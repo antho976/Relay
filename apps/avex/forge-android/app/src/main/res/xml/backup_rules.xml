@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- Offline single-user app: include the Room DB and DataStore prefs by default. -->
+</full-backup-content>

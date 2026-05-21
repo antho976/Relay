@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+        Base theme used by the system before Compose takes over. Once MainActivity calls
+        setContent { ForgeTheme { ... } }, the Compose-side theme governs everything visible.
+        This XML theme only needs to set the window background to avoid a white flash on launch.
+    -->
+    <style name="Theme.Forge" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/forge_background</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Match the Compose-side ForgeBackground so there's no flash on cold launch. -->
+    <color name="forge_background">#0B0B0E</color>
+    <color name="ic_launcher_background">#0B0B0E</color>
+</resources>
