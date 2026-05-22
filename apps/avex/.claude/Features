@@ -1,0 +1,339 @@
+# Forge — Built Features Inventory
+Last updated: 2026-05-21
+
+---
+
+## Navigation & App Shell
+
+- Welcome screen (placeholder — skip button routes to Overview)
+- Overview (home hub) with top app bar "FORGE"
+- Full nav graph: Welcome → Overview → Gym → Day → Cardio → Trophies
+- Back navigation on every screen
+
+---
+
+## Overview Screen
+
+- Weekly stats strip: workouts this week · volume (lb) · cardio minutes
+- Deload banner: appears after 24 sessions since last deload, "Mark deloaded" dismisses it and resets the counter (saved to DataStore)
+- Nav tile — Gym (primary, tall, gradient): bounceClick, accent gradient
+- Nav tiles — Cardio + Trophies (secondary, side-by-side): subtler gradient, bounceClick
+
+---
+
+## Gym — Day List (Train tab)
+
+- 4-day Upper/Lower split: Upper A (PUSH · red), Lower A (QUADS · gold), Upper B (PULL · green), Lower B (HAMS · purple)
+- "Pick your day." header
+- NEXT UP tile (172dp tall): "NEXT UP" pill, large name, subtitle + exercise count, accent START/Continue button
+- Compact tiles for other 3 days (96dp): right-side "→" arrow, last-trained date + exercise count
+- Next-up rotation logic: Upper A → Lower A → Upper B → Lower B; advances from most-recently-finished session; defaults to Upper A if never trained; active session day takes priority
+- Per-day accent color from hex (toAccentColor())
+- Spine strip: vertical rotated word (PUSH / QUADS / PULL / HAMS), accent tinted
+- Smooth radial bloom gradient via drawBehind (centered at 92–95% card width, fades to transparent)
+- ACTIVE dot on card when a session is in progress for that day
+- bounceClick spring animation on all cards
+
+---
+
+## Gym — Stats tab
+
+Accessed via the Stats tab inside the Gym screen (alongside Train).
+
+- Totals row: total workouts · exercises logged · total PRs
+- 12-week frequency heatmap (activity calendar, one cell per day, shaded by exercise count)
+- Volume by muscle group chart (horizontal bars, weekly lb)
+- Strength curve: line chart of max weight per session for an exercise (~10 most recent points)
+- PR timeline list: recent PRs with date, exercise name, weight, reps
+
+---
+
+## Gym — Active Workout (Day Screen)
+
+### Warmup Gate
+- 4 warmup items per day (day-specific exercises/stretches)
+- Checkbox list — auto-advances when all ticked
+- "Skip warmup" button
+- Gate disappears on completion, exercise list appears
+
+### Session Management
+- Session persists to DB on start (survives app kill / rotation)
+- Active session rehydrates on screen re-entry
+- Discard workout confirmation dialog (only shown if sets have been logged)
+- Session duration tracked from start time
+
+### Exercise List
+- Collapsible exercise cards (tap to expand/collapse)
+- Previous session "last time" text shown per exercise (e.g. "Last: 30 lb × 10")
+- Weight prefill from last session
+
+### Set Logging
+- Weight + reps input row per set
+- PR badge shown inline on set rows where a PR is detected in real time
+- PR detection: compares max weight against all historical sets for that exercise
+
+### Per-Exercise Controls
+- Difficulty rater: EASY / MODERATE / HARD / BRUTAL (saved to DB per exercise)
+- Note field: freeform text saved per logged exercise
+- Exercise swap picker sheet:
+  - Session-only swap (this workout only)
+  - Persistent swap (saved to ExerciseCustomization, applies to all future sessions)
+  - Swap candidates filtered by muscle group from the swap catalog
+- Skip exercise
+
+### Rest Timer
+- Auto-starts (2:30 default) when a set is logged
+- Floating FAB bubble on the Scaffold FAB slot: shows countdown (M:SS), accent-colored while running, grey when paused, green when done
+- Tap bubble → RestTimerControlsDialog: Pause / Resume / Reset / Skip
+- Timer state persisted in ViewModel (survives screen rotation)
+
+### Session Summary Sheet (end of workout)
+- Total volume in lb
+- PR count (highlighted if > 0)
+- Duration in minutes
+- Sets logged, exercises logged, exercises skipped
+- Per-exercise highlights: sets · volume · PR badge
+- Trophies unlocked section (shows new unlocks earned in this session)
+- Mood prompt: Drained 😩 / Off 😕 / Fine 😐 / Good 🙂 / Strong 💪 (tap to select, tap again to deselect)
+- Done button — saves mood to MoodEntry table, closes sheet
+
+---
+
+## Trophies
+
+- 20 trophies across 3 categories: Firsts · Consistency · Strength
+- **Firsts (5):** First Session, First PR, Hit the Wall (brutal rating), Made It Mine (swap used), Full Slate (all target sets hit)
+- **Consistency (8):** Five Strong / Double Digits / Quarter Hundred / Halfway / Century (session milestones), Through the Door (first full workout), Showing Up (10 full workouts), Full Week (all 4 days trained)
+- **Strength (7):** PR Hunter / On a Roll / Forged Strength (PR milestones), 25lb/30lb Bench Club, 30lb Goblet, Volume King (3000 lb session), Volume Beast (5000 lb session)
+- Pure-function evaluator: TrophyEvaluator runs against TrophyStatsSnapshot (no DAO deps — testable in isolation)
+- Progress hints for locked trophies (e.g. "7 / 10 PRs")
+- 2-column grid layout, section headers per category
+- Progress bar header: X / 20 unlocked
+- Unlock date shown on earned trophy cards
+- New unlocks surfaced in Session Summary Sheet immediately after finishing a workout
+- 11 icon types mapped to Material Icons (Spark, Star, Flame, Swap, Check, Stack, Crown, Door, Four, Dumbbell, Bolt)
+
+---
+
+## Cardio
+
+- **Types:** Run · Walk · Treadmill · Rest · Other
+- **Effort levels:** Easy · Moderate · Hard
+- **Rest reasons:** Planned · Sore · Sick · Busy (shown only when type = Rest)
+- Weekly summary card: total minutes + session count this week
+- Entry list: last 20 entries, each showing type icon badge, name, subtitle, date
+- Log cardio bottom sheet:
+  - Type chip row
+  - Duration field (minutes)
+  - Distance field (km, hidden for Rest)
+  - Effort chip row (hidden for Rest)
+  - Rest reason chip row (shown for Rest)
+  - Note field
+  - Form resets on re-open
+- Delete entry with confirmation dialog
+
+---
+
+## Program Definition (static, hard-coded)
+
+All 4 days fully specified with:
+- Exercise name, sets, reps, unit (dumbbell / plates / bodyweight), muscle group, difficulty
+- Warmup routine (4 items per day, day-specific)
+- Coaching notes per exercise
+- Swap catalog: alternate exercises keyed by muscle group
+- Tutorial text per exercise
+- Exercise IDs: ua1–ua6, la1–la6, ub1–ub7, lb1–lb6
+
+---
+
+## Data Layer
+
+### Database (Room, WAL mode)
+| Table | Purpose |
+|---|---|
+| Session | One row per started workout (dayKey, startedAt, finishedAt) |
+| LoggedExercise | One row per exercise in a session (effortRating, note, skipped) |
+| LoggedSet | One row per set (weight, reps, isPr) |
+| DayNameOverride | User-renamed day labels |
+| ExerciseCustomization | Persistent exercise swaps (name + unit override) |
+| UnlockedTrophy | Trophy IDs + unlock timestamp |
+| CardioEntry | Cardio logs (type, duration, distance, effort, restReason, note) |
+| MoodEntry | Post-workout mood per session |
+
+### Repositories
+- WorkoutRepository — session + set + exercise CRUD, mood recording, active session observe
+- CustomizationRepository — day name overrides, exercise customizations
+- TrophyRepository — unlock evaluation + persistence, stats snapshot fan-out
+- CardioRepository — cardio CRUD, weekly minutes flow
+- StatsRepository — all stats queries for the Stats tab
+
+### Preferences (DataStore)
+- `welcomed` flag
+- `lastDeloadAtSessionCount` for deload tracking
+
+### Domain Utilities
+- PrDetector — compares new set against historical max
+- VolumeCalculator — weight × reps per set → total lb
+- WeightParser — parses reps strings ("8-10", "10/leg") for numeric extraction
+- TrophyEvaluator — pure function, stats snapshot → set of unlocked trophy IDs
+- RestTimerController — coroutine-based countdown state machine (start / pause / resume / reset / stop)
+
+### DI
+- Hilt throughout (ViewModels, Repositories, DAOs, Clock)
+- Clock abstraction (SystemClock + fakeable for tests)
+
+---
+
+## UI / Design System
+
+- Material 3, dark theme, custom color palette
+- Per-day accent colors extracted from hex strings (toAccentColor())
+- bounceClick modifier: spring-animated scale (0.97×) on press, no ripple (scale is the affordance)
+- Radial bloom gradients via Modifier.drawBehind (smooth fade, no hard edges)
+- Linear gradients on NavTiles (primary: accent 0.28→0.10, secondary: surface→accent 0.08)
+- Typography: Display / Headline / Title / Body / Label hierarchy applied consistently
+- ModalBottomSheet for log sheets and session summary
+- AlertDialog for destructive confirmations
+
+---
+
+## Not Yet Built (known gaps vs. premium)
+
+- Onboarding / welcome flow (placeholder only)
+- Bodyweight log + trend chart
+- Weight suggestions ("try +2.5 lb today" based on last session)
+- Rest timer push notification (timer runs but no system notification when screen is off)
+- Progress ring on rest timer FAB (noted as polish task in code comments)
+- Per-exercise all-time PR hall-of-fame / browsable best lifts screen
+- Workout streak counter + calendar view on Overview
+- Unit toggle (kg ↔ lb) — currently lb only
+- Custom exercise creation (only swaps from predefined catalog)
+- Strava integration (discussed, deferred)
+- Nutrition tracking (deferred indefinitely)
+
+## Roadmap — Prioritized
+
+Priority logic: **Core training loop first** (every session benefits), then **data trust**, then **motivation/retention**, then **analytics**, then **big scope / future**.
+
+---
+
+### Tier 1 — Fix what's broken (do before anything else)
+Small effort, high trust. These are bugs in already-built features.
+
+| # | Item | Why first |
+|---|---|---|
+| 17a | Strength curve Y-axis + grid lines | Chart is misleading without it |
+| 17b | Heatmap day-of-week labels | Can't read the calendar without them |
+| 17c | Trophy count off-by-one | Wrong number in the header undermines trust |
+| 17d | Stats Y-axis labels everywhere missing | Same — charts need scale |
+| 17e | Heatmap legend + current-day marker | Basic readability |
+| 17f | Better cardio weekly card (small chart) | Cardio section feels unfinished |
+| 17g | Chart legends everywhere missing | Polish that makes existing data readable |
+
+---
+
+### Tier 2 — Core training loop (highest per-session impact)
+These touch every single set of every single workout. Biggest ROI.
+
+| # | Item | Effort | Why |
+|---|---|---|---|
+| 20 | Forgiving input parser ("45x10" as one string) | Small | Removes the biggest friction point in set logging |
+| 19 | Quick-log "same as last set" (long-press set row) | Small | One tap instead of two fields — fast sets |
+| 21 | Set autocomplete — typing reps suggests last weight | Small | Closes the "what did I do last time?" loop at input level |
+| 13 | Weight suggestion on set entry based on last performance + difficulty rating | Medium | If you rated Hard on 25lb → suggest 22.5lb next time; the data is already in DB |
+| 12 | Auto-progression rule ("hit top of rep range → +2.5lb next session") | Medium | Makes the app a real training partner, not a logbook |
+| 24 | Single-tap "start last workout" — auto-fills all weights from last session | Medium | One button turns a blank screen into a pre-filled workout |
+
+---
+
+### Tier 3 — Rest timer + session UX
+Timer is built but has one critical gap, and the session flow has quality-of-life holes.
+
+| # | Item | Effort | Why |
+|---|---|---|---|
+| 16 | Push notification + vibration when rest timer finishes (screen off) | Small–Medium | Timer is useless if you pocket your phone mid-rest |
+| 23 | Smart rest timer defaults per exercise type (compound 3min, isolation 90s) + +30s on Brutal rating | Small | The 2:30 flat default is wrong for most exercises |
+| 26 | Haptic feedback on set logged + timer done | Small | Physical confirmation = fewer "did that save?" moments |
+| 30 | PR celebration animation + trophy confetti | Small–Medium | PRs should feel like a moment, not a badge |
+| 7 | Edit/delete logged sets + edit past sessions | Medium | Can't fix a mis-tap; this blocks trust in the data |
+
+---
+
+### Tier 4 — Motivation & retention
+High visibility, drives return visits.
+
+| # | Item | Effort | Why |
+|---|---|---|---|
+| 15 | Streak counter on Overview (icon changes at 7/30/100 days) | Small | Single number that drives daily opens |
+| 14 | All-time PR hall-of-fame screen | Small–Medium | "What's my best bench?" should be one tap away |
+| 27 | Exercise history graph (weight × reps scatter across all sessions) | Medium | See the line going up — the core motivation loop |
+| 28 | Goal weight per exercise + progress bar toward it | Medium | Gives direction; pairs naturally with the history graph |
+| 31 | Weekly recap notification (Sunday) + export snippet for AI analysis | Medium | Habit-forming touchpoint even on rest days |
+
+---
+
+### Tier 5 — UX quality & settings
+Makes the app feel polished and personal.
+
+| # | Item | Effort | Why |
+|---|---|---|---|
+| 2 | Unit toggle kg ↔ lb (DataStore, applies everywhere) | Small–Medium | Non-negotiable if anyone outside the US ever uses it |
+| 35a | Settings screen: AMOLED true-black, accent color picker, font size | Medium | Personalization = ownership |
+| 35b | French language option | Small (strings only) | One user (you) is French-Canadian |
+| 35c | Compact mode for set logging | Small | Dense view for experienced users |
+| 25 | Reorder exercises in a day, long-press quick actions, sticky session header | Medium | QoL for power users |
+| 36 | Swipe-to-delete (cardio, sets), animated tab transitions | Small–Medium | Standard Android gesture; missing feels unpolished |
+| 29 | Empty state illustrations + loading skeletons | Small | First launch looks broken without data |
+
+---
+
+### Tier 6 — Analytics & insights
+Needs data to be meaningful — build after users have a few weeks of history.
+
+| # | Item | Effort | Why |
+|---|---|---|---|
+| 39 | PRs subtab in Stats + filter by exercise/muscle/period | Medium | Stats tab needs depth as data grows |
+| 40 | Session metrics: duration target, lifetime volume, volume/min efficiency, avg rest time | Medium | Makes each session's data richer |
+| 5 | Export data for AI weekly analysis (JSON/CSV) | Small | Useful now; pairs with item 31 |
+| 6 | Backup to file + restore | Medium | Data safety for a no-cloud app |
+| 34 | Compare weeks (this vs last) | Medium | Simple but very motivating |
+| 41 | Behavioral insights: muscle balance alert, most improved exercise, best time-of-day | Large | Needs months of data to be accurate |
+| 32 | Monthly recap screen (Spotify Wrapped style) | Large | Fun but needs data volume |
+| 33 | Year-over-year recap | Large | Same |
+
+---
+
+### Tier 7 — Bigger features (when core is solid)
+
+| # | Item | Effort | Why here |
+|---|---|---|---|
+| 1 | Onboarding flow (name, bodyweight, units, goal) | Medium | Nice but the app works fine without it |
+| 22 | Search exercises by name + recently used at top | Medium | Only matters when the exercise list grows |
+| 37 | Exercise tags (compound/machine/free weight) in swap picker | Small | Good filter but swap list is short for now |
+| 38 | Superset/giant set support | Large | Schema change + big UI work |
+| 18 | Drop set logging, failure marker per set | Medium | Power-user feature, niche now |
+| 10 | Warmup set suggester (40/60/80% of working weight) | Small | Nice, but warmup gate already exists |
+| 11 | Plate calculator + reverse | Small | Home gym context makes this less urgent (adjustable DBs) |
+| 8 | Form cue text per exercise (in-session coaching) | Small | Tutorials exist; this is additive |
+| 44 | Equipment context + exercise filter by available equipment | Very Large | Major schema + UX rework |
+
+---
+
+### Tier 8 — Future / out of scope for now
+
+| # | Item | Notes |
+|---|---|---|
+| 9 | Exercise tutorial videos (YouTube links) | Requires internet; conflicts with offline-first principle |
+| 42 | Galaxy Watch 6 companion | Explicitly deferred; needs Wear OS expertise |
+| 43 | Cardio expansion (maps, Strava) | Deferred; revisit after Strava auth is explored |
+| 45 | Advanced UI polish (parallax trophy room, chart animate-in, hero onboarding animation, spine press animation) | Last — build features first, polish second |
+| 3/4 | Auto-save / crash restore | Room + ViewModel SavedState already handles most of this; audit before building |
+
+---
+
+### Build order recommendation (next sessions)
+
+**Start here → Tier 1 bug fixes** (fast, high trust, clear done condition)
+**Then → Tier 2 items 20 + 19 + 21** (forgiving input + quick-log + autocomplete, all in the set row — one coherent PR)
+**Then → Tier 2 items 13 + 12 + 24** (weight suggestions + auto-progression + start-last-workout — the overload loop)
+**Then → Tier 3** (rest timer notification, smart defaults, haptics, PR animation, edit sets)

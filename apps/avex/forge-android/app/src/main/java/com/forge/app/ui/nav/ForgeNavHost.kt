@@ -18,7 +18,9 @@ fun ForgeNavHost() {
     val nav = rememberNavController()
     NavHost(navController = nav, startDestination = Routes.OVERVIEW) {
         composable(Routes.WELCOME) {
-            WelcomeScreen(onFinished = { nav.navigate(Routes.OVERVIEW) { popUpTo(Routes.WELCOME) { inclusive = true } } })
+            WelcomeScreen(onFinished = {
+                nav.navigate(Routes.OVERVIEW) { popUpTo(Routes.WELCOME) { inclusive = true } }
+            })
         }
         composable(Routes.OVERVIEW) {
             OverviewScreen(
@@ -30,12 +32,19 @@ fun ForgeNavHost() {
         composable(Routes.GYM_TRAIN) {
             DayListScreen(
                 onBack = { nav.popBackStack() },
-                onOpenDay = { dayKey -> nav.navigate(Routes.gymDay(dayKey)) }
+                onOpenDay = { dayKey -> nav.navigate(Routes.gymDay(dayKey)) },
+                onOpenDayQuick = { dayKey -> nav.navigate(Routes.gymDay(dayKey, skipWarmup = true)) }
             )
         }
         composable(
             route = Routes.GYM_DAY,
-            arguments = listOf(navArgument(Routes.ARG_DAY_KEY) { type = NavType.StringType })
+            arguments = listOf(
+                navArgument(Routes.ARG_DAY_KEY) { type = NavType.StringType },
+                navArgument(Routes.ARG_SKIP_WARMUP) {
+                    type = NavType.BoolType
+                    defaultValue = false
+                }
+            )
         ) { entry ->
             val dayKey = entry.arguments?.getString(Routes.ARG_DAY_KEY).orEmpty()
             DayScreen(dayKey = dayKey, onBack = { nav.popBackStack() })

@@ -3,17 +3,19 @@
 Native Kotlin/Compose rewrite of the React/Expo prototype that lives in `../forge/`.
 The prototype is the **feature spec**, not the build target — see [`../forge/src/WorkoutTracker.web.jsx`](../forge/src/WorkoutTracker.web.jsx).
 
-## Status — Phase 0
+## Status — Phase 2 complete
 
-The skeleton builds and installs. Every Nav destination resolves to a placeholder screen tagged "PHASE 0". Nothing persists yet; nothing computes yet.
+Phases 0–2 are done. The skeleton builds and installs, the static program data is in code, and the Room layer (8 entities, 8 DAOs, 4 repositories, all Hilt-wired) is in place. UI is still all placeholders — set logging lands in Phase 3.
 
 What is wired up:
 
 - Gradle (Kotlin DSL) + version catalog at [`gradle/libs.versions.toml`](gradle/libs.versions.toml)
 - Compose (Material 3 dark theme), Activity, single-Activity nav
 - Hilt DI (Application + Activity entry points, ClockModule, DatabaseModule)
-- Room (minimal `AppMeta` schema, KSP wired, schema export at `app/schemas/`)
-- DataStore Preferences dependency (not yet used)
+- Room schema v2 with 8 entities — Session, LoggedExercise, LoggedSet, ExerciseCustomization, DayNameOverride, UnlockedTrophy, CardioEntry, MoodEntry. `fallbackToDestructiveMigration()` until first real workout is logged.
+- 4 repositories — WorkoutRepository, CustomizationRepository, CardioRepository, TrophyRepository
+- Static program in [`program/`](app/src/main/java/com/forge/app/program/) — Program (4 days, 25 exercises), Swaps (50 variants across 11 muscle groups), Trophies (21), Tutorials (per-exercise text)
+- DataStore Preferences dependency (not yet used — wires in Phase 3)
 - Coroutines + Lifecycle Compose integration
 - 5 placeholder screens routed through `ForgeNavHost`
 
@@ -47,9 +49,9 @@ app/src/main/java/com/forge/app/
 | # | Phase | Outcome |
 |---|---|---|
 | **0** ✅ | Scaffold | App builds, installs, navigates between placeholder screens |
-| 1 | Static program data | `program/` package with PROGRAM, SWAPS, TROPHIES, tutorials |
-| 2 | Room schema + DAOs + repositories | DB persists sessions, sets, customizations, cardio, moods, trophies |
-| 3 | **Gym training feature** | Log a real workout end-to-end on the phone |
+| **1** ✅ | Static program data | `program/` package with PROGRAM, SWAPS, TROPHIES, tutorials |
+| **2** ✅ | Room schema + DAOs + repositories | DB persists sessions, sets, customizations, cardio, moods, trophies |
+| **3** ◀ next | **Gym training feature** | Log a real workout end-to-end on the phone |
 | 4 | Overview screen | Real weekly stats |
 | 5 | Stats subtab | Heatmap, strength curves, weekly volume, PR timeline |
 | 6 | Trophies | Catalog + unlock evaluator + animation |
