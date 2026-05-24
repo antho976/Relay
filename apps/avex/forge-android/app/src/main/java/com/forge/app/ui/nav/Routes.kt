@@ -7,6 +7,14 @@ object Routes {
     const val GYM_DAY = "gym/day/{dayKey}?skipWarmup={skipWarmup}"
     const val CARDIO = "cardio"
     const val TROPHIES = "trophies"
+    const val SETTINGS = "settings"
+    const val SESSION_HISTORY = "gym/session-history"
+    const val NOTES_SEARCH = "gym/notes-search"
+    const val RECAP = "recap"
+    const val ONBOARDING = "onboarding"
+    const val PROGRAM_EDITOR = "program-editor/{dayKey}"
+
+    fun programEditor(dayKey: String) = "program-editor/$dayKey"
 
     const val ARG_DAY_KEY = "dayKey"
     const val ARG_SKIP_WARMUP = "skipWarmup"

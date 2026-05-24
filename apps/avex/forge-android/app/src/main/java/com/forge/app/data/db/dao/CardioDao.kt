@@ -35,4 +35,15 @@ interface CardioDao {
     /** Cardio minutes since [sinceEpochMs], excluding rest-day entries. */
     @Query("SELECT SUM(duration_min) FROM cardio_entry WHERE date >= :sinceEpochMs AND type != :excludeType")
     fun observeMinutesSince(sinceEpochMs: Long, excludeType: String = "rest"): Flow<Int?>
+
+    @Query("DELETE FROM cardio_entry")
+    suspend fun deleteAll()
+
+    /** Sum of all distance_km across all entries — lifetime total (#79). */
+    @Query("SELECT SUM(distance_km) FROM cardio_entry WHERE distance_km IS NOT NULL")
+    fun observeLifetimeDistanceKm(): Flow<Double?>
+
+    /** All Run entries with both distance and duration > 0, ordered by date, for pace trend (#78). */
+    @Query("SELECT * FROM cardio_entry WHERE type = 'run' AND distance_km > 0 AND duration_min > 0 ORDER BY date ASC")
+    fun observeRunEntries(): Flow<List<CardioEntry>>
 }

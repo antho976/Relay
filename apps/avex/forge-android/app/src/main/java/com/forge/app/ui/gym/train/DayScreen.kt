@@ -5,12 +5,18 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ExitToApp
 import androidx.compose.material.icons.filled.Done
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -19,26 +25,56 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import android.view.HapticFeedbackConstants
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.ui.gym.train.components.ExerciseCard
+import com.forge.app.ui.gym.train.components.PlateCalculatorDialog
 import com.forge.app.ui.gym.train.components.RestTimerBubble
+import com.forge.app.ui.gym.train.components.WarmupSuggesterDialog
 import com.forge.app.ui.gym.train.components.RestTimerControlsDialog
 import com.forge.app.ui.gym.train.components.SessionSummarySheet
 import com.forge.app.ui.gym.train.components.SwapPickerSheet
+import com.forge.app.domain.units.parseToLb
+import com.forge.app.ui.common.ConfettiOverlay
+import com.forge.app.ui.gym.train.components.AddExerciseSheet
+import com.forge.app.ui.common.ForgeHapticType
+import com.forge.app.ui.common.forgeHaptic
+import com.forge.app.ui.theme.LocalForgeSettings
 import com.forge.app.ui.gym.train.components.WarmupGate
 import com.forge.app.ui.gym.train.state.DayUiEvent
 import com.forge.app.ui.gym.train.state.DayUiState
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Suppress("UNUSED_PARAMETER") // dayKey arrives via SavedStateHandle; not used here
 @OptIn(ExperimentalMaterial3Api::class)
@@ -49,6 +85,55 @@ fun DayScreen(
     viewModel: DayViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val snackbarHostState = remember { SnackbarHostState() }
+    val hapticStrength = LocalForgeSettings.current.hapticStrength
+
+    // ── Haptics (#26 set logged, #50 PR, #51 10s countdown) ──────────────────
+    val view = LocalView.current
+    val totalSets by remember { derivedStateOf { state.exercises.sumOf { it.loggedSets.size } } }
+    val totalPrSets by remember { derivedStateOf { state.exercises.sumOf { it.prSetIds.size } } }
+    var prevTotalSets by remember { mutableIntStateOf(-1) }
+    var prevTotalPrs by remember { mutableIntStateOf(-1) }
+    var prConfettiRevision by remember { mutableIntStateOf(0) }
+
+    val showEncouragement = LocalForgeSettings.current.showEncouragement
+    val encouragements = remember { listOf("New PR! 🔥", "That's a record!", "You beast.", "Keep pushing.", "Gains incoming.") }
+    LaunchedEffect(totalSets, totalPrSets) {
+        when {
+            prevTotalPrs >= 0 && totalPrSets > prevTotalPrs -> {
+                view.forgeHaptic(ForgeHapticType.PR_OR_FINISH, hapticStrength)
+                prConfettiRevision++
+                if (showEncouragement) snackbarHostState.showSnackbar(encouragements.random())
+            }
+            prevTotalSets >= 0 && totalSets > prevTotalSets ->
+                view.forgeHaptic(ForgeHapticType.SET_LOGGED, hapticStrength)
+        }
+        prevTotalSets = totalSets
+        prevTotalPrs = totalPrSets
+    }
+
+    LaunchedEffect(state.restTimer?.isFinished) {
+        if (state.restTimer?.isFinished == true)
+            view.forgeHaptic(ForgeHapticType.PR_OR_FINISH, hapticStrength)
+    }
+
+    LaunchedEffect(state.restTimer?.secondsRemaining) {
+        if (state.restTimer?.secondsRemaining == 10)
+            view.forgeHaptic(ForgeHapticType.COUNTDOWN_TICK, hapticStrength)
+    }
+
+    // ── Undo snackbar (#46) ───────────────────────────────────────────────────
+    LaunchedEffect(state.undoableSetId) {
+        val setId = state.undoableSetId ?: return@LaunchedEffect
+        val result = snackbarHostState.showSnackbar(
+            message = "Set logged",
+            actionLabel = "Undo",
+            duration = SnackbarDuration.Short
+        )
+        if (result == SnackbarResult.ActionPerformed) {
+            viewModel.onEvent(DayUiEvent.UndoLastSet)
+        }
+    }
 
     BackHandler(enabled = !state.isFinished) {
         viewModel.onEvent(DayUiEvent.RequestBack)
@@ -62,7 +147,17 @@ fun DayScreen(
         }
     }
 
+    // ── Estimated end time (#103) ─────────────────────────────────────────────
+    val estimatedEndText = remember(state.remainingSetsCount) {
+        val remaining = state.remainingSetsCount
+        if (remaining <= 0) return@remember null
+        val endMs = System.currentTimeMillis() + remaining * 3L * 60_000
+        val fmt = SimpleDateFormat("h:mm a", Locale.getDefault())
+        "est. done ~${fmt.format(Date(endMs)).lowercase()}"
+    }
+
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = {
@@ -73,6 +168,19 @@ fun DayScreen(
                             style = MaterialTheme.typography.labelLarge,
                             color = MaterialTheme.colorScheme.primary
                         )
+                        // Session progress + estimated end time (#102, #103)
+                        val progressText = state.sessionProgressText
+                        if (progressText.isNotEmpty()) {
+                            val infoText = buildString {
+                                append(progressText)
+                                if (estimatedEndText != null) append("  ·  $estimatedEndText")
+                            }
+                            Text(
+                                infoText,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 },
                 navigationIcon = {
@@ -81,6 +189,16 @@ fun DayScreen(
                     }
                 },
                 actions = {
+                    // Emergency save & exit (#97)
+                    if (!state.isFinished && state.hasUnsavedWork) {
+                        IconButton(onClick = { viewModel.onEvent(DayUiEvent.SaveAndExit) }) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.ExitToApp,
+                                contentDescription = "Save and exit",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
                     IconButton(onClick = { viewModel.onEvent(DayUiEvent.FinishWorkout) }) {
                         Icon(
                             Icons.Default.Done,
@@ -96,10 +214,36 @@ fun DayScreen(
         },
         floatingActionButton = {
             state.restTimer?.let { timer ->
-                RestTimerBubble(
-                    state = timer,
-                    onOpenControls = { viewModel.onEvent(DayUiEvent.RestTimerOpen) }
-                )
+                Column(horizontalAlignment = Alignment.End) {
+                    // "Next up" label above the timer bubble (#99)
+                    state.nextUpExerciseName?.let { name ->
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            shape = RoundedCornerShape(8.dp),
+                            tonalElevation = 4.dp
+                        ) {
+                            Text(
+                                "Next: $name",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                maxLines = 1
+                            )
+                        }
+                        Spacer(Modifier.height(4.dp))
+                    }
+                    RestTimerBubble(
+                        state = timer,
+                        onOpenControls = { viewModel.onEvent(DayUiEvent.RestTimerOpen) },
+                        onLongClick = { viewModel.onEvent(DayUiEvent.RestTimerAddSeconds(30)) }
+                    )
+                    // Quick-break sub-actions (#139)
+                    if (state.sessionId != null && !state.isFinished) {
+                        QuickBreakChips(
+                            onBreak = { type -> viewModel.onEvent(DayUiEvent.LogBreak(type)) }
+                        )
+                    }
+                }
             }
         },
         containerColor = MaterialTheme.colorScheme.background
@@ -127,6 +271,7 @@ fun DayScreen(
             onResume = { viewModel.onEvent(DayUiEvent.RestTimerResume) },
             onReset = { viewModel.onEvent(DayUiEvent.RestTimerReset) },
             onSkip = { viewModel.onEvent(DayUiEvent.RestTimerSkip) },
+            onAddSeconds = { s -> viewModel.onEvent(DayUiEvent.RestTimerAddSeconds(s)) },
             onDismiss = { viewModel.onEvent(DayUiEvent.RestTimerClose) }
         )
     }
@@ -148,11 +293,113 @@ fun DayScreen(
         )
     }
 
+    if (state.showPreSessionPicker) {
+        PreSessionPickerDialog(
+            sessionType = state.sessionType,
+            isUntracked = state.isUntracked,
+            intensity = state.sessionIntensity,
+            onTypeChange = { viewModel.onEvent(DayUiEvent.SetSessionType(it)) },
+            onUntrackedChange = { viewModel.onEvent(DayUiEvent.SetUntracked(it)) },
+            onIntensityChange = { viewModel.onEvent(DayUiEvent.SetIntensity(it)) },
+            onConfirm = { viewModel.onEvent(DayUiEvent.ConfirmPreSessionPicker) }
+        )
+    }
+
+    state.pendingWeightJumpWarning?.let { warning ->
+        AlertDialog(
+            onDismissRequest = { viewModel.onEvent(DayUiEvent.DismissWeightJump) },
+            title = { Text("Big jump — are you sure?") },
+            text = { Text("${warning.lastWeightLb.toInt()} lb → ${warning.newWeightLb.toInt()} lb is a ${((warning.newWeightLb / warning.lastWeightLb - 1) * 100).toInt()}% increase. Log it anyway?") },
+            confirmButton = {
+                Button(onClick = { viewModel.onEvent(DayUiEvent.ConfirmWeightJump) }) { Text("Log it") }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.onEvent(DayUiEvent.DismissWeightJump) }) { Text("Go back") }
+            }
+        )
+    }
+
+    state.quickActionsForExerciseId?.let { exId ->
+        val exercise = state.exercises.firstOrNull { it.plan.id == exId }
+        AlertDialog(
+            onDismissRequest = { viewModel.onEvent(DayUiEvent.DismissQuickActions) },
+            title = { Text(exercise?.effectiveName ?: exId) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    listOf(
+                        "Toggle skip" to { viewModel.onEvent(DayUiEvent.ToggleSkipped(exId)) },
+                        "Open swap picker" to { viewModel.onEvent(DayUiEvent.OpenSwapPicker(exId)) },
+                        "Set rest timer" to { viewModel.onEvent(DayUiEvent.DismissQuickActions); /* handled via DayContent local state */ }
+                    ).forEach { (label, action) ->
+                        TextButton(
+                            onClick = { action(); viewModel.onEvent(DayUiEvent.DismissQuickActions) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text(label, modifier = Modifier.fillMaxWidth()) }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { viewModel.onEvent(DayUiEvent.DismissQuickActions) }) { Text("Cancel") } }
+        )
+    }
+
+    if (state.showAddExercisePicker) {
+        AddExerciseSheet(
+            alreadyAddedIds = state.exercises.map { it.plan.id }.toSet(),
+            onPick = { exerciseId -> viewModel.onEvent(DayUiEvent.AddUnplannedExercise(exerciseId)) },
+            onDismiss = { viewModel.onEvent(DayUiEvent.CloseAddExercisePicker) }
+        )
+    }
+
+    state.goalSetterForExerciseId?.let { exerciseId ->
+        val exercise = state.exercises.firstOrNull { it.plan.id == exerciseId }
+        GoalSetterDialog(
+            exerciseName = exercise?.effectiveName ?: exerciseId,
+            currentGoal = exercise?.goalWeightLb,
+            onSet = { lb -> viewModel.onEvent(DayUiEvent.SetGoal(exerciseId, lb)) },
+            onClear = { viewModel.onEvent(DayUiEvent.ClearGoal(exerciseId)) },
+            onDismiss = { viewModel.onEvent(DayUiEvent.DismissGoalSetter) }
+        )
+    }
+
+    // Training helper dialogs (#10, #11)
+    state.warmupSuggesterForExerciseId?.let { exerciseId ->
+        val ex = state.exercises.firstOrNull { it.plan.id == exerciseId }
+        val workingWeight = ex?.loggedSets?.lastOrNull()?.weightLb
+            ?: ex?.prefillWeight?.toDoubleOrNull()
+        WarmupSuggesterDialog(
+            workingWeightLb = workingWeight,
+            onDismiss = { viewModel.onEvent(DayUiEvent.DismissTrainingHelper) }
+        )
+    }
+    state.plateCalculatorForExerciseId?.let { exerciseId ->
+        val ex = state.exercises.firstOrNull { it.plan.id == exerciseId }
+        val workingWeight = ex?.loggedSets?.lastOrNull()?.weightLb
+            ?: ex?.prefillWeight?.toDoubleOrNull()
+        PlateCalculatorDialog(
+            initialWeightLb = workingWeight,
+            onDismiss = { viewModel.onEvent(DayUiEvent.DismissTrainingHelper) }
+        )
+    }
+
     state.summary?.let { summary ->
         SessionSummarySheet(
             summary = summary,
-            onDismiss = { mood -> viewModel.onEvent(DayUiEvent.DismissSummary(mood)) }
+            onDismiss = { mood, tags, journal ->
+                viewModel.onEvent(DayUiEvent.DismissSummary(mood, tags))
+                if (journal.isNotBlank()) viewModel.onEvent(DayUiEvent.UpdateJournal(journal))
+            }
         )
+    }
+
+    // PR confetti burst (#30): one fresh instance per PR earned; non-blocking (no pointerInput)
+    if (prConfettiRevision > 0) {
+        key(prConfettiRevision) {
+            ConfettiOverlay(
+                modifier = Modifier.fillMaxSize(),
+                onComplete = { prConfettiRevision = 0 }
+            )
+        }
     }
 }
 
@@ -168,6 +415,21 @@ private fun DayContent(
         return
     }
 
+    var restTimerSetterForId by remember { mutableStateOf<String?>(null) }
+
+    restTimerSetterForId?.let { exId ->
+        val exercise = state.exercises.firstOrNull { it.plan.id == exId }
+        RestTimerSetterDialog(
+            exerciseName = exercise?.effectiveName ?: exId,
+            currentSeconds = exercise?.restTimerOverrideSeconds,
+            onSet = { secs -> onEvent(DayUiEvent.SetRestTimerOverride(exId, secs)); restTimerSetterForId = null },
+            onClear = { onEvent(DayUiEvent.SetRestTimerOverride(exId, null)); restTimerSetterForId = null },
+            onDismiss = { restTimerSetterForId = null }
+        )
+    }
+
+    val useKg = LocalForgeSettings.current.useKg
+
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
@@ -176,21 +438,44 @@ private fun DayContent(
         if (!state.isWarmupComplete) {
             item(key = "warmup") {
                 WarmupGate(
-                    warmupItems = state.dayPlan.warmup,
+                    warmupItems = state.customWarmupItems ?: state.dayPlan.warmup,
                     checks = state.warmupChecks,
                     onToggle = { idx -> onEvent(DayUiEvent.ToggleWarmupItem(idx)) },
-                    onSkip = { onEvent(DayUiEvent.SkipWarmup) }
+                    onSkip = { onEvent(DayUiEvent.SkipWarmup) },
+                    reactions = state.warmupReactions,
+                    onReaction = { idx, thumbsUp -> onEvent(DayUiEvent.WarmupReaction(idx, thumbsUp)) }
                 )
             }
         } else {
+            item(key = "session-header-sticky") {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = MaterialTheme.colorScheme.background.copy(alpha = 0.95f)
+                ) {
+                    Text(
+                        text = "${state.displayName} · ${state.sessionProgressText}",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp)
+                    )
+                }
+            }
+            val totalExercises = state.exercises.size
             items(state.exercises, key = { it.plan.id }) { exerciseState ->
+                val idx = state.exercises.indexOf(exerciseState)
                 ExerciseCard(
                     state = exerciseState,
                     onToggle = { onEvent(DayUiEvent.ToggleExpanded(exerciseState.plan.id)) },
                     onLogSet = { weight, reps ->
-                        onEvent(DayUiEvent.LogSet(exerciseState.plan.id, weight, reps))
+                        // Convert kg input to lb storage if unit is kg
+                        val storedWeight = if (useKg) {
+                            val lb = parseToLb(weight, useKg = true)
+                            if (lb != null) "%.1f".format(lb).trimEnd('0').trimEnd('.') else weight
+                        } else weight
+                        onEvent(DayUiEvent.LogSet(exerciseState.plan.id, storedWeight, reps))
                     },
                     onDeleteSet = { setId -> onEvent(DayUiEvent.DeleteSet(setId)) },
+                    onEditSet = { setId, w, r -> onEvent(DayUiEvent.EditSet(setId, w, r)) },
                     onLogSameAsLast = { setId ->
                         onEvent(DayUiEvent.LogSameAsLast(exerciseState.plan.id, setId))
                     },
@@ -201,8 +486,23 @@ private fun DayContent(
                         onEvent(DayUiEvent.UpdateNote(exerciseState.plan.id, note))
                     },
                     onToggleSkipped = { onEvent(DayUiEvent.ToggleSkipped(exerciseState.plan.id)) },
-                    onOpenSwapPicker = { onEvent(DayUiEvent.OpenSwapPicker(exerciseState.plan.id)) }
+                    onOpenSwapPicker = { onEvent(DayUiEvent.OpenSwapPicker(exerciseState.plan.id)) },
+                    onOpenGoalSetter = { onEvent(DayUiEvent.OpenGoalSetter(exerciseState.plan.id)) },
+                    onMoveUp = if (idx > 0) { { onEvent(DayUiEvent.MoveExercise(exerciseState.plan.id, -1)) } } else null,
+                    onMoveDown = if (idx < totalExercises - 1) { { onEvent(DayUiEvent.MoveExercise(exerciseState.plan.id, 1)) } } else null,
+                    onLongPress = { onEvent(DayUiEvent.LongPressExercise(exerciseState.plan.id)) },
+                    onOpenRestTimerSetter = { restTimerSetterForId = exerciseState.plan.id },
+                    onSetExerciseUnit = { unit -> onEvent(DayUiEvent.SetExerciseUnit(exerciseState.plan.id, unit)) },
+                    onPinNote = { note -> onEvent(DayUiEvent.SetPinnedNote(exerciseState.plan.id, note)) },
+                    onToggleSetDifficultyTag = { setId, tag -> onEvent(DayUiEvent.ToggleSetDifficultyTag(setId, tag)) }
                 )
+            }
+            // "Add exercise" button at the bottom of the list (#61)
+            item(key = "add-exercise") {
+                androidx.compose.material3.TextButton(
+                    onClick = { onEvent(DayUiEvent.OpenAddExercisePicker) },
+                    modifier = Modifier.fillMaxWidth()
+                ) { Text("+ Add exercise") }
             }
         }
     }
@@ -224,4 +524,142 @@ private fun DiscardDialog(
             TextButton(onClick = onDismiss) { Text("Keep going") }
         }
     )
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@Composable
+private fun PreSessionPickerDialog(
+    sessionType: String,
+    isUntracked: Boolean,
+    intensity: String,
+    onTypeChange: (String) -> Unit,
+    onUntrackedChange: (Boolean) -> Unit,
+    onIntensityChange: (String) -> Unit,
+    onConfirm: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onConfirm,
+        title = { Text("How are we training today?") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("Session type", style = MaterialTheme.typography.labelLarge)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    listOf("normal" to "Normal", "deload" to "Deload", "test" to "Test day",
+                        "technique" to "Technique", "first_back" to "First day back").forEach { (v, label) ->
+                        FilterChip(selected = sessionType == v, onClick = { onTypeChange(v) }, label = { Text(label) })
+                    }
+                }
+                Text("Intensity", style = MaterialTheme.typography.labelLarge)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf("light" to "Light", "normal" to "Normal", "hard" to "Hard").forEach { (v, label) ->
+                        FilterChip(selected = intensity == v, onClick = { onIntensityChange(v) }, label = { Text(label) })
+                    }
+                }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    androidx.compose.material3.Switch(checked = isUntracked, onCheckedChange = onUntrackedChange)
+                    Column {
+                        Text("Untracked session", style = MaterialTheme.typography.bodyMedium)
+                        Text("Skips streak, trophies & suggestions", style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            }
+        },
+        confirmButton = { Button(onClick = onConfirm) { Text("Let's go") } }
+    )
+}
+
+@Composable
+private fun RestTimerSetterDialog(
+    exerciseName: String,
+    currentSeconds: Int?,
+    onSet: (Int) -> Unit,
+    onClear: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val presets = listOf(60 to "1m", 90 to "1:30", 120 to "2m", 150 to "2:30", 180 to "3m", 240 to "4m")
+    var selected by remember { mutableStateOf(currentSeconds) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Rest timer — $exerciseName") },
+        text = {
+            @OptIn(ExperimentalLayoutApi::class)
+        FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                presets.forEach { (secs, label) ->
+                    FilterChip(
+                        selected = selected == secs,
+                        onClick = { selected = secs },
+                        label = { Text(label) }
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = { selected?.let { onSet(it) } }, enabled = selected != null) { Text("Save") }
+        },
+        dismissButton = {
+            if (currentSeconds != null) {
+                TextButton(onClick = onClear) { Text("Use default") }
+            } else {
+                TextButton(onClick = onDismiss) { Text("Cancel") }
+            }
+        }
+    )
+}
+
+@Composable
+private fun GoalSetterDialog(
+    exerciseName: String,
+    currentGoal: Double?,
+    onSet: (Double) -> Unit,
+    onClear: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    var weightText by remember { mutableStateOf(currentGoal?.toInt()?.toString() ?: "") }
+    val weightLb = weightText.toDoubleOrNull()
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Goal weight — $exerciseName") },
+        text = {
+            OutlinedTextField(
+                value = weightText,
+                onValueChange = { weightText = it.filter { c -> c.isDigit() || c == '.' } },
+                label = { Text("Target weight (lb)") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
+            )
+        },
+        confirmButton = {
+            Button(
+                onClick = { weightLb?.let { onSet(it) } },
+                enabled = weightLb != null && weightLb > 0
+            ) { Text("Save") }
+        },
+        dismissButton = {
+            if (currentGoal != null) {
+                TextButton(onClick = onClear) { Text("Clear goal") }
+            } else {
+                TextButton(onClick = onDismiss) { Text("Cancel") }
+            }
+        }
+    )
+}
+
+@Composable
+private fun QuickBreakChips(onBreak: (String) -> Unit) {
+    val breaks = listOf("💧" to "water", "😴" to "rest", "🍌" to "snack")
+    androidx.compose.foundation.layout.Row(
+        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)
+    ) {
+        breaks.forEach { (emoji, type) ->
+            androidx.compose.material3.FilterChip(
+                selected = false,
+                onClick = { onBreak(type) },
+                label = { androidx.compose.material3.Text(emoji) }
+            )
+        }
+    }
 }

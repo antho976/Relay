@@ -12,6 +12,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -30,6 +31,8 @@ fun WarmupGate(
     checks: List<Boolean>,
     onToggle: (Int) -> Unit,
     onSkip: () -> Unit,
+    reactions: Map<Int, Boolean> = emptyMap(),
+    onReaction: (Int, Boolean) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
     Surface(
@@ -59,7 +62,9 @@ fun WarmupGate(
                 WarmupRow(
                     label = label,
                     checked = checks.getOrElse(index) { false },
-                    onToggle = { onToggle(index) }
+                    onToggle = { onToggle(index) },
+                    reaction = reactions[index],
+                    onReaction = if (checks.getOrElse(index) { false }) { thumbsUp -> onReaction(index, thumbsUp) } else null
                 )
             }
 
@@ -78,7 +83,13 @@ fun WarmupGate(
 }
 
 @Composable
-private fun WarmupRow(label: String, checked: Boolean, onToggle: () -> Unit) {
+private fun WarmupRow(
+    label: String,
+    checked: Boolean,
+    onToggle: () -> Unit,
+    reaction: Boolean? = null,
+    onReaction: ((Boolean) -> Unit)? = null
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -96,5 +107,21 @@ private fun WarmupRow(label: String, checked: Boolean, onToggle: () -> Unit) {
                     else MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.weight(1f)
         )
+        if (onReaction != null) {
+            Text(
+                text = "👍",
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (reaction == true) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                modifier = Modifier.clickable { onReaction(true) }
+            )
+            Text(
+                text = "👎",
+                style = MaterialTheme.typography.bodyMedium,
+                color = if (reaction == false) MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                modifier = Modifier.clickable { onReaction(false) }
+            )
+        }
     }
 }

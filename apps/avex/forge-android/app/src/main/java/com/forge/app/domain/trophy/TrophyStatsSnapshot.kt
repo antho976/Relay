@@ -18,5 +18,16 @@ data class TrophyStatsSnapshot(
     val distinctDayKeysTrained: Int,
     val maxBenchLb: Double,
     val maxSquatLb: Double,
-    val maxSessionVolumeLb: Double
+    val maxSessionVolumeLb: Double,
+    // ─── New fields for #105 ────────────────────────────────────────────────
+    val maxStreakEver: Int = 0,
+    val earlyBirdSessions: Int = 0,
+    val nightOwlSessions: Int = 0,
+    val sundaysTrainedCount: Int = 0,
+    val maxSessionDurationMinutes: Int = 0,
+    val minFinishedSessionDurationMinutes: Int = Int.MAX_VALUE,
+    val maxSingleExerciseReps: Int = 0,
+    val comebackKidEarned: Boolean = false,
+    val consistencyKingEarned: Boolean = false,
+    val varietyPackEarned: Boolean = false
 )

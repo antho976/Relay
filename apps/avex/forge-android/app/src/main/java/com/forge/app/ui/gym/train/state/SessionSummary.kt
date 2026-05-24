@@ -18,7 +18,23 @@ data class SessionSummary(
     val exercisesLogged: Int,
     val exercisesSkipped: Int,
     val highlights: List<ExerciseHighlight>,
-    val unlockedTrophies: List<UnlockedTrophyHighlight> = emptyList()
+    val unlockedTrophies: List<UnlockedTrophyHighlight> = emptyList(),
+    /** Volume delta vs last session on the same day (positive = improvement). Null if no prior session (#52). */
+    val vsLastVolumeDelta: Double? = null,
+    /** Set count delta vs last session on the same day. Null if no prior session (#52). */
+    val vsLastSetsDelta: Int? = null,
+    /** True if this session's volume is the all-time best for this day (#53). */
+    val isBestSession: Boolean = false,
+    /** Sets logged per minute — 0.0 if duration unknown (#83). */
+    val setsPerMin: Double = 0.0,
+    /** Volume (lb) per minute — 0.0 if duration unknown (#83). */
+    val volumePerMin: Double = 0.0,
+    /** Volume ÷ duration — the workout density score (#127). Null if duration is 0. */
+    val densityScore: Double? = null,
+    /** Average rest between consecutive sets within each exercise, in seconds. Null if < 2 sets (#82). */
+    val avgRestSeconds: Int? = null,
+    /** Planned sets logged / total planned sets × 100. Null if no planned exercises (#133). */
+    val honestyPct: Int? = null
 )
 
 data class ExerciseHighlight(

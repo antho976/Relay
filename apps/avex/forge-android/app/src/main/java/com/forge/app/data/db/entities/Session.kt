@@ -21,5 +21,16 @@ data class Session(
     @ColumnInfo(name = "finished_at") val finishedAt: Long? = null,
     @ColumnInfo(name = "total_volume_lb") val totalVolumeLb: Double? = null,
     @ColumnInfo(name = "pr_count") val prCount: Int = 0,
-    @ColumnInfo(name = "deload_marked_here") val deloadMarkedHere: Boolean = false
+    @ColumnInfo(name = "set_count") val setCount: Int = 0,
+    @ColumnInfo(name = "deload_marked_here") val deloadMarkedHere: Boolean = false,
+    /** Comma-separated quick tags chosen at session end (#107). Empty string = no tags. */
+    @ColumnInfo(name = "tags") val tags: String = "",
+    /** Session type marker (#109): "normal" | "deload" | "test" | "technique" | "first_back" */
+    @ColumnInfo(name = "session_type") val sessionType: String = "normal",
+    /** If true, session is untracked — excluded from streak, trophies, suggestions (#110). */
+    @ColumnInfo(name = "is_untracked") val isUntracked: Boolean = false,
+    /** Free-text journal for the whole session (#111). */
+    @ColumnInfo(name = "journal") val journal: String = "",
+    /** Intensity intent (#123): "light" | "normal" | "hard" */
+    @ColumnInfo(name = "intensity") val intensity: String = "normal"
 )

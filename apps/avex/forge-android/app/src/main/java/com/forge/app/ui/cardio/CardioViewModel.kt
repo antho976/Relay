@@ -9,6 +9,7 @@ import com.forge.app.domain.cardio.CardioEffort
 import com.forge.app.domain.cardio.CardioRestReason
 import com.forge.app.domain.cardio.CardioType
 import com.forge.app.ui.cardio.state.CardioUiState
+import com.forge.app.ui.cardio.state.PaceTrendPoint
 import java.time.DayOfWeek
 import java.time.Instant
 import java.time.LocalDate
@@ -18,6 +19,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -42,12 +44,19 @@ class CardioViewModel @Inject constructor(
     private val transient = MutableStateFlow(TransientState())
     private val weekStartMs: Long = clock.nowMs() - WEEK_MS
 
-    val state: StateFlow<CardioUiState> = combine(
+    private val dbFlow = combine(
         cardioRepo.observeRecent(limit = 20),
         cardioRepo.observeMinutesSince(weekStartMs),
         cardioRepo.observeSince(weekStartMs),
-        transient
-    ) { recent, weekMin, weekEntries, tr ->
+        cardioRepo.observeLifetimeDistanceKm(),
+        cardioRepo.observeRunEntries()
+    ) { recent, weekMin, weekEntries, lifetimeKm, runEntries ->
+        Triple(recent, weekMin to weekEntries, lifetimeKm to runEntries)
+    }
+
+    val state: StateFlow<CardioUiState> = combine(dbFlow, transient) { (recent, weekPair, analyticsPair), tr ->
+        val (weekMin, weekEntries) = weekPair
+        val (lifetimeKm, runEntries) = analyticsPair
         CardioUiState(
             isLoading = false,
             weekMinutes = weekMin ?: 0,
@@ -55,7 +64,12 @@ class CardioViewModel @Inject constructor(
             weekDailyMinutes = buildDailyMinutes(weekEntries),
             entries = recent,
             sheetOpen = tr.sheetOpen,
-            pendingDeleteId = tr.pendingDeleteId
+            pendingDeleteId = tr.pendingDeleteId,
+            selectedTypeFilter = tr.selectedTypeFilter,
+            lifetimeDistanceKm = lifetimeKm ?: 0.0,
+            paceTrend = runEntries.takeLast(20).map { entry ->
+                PaceTrendPoint(dateMs = entry.date, paceMinPerKm = entry.durationMin.toDouble() / (entry.distanceKm ?: 1.0))
+            }
         )
     }.stateIn(
         scope = viewModelScope,
@@ -107,9 +121,12 @@ class CardioViewModel @Inject constructor(
         }
     }
 
+    fun setTypeFilter(type: String?) = transient.update { it.copy(selectedTypeFilter = type) }
+
     private data class TransientState(
         val sheetOpen: Boolean = false,
-        val pendingDeleteId: Long? = null
+        val pendingDeleteId: Long? = null,
+        val selectedTypeFilter: String? = null
     )
 
     companion object {

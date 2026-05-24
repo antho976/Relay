@@ -3,6 +3,7 @@ package com.forge.app.ui.gym.train
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.forge.app.data.db.dao.SessionDao
+import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.data.repo.CustomizationRepository
 import com.forge.app.data.repo.WorkoutRepository
 import com.forge.app.program.Program
@@ -13,30 +14,23 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
-/**
- * Drives the four-day list. The day cards are constant (taken from the static
- * [Program]); only [DayListItem.displayName] (user override), [DayListItem.lastFinishedAt],
- * [DayListItem.isActive], and [DayListItem.isNextUp] vary at runtime.
- *
- * Next-up rule: if there is an active session, that day is next-up. Otherwise, find the
- * most-recently-finished session and advance one step in the [Program.dayKeys] rotation
- * (Upper A → Lower A → Upper B → Lower B → Upper A …). Defaults to Upper A when no
- * session has ever been completed.
- */
 @HiltViewModel
 class DayListViewModel @Inject constructor(
     private val workoutRepo: WorkoutRepository,
     private val customizationRepo: CustomizationRepository,
-    private val sessionDao: SessionDao
+    private val sessionDao: SessionDao,
+    private val settingsRepo: SettingsRepository
 ) : ViewModel() {
 
     val state: StateFlow<DayListUiState> = combine(
         customizationRepo.observeAllDayNames(),
         workoutRepo.observeActiveSession(),
-        sessionDao.observeRecent(50)
-    ) { dayNames, activeSession, recentSessions ->
+        sessionDao.observeRecent(50),
+        settingsRepo.observeAllDayColors()
+    ) { dayNames, activeSession, recentSessions, dayColors ->
         val nameByKey = dayNames.associate { it.dayKey to it.customName }
         val lastFinishedByKey = recentSessions
             .filter { it.finishedAt != null }
@@ -49,9 +43,8 @@ class DayListViewModel @Inject constructor(
                 val lastFinished = recentSessions
                     .filter { it.finishedAt != null }
                     .maxByOrNull { it.finishedAt!! }
-                if (lastFinished == null) {
-                    Program.UPPER_A
-                } else {
+                if (lastFinished == null) Program.UPPER_A
+                else {
                     val idx = Program.dayKeys.indexOf(lastFinished.dayKey)
                     Program.dayKeys[(idx + 1) % Program.dayKeys.size]
                 }
@@ -66,7 +59,8 @@ class DayListViewModel @Inject constructor(
                     lastFinishedAt = lastFinishedByKey[plan.key],
                     isActive = activeSession?.dayKey == plan.key,
                     isNextUp = plan.key == nextUpKey,
-                    exerciseCount = plan.exercises.size
+                    exerciseCount = plan.exercises.size,
+                    customAccentHex = dayColors[plan.key]
                 )
             },
             activeSession = activeSession
@@ -76,4 +70,8 @@ class DayListViewModel @Inject constructor(
         started = SharingStarted.WhileSubscribed(stopTimeoutMillis = 5_000),
         initialValue = DayListUiState()
     )
+
+    fun setDayColor(dayKey: String, hex: String?) {
+        viewModelScope.launch { settingsRepo.setDayColor(dayKey, hex) }
+    }
 }

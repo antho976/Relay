@@ -16,5 +16,9 @@ import androidx.room.PrimaryKey
 data class ExerciseCustomization(
     @PrimaryKey @ColumnInfo(name = "exercise_id") val exerciseId: String,
     @ColumnInfo(name = "swapped_name") val swappedName: String,
-    @ColumnInfo(name = "swapped_unit") val swappedUnit: String
+    @ColumnInfo(name = "swapped_unit") val swappedUnit: String,
+    /** User-set rest duration in seconds for this exercise. Null = use smart defaults (#59). */
+    @ColumnInfo(name = "rest_timer_override_seconds") val restTimerOverrideSeconds: Int? = null,
+    /** Always-visible pinned cue in the collapsed card header (#112). Empty = not pinned. */
+    @ColumnInfo(name = "pinned_note") val pinnedNote: String = ""
 )

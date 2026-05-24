@@ -25,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import com.forge.app.data.db.entities.LoggedSet
 
 /**
  * Weight + reps inputs + Add button for an expanded exercise card.
@@ -38,12 +39,16 @@ import androidx.compose.ui.unit.dp
  * Weight suggestion (#13/#12): when [suggestedWeight] is non-null (computed by the VM from last
  * performance + difficulty rating + rep-range progression), a "Try: X lb" hint row is shown with a
  * one-tap "Use" button.
+ *
+ * PR hint (#100): when [priorSets] is non-empty and the current weight has a numeric value,
+ * shows "Hit N reps for a PR" next to the reps field based on history at this weight or higher.
  */
 @Composable
 fun SetInputRow(
     prefillWeight: String?,
     suggestedWeight: String? = null,
     suggestionReason: String? = null,
+    priorSets: List<LoggedSet> = emptyList(),
     onSubmit: (weightText: String, reps: Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -62,6 +67,12 @@ fun SetInputRow(
 
     val canSubmit = remember(weight, reps) {
         weight.isNotBlank() && reps.toIntOrNull()?.let { it > 0 } == true
+    }
+
+    // PR hint: how many reps at this weight to beat all-time best (#100)
+    val prRepsHint = remember(weight, priorSets) {
+        val weightLb = weight.trim().toDoubleOrNull() ?: return@remember null
+        repsNeededForPr(priorSets, weightLb)
     }
 
     Column(modifier = modifier.fillMaxWidth()) {
@@ -117,6 +128,10 @@ fun SetInputRow(
                 onValueChange = { new -> if (new.all { it.isDigit() }) reps = new },
                 modifier = Modifier.weight(0.8f),
                 label = { Text("Reps") },
+                supportingText = prRepsHint?.let { needed ->
+                    { Text("$needed for PR", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary) }
+                },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(
                     keyboardType = KeyboardType.Number,
@@ -155,4 +170,20 @@ fun SetInputRow(
             }
         }
     }
+}
+
+/**
+ * Returns the rep count needed to beat the all-time PR at [weightLb], or null when:
+ * - history is empty at or above this weight (the weight itself would be a PR at any reps)
+ * - [weightLb] is heavier than any historical set (first set at this weight is always a PR)
+ *
+ * Logic mirrors [PrDetector.isPr]: a PR requires being strictly heavier than the max weight
+ * logged at the same-or-higher rep count. At a fixed weight, that means logging more reps
+ * than the historical max at this weight or above.
+ */
+private fun repsNeededForPr(history: List<LoggedSet>, weightLb: Double): Int? {
+    val maxRepsAtOrAbove = history
+        .filter { it.weightLb != null && it.weightLb >= weightLb }
+        .maxOfOrNull { it.reps }
+    return maxRepsAtOrAbove?.let { it + 1 }
 }

@@ -86,6 +86,15 @@ dependencies {
     // Coroutines
     implementation(libs.kotlinx.coroutines.android)
 
+    // WorkManager + Hilt Worker injection
+    implementation(libs.work.runtime.ktx)
+    implementation(libs.hilt.work)
+    ksp(libs.hilt.androidx.compiler)
+
+    // Glance for home screen widget (#146)
+    implementation("androidx.glance:glance-appwidget:1.1.1")
+    implementation("androidx.glance:glance-material3:1.1.1")
+
     // Test
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.test.junit)

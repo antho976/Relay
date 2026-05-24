@@ -9,6 +9,28 @@ package com.forge.app.program
  * prototype uses a mix of ranges and per-side notations. PR detection (Phase 6+)
  * parses this when needed.
  */
+/** Equipment required to perform an exercise (#44). */
+enum class Equipment(val display: String) {
+    DUMBBELLS("Dumbbells"),
+    BARBELL("Barbell"),
+    CABLE("Cable machine"),
+    PULL_UP_BAR("Pull-up bar"),
+    BENCH("Bench"),
+    BODYWEIGHT_ONLY("Bodyweight only"),
+    RESISTANCE_BAND("Resistance bands"),
+    KETTLEBELL("Kettlebell"),
+    MACHINE("Machine")
+}
+
+/** Equipment/movement tag for an exercise (#37). */
+enum class ExerciseTag(val display: String) {
+    COMPOUND("Compound"),
+    ISOLATION("Isolation"),
+    MACHINE("Machine"),
+    FREE_WEIGHT("Free Weight"),
+    BODYWEIGHT("Bodyweight")
+}
+
 data class ExercisePlan(
     val id: String,
     val name: String,
@@ -17,7 +39,13 @@ data class ExercisePlan(
     val unit: ExerciseUnit,
     val muscle: MuscleGroup,
     val difficulty: Difficulty,
-    val note: String
+    val note: String,
+    /** Movement tags for swap-picker filtering (#37). */
+    val tags: List<ExerciseTag> = emptyList(),
+    /** Short form cue shown as a chip during session (#8). Null = no cue. */
+    val formCue: String? = null,
+    /** Equipment required for this exercise (#44). Empty = no specific equipment needed. */
+    val equipment: List<Equipment> = emptyList()
 )
 
 /**

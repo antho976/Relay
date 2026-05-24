@@ -35,5 +35,20 @@ data class LoggedSet(
     @ColumnInfo(name = "weight_text") val weightText: String,
     @ColumnInfo(name = "weight_lb") val weightLb: Double? = null,
     @ColumnInfo(name = "reps") val reps: Int,
-    @ColumnInfo(name = "completed_at") val completedAt: Long
+    @ColumnInfo(name = "completed_at") val completedAt: Long,
+    /** Per-set difficulty tag (#68): "easy" | "hard" | null (no tag). */
+    @ColumnInfo(name = "difficulty_tag") val difficultyTag: String? = null,
+    /** AMRAP marker (#140): reps field = achieved count; intent was max reps. */
+    @ColumnInfo(name = "is_amrap") val isAmrap: Boolean = false,
+    /** Assisted set (#141): bands / spotter — excluded from all-time PR comparison. */
+    @ColumnInfo(name = "is_assisted") val isAssisted: Boolean = false,
+    /** Failure marker (#18): set ended at muscular failure. */
+    @ColumnInfo(name = "to_failure") val toFailure: Boolean = false,
+    /**
+     * Advanced set type (#142): null = normal | "drop" | "myo" | "rest_pause"
+     * | "negative" | "paused" | "partial" | "isometric" | "cluster" | "emom"
+     */
+    @ColumnInfo(name = "set_type") val setType: String? = null,
+    /** Mid-set weight drop annotation (#143): "weightLb2/reps2" e.g. "35/4". */
+    @ColumnInfo(name = "drop_annotation") val dropAnnotation: String? = null
 )

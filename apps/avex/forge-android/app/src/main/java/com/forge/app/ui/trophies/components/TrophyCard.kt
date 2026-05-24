@@ -4,15 +4,18 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -25,10 +28,7 @@ import java.util.Locale
 /**
  * One tile in the trophies grid. Two visual states:
  *   - Unlocked: full-colour icon badge, accent border, unlock date at the bottom.
- *   - Locked: muted icon, no border, progress hint at the bottom (e.g. "12 / 25").
- *
- * Sizes itself to the content; pair with [androidx.compose.foundation.lazy.grid.LazyVerticalGrid]
- * + GridCells.Fixed(2) for the catalog layout.
+ *   - Locked: muted icon, no border, thin progress bar + "X / Y" hint at the bottom (#71).
  */
 @Composable
 fun TrophyCard(
@@ -61,6 +61,14 @@ fun TrophyCard(
                 unlocked = unlocked,
                 size = 48.dp
             )
+            // Tier badge (#150)
+            val tierColor = androidx.compose.ui.graphics.Color(display.trophy.tier.color)
+            Text(
+                text = display.trophy.tier.display,
+                style = MaterialTheme.typography.labelSmall,
+                color = tierColor,
+                fontWeight = FontWeight.SemiBold
+            )
             Text(
                 text = display.trophy.name,
                 style = MaterialTheme.typography.titleSmall,
@@ -86,21 +94,35 @@ fun TrophyCard(
 
 @Composable
 private fun FooterLine(display: TrophyDisplay) {
-    val text: String
-    val color = if (display.isUnlocked) MaterialTheme.colorScheme.primary
-                else MaterialTheme.colorScheme.onSurfaceVariant
     if (display.isUnlocked) {
-        text = "Unlocked " + formatDate(display.unlockedAt!!)
+        Text(
+            text = "Unlocked " + formatDate(display.unlockedAt!!),
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.primary,
+            textAlign = TextAlign.Center
+        )
     } else {
-        text = display.progressHint ?: "Locked"
+        val fraction = display.progressFraction
+        if (fraction != null && fraction > 0f) {
+            LinearProgressIndicator(
+                progress = { fraction },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(2.dp)),
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
+                trackColor = MaterialTheme.colorScheme.surfaceVariant
+            )
+        }
+        Text(
+            text = display.progressHint ?: "Locked",
+            style = MaterialTheme.typography.labelSmall,
+            fontWeight = FontWeight.Normal,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            textAlign = TextAlign.Center
+        )
     }
-    Text(
-        text = text,
-        style = MaterialTheme.typography.labelSmall,
-        fontWeight = if (display.isUnlocked) FontWeight.SemiBold else FontWeight.Normal,
-        color = color,
-        textAlign = TextAlign.Center
-    )
 }
 
 private val dateFormat = SimpleDateFormat("MMM d", Locale.getDefault())

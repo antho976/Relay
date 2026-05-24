@@ -43,5 +43,11 @@ data class LoggedExercise(
     @ColumnInfo(name = "hit_full_target") val hitFullTarget: Boolean = false,
     @ColumnInfo(name = "was_pr") val wasPr: Boolean = false,
     @ColumnInfo(name = "note") val note: String? = null,
-    @ColumnInfo(name = "skipped") val skipped: Boolean = false
+    @ColumnInfo(name = "skipped") val skipped: Boolean = false,
+    /**
+     * Superset group identifier (#38). Exercises with the same non-null group value
+     * are shown as a superset (back-to-back with no rest between them).
+     * Null = standalone exercise (default).
+     */
+    @ColumnInfo(name = "superset_group") val supersetGroup: String? = null
 )

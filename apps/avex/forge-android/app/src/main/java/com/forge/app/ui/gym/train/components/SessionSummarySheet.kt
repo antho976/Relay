@@ -2,9 +2,12 @@ package com.forge.app.ui.gym.train.components
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -14,6 +17,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -33,6 +38,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.domain.mood.Mood
+import com.forge.app.ui.common.ConfettiOverlay
 import com.forge.app.ui.gym.train.state.SessionSummary
 import com.forge.app.ui.gym.train.state.UnlockedTrophyHighlight
 import com.forge.app.ui.trophies.components.TrophyIconBadge
@@ -44,15 +50,19 @@ import com.forge.app.ui.trophies.components.TrophyIconBadge
 @Composable
 fun SessionSummarySheet(
     summary: SessionSummary,
-    onDismiss: (Mood?) -> Unit
+    onDismiss: (mood: Mood?, tags: List<String>, journal: String) -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var selectedMood by remember { mutableStateOf<Mood?>(null) }
+    var selectedTags by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var journal by remember { mutableStateOf("") }
+    var showTrophyConfetti by remember { mutableStateOf(summary.unlockedTrophies.isNotEmpty()) }
     ModalBottomSheet(
-        onDismissRequest = { onDismiss(selectedMood) },
+        onDismissRequest = { onDismiss(selectedMood, selectedTags.toList(), journal) },
         sheetState = sheetState,
         containerColor = MaterialTheme.colorScheme.surface
     ) {
+        Box {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -115,6 +125,60 @@ fun SessionSummarySheet(
                 )
             }
 
+            // Session efficiency metrics (#83, #127, #82, #133)
+            val hasEfficiency = summary.densityScore != null || summary.avgRestSeconds != null || summary.honestyPct != null
+            if (hasEfficiency) {
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+                Text(
+                    "SESSION METRICS",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    summary.densityScore?.let { density ->
+                        MetaStat(
+                            label = "Density",
+                            value = "${density.toInt()} lb/min",
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    summary.avgRestSeconds?.let { rest ->
+                        val restStr = if (rest >= 60) "${rest / 60}m ${rest % 60}s" else "${rest}s"
+                        MetaStat(
+                            label = "Avg rest",
+                            value = restStr,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    summary.honestyPct?.let { pct ->
+                        MetaStat(
+                            label = "Completion",
+                            value = "$pct%",
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                }
+            }
+
+            // Session comparison vs last same-day session (#52)
+            val hasComparison = summary.vsLastVolumeDelta != null || summary.vsLastSetsDelta != null
+            if (hasComparison) {
+                HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+                SessionComparisonRow(
+                    volumeDelta = summary.vsLastVolumeDelta,
+                    setsDelta = summary.vsLastSetsDelta
+                )
+            }
+
+            // Best session callout (#53)
+            if (summary.isBestSession) {
+                BestSessionCallout(dayWord = summary.dayWord)
+            }
+
             if (summary.highlights.isNotEmpty()) {
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
                 Text(
@@ -145,8 +209,19 @@ fun SessionSummarySheet(
                 onSelect = { mood -> selectedMood = if (selectedMood == mood) null else mood }
             )
 
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+            JournalField(value = journal, onValueChange = { journal = it })
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+            TagPicker(
+                selected = selectedTags,
+                onToggle = { tag ->
+                    selectedTags = if (tag in selectedTags) selectedTags - tag else selectedTags + tag
+                }
+            )
+
             Button(
-                onClick = { onDismiss(selectedMood) },
+                onClick = { onDismiss(selectedMood, selectedTags.toList(), journal) },
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 8.dp, bottom = 16.dp),
@@ -157,6 +232,14 @@ fun SessionSummarySheet(
                 Text("Done")
             }
         }
+        // Trophy confetti (#30): fires once when sheet opens with unlocked trophies
+        if (showTrophyConfetti) {
+            ConfettiOverlay(
+                modifier = Modifier.matchParentSize(),
+                onComplete = { showTrophyConfetti = false }
+            )
+        }
+        } // end Box
     }
 }
 
@@ -185,9 +268,14 @@ private fun StatTile(
 }
 
 @Composable
-private fun MetaStat(label: String, value: String, modifier: Modifier = Modifier) {
+private fun MetaStat(
+    label: String,
+    value: String,
+    modifier: Modifier = Modifier,
+    valueColor: androidx.compose.ui.graphics.Color = MaterialTheme.colorScheme.onSurface
+) {
     Column(modifier = modifier) {
-        Text(value, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onSurface)
+        Text(value, style = MaterialTheme.typography.titleLarge, color = valueColor)
         Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
@@ -281,6 +369,109 @@ private fun TrophyUnlockRow(t: UnlockedTrophyHighlight) {
                     t.description,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SessionComparisonRow(volumeDelta: Double?, setsDelta: Int?) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        if (volumeDelta != null) {
+            val positive = volumeDelta >= 0
+            val sign = if (positive) "+" else ""
+            val color = if (positive) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.error
+            MetaStat(
+                label = "vs last session",
+                value = "$sign${volumeDelta.toInt()} lb",
+                modifier = Modifier.weight(1f),
+                valueColor = color
+            )
+        }
+        if (setsDelta != null) {
+            val positive = setsDelta >= 0
+            val sign = if (positive) "+" else ""
+            val color = if (positive) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.error
+            MetaStat(
+                label = "sets vs last",
+                value = "$sign$setsDelta",
+                modifier = Modifier.weight(1f),
+                valueColor = color
+            )
+        }
+    }
+}
+
+@Composable
+private fun BestSessionCallout(dayWord: String) {
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.13f),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text("★", color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Black)
+            Text(
+                "Your best $dayWord ever",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
+    }
+}
+
+@Composable
+private fun JournalField(value: String, onValueChange: (String) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(
+            "SESSION JOURNAL",
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            modifier = Modifier.fillMaxWidth(),
+            placeholder = { Text("How was the session overall?", style = MaterialTheme.typography.bodyMedium) },
+            minLines = 2,
+            maxLines = 5
+        )
+    }
+}
+
+private val SESSION_TAGS = listOf("💪 Felt Strong", "😅 Low Energy", "🔥 On Fire", "😷 Sick", "⚡ Rushed", "✅ Great Session")
+
+@OptIn(ExperimentalLayoutApi::class, ExperimentalMaterial3Api::class)
+@Composable
+private fun TagPicker(selected: Set<String>, onToggle: (String) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            "TAG THIS SESSION",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontWeight = FontWeight.SemiBold
+        )
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            SESSION_TAGS.forEach { tag ->
+                FilterChip(
+                    selected = tag in selected,
+                    onClick = { onToggle(tag) },
+                    label = { Text(tag, style = MaterialTheme.typography.labelMedium) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
+                        selectedLabelColor = MaterialTheme.colorScheme.primary
+                    )
                 )
             }
         }

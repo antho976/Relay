@@ -5,19 +5,26 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -32,15 +39,51 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * One row in the recent-cardio list. Decodes the raw [CardioEntry] strings to enums
- * for icon + display name. Trailing trash button opens the parent's delete confirm.
+ * One row in the recent-cardio list with swipe-left-to-delete (#36).
+ * Decodes the raw [CardioEntry] strings to enums for icon + display name.
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CardioEntryRow(
     entry: CardioEntry,
     onRequestDelete: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val dismissState = rememberSwipeToDismissBoxState(
+        confirmValueChange = { value ->
+            if (value == SwipeToDismissBoxValue.EndToStart) {
+                onRequestDelete()
+                false // let the confirm dialog handle actual deletion
+            } else false
+        }
+    )
+    // Reset after the dialog dismisses so the row stays visible
+    LaunchedEffect(dismissState.currentValue) {
+        if (dismissState.currentValue != SwipeToDismissBoxValue.Settled) {
+            dismissState.reset()
+        }
+    }
+    SwipeToDismissBox(
+        state = dismissState,
+        enableDismissFromStartToEnd = false,
+        backgroundContent = {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(MaterialTheme.colorScheme.error.copy(alpha = 0.85f)),
+                contentAlignment = Alignment.CenterEnd
+            ) {
+                Icon(
+                    Icons.Default.Delete,
+                    contentDescription = "Delete",
+                    tint = MaterialTheme.colorScheme.onError,
+                    modifier = Modifier.padding(end = 20.dp)
+                )
+            }
+        },
+        modifier = modifier
+    ) {
     val type = CardioType.fromCode(entry.type)
     Surface(
         modifier = modifier.fillMaxWidth(),
@@ -82,6 +125,7 @@ fun CardioEntryRow(
             }
         }
     }
+    } // SwipeToDismissBox
 }
 
 @Composable

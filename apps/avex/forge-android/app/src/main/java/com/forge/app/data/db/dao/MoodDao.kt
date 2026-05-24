@@ -17,4 +17,7 @@ interface MoodDao {
 
     @Query("SELECT * FROM mood_entry WHERE session_id = :sessionId LIMIT 1")
     suspend fun forSession(sessionId: Long): MoodEntry?
+
+    @Query("SELECT * FROM mood_entry")
+    fun observeAll(): Flow<List<MoodEntry>>
 }

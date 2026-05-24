@@ -27,7 +27,33 @@ class CustomizationRepository @Inject constructor(
         customizationDao.get(exerciseId)
 
     suspend fun setSwap(exerciseId: String, swappedName: String, swappedUnit: String) {
-        customizationDao.upsert(ExerciseCustomization(exerciseId, swappedName, swappedUnit))
+        val existing = customizationDao.get(exerciseId)
+        customizationDao.upsert(
+            ExerciseCustomization(exerciseId, swappedName, swappedUnit,
+                restTimerOverrideSeconds = existing?.restTimerOverrideSeconds)
+        )
+    }
+
+    suspend fun setRestTimerOverride(exerciseId: String, seconds: Int?) {
+        val existing = customizationDao.get(exerciseId)
+        if (existing != null) {
+            customizationDao.upsert(existing.copy(restTimerOverrideSeconds = seconds))
+        } else {
+            // No swap exists yet — create a minimal row to hold the override
+            customizationDao.upsert(ExerciseCustomization(exerciseId, "", "", seconds))
+        }
+    }
+
+    suspend fun getRestTimerOverride(exerciseId: String): Int? =
+        customizationDao.get(exerciseId)?.restTimerOverrideSeconds
+
+    suspend fun setPinnedNote(exerciseId: String, note: String) {
+        val existing = customizationDao.get(exerciseId)
+        if (existing != null) {
+            customizationDao.upsert(existing.copy(pinnedNote = note))
+        } else {
+            customizationDao.upsert(ExerciseCustomization(exerciseId, "", "", null, note))
+        }
     }
 
     suspend fun clearSwap(exerciseId: String) = customizationDao.clear(exerciseId)

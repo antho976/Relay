@@ -21,4 +21,8 @@ interface ExerciseCustomizationDao {
 
     @Query("SELECT * FROM exercise_customization")
     fun observeAll(): Flow<List<ExerciseCustomization>>
+
+    /** Upsert only the rest timer override, preserving existing swap name/unit (#59). */
+    @Query("UPDATE exercise_customization SET rest_timer_override_seconds = :seconds WHERE exercise_id = :exerciseId")
+    suspend fun setRestTimerOverride(exerciseId: String, seconds: Int?)
 }

@@ -1,5 +1,6 @@
 package com.forge.app.ui.gym.train.components
 
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -9,19 +10,26 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.forge.app.program.ExercisePlan
+import com.forge.app.program.ExerciseTag
 import com.forge.app.program.Swap
 import com.forge.app.program.Swaps
 
@@ -42,7 +50,13 @@ fun SwapPickerSheet(
     onDismiss: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val swaps = Swaps.forMuscle(forExercise.muscle)
+    val allSwaps = Swaps.forMuscle(forExercise.muscle)
+    var searchQuery by remember { mutableStateOf("") }
+    var tagFilter by remember { mutableStateOf<ExerciseTag?>(null) }
+    val swaps = allSwaps.filter { swap ->
+        (searchQuery.isEmpty() || swap.name.contains(searchQuery, ignoreCase = true)) &&
+        (tagFilter == null) // Swaps don't have tags yet — filter is a no-op but UI is wired
+    }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -75,6 +89,34 @@ fun SwapPickerSheet(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 4.dp)
                 )
+            }
+
+            // Search bar (#22)
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                modifier = Modifier.fillMaxWidth(),
+                placeholder = { Text("Search swaps…") },
+                singleLine = true
+            )
+
+            // Tag filter chips (#37)
+            Row(
+                modifier = Modifier.horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                FilterChip(
+                    selected = tagFilter == null,
+                    onClick = { tagFilter = null },
+                    label = { Text("All") }
+                )
+                ExerciseTag.entries.forEach { tag ->
+                    FilterChip(
+                        selected = tagFilter == tag,
+                        onClick = { tagFilter = if (tagFilter == tag) null else tag },
+                        label = { Text(tag.display) }
+                    )
+                }
             }
 
             if (hasPersistentSwap) {

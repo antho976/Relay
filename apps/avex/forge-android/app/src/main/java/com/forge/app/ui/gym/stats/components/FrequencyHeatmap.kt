@@ -24,6 +24,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.forge.app.ui.gym.stats.state.HeatmapCell
+import com.forge.app.ui.theme.LocalForgeSettings
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.format.TextStyle
@@ -39,9 +40,11 @@ fun FrequencyHeatmap(cells: List<HeatmapCell>, modifier: Modifier = Modifier) {
     val accent = MaterialTheme.colorScheme.primary
     val maxCount = (cells.maxOfOrNull { it.count } ?: 0).coerceAtLeast(1)
     val today = remember { LocalDate.now() }
+    val firstDayMonday = LocalForgeSettings.current.firstDayMonday
 
     // Column headers derived from the day-of-week of the oldest cell
-    val startDow: DayOfWeek = cells.firstOrNull()?.date?.dayOfWeek ?: DayOfWeek.MONDAY
+    val defaultStart = if (firstDayMonday) DayOfWeek.MONDAY else DayOfWeek.SUNDAY
+    val startDow: DayOfWeek = cells.firstOrNull()?.date?.dayOfWeek ?: defaultStart
     val colLabels = (0 until COLS).map { i ->
         DayOfWeek.of(((startDow.value - 1 + i) % 7) + 1)
             .getDisplayName(TextStyle.NARROW, Locale.getDefault())

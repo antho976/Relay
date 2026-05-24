@@ -14,5 +14,7 @@ data class DayListItem(
     val lastFinishedAt: Long? = null,
     val isActive: Boolean = false,
     val isNextUp: Boolean = false,
-    val exerciseCount: Int = 0
+    val exerciseCount: Int = 0,
+    /** User-set accent hex override (#65). Null = use plan.accentHex. */
+    val customAccentHex: String? = null
 )

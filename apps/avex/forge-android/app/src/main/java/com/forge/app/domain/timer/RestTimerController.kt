@@ -79,6 +79,17 @@ class RestTimerController(
         _state.value = null
     }
 
+    /** Add [seconds] to the remaining time. Resumes if the timer was paused. */
+    fun addSeconds(seconds: Int) {
+        val current = _state.value ?: return
+        val wasPaused = current.isPaused
+        _state.value = current.copy(
+            secondsRemaining = current.secondsRemaining + seconds,
+            isPaused = false
+        )
+        if (wasPaused) relaunchTickJob()
+    }
+
     private fun relaunchTickJob() {
         tickJob?.cancel()
         tickJob = scope.launch {

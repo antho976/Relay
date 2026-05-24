@@ -7,9 +7,14 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.forge.app.ui.cardio.CardioScreen
+import com.forge.app.ui.gym.history.SessionHistoryScreen
+import com.forge.app.ui.gym.notes.NotesSearchScreen
 import com.forge.app.ui.gym.train.DayListScreen
 import com.forge.app.ui.gym.train.DayScreen
 import com.forge.app.ui.overview.OverviewScreen
+import com.forge.app.ui.programeditor.ProgramEditorScreen
+import com.forge.app.ui.recap.RecapScreen
+import com.forge.app.ui.settings.SettingsScreen
 import com.forge.app.ui.trophies.TrophiesScreen
 import com.forge.app.ui.welcome.WelcomeScreen
 
@@ -26,15 +31,26 @@ fun ForgeNavHost() {
             OverviewScreen(
                 onGoToGym = { nav.navigate(Routes.GYM_TRAIN) },
                 onGoToCardio = { nav.navigate(Routes.CARDIO) },
-                onGoToTrophies = { nav.navigate(Routes.TROPHIES) }
+                onGoToTrophies = { nav.navigate(Routes.TROPHIES) },
+                onGoToSettings = { nav.navigate(Routes.SETTINGS) }
             )
         }
         composable(Routes.GYM_TRAIN) {
             DayListScreen(
                 onBack = { nav.popBackStack() },
                 onOpenDay = { dayKey -> nav.navigate(Routes.gymDay(dayKey)) },
-                onOpenDayQuick = { dayKey -> nav.navigate(Routes.gymDay(dayKey, skipWarmup = true)) }
+                onOpenDayQuick = { dayKey -> nav.navigate(Routes.gymDay(dayKey, skipWarmup = true)) },
+                onOpenHistory = { nav.navigate(Routes.SESSION_HISTORY) },
+                onOpenNotes = { nav.navigate(Routes.NOTES_SEARCH) },
+                onOpenRecap = { nav.navigate(Routes.RECAP) },
+                onEditProgram = { dayKey -> nav.navigate(Routes.programEditor(dayKey)) }
             )
+        }
+        composable(Routes.SESSION_HISTORY) {
+            SessionHistoryScreen(onBack = { nav.popBackStack() })
+        }
+        composable(Routes.NOTES_SEARCH) {
+            NotesSearchScreen(onBack = { nav.popBackStack() })
         }
         composable(
             route = Routes.GYM_DAY,
@@ -54,6 +70,21 @@ fun ForgeNavHost() {
         }
         composable(Routes.TROPHIES) {
             TrophiesScreen(onBack = { nav.popBackStack() })
+        }
+        composable(Routes.SETTINGS) {
+            SettingsScreen(onBack = { nav.popBackStack() })
+        }
+        composable(Routes.RECAP) {
+            RecapScreen(onBack = { nav.popBackStack() })
+        }
+        composable(
+            route = Routes.PROGRAM_EDITOR,
+            arguments = listOf(navArgument("dayKey") { type = NavType.StringType })
+        ) { entry ->
+            ProgramEditorScreen(
+                dayKey = entry.arguments?.getString("dayKey").orEmpty(),
+                onBack = { nav.popBackStack() }
+            )
         }
     }
 }

@@ -4,7 +4,8 @@
       "PowerShell(Get-ChildItem -Path 'c:\\\\Users\\\\antho\\\\Gym-Phone-app\\\\forge-android' -Recurse -File | ForEach-Object { $_.FullName.Replace\\('c:\\\\Users\\\\antho\\\\Gym-Phone-app\\\\forge-android\\\\',''\\) } | Sort-Object)",
       "mcp__codegraph__codegraph_files",
       "Bash(Test-Path \"C:\\\\Users\\\\antho\\\\Gym-Phone-app\\\\.claude\\\\Features\")",
-      "mcp__codegraph__codegraph_explore"
+      "mcp__codegraph__codegraph_explore",
+      "Bash(node -e ' *)"
     ]
   }
 }

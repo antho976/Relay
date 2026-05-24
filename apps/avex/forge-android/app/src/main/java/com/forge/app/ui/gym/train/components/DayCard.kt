@@ -32,6 +32,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.gym.train.state.DayListItem
 import com.forge.app.ui.theme.toAccentColor
@@ -44,12 +46,13 @@ fun DayCard(
     item: DayListItem,
     onClick: () -> Unit,
     onQuickStart: (() -> Unit)? = null,
+    onLongPress: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     if (item.isNextUp) {
-        NextUpCard(item = item, onClick = onClick, onQuickStart = onQuickStart, modifier = modifier)
+        NextUpCard(item = item, onClick = onClick, onQuickStart = onQuickStart, onLongPress = onLongPress, modifier = modifier)
     } else {
-        CompactCard(item = item, onClick = onClick, modifier = modifier)
+        CompactCard(item = item, onClick = onClick, onLongPress = onLongPress, modifier = modifier)
     }
 }
 
@@ -60,9 +63,10 @@ private fun NextUpCard(
     item: DayListItem,
     onClick: () -> Unit,
     onQuickStart: (() -> Unit)? = null,
+    onLongPress: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
-    val accent = item.plan.accentHex.toAccentColor()
+    val accent = (item.customAccentHex ?: item.plan.accentHex).toAccentColor()
     val surface = MaterialTheme.colorScheme.surface
 
     val bloom = remember(accent) {
@@ -78,10 +82,12 @@ private fun NextUpCard(
         )
     }
 
+    @OptIn(ExperimentalFoundationApi::class)
     Surface(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
+            .combinedClickable(onClick = onClick, onLongClick = onLongPress)
             .bounceClick { onClick() },
         color = Color.Transparent,
         tonalElevation = 2.dp
@@ -167,16 +173,19 @@ private fun NextUpCard(
 private fun CompactCard(
     item: DayListItem,
     onClick: () -> Unit,
+    onLongPress: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
-    val accent = item.plan.accentHex.toAccentColor()
+    val accent = (item.customAccentHex ?: item.plan.accentHex).toAccentColor()
     val surface = MaterialTheme.colorScheme.surface
 
+    @OptIn(ExperimentalFoundationApi::class)
     Surface(
         modifier = modifier
             .fillMaxWidth()
             .height(96.dp)
             .clip(RoundedCornerShape(16.dp))
+            .combinedClickable(onClick = onClick, onLongClick = onLongPress)
             .bounceClick { onClick() },
         color = Color.Transparent,
         tonalElevation = 2.dp
