@@ -39,6 +39,7 @@ fun NoteField(
     onCommit: (String) -> Unit,
     onPinNote: (String) -> Unit = {},
     currentPinnedNote: String = "",
+    showTemplates: Boolean = true,
     modifier: Modifier = Modifier,
     settingsViewModel: SettingsViewModel = hiltViewModel()
 ) {
@@ -55,7 +56,7 @@ fun NoteField(
     }
 
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        if (templates.isNotEmpty()) {
+        if (showTemplates && templates.isNotEmpty()) {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 templates.forEach { template ->
                     FilterChip(

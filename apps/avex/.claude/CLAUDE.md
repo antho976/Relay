@@ -36,3 +36,6 @@ The MCP server returns "not initialized." Ask the user: *"I notice this project 
 ## Project conventions
 
 - **Feature inventory**: `.claude/Features` is the running inventory of built features and roadmap. When a feature is completed, append a brief summary entry to the relevant section. Treat it as the source of truth for "what's built" — reference it before suggesting work that might already exist.
+
+These HTML files are visual mockups exported from Claude Design.
+They are design reference only — not part of the app build.

@@ -36,6 +36,10 @@ interface CardioDao {
     @Query("SELECT SUM(duration_min) FROM cardio_entry WHERE date >= :sinceEpochMs AND type != :excludeType")
     fun observeMinutesSince(sinceEpochMs: Long, excludeType: String = "rest"): Flow<Int?>
 
+    /** Cardio distance (km) since [sinceEpochMs], excluding rest-day entries. */
+    @Query("SELECT SUM(distance_km) FROM cardio_entry WHERE date >= :sinceEpochMs AND type != :excludeType AND distance_km IS NOT NULL")
+    fun observeDistanceKmSince(sinceEpochMs: Long, excludeType: String = "rest"): Flow<Double?>
+
     @Query("DELETE FROM cardio_entry")
     suspend fun deleteAll()
 

@@ -35,17 +35,12 @@ fun WarmupGate(
     onReaction: (Int, Boolean) -> Unit = { _, _ -> },
     modifier: Modifier = Modifier
 ) {
-    Surface(
+    Column(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp)),
-        color = MaterialTheme.colorScheme.surface,
-        tonalElevation = 2.dp
+            .padding(vertical = 8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
             Text(
                 text = "WARMUP",
                 color = MaterialTheme.colorScheme.primary,
@@ -53,9 +48,9 @@ fun WarmupGate(
                 fontWeight = FontWeight.Black
             )
             Text(
-                text = "Tick everything off before you start. Skip if you've already warmed up.",
+                text = "Tick everything off before you start.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.bodyMedium
+                style = MaterialTheme.typography.bodySmall
             )
 
             warmupItems.forEachIndexed { index, label ->
@@ -78,7 +73,6 @@ fun WarmupGate(
                     Text("Skip warmup")
                 }
             }
-        }
     }
 }
 

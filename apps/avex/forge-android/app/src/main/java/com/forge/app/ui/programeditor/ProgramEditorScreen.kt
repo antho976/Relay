@@ -33,6 +33,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -148,7 +149,7 @@ fun ProgramEditorScreen(
                 actions = {
                     TextButton(onClick = viewModel::resetDay) { Text("Reset") }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = MaterialTheme.colorScheme.background)
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
             )
         },
         floatingActionButton = {
@@ -156,7 +157,7 @@ fun ProgramEditorScreen(
                 Icon(Icons.Default.Add, "Add exercise")
             }
         },
-        containerColor = MaterialTheme.colorScheme.background
+        containerColor = Color.Transparent
     ) { inner ->
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(inner),

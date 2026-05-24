@@ -71,22 +71,22 @@ private fun pearlColorScheme(accent: Color, amoled: Boolean): ColorScheme {
     val surface    = if (amoled) Color(0xFF080808)   else PearlSurface
     val surfaceVar = if (amoled) Color(0xFF111111)   else PearlSurfaceVar
     return darkColorScheme(
-        background        = bg,
-        onBackground      = PearlOnBg,
-        surface           = surface,
-        onSurface         = PearlOnBg,
-        surfaceVariant    = surfaceVar,
-        onSurfaceVariant  = PearlMuted,
-        outline           = PearlOutline,
-        primary           = PearlOnBg,
-        onPrimary         = bg,
-        primaryContainer  = surfaceVar,
+        background         = bg,
+        onBackground       = PearlOnBg,
+        surface            = surface,
+        onSurface          = PearlOnBg,
+        surfaceVariant     = surfaceVar,
+        onSurfaceVariant   = PearlMuted,
+        outline            = PearlOutline,
+        primary            = accent,                          // user-editable brand/accent
+        onPrimary          = PearlOnBg,
+        primaryContainer   = accent.copy(alpha = 0.15f),
         onPrimaryContainer = PearlOnBg,
-        secondary         = accent,
-        onSecondary       = PearlOnBg,
-        tertiary          = ForgeSuccess,
-        error             = ForgeError,
-        errorContainer    = ForgeError.copy(alpha = 0.15f),
-        onError           = PearlOnBg
+        secondary          = accent.copy(alpha = 0.6f),
+        onSecondary        = PearlOnBg,
+        tertiary           = ForgeSuccess,
+        error              = ForgeError,
+        errorContainer     = ForgeError.copy(alpha = 0.15f),
+        onError            = PearlOnBg
     )
 }

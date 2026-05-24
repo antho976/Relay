@@ -12,22 +12,33 @@ data class OnThisDayMemory(
     val sessionDate: Long
 )
 
+/** One row in the overview RECENT section — gym session or cardio entry. */
+data class OverviewRecentItem(
+    val dayLabel: String,   // "YESTERDAY", "MON", "SUN", etc.
+    val title: String,      // "Lower A", "Cardio · Run"
+    val subtitle: String,   // "6 ex · 45 min" or "20 min · 3 km"
+    val tag: String         // "QUADS", "MOVE", "PUSH", etc.
+)
+
 data class OverviewUiState(
     val workoutsThisWeek: Int = 0,
     val volumeThisWeekLb: Double = 0.0,
     val cardioMinutesThisWeek: Int = 0,
     val totalFinishedSessions: Int = 0,
     val lastDeloadAtSessionCount: Int = 0,
-    /** Consecutive training days (streak). 0 = no active streak. */
     val streakDays: Int = 0,
-    /** Calendar days since last finished session. null = never trained. */
     val daysSinceLastSession: Int? = null,
-    /** Pending one-shot milestone to show as a snackbar (#56). Null when none. */
     val pendingMilestone: MilestoneEvent? = null,
-    /** "On this day" memory card (#106). Null when no qualifying session found. */
     val onThisDayMemory: OnThisDayMemory? = null,
-    /** Planned next training day set via "Plan tomorrow" (#147). Empty = not planned. */
-    val plannedNextDay: String = ""
+    val plannedNextDay: String = "",
+    /** Next gym day in the rotation. */
+    val nextUpDayKey: String = "upper-a",
+    /** 0=Mon..6=Sun indices that had a gym session this ISO week. */
+    val weekDaysTrained: Set<Int> = emptySet(),
+    /** Combined gym + cardio, sorted newest first, capped at 2. */
+    val recentItems: List<OverviewRecentItem> = emptyList(),
+    val trophiesUnlocked: Int = 0,
+    val cardioDistanceKm: Double = 0.0
 ) {
     val sessionsSinceLastDeload: Int
         get() = (totalFinishedSessions - lastDeloadAtSessionCount).coerceAtLeast(0)

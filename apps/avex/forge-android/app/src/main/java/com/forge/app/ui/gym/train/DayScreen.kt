@@ -15,15 +15,15 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.foundation.clickable
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.ExitToApp
-import androidx.compose.material.icons.filled.Done
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
@@ -32,8 +32,8 @@ import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.unit.sp
 import android.view.HapticFeedbackConstants
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -52,13 +52,19 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.foundation.background
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.ui.gym.train.components.ExerciseCard
 import com.forge.app.ui.gym.train.components.PlateCalculatorDialog
 import com.forge.app.ui.gym.train.components.RestTimerBubble
+import com.forge.app.ui.gym.train.components.WarmupGate
 import com.forge.app.ui.gym.train.components.WarmupSuggesterDialog
 import com.forge.app.ui.gym.train.components.RestTimerControlsDialog
 import com.forge.app.ui.gym.train.components.SessionSummarySheet
@@ -69,7 +75,6 @@ import com.forge.app.ui.gym.train.components.AddExerciseSheet
 import com.forge.app.ui.common.ForgeHapticType
 import com.forge.app.ui.common.forgeHaptic
 import com.forge.app.ui.theme.LocalForgeSettings
-import com.forge.app.ui.gym.train.components.WarmupGate
 import com.forge.app.ui.gym.train.state.DayUiEvent
 import com.forge.app.ui.gym.train.state.DayUiState
 import java.text.SimpleDateFormat
@@ -147,71 +152,8 @@ fun DayScreen(
         }
     }
 
-    // ── Estimated end time (#103) ─────────────────────────────────────────────
-    val estimatedEndText = remember(state.remainingSetsCount) {
-        val remaining = state.remainingSetsCount
-        if (remaining <= 0) return@remember null
-        val endMs = System.currentTimeMillis() + remaining * 3L * 60_000
-        val fmt = SimpleDateFormat("h:mm a", Locale.getDefault())
-        "est. done ~${fmt.format(Date(endMs)).lowercase()}"
-    }
-
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
-        topBar = {
-            TopAppBar(
-                title = {
-                    Column {
-                        Text(state.displayName, style = MaterialTheme.typography.titleLarge)
-                        Text(
-                            state.dayPlan.word,
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        // Session progress + estimated end time (#102, #103)
-                        val progressText = state.sessionProgressText
-                        if (progressText.isNotEmpty()) {
-                            val infoText = buildString {
-                                append(progressText)
-                                if (estimatedEndText != null) append("  ·  $estimatedEndText")
-                            }
-                            Text(
-                                infoText,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                },
-                navigationIcon = {
-                    IconButton(onClick = { viewModel.onEvent(DayUiEvent.RequestBack) }) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
-                actions = {
-                    // Emergency save & exit (#97)
-                    if (!state.isFinished && state.hasUnsavedWork) {
-                        IconButton(onClick = { viewModel.onEvent(DayUiEvent.SaveAndExit) }) {
-                            Icon(
-                                Icons.AutoMirrored.Filled.ExitToApp,
-                                contentDescription = "Save and exit",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                    IconButton(onClick = { viewModel.onEvent(DayUiEvent.FinishWorkout) }) {
-                        Icon(
-                            Icons.Default.Done,
-                            contentDescription = "Finish workout",
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background
-                )
-            )
-        },
         floatingActionButton = {
             state.restTimer?.let { timer ->
                 Column(horizontalAlignment = Alignment.End) {
@@ -246,7 +188,7 @@ fun DayScreen(
                 }
             }
         },
-        containerColor = MaterialTheme.colorScheme.background
+        containerColor = Color.Transparent
     ) { inner ->
         Box(Modifier.fillMaxSize().padding(inner)) {
             DayContent(
@@ -280,6 +222,7 @@ fun DayScreen(
         SwapPickerSheet(
             forExercise = exerciseUi.plan,
             hasPersistentSwap = exerciseUi.persistentSwapName != null,
+            currentSwapName = exerciseUi.sessionSwapName ?: exerciseUi.persistentSwapName,
             onPickForSession = { swap ->
                 viewModel.onEvent(DayUiEvent.PickSwapForSession(exerciseUi.plan.id, swap))
             },
@@ -432,8 +375,7 @@ private fun DayContent(
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+        contentPadding = PaddingValues(vertical = 8.dp)
     ) {
         if (!state.isWarmupComplete) {
             item(key = "warmup") {
@@ -447,24 +389,22 @@ private fun DayContent(
                 )
             }
         } else {
-            item(key = "session-header-sticky") {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    color = MaterialTheme.colorScheme.background.copy(alpha = 0.95f)
-                ) {
-                    Text(
-                        text = "${state.displayName} · ${state.sessionProgressText}",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp)
-                    )
-                }
+            item(key = "session-hero") {
+                SessionHero(
+                    state = state,
+                    onBack = { onEvent(DayUiEvent.RequestBack) },
+                    onFinish = { onEvent(DayUiEvent.FinishWorkout) }
+                )
             }
-            val totalExercises = state.exercises.size
+            val nowExerciseId = state.exercises.firstOrNull {
+                !it.skipped && it.loggedSets.size < it.plan.sets
+            }?.plan?.id
             items(state.exercises, key = { it.plan.id }) { exerciseState ->
                 val idx = state.exercises.indexOf(exerciseState)
                 ExerciseCard(
+                    exerciseIndex = idx,
                     state = exerciseState,
+                    isNow = exerciseState.plan.id == nowExerciseId,
                     onToggle = { onEvent(DayUiEvent.ToggleExpanded(exerciseState.plan.id)) },
                     onLogSet = { weight, reps ->
                         // Convert kg input to lb storage if unit is kg
@@ -489,7 +429,7 @@ private fun DayContent(
                     onOpenSwapPicker = { onEvent(DayUiEvent.OpenSwapPicker(exerciseState.plan.id)) },
                     onOpenGoalSetter = { onEvent(DayUiEvent.OpenGoalSetter(exerciseState.plan.id)) },
                     onMoveUp = if (idx > 0) { { onEvent(DayUiEvent.MoveExercise(exerciseState.plan.id, -1)) } } else null,
-                    onMoveDown = if (idx < totalExercises - 1) { { onEvent(DayUiEvent.MoveExercise(exerciseState.plan.id, 1)) } } else null,
+                    onMoveDown = if (idx < state.exercises.size - 1) { { onEvent(DayUiEvent.MoveExercise(exerciseState.plan.id, 1)) } } else null,
                     onLongPress = { onEvent(DayUiEvent.LongPressExercise(exerciseState.plan.id)) },
                     onOpenRestTimerSetter = { restTimerSetterForId = exerciseState.plan.id },
                     onSetExerciseUnit = { unit -> onEvent(DayUiEvent.SetExerciseUnit(exerciseState.plan.id, unit)) },
@@ -497,12 +437,16 @@ private fun DayContent(
                     onToggleSetDifficultyTag = { setId, tag -> onEvent(DayUiEvent.ToggleSetDifficultyTag(setId, tag)) }
                 )
             }
-            // "Add exercise" button at the bottom of the list (#61)
             item(key = "add-exercise") {
-                androidx.compose.material3.TextButton(
-                    onClick = { onEvent(DayUiEvent.OpenAddExercisePicker) },
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text("+ Add exercise") }
+                Text(
+                    "+ add exercise",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onEvent(DayUiEvent.OpenAddExercisePicker) }
+                        .padding(horizontal = 24.dp, vertical = 16.dp)
+                )
             }
         }
     }
@@ -646,6 +590,141 @@ private fun GoalSetterDialog(
             }
         }
     )
+}
+
+@Composable
+private fun SessionHero(
+    state: DayUiState,
+    onBack: () -> Unit,
+    onFinish: () -> Unit
+) {
+    val onBg = MaterialTheme.colorScheme.onBackground
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val outline = MaterialTheme.colorScheme.outline
+
+    val sessionDateText = remember(state.sessionStartedAt) {
+        val ms = state.sessionStartedAt ?: System.currentTimeMillis()
+        SimpleDateFormat("EEE · MMM d · HH:mm", Locale.getDefault())
+            .format(Date(ms)).uppercase()
+    }
+
+    val estimatedEndText = remember(state.remainingSetsCount) {
+        val remaining = state.remainingSetsCount
+        if (remaining <= 0) null
+        else {
+            val endMs = System.currentTimeMillis() + remaining * 3L * 60_000
+            SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(endMs))
+        }
+    }
+
+    val exerciseCount = state.exercises.size
+    val doneCount = state.exercises.count { it.loggedSets.size >= it.plan.sets || it.skipped }
+    val totalSets = state.exercises.sumOf { it.loggedSets.size }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 24.dp)
+    ) {
+        // Nav row: [back arrow + session name italic] | [finish]
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onBack) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Back",
+                        tint = onBg
+                    )
+                }
+                Text(
+                    state.displayName,
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = onBg,
+                    fontStyle = FontStyle.Italic
+                )
+            }
+            Text(
+                "finish",
+                style = MaterialTheme.typography.labelMedium,
+                color = muted,
+                modifier = Modifier
+                    .clickable { onFinish() }
+                    .padding(start = 8.dp, top = 8.dp, bottom = 8.dp)
+            )
+        }
+
+        // Subtitle: WORD · DONE ~ estimated end
+        val subtitleText = if (estimatedEndText != null)
+            "${state.dayPlan.word} · DONE ~ $estimatedEndText"
+        else state.dayPlan.word
+        Text(
+            subtitleText,
+            style = MaterialTheme.typography.labelSmall,
+            color = muted,
+            fontSize = 11.sp
+        )
+
+        Spacer(Modifier.height(16.dp))
+        HorizontalDivider(color = outline.copy(alpha = 0.3f))
+        Spacer(Modifier.height(12.dp))
+
+        // Date from session start
+        Text(sessionDateText, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
+        Spacer(Modifier.height(6.dp))
+
+        // "Six moves today." with italic "today."
+        val countWord = when (exerciseCount) {
+            1 -> "One"; 2 -> "Two"; 3 -> "Three"; 4 -> "Four"; 5 -> "Five"
+            6 -> "Six"; 7 -> "Seven"; 8 -> "Eight"; 9 -> "Nine"; 10 -> "Ten"
+            11 -> "Eleven"; 12 -> "Twelve"; else -> "$exerciseCount"
+        }
+        val movesText = buildAnnotatedString {
+            append("$countWord moves ")
+            withStyle(SpanStyle(fontStyle = FontStyle.Italic)) { append("today.") }
+        }
+        Text(movesText, style = MaterialTheme.typography.displayLarge, color = onBg)
+
+        Spacer(Modifier.height(6.dp))
+
+        // Progress line: "0 of 6 done · 3 sets logged."
+        val progressLine = buildString {
+            append("$doneCount of $exerciseCount done")
+            if (totalSets > 0) append(" · $totalSets sets logged.") else append(".")
+        }
+        Text(
+            progressLine,
+            style = MaterialTheme.typography.bodySmall,
+            color = onBg.copy(alpha = 0.45f),
+            fontStyle = FontStyle.Italic
+        )
+
+        Spacer(Modifier.height(12.dp))
+
+        // Segmented progress bar — one segment per exercise
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(3.dp)
+        ) {
+            state.exercises.forEach { ex ->
+                val isDone = ex.loggedSets.size >= ex.plan.sets || ex.skipped
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(2.dp)
+                        .background(
+                            if (isDone) onBg else outline.copy(alpha = 0.25f),
+                            RoundedCornerShape(1.dp)
+                        )
+                )
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+    }
 }
 
 @Composable

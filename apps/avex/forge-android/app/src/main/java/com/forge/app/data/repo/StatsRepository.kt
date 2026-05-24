@@ -64,12 +64,15 @@ class StatsRepository @Inject constructor(
         val volumeLb: Double = 0.0,
         val cardioMinutes: Int = 0,
         val totalFinishedSessions: Int = 0,
-        /** Consecutive training days ending today or yesterday (0 if streak is broken). */
         val streakDays: Int = 0,
-        /** Calendar days since the last finished session (null = never trained, 0 = trained today). */
         val daysSinceLastSession: Int? = null,
-        /** Epoch ms of the very first finished session — used for the "first full month" milestone (#56). */
-        val firstFinishedSessionMs: Long? = null
+        val firstFinishedSessionMs: Long? = null,
+        /** 0=Mon..6=Sun indices that had a finished gym session in the current ISO week. */
+        val weekDaysTrained: Set<Int> = emptySet(),
+        /** Next gym day key in the rotation (Upper A → Lower A → Upper B → Lower B). */
+        val nextUpDayKey: String = Program.UPPER_A,
+        /** Last 5 finished gym sessions for the overview RECENT section. */
+        val recentGymSessions: List<com.forge.app.data.db.entities.Session> = emptyList()
     )
 
     fun observeWeeklyStats(): Flow<WeeklyStats> {
@@ -81,14 +84,31 @@ class StatsRepository @Inject constructor(
             sessionDao.observeFinishedCount(),
             sessionDao.observeRecent(120)
         ) { workouts, volume, cardio, totalFinished, recentSessions ->
+            val zone = ZoneId.systemDefault()
+            val todayDate = LocalDate.now(zone)
+            val isoWeekStart = todayDate.minusDays(todayDate.dayOfWeek.value.toLong() - 1)
+            val isoWeekStartMs = isoWeekStart.atStartOfDay(zone).toInstant().toEpochMilli()
             val finishedAts = recentSessions.mapNotNull { it.finishedAt }
+            val weekDaysTrained = recentSessions
+                .filter { it.finishedAt != null && it.finishedAt >= isoWeekStartMs }
+                .map {
+                    val d = Instant.ofEpochMilli(it.startedAt).atZone(zone).toLocalDate()
+                    d.dayOfWeek.value - 1 // 0=Mon..6=Sun
+                }
+                .toSet()
+            val lastFinished = recentSessions.filter { it.finishedAt != null }.maxByOrNull { it.finishedAt!! }
+            val nextUpDayKey = if (lastFinished == null) Program.UPPER_A
+                else { val idx = Program.dayKeys.indexOf(lastFinished.dayKey); Program.dayKeys[(idx + 1) % Program.dayKeys.size] }
             WeeklyStats(
                 workouts = workouts,
                 volumeLb = volume ?: 0.0,
                 cardioMinutes = cardio ?: 0,
                 totalFinishedSessions = totalFinished,
                 streakDays = computeStreak(finishedAts),
-                daysSinceLastSession = computeDaysSinceLast(finishedAts)
+                daysSinceLastSession = computeDaysSinceLast(finishedAts),
+                weekDaysTrained = weekDaysTrained,
+                nextUpDayKey = nextUpDayKey,
+                recentGymSessions = recentSessions.filter { it.finishedAt != null }.take(5)
             )
         }
         return baseFlow.combine(sessionDao.observeFirstFinishedSessionStartedAt()) { stats, firstMs ->

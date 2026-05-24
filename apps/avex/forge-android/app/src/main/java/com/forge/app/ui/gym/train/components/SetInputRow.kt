@@ -1,17 +1,19 @@
 package com.forge.app.ui.gym.train.components
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -22,26 +24,21 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.forge.app.data.db.entities.LoggedSet
 
 /**
- * Weight + reps inputs + Add button for an expanded exercise card.
+ * Weight + reps inputs + Log set button for an expanded exercise card.
  *
- * Forgiving input (#20): typing "45x10" (or "45 X 10") in the weight field auto-splits into
- * weight=45 and reps=10 so users can log a set from a single keystroke sequence.
+ * Underline-style: values render in the headline serif type with a thin underline,
+ * matching the editorial design (no filled / outlined text-field boxes).
  *
- * Use-last chip (#21): when the weight field is cleared and [prefillWeight] is known, a tap-to-fill
- * chip appears so the user can restore the last-session value in one tap.
- *
- * Weight suggestion (#13/#12): when [suggestedWeight] is non-null (computed by the VM from last
- * performance + difficulty rating + rep-range progression), a "Try: X lb" hint row is shown with a
- * one-tap "Use" button.
- *
- * PR hint (#100): when [priorSets] is non-empty and the current weight has a numeric value,
- * shows "Hit N reps for a PR" next to the reps field based on history at this weight or higher.
+ * Forgiving input (#20): typing "45x10" in the weight field auto-splits into weight=45 reps=10.
+ * Use-last chip (#21), weight suggestion (#13/#12) and PR hint (#100) work as before.
  */
 @Composable
 fun SetInputRow(
@@ -69,19 +66,19 @@ fun SetInputRow(
         weight.isNotBlank() && reps.toIntOrNull()?.let { it > 0 } == true
     }
 
-    // PR hint: how many reps at this weight to beat all-time best (#100)
     val prRepsHint = remember(weight, priorSets) {
         val weightLb = weight.trim().toDoubleOrNull() ?: return@remember null
         repsNeededForPr(priorSets, weightLb)
     }
 
+    val onBg = MaterialTheme.colorScheme.onBackground
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+
     Column(modifier = modifier.fillMaxWidth()) {
-        // #13/#12: Auto-progression suggestion
+        // Auto-progression suggestion (#13/#12)
         if (suggestedWeight != null) {
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 2.dp),
+                modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
@@ -105,38 +102,48 @@ fun SetInputRow(
             }
         }
 
-        // Main input row
+        // Labels
         Row(
             modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalAlignment = Alignment.Bottom
         ) {
-            OutlinedTextField(
+            Text(
+                "WEIGHT · LB",
+                style = MaterialTheme.typography.labelSmall,
+                color = muted,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                "REPS",
+                style = MaterialTheme.typography.labelSmall,
+                color = muted,
+                modifier = Modifier.weight(0.7f)
+            )
+        }
+
+        // Inputs row
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+            verticalAlignment = Alignment.Bottom,
+            horizontalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            UnderlineNumberField(
                 value = weight,
                 onValueChange = ::onWeightChange,
-                modifier = Modifier.weight(1.2f),
-                label = { Text("Weight") },
-                placeholder = { Text("e.g. 25 or 45x10") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(
-                    keyboardType = KeyboardType.Text,
-                    imeAction = ImeAction.Next
-                )
+                placeholder = "0",
+                keyboardType = KeyboardType.Text,
+                imeAction = ImeAction.Next,
+                modifier = Modifier.weight(1f)
             )
-            OutlinedTextField(
+            UnderlineNumberField(
                 value = reps,
                 onValueChange = { new -> if (new.all { it.isDigit() }) reps = new },
-                modifier = Modifier.weight(0.8f),
-                label = { Text("Reps") },
-                supportingText = prRepsHint?.let { needed ->
-                    { Text("$needed for PR", style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary) }
-                },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(
-                    keyboardType = KeyboardType.Number,
-                    imeAction = ImeAction.Done
-                )
+                placeholder = "0",
+                keyboardType = KeyboardType.Number,
+                imeAction = ImeAction.Done,
+                supportingText = prRepsHint?.let { "$it for PR" },
+                modifier = Modifier.weight(0.7f)
             )
             Button(
                 onClick = {
@@ -145,17 +152,20 @@ fun SetInputRow(
                     reps = ""
                 },
                 enabled = canSubmit,
-                modifier = Modifier.height(56.dp),
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(50),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary
+                    containerColor = onBg,
+                    contentColor = MaterialTheme.colorScheme.background,
+                    disabledContainerColor = onBg.copy(alpha = 0.35f),
+                    disabledContentColor = MaterialTheme.colorScheme.background.copy(alpha = 0.7f)
                 )
             ) {
-                Text("Add")
+                Text("Log set →", style = MaterialTheme.typography.labelSmall)
             }
         }
 
-        // #21: Use-last chip — shown when weight is blank and a last-session weight exists
+        // Use-last chip (#21)
         if (prefillWeight != null && weight.isBlank()) {
             TextButton(
                 onClick = { weight = prefillWeight },
@@ -165,21 +175,72 @@ fun SetInputRow(
                 Text(
                     "Use last: $prefillWeight",
                     style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.primary
+                    color = MaterialTheme.colorScheme.primary,
+                    fontStyle = FontStyle.Italic
                 )
             }
         }
     }
 }
 
+@Composable
+private fun UnderlineNumberField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    placeholder: String,
+    keyboardType: KeyboardType,
+    imeAction: ImeAction,
+    modifier: Modifier = Modifier,
+    supportingText: String? = null
+) {
+    val onBg = MaterialTheme.colorScheme.onBackground
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val accent = MaterialTheme.colorScheme.primary
+    val outline = MaterialTheme.colorScheme.outline
+
+    Column(modifier = modifier) {
+        BasicTextField(
+            value = value,
+            onValueChange = onValueChange,
+            textStyle = MaterialTheme.typography.headlineMedium.copy(color = onBg),
+            singleLine = true,
+            cursorBrush = SolidColor(accent),
+            keyboardOptions = KeyboardOptions(
+                keyboardType = keyboardType,
+                imeAction = imeAction
+            ),
+            decorationBox = { inner ->
+                Box {
+                    if (value.isEmpty()) {
+                        Text(
+                            placeholder,
+                            style = MaterialTheme.typography.headlineMedium,
+                            color = muted.copy(alpha = 0.4f)
+                        )
+                    }
+                    inner()
+                }
+            }
+        )
+        HorizontalDivider(
+            modifier = Modifier.padding(top = 2.dp),
+            thickness = 1.dp,
+            color = outline.copy(alpha = 0.5f)
+        )
+        if (supportingText != null) {
+            Text(
+                supportingText,
+                style = MaterialTheme.typography.labelSmall,
+                color = accent,
+                modifier = Modifier.padding(top = 2.dp)
+            )
+        }
+    }
+}
+
 /**
- * Returns the rep count needed to beat the all-time PR at [weightLb], or null when:
- * - history is empty at or above this weight (the weight itself would be a PR at any reps)
- * - [weightLb] is heavier than any historical set (first set at this weight is always a PR)
- *
- * Logic mirrors [PrDetector.isPr]: a PR requires being strictly heavier than the max weight
- * logged at the same-or-higher rep count. At a fixed weight, that means logging more reps
- * than the historical max at this weight or above.
+ * Returns the rep count needed to beat the all-time PR at [weightLb], or null when no PR is reachable.
+ * Mirrors PrDetector.isPr: at fixed weight, PR requires more reps than the historical max at this weight or above.
  */
 private fun repsNeededForPr(history: List<LoggedSet>, weightLb: Double): Int? {
     val maxRepsAtOrAbove = history

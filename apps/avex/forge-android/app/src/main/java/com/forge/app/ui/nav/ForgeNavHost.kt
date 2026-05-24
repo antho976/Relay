@@ -29,6 +29,8 @@ fun ForgeNavHost() {
         }
         composable(Routes.OVERVIEW) {
             OverviewScreen(
+                onStartSession = { dayKey -> nav.navigate(Routes.gymDay(dayKey)) },
+                onStartSessionSkipWarmup = { dayKey -> nav.navigate(Routes.gymDay(dayKey, skipWarmup = true)) },
                 onGoToGym = { nav.navigate(Routes.GYM_TRAIN) },
                 onGoToCardio = { nav.navigate(Routes.CARDIO) },
                 onGoToTrophies = { nav.navigate(Routes.TROPHIES) },

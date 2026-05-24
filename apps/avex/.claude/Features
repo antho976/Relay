@@ -191,7 +191,7 @@ All 4 days fully specified with:
 
 ## UI / Design System
 
-- Material 3, dark theme, custom color palette
+- Material 3, dark theme (Pearl), custom color palette
 - Per-day accent colors extracted from hex strings (toAccentColor())
 - bounceClick modifier: spring-animated scale (0.97×) on press, no ripple (scale is the affordance)
 - Radial bloom gradients via Modifier.drawBehind (smooth fade, no hard edges)
@@ -199,6 +199,18 @@ All 4 days fully specified with:
 - Typography: Display / Headline / Title / Body / Label hierarchy applied consistently
 - ModalBottomSheet for log sheets and session summary
 - AlertDialog for destructive confirmations
+
+### Editorial Redesign (v0.3)
+
+- **Pearl dark theme**: gradient bg `#131318` → `#090909` applied at root in `ForgeTheme`; Indigo light defined but not wired
+- **Typography**: `headlineLarge/Medium/Small` = `FontFamily.Serif Normal`; `labelLarge/Medium/Small` = `FontFamily.Monospace`; body = SansSerif
+- **Gradient show-through**: all Scaffolds + TopAppBars set `containerColor = Color.Transparent`; root `ForgeTheme` wraps content in gradient `Box`
+- **No-card editorial style**: `HorizontalDivider(alpha 0.3f)` hairlines instead of Surface cards on Overview
+- **Accent color presets**: 4 options (Navy #3D4F73 default, Red #8B3535, Olive #4D6040, Gold #7A6435) — user-selectable in Settings, persisted to DataStore via `SettingsRepository.accentColorHex`, wired through `ForgeUiSettings` → `ForgeTheme` → `primary` token
+- **OverviewScreen**: Serif hero text (dynamic: comeback / planned day / streak / "Ready."), monospace `FORGE` wordmark, stat strip without cards, `OnThisDay` as inline text, hairline dividers
+- **WarmupGate**: removed Surface card wrapper — plain Column with monospace `WARMUP` label
+- **TrophiesScreen**: serif "N of 21." hero count + `LinearProgressIndicator(height = 2.dp)` — no card wrapper
+- **SettingsScreen**: accent color `FilterChip` row in Appearance section (Navy / Red / Olive / Gold)
 
 ---
 

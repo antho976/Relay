@@ -33,6 +33,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -56,13 +57,10 @@ fun SettingsScreen(
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background,
-                    titleContentColor = MaterialTheme.colorScheme.onBackground
-                )
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
             )
         },
-        containerColor = MaterialTheme.colorScheme.background
+        containerColor = Color.Transparent
     ) { inner ->
         Column(
             modifier = Modifier
@@ -91,8 +89,24 @@ fun SettingsScreen(
                 checked = state.amoledMode,
                 onCheckedChange = viewModel::setAmoledMode
             )
-            SettingsInfoRow(label = "Accent color", value = "After UI pass")
-            SettingsInfoRow(label = "Font", value = "After UI pass")
+            Text("Accent color", style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.padding(top = 4.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.padding(vertical = 4.dp)) {
+                listOf("#3D4F73" to "Navy", "#8B3535" to "Red",
+                       "#4D6040" to "Olive", "#7A6435" to "Gold").forEach { (hex, label) ->
+                    val isDefault = state.accentColorHex.isEmpty() && hex == "#3D4F73"
+                    FilterChip(
+                        selected = state.accentColorHex == hex || isDefault,
+                        onClick = { viewModel.setAccentColorHex(hex) },
+                        label = { Text(label, style = MaterialTheme.typography.labelMedium) },
+                        colors = FilterChipDefaults.filterChipColors(
+                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    )
+                }
+            }
 
             SectionDivider()
 
