@@ -1,6 +1,23 @@
 package com.forge.app.ui.nav
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontStyle
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -34,6 +51,8 @@ fun ForgeNavHost() {
                 onGoToGym = { nav.navigate(Routes.GYM_TRAIN) },
                 onGoToCardio = { nav.navigate(Routes.CARDIO) },
                 onGoToTrophies = { nav.navigate(Routes.TROPHIES) },
+                onGoToStats = { nav.navigate(Routes.GYM_STATS) },
+                onGoToNutrition = { nav.navigate(Routes.NUTRITION) },
                 onGoToSettings = { nav.navigate(Routes.SETTINGS) }
             )
         }
@@ -47,6 +66,21 @@ fun ForgeNavHost() {
                 onOpenRecap = { nav.navigate(Routes.RECAP) },
                 onEditProgram = { dayKey -> nav.navigate(Routes.programEditor(dayKey)) }
             )
+        }
+        composable(Routes.GYM_STATS) {
+            DayListScreen(
+                onBack = { nav.popBackStack() },
+                onOpenDay = { dayKey -> nav.navigate(Routes.gymDay(dayKey)) },
+                onOpenDayQuick = { dayKey -> nav.navigate(Routes.gymDay(dayKey, skipWarmup = true)) },
+                onOpenHistory = { nav.navigate(Routes.SESSION_HISTORY) },
+                onOpenNotes = { nav.navigate(Routes.NOTES_SEARCH) },
+                onOpenRecap = { nav.navigate(Routes.RECAP) },
+                onEditProgram = { dayKey -> nav.navigate(Routes.programEditor(dayKey)) },
+                initialTab = 1
+            )
+        }
+        composable(Routes.NUTRITION) {
+            NutritionPlaceholderScreen(onBack = { nav.popBackStack() })
         }
         composable(Routes.SESSION_HISTORY) {
             SessionHistoryScreen(onBack = { nav.popBackStack() })
@@ -86,6 +120,41 @@ fun ForgeNavHost() {
             ProgramEditorScreen(
                 dayKey = entry.arguments?.getString("dayKey").orEmpty(),
                 onBack = { nav.popBackStack() }
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun NutritionPlaceholderScreen(onBack: () -> Unit) {
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {},
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
+            )
+        },
+        containerColor = Color.Transparent
+    ) { inner ->
+        Box(
+            modifier = Modifier.fillMaxSize().padding(inner),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                "Nutrition — coming soon.",
+                style = MaterialTheme.typography.headlineSmall,
+                fontStyle = FontStyle.Italic,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }

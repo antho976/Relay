@@ -67,6 +67,8 @@ fun OverviewScreen(
     onGoToGym: () -> Unit,
     onGoToCardio: () -> Unit,
     onGoToTrophies: () -> Unit,
+    onGoToStats: () -> Unit = {},
+    onGoToNutrition: () -> Unit = {},
     onGoToSettings: () -> Unit = {},
     viewModel: OverviewViewModel = hiltViewModel()
 ) {
@@ -257,7 +259,7 @@ fun OverviewScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(vertical = 8.dp),
+                    .padding(top = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 BottomNavButton(
@@ -273,6 +275,31 @@ fun OverviewScreen(
                     label = "Trophies",
                     metric = "${state.trophiesUnlocked}/${Trophies.all.size}",
                     onClick = onGoToTrophies,
+                    outlineColor = outline,
+                    onBg = onBg,
+                    muted = muted,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                BottomNavButton(
+                    label = "Stats",
+                    metric = "${state.totalFinishedSessions} sessions",
+                    onClick = onGoToStats,
+                    outlineColor = outline,
+                    onBg = onBg,
+                    muted = muted,
+                    modifier = Modifier.weight(1f)
+                )
+                BottomNavButton(
+                    label = "Nutrition",
+                    metric = "coming soon",
+                    onClick = onGoToNutrition,
                     outlineColor = outline,
                     onBg = onBg,
                     muted = muted,

@@ -48,7 +48,9 @@ class StatsViewModel @Inject constructor(
             insights = snapshot.insights,
             dayTypeBreakdown = snapshot.dayTypeBreakdown,
             lifetimeMetrics = snapshot.lifetimeMetrics,
-            moodOverTime = snapshot.moodOverTime
+            moodOverTime = snapshot.moodOverTime,
+            weekActivity = snapshot.weekActivity,
+            thisWeekCardioMin = snapshot.thisWeekCardioMin
         )
     }.stateIn(
         scope = viewModelScope,

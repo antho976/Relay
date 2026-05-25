@@ -5,7 +5,10 @@
       "mcp__codegraph__codegraph_files",
       "Bash(Test-Path \"C:\\\\Users\\\\antho\\\\Gym-Phone-app\\\\.claude\\\\Features\")",
       "mcp__codegraph__codegraph_explore",
-      "Bash(node -e ' *)"
+      "Bash(node -e ' *)",
+      "Bash(Get-ChildItem -Recurse -Filter \"SessionDao.kt\" -ErrorAction SilentlyContinue)",
+      "Bash(Select-Object -First 5)",
+      "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\antho\\\\Gym-Phone-app\\\\forge-android\" -Recurse -Filter \"Session.kt\" -ErrorAction SilentlyContinue | Where-Object { $_.Directory.Name -eq \"entities\" })"
     ]
   }
 }

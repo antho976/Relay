@@ -67,9 +67,10 @@ fun DayListScreen(
     onOpenNotes: () -> Unit = {},
     onOpenRecap: () -> Unit = {},
     onEditProgram: (String) -> Unit = {},
+    initialTab: Int = 0,
     viewModel: DayListViewModel = hiltViewModel()
 ) {
-    var selectedTab by rememberSaveable { mutableIntStateOf(0) }
+    var selectedTab by rememberSaveable(initialTab) { mutableIntStateOf(initialTab) }
 
     Scaffold(
         topBar = {

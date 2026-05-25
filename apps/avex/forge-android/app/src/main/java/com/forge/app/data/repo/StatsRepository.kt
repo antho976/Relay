@@ -8,7 +8,10 @@ import com.forge.app.data.db.dao.RestDayDao
 import com.forge.app.data.db.dao.SessionDao
 import com.forge.app.data.repo.BodyweightRepository
 import com.forge.app.program.Program
+import com.forge.app.data.db.entities.CardioEntry
+import com.forge.app.data.db.entities.Session
 import com.forge.app.ui.gym.stats.state.DayTypeVolumeStats
+import com.forge.app.ui.gym.stats.state.WeekActivityRow
 import com.forge.app.ui.gym.stats.state.ExerciseFrequency
 import com.forge.app.ui.gym.stats.state.ExerciseYoY
 import com.forge.app.ui.gym.stats.state.HeatmapCell
@@ -172,7 +175,11 @@ class StatsRepository @Inject constructor(
         val insights: List<InsightFlag> = emptyList(),
         val dayTypeBreakdown: List<DayTypeBreakdown> = emptyList(),
         val lifetimeMetrics: LifetimeMetrics? = null,
-        val moodOverTime: List<com.forge.app.data.db.dao.SessionDao.MoodOverTime> = emptyList()
+        val moodOverTime: List<com.forge.app.data.db.dao.SessionDao.MoodOverTime> = emptyList(),
+        /** Raw sessions this ISO week — used internally to build [weekActivity]. */
+        val weekSessions: List<Session> = emptyList(),
+        val weekActivity: List<WeekActivityRow> = emptyList(),
+        val thisWeekCardioMin: Int = 0
     )
 
     /**
@@ -183,6 +190,13 @@ class StatsRepository @Inject constructor(
     fun observeGymStats(): Flow<GymStats> {
         val heatmapStartMs = clock.nowMs() - HEATMAP_WINDOW_MS
         val volumeStartMs = clock.nowMs() - WEEK_MS
+        val zone = ZoneId.systemDefault()
+        val isoWeekStart = run {
+            val today = LocalDate.now(zone)
+            today.minusDays(today.dayOfWeek.value.toLong() - 1)
+        }
+        val weekStartMs = isoWeekStart.atStartOfDay(zone).toInstant().toEpochMilli()
+        val weekEndMs = isoWeekStart.plusWeeks(1).atStartOfDay(zone).toInstant().toEpochMilli()
 
         val totalsFlow: Flow<Totals> = combine(
             sessionDao.observeFinishedCount(),
@@ -249,6 +263,14 @@ class StatsRepository @Inject constructor(
             )
         }.combine(moodFlow) { stats, moods ->
             stats.copy(moodOverTime = moods)
+        }.combine(sessionDao.observeFinishedInRange(weekStartMs, weekEndMs)) { stats, sessions ->
+            stats.copy(weekSessions = sessions)
+        }.combine(cardioDao.observeSince(weekStartMs)) { stats, cardioEntries ->
+            val nonRest = cardioEntries.filter { it.type != "rest" }
+            stats.copy(
+                weekActivity = buildWeekActivity(stats.weekSessions, nonRest),
+                thisWeekCardioMin = nonRest.sumOf { it.durationMin }
+            )
         }
     }
 
@@ -678,6 +700,38 @@ class StatsRepository @Inject constructor(
                 )
             }
             .sortedByDescending { it.delta }
+    }
+
+    private fun buildWeekActivity(
+        sessions: List<Session>,
+        cardioEntries: List<CardioEntry>
+    ): List<WeekActivityRow> {
+        val zone = ZoneId.systemDefault()
+        val today = LocalDate.now(zone)
+        val isoWeekStart = today.minusDays(today.dayOfWeek.value.toLong() - 1)
+        val dayLabels = listOf("MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN")
+        return (0..6).map { dow ->
+            val date = isoWeekStart.plusDays(dow.toLong())
+            val session = sessions.firstOrNull { s ->
+                Instant.ofEpochMilli(s.startedAt).atZone(zone).toLocalDate() == date
+            }
+            val cardio = if (session == null) cardioEntries.firstOrNull { c ->
+                Instant.ofEpochMilli(c.date).atZone(zone).toLocalDate() == date
+            } else null
+            val dayPlan = session?.let { s -> Program.days.firstOrNull { it.key == s.dayKey } }
+            WeekActivityRow(
+                dayOfWeek = dow,
+                dayLabel = dayLabels[dow],
+                sessionName = dayPlan?.defaultName,
+                muscleWord = dayPlan?.word,
+                durationMin = session?.finishedAt?.let { fin -> ((fin - session.startedAt) / 60_000).toInt() },
+                setCount = session?.setCount ?: 0,
+                hasPr = (session?.prCount ?: 0) > 0,
+                cardioType = cardio?.type?.replaceFirstChar { it.uppercase() },
+                cardioDurationMin = cardio?.durationMin,
+                cardioDistanceKm = cardio?.distanceKm
+            )
+        }
     }
 
     companion object {

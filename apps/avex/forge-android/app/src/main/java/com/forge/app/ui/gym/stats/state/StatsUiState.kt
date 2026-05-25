@@ -5,6 +5,20 @@ import com.forge.app.program.MuscleGroup
 import java.time.LocalDate
 import java.time.YearMonth
 
+/** One day row in the "What I did this week" editorial section. */
+data class WeekActivityRow(
+    val dayOfWeek: Int,            // 0=Mon .. 6=Sun
+    val dayLabel: String,          // "MON", "TUE", etc.
+    val sessionName: String? = null,
+    val muscleWord: String? = null, // "PUSH", "HAMS", etc.
+    val durationMin: Int? = null,
+    val setCount: Int = 0,
+    val hasPr: Boolean = false,
+    val cardioType: String? = null, // "Run", "Walk", etc. — null if not cardio
+    val cardioDurationMin: Int? = null,
+    val cardioDistanceKm: Double? = null
+)
+
 data class StatsUiState(
     val isLoading: Boolean = true,
     val totals: Totals = Totals(),
@@ -46,7 +60,11 @@ data class StatsUiState(
     /** Per-day-type breakdown (#134). */
     val dayTypeBreakdown: List<DayTypeBreakdown> = emptyList(),
     /** Lifetime session metrics (#40). */
-    val lifetimeMetrics: LifetimeMetrics? = null
+    val lifetimeMetrics: LifetimeMetrics? = null,
+    /** Mon–Sun rows for "What I did this week" editorial section. Always 7 entries. */
+    val weekActivity: List<WeekActivityRow> = emptyList(),
+    /** Cardio minutes this ISO week (excludes rest-type entries). */
+    val thisWeekCardioMin: Int = 0
 )
 
 data class Totals(
