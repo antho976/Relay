@@ -61,6 +61,7 @@ object PreferenceKeys {
     // ─── Locale (#116) ────────────────────────────────────────────────────────
     /** "MM/dd/yyyy" or "dd/MM/yyyy" */
     val DATE_FORMAT = stringPreferencesKey("date_format")
+    val TIMEZONE = stringPreferencesKey("timezone")
     val TIME_FORMAT_24H = booleanPreferencesKey("time_format_24h")
     val FIRST_DAY_MONDAY = booleanPreferencesKey("first_day_monday")
 

@@ -14,10 +14,19 @@ data class OnThisDayMemory(
 
 /** One row in the overview RECENT section — gym session or cardio entry. */
 data class OverviewRecentItem(
-    val dayLabel: String,   // "YESTERDAY", "MON", "SUN", etc.
-    val title: String,      // "Lower A", "Cardio · Run"
-    val subtitle: String,   // "6 ex · 45 min" or "20 min · 3 km"
-    val tag: String         // "QUADS", "MOVE", "PUSH", etc.
+    val dayLabel: String,
+    val title: String,
+    val subtitle: String,
+    val tag: String,
+    val id: Long = -1L,
+    val timestampMs: Long = 0L,
+    val isGym: Boolean = true,
+    val volumeLb: Double? = null,
+    val prCount: Int = 0,
+    val vsAvgPct: Int? = null,
+    val isBest: Boolean = false,
+    val durationMin: Int? = null,
+    val distanceKm: Double? = null,
 )
 
 data class OverviewUiState(
@@ -35,6 +44,10 @@ data class OverviewUiState(
     val nextUpDayKey: String = "upper-a",
     /** 0=Mon..6=Sun indices that had a gym session this ISO week. */
     val weekDaysTrained: Set<Int> = emptySet(),
+    /** 0=Mon..6=Sun indices that had a cardio entry this ISO week. */
+    val cardioWeekDays: Set<Int> = emptySet(),
+    /** Custom name for the next-up day set by the user, or null if using the program default. */
+    val customDayName: String? = null,
     /** Combined gym + cardio, sorted newest first, capped at 2. */
     val recentItems: List<OverviewRecentItem> = emptyList(),
     val trophiesUnlocked: Int = 0,

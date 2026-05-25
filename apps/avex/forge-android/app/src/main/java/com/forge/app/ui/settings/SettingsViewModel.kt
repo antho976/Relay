@@ -31,7 +31,8 @@ data class SettingsUiState(
     val quietHoursEnd: Int = 7,
     val privacyMode: Boolean = false,
     val availableEquipment: Set<String> = emptySet(),
-    val accentColorHex: String = ""
+    val accentColorHex: String = "",
+    val timezone: String = java.util.TimeZone.getDefault().id
 )
 
 @HiltViewModel
@@ -81,6 +82,8 @@ class SettingsViewModel @Inject constructor(
         s.copy(availableEquipment = equip)
     }.combine(settingsRepo.accentColorHex) { s, v ->
         s.copy(accentColorHex = v)
+    }.combine(settingsRepo.timezone) { s, v ->
+        s.copy(timezone = v)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsUiState())
 
     fun setAmoledMode(v: Boolean) = viewModelScope.launch { settingsRepo.setAmoledMode(v) }
@@ -110,6 +113,7 @@ class SettingsViewModel @Inject constructor(
     fun setPrivacyMode(v: Boolean) = viewModelScope.launch { settingsRepo.setPrivacyMode(v) }
     fun setAvailableEquipment(codes: Set<String>) = viewModelScope.launch { settingsRepo.setAvailableEquipment(codes) }
     fun setAccentColorHex(hex: String) = viewModelScope.launch { settingsRepo.setAccentColorHex(hex) }
+    fun setTimezone(id: String) = viewModelScope.launch { settingsRepo.setTimezone(id) }
     fun exportLastSessionPdf() = viewModelScope.launch {
         val file = pdfExport.exportLastSessionPdf()
         if (file != null) _exportPath.value = file.absolutePath

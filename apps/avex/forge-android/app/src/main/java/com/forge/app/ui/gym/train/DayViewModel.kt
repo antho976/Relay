@@ -65,6 +65,7 @@ import javax.inject.Inject
 class DayViewModel @Inject constructor(
     private val workoutRepo: WorkoutRepository,
     private val customizationRepo: CustomizationRepository,
+    private val programCustomRepo: com.forge.app.data.repo.ProgramCustomizationRepository,
     private val trophyRepo: TrophyRepository,
     private val goalRepo: GoalRepository,
     private val settingsRepo: com.forge.app.data.prefs.SettingsRepository,
@@ -118,8 +119,7 @@ class DayViewModel @Inject constructor(
             }
             refreshExercises()
             startSessionService(resolvedName)
-            val isNewSession = workoutRepo.isNewSession(sessionId)
-            if (isNewSession) _state.update { it.copy(showPreSessionPicker = true) }
+            workoutRepo.isNewSession(sessionId)
         }
 
         // Load custom warmup items — DB-backed (#144) takes priority over DataStore (#120)
@@ -333,7 +333,8 @@ class DayViewModel @Inject constructor(
         val byExerciseId = loggedExercises.associateBy { it.exerciseId }
         val previousExpandedById = _state.value.exercises.associate { it.plan.id to it.isExpanded }
 
-        val exercises = dayPlan.exercises.mapIndexed { index, plan ->
+        val effectivePlans = programCustomRepo.effectivePlanForDay(dayKey)
+        val exercises = effectivePlans.mapIndexed { index, plan ->
             buildExerciseUi(
                 plan = plan,
                 logged = byExerciseId[plan.id],

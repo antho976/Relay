@@ -1,43 +1,88 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 package com.forge.app.ui.settings
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+
+enum class SettingsPage(val title: String) {
+    Appearance("Appearance"),
+    Format("Units & format"),
+    Session("Session"),
+    Notifications("Notifications"),
+    Tiles("Overview tiles"),
+    Equipment("Equipment"),
+    Privacy("Privacy")
+}
+
+private data class SettingsRow(val label: String, val tags: String, val page: SettingsPage)
+
+private val ALL_ROWS = listOf(
+    SettingsRow("Appearance", "amoled dark theme accent compact logging display", SettingsPage.Appearance),
+    SettingsRow("Units & format", "kg lb weight date time week timezone locale", SettingsPage.Format),
+    SettingsRow("Session", "encouragement haptic feedback vibration", SettingsPage.Session),
+    SettingsRow("Notifications", "quiet hours notify suppress", SettingsPage.Notifications),
+    SettingsRow("Overview tiles", "tiles order visible hidden gym cardio trophies streak deload", SettingsPage.Tiles),
+    SettingsRow("Equipment", "equipment available barbell dumbbell cable machine", SettingsPage.Equipment),
+    SettingsRow("Privacy", "privacy mode blur screenshot", SettingsPage.Privacy)
+)
+
+enum class ResetTarget(val label: String, val message: String) {
+    SESSIONS("Reset session data", "Deletes all sessions, sets, and exercises logged. Cannot be undone."),
+    TROPHIES("Reset trophies", "Clears all earned trophies. Cannot be undone."),
+    CARDIO("Reset cardio", "Deletes all cardio entries. Cannot be undone."),
+    SETTINGS("Reset app settings", "Restores all settings to defaults. Does not delete your data."),
+    FACTORY("Factory reset", "Deletes ALL data and resets all settings. This cannot be undone.")
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -46,15 +91,123 @@ fun SettingsScreen(
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val exportPath by viewModel.exportPath.collectAsStateWithLifecycle()
+
+    var currentPage by remember { mutableStateOf<SettingsPage?>(null) }
+    var searchActive by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
     var confirmReset by remember { mutableStateOf<ResetTarget?>(null) }
+    var showDataDialog by remember { mutableStateOf(false) }
+
+    val focusRequester = remember { FocusRequester() }
+    LaunchedEffect(searchActive) {
+        if (searchActive) focusRequester.requestFocus()
+    }
+
+    BackHandler(enabled = currentPage != null || searchActive) {
+        if (currentPage != null) currentPage = null
+        else { searchActive = false; searchQuery = "" }
+    }
+
+    val displayRows = if (searchQuery.isBlank()) ALL_ROWS
+    else ALL_ROWS.filter {
+        searchQuery.lowercase().let { q -> q in it.label.lowercase() || q in it.tags }
+    }
+
+    val onBg = MaterialTheme.colorScheme.onBackground
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("SETTINGS", style = MaterialTheme.typography.headlineLarge) },
+                title = {
+                    when {
+                        currentPage != null -> {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text("•", style = MaterialTheme.typography.bodyMedium, color = muted)
+                                Text("Forge", style = MaterialTheme.typography.bodyMedium, color = onBg, fontStyle = FontStyle.Italic)
+                            }
+                        }
+                        searchActive -> {
+                            BasicTextField(
+                                value = searchQuery,
+                                onValueChange = { searchQuery = it },
+                                textStyle = MaterialTheme.typography.bodyMedium.copy(color = onBg),
+                                cursorBrush = SolidColor(onBg),
+                                singleLine = true,
+                                decorationBox = { inner ->
+                                    Box {
+                                        if (searchQuery.isEmpty()) {
+                                            Text(
+                                                "Search settings…",
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                color = muted.copy(alpha = 0.45f),
+                                                fontStyle = FontStyle.Italic
+                                            )
+                                        }
+                                        inner()
+                                    }
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .focusRequester(focusRequester)
+                            )
+                        }
+                        else -> {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Text("•", style = MaterialTheme.typography.bodyMedium, color = muted)
+                                Text("Forge", style = MaterialTheme.typography.bodyMedium, color = onBg, fontStyle = FontStyle.Italic)
+                            }
+                        }
+                    }
+                },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    IconButton(onClick = {
+                        when {
+                            currentPage != null -> currentPage = null
+                            searchActive -> { searchActive = false; searchQuery = "" }
+                            else -> onBack()
+                        }
+                    }) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = muted)
+                    }
+                },
+                actions = {
+                    when {
+                        currentPage != null -> {
+                            Text(
+                                currentPage!!.title.uppercase(),
+                                style = MaterialTheme.typography.labelSmall,
+                                letterSpacing = 1.5.sp,
+                                color = muted,
+                                modifier = Modifier.padding(end = 16.dp)
+                            )
+                        }
+                        searchActive -> {
+                            if (searchQuery.isNotEmpty()) {
+                                TextButton(onClick = { searchQuery = "" }) {
+                                    Text("×", style = MaterialTheme.typography.bodyLarge, color = muted)
+                                }
+                            }
+                        }
+                        else -> {
+                            IconButton(onClick = { searchActive = true }) {
+                                Icon(Icons.Filled.Search, contentDescription = "Search", tint = muted)
+                            }
+                            Text(
+                                "SETTINGS",
+                                style = MaterialTheme.typography.labelSmall,
+                                letterSpacing = 2.sp,
+                                color = muted,
+                                modifier = Modifier.padding(end = 16.dp)
+                            )
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
@@ -62,273 +215,32 @@ fun SettingsScreen(
         },
         containerColor = Color.Transparent
     ) { inner ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(inner)
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            // ─── Units ────────────────────────────────────────────────────────
-            SectionHeader("UNITS")
-            SettingsChipRow(
-                label = "Weight unit",
-                options = listOf("lb" to "lb (default)", "kg" to "kg"),
-                selected = if (state.useKg) "kg" else "lb",
-                onSelect = { viewModel.setUseKg(it == "kg") }
+        when (val page = currentPage) {
+            null -> MainList(
+                state = state,
+                displayRows = displayRows,
+                searchQuery = searchQuery,
+                modifier = Modifier.fillMaxSize().padding(inner),
+                onOpenPage = { currentPage = it },
+                onOpenDataDialog = { showDataDialog = true },
+                onResetTarget = { confirmReset = it }
             )
-
-            SectionDivider()
-
-            // ─── Appearance ───────────────────────────────────────────────────
-            SectionHeader("APPEARANCE")
-            SettingsToggleRow(
-                label = "AMOLED pure black",
-                subtitle = "Replaces dark background with true black",
-                checked = state.amoledMode,
-                onCheckedChange = viewModel::setAmoledMode
-            )
-            Text("Accent color", style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.padding(top = 4.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.padding(vertical = 4.dp)) {
-                listOf("#3D4F73" to "Navy", "#8B3535" to "Red",
-                       "#4D6040" to "Olive", "#7A6435" to "Gold").forEach { (hex, label) ->
-                    val isDefault = state.accentColorHex.isEmpty() && hex == "#3D4F73"
-                    FilterChip(
-                        selected = state.accentColorHex == hex || isDefault,
-                        onClick = { viewModel.setAccentColorHex(hex) },
-                        label = { Text(label, style = MaterialTheme.typography.labelMedium) },
-                        colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                            selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer
-                        )
-                    )
-                }
-            }
-
-            SectionDivider()
-
-            // ─── Locale ───────────────────────────────────────────────────────
-            SectionHeader("LOCALE")
-            SettingsChipRow(
-                label = "Date format",
-                options = listOf("MMM d, yyyy" to "Jan 5", "dd/MM/yyyy" to "05/01", "MM/dd/yyyy" to "01/05"),
-                selected = state.dateFormat,
-                onSelect = viewModel::setDateFormat
-            )
-            SettingsChipRow(
-                label = "Time format",
-                options = listOf("12h" to "12h", "24h" to "24h"),
-                selected = if (state.timeFormat24h) "24h" else "12h",
-                onSelect = { viewModel.setTimeFormat24h(it == "24h") }
-            )
-            SettingsChipRow(
-                label = "Week starts",
-                options = listOf("Mon" to "Mon", "Sun" to "Sun"),
-                selected = if (state.firstDayMonday) "Mon" else "Sun",
-                onSelect = { viewModel.setFirstDayMonday(it == "Mon") }
-            )
-
-            SectionDivider()
-
-            // ─── Session UX ───────────────────────────────────────────────────
-            SectionHeader("SESSION UX")
-            SettingsToggleRow(
-                label = "Encouragement messages",
-                subtitle = "Show motivational messages during sessions",
-                checked = state.showEncouragement,
-                onCheckedChange = viewModel::setShowEncouragement
-            )
-            SettingsToggleRow(
-                label = "Compact set logging",
-                subtitle = "Denser set rows for experienced users",
-                checked = state.compactSetLogging,
-                onCheckedChange = viewModel::setCompactSetLogging
-            )
-
-            SectionDivider()
-
-            // ─── Feel ─────────────────────────────────────────────────────────
-            SectionHeader("FEEL")
-            SettingsChipRow(
-                label = "Haptic feedback",
-                options = listOf("off" to "Off", "light" to "Light", "medium" to "Medium", "strong" to "Strong"),
-                selected = state.hapticStrength,
-                onSelect = viewModel::setHapticStrength
-            )
-
-            SectionDivider()
-
-            // ─── Notifications ────────────────────────────────────────────────
-            SectionHeader("NOTIFICATIONS")
-            SettingsToggleRow(
-                label = "Quiet hours",
-                subtitle = "Suppress timer + recap notifications",
-                checked = state.quietHoursEnabled,
-                onCheckedChange = viewModel::setQuietHoursEnabled
-            )
-            if (state.quietHoursEnabled) {
-                SettingsHourRow(
-                    label = "From",
-                    hour = state.quietHoursStart,
-                    onHourChange = viewModel::setQuietHoursStart
-                )
-                SettingsHourRow(
-                    label = "Until",
-                    hour = state.quietHoursEnd,
-                    onHourChange = viewModel::setQuietHoursEnd
-                )
-            }
-
-            SectionDivider()
-
-            // ─── Overview tiles (#121) ────────────────────────────────────────
-            SectionHeader("OVERVIEW TILES")
-            Text("Tile order", style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(bottom = 4.dp))
-            val tileLabels = mapOf("gym" to "Gym", "cardio" to "Cardio", "trophies" to "Trophies")
-            state.overviewTileOrder.forEachIndexed { idx, tileId ->
-                Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically) {
-                    Text(tileLabels[tileId] ?: tileId, style = MaterialTheme.typography.bodyLarge)
-                    Row {
-                        if (idx > 0) TextButton(onClick = {
-                            val order = state.overviewTileOrder.toMutableList()
-                            order.add(idx - 1, order.removeAt(idx))
-                            viewModel.setOverviewTileOrder(order)
-                        }) { Text("↑") }
-                        if (idx < state.overviewTileOrder.lastIndex) TextButton(onClick = {
-                            val order = state.overviewTileOrder.toMutableList()
-                            order.add(idx + 1, order.removeAt(idx))
-                            viewModel.setOverviewTileOrder(order)
-                        }) { Text("↓") }
-                    }
-                }
-            }
-            SectionDivider()
-            Text("Tile visibility", style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(vertical = 4.dp))
-            listOf("gym" to "Gym tile", "cardio" to "Cardio tile", "trophies" to "Trophies tile",
-                "streak" to "Streak card", "deload" to "Deload banner").forEach { (id, label) ->
-                SettingsToggleRow(
-                    label = label,
-                    subtitle = if (id in state.hiddenOverviewTiles) "Hidden" else "Shown",
-                    checked = id !in state.hiddenOverviewTiles,
-                    onCheckedChange = { shown -> viewModel.setTileHidden(id, !shown) }
-                )
-            }
-
-            SectionDivider()
-
-            // ─── Custom warmup (#120) ─────────────────────────────────────────
-            SectionHeader("CUSTOM WARMUP")
-            Text(
-                "Replace the built-in warmup for each day. One item per line.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(bottom = 4.dp)
-            )
-            com.forge.app.program.Program.days.forEach { day ->
-                WarmupDayEditor(
-                    dayName = day.defaultName,
-                    defaultItems = day.warmup,
-                    onSave = { items -> viewModel.setCustomWarmup(day.key, items) }
-                )
-            }
-
-            SectionDivider()
-
-            // ─── Equipment context (#44) ──────────────────────────────────────
-            SectionDivider()
-            SectionHeader("EQUIPMENT")
-            Text(
-                "Select what equipment you have available. Swap suggestions will favor exercises you can do.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            // Equipment toggles — shown as filter chips
-            @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
-            androidx.compose.foundation.layout.FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                com.forge.app.program.Equipment.entries.forEach { equip ->
-                    val selected = state.availableEquipment.contains(equip.name)
-                    FilterChip(
-                        selected = selected,
-                        onClick = {
-                            val current = state.availableEquipment.toMutableSet()
-                            if (selected) current.remove(equip.name) else current.add(equip.name)
-                            viewModel.setAvailableEquipment(current)
-                        },
-                        label = { Text(equip.display, style = MaterialTheme.typography.labelSmall) }
-                    )
-                }
-            }
-
-            // ─── Privacy mode (#152) ──────────────────────────────────────────
-            SectionDivider()
-            SectionHeader("PRIVACY")
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Privacy mode", style = MaterialTheme.typography.bodyMedium)
-                    Text("Blur app content in task switcher / screenshots",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                Switch(
-                    checked = state.privacyMode,
-                    onCheckedChange = viewModel::setPrivacyMode
-                )
-            }
-
-            // ─── Vacation mode (#135) ──────────────────────────────────────────
-            SectionDivider()
-            SectionHeader("VACATION MODE")
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Holiday / Vacation", style = MaterialTheme.typography.bodyMedium)
-                    Text("Streak & deload counter pause during marked ranges",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                TextButton(onClick = { /* vacation management — full UI in future */ }) {
-                    Text("Manage")
-                }
-            }
-
-            // ─── Data ─────────────────────────────────────────────────────────
-            SectionDivider()
-            SectionHeader("DATA")
-
-            // Export (#5, #6, #138)
-            ExportRow("Export weekly data (JSON)", viewModel::exportWeeklyJson)
-            ExportRow("Export sessions (CSV)", viewModel::exportSessionsCsv)
-            ExportRow("Full backup (JSON)", viewModel::exportFullBackup)
-            ExportRow("Load sample data (8 weeks)", viewModel::loadSampleData)
-            ExportRow("Export last session (PDF)", viewModel::exportLastSessionPdf)
-            SectionDivider()
-
-            ResetTarget.entries.forEach { target ->
-                SettingsDestructiveRow(label = target.label) { confirmReset = target }
-            }
+            SettingsPage.Appearance -> AppearancePage(state, viewModel, Modifier.padding(inner))
+            SettingsPage.Format -> FormatPage(state, viewModel, Modifier.padding(inner))
+            SettingsPage.Session -> SessionPage(state, viewModel, Modifier.padding(inner))
+            SettingsPage.Notifications -> NotificationsPage(state, viewModel, Modifier.padding(inner))
+            SettingsPage.Tiles -> TilesPage(state, viewModel, Modifier.padding(inner))
+            SettingsPage.Equipment -> EquipmentPage(state, viewModel, Modifier.padding(inner))
+            SettingsPage.Privacy -> PrivacyPage(state, viewModel, Modifier.padding(inner))
         }
     }
 
-    // Export success snackbar
-    val exportPath by viewModel.exportPath.collectAsStateWithLifecycle()
+    if (showDataDialog) {
+        DataExportDialog(viewModel = viewModel, onDismiss = { showDataDialog = false })
+    }
+
     exportPath?.let { path ->
-        androidx.compose.material3.AlertDialog(
+        AlertDialog(
             onDismissRequest = viewModel::clearExportPath,
             title = { Text("Export saved") },
             text = { Text("File saved to app storage:\n${path.substringAfterLast("/")}") },
@@ -354,191 +266,187 @@ fun SettingsScreen(
     }
 }
 
-enum class ResetTarget(val label: String, val message: String) {
-    SESSIONS("Reset session data", "Deletes all sessions, sets, and exercises logged. Cannot be undone."),
-    TROPHIES("Reset trophies", "Clears all earned trophies. Cannot be undone."),
-    CARDIO("Reset cardio", "Deletes all cardio entries. Cannot be undone."),
-    SETTINGS("Reset app settings", "Restores all settings to defaults. Does not delete your data."),
-    FACTORY("Factory reset", "Deletes ALL data and resets all settings. This cannot be undone.")
-}
-
-// ─── Section composables ──────────────────────────────────────────────────────
+// ─── Main list ────────────────────────────────────────────────────────────────
 
 @Composable
-private fun SectionHeader(title: String) {
-    Text(
-        text = title,
-        style = MaterialTheme.typography.labelLarge,
-        fontWeight = FontWeight.Bold,
-        color = MaterialTheme.colorScheme.primary,
-        letterSpacing = androidx.compose.ui.unit.TextUnit(1.5f, androidx.compose.ui.unit.TextUnitType.Sp),
-        modifier = Modifier.padding(top = 12.dp, bottom = 4.dp)
-    )
-}
-
-@Composable
-private fun SectionDivider() {
-    HorizontalDivider(
-        modifier = Modifier.padding(vertical = 8.dp),
-        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
-    )
-}
-
-@Composable
-private fun SettingsToggleRow(
-    label: String,
-    subtitle: String,
-    checked: Boolean,
-    onCheckedChange: (Boolean) -> Unit
+private fun MainList(
+    state: SettingsUiState,
+    displayRows: List<SettingsRow>,
+    searchQuery: String,
+    modifier: Modifier,
+    onOpenPage: (SettingsPage) -> Unit,
+    onOpenDataDialog: () -> Unit,
+    onResetTarget: (ResetTarget) -> Unit
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(label, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
-            Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    LazyColumn(modifier = modifier, contentPadding = PaddingValues(bottom = 56.dp)) {
+        displayRows.forEach { row ->
+            item(row.page.name) {
+                SettingsNavRow(row.label, rowSubtitle(row.page, state)) { onOpenPage(row.page) }
+                SectionDivider()
+            }
         }
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
+
+        if (searchQuery.isBlank()) {
+            item("vacation") {
+                SettingsNavRow("Holiday / Vacation", "Streak & deload counter pause") { /* future */ }
+                SectionDivider()
+            }
+            item("data") {
+                SectionLabel("DATA")
+                SettingsNavRow("Export data", "Sessions · weekly · full backup · PDF") { onOpenDataDialog() }
+                SectionDivider()
+            }
+            item("reset") {
+                SectionLabel("RESET")
+                ResetTarget.entries.forEach { target ->
+                    DestructiveRow(target.label, isFactory = target == ResetTarget.FACTORY) { onResetTarget(target) }
+                }
+                Spacer(Modifier.height(8.dp))
+            }
+        }
     }
 }
 
-@Composable
-private fun SettingsInfoRow(label: String, value: String) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(label, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
-        Text(value, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
+// ─── Subtitle helpers ─────────────────────────────────────────────────────────
+
+private fun rowSubtitle(page: SettingsPage, s: SettingsUiState): String = when (page) {
+    SettingsPage.Appearance -> "AMOLED ${if (s.amoledMode) "on" else "off"} · compact ${if (s.compactSetLogging) "on" else "off"}"
+    SettingsPage.Format -> "${if (s.useKg) "kg" else "lb"} · ${dateShort(s.dateFormat)} · ${if (s.timeFormat24h) "24h" else "12h"} · ${tzShort(s.timezone)}"
+    SettingsPage.Session -> "Haptic: ${s.hapticStrength}"
+    SettingsPage.Notifications -> if (s.quietHoursEnabled)
+        "Quiet ${s.quietHoursStart.toString().padStart(2, '0')}:00–${s.quietHoursEnd.toString().padStart(2, '0')}:00"
+    else "Off"
+    SettingsPage.Tiles -> "${s.overviewTileOrder.count { it !in s.hiddenOverviewTiles }} of ${s.overviewTileOrder.size} visible"
+    SettingsPage.Equipment -> if (s.availableEquipment.isEmpty()) "All equipment" else "${s.availableEquipment.size} selected"
+    SettingsPage.Privacy -> if (s.privacyMode) "Screen blur on" else "Screen blur off"
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+private fun dateShort(f: String) = when (f) {
+    "dd/MM/yyyy" -> "05/01"
+    "MM/dd/yyyy" -> "01/05"
+    else -> "Jan 5"
+}
+
+private fun tzShort(id: String) = when (id) {
+    "America/Los_Angeles" -> "PST"
+    "America/Denver" -> "MST"
+    "America/Chicago" -> "CST"
+    "America/New_York" -> "EST"
+    "America/Sao_Paulo" -> "BRT"
+    "UTC" -> "UTC"
+    "Europe/London" -> "GMT"
+    "Europe/Paris" -> "CET"
+    "Europe/Moscow" -> "MSK"
+    "Asia/Kolkata" -> "IST"
+    "Asia/Tokyo" -> "JST"
+    "Australia/Sydney" -> "AEST"
+    else -> id.substringAfterLast("/")
+}
+
+// ─── Data export dialog ───────────────────────────────────────────────────────
+
+private data class ExportOption(val label: String, val format: String, val action: () -> Unit)
+
 @Composable
-private fun SettingsChipRow(
-    label: String,
-    options: List<Pair<String, String>>,
-    selected: String,
-    onSelect: (String) -> Unit
-) {
-    Column(modifier = Modifier.padding(vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(label, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            options.forEach { (value, display) ->
-                FilterChip(
-                    selected = selected == value,
-                    onClick = { onSelect(value) },
-                    label = { Text(display, style = MaterialTheme.typography.labelMedium) },
-                    colors = FilterChipDefaults.filterChipColors(
-                        selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
-                        selectedLabelColor = MaterialTheme.colorScheme.primary
-                    )
+private fun DataExportDialog(viewModel: SettingsViewModel, onDismiss: () -> Unit) {
+    var selectedIdx by remember { mutableStateOf<Int?>(null) }
+    var selectedFormat by remember { mutableStateOf<String?>(null) }
+
+    val options = remember(viewModel) {
+        listOf(
+            ExportOption("Sessions", "CSV") { viewModel.exportSessionsCsv() },
+            ExportOption("Weekly summary", "JSON") { viewModel.exportWeeklyJson() },
+            ExportOption("Full backup", "JSON") { viewModel.exportFullBackup() },
+            ExportOption("Last session", "PDF") { viewModel.exportLastSessionPdf() }
+        )
+    }
+
+    val validFormat = selectedIdx?.let { options[it].format }
+    val canExport = selectedIdx != null && selectedFormat == validFormat
+
+    Dialog(onDismissRequest = onDismiss) {
+        val onBg = MaterialTheme.colorScheme.onBackground
+        val muted = MaterialTheme.colorScheme.onSurfaceVariant
+        val outline = MaterialTheme.colorScheme.outline
+        val bg = MaterialTheme.colorScheme.background
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(bg, RoundedCornerShape(8.dp))
+                .padding(horizontal = 24.dp, vertical = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Text(
+                "EXPORT DATA",
+                style = MaterialTheme.typography.labelSmall,
+                color = muted,
+                letterSpacing = 1.5.sp
+            )
+
+            // What?
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("What?", style = MaterialTheme.typography.bodyMedium, color = onBg)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    options.forEachIndexed { idx, opt ->
+                        PillChip("${opt.label}\n${opt.format}", selected = selectedIdx == idx) {
+                            selectedIdx = idx
+                            selectedFormat = opt.format
+                        }
+                    }
+                }
+            }
+
+            HorizontalDivider(color = outline.copy(alpha = 0.2f))
+
+            // Format?
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Format?", style = MaterialTheme.typography.bodyMedium, color = onBg)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("CSV", "JSON", "PDF").forEach { fmt ->
+                        val isValid = validFormat == fmt
+                        PillChip(fmt, selected = selectedFormat == fmt, enabled = isValid) {
+                            if (isValid) selectedFormat = fmt
+                        }
+                    }
+                }
+            }
+
+            HorizontalDivider(color = outline.copy(alpha = 0.2f))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(20.dp, Alignment.End),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "cancel",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = muted.copy(alpha = 0.6f),
+                    modifier = Modifier.clickable(onClick = onDismiss).padding(4.dp)
+                )
+                Text(
+                    "Export →",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (canExport) onBg else onBg.copy(alpha = 0.3f),
+                    modifier = if (canExport) {
+                        Modifier.clickable {
+                            options[selectedIdx!!].action()
+                            onDismiss()
+                        }.padding(4.dp)
+                    } else {
+                        Modifier.padding(4.dp)
+                    }
                 )
             }
         }
     }
 }
 
-@Composable
-private fun SettingsHourRow(label: String, hour: Int, onHourChange: (Int) -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = { onHourChange((hour - 1 + 24) % 24) }) { Text("−") }
-            Text(
-                "${hour.toString().padStart(2, '0')}:00",
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            TextButton(onClick = { onHourChange((hour + 1) % 24) }) { Text("+") }
-        }
-    }
-}
+// ─── Reset confirm dialog ─────────────────────────────────────────────────────
 
 @Composable
-private fun ExportRow(label: String, onClick: () -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(label, style = MaterialTheme.typography.bodyMedium,
-            modifier = Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurface)
-        TextButton(onClick = onClick) { Text("Export") }
-    }
-}
-
-@Composable
-private fun SettingsDestructiveRow(label: String, onClick: () -> Unit) {
-    TextButton(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
-        colors = androidx.compose.material3.ButtonDefaults.textButtonColors(
-            contentColor = if (label.startsWith("Factory")) MaterialTheme.colorScheme.error
-            else MaterialTheme.colorScheme.onSurface
-        )
-    ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.bodyLarge,
-            modifier = Modifier.fillMaxWidth()
-        )
-    }
-}
-
-@Composable
-private fun WarmupDayEditor(
-    dayName: String,
-    defaultItems: List<String>,
-    onSave: (List<String>) -> Unit
-) {
-    var expanded by remember { mutableStateOf(false) }
-    var text by remember { mutableStateOf(defaultItems.joinToString("\n")) }
-
-    Column(modifier = Modifier.padding(vertical = 4.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(dayName, style = MaterialTheme.typography.bodyLarge)
-            TextButton(onClick = { expanded = !expanded }) {
-                Text(if (expanded) "Done" else "Edit")
-            }
-        }
-        if (expanded) {
-            androidx.compose.material3.OutlinedTextField(
-                value = text,
-                onValueChange = { text = it },
-                modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text("One item per line") },
-                minLines = 3,
-                maxLines = 8
-            )
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                TextButton(onClick = { text = defaultItems.joinToString("\n") }) { Text("Reset to default") }
-                TextButton(onClick = {
-                    onSave(text.lines().filter { it.isNotBlank() })
-                    expanded = false
-                }) { Text("Save") }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ResetConfirmDialog(
-    target: ResetTarget,
-    onConfirm: () -> Unit,
-    onDismiss: () -> Unit
-) {
+private fun ResetConfirmDialog(target: ResetTarget, onConfirm: () -> Unit, onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(target.label) },

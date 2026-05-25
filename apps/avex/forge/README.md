@@ -36,7 +36,7 @@ forge/
 └── src/
     ├── WorkoutTracker.web.jsx # ORIGINAL web React code (reference)
     └── WorkoutTracker.jsx     # PORT TARGET — empty, fill this in
-```
+```this UI is hard to read what do you think we could tweak?
 
 ---
 

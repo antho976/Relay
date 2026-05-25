@@ -1,21 +1,31 @@
 package com.forge.app.ui.cardio
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -26,33 +36,33 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
-import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.text.font.FontWeight
+import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.domain.cardio.CardioType
 import com.forge.app.ui.cardio.components.CardioEntryRow
 import com.forge.app.ui.cardio.components.CardioLogSheet
-import com.forge.app.ui.cardio.components.WeeklyCardioCard
-import com.forge.app.ui.cardio.state.PaceTrendPoint
+import com.forge.app.ui.cardio.state.CardioUiState
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.format.TextStyle
+import java.time.temporal.WeekFields
+import java.util.Locale
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CardioScreen(
     onBack: () -> Unit,
@@ -60,200 +70,354 @@ fun CardioScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("CARDIO", style = MaterialTheme.typography.headlineLarge) },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
-            )
-        },
-        containerColor = Color.Transparent
-    ) { inner ->
-        Box(Modifier.fillMaxSize().padding(inner)) {
-            LazyColumn(
-                modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                item(key = "summary") {
-                    WeeklyCardioCard(
-                        minutes = state.weekMinutes,
-                        entries = state.weekEntryCount,
-                        weekDailyMinutes = state.weekDailyMinutes
-                    )
-                }
-                // Lifetime distance + pace trend (#79, #78)
-                if (state.lifetimeDistanceKm > 0) {
-                    item(key = "lifetime") {
-                        CardioAnalyticsCard(
-                            lifetimeKm = state.lifetimeDistanceKm,
-                            paceTrend = state.paceTrend
-                        )
-                    }
-                }
-                item(key = "filter") {
-                    TypeFilterRow(
-                        selected = state.selectedTypeFilter,
-                        onSelect = viewModel::setTypeFilter
-                    )
-                }
-                item(key = "add") {
-                    Button(
-                        onClick = viewModel::openSheet,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 4.dp, bottom = 4.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.primary
-                        )
-                    ) {
-                        Icon(Icons.Filled.Add, contentDescription = null)
-                        Text("  Log cardio")
-                    }
-                }
-                if (state.filteredEntries.isEmpty() && !state.isLoading) {
-                    item(key = "empty") {
-                        EmptyState()
-                    }
-                }
-                items(items = state.filteredEntries, key = { it.id }) { entry ->
-                    CardioEntryRow(
-                        entry = entry,
-                        onRequestDelete = { viewModel.requestDelete(entry.id) }
-                    )
-                }
-            }
-        }
-    }
-
     if (state.sheetOpen) {
         CardioLogSheet(
             onDismiss = viewModel::closeSheet,
             onLog = viewModel::logEntry
         )
+    } else {
+        CardioListContent(
+            state = state,
+            onBack = onBack,
+            onOpenLog = viewModel::openSheet,
+            onRequestDelete = viewModel::requestDelete
+        )
     }
 
-    val pendingDelete = state.pendingDeleteId
-    if (pendingDelete != null) {
-        DeleteConfirmDialog(
-            onConfirm = viewModel::confirmDelete,
-            onDismiss = viewModel::cancelDelete
+    if (state.pendingDeleteId != null) {
+        AlertDialog(
+            onDismissRequest = viewModel::cancelDelete,
+            title = { Text("Delete entry?") },
+            text = { Text("This can't be undone.") },
+            confirmButton = { TextButton(onClick = viewModel::confirmDelete) { Text("Delete") } },
+            dismissButton = { TextButton(onClick = viewModel::cancelDelete) { Text("Cancel") } }
         )
     }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun TypeFilterRow(selected: String?, onSelect: (String?) -> Unit) {
-    Row(
-        modifier = androidx.compose.ui.Modifier
-            .horizontalScroll(rememberScrollState())
-            .padding(bottom = 4.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        FilterChip(
-            selected = selected == null,
-            onClick = { onSelect(null) },
-            label = { Text("All") },
-            colors = FilterChipDefaults.filterChipColors(
-                selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
-                selectedLabelColor = MaterialTheme.colorScheme.primary
+private fun CardioListContent(
+    state: CardioUiState,
+    onBack: () -> Unit,
+    onOpenLog: () -> Unit,
+    onRequestDelete: (Long) -> Unit
+) {
+    val zone = ZoneId.systemDefault()
+    val today = LocalDate.now(zone)
+    val weekNum = today.get(WeekFields.ISO.weekOfWeekBasedYear())
+    val isoWeekStart = today.minusDays(today.dayOfWeek.value.toLong() - 1)
+    val isoWeekEnd = isoWeekStart.plusDays(6)
+    val weekLabel = remember(weekNum) {
+        val fmt = DateTimeFormatter.ofPattern("MMM d", Locale.getDefault())
+        "${isoWeekStart.format(fmt).uppercase()} — ${isoWeekEnd.format(fmt).uppercase()}"
+    }
+    val todayDow = today.dayOfWeek.value - 1
+    val isoWeekStartMs = remember(isoWeekStart) {
+        isoWeekStart.atStartOfDay(zone).toInstant().toEpochMilli()
+    }
+    val weekEntries = remember(state.entries, isoWeekStartMs) {
+        state.entries.filter { it.date >= isoWeekStartMs && it.type != CardioType.REST.code }
+    }
+
+    val onBg = MaterialTheme.colorScheme.onBackground
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val outline = MaterialTheme.colorScheme.outline
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text("•", style = MaterialTheme.typography.bodyMedium, color = muted)
+                        Text("Forge", style = MaterialTheme.typography.bodyMedium, color = onBg, fontStyle = FontStyle.Italic)
+                    }
+                },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = muted)
+                    }
+                },
+                actions = {
+                    Text(
+                        "CARDIO",
+                        style = MaterialTheme.typography.labelSmall,
+                        letterSpacing = 2.sp,
+                        color = muted,
+                        modifier = Modifier.padding(end = 16.dp)
+                    )
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
             )
-        )
-        CardioType.entries.forEach { type ->
-            FilterChip(
-                selected = selected == type.code,
-                onClick = { onSelect(type.code) },
-                label = { Text(type.displayName) },
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.18f),
-                    selectedLabelColor = MaterialTheme.colorScheme.primary
+        },
+        containerColor = Color.Transparent
+    ) { inner ->
+        LazyColumn(
+            modifier = Modifier.fillMaxSize().padding(inner),
+            contentPadding = PaddingValues(bottom = 56.dp)
+        ) {
+            item("hero") {
+                CardioHero(
+                    weekMinutes = state.weekMinutes,
+                    weekNum = weekNum,
+                    weekLabel = weekLabel,
+                    weekEntries = weekEntries,
+                    today = today,
+                    zone = zone,
+                    onBg = onBg,
+                    muted = muted,
+                    outline = outline
                 )
-            )
+            }
+
+            item("week-row") {
+                WeekBoxRow(
+                    dailyMinutes = state.weekDailyMinutes,
+                    todayDow = todayDow,
+                    onBg = onBg,
+                    muted = muted,
+                    outline = outline
+                )
+            }
+
+            item("log-action") {
+                LogTodayRow(onOpenLog = onOpenLog, onBg = onBg, muted = muted, outline = outline)
+                Column(Modifier.padding(horizontal = 24.dp)) {
+                    HorizontalDivider(color = outline.copy(alpha = 0.25f))
+                    Spacer(Modifier.height(16.dp))
+                }
+            }
+
+            if (state.filteredEntries.isNotEmpty()) {
+                item("history-title") {
+                    Text(
+                        "What I did",
+                        style = MaterialTheme.typography.headlineSmall,
+                        color = onBg,
+                        fontStyle = FontStyle.Italic,
+                        modifier = Modifier.padding(horizontal = 24.dp)
+                    )
+                    Spacer(Modifier.height(12.dp))
+                }
+                items(state.filteredEntries, key = { it.id }) { entry ->
+                    CardioEntryRow(
+                        entry = entry,
+                        today = today,
+                        onRequestDelete = { onRequestDelete(entry.id) }
+                    )
+                    HorizontalDivider(
+                        modifier = Modifier.padding(horizontal = 24.dp),
+                        color = outline.copy(alpha = 0.18f)
+                    )
+                }
+            } else if (!state.isLoading) {
+                item("empty") {
+                    Text(
+                        "No activity logged yet.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = muted.copy(alpha = 0.55f),
+                        fontStyle = FontStyle.Italic,
+                        modifier = Modifier.padding(horizontal = 24.dp)
+                    )
+                }
+            }
         }
     }
 }
 
 @Composable
-private fun EmptyState() {
-    com.forge.app.ui.common.EmptyState(
-        emoji = "🏃",
-        title = "No cardio yet.",
-        subtitle = "That's on you."
-    )
-}
+private fun CardioHero(
+    weekMinutes: Int,
+    weekNum: Int,
+    weekLabel: String,
+    weekEntries: List<CardioEntry>,
+    today: LocalDate,
+    zone: ZoneId,
+    onBg: Color,
+    muted: Color,
+    outline: Color
+) {
+    val description = remember(weekEntries) { buildWeekDescription(weekEntries, zone) }
 
-@Composable
-private fun CardioAnalyticsCard(lifetimeKm: Double, paceTrend: List<PaceTrendPoint>) {
-    val primary = MaterialTheme.colorScheme.primary
-    val surfaceVar = MaterialTheme.colorScheme.surfaceVariant
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(surfaceVar, RoundedCornerShape(12.dp))
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
+            .padding(horizontal = 24.dp)
+            .padding(top = 8.dp, bottom = 8.dp)
     ) {
-        Text("CARDIO ANALYTICS", style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.SemiBold)
         Text(
-            "Lifetime: ${"%.1f".format(lifetimeKm)} km",
-            style = MaterialTheme.typography.headlineSmall,
-            color = MaterialTheme.colorScheme.onSurface,
-            fontWeight = FontWeight.Black
+            "WEEK $weekNum · $weekLabel",
+            style = MaterialTheme.typography.labelSmall,
+            color = muted,
+            fontSize = 9.sp,
+            letterSpacing = 1.sp
         )
-        if (paceTrend.size >= 2) {
-            Text("RUN PACE TREND · min/km", style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-            val minPace = paceTrend.minOf { it.paceMinPerKm }
-            val maxPace = paceTrend.maxOf { it.paceMinPerKm }.coerceAtLeast(minPace + 0.01)
-            val range = maxPace - minPace
-            Canvas(modifier = Modifier.fillMaxWidth().height(60.dp).clip(RoundedCornerShape(4.dp))) {
-                val step = size.width / (paceTrend.size - 1).coerceAtLeast(1)
-                val path = Path()
-                paceTrend.forEachIndexed { i, pt ->
-                    val x = i * step
-                    val y = size.height - ((pt.paceMinPerKm - minPace) / range * size.height).toFloat()
-                    if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
-                }
-                drawPath(path, color = primary, style = Stroke(width = 3f))
-                // dots
-                paceTrend.forEachIndexed { i, pt ->
-                    val x = i * step
-                    val y = size.height - ((pt.paceMinPerKm - minPace) / range * size.height).toFloat()
-                    drawCircle(primary, radius = 4f, center = Offset(x, y))
-                }
-            }
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("${"%.1f".format(paceTrend.first().paceMinPerKm)} min/km",
-                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text("${"%.1f".format(paceTrend.last().paceMinPerKm)} min/km",
-                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
+        Spacer(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text(
+                if (weekMinutes > 0) "$weekMinutes" else "—",
+                style = MaterialTheme.typography.displayLarge,
+                color = onBg
+            )
+            Text(
+                " minutes.",
+                style = MaterialTheme.typography.headlineSmall,
+                color = onBg,
+                fontStyle = FontStyle.Italic,
+                modifier = Modifier.padding(start = 4.dp, bottom = 6.dp)
+            )
         }
+        if (description.isNotEmpty()) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                description,
+                style = MaterialTheme.typography.bodySmall,
+                color = muted,
+                fontStyle = FontStyle.Italic
+            )
+        }
+        Spacer(Modifier.height(16.dp))
     }
 }
 
 @Composable
-private fun DeleteConfirmDialog(
-    onConfirm: () -> Unit,
-    onDismiss: () -> Unit
+private fun WeekBoxRow(
+    dailyMinutes: List<Int>,
+    todayDow: Int,
+    onBg: Color,
+    muted: Color,
+    outline: Color
 ) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Delete entry?") },
-        text = { Text("This can't be undone.") },
-        confirmButton = {
-            TextButton(onClick = onConfirm) { Text("Delete") }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancel") }
+    val dayLetters = listOf("M", "T", "W", "T", "F", "S", "S")
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 24.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        dayLetters.forEachIndexed { i, letter ->
+            val mins = dailyMinutes.getOrElse(i) { 0 }
+            val isToday = i == todayDow
+            val hasActivity = mins > 0
+            val isFuture = i > todayDow
+
+            Column(
+                modifier = Modifier.weight(1f),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    letter,
+                    fontSize = 8.sp,
+                    color = if (isToday) onBg else muted.copy(alpha = 0.45f)
+                )
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(40.dp)
+                        .then(
+                            if (isToday && !hasActivity) {
+                                Modifier.drawBehind {
+                                    val effect = PathEffect.dashPathEffect(floatArrayOf(5f, 4f), 0f)
+                                    drawRoundRect(
+                                        color = onBg.copy(alpha = 0.35f),
+                                        style = Stroke(
+                                            width = 1.dp.toPx(),
+                                            pathEffect = effect
+                                        ),
+                                        cornerRadius = CornerRadius(4.dp.toPx())
+                                    )
+                                }
+                            } else {
+                                Modifier.background(
+                                    when {
+                                        hasActivity -> onBg.copy(alpha = 0.14f)
+                                        isFuture -> outline.copy(alpha = 0.06f)
+                                        else -> outline.copy(alpha = 0.1f)
+                                    },
+                                    RoundedCornerShape(4.dp)
+                                )
+                            }
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (hasActivity) {
+                        Text(
+                            "${mins}m",
+                            fontSize = 9.sp,
+                            color = onBg,
+                            fontWeight = FontWeight.Medium
+                        )
+                    } else if (isToday) {
+                        Text("NOW", fontSize = 7.sp, color = muted.copy(alpha = 0.6f), letterSpacing = 0.5.sp)
+                    }
+                }
+            }
         }
-    )
+    }
+    Spacer(Modifier.height(4.dp))
 }
 
+@Composable
+private fun LogTodayRow(
+    onOpenLog: () -> Unit,
+    onBg: Color,
+    muted: Color,
+    outline: Color
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onOpenLog)
+            .padding(horizontal = 24.dp, vertical = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(44.dp)
+                .border(1.dp, onBg.copy(alpha = 0.55f), CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                Icons.Filled.Add,
+                contentDescription = null,
+                tint = onBg,
+                modifier = Modifier.size(20.dp)
+            )
+        }
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text("Log today's cardio", style = MaterialTheme.typography.bodyMedium, color = onBg)
+            Text(
+                "run · walk · treadmill · rest",
+                style = MaterialTheme.typography.labelSmall,
+                color = muted,
+                fontSize = 10.sp
+            )
+        }
+        Icon(
+            Icons.AutoMirrored.Filled.ArrowForward,
+            contentDescription = null,
+            tint = muted.copy(alpha = 0.5f),
+            modifier = Modifier.size(14.dp)
+        )
+    }
+}
+
+private fun buildWeekDescription(entries: List<CardioEntry>, zone: ZoneId): String {
+    if (entries.isEmpty()) return ""
+    if (entries.size == 1) {
+        val e = entries.first()
+        val typeName = CardioType.fromCode(e.type).displayName.lowercase()
+        val dayName = Instant.ofEpochMilli(e.date)
+            .atZone(zone).dayOfWeek
+            .getDisplayName(TextStyle.FULL, Locale.getDefault())
+            .lowercase()
+        return "One $typeName on $dayName."
+    }
+    return "${entries.size} sessions this week."
+}

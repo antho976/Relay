@@ -29,7 +29,7 @@ import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
-import androidx.compose.material3.Surface
+import androidx.compose.foundation.border
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.ui.text.font.FontStyle
@@ -70,7 +70,6 @@ import com.forge.app.ui.gym.train.components.RestTimerControlsDialog
 import com.forge.app.ui.gym.train.components.SessionSummarySheet
 import com.forge.app.ui.gym.train.components.SwapPickerSheet
 import com.forge.app.domain.units.parseToLb
-import com.forge.app.ui.common.ConfettiOverlay
 import com.forge.app.ui.gym.train.components.AddExerciseSheet
 import com.forge.app.ui.common.ForgeHapticType
 import com.forge.app.ui.common.forgeHaptic
@@ -99,16 +98,10 @@ fun DayScreen(
     val totalPrSets by remember { derivedStateOf { state.exercises.sumOf { it.prSetIds.size } } }
     var prevTotalSets by remember { mutableIntStateOf(-1) }
     var prevTotalPrs by remember { mutableIntStateOf(-1) }
-    var prConfettiRevision by remember { mutableIntStateOf(0) }
-
-    val showEncouragement = LocalForgeSettings.current.showEncouragement
-    val encouragements = remember { listOf("New PR! 🔥", "That's a record!", "You beast.", "Keep pushing.", "Gains incoming.") }
     LaunchedEffect(totalSets, totalPrSets) {
         when {
             prevTotalPrs >= 0 && totalPrSets > prevTotalPrs -> {
                 view.forgeHaptic(ForgeHapticType.PR_OR_FINISH, hapticStrength)
-                prConfettiRevision++
-                if (showEncouragement) snackbarHostState.showSnackbar(encouragements.random())
             }
             prevTotalSets >= 0 && totalSets > prevTotalSets ->
                 view.forgeHaptic(ForgeHapticType.SET_LOGGED, hapticStrength)
@@ -159,32 +152,19 @@ fun DayScreen(
                 Column(horizontalAlignment = Alignment.End) {
                     // "Next up" label above the timer bubble (#99)
                     state.nextUpExerciseName?.let { name ->
-                        Surface(
-                            color = MaterialTheme.colorScheme.surfaceVariant,
-                            shape = RoundedCornerShape(8.dp),
-                            tonalElevation = 4.dp
-                        ) {
-                            Text(
-                                "Next: $name",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                                maxLines = 1
-                            )
-                        }
-                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "next: $name",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
+                            maxLines = 1,
+                            modifier = Modifier.padding(bottom = 6.dp)
+                        )
                     }
                     RestTimerBubble(
                         state = timer,
                         onOpenControls = { viewModel.onEvent(DayUiEvent.RestTimerOpen) },
                         onLongClick = { viewModel.onEvent(DayUiEvent.RestTimerAddSeconds(30)) }
                     )
-                    // Quick-break sub-actions (#139)
-                    if (state.sessionId != null && !state.isFinished) {
-                        QuickBreakChips(
-                            onBreak = { type -> viewModel.onEvent(DayUiEvent.LogBreak(type)) }
-                        )
-                    }
                 }
             }
         },
@@ -233,18 +213,6 @@ fun DayScreen(
                 viewModel.onEvent(DayUiEvent.ClearPersistentSwap(exerciseUi.plan.id))
             },
             onDismiss = { viewModel.onEvent(DayUiEvent.CloseSwapPicker) }
-        )
-    }
-
-    if (state.showPreSessionPicker) {
-        PreSessionPickerDialog(
-            sessionType = state.sessionType,
-            isUntracked = state.isUntracked,
-            intensity = state.sessionIntensity,
-            onTypeChange = { viewModel.onEvent(DayUiEvent.SetSessionType(it)) },
-            onUntrackedChange = { viewModel.onEvent(DayUiEvent.SetUntracked(it)) },
-            onIntensityChange = { viewModel.onEvent(DayUiEvent.SetIntensity(it)) },
-            onConfirm = { viewModel.onEvent(DayUiEvent.ConfirmPreSessionPicker) }
         )
     }
 
@@ -335,15 +303,6 @@ fun DayScreen(
         )
     }
 
-    // PR confetti burst (#30): one fresh instance per PR earned; non-blocking (no pointerInput)
-    if (prConfettiRevision > 0) {
-        key(prConfettiRevision) {
-            ConfettiOverlay(
-                modifier = Modifier.fillMaxSize(),
-                onComplete = { prConfettiRevision = 0 }
-            )
-        }
-    }
 }
 
 @Composable
@@ -467,49 +426,6 @@ private fun DiscardDialog(
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("Keep going") }
         }
-    )
-}
-
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
-@Composable
-private fun PreSessionPickerDialog(
-    sessionType: String,
-    isUntracked: Boolean,
-    intensity: String,
-    onTypeChange: (String) -> Unit,
-    onUntrackedChange: (Boolean) -> Unit,
-    onIntensityChange: (String) -> Unit,
-    onConfirm: () -> Unit
-) {
-    AlertDialog(
-        onDismissRequest = onConfirm,
-        title = { Text("How are we training today?") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("Session type", style = MaterialTheme.typography.labelLarge)
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    listOf("normal" to "Normal", "deload" to "Deload", "test" to "Test day",
-                        "technique" to "Technique", "first_back" to "First day back").forEach { (v, label) ->
-                        FilterChip(selected = sessionType == v, onClick = { onTypeChange(v) }, label = { Text(label) })
-                    }
-                }
-                Text("Intensity", style = MaterialTheme.typography.labelLarge)
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    listOf("light" to "Light", "normal" to "Normal", "hard" to "Hard").forEach { (v, label) ->
-                        FilterChip(selected = intensity == v, onClick = { onIntensityChange(v) }, label = { Text(label) })
-                    }
-                }
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    androidx.compose.material3.Switch(checked = isUntracked, onCheckedChange = onUntrackedChange)
-                    Column {
-                        Text("Untracked session", style = MaterialTheme.typography.bodyMedium)
-                        Text("Skips streak, trophies & suggestions", style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
-            }
-        },
-        confirmButton = { Button(onClick = onConfirm) { Text("Let's go") } }
     )
 }
 
@@ -727,18 +643,3 @@ private fun SessionHero(
     }
 }
 
-@Composable
-private fun QuickBreakChips(onBreak: (String) -> Unit) {
-    val breaks = listOf("💧" to "water", "😴" to "rest", "🍌" to "snack")
-    androidx.compose.foundation.layout.Row(
-        horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)
-    ) {
-        breaks.forEach { (emoji, type) ->
-            androidx.compose.material3.FilterChip(
-                selected = false,
-                onClick = { onBreak(type) },
-                label = { androidx.compose.material3.Text(emoji) }
-            )
-        }
-    }
-}

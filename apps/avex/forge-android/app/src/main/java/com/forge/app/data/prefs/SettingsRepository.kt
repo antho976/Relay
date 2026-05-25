@@ -163,6 +163,11 @@ class SettingsRepository @Inject constructor(
     suspend fun setFirstDayMonday(value: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.FIRST_DAY_MONDAY] = value }
 
+    val timezone: Flow<String> = context.forgePreferences.data
+        .map { it[PreferenceKeys.TIMEZONE] ?: java.util.TimeZone.getDefault().id }
+    suspend fun setTimezone(id: String) =
+        context.forgePreferences.edit { it[PreferenceKeys.TIMEZONE] = id }
+
     // ─── Feel (#118) ──────────────────────────────────────────────────────────
 
     val hapticStrength: Flow<String> = context.forgePreferences.data

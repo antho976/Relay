@@ -35,6 +35,8 @@ import com.forge.app.ui.gym.stats.state.WeeklyEffortCounts
 import com.forge.app.ui.overview.state.OnThisDayMemory
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import java.time.Instant
 import java.time.LocalDate
@@ -145,6 +147,43 @@ class StatsRepository @Inject constructor(
         val zone = ZoneId.systemDefault()
         val lastDay = Instant.ofEpochMilli(latest).atZone(zone).toLocalDate()
         return ChronoUnit.DAYS.between(lastDay, LocalDate.now(zone)).toInt()
+    }
+
+    // ─── History / comparison helpers ─────────────────────────────────────────
+
+    fun observeAllFinishedSessions(): Flow<List<Session>> = sessionDao.observeAllFinishedSessions()
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    fun observeDayVolumeStats(): Flow<Map<String, SessionDao.DayVolumeStats>> =
+        sessionDao.observeFinishedCount()
+            .flatMapLatest { flow { emit(sessionDao.avgMaxVolumeByDayKey().associateBy { it.dayKey }) } }
+
+    data class SessionExerciseLine(
+        val exerciseName: String,
+        val topWeightLb: Double?,
+        val topReps: Int?,
+        val setCount: Int
+    )
+
+    suspend fun getSessionExerciseLines(sessionId: Long): List<SessionExerciseLine> {
+        val exercises = loggedExerciseDao.forSession(sessionId)
+        val allSets = loggedSetDao.allForSession(sessionId)
+        val setsByExId = allSets.groupBy { it.loggedExerciseId }
+        return exercises.mapNotNull { ex ->
+            if (ex.skipped) return@mapNotNull null
+            val sets = setsByExId[ex.id] ?: emptyList()
+            if (sets.isEmpty()) return@mapNotNull null
+            val topSet = sets.maxByOrNull { it.weightLb ?: 0.0 }
+            val name = ex.swappedName
+                ?: Program.days.flatMap { it.exercises }.firstOrNull { it.id == ex.exerciseId }?.name
+                ?: ex.exerciseId
+            SessionExerciseLine(
+                exerciseName = name,
+                topWeightLb = topSet?.weightLb,
+                topReps = topSet?.reps,
+                setCount = sets.size
+            )
+        }
     }
 
     // ─── Gym stats subtab ──────────────────────────────────────────────────────
