@@ -109,12 +109,14 @@ class DayViewModel @Inject constructor(
             val sessionId = workoutRepo.startOrResumeSession(dayKey)
             val nameOverride = customizationRepo.getDayName(dayKey)
             val resolvedName = nameOverride?.customName ?: dayPlan.defaultName
+            val disabledUntilMs = settingsRepo.warmupDisabledUntilMs.firstOrNull() ?: 0L
+            val warmupAutoSkipped = clock.nowMs() < disabledUntilMs
             _state.update {
                 it.copy(
                     sessionId = sessionId,
                     sessionStartedAt = clock.nowMs(),
                     displayName = resolvedName,
-                    isWarmupComplete = it.isWarmupComplete || skipWarmup
+                    isWarmupComplete = it.isWarmupComplete || skipWarmup || warmupAutoSkipped
                 )
             }
             refreshExercises()
@@ -154,6 +156,22 @@ class DayViewModel @Inject constructor(
 
             is DayUiEvent.ToggleWarmupItem -> toggleWarmupItem(event.index)
             DayUiEvent.SkipWarmup -> _state.update { it.copy(isWarmupComplete = true) }
+            DayUiEvent.DisableWarmupToday -> viewModelScope.launch {
+                val untilMs = java.time.LocalDate.now()
+                    .plusDays(1)
+                    .atStartOfDay(java.time.ZoneId.systemDefault())
+                    .toInstant().toEpochMilli()
+                settingsRepo.setWarmupDisabledUntilMs(untilMs)
+                _state.update { it.copy(isWarmupComplete = true) }
+            }
+            DayUiEvent.DisableWarmupWeek -> viewModelScope.launch {
+                val untilMs = java.time.LocalDate.now()
+                    .with(java.time.temporal.TemporalAdjusters.next(java.time.DayOfWeek.MONDAY))
+                    .atStartOfDay(java.time.ZoneId.systemDefault())
+                    .toInstant().toEpochMilli()
+                settingsRepo.setWarmupDisabledUntilMs(untilMs)
+                _state.update { it.copy(isWarmupComplete = true) }
+            }
 
             DayUiEvent.RestTimerOpen -> _state.update { it.copy(showTimerControls = true) }
             DayUiEvent.RestTimerClose -> _state.update { it.copy(showTimerControls = false) }

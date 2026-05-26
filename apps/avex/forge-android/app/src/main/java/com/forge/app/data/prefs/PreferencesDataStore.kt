@@ -5,6 +5,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -88,6 +89,10 @@ object PreferenceKeys {
 
     // ─── Privacy mode (#152) ──────────────────────────────────────────────────
     val PRIVACY_MODE = booleanPreferencesKey("privacy_mode")
+
+    // ─── Warmup disable (#156) ────────────────────────────────────────────────
+    /** Epoch-ms until which warmup should be auto-skipped. 0 = not disabled. */
+    val WARMUP_DISABLED_UNTIL_MS = longPreferencesKey("warmup_disabled_until_ms")
 
     // ─── Onboarding (#1) ──────────────────────────────────────────────────────
     /** User's display name set during onboarding. Empty = not set. */

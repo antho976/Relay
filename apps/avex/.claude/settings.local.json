@@ -8,7 +8,9 @@
       "Bash(node -e ' *)",
       "Bash(Get-ChildItem -Recurse -Filter \"SessionDao.kt\" -ErrorAction SilentlyContinue)",
       "Bash(Select-Object -First 5)",
-      "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\antho\\\\Gym-Phone-app\\\\forge-android\" -Recurse -Filter \"Session.kt\" -ErrorAction SilentlyContinue | Where-Object { $_.Directory.Name -eq \"entities\" })"
+      "PowerShell(Get-ChildItem -Path \"C:\\\\Users\\\\antho\\\\Gym-Phone-app\\\\forge-android\" -Recurse -Filter \"Session.kt\" -ErrorAction SilentlyContinue | Where-Object { $_.Directory.Name -eq \"entities\" })",
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\antho\\\\Gym-Phone-app\\\\forge-android\\\\app\\\\src\\\\main\" -Recurse -Filter \"*trophy*\" -ErrorAction SilentlyContinue)",
+      "PowerShell(Get-ChildItem \"c:\\\\Users\\\\antho\\\\Gym-Phone-app\\\\forge-android\\\\app\\\\src\\\\main\\\\java\\\\com\\\\forge\\\\app\\\\ui\\\\trophies\" -Recurse | Where-Object { $_.PSIsContainer -eq $false } | ForEach-Object { @{ File = $_.FullName; Lines = \\(Get-Content $_.FullName | Measure-Object -Line\\).Lines } } | ForEach-Object { [PSCustomObject]$_ } | Format-Table -AutoSize)"
     ]
   }
 }

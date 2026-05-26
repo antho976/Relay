@@ -1,6 +1,9 @@
 package com.forge.app.ui.trophies
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,7 +18,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
@@ -47,6 +52,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.ui.trophies.components.TrophyIconBadge
 import com.forge.app.ui.trophies.state.TrophiesUiState
 import com.forge.app.ui.trophies.state.TrophyDisplay
+import com.forge.app.ui.trophies.state.TrophyFilter
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -121,7 +127,17 @@ fun TrophiesScreen(
                 )
             }
 
-            state.sections.forEach { section ->
+            item("filters") {
+                FilterChips(
+                    selected = state.selectedFilter,
+                    onSelect = { viewModel.setFilter(it) },
+                    onBg = onBg,
+                    muted = muted,
+                    outline = outline
+                )
+            }
+
+            state.filteredSections.forEach { section ->
                 item("h-${section.category.code}") {
                     Column(Modifier.padding(horizontal = 24.dp)) {
                         Spacer(Modifier.height(24.dp))
@@ -139,7 +155,8 @@ fun TrophiesScreen(
                         display = display,
                         onBg = onBg,
                         muted = muted,
-                        bg = bg
+                        bg = bg,
+                        outline = outline
                     )
                     HorizontalDivider(
                         modifier = Modifier.padding(horizontal = 24.dp),
@@ -224,6 +241,7 @@ private fun TrophyRow(
     onBg: Color,
     muted: Color,
     bg: Color,
+    outline: Color,
     modifier: Modifier = Modifier
 ) {
     val unlocked = display.isUnlocked
@@ -278,6 +296,23 @@ private fun TrophyRow(
                 fontStyle = FontStyle.Italic,
                 fontSize = 11.sp
             )
+            val frac = display.progressFraction
+            if (!display.isUnlocked && frac != null && frac > 0f) {
+                Spacer(Modifier.height(5.dp))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(2.dp)
+                        .background(outline.copy(alpha = 0.18f))
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(frac.coerceIn(0f, 1f))
+                            .fillMaxHeight()
+                            .background(onBg.copy(alpha = 0.5f))
+                    )
+                }
+            }
         }
 
         if (unlocked) {
@@ -298,6 +333,42 @@ private fun TrophyRow(
                 color = muted.copy(alpha = 0.4f),
                 fontSize = 9.sp
             )
+        }
+    }
+}
+
+@Composable
+private fun FilterChips(
+    selected: TrophyFilter,
+    onSelect: (TrophyFilter) -> Unit,
+    onBg: Color,
+    muted: Color,
+    outline: Color
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .horizontalScroll(rememberScrollState())
+            .padding(horizontal = 24.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        TrophyFilter.entries.forEach { filter ->
+            val isSelected = filter == selected
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .border(0.5.dp, if (isSelected) onBg else outline.copy(alpha = 0.35f), RoundedCornerShape(50))
+                    .background(if (isSelected) onBg.copy(alpha = 0.08f) else Color.Transparent)
+                    .clickable { onSelect(filter) }
+                    .padding(horizontal = 12.dp, vertical = 5.dp)
+            ) {
+                Text(
+                    filter.label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (isSelected) onBg else muted.copy(alpha = 0.65f),
+                    fontSize = 10.sp
+                )
+            }
         }
     }
 }

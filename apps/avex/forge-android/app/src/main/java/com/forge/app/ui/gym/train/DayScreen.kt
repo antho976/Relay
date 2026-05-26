@@ -343,8 +343,8 @@ private fun DayContent(
                     checks = state.warmupChecks,
                     onToggle = { idx -> onEvent(DayUiEvent.ToggleWarmupItem(idx)) },
                     onSkip = { onEvent(DayUiEvent.SkipWarmup) },
-                    reactions = state.warmupReactions,
-                    onReaction = { idx, thumbsUp -> onEvent(DayUiEvent.WarmupReaction(idx, thumbsUp)) }
+                    onDisableToday = { onEvent(DayUiEvent.DisableWarmupToday) },
+                    onDisableWeek = { onEvent(DayUiEvent.DisableWarmupWeek) }
                 )
             }
         } else {

@@ -29,6 +29,8 @@ sealed interface DayUiEvent {
     // Warmup
     data class ToggleWarmupItem(val index: Int) : DayUiEvent
     data object SkipWarmup : DayUiEvent
+    data object DisableWarmupToday : DayUiEvent
+    data object DisableWarmupWeek : DayUiEvent
 
     // Rest timer
     data object RestTimerOpen : DayUiEvent

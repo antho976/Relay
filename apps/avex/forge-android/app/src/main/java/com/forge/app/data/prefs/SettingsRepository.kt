@@ -215,6 +215,13 @@ class SettingsRepository @Inject constructor(
     suspend fun clearPlannedNextDay() =
         context.forgePreferences.edit { it.remove(PreferenceKeys.PLANNED_NEXT_DAY) }
 
+    // ─── Warmup disable (#156) ────────────────────────────────────────────────
+
+    val warmupDisabledUntilMs: Flow<Long> = context.forgePreferences.data
+        .map { it[PreferenceKeys.WARMUP_DISABLED_UNTIL_MS] ?: 0L }
+    suspend fun setWarmupDisabledUntilMs(untilMs: Long) =
+        context.forgePreferences.edit { it[PreferenceKeys.WARMUP_DISABLED_UNTIL_MS] = untilMs }
+
     // ─── Privacy mode (#152) ──────────────────────────────────────────────────
 
     val privacyMode: Flow<Boolean> = context.forgePreferences.data

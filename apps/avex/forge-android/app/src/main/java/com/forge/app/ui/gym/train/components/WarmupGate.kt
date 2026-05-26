@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.HorizontalDivider
@@ -29,18 +30,14 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-/**
- * Warmup checklist shown at the top of [com.forge.app.ui.gym.train.DayScreen] until
- * every box is ticked or the user explicitly skips.
- */
 @Composable
 fun WarmupGate(
     warmupItems: List<String>,
     checks: List<Boolean>,
     onToggle: (Int) -> Unit,
     onSkip: () -> Unit,
-    reactions: Map<Int, Boolean> = emptyMap(),
-    onReaction: (Int, Boolean) -> Unit = { _, _ -> },
+    onDisableToday: () -> Unit,
+    onDisableWeek: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val onBg = MaterialTheme.colorScheme.onBackground
@@ -51,7 +48,7 @@ fun WarmupGate(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 24.dp, vertical = 8.dp)
+            .padding(horizontal = 24.dp, vertical = 12.dp)
     ) {
         Text(
             "WARMUP",
@@ -61,12 +58,12 @@ fun WarmupGate(
         )
         Spacer(Modifier.height(4.dp))
         Text(
-            "Tick everything off before you start.",
+            "Complete everything before you start.",
             style = MaterialTheme.typography.bodySmall,
             color = muted,
             fontStyle = FontStyle.Italic
         )
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(16.dp))
 
         warmupItems.forEachIndexed { index, label ->
             val checked = checks.getOrElse(index) { false }
@@ -74,8 +71,6 @@ fun WarmupGate(
                 label = label,
                 checked = checked,
                 onToggle = { onToggle(index) },
-                reaction = reactions[index],
-                onReaction = if (checked) { thumbsUp -> onReaction(index, thumbsUp) } else null,
                 onBg = onBg,
                 muted = muted,
                 outline = outline,
@@ -84,20 +79,43 @@ fun WarmupGate(
             HorizontalDivider(color = outline.copy(alpha = 0.15f))
         }
 
+        Spacer(Modifier.height(16.dp))
+
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 12.dp),
-            horizontalArrangement = Arrangement.End
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                "skip warmup →",
-                style = MaterialTheme.typography.labelSmall,
-                color = muted.copy(alpha = 0.5f),
+            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                Text(
+                    "disable today",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = muted.copy(alpha = 0.35f),
+                    fontSize = 9.sp,
+                    modifier = Modifier.clickable(onClick = onDisableToday)
+                )
+                Text(
+                    "disable this week",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = muted.copy(alpha = 0.35f),
+                    fontSize = 9.sp,
+                    modifier = Modifier.clickable(onClick = onDisableWeek)
+                )
+            }
+            Box(
                 modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .border(0.5.dp, muted.copy(alpha = 0.4f), RoundedCornerShape(50))
                     .clickable(onClick = onSkip)
-                    .padding(vertical = 4.dp, horizontal = 2.dp)
-            )
+                    .padding(horizontal = 14.dp, vertical = 6.dp)
+            ) {
+                Text(
+                    "skip warmup",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = muted.copy(alpha = 0.7f),
+                    fontSize = 11.sp
+                )
+            }
         }
     }
 }
@@ -107,8 +125,6 @@ private fun WarmupRow(
     label: String,
     checked: Boolean,
     onToggle: () -> Unit,
-    reaction: Boolean?,
-    onReaction: ((Boolean) -> Unit)?,
     onBg: Color,
     muted: Color,
     outline: Color,
@@ -118,13 +134,13 @@ private fun WarmupRow(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onToggle)
-            .padding(vertical = 12.dp),
+            .padding(vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+        horizontalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         Box(
             modifier = Modifier
-                .size(20.dp)
+                .size(22.dp)
                 .clip(CircleShape)
                 .background(if (checked) onBg else Color.Transparent)
                 .border(1.dp, if (checked) onBg else outline.copy(alpha = 0.45f), CircleShape),
@@ -135,7 +151,7 @@ private fun WarmupRow(
                     Icons.Filled.Check,
                     contentDescription = null,
                     tint = bg,
-                    modifier = Modifier.size(12.dp)
+                    modifier = Modifier.size(14.dp)
                 )
             }
         }
@@ -146,22 +162,5 @@ private fun WarmupRow(
             modifier = Modifier.weight(1f),
             textDecoration = if (checked) TextDecoration.LineThrough else TextDecoration.None
         )
-        if (onReaction != null) {
-            Text(
-                "↑",
-                style = MaterialTheme.typography.labelSmall,
-                color = if (reaction == true) onBg else muted.copy(alpha = 0.3f),
-                fontSize = 11.sp,
-                modifier = Modifier.clickable { onReaction(true) }.padding(4.dp)
-            )
-            Text(
-                "↓",
-                style = MaterialTheme.typography.labelSmall,
-                color = if (reaction == false) MaterialTheme.colorScheme.error.copy(alpha = 0.7f)
-                        else muted.copy(alpha = 0.3f),
-                fontSize = 11.sp,
-                modifier = Modifier.clickable { onReaction(false) }.padding(4.dp)
-            )
-        }
     }
 }
