@@ -6,6 +6,7 @@ import androidx.room.Insert
 import androidx.room.Query
 import androidx.room.Update
 import com.forge.app.data.db.entities.LoggedSet
+import com.forge.app.data.db.projections.ExerciseSessionAggregate
 import com.forge.app.data.db.projections.SetWithExerciseAndSession
 import com.forge.app.data.db.projections.SetWithExerciseId
 import kotlinx.coroutines.flow.Flow
@@ -105,6 +106,30 @@ interface LoggedSetDao {
     /** Set drop annotation (#143): "weightLb2/reps2" format. */
     @Query("UPDATE logged_set SET drop_annotation = :annotation WHERE id = :id")
     suspend fun setDropAnnotation(id: Long, annotation: String?)
+
+    /** Set per-set RPE (1.0–10.0 in 0.5 steps, or null to clear). */
+    @Query("UPDATE logged_set SET rpe = :rpe WHERE id = :id")
+    suspend fun setRpe(id: Long, rpe: Double?)
+
+    /**
+     * Per-session aggregates for one exercise across finished sessions, newest first.
+     * Used by the day-screen last-session strip + sparkline. Excludes the current
+     * in-progress session by relying on session.finished_at IS NOT NULL.
+     */
+    @Query("""
+        SELECT s.started_at AS started_at,
+               s.finished_at AS finished_at,
+               COALESCE(SUM(IFNULL(ls.weight_lb, 0) * ls.reps), 0) AS volume_lb,
+               MAX(ls.weight_lb) AS top_weight_lb
+        FROM logged_set ls
+        INNER JOIN logged_exercise le ON ls.logged_exercise_id = le.id
+        INNER JOIN session s ON le.session_id = s.id
+        WHERE le.exercise_id = :exerciseId AND s.finished_at IS NOT NULL
+        GROUP BY s.id
+        ORDER BY s.started_at DESC
+        LIMIT :limit
+    """)
+    suspend fun sessionAggregatesForExercise(exerciseId: String, limit: Int = 8): List<ExerciseSessionAggregate>
 
     /** All sets in a session ordered by completedAt — used for actual rest-time computation (#82). */
     @Query("""

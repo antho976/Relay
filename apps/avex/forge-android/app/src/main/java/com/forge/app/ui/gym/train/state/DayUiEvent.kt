@@ -94,6 +94,12 @@ sealed interface DayUiEvent {
     data class SetSetType(val setId: Long, val type: String?) : DayUiEvent
     data class SetDropAnnotation(val setId: Long, val annotation: String?) : DayUiEvent
 
+    /** Set or clear per-set RPE (1.0–10.0, 0.5 steps). */
+    data class SetRpe(val setId: Long, val rpe: Double?) : DayUiEvent
+
+    /** Add one set beyond the plan for this exercise this session ("+ ADD A SET"). */
+    data class AddBonusSet(val exerciseId: String) : DayUiEvent
+
     // Superset grouping (#38)
     data class SetSupersetGroup(val exerciseId: String, val group: String?) : DayUiEvent
 

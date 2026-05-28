@@ -1,5 +1,63 @@
 # Forge — Built Features Inventory
-Last updated: 2026-05-23
+Last updated: 2026-05-27
+
+> **Legend:** Items below are marked with their current UI status.
+> - ✅ **Visible** — currently reachable in the running app.
+> - 🔒 **Logic-only** — code (ViewModel/repo/composable) still exists in the tree but no screen invokes it. Re-enabling means re-wiring an entry point, not rebuilding.
+> - 💤 **Hidden gate** — feature is fully wired but blocked by a gate that never fires (e.g. onboarding never triggers because startDestination skips it).
+>
+> Unmarked items predate this audit and are presumed visible. The "🔒 Audit — UI removed but logic retained (2026-05-27)" section is the source of truth for what was stripped during the v0.3 editorial redesign.
+
+---
+
+## 🔒 Audit — UI removed but logic retained (2026-05-27)
+
+These were verified by codegraph + grep: the file is on disk and compiles, but no Composable in the current screen graph calls into it. Code is safe to delete or to re-wire later.
+
+### Orphaned Stats components (`ui/gym/stats/components/`)
+Every file below is self-referencing only — `StatsContent.kt` no longer invokes them after the editorial Stats redesign:
+- `CalendarCard.kt` — monthly calendar grid (#54)
+- `FrequencyHeatmap.kt` — 12-week heatmap with day-of-week labels (#17a/b)
+- `EffortDistributionCard.kt` — 8-week stacked bar of effort ratings (#75)
+- `InsightsCard.kt` — boxed insights card (#40/#41) — note: insights ARE shown on Stats, but as inline text rows, not via this card
+- `HallOfFameSection.kt` — boxed hall-of-fame section (#14) — note: hall-of-fame IS shown on Stats, but as inline rows, not via this section
+- `ExerciseHistorySheet.kt` — exercise history sparkline sheet (#27)
+- `SessionCompareSheet.kt` — two-session side-by-side (#129)
+- `PrTimelineStory.kt` — scrollable PR timeline (#93)
+- `AdvancedCharts.kt` — `ExerciseVolumeChart` (#72), `StrengthOverlayCard` (#94), `EffortOverTimeCard` (#95)
+- `AdvancedChartsExtra.kt` — `StrengthRadarCard` (#124), `PrClusteringCard` (#128)
+- `AnalyticsCards.kt` — `ExerciseFrequencyCard` (#73), `TimeToPrCard` (#74), `PrDayOfWeekCard` (#85), `VolumeDonutCard` (#125)
+- `AnalyticsCardsExtra.kt` — `VolumeDeloadCard` (#126), `DayTypeBestVsAvgCard` (#132)
+
+### Orphaned Overview components (`ui/overview/components/`)
+- `DeloadBanner.kt` — deload nudge after 24 sessions (banner not called from OverviewScreen)
+- `OnThisDayCard.kt` — "1 month ago" memory card (#106)
+- `StreakCard.kt` — standalone streak card (#15) — streak number IS shown inline in `StatsTile`, but the dedicated card with milestone styling is not
+- `TrainingAlertBanner.kt` — comeback banner (#57), 3-days-straight warning (#58)
+
+### Orphaned screens / sheets
+- `ui/bodyweight/BodyweightSheet.kt` + `BodyweightViewModel.kt` (#76, #77) — no "Log bodyweight" button on Overview anymore
+- `ui/trophies/components/TrophyCard.kt` — TrophiesScreen uses `TrophyRow` from `TrophiesComponents.kt` instead
+
+### Routes that exist but have no in-app entry point
+These are in `ForgeNavHost.kt` but nothing in the visible UI navigates to them:
+- `Routes.SESSION_HISTORY` → `SessionHistoryScreen` — `onOpenHistory` callback passed to `StatsContent` but never wired to a button
+- `Routes.NOTES_SEARCH` → `NotesSearchScreen` (#60) — same situation, callback unused
+- `Routes.RECAP` → `RecapScreen` (#32, #33) — same situation, callback unused
+
+### 💤 Hidden behind a gate that never fires
+- **Onboarding (#1)** — `OnboardingScreen.kt` is fully built (4 steps: name / units / goal / bodyweight + sample data toggle). Routed via `Routes.WELCOME` → `WelcomeScreen` → `OnboardingScreen`. But `ForgeNavHost.startDestination = Routes.OVERVIEW`, so fresh-install users go straight to Overview and never see onboarding. Re-enabling = one-line change to switch startDestination based on a "welcomed" pref.
+- **Sample data seeding (#148)** — only reachable through the onboarding gate above. Once onboarding fires, the toggle works.
+
+### Visible but in a different form than the file claims
+- **Hall of Fame (#14)** — Stats tab shows "All-time bests" as inline rows (top 8). The richer `HallOfFameSection.kt` card with grouping is orphaned.
+- **Insights (#40/#41)** — Stats tab shows insights as inline text. The boxed `InsightsCard.kt` is orphaned.
+- **Exercise Frequency (#73)** — Stats tab shows it via `StatsFreqSection` (in `StatsItemSections.kt`). The `ExerciseFrequencyCard.kt` in `AnalyticsCards.kt` is orphaned.
+- **Plan tomorrow (#147)** — no dedicated button; reached by tapping the day name on Overview → opens `DayEditSheet` which calls `setPlanNextDay`. Logic intact, entry point is unlabeled.
+
+### Filter / search UI claimed but not visible on its screen
+- **Cardio filter chips (#63)** — `CardioUiState.filteredEntries` exists but `CardioScreen.kt` has no chip row to set the filter. Filter is permanently "All".
+- **Trophy near-miss section (#136)** — `TrophiesUiState` and `TrophiesViewModel` track near-misses; `TrophiesScreen.kt` does not render them.
 
 ---
 
@@ -14,10 +72,19 @@ Last updated: 2026-05-23
 
 ## Overview Screen
 
-- Weekly stats strip: workouts this week · volume (lb) · cardio minutes
-- Deload banner: appears after 24 sessions since last deload, "Mark deloaded" dismisses it and resets the counter (saved to DataStore)
-- Nav tile — Gym (primary, tall, gradient): bounceClick, accent gradient
-- Nav tiles — Cardio + Trophies (secondary, side-by-side): subtler gradient, bounceClick
+**✅ Currently visible (post-editorial redesign):**
+- Top bar: accent dot + "Forge" italic, day-of-week · WK number, week date range, gear icon → Settings
+- "TODAY" hero — custom day name OR next-up day name OR "Ready"; tapping opens `DayEditSheet` (day picker / rename / accent override)
+- Subtitle: "{plan subtitle} · {N} exercises"
+- "Start session →" white pill button + "skip warmup" outlined chip
+- "THIS WEEK" section: M T W T F S S strip (trained / today markers) + 3 inline stats (workouts · LB · cardio min)
+- "RECENT" list: clickable rows opening `SummarySheet`; "view all →" opens `HistorySheet`
+- `CardioTile` (full-width) + `StatsTile` + `TrophiesTile` (side-by-side)
+- Faint "Nutrition →" link → `NutritionPlaceholderScreen`
+
+**🔒 Logic present, UI removed — see audit section above:**
+- Deload banner (logic in `OverviewViewModel.onMarkDeloaded` + `DeloadBanner.kt`)
+- On-this-day card (#106), comeback banner (#57), 3-days-straight warning (#58), dedicated streak card with milestone styling (#15), closest-trophy nudge (#55), log-bodyweight button (#76)
 
 ---
 
@@ -38,13 +105,29 @@ Last updated: 2026-05-23
 
 ## Gym — Stats tab
 
-Accessed via the Stats tab inside the Gym screen (alongside Train).
+Accessed via the Stats tab inside the Gym screen (alongside Train + PRs).
 
-- Totals row: total workouts · exercises logged · total PRs
-- 12-week frequency heatmap: day-of-week column headers, today marker (border), legend strip (Less → More)
-- Volume by muscle group chart (horizontal bars, weekly lb) — labeled "BY MUSCLE · lb"
-- Strength curve: line chart of max weight per session, Y-axis labels (max/mid/min), dashed grid lines at 25%/50%/75%, legend row
-- PR timeline list: recent PRs with date, exercise name, weight, reps
+**✅ Currently visible (editorial Stats redesign — `StatsContent.kt`):**
+- Hero: WK number · date range · this-week stats (sessions / volume / cardio min)
+- "RHYTHM" — week activity strip
+- "What I did this week" — per-day breakdown rows
+- "vs last week" — sessions / volume / PRs / sets deltas
+- "BY MUSCLE · lb" — `StatsVolumeSection` horizontal bars
+- "STRENGTH" — strength curve (`StatsStrengthSection`)
+- "Records broken" — recent PRs as inline rows
+- "All-time bests" — top 8 hall-of-fame entries as inline rows
+- "Exercise frequency" — `StatsFreqSection`
+- "Lifetime metrics" — `StatsLifetimeSection`
+- "Insights" — inline text rows (when behavioral flags trigger)
+
+**🔒 Built but not invoked by current Stats screen — see audit section above:**
+- Frequency heatmap (#17a/b), calendar (#54), effort distribution stacked bar (#75)
+- Volume donut (#125), volume deload trend (#126), day-type best vs avg (#132)
+- Strength radar (#124), PR clustering (#128), strength comparison overlay (#94), effort over time (#95), exercise volume chart (#72)
+- Time-to-next-PR (#74), PR by day of week (#85)
+- "View monthly & yearly recap →" link to `RecapScreen` (#32, #33)
+- Two-session compare sheet (#129), PR timeline story (#93), exercise history sheet (#27)
+- Year-over-year card (#131)
 
 ---
 
@@ -202,12 +285,14 @@ All 4 days fully specified with:
 
 ### Editorial Redesign (v0.3)
 
+The editorial pass simplified Overview + Stats + Trophies to no-card hairline layouts. Many feature cards documented elsewhere in this file were stripped from their screens during this pass — see "🔒 Audit" near the top.
+
 - **Pearl dark theme**: gradient bg `#131318` → `#090909` applied at root in `ForgeTheme`; Indigo light defined but not wired
 - **Typography**: `headlineLarge/Medium/Small` = `FontFamily.Serif Normal`; `labelLarge/Medium/Small` = `FontFamily.Monospace`; body = SansSerif
 - **Gradient show-through**: all Scaffolds + TopAppBars set `containerColor = Color.Transparent`; root `ForgeTheme` wraps content in gradient `Box`
 - **No-card editorial style**: `HorizontalDivider(alpha 0.3f)` hairlines instead of Surface cards on Overview
 - **Accent color presets**: 4 options (Navy #3D4F73 default, Red #8B3535, Olive #4D6040, Gold #7A6435) — user-selectable in Settings, persisted to DataStore via `SettingsRepository.accentColorHex`, wired through `ForgeUiSettings` → `ForgeTheme` → `primary` token
-- **OverviewScreen**: Serif hero text (dynamic: comeback / planned day / streak / "Ready."), monospace `FORGE` wordmark, stat strip without cards, `OnThisDay` as inline text, hairline dividers
+- **OverviewScreen**: see "Overview Screen" section above for the precise current layout. Note: the originally-planned dynamic hero (comeback / streak text) and inline OnThisDay are no longer present — only the day name renders.
 - **WarmupGate**: removed Surface card wrapper — plain Column with monospace `WARMUP` label
 - **TrophiesScreen**: serif "N of 21." hero count + `LinearProgressIndicator(height = 2.dp)` — no card wrapper
 - **SettingsScreen**: accent color `FilterChip` row in Appearance section (Navy / Red / Olive / Gold)
@@ -474,20 +559,6 @@ Visual and tactile feedback that makes interactions feel alive. Build last — t
 | P7 | Easter egg trophy for visiting the about / app credits screen | Tiny | One moment of delight for curious users |
 | P8 | "Focus on form" gentle reminder toast on set 1 of each exercise (first occurrence that day; dismissible) | Small | Easy to ignore, useful when you are fatigued and sloppy |
 | P9 | Color-coded set rows by relative effort: muted/faded for clearly sub-max sets, full accent if in PR territory | Small | Visual density read — see the session's intensity without reading numbers |
-
----
-
-### Build order recommendation
-
-**DONE → Tier 1** (chart bugs, heatmap labels, cardio mini-chart)
-**DONE → Tier 2** (forgiving input, long-press copy, use-last chip, weight suggestion, auto-progression, quick start)
-**Next → Tier 3** (rest timer notification + quick-extend, smart defaults, haptics, PR animation, edit sets, undo, session warning, foreground notification, skip remaining, in-session progress, next-up preview, predicted end time, per-exercise status chip)
-**Then → Tier 4** (streak, PR hall-of-fame, exercise history graph, goal weights, session comparison, monthly calendar, trophy nudge, new trophies batch, session tags, on-this-day memory)
-**Then → Tier 5** (settings screen, unit toggle, empty states, per-exercise timer, notes search, session type markers, reset options, locale settings, intensity pre-selector)
-**Then → Tier 6** (analytics — needs weeks of real data to be meaningful; start with density score + honesty index since those work with small datasets)
-**Later → Tier 7** (custom programming, AMRAP/advanced set types, widget, sample data mode)
-**Eventually → Tier 9** (Polish — after Tier 5 is solid and Tier 3 haptics are tuned)
-**Someday → Tier 8** (future scope / AI-adjacent / intelligence features that need months of data)
 
 ---
 

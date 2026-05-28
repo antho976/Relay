@@ -6,14 +6,24 @@ import com.forge.app.data.db.types.EffortRating
 import com.forge.app.domain.pr.PrDetector
 import com.forge.app.program.ExercisePlan
 import com.forge.app.program.MuscleGroup
+import com.forge.app.ui.gym.train.state.ExerciseSessionPoint
 import com.forge.app.ui.gym.train.state.ExerciseUiState
 import com.forge.app.ui.gym.train.state.VsLastStatus
+import java.util.concurrent.TimeUnit
+
+/**
+ * TEMP: fills the day screen with placeholder "last session", "suggested next", and
+ * sparkline data when no real history exists yet, so the UI can be evaluated against
+ * the mockup. Flip to false (or delete the dummy blocks) once real sessions accumulate.
+ */
+private const val DUMMY_TRAINING_DATA = true
 
 internal suspend fun DayViewModel.buildExerciseUi(
     plan: ExercisePlan,
     logged: LoggedExercise?,
     expandedDefault: Boolean,
-    expandedOverride: Boolean?
+    expandedOverride: Boolean?,
+    bonusSets: Int = 0
 ): ExerciseUiState {
     val sessionId = _state.value.sessionId ?: error("sessionId required")
     val sets = logged?.let { workoutRepo.setsFor(it.id) }.orEmpty()
@@ -50,6 +60,46 @@ internal suspend fun DayViewModel.buildExerciseUi(
         else -> VsLastStatus.UNDER
     }
 
+    val sessionHistory = workoutRepo.sessionAggregatesForExercise(plan.id, limit = 8)
+        .map { agg ->
+            ExerciseSessionPoint(
+                sessionStartedAt = agg.sessionStartedAt,
+                durationMin = agg.sessionFinishedAt?.let { end ->
+                    TimeUnit.MILLISECONDS.toMinutes(end - agg.sessionStartedAt).toInt().coerceAtLeast(0)
+                },
+                volumeLb = agg.volumeLb,
+                topWeightLb = agg.topWeightLb
+            )
+        }
+
+    // ── TEMP dummy fallbacks (gated by DUMMY_TRAINING_DATA) ───────────────────────
+    val displayPrior = if (DUMMY_TRAINING_DATA && prior.isEmpty()) {
+        List(plan.sets.coerceAtLeast(3)) { i ->
+            LoggedSet(
+                id = -(i + 1L), loggedExerciseId = -1L, setIndex = i,
+                weightText = "40", weightLb = 40.0, reps = 10 - i, completedAt = 0L, rpe = 8.0
+            )
+        }
+    } else prior
+
+    val displaySuggested = suggestedWeight ?: if (DUMMY_TRAINING_DATA) "45" else null
+    val displayReason = suggestionReason
+        ?: if (DUMMY_TRAINING_DATA && displaySuggested != null) "matches set 1" else null
+
+    val displayHistory = if (DUMMY_TRAINING_DATA && sessionHistory.isEmpty()) {
+        val now = System.currentTimeMillis()
+        val day = 24L * 60 * 60 * 1000
+        listOf(
+            ExerciseSessionPoint(now - 3 * day, 14, 320.0, 40.0),
+            ExerciseSessionPoint(now - 10 * day, 13, 300.0, 37.5),
+            ExerciseSessionPoint(now - 17 * day, 15, 290.0, 37.5),
+            ExerciseSessionPoint(now - 24 * day, 12, 270.0, 35.0),
+            ExerciseSessionPoint(now - 31 * day, 14, 260.0, 35.0),
+            ExerciseSessionPoint(now - 38 * day, 13, 240.0, 32.5)
+        )
+    } else sessionHistory
+    // ──────────────────────────────────────────────────────────────────────────────
+
     return ExerciseUiState(
         plan = plan,
         loggedExerciseId = logged?.id,
@@ -66,18 +116,40 @@ internal suspend fun DayViewModel.buildExerciseUi(
         sessionSwapUnit = logged?.swappedUnit,
         persistentSwapName = persistent?.swappedName,
         persistentSwapUnit = persistent?.swappedUnit,
-        suggestedWeight = suggestedWeight,
-        suggestionReason = suggestionReason,
-        priorSets = prior,
+        suggestedWeight = displaySuggested,
+        suggestionReason = displayReason,
+        priorSets = displayPrior,
         allTimePbText = allTimePbText,
         allTimePbLb = allTimePbLb,
         vsLastStatus = vsLastStatus,
         goalWeightLb = goalWeightLb,
         restTimerOverrideSeconds = persistent?.restTimerOverrideSeconds,
         pinnedNote = persistent?.pinnedNote ?: "",
-        supersetGroup = logged?.supersetGroup
+        supersetGroup = logged?.supersetGroup,
+        sessionHistory = displayHistory,
+        bonusSets = bonusSets
     )
 }
+
+/**
+ * Second-pass annotation: for each exercise, compute the suggested weight delta for the
+ * *next* exercise (used by the "UP NEXT  +5 ↑" pill). Pure function — no DB access.
+ */
+internal fun annotateNextExerciseDeltas(exercises: List<ExerciseUiState>): List<ExerciseUiState> =
+    exercises.mapIndexed { idx, ex ->
+        val next = exercises.getOrNull(idx + 1) ?: return@mapIndexed ex
+        val nextSuggestedLb = next.suggestedWeight?.toDoubleOrNull() ?: return@mapIndexed ex
+        val nextPrevMaxLb = next.priorSets
+            .filter { it.loggedExerciseId != next.loggedExerciseId }
+            .mapNotNull { it.weightLb }
+            .maxOrNull() ?: return@mapIndexed ex
+        val delta = nextSuggestedLb - nextPrevMaxLb
+        if (kotlin.math.abs(delta) < 0.5) return@mapIndexed ex
+        val sign = if (delta > 0) "+" else "−"
+        val abs = kotlin.math.abs(delta)
+        val deltaStr = if (abs % 1.0 == 0.0) "$sign${abs.toInt()}" else "$sign$abs"
+        ex.copy(nextSuggestedWeightDelta = deltaStr)
+    }
 
 internal fun DayViewModel.computeWeightSuggestion(
     plan: ExercisePlan,

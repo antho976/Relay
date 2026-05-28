@@ -39,7 +39,7 @@ import com.forge.app.data.db.entities.SessionBreak
 import com.forge.app.data.db.entities.VacationPeriod
 
 /**
- * Schema is currently v11 (v10 added WarmupRoutineItem; prior versions are destructively migrated).
+ * Schema is currently v12 (v12 added LoggedSet.rpe; v11 added per-set annotations; prior versions are destructively migrated).
  * Migrations are deliberately destructive until Antho logs his first "real" workout
  * — at that point we lock the schema, write real Migration objects per change, and
  * remove the destructive fallback in [com.forge.app.di.DatabaseModule].
@@ -64,7 +64,7 @@ import com.forge.app.data.db.entities.VacationPeriod
         ProgramCustomization::class,
         WarmupRoutineItem::class
     ],
-    version = 11,
+    version = 12,
     exportSchema = true
 )
 @TypeConverters(Converters::class)

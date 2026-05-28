@@ -1,23 +1,31 @@
 package com.forge.app.ui.gym.train.components
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -29,16 +37,16 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.data.db.entities.LoggedSet
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.ui.theme.LocalForgeSettings
 
-private val SET_COL_W = 44.dp
-private val REPS_COL_W = 56.dp
-private val DELTA_COL_W = 88.dp
+private val SET_COL_W = 36.dp
+private val REPS_COL_W = 48.dp
+private val RPE_COL_W = 44.dp
+private val DELTA_COL_W = 72.dp
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -51,6 +59,7 @@ fun SetRow(
     onEdit: (weightText: String, reps: Int) -> Unit,
     onLongPress: (() -> Unit)? = null,
     onToggleDifficultyTag: ((String?) -> Unit)? = null,
+    onSetRpe: ((Double?) -> Unit)? = null,
     onToggleAmrap: (() -> Unit)? = null,
     onToggleAssisted: (() -> Unit)? = null,
     onToggleFailure: (() -> Unit)? = null,
@@ -61,10 +70,12 @@ fun SetRow(
     var isEditing by remember(set.id) { mutableStateOf(false) }
     var editWeight by remember { mutableStateOf(set.weightText) }
     var editReps by remember { mutableStateOf(set.reps.toString()) }
+    var showRpePicker by remember { mutableStateOf(false) }
 
     val accent = MaterialTheme.colorScheme.primary
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val outline = MaterialTheme.colorScheme.outline
 
     val wLb = set.weightLb ?: 0.0
     val pLb = priorSet?.weightLb ?: 0.0
@@ -87,11 +98,7 @@ fun SetRow(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(modifier = Modifier.width(SET_COL_W)) {
-                Text(
-                    "%02d".format(setIndex),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = muted
-                )
+                Text("%02d".format(setIndex), style = MaterialTheme.typography.labelSmall, color = muted)
             }
             OutlinedTextField(
                 value = editWeight,
@@ -112,9 +119,7 @@ fun SetRow(
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done)
             )
             IconButton(
-                onClick = {
-                    if (canConfirm) { onEdit(editWeight.trim(), editReps.toInt()); isEditing = false }
-                },
+                onClick = { if (canConfirm) { onEdit(editWeight.trim(), editReps.toInt()); isEditing = false } },
                 modifier = Modifier.size(36.dp),
                 enabled = canConfirm
             ) {
@@ -137,19 +142,10 @@ fun SetRow(
             modifier = tapMod.fillMaxWidth().padding(vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Set number col
+            // Set number col (★ inline next to number for set 1)
             Box(modifier = Modifier.width(SET_COL_W), contentAlignment = Alignment.TopStart) {
-                Column {
-                    Text(
-                        "%02d".format(setIndex),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = muted,
-                        fontSize = 9.sp
-                    )
-                    if (setIndex == 1) {
-                        Text("★", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 8.sp)
-                    }
-                }
+                val label = if (setIndex == 1) "%02d ★".format(setIndex) else "%02d".format(setIndex)
+                Text(label, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
             }
 
             // Weight + ghost prior col
@@ -173,11 +169,28 @@ fun SetRow(
 
             // Reps col
             Box(modifier = Modifier.width(REPS_COL_W), contentAlignment = Alignment.CenterStart) {
-                Text(
-                    "${set.reps}",
-                    style = MaterialTheme.typography.headlineSmall,
-                    color = onBg
-                )
+                Text("${set.reps}", style = MaterialTheme.typography.headlineSmall, color = onBg)
+            }
+
+            // RPE col — tappable framed box
+            Box(modifier = Modifier.width(RPE_COL_W), contentAlignment = Alignment.Center) {
+                if (onSetRpe != null) {
+                    Box(
+                        modifier = Modifier
+                            .border(0.5.dp, outline.copy(alpha = 0.4f), RoundedCornerShape(3.dp))
+                            .combinedClickable(onClick = { showRpePicker = true }, onLongClick = { onSetRpe(null) })
+                            .padding(horizontal = 8.dp, vertical = 3.dp)
+                    ) {
+                        Text(
+                            set.rpe?.let { rpeLabel(it) } ?: "—",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (set.rpe != null) onBg else muted.copy(alpha = 0.4f),
+                            fontSize = 11.sp
+                        )
+                    }
+                } else if (set.rpe != null) {
+                    Text(rpeLabel(set.rpe), style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 11.sp)
+                }
             }
 
             // Delta col
@@ -187,5 +200,60 @@ fun SetRow(
                 }
             }
         }
+
+        if (showRpePicker && onSetRpe != null) {
+            RpePickerDialog(
+                current = set.rpe,
+                onPick = { rpe -> onSetRpe(rpe); showRpePicker = false },
+                onClear = { onSetRpe(null); showRpePicker = false },
+                onDismiss = { showRpePicker = false }
+            )
+        }
     }
+}
+
+private fun rpeLabel(rpe: Double): String = if (rpe % 1.0 == 0.0) "${rpe.toInt()}" else "%.1f".format(rpe)
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun RpePickerDialog(
+    current: Double?,
+    onPick: (Double) -> Unit,
+    onClear: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val options = generateSequence(6.0) { it + 0.5 }.takeWhile { it <= 10.0 }.toList()
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("RPE — how hard was that set?") },
+        text = {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                options.forEach { v ->
+                    val selected = current != null && kotlin.math.abs(current - v) < 0.01
+                    Box(
+                        modifier = Modifier
+                            .border(
+                                1.dp,
+                                if (selected) MaterialTheme.colorScheme.onSurface
+                                else MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                                RoundedCornerShape(4.dp)
+                            )
+                            .clickable { onPick(v) }
+                            .padding(horizontal = 14.dp, vertical = 10.dp)
+                    ) { Text(rpeLabel(v), style = MaterialTheme.typography.bodyMedium) }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            if (current != null) {
+                TextButton(onClick = onClear) { Text("Clear") }
+            } else {
+                TextButton(onClick = onDismiss) { Text("Cancel") }
+            }
+        }
+    )
 }

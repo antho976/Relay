@@ -37,7 +37,6 @@ fun ExerciseCard(
     isNow: Boolean = false,
     totalExercises: Int = 0,
     restTimerState: RestTimerState? = null,
-    nextExerciseName: String? = null,
     onToggle: () -> Unit,
     onLogSet: (weightText: String, reps: Int) -> Unit,
     onDeleteSet: (setId: Long) -> Unit,
@@ -52,6 +51,10 @@ fun ExerciseCard(
     onSetExerciseUnit: (String?) -> Unit = {},
     onPinNote: (String) -> Unit = {},
     onToggleSetDifficultyTag: (setId: Long, currentTag: String?) -> Unit = { _, _ -> },
+    onSetRpe: (setId: Long, rpe: Double?) -> Unit = { _, _ -> },
+    onAddSet: () -> Unit = {},
+    advanceLabel: String = "",
+    onAdvance: () -> Unit = {},
     onMoveUp: (() -> Unit)? = null,
     onMoveDown: (() -> Unit)? = null,
     onLongPress: (() -> Unit)? = null,
@@ -118,6 +121,10 @@ fun ExerciseCard(
                         append("Target ${state.plan.sets} × ${state.plan.reps}")
                         if (priorLastSet != null) {
                             append(" · last session ${priorLastSet.weightText} × ${priorLastSet.reps}")
+                            priorLastSet.rpe?.let { rpe ->
+                                val rpeStr = if (rpe % 1.0 == 0.0) "${rpe.toInt()}" else "%.1f".format(rpe)
+                                append(" @ RPE $rpeStr")
+                            }
                         }
                     }
                 }
@@ -148,6 +155,12 @@ fun ExerciseCard(
                     )
                 }
 
+                // Last-session strip + sparkline (target screenshot's "03/21 · 14 MIN · 320 LB").
+                if (state.sessionHistory.isNotEmpty()) {
+                    Spacer(Modifier.height(12.dp))
+                    LastSessionStrip(history = state.sessionHistory)
+                }
+
                 Spacer(Modifier.height(16.dp))
 
                 // Session stats chip (sets progress + volume)
@@ -155,7 +168,7 @@ fun ExerciseCard(
                     val totalVolumeLb = state.loggedSets.sumOf { (it.weightLb ?: 0.0) * it.reps }
                     val volumeText = if (totalVolumeLb > 0) "  ·  ${totalVolumeLb.toInt()} LB" else ""
                     Text(
-                        "${state.loggedSets.size} / ${state.plan.sets} SETS$volumeText",
+                        "${state.loggedSets.size} / ${state.targetSets} SETS$volumeText",
                         style = MaterialTheme.typography.labelSmall,
                         color = muted,
                         fontSize = 9.sp
@@ -164,15 +177,16 @@ fun ExerciseCard(
                 }
 
                 // ── Set table ─────────────────────────────────────────────────
-                // Table header
+                // Table header (5 cols: SET | WEIGHT | REPS | RPE | Δ LAST)
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("SET", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, modifier = Modifier.width(44.dp))
+                    Text("SET", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, modifier = Modifier.width(36.dp))
                     Text("WEIGHT · LB", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, modifier = Modifier.weight(1f))
-                    Text("REPS", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, modifier = Modifier.width(56.dp))
-                    Text("△ LAST", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, modifier = Modifier.width(88.dp), textAlign = TextAlign.End)
+                    Text("REPS", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, modifier = Modifier.width(48.dp))
+                    Text("RPE", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, modifier = Modifier.width(44.dp), textAlign = TextAlign.Center)
+                    Text("△ LAST", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, modifier = Modifier.width(72.dp), textAlign = TextAlign.End)
                 }
                 HorizontalDivider(color = outline.copy(alpha = 0.3f), modifier = Modifier.padding(top = 4.dp))
 
@@ -186,7 +200,8 @@ fun ExerciseCard(
                         onDelete = { onDeleteSet(set.id) },
                         onEdit = { w, r -> onEditSet(set.id, w, r) },
                         onLongPress = { onLogSameAsLast(set.id) },
-                        onToggleDifficultyTag = { tag -> onToggleSetDifficultyTag(set.id, tag) }
+                        onToggleDifficultyTag = { tag -> onToggleSetDifficultyTag(set.id, tag) },
+                        onSetRpe = { rpe -> onSetRpe(set.id, rpe) }
                     )
                     HorizontalDivider(color = outline.copy(alpha = 0.12f))
                 }
@@ -200,6 +215,7 @@ fun ExerciseCard(
 
                 // Input row for the next set
                 if (!state.skipped) {
+                    val targetsMet = state.loggedSets.size >= state.targetSets
                     Spacer(Modifier.height(if (restTimerState == null) 8.dp else 0.dp))
                     SetInputRow(
                         prefillWeight = state.prefillWeight,
@@ -208,7 +224,11 @@ fun ExerciseCard(
                         priorSets = state.priorSets,
                         nextSetNumber = state.loggedSets.size + 1,
                         priorSetForActiveRow = state.priorSets.getOrNull(state.loggedSets.size),
-                        onSubmit = onLogSet
+                        targetsMet = targetsMet,
+                        advanceLabel = advanceLabel,
+                        onAdvance = onAdvance,
+                        onSubmit = onLogSet,
+                        onAddSet = onAddSet
                     )
                 }
 
@@ -216,7 +236,6 @@ fun ExerciseCard(
 
                 ExerciseCardFooter(
                     state = state,
-                    nextExerciseName = nextExerciseName,
                     onNoteChange = onNoteChange,
                     onPinNote = onPinNote,
                     onRate = onRate,

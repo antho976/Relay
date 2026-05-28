@@ -50,5 +50,7 @@ data class LoggedSet(
      */
     @ColumnInfo(name = "set_type") val setType: String? = null,
     /** Mid-set weight drop annotation (#143): "weightLb2/reps2" e.g. "35/4". */
-    @ColumnInfo(name = "drop_annotation") val dropAnnotation: String? = null
+    @ColumnInfo(name = "drop_annotation") val dropAnnotation: String? = null,
+    /** Per-set RPE (Rate of Perceived Exertion), 1.0–10.0 in 0.5 steps. */
+    @ColumnInfo(name = "rpe") val rpe: Double? = null
 )

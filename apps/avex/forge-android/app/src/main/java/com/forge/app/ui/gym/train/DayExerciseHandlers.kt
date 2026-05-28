@@ -57,7 +57,7 @@ internal fun DayViewModel.handleExerciseEvent(event: DayUiEvent) {
             if (newSkipped) {
                 val nextEx = _state.value.exercises
                     .dropWhile { it.plan.id != event.exerciseId }.drop(1)
-                    .firstOrNull { !it.skipped && it.loggedSets.size < it.plan.sets }
+                    .firstOrNull { !it.skipped && it.loggedSets.size < it.targetSets }
                 if (nextEx != null) _state.update { s ->
                     s.copy(exercises = s.exercises.map {
                         if (it.plan.id == nextEx.plan.id) it.copy(isExpanded = true) else it
@@ -94,7 +94,8 @@ internal fun DayViewModel.handleExerciseEvent(event: DayUiEvent) {
         is DayUiEvent.ConfirmWeightJump -> {
             val warning = _state.value.pendingWeightJumpWarning ?: return
             _state.update { it.copy(pendingWeightJumpWarning = null) }
-            logSet(warning.exerciseId, warning.weightText, warning.reps)
+            // Bypass the jump check — the user already confirmed; otherwise it re-triggers.
+            logSet(warning.exerciseId, warning.weightText, warning.reps, skipJumpCheck = true)
         }
         is DayUiEvent.DismissWeightJump -> _state.update { it.copy(pendingWeightJumpWarning = null) }
         is DayUiEvent.UpdateJournal ->
@@ -163,6 +164,15 @@ internal fun DayViewModel.handleExerciseEvent(event: DayUiEvent) {
             workoutRepo.setDropAnnotation(event.setId, event.annotation)
             refreshExercises()
         }
+        is DayUiEvent.SetRpe -> viewModelScope.launch {
+            workoutRepo.setRpe(event.setId, event.rpe)
+            refreshExercises()
+        }
+        is DayUiEvent.AddBonusSet -> _state.update { s ->
+            s.copy(exercises = s.exercises.map {
+                if (it.plan.id == event.exerciseId) it.copy(bonusSets = it.bonusSets + 1, isExpanded = true) else it
+            })
+        }
         is DayUiEvent.SetSupersetGroup -> viewModelScope.launch {
             val loggedId = _state.value.exercises
                 .firstOrNull { it.plan.id == event.exerciseId }?.loggedExerciseId ?: return@launch
@@ -182,7 +192,7 @@ internal fun DayViewModel.handleExerciseEvent(event: DayUiEvent) {
     }
 }
 
-internal fun DayViewModel.logSet(exerciseId: String, weightText: String, reps: Int) {
+internal fun DayViewModel.logSet(exerciseId: String, weightText: String, reps: Int, skipJumpCheck: Boolean = false) {
     if (reps <= 0) return
     viewModelScope.launch {
         val sessionId = _state.value.sessionId ?: return@launch
@@ -190,8 +200,13 @@ internal fun DayViewModel.logSet(exerciseId: String, weightText: String, reps: I
         val currentUi = _state.value.exercises.firstOrNull { it.plan.id == exerciseId } ?: return@launch
 
         val newWeightLb = WeightParser.parse(weightText, plan.unit)
-        val lastWeightLb = currentUi.priorSets.mapNotNull { it.weightLb }.maxOrNull()
-        if (newWeightLb != null && lastWeightLb != null && lastWeightLb > 0 &&
+        // Ignore dummy display rows (loggedExerciseId == -1) so placeholder data never
+        // triggers the jump warning.
+        val lastWeightLb = currentUi.priorSets
+            .filter { it.loggedExerciseId != -1L }
+            .mapNotNull { it.weightLb }
+            .maxOrNull()
+        if (!skipJumpCheck && newWeightLb != null && lastWeightLb != null && lastWeightLb > 0 &&
             newWeightLb > lastWeightLb * 1.20
         ) {
             _state.update {
@@ -220,7 +235,7 @@ internal fun DayViewModel.logSet(exerciseId: String, weightText: String, reps: I
         refreshExercises()
 
         val updatedEx = _state.value.exercises.firstOrNull { it.plan.id == exerciseId }
-        if (updatedEx != null && updatedEx.loggedSets.size == plan.sets) {
+        if (updatedEx != null && updatedEx.loggedSets.size >= updatedEx.targetSets) {
             _state.update { s ->
                 s.copy(exercises = s.exercises.map {
                     if (it.plan.id == exerciseId) it.copy(isExpanded = false) else it

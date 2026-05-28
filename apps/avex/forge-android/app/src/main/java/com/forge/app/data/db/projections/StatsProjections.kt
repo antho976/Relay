@@ -35,3 +35,15 @@ data class RecentPrRow(
     @ColumnInfo(name = "started_at") val sessionStartedAt: Long,
     @ColumnInfo(name = "logged_exercise_id") val loggedExerciseId: Long
 )
+
+/**
+ * Per-session aggregate for one exercise: feeds the day-screen last-session strip + sparkline.
+ * Volume = SUM(weight_lb * reps) restricted to this exercise within that session.
+ * Top weight = MAX(weight_lb) for that exercise in that session.
+ */
+data class ExerciseSessionAggregate(
+    @ColumnInfo(name = "started_at") val sessionStartedAt: Long,
+    @ColumnInfo(name = "finished_at") val sessionFinishedAt: Long?,
+    @ColumnInfo(name = "volume_lb") val volumeLb: Double,
+    @ColumnInfo(name = "top_weight_lb") val topWeightLb: Double?
+)

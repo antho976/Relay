@@ -83,6 +83,7 @@ class WorkoutRepository @Inject constructor(
     suspend fun setToFailure(setId: Long, v: Boolean) = loggedSetDao.setToFailure(setId, v)
     suspend fun setSetType(setId: Long, type: String?) = loggedSetDao.setSetType(setId, type)
     suspend fun setDropAnnotation(setId: Long, annotation: String?) = loggedSetDao.setDropAnnotation(setId, annotation)
+    suspend fun setRpe(setId: Long, rpe: Double?) = loggedSetDao.setRpe(setId, rpe)
 
     suspend fun setSessionType(sessionId: Long, type: String) = sessionDao.setSessionType(sessionId, type)
     suspend fun setUntracked(sessionId: Long, v: Boolean) = sessionDao.setUntracked(sessionId, v)
@@ -174,6 +175,10 @@ class WorkoutRepository @Inject constructor(
     /** All sets for this static exercise across every session. Feeds PR detection. */
     suspend fun historyForExercise(exerciseId: String): List<LoggedSet> =
         loggedSetDao.historyForExercise(exerciseId)
+
+    /** Per-session aggregates for one exercise (last N finished sessions, newest first). */
+    suspend fun sessionAggregatesForExercise(exerciseId: String, limit: Int = 8) =
+        loggedSetDao.sessionAggregatesForExercise(exerciseId, limit)
 
     /** All sets in a session ordered by completedAt — used to derive actual rest intervals (#82). */
     suspend fun allSetsForSession(sessionId: Long): List<LoggedSet> =

@@ -90,14 +90,14 @@ data class DayUiState(
     val sessionProgressText: String
         get() {
             if (exercises.isEmpty()) return ""
-            val done = exercises.count { it.loggedSets.size >= it.plan.sets || it.skipped }
+            val done = exercises.count { it.loggedSets.size >= it.targetSets || it.skipped }
             return "$done / ${exercises.size}"
         }
 
     /** Remaining planned sets across all non-skipped exercises; used to estimate end time (#103). */
     val remainingSetsCount: Int
         get() = exercises.filter { !it.skipped }
-            .sumOf { maxOf(0, it.plan.sets - it.loggedSets.size) }
+            .sumOf { maxOf(0, it.targetSets - it.loggedSets.size) }
 }
 
 data class ExerciseUiState(
@@ -142,8 +142,27 @@ data class ExerciseUiState(
     /** Always-visible pinned cue in the card header (#112). Empty = not shown. */
     val pinnedNote: String = "",
     /** Superset group identifier (#38). Non-null = part of a superset. */
-    val supersetGroup: String? = null
+    val supersetGroup: String? = null,
+    /**
+     * Per-session aggregates for this exercise (newest first, up to ~8 sessions).
+     * Fuel for the last-session strip (date · duration · volume) + sparkline.
+     */
+    val sessionHistory: List<ExerciseSessionPoint> = emptyList(),
+    /**
+     * Suggested weight delta for the *next* exercise in the session — drives the
+     * "+5 ↑" pill on the UP NEXT row. Already includes sign (e.g. "+5", "−2.5").
+     */
+    val nextSuggestedWeightDelta: String? = null,
+    /**
+     * Extra sets added beyond the plan this session via "+ ADD A SET" (in-memory,
+     * resets if the VM is recreated). Raises [targetSets] so the card doesn't
+     * auto-collapse and the counter reflects the new goal.
+     */
+    val bonusSets: Int = 0
 ) {
+    /** Planned sets plus any session-local bonus sets ("+ ADD A SET"). */
+    val targetSets: Int get() = plan.sets + bonusSets
+
     /** 0f–1f progress toward [goalWeightLb] based on all-time PB. Null if either is absent. */
     val goalProgressFraction: Float?
         get() {
@@ -156,3 +175,11 @@ data class ExerciseUiState(
     val effectiveName: String
         get() = sessionSwapName ?: persistentSwapName ?: plan.name
 }
+
+/** Slim per-session aggregate for one exercise (for the day-screen ledger strip). */
+data class ExerciseSessionPoint(
+    val sessionStartedAt: Long,
+    val durationMin: Int?,
+    val volumeLb: Double,
+    val topWeightLb: Double?
+)

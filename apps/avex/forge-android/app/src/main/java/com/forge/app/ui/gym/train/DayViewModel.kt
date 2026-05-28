@@ -117,7 +117,8 @@ class DayViewModel @Inject constructor(
             is DayUiEvent.DismissQuickActions, is DayUiEvent.OpenAddExercisePicker,
             is DayUiEvent.CloseAddExercisePicker, is DayUiEvent.AddUnplannedExercise,
             is DayUiEvent.ToggleAmrap, is DayUiEvent.ToggleAssisted, is DayUiEvent.ToggleFailure,
-            is DayUiEvent.SetSetType, is DayUiEvent.SetDropAnnotation,
+            is DayUiEvent.SetSetType, is DayUiEvent.SetDropAnnotation, is DayUiEvent.SetRpe,
+            is DayUiEvent.AddBonusSet,
             is DayUiEvent.SetSupersetGroup, is DayUiEvent.ShowWarmupSuggester,
             is DayUiEvent.ShowPlateCalculator, is DayUiEvent.DismissTrainingHelper,
             is DayUiEvent.LogBreak -> handleExerciseEvent(event)
@@ -148,16 +149,19 @@ class DayViewModel @Inject constructor(
         val loggedExercises = workoutRepo.observeExercisesForSession(sessionId).firstOrNull().orEmpty()
         val byExerciseId = loggedExercises.associateBy { it.exerciseId }
         val previousExpandedById = _state.value.exercises.associate { it.plan.id to it.isExpanded }
+        val previousBonusById = _state.value.exercises.associate { it.plan.id to it.bonusSets }
         val effectivePlans = programCustomRepo.effectivePlanForDay(dayKey)
         val exercises = effectivePlans.mapIndexed { index, plan ->
             buildExerciseUi(
                 plan = plan,
                 logged = byExerciseId[plan.id],
                 expandedDefault = (index == 0),
-                expandedOverride = previousExpandedById[plan.id]
+                expandedOverride = previousExpandedById[plan.id],
+                bonusSets = previousBonusById[plan.id] ?: 0
             )
         }
-        _state.update { it.copy(isLoading = false, exercises = exercises) }
+        val annotated = annotateNextExerciseDeltas(exercises)
+        _state.update { it.copy(isLoading = false, exercises = annotated) }
     }
 
     internal suspend fun ensureLoggedExercise(exerciseId: String): Long? {
