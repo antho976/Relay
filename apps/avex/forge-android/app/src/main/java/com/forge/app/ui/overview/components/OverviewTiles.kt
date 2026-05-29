@@ -54,7 +54,7 @@ fun CardioTile(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text("CARDIO", style = MaterialTheme.typography.labelSmall, letterSpacing = 1.sp, color = muted, fontSize = 9.sp)
-                Text("→", style = MaterialTheme.typography.bodySmall, color = muted.copy(alpha = 0.5f))
+                Text("→", style = MaterialTheme.typography.bodySmall, color = muted.copy(alpha = 0.75f))
             }
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
                 listOf("M", "T", "W", "T", "F", "S", "S").forEachIndexed { i, letter ->
@@ -71,7 +71,7 @@ fun CardioTile(
                             )
                         )
                         Text(letter, style = MaterialTheme.typography.labelSmall, fontSize = 8.sp,
-                            color = if (active) onBg else muted.copy(alpha = 0.4f))
+                            color = if (active) onBg else muted.copy(alpha = 0.6f))
                     }
                 }
             }
@@ -84,7 +84,7 @@ fun CardioTile(
                 }
             } else {
                 Text("no cardio logged this week", style = MaterialTheme.typography.bodySmall,
-                    color = muted.copy(alpha = 0.4f), fontStyle = FontStyle.Italic, fontSize = 11.sp)
+                    color = muted, fontStyle = FontStyle.Italic, fontSize = 11.sp)
             }
         }
     }
@@ -112,7 +112,7 @@ fun StatsTile(
             Text("STATS", style = MaterialTheme.typography.labelSmall, letterSpacing = 1.sp, color = muted, fontSize = 9.sp)
             Spacer(Modifier.height(4.dp))
             Text("$totalSessions", style = MaterialTheme.typography.headlineSmall, color = onBg, fontWeight = FontWeight.Normal)
-            Text("sessions total", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.6f), fontSize = 9.sp)
+            Text("sessions total", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
             if (streakDays > 0) {
                 Spacer(Modifier.height(2.dp))
                 Text("$streakDays day streak", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
@@ -144,7 +144,7 @@ fun TrophiesTile(
             Text("TROPHIES", style = MaterialTheme.typography.labelSmall, letterSpacing = 1.sp, color = muted, fontSize = 9.sp)
             Spacer(Modifier.height(4.dp))
             Text("$unlocked", style = MaterialTheme.typography.headlineSmall, color = onBg, fontWeight = FontWeight.Normal)
-            Text("of $total", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.6f), fontSize = 9.sp)
+            Text("of $total", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
             Spacer(Modifier.height(6.dp))
             val progress = if (total > 0) (unlocked.toFloat() / total).coerceIn(0f, 1f) else 0f
             Box(Modifier.fillMaxWidth().height(2.dp).background(outline.copy(alpha = 0.2f), RoundedCornerShape(1.dp))) {

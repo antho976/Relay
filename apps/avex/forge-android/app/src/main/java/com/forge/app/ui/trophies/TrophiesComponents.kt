@@ -113,7 +113,7 @@ internal fun TrophyRow(display: TrophyDisplay, onBg: Color, muted: Color, bg: Co
             }
             Text(dateText, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
         } else {
-            Text(display.progressHint ?: "LOCKED", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.4f), fontSize = 9.sp)
+            Text(display.progressHint ?: "LOCKED", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.7f), fontSize = 9.sp)
         }
     }
 }

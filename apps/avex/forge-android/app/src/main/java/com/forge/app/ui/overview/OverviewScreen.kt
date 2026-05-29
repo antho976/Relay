@@ -157,7 +157,7 @@ fun OverviewScreen(
                         Text("$dayName · WK $weekNumber", style = MaterialTheme.typography.labelSmall,
                             fontSize = 13.sp, color = muted)
                         Text(weekRangeText, style = MaterialTheme.typography.labelSmall,
-                            fontSize = 9.sp, color = muted.copy(alpha = 0.55f))
+                            fontSize = 9.sp, color = muted.copy(alpha = 0.8f))
                     }
                     Spacer(Modifier.width(8.dp))
                     Icon(
@@ -247,13 +247,13 @@ fun OverviewScreen(
                 verticalAlignment = Alignment.CenterVertically) {
                 Text("RECENT", style = MaterialTheme.typography.labelMedium, color = muted)
                 Text("view all →", style = MaterialTheme.typography.labelSmall,
-                    color = muted.copy(alpha = 0.45f), fontSize = 10.sp,
+                    color = muted, fontSize = 10.sp,
                     modifier = Modifier.clickable { showHistory = true }.padding(vertical = 2.dp))
             }
             Spacer(Modifier.height(10.dp))
             if (state.recentItems.isEmpty()) {
                 Text("no activity logged yet.", style = MaterialTheme.typography.bodySmall,
-                    color = muted.copy(alpha = 0.5f), fontStyle = FontStyle.Italic)
+                    color = muted, fontStyle = FontStyle.Italic)
             } else {
                 state.recentItems.forEach { item ->
                     RecentRow(item = item, muted = muted, onBg = onBg, outline = outline,
@@ -281,7 +281,7 @@ fun OverviewScreen(
             Spacer(Modifier.height(8.dp))
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 Text("Nutrition →", style = MaterialTheme.typography.labelSmall,
-                    color = muted.copy(alpha = 0.4f), fontSize = 10.sp,
+                    color = muted.copy(alpha = 0.7f), fontSize = 10.sp,
                     modifier = Modifier.clickable { onGoToNutrition() }.padding(4.dp))
             }
 

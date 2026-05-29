@@ -38,6 +38,7 @@ fun ExerciseCard(
     isNow: Boolean = false,
     totalExercises: Int = 0,
     restTimerState: RestTimerState? = null,
+    sessionStartedAtMs: Long? = null,
     onToggle: () -> Unit,
     onLogSet: (weightText: String, reps: Int) -> Unit,
     onDeleteSet: (setId: Long) -> Unit,
@@ -159,16 +160,17 @@ fun ExerciseCard(
                     )
                 }
 
-                // Last-session strip + comparison sparkline (current vs previous).
-                if (state.sessionHistory.isNotEmpty()) {
-                    Spacer(Modifier.height(12.dp))
-                    LastSessionStrip(
-                        history = state.sessionHistory,
-                        currentWeights = state.loggedSets.mapNotNull { it.weightLb },
-                        priorWeights = state.priorSets.mapNotNull { it.weightLb },
-                        onClick = onOpenChart
-                    )
-                }
+                // Live current-session readout + per-set volume comparison (current vs last).
+                Spacer(Modifier.height(12.dp))
+                LastSessionStrip(
+                    sessionStartedAtMs = sessionStartedAtMs,
+                    currentVolumeLb = state.loggedSets.sumOf { (it.weightLb ?: 0.0) * it.reps },
+                    currentSets = state.loggedSets.size,
+                    targetSets = state.targetSets,
+                    currentVolumes = state.loggedSets.map { (it.weightLb ?: 0.0) * it.reps },
+                    priorVolumes = state.priorSets.map { (it.weightLb ?: 0.0) * it.reps },
+                    onClick = onOpenChart
+                )
 
                 Spacer(Modifier.height(16.dp))
 
@@ -195,7 +197,7 @@ fun ExerciseCard(
                     Text("WEIGHT · LB", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, modifier = Modifier.weight(1f))
                     Text("REPS", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, modifier = Modifier.width(48.dp))
                     Text("RPE", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, modifier = Modifier.width(44.dp), textAlign = TextAlign.Center)
-                    Text("△ LAST", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, modifier = Modifier.width(72.dp), textAlign = TextAlign.End)
+                    Text("LAST", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, modifier = Modifier.width(72.dp), textAlign = TextAlign.End)
                 }
                 HorizontalDivider(color = outline.copy(alpha = 0.3f), modifier = Modifier.padding(top = 4.dp))
 

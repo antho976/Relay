@@ -138,6 +138,7 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
                         isNow = isNowExercise,
                         totalExercises = state.exercises.size,
                         restTimerState = if (isNowExercise) state.restTimer else null,
+                        sessionStartedAtMs = state.sessionStartedAt,
                         advanceLabel = advanceLabel,
                         onAdvance = onAdvance,
                         onToggle = { },

@@ -202,6 +202,9 @@ internal fun computePrFlags(
     currentSets: List<LoggedSet>
 ): Pair<Set<Long>, Boolean> {
     if (currentSets.isEmpty()) return emptySet<Long>() to false
+    // No prior history → there's nothing to beat, so nothing is a PR. (Without this, the
+    // first-ever set on an exercise would falsely flag as a PR and render gold.)
+    if (prior.isEmpty()) return emptySet<Long>() to false
     val prIds = currentSets
         .filter { PrDetector.isPr(prior, it.weightLb, it.reps) }
         .map { it.id }.toSet()

@@ -47,7 +47,7 @@ fun WeekDayBox(
         Text(
             letter,
             style = MaterialTheme.typography.labelSmall,
-            color = if (isToday) onBg else onBg.copy(alpha = 0.55f),
+            color = if (isToday) onBg else onBg.copy(alpha = 0.75f),
             fontSize = 10.sp,
             fontWeight = if (isToday) FontWeight.SemiBold else FontWeight.Normal
         )
@@ -110,7 +110,7 @@ fun RecentRow(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(item.dayLabel, style = MaterialTheme.typography.labelSmall,
-                    color = muted.copy(alpha = 0.55f), fontSize = 9.sp, letterSpacing = 0.5.sp)
+                    color = muted, fontSize = 9.sp, letterSpacing = 0.5.sp)
                 if (item.tag.isNotEmpty()) {
                     Box(
                         modifier = Modifier

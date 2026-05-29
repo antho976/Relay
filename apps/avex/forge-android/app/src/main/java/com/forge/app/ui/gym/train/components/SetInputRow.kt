@@ -190,7 +190,7 @@ fun SetInputRow(
                             Text(
                                 "try $priorDisplay × ${prior.reps}",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
+                                color = onBg.copy(alpha = 0.7f),
                                 fontSize = 9.sp,
                                 textAlign = TextAlign.End,
                                 modifier = Modifier.clickable {

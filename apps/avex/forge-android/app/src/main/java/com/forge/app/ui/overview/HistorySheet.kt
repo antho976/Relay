@@ -71,7 +71,7 @@ fun HistorySheet(
                     letterSpacing = 1.5.sp, color = muted, fontSize = 10.sp)
                 Spacer(Modifier.height(24.dp))
                 Text("no sessions yet.", style = MaterialTheme.typography.bodySmall,
-                    color = muted.copy(alpha = 0.5f), fontStyle = FontStyle.Italic)
+                    color = muted, fontStyle = FontStyle.Italic)
                 Spacer(Modifier.height(48.dp))
             }
         } else {

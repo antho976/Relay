@@ -25,6 +25,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -121,70 +122,60 @@ internal fun CollapsedRow(
 }
 
 /**
- * Last-session metadata strip + comparison sparkline. Left: most recent prior session's
- * date · duration · volume. Right: a small dual line — this session's set weights (bright)
- * over last session's (faint) so you can see at a glance if you're on track to beat it.
- * Tapping the whole strip opens the full chart detail.
+ * Live current-session readout + comparison sparkline. Left: elapsed time (ticking),
+ * volume moved this exercise, and sets done — all updating as you train. Right: a small
+ * dual line of this session's per-set volume (bright) over last session's (faint), so you
+ * can see if you're on track to beat it. Tapping the strip opens the full chart detail.
  */
 @Composable
 internal fun LastSessionStrip(
-    history: List<ExerciseSessionPoint>,
-    currentWeights: List<Double> = emptyList(),
-    priorWeights: List<Double> = emptyList(),
+    sessionStartedAtMs: Long?,
+    currentVolumeLb: Double,
+    currentSets: Int,
+    targetSets: Int,
+    currentVolumes: List<Double> = emptyList(),
+    priorVolumes: List<Double> = emptyList(),
     onClick: () -> Unit = {}
 ) {
-    if (history.isEmpty()) return
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val outline = MaterialTheme.colorScheme.outline
 
-    val last = history.first() // newest first
-    val zone = ZoneId.systemDefault()
-    val dateStr = Instant.ofEpochMilli(last.sessionStartedAt)
-        .atZone(zone)
-        .format(DateTimeFormatter.ofPattern("MM/dd", Locale.getDefault()))
-    val durationStr = last.durationMin?.let { "$it MIN" }
-    val volumeStr = last.volumeLb.takeIf { it > 0 }?.let { "${it.toInt()} LB" }
-
-    // Fall back to the per-session top-weight trend when there's no per-set comparison yet.
-    val fallback = history.asReversed().mapNotNull { it.topWeightLb }
+    // Tick once a second so the elapsed time advances live.
+    var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(sessionStartedAtMs) {
+        while (true) {
+            nowMs = System.currentTimeMillis()
+            kotlinx.coroutines.delay(1000)
+        }
+    }
+    val elapsedSec = sessionStartedAtMs?.let { ((nowMs - it) / 1000L).coerceAtLeast(0) } ?: 0L
+    val elapsedStr = "%d:%02d".format(elapsedSec / 60, elapsedSec % 60)
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .border(0.5.dp, outline.copy(alpha = 0.3f), RoundedCornerShape(4.dp))
+            .border(0.5.dp, outline.copy(alpha = 0.4f), RoundedCornerShape(6.dp))
             .clickable { onClick() }
-            .padding(horizontal = 12.dp, vertical = 8.dp),
+            .padding(horizontal = 12.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(dateStr, style = MaterialTheme.typography.labelSmall, color = onBg, fontSize = 10.sp)
-            if (durationStr != null) {
-                Text("·", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.4f))
-                Text(durationStr, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp)
-            }
-            if (volumeStr != null) {
-                Text("·", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.4f))
-                Text(volumeStr, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp)
-            }
+            Text(elapsedStr, style = MaterialTheme.typography.labelMedium, color = onBg, fontSize = 11.sp)
+            Text("·", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.5f))
+            Text("${currentVolumeLb.toInt()} lb", style = MaterialTheme.typography.labelMedium, color = onBg, fontSize = 11.sp)
+            Text("·", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.5f))
+            Text("$currentSets/$targetSets", style = MaterialTheme.typography.labelMedium, color = muted, fontSize = 11.sp)
         }
         Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
-            if (currentWeights.isNotEmpty() || priorWeights.size >= 2) {
+            if (currentVolumes.isNotEmpty() || priorVolumes.size >= 2) {
                 DualSparkline(
-                    current = currentWeights,
-                    previous = priorWeights,
+                    current = currentVolumes,
+                    previous = priorVolumes,
                     currentColor = onBg,
-                    previousColor = muted.copy(alpha = 0.45f),
+                    previousColor = muted.copy(alpha = 0.5f),
                     modifier = Modifier.width(60.dp).height(16.dp)
-                )
-            } else if (fallback.size >= 2) {
-                Sparkline(
-                    values = fallback,
-                    lineColor = onBg.copy(alpha = 0.55f),
-                    minValue = fallback.min(),
-                    maxValue = fallback.max(),
-                    modifier = Modifier.width(56.dp).height(14.dp)
                 )
             }
         }
@@ -398,13 +389,13 @@ internal fun UpNextBubble(
                 Text(label, style = MaterialTheme.typography.bodyMedium, color = onBg)
             }
             nextDelta?.let { delta ->
-                // Deliberately understated — it's a hint, not a headline.
+                // A quiet hint — visible but not competing with the exercise name.
                 Box(modifier = Modifier.padding(horizontal = 4.dp)) {
                     Text(
                         "$delta ${if (delta.startsWith("+")) "↑" else "↓"}",
                         style = MaterialTheme.typography.labelSmall,
-                        color = muted.copy(alpha = 0.5f),
-                        fontSize = 9.sp
+                        color = muted,
+                        fontSize = 10.sp
                     )
                 }
             }
