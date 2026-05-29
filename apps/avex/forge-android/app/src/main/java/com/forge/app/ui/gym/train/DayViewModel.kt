@@ -118,7 +118,7 @@ class DayViewModel @Inject constructor(
             is DayUiEvent.CloseAddExercisePicker, is DayUiEvent.AddUnplannedExercise,
             is DayUiEvent.ToggleAmrap, is DayUiEvent.ToggleAssisted, is DayUiEvent.ToggleFailure,
             is DayUiEvent.SetSetType, is DayUiEvent.SetDropAnnotation, is DayUiEvent.SetRpe,
-            is DayUiEvent.AddBonusSet,
+            is DayUiEvent.AddBonusSet, is DayUiEvent.SetUseKg,
             is DayUiEvent.SetSupersetGroup, is DayUiEvent.ShowWarmupSuggester,
             is DayUiEvent.ShowPlateCalculator, is DayUiEvent.DismissTrainingHelper,
             is DayUiEvent.LogBreak -> handleExerciseEvent(event)

@@ -1,5 +1,6 @@
 package com.forge.app.ui.gym.train.components
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -31,7 +32,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -117,12 +121,18 @@ internal fun CollapsedRow(
 }
 
 /**
- * Last-session metadata strip + sparkline. Shows the most recent prior session's
- * date · duration · this-exercise volume, with a small line chart of top-weight-per-session
- * spanning the last ~8 sessions.
+ * Last-session metadata strip + comparison sparkline. Left: most recent prior session's
+ * date · duration · volume. Right: a small dual line — this session's set weights (bright)
+ * over last session's (faint) so you can see at a glance if you're on track to beat it.
+ * Tapping the whole strip opens the full chart detail.
  */
 @Composable
-internal fun LastSessionStrip(history: List<ExerciseSessionPoint>) {
+internal fun LastSessionStrip(
+    history: List<ExerciseSessionPoint>,
+    currentWeights: List<Double> = emptyList(),
+    priorWeights: List<Double> = emptyList(),
+    onClick: () -> Unit = {}
+) {
     if (history.isEmpty()) return
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
@@ -136,12 +146,14 @@ internal fun LastSessionStrip(history: List<ExerciseSessionPoint>) {
     val durationStr = last.durationMin?.let { "$it MIN" }
     val volumeStr = last.volumeLb.takeIf { it > 0 }?.let { "${it.toInt()} LB" }
 
-    val sparkValues = history.asReversed().mapNotNull { it.topWeightLb }
+    // Fall back to the per-session top-weight trend when there's no per-set comparison yet.
+    val fallback = history.asReversed().mapNotNull { it.topWeightLb }
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .border(0.5.dp, outline.copy(alpha = 0.3f), RoundedCornerShape(4.dp))
+            .clickable { onClick() }
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -158,16 +170,64 @@ internal fun LastSessionStrip(history: List<ExerciseSessionPoint>) {
             }
         }
         Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
-            if (sparkValues.size >= 2) {
+            if (currentWeights.isNotEmpty() || priorWeights.size >= 2) {
+                DualSparkline(
+                    current = currentWeights,
+                    previous = priorWeights,
+                    currentColor = onBg,
+                    previousColor = muted.copy(alpha = 0.45f),
+                    modifier = Modifier.width(60.dp).height(16.dp)
+                )
+            } else if (fallback.size >= 2) {
                 Sparkline(
-                    values = sparkValues,
+                    values = fallback,
                     lineColor = onBg.copy(alpha = 0.55f),
-                    minValue = sparkValues.min(),
-                    maxValue = sparkValues.max(),
+                    minValue = fallback.min(),
+                    maxValue = fallback.max(),
                     modifier = Modifier.width(56.dp).height(14.dp)
                 )
             }
         }
+    }
+}
+
+/**
+ * Two overlaid line series sharing one scale: [current] drawn bold, [previous] faint.
+ * Single-point series render as a dot so an in-progress session still shows.
+ */
+@Composable
+internal fun DualSparkline(
+    current: List<Double>,
+    previous: List<Double>,
+    currentColor: Color,
+    previousColor: Color,
+    modifier: Modifier = Modifier
+) {
+    val all = current + previous
+    if (all.isEmpty()) return
+    val minV = all.min()
+    val maxV = all.max()
+    val range = (maxV - minV).coerceAtLeast(1.0)
+
+    Canvas(modifier = modifier) {
+        fun yFor(v: Double) = size.height - ((v - minV) / range * size.height).toFloat()
+        fun drawSeries(values: List<Double>, color: Color, stroke: Float) {
+            if (values.isEmpty()) return
+            if (values.size == 1) {
+                drawCircle(color, radius = stroke + 1f, center = Offset(size.width / 2f, yFor(values[0])))
+                return
+            }
+            val stepX = size.width / (values.size - 1)
+            val path = Path()
+            values.forEachIndexed { i, v ->
+                val x = stepX * i
+                val y = yFor(v)
+                if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+            }
+            drawPath(path, color = color, style = Stroke(width = stroke))
+        }
+        drawSeries(previous, previousColor, 2f)
+        drawSeries(current, currentColor, 3f)
     }
 }
 
@@ -181,6 +241,29 @@ internal fun ActionChip(icon: ImageVector, label: String, onClick: () -> Unit) {
     ) {
         Icon(icon, contentDescription = label, tint = muted, modifier = Modifier.size(15.dp))
         Text(label, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
+    }
+}
+
+/**
+ * Completed-rest indicator shown between two logged sets — the actual time rested,
+ * derived from the gap between their timestamps. Green = a finished rest period.
+ */
+@Composable
+internal fun RestBetweenSets(seconds: Int) {
+    if (seconds <= 0) return
+    val readyColor = Color(0xFF5CB85C)
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val m = seconds / 60; val s = seconds % 60
+    val label = if (m > 0) "$m:${"%02d".format(s)}" else "0:${"%02d".format(s)}"
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        HorizontalDivider(modifier = Modifier.weight(1f), color = readyColor.copy(alpha = 0.2f))
+        Box(modifier = Modifier.size(7.dp).clip(CircleShape).background(readyColor))
+        Text("rested $label", style = MaterialTheme.typography.labelSmall, color = readyColor.copy(alpha = 0.8f), fontSize = 9.sp)
+        HorizontalDivider(modifier = Modifier.weight(1f), color = readyColor.copy(alpha = 0.2f))
     }
 }
 
@@ -315,18 +398,13 @@ internal fun UpNextBubble(
                 Text(label, style = MaterialTheme.typography.bodyMedium, color = onBg)
             }
             nextDelta?.let { delta ->
-                val isPositive = delta.startsWith("+")
-                val pillColor = if (isPositive) Color(0xFF5CB85C) else muted
-                Box(
-                    modifier = Modifier
-                        .border(0.5.dp, pillColor.copy(alpha = 0.5f), RoundedCornerShape(50))
-                        .padding(horizontal = 10.dp, vertical = 3.dp)
-                ) {
+                // Deliberately understated — it's a hint, not a headline.
+                Box(modifier = Modifier.padding(horizontal = 4.dp)) {
                     Text(
-                        "$delta ${if (isPositive) "↑" else "↓"}",
+                        "$delta ${if (delta.startsWith("+")) "↑" else "↓"}",
                         style = MaterialTheme.typography.labelSmall,
-                        color = pillColor,
-                        fontSize = 10.sp
+                        color = muted.copy(alpha = 0.5f),
+                        fontSize = 9.sp
                     )
                 }
             }

@@ -173,6 +173,7 @@ internal fun DayViewModel.handleExerciseEvent(event: DayUiEvent) {
                 if (it.plan.id == event.exerciseId) it.copy(bonusSets = it.bonusSets + 1, isExpanded = true) else it
             })
         }
+        is DayUiEvent.SetUseKg -> viewModelScope.launch { settingsRepo.setUseKg(event.useKg) }
         is DayUiEvent.SetSupersetGroup -> viewModelScope.launch {
             val loggedId = _state.value.exercises
                 .firstOrNull { it.plan.id == event.exerciseId }?.loggedExerciseId ?: return@launch

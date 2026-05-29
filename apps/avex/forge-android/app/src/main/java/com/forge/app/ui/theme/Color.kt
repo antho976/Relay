@@ -8,7 +8,7 @@ val PearlSurface     = Color(0xFF18181C)
 val PearlSurfaceVar  = Color(0xFF222228)
 val PearlOutline     = Color(0xFF2E2E38)
 val PearlOnBg        = Color(0xFFEEEEF2)
-val PearlMuted       = Color(0xFF7A7A8A)
+val PearlMuted       = Color(0xFFA6A6B6)   // brightened: old 0xFF7A7A8A was too faint to read
 
 val PearlGradTop     = Color(0xFF131318)
 val PearlGradBottom  = Color(0xFF090909)
@@ -36,3 +36,8 @@ val AccentIndigoDefault = Color(0xFFCFCFCF)  // default light
 val ForgeSuccess = Color(0xFF4CAF7D)
 val ForgeWarning = Color(0xFFCFAB47)
 val ForgeError   = Color(0xFFBF4040)
+
+/** Bright gold reserved for PR moments (PR star, PR weight). */
+val ForgePrGold  = Color(0xFFE3B341)
+/** Visible green for the "△ LAST" beat-your-last indicator. */
+val ForgeLastGreen = Color(0xFF5BC873)

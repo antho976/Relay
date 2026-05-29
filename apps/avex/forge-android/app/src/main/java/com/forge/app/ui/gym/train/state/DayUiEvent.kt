@@ -100,6 +100,9 @@ sealed interface DayUiEvent {
     /** Add one set beyond the plan for this exercise this session ("+ ADD A SET"). */
     data class AddBonusSet(val exerciseId: String) : DayUiEvent
 
+    /** Switch the global weight unit (lb ↔ kg) from the training screen. */
+    data class SetUseKg(val useKg: Boolean) : DayUiEvent
+
     // Superset grouping (#38)
     data class SetSupersetGroup(val exerciseId: String, val group: String?) : DayUiEvent
 

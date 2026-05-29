@@ -235,8 +235,10 @@ private fun androidx.compose.foundation.lazy.LazyListScope.items(
     key: (Pair<String, String>) -> Any,
     itemContent: @Composable (Pair<String, String>) -> Unit
 ) {
+    // Prefix the key: the Tiles page renders an Order list and a Visibility list in the
+    // same LazyColumn, both keyed by tile id — without namespacing they collide and crash.
     items.forEach { pair ->
-        item(key(pair)) { itemContent(pair) }
+        item("kv-${key(pair)}") { itemContent(pair) }
     }
 }
 
@@ -254,6 +256,6 @@ private fun androidx.compose.foundation.lazy.LazyListScope.itemsIndexed(
     itemContent: @Composable (Int, String) -> Unit
 ) {
     items.forEachIndexed { idx, item ->
-        item(item) { itemContent(idx, item) }
+        item("order-$item") { itemContent(idx, item) }
     }
 }

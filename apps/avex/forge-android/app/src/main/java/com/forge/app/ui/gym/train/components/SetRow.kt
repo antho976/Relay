@@ -19,6 +19,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.TrendingDown
+import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -41,6 +43,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.data.db.entities.LoggedSet
 import com.forge.app.domain.units.formatWeight
+import com.forge.app.ui.theme.ForgeLastGreen
+import com.forge.app.ui.theme.ForgePrGold
 import com.forge.app.ui.theme.LocalForgeSettings
 
 private val SET_COL_W = 36.dp
@@ -81,15 +85,15 @@ fun SetRow(
     val pLb = priorSet?.weightLb ?: 0.0
     val wDiff = wLb - pLb
     val rDiff = if (priorSet != null) set.reps - priorSet.reps else 0
-    val deltaText = if (priorSet != null) when {
-        wDiff >= 0.5 -> "↑ +${wDiff.toInt()} lb"
-        wDiff <= -0.5 -> "↓ ${wDiff.toInt()} lb"
-        rDiff > 0 -> "↑ +$rDiff rep"
-        rDiff < 0 -> "↓ $rDiff rep"
+    val deltaLabel = if (priorSet != null) when {
+        wDiff >= 0.5 -> "+${wDiff.toInt()} lb"
+        wDiff <= -0.5 -> "${wDiff.toInt()} lb"
+        rDiff > 0 -> "+$rDiff rep"
+        rDiff < 0 -> "$rDiff rep"
         else -> null
     } else null
-    val isPositive = deltaText?.startsWith("↑") == true
-    val deltaColor = if (isPositive) Color(0xFF5CB85C) else muted.copy(alpha = 0.6f)
+    val deltaPositive = wDiff >= 0.5 || (wDiff > -0.5 && rDiff > 0)
+    val deltaColor = if (deltaPositive) ForgeLastGreen else muted.copy(alpha = 0.7f)
 
     if (isEditing) {
         val canConfirm = editWeight.isNotBlank() && editReps.toIntOrNull()?.let { it > 0 } == true
@@ -142,18 +146,22 @@ fun SetRow(
             modifier = tapMod.fillMaxWidth().padding(vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            // Set number col (★ inline next to number for set 1)
+            // Set number col (gold ★ inline next to number for set 1)
             Box(modifier = Modifier.width(SET_COL_W), contentAlignment = Alignment.TopStart) {
-                val label = if (setIndex == 1) "%02d ★".format(setIndex) else "%02d".format(setIndex)
-                Text(label, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text("%02d".format(setIndex), style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
+                    if (setIndex == 1) {
+                        Text("★", style = MaterialTheme.typography.labelSmall, color = ForgePrGold, fontSize = 9.sp)
+                    }
+                }
             }
 
-            // Weight + ghost prior col
+            // Weight + ghost prior col — gold only when this set is a new PR
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     displayWeight,
                     style = MaterialTheme.typography.headlineSmall,
-                    color = if (isPr) accent else onBg,
+                    color = if (isPr) ForgePrGold else onBg,
                     fontWeight = if (isPr) FontWeight.SemiBold else FontWeight.Normal
                 )
                 priorSet?.let { prior ->
@@ -193,10 +201,18 @@ fun SetRow(
                 }
             }
 
-            // Delta col
+            // Delta col — trend icon + value, green when you beat last session
             Box(modifier = Modifier.width(DELTA_COL_W), contentAlignment = Alignment.CenterEnd) {
-                deltaText?.let {
-                    Text(it, style = MaterialTheme.typography.labelSmall, color = deltaColor, fontSize = 9.sp)
+                deltaLabel?.let {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Icon(
+                            if (deltaPositive) Icons.Filled.TrendingUp else Icons.Filled.TrendingDown,
+                            contentDescription = null,
+                            tint = deltaColor,
+                            modifier = Modifier.size(13.dp)
+                        )
+                        Text(it, style = MaterialTheme.typography.labelSmall, color = deltaColor, fontSize = 9.sp)
+                    }
                 }
             }
         }

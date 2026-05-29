@@ -1,6 +1,7 @@
 package com.forge.app.ui.gym.train.components
 
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -53,6 +54,8 @@ fun ExerciseCard(
     onToggleSetDifficultyTag: (setId: Long, currentTag: String?) -> Unit = { _, _ -> },
     onSetRpe: (setId: Long, rpe: Double?) -> Unit = { _, _ -> },
     onAddSet: () -> Unit = {},
+    onSwitchUnit: () -> Unit = {},
+    onOpenChart: () -> Unit = {},
     advanceLabel: String = "",
     onAdvance: () -> Unit = {},
     onMoveUp: (() -> Unit)? = null,
@@ -104,12 +107,13 @@ fun ExerciseCard(
                     Spacer(Modifier.height(4.dp))
                 }
 
-                // Exercise name (large serif)
+                // Exercise name (large serif) — tap to open the swap picker.
                 Text(
                     state.effectiveName,
                     style = MaterialTheme.typography.displayLarge,
                     color = onBg,
-                    textDecoration = if (state.skipped) TextDecoration.LineThrough else TextDecoration.None
+                    textDecoration = if (state.skipped) TextDecoration.LineThrough else TextDecoration.None,
+                    modifier = Modifier.clickable { onOpenSwapPicker() }
                 )
 
                 Spacer(Modifier.height(6.dp))
@@ -155,10 +159,15 @@ fun ExerciseCard(
                     )
                 }
 
-                // Last-session strip + sparkline (target screenshot's "03/21 · 14 MIN · 320 LB").
+                // Last-session strip + comparison sparkline (current vs previous).
                 if (state.sessionHistory.isNotEmpty()) {
                     Spacer(Modifier.height(12.dp))
-                    LastSessionStrip(history = state.sessionHistory)
+                    LastSessionStrip(
+                        history = state.sessionHistory,
+                        currentWeights = state.loggedSets.mapNotNull { it.weightLb },
+                        priorWeights = state.priorSets.mapNotNull { it.weightLb },
+                        onClick = onOpenChart
+                    )
                 }
 
                 Spacer(Modifier.height(16.dp))
@@ -190,7 +199,7 @@ fun ExerciseCard(
                 }
                 HorizontalDivider(color = outline.copy(alpha = 0.3f), modifier = Modifier.padding(top = 4.dp))
 
-                // Logged set rows
+                // Logged set rows, with the actual rest taken shown between consecutive sets
                 state.loggedSets.forEachIndexed { i, set ->
                     SetRow(
                         set = set,
@@ -203,6 +212,11 @@ fun ExerciseCard(
                         onToggleDifficultyTag = { tag -> onToggleSetDifficultyTag(set.id, tag) },
                         onSetRpe = { rpe -> onSetRpe(set.id, rpe) }
                     )
+                    val next = state.loggedSets.getOrNull(i + 1)
+                    if (next != null) {
+                        val restSec = ((next.completedAt - set.completedAt) / 1000L).toInt()
+                        RestBetweenSets(restSec)
+                    }
                     HorizontalDivider(color = outline.copy(alpha = 0.12f))
                 }
 
@@ -228,7 +242,8 @@ fun ExerciseCard(
                         advanceLabel = advanceLabel,
                         onAdvance = onAdvance,
                         onSubmit = onLogSet,
-                        onAddSet = onAddSet
+                        onAddSet = onAddSet,
+                        onSwitchUnit = onSwitchUnit
                     )
                 }
 

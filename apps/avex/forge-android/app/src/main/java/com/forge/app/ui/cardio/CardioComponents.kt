@@ -24,6 +24,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.Color
@@ -91,82 +92,98 @@ internal fun WeekBoxRow(
     outline: Color
 ) {
     val dayLetters = listOf("M", "T", "W", "T", "F", "S", "S")
+    val maxMin = (dailyMinutes.maxOrNull() ?: 0).coerceAtLeast(1)
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.Bottom
     ) {
         dayLetters.forEachIndexed { i, letter ->
             val mins = dailyMinutes.getOrElse(i) { 0 }
             val isToday = i == todayDow
             val hasActivity = mins > 0
-            val isFuture = i > todayDow
             Column(
                 modifier = Modifier.weight(1f),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                Text(letter, fontSize = 8.sp, color = if (isToday) onBg else muted.copy(alpha = 0.45f))
+                if (hasActivity) {
+                    Text("${mins}m", fontSize = 9.sp, color = onBg, fontWeight = FontWeight.SemiBold)
+                }
+                // Proportional bar in a fixed 48dp track — clearly readable, white-on-dark.
                 Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(40.dp)
-                        .then(
-                            if (isToday && !hasActivity) {
-                                Modifier.drawBehind {
-                                    val effect = PathEffect.dashPathEffect(floatArrayOf(5f, 4f), 0f)
-                                    drawRoundRect(
-                                        color = onBg.copy(alpha = 0.35f),
-                                        style = Stroke(width = 1.dp.toPx(), pathEffect = effect),
-                                        cornerRadius = CornerRadius(4.dp.toPx())
+                    modifier = Modifier.fillMaxWidth().height(48.dp),
+                    contentAlignment = Alignment.BottomCenter
+                ) {
+                    val frac = (mins.toFloat() / maxMin).coerceIn(0f, 1f)
+                    val barHeight = if (hasActivity) (8 + 40 * frac).dp else 4.dp
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(barHeight)
+                            .clip(RoundedCornerShape(4.dp))
+                            .then(
+                                if (isToday && !hasActivity) {
+                                    Modifier.drawBehind {
+                                        drawRoundRect(
+                                            color = onBg.copy(alpha = 0.6f),
+                                            style = Stroke(
+                                                width = 1.5.dp.toPx(),
+                                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(5f, 4f), 0f)
+                                            ),
+                                            cornerRadius = CornerRadius(4.dp.toPx())
+                                        )
+                                    }
+                                } else {
+                                    Modifier.background(
+                                        when {
+                                            hasActivity -> onBg
+                                            else -> outline.copy(alpha = 0.35f)
+                                        }
                                     )
                                 }
-                            } else {
-                                Modifier.background(
-                                    when {
-                                        hasActivity -> onBg.copy(alpha = 0.14f)
-                                        isFuture -> outline.copy(alpha = 0.06f)
-                                        else -> outline.copy(alpha = 0.1f)
-                                    },
-                                    RoundedCornerShape(4.dp)
-                                )
-                            }
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (hasActivity) {
-                        Text("${mins}m", fontSize = 9.sp, color = onBg, fontWeight = FontWeight.Medium)
-                    } else if (isToday) {
-                        Text("NOW", fontSize = 7.sp, color = muted.copy(alpha = 0.6f), letterSpacing = 0.5.sp)
-                    }
+                            )
+                    )
                 }
+                Text(
+                    letter,
+                    fontSize = 9.sp,
+                    color = if (isToday) onBg else muted,
+                    fontWeight = if (isToday) FontWeight.Bold else FontWeight.Normal
+                )
             }
         }
     }
-    Spacer(Modifier.height(4.dp))
+    Spacer(Modifier.height(8.dp))
 }
 
 @Composable
 internal fun LogTodayRow(onOpenLog: () -> Unit, onBg: Color, muted: Color, outline: Color) {
+    // Prominent full-width CTA so logging never feels hidden.
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .padding(horizontal = 24.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .border(1.dp, onBg, RoundedCornerShape(16.dp))
             .clickable(onClick = onOpenLog)
-            .padding(horizontal = 24.dp, vertical = 16.dp),
+            .padding(horizontal = 16.dp, vertical = 16.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(16.dp)
+        horizontalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         Box(
-            modifier = Modifier.size(44.dp).border(1.dp, onBg.copy(alpha = 0.55f), CircleShape),
+            modifier = Modifier.size(40.dp).background(onBg, CircleShape),
             contentAlignment = Alignment.Center
         ) {
-            Icon(Icons.Filled.Add, contentDescription = null, tint = onBg, modifier = Modifier.size(20.dp))
+            Icon(Icons.Filled.Add, contentDescription = null, tint = MaterialTheme.colorScheme.background, modifier = Modifier.size(20.dp))
         }
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text("Log today's cardio", style = MaterialTheme.typography.bodyMedium, color = onBg)
+            Text("Log today's cardio", style = MaterialTheme.typography.bodyLarge, color = onBg, fontWeight = FontWeight.SemiBold)
             Text("run · walk · treadmill · rest", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp)
         }
-        Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, tint = muted.copy(alpha = 0.5f), modifier = Modifier.size(14.dp))
+        Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, tint = onBg, modifier = Modifier.size(16.dp))
     }
+    Spacer(Modifier.height(8.dp))
 }
 
 internal fun buildWeekDescription(entries: List<CardioEntry>, zone: ZoneId): String {

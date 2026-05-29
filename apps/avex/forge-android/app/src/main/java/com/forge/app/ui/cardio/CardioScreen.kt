@@ -164,10 +164,7 @@ private fun CardioListContent(
 
             item("log-action") {
                 LogTodayRow(onOpenLog = onOpenLog, onBg = onBg, muted = muted, outline = outline)
-                Column(Modifier.padding(horizontal = 24.dp)) {
-                    HorizontalDivider(color = outline.copy(alpha = 0.25f))
-                    Spacer(Modifier.height(16.dp))
-                }
+                Spacer(Modifier.height(12.dp))
             }
 
             if (state.filteredEntries.isNotEmpty()) {

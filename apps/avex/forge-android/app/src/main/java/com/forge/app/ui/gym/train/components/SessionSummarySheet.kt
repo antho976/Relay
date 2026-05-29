@@ -15,6 +15,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -40,7 +41,12 @@ fun SessionSummarySheet(
     summary: SessionSummary,
     onDismiss: (mood: Mood?, tags: List<String>, journal: String) -> Unit
 ) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    // Block swipe-to-dismiss: the only way out is the COMPLETE button, otherwise the
+    // sheet can be swiped away while the summary is still "open", leaving FINISH dead.
+    val sheetState = rememberModalBottomSheetState(
+        skipPartiallyExpanded = true,
+        confirmValueChange = { it != SheetValue.Hidden }
+    )
     var selectedMood by remember { mutableStateOf<Mood?>(null) }
     var selectedTags by remember { mutableStateOf<Set<String>>(emptySet()) }
     var journal by remember { mutableStateOf("") }

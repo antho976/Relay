@@ -15,11 +15,13 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -64,12 +66,27 @@ fun SetInputRow(
     onAdvance: () -> Unit = {},
     onSubmit: (weightText: String, reps: Int) -> Unit,
     onAddSet: (() -> Unit)? = null,
+    onSwitchUnit: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var weight by rememberSaveable(prefillWeight) { mutableStateOf(prefillWeight.orEmpty()) }
     var reps by rememberSaveable { mutableStateOf("") }
     val useKg = LocalForgeSettings.current.useKg
     val repsFocus = remember { FocusRequester() }
+    var showUnitDialog by remember { mutableStateOf(false) }
+
+    if (showUnitDialog) {
+        val target = if (useKg) "lb" else "kg"
+        AlertDialog(
+            onDismissRequest = { showUnitDialog = false },
+            title = { Text("Switch units?") },
+            text = { Text("Show all weights in $target?") },
+            confirmButton = {
+                TextButton(onClick = { onSwitchUnit(); showUnitDialog = false }) { Text("Switch to $target") }
+            },
+            dismissButton = { TextButton(onClick = { showUnitDialog = false }) { Text("Cancel") } }
+        )
+    }
 
     fun onWeightChange(new: String) {
         // Typing "x"/"X" after a number (e.g. "45x") commits the weight and jumps to the
@@ -125,9 +142,15 @@ fun SetInputRow(
                         )
                     }
 
-                    // Weight input
+                    // Weight input — tapping the "· LB/KG" label offers a unit switch.
                     Column(modifier = Modifier.weight(1f)) {
-                        Text("WEIGHT${if (useKg) " · KG" else " · LB"}", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
+                        Text(
+                            "WEIGHT${if (useKg) " · KG" else " · LB"}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = muted,
+                            fontSize = 9.sp,
+                            modifier = Modifier.clickable { showUnitDialog = true }
+                        )
                         Spacer(Modifier.height(2.dp))
                         UnderlineNumberField(
                             value = weight,
@@ -147,7 +170,7 @@ fun SetInputRow(
                             UnderlineNumberField(
                                 value = reps,
                                 onValueChange = { new -> if (new.all { it.isDigit() }) reps = new },
-                                placeholder = "—",
+                                placeholder = "0",
                                 keyboardType = KeyboardType.Number,
                                 imeAction = ImeAction.Done,
                                 focusRequester = repsFocus
@@ -160,16 +183,20 @@ fun SetInputRow(
                         Text("—", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.3f), fontSize = 11.sp)
                     }
 
-                    // Prior set hint ("try 45 × 10")
+                    // Prior set hint ("try 45 × 10") — tap to autofill the inputs.
                     Box(modifier = Modifier.width(DELTA_COL_W), contentAlignment = Alignment.BottomEnd) {
                         priorSetForActiveRow?.let { prior ->
                             val priorDisplay = prior.weightLb?.let { formatWeight(it, useKg) } ?: prior.weightText
                             Text(
                                 "try $priorDisplay × ${prior.reps}",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = muted.copy(alpha = 0.35f),
+                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
                                 fontSize = 9.sp,
-                                textAlign = TextAlign.End
+                                textAlign = TextAlign.End,
+                                modifier = Modifier.clickable {
+                                    weight = prior.weightLb?.let { formatWeight(it, useKg) } ?: prior.weightText
+                                    reps = prior.reps.toString()
+                                }
                             )
                         }
                     }
@@ -182,7 +209,7 @@ fun SetInputRow(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .border(1.dp, muted.copy(alpha = 0.35f), ctaShape)
+                    .border(1.dp, muted.copy(alpha = 0.6f), ctaShape)
                     .then(if (onAddSet != null) Modifier.clickable { onAddSet() } else Modifier)
                     .padding(vertical = 14.dp),
                 contentAlignment = Alignment.Center
@@ -190,19 +217,20 @@ fun SetInputRow(
                 Text(
                     "+ ADD A SET",
                     style = MaterialTheme.typography.labelMedium,
-                    color = muted.copy(alpha = 0.6f)
+                    color = muted
                 )
             }
 
             Spacer(Modifier.height(10.dp))
 
             // Full-width primary CTA — solid white. Logs the current input, or advances
-            // to the next exercise once the target sets are met.
+            // to the next exercise once the target sets are met. Disabled state stays
+            // clearly visible (not faded to "broken").
             val ctaColors = ButtonDefaults.buttonColors(
                 containerColor = Color.White,
                 contentColor = Color.Black,
-                disabledContainerColor = Color.White.copy(alpha = 0.25f),
-                disabledContentColor = Color.Black.copy(alpha = 0.5f)
+                disabledContainerColor = Color.White.copy(alpha = 0.6f),
+                disabledContentColor = Color.Black.copy(alpha = 0.7f)
             )
             if (targetsMet) {
                 Button(

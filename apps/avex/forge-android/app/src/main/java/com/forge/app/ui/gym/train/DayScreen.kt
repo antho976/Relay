@@ -98,16 +98,9 @@ fun DayScreen(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         floatingActionButton = {
             state.restTimer?.let { timer ->
-                Column(horizontalAlignment = Alignment.End) {
-                    state.nextUpExerciseName?.let { name ->
-                        Text("next: $name", style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
-                            maxLines = 1, modifier = Modifier.padding(bottom = 6.dp))
-                    }
-                    RestTimerBubble(state = timer,
-                        onOpenControls = { viewModel.onEvent(DayUiEvent.RestTimerOpen) },
-                        onLongClick = { viewModel.onEvent(DayUiEvent.RestTimerAddSeconds(30)) })
-                }
+                RestTimerBubble(state = timer,
+                    onOpenControls = { viewModel.onEvent(DayUiEvent.RestTimerOpen) },
+                    onLongClick = { viewModel.onEvent(DayUiEvent.RestTimerAddSeconds(30)) })
             }
         },
         containerColor = Color.Transparent

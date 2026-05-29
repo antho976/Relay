@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -14,6 +15,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.forge.app.data.db.types.EffortRating
 
@@ -28,17 +31,22 @@ fun DifficultyRater(
     onSelect: (EffortRating) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Row(
-        modifier = modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        EffortRating.entries.forEach { rating ->
-            RatingChip(
-                rating = rating,
-                isSelected = selected == rating,
-                onClick = { onSelect(rating) },
-                modifier = Modifier.weight(1f)
-            )
+    // 2×2 grid so labels like "Just Right" never overflow on narrow phones.
+    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        EffortRating.entries.chunked(2).forEach { pair ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                pair.forEach { rating ->
+                    RatingChip(
+                        rating = rating,
+                        isSelected = selected == rating,
+                        onClick = { onSelect(rating) },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
         }
     }
 }
@@ -73,7 +81,10 @@ private fun RatingChip(
         Text(
             text = rating.displayName,
             color = textColor,
-            style = MaterialTheme.typography.labelLarge
+            style = MaterialTheme.typography.labelMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center
         )
     }
 }

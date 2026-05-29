@@ -88,31 +88,31 @@ fun WarmupGate(
         ) {
             Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                 Text(
-                    "disable today",
+                    "No warmup today",
                     style = MaterialTheme.typography.labelSmall,
-                    color = muted.copy(alpha = 0.35f),
-                    fontSize = 9.sp,
+                    color = muted,
+                    fontSize = 11.sp,
                     modifier = Modifier.clickable(onClick = onDisableToday)
                 )
                 Text(
-                    "disable this week",
+                    "No warmup this week",
                     style = MaterialTheme.typography.labelSmall,
-                    color = muted.copy(alpha = 0.35f),
-                    fontSize = 9.sp,
+                    color = muted,
+                    fontSize = 11.sp,
                     modifier = Modifier.clickable(onClick = onDisableWeek)
                 )
             }
             Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(50))
-                    .border(0.5.dp, muted.copy(alpha = 0.4f), RoundedCornerShape(50))
+                    .border(1.dp, muted, RoundedCornerShape(50))
                     .clickable(onClick = onSkip)
                     .padding(horizontal = 14.dp, vertical = 6.dp)
             ) {
                 Text(
-                    "skip warmup",
+                    "Skip warmup",
                     style = MaterialTheme.typography.labelSmall,
-                    color = muted.copy(alpha = 0.7f),
+                    color = onBg,
                     fontSize = 11.sp
                 )
             }
@@ -140,10 +140,10 @@ private fun WarmupRow(
     ) {
         Box(
             modifier = Modifier
-                .size(22.dp)
+                .size(24.dp)
                 .clip(CircleShape)
                 .background(if (checked) onBg else Color.Transparent)
-                .border(1.dp, if (checked) onBg else outline.copy(alpha = 0.45f), CircleShape),
+                .border(1.5.dp, if (checked) onBg else muted, CircleShape),
             contentAlignment = Alignment.Center
         ) {
             if (checked) {

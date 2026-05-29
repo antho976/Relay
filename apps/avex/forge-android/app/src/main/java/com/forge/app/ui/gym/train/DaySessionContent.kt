@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -31,10 +32,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.domain.units.parseToLb
 import com.forge.app.ui.gym.train.components.ExerciseCard
+import com.forge.app.ui.gym.train.components.ExerciseChartSheet
 import com.forge.app.ui.gym.train.components.UpNextBubble
 import com.forge.app.ui.gym.train.components.WarmupGate
 import com.forge.app.ui.gym.train.state.DayUiEvent
@@ -54,6 +57,18 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
     }
 
     var restTimerSetterForId by remember { mutableStateOf<String?>(null) }
+    var chartForExerciseId by remember { mutableStateOf<String?>(null) }
+
+    chartForExerciseId?.let { exId ->
+        val exercise = state.exercises.firstOrNull { it.plan.id == exId }
+        if (exercise != null) {
+            ExerciseChartSheet(
+                exerciseName = exercise.effectiveName,
+                history = exercise.sessionHistory,
+                onDismiss = { chartForExerciseId = null }
+            )
+        }
+    }
 
     restTimerSetterForId?.let { exId ->
         val exercise = state.exercises.firstOrNull { it.plan.id == exId }
@@ -147,7 +162,9 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
                         onPinNote = { note -> onEvent(DayUiEvent.SetPinnedNote(shownId, note)) },
                         onToggleSetDifficultyTag = { setId, tag -> onEvent(DayUiEvent.ToggleSetDifficultyTag(setId, tag)) },
                         onSetRpe = { setId, rpe -> onEvent(DayUiEvent.SetRpe(setId, rpe)) },
-                        onAddSet = { onEvent(DayUiEvent.AddBonusSet(shownId)) }
+                        onAddSet = { onEvent(DayUiEvent.AddBonusSet(shownId)) },
+                        onSwitchUnit = { onEvent(DayUiEvent.SetUseKg(!useKg)) },
+                        onOpenChart = { chartForExerciseId = shownId }
                     )
                 }
 
@@ -180,43 +197,35 @@ internal fun SessionHero(state: DayUiState, onBack: () -> Unit, onFinish: () -> 
         SimpleDateFormat("EEE · MMM d", Locale.getDefault()).format(Date(ms)).uppercase()
     }
 
-    val estimatedEndText = remember(state.remainingSetsCount) {
-        val remaining = state.remainingSetsCount
-        if (remaining <= 0) null
-        else {
-            val endMs = System.currentTimeMillis() + remaining * 3L * 60_000
-            SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(endMs))
-        }
-    }
-
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            // Left: back + day name. weight(1f) so it yields space to the date pill + FINISH.
+            Row(
+                modifier = Modifier.weight(1f),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 IconButton(onClick = onBack, modifier = Modifier.padding(end = 2.dp)) {
                     Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = onBg)
                 }
-                Column {
-                    Text(state.displayName.uppercase(), style = MaterialTheme.typography.labelSmall, color = onBg)
-                    val subtitle = buildString {
-                        append(state.dayPlan.word)
-                        estimatedEndText?.let { append(" · DONE ~ $it") }
-                    }
-                    if (subtitle.isNotBlank()) {
-                        Text(subtitle, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
-                    }
-                }
+                Text(
+                    state.displayName.uppercase(),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = onBg,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Box(modifier = Modifier.border(1.dp, outline.copy(alpha = 0.4f), RoundedCornerShape(50)).padding(horizontal = 10.dp, vertical = 4.dp)) {
-                    Text(datePillText, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
-                }
-                Box(modifier = Modifier.background(Color.White, RoundedCornerShape(50)).clickable { onFinish() }.padding(horizontal = 16.dp, vertical = 7.dp)) {
-                    Text("FINISH", style = MaterialTheme.typography.labelSmall, color = Color.Black)
-                }
+            Spacer(Modifier.width(8.dp))
+            Box(modifier = Modifier.border(1.dp, outline.copy(alpha = 0.4f), RoundedCornerShape(50)).padding(horizontal = 10.dp, vertical = 4.dp)) {
+                Text(datePillText, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, maxLines = 1)
+            }
+            Spacer(Modifier.width(8.dp))
+            Box(modifier = Modifier.background(Color.White, RoundedCornerShape(50)).clickable { onFinish() }.padding(horizontal = 16.dp, vertical = 7.dp)) {
+                Text("FINISH", style = MaterialTheme.typography.labelSmall, color = Color.Black, maxLines = 1)
             }
         }
         HorizontalDivider(color = outline.copy(alpha = 0.2f))
