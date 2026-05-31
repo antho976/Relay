@@ -18,6 +18,12 @@ import com.forge.app.ui.gym.stats.state.HeatmapCell
 import com.forge.app.ui.gym.stats.state.PeriodComparison
 import com.forge.app.ui.gym.stats.state.PeriodStats
 import com.forge.app.ui.gym.stats.state.HistoryPoint
+import com.forge.app.ui.gym.stats.state.E1rmLift
+import com.forge.app.ui.gym.stats.state.RepMaxEntry
+import com.forge.app.ui.gym.stats.state.RepMaxSet
+import com.forge.app.ui.gym.stats.state.MuscleSetCount
+import com.forge.app.ui.gym.stats.state.RepRangeDist
+import com.forge.app.ui.gym.stats.state.RpeBucket
 import com.forge.app.ui.gym.stats.state.DayTypeBreakdown
 import com.forge.app.ui.gym.stats.state.InsightFlag
 import com.forge.app.ui.gym.stats.state.LifetimeMetrics
@@ -218,7 +224,18 @@ class StatsRepository @Inject constructor(
         /** Raw sessions this ISO week — used internally to build [weekActivity]. */
         val weekSessions: List<Session> = emptyList(),
         val weekActivity: List<WeekActivityRow> = emptyList(),
-        val thisWeekCardioMin: Int = 0
+        val thisWeekCardioMin: Int = 0,
+        val e1rmLifts: List<E1rmLift> = emptyList(),
+        val repMaxes: RepMaxSet? = null,
+        val weeklySetsByMuscle: List<MuscleSetCount> = emptyList(),
+        val repRangeDist: RepRangeDist? = null,
+        val rpeDistribution: List<RpeBucket> = emptyList(),
+        val avgRpe: Double? = null,
+        val bodyweightTrend: List<Double> = emptyList(),
+        val consistencyStreakWeeks: Int = 0,
+        val progressiveOverloadPct: Double? = null,
+        val avgRpePerSession: List<Double> = emptyList(),
+        val weeklySessionCounts: List<Int> = emptyList()
     )
 
     /**
@@ -276,6 +293,7 @@ class StatsRepository @Inject constructor(
             val dayTypeRows = sessionDao.perDayTypeStats()
             val dayTypeBreakdown = buildDayTypeBreakdown(dayTypeRows)
             val insights = buildInsights(allSets, volumeSets, dayTypeRows)
+            val e1lifts = buildE1rmLifts(allSets)
             GymStats(
                 totals = totals,
                 heatmap = buildHeatmap(heatmapRows.map { it.startedAt }),
@@ -286,6 +304,16 @@ class StatsRepository @Inject constructor(
                 exerciseHistory = buildExerciseHistory(allSets),
                 exerciseVolumeHistory = buildExerciseVolumeHistory(allSets),
                 compoundMaxes = buildCompoundMaxes(allSets),
+                e1rmLifts = e1lifts,
+                repMaxes = buildRepMaxes(allSets),
+                weeklySetsByMuscle = buildWeeklySetsByMuscle(volumeSets),
+                repRangeDist = buildRepRangeDist(allSets),
+                rpeDistribution = buildRpeDistribution(allSets),
+                avgRpe = allSets.mapNotNull { it.rpe }.takeIf { it.isNotEmpty() }?.average(),
+                consistencyStreakWeeks = computeConsistencyStreak(allSets),
+                progressiveOverloadPct = computeProgressiveOverload(e1lifts),
+                avgRpePerSession = buildAvgRpePerSession(allSets),
+                weeklySessionCounts = buildWeeklySessionCounts(allSets),
                 prSessionTimestamps = prTimes,
                 exerciseFrequency = buildExerciseFrequency(freqRows),
                 timeToPr = buildTimeToPr(prDates),
@@ -310,6 +338,9 @@ class StatsRepository @Inject constructor(
                 weekActivity = buildWeekActivity(stats.weekSessions, nonRest),
                 thisWeekCardioMin = nonRest.sumOf { it.durationMin }
             )
+        }.combine(bodyweightRepo.observeRecent(90)) { stats, bw ->
+            // observeRecent is newest-first; reverse to chronological for the trend chart.
+            stats.copy(bodyweightTrend = bw.reversed().map { it.weightLb })
         }
     }
 
@@ -482,6 +513,154 @@ class StatsRepository @Inject constructor(
                     }
                     .sortedBy { it.sessionDate }
             }
+    }
+
+    /** Epley estimated 1-rep max. */
+    private fun e1rm(weightLb: Double, reps: Int): Double = weightLb * (1.0 + reps / 30.0)
+
+    /** Per-lift estimated-1RM progression: best e1RM per session, with growth rate + stall flag. */
+    private fun buildE1rmLifts(
+        allSets: List<com.forge.app.data.db.projections.SetWithExerciseAndSession>
+    ): List<E1rmLift> {
+        return allSets
+            .filter { it.weightLb != null && it.weightLb > 0 }
+            .groupBy { it.exerciseId }
+            .mapNotNull { (id, sets) ->
+                val name = Program.exercise(id)?.name ?: return@mapNotNull null
+                val perSession = sets.groupBy { it.sessionStartedAt }.toSortedMap()
+                val points = perSession.map { (_, ss) -> ss.maxOf { e1rm(it.weightLb!!, it.reps) } }
+                if (points.isEmpty()) return@mapNotNull null
+                val dates = perSession.keys.toList()
+                val first = points.first()
+                val current = points.last()
+                val monthlyPct = if (points.size >= 2 && first > 0) {
+                    val months = ((dates.last() - dates.first()) / (30.44 * 24 * 60 * 60 * 1000)).coerceAtLeast(0.5)
+                    (current - first) / first / months * 100.0
+                } else null
+                val stalling = points.size >= 3 && run {
+                    val recent = points.takeLast(3)
+                    val hi = recent.max()
+                    hi > 0 && (hi - recent.min()) / hi < 0.01
+                }
+                E1rmLift(
+                    exerciseId = id, exerciseName = name, currentE1rm = current,
+                    history = points, monthlyPct = monthlyPct, stalling = stalling
+                )
+            }
+            .sortedByDescending { it.currentE1rm }
+            .take(6)
+    }
+
+    /** Average RPE per finished session, oldest → newest (only sessions that recorded RPE). */
+    private fun buildAvgRpePerSession(
+        allSets: List<com.forge.app.data.db.projections.SetWithExerciseAndSession>
+    ): List<Double> {
+        return allSets
+            .filter { it.rpe != null }
+            .groupBy { it.sessionStartedAt }
+            .toSortedMap()
+            .map { (_, ss) -> ss.mapNotNull { it.rpe }.average() }
+    }
+
+    /** Session count per ISO week for the last 12 weeks, oldest → newest. */
+    private fun buildWeeklySessionCounts(
+        allSets: List<com.forge.app.data.db.projections.SetWithExerciseAndSession>
+    ): List<Int> {
+        val zone = ZoneId.systemDefault()
+        val byWeek = allSets.map { it.sessionStartedAt }.distinct()
+            .groupingBy {
+                val d = Instant.ofEpochMilli(it).atZone(zone).toLocalDate()
+                d.minusDays(d.dayOfWeek.value.toLong() - 1)
+            }
+            .eachCount()
+        val now = LocalDate.now(zone)
+        val thisWeek = now.minusDays(now.dayOfWeek.value.toLong() - 1)
+        return (11 downTo 0).map { i -> byWeek[thisWeek.minusWeeks(i.toLong())] ?: 0 }
+    }
+
+    /** Best weight at each rep count for the single most-trained lift. */
+    private fun buildRepMaxes(
+        allSets: List<com.forge.app.data.db.projections.SetWithExerciseAndSession>
+    ): RepMaxSet? {
+        val byExercise = allSets.filter { it.weightLb != null && it.weightLb > 0 }.groupBy { it.exerciseId }
+        val top = byExercise.maxByOrNull { it.value.size } ?: return null
+        val name = Program.exercise(top.key)?.name ?: return null
+        val entries = top.value
+            .groupBy { it.reps }
+            .map { (reps, ss) -> RepMaxEntry(reps = reps, weightLb = ss.maxOf { it.weightLb!! }) }
+            .sortedBy { it.reps }
+        return if (entries.isEmpty()) null else RepMaxSet(exerciseName = name, entries = entries)
+    }
+
+    /** Consecutive recent weeks (incl. an in-progress current week) hitting the session target. */
+    private fun computeConsistencyStreak(
+        allSets: List<com.forge.app.data.db.projections.SetWithExerciseAndSession>
+    ): Int {
+        if (allSets.isEmpty()) return 0
+        val zone = ZoneId.systemDefault()
+        val sessionsPerWeek = allSets.map { it.sessionStartedAt }.distinct()
+            .groupingBy {
+                val d = Instant.ofEpochMilli(it).atZone(zone).toLocalDate()
+                d.minusDays(d.dayOfWeek.value.toLong() - 1) // ISO week start (Monday)
+            }
+            .eachCount()
+        val now = LocalDate.now(zone)
+        val thisWeek = now.minusDays(now.dayOfWeek.value.toLong() - 1)
+        var streak = 0
+        for (i in 0 until 52) {
+            val w = thisWeek.minusWeeks(i.toLong())
+            val count = sessionsPerWeek[w] ?: 0
+            when {
+                count >= CONSISTENCY_TARGET -> streak++
+                i == 0 -> {} // current week may still be in progress — don't break the streak
+                else -> return streak
+            }
+        }
+        return streak
+    }
+
+    /** Average estimated-1RM growth per month across lifts, as a percent. */
+    private fun computeProgressiveOverload(lifts: List<E1rmLift>): Double? =
+        lifts.mapNotNull { it.monthlyPct }.takeIf { it.isNotEmpty() }?.average()
+
+    /** Working sets per muscle group in the current rolling week (#volume landmarks). */
+    private fun buildWeeklySetsByMuscle(
+        sets: List<com.forge.app.data.db.projections.SetWithExerciseId>
+    ): List<MuscleSetCount> {
+        val byMuscle = mutableMapOf<com.forge.app.program.MuscleGroup, Int>()
+        sets.forEach { s ->
+            val plan = Program.exercise(s.exerciseId) ?: return@forEach
+            byMuscle.merge(plan.muscle, 1, Int::plus)
+        }
+        return byMuscle.map { (m, n) -> MuscleSetCount(muscle = m, sets = n) }
+            .sortedByDescending { it.sets }
+    }
+
+    /** Split all logged sets into strength (1–5) / hypertrophy (6–12) / endurance (13+). */
+    private fun buildRepRangeDist(
+        allSets: List<com.forge.app.data.db.projections.SetWithExerciseAndSession>
+    ): RepRangeDist? {
+        if (allSets.isEmpty()) return null
+        var s = 0; var h = 0; var e = 0
+        allSets.forEach {
+            when {
+                it.reps <= 5 -> s++
+                it.reps <= 12 -> h++
+                else -> e++
+            }
+        }
+        return RepRangeDist(strength = s, hypertrophy = h, endurance = e)
+    }
+
+    /** Count of sets logged at each RPE value (only sets where RPE was recorded). */
+    private fun buildRpeDistribution(
+        allSets: List<com.forge.app.data.db.projections.SetWithExerciseAndSession>
+    ): List<RpeBucket> {
+        return allSets.mapNotNull { it.rpe }
+            .groupingBy { it }
+            .eachCount()
+            .map { (rpe, count) -> RpeBucket(rpe = rpe, count = count) }
+            .sortedBy { it.rpe }
     }
 
     private fun buildExerciseFrequency(
@@ -774,6 +953,8 @@ class StatsRepository @Inject constructor(
     }
 
     companion object {
+        /** Weekly session count that counts toward the consistency streak. */
+        private const val CONSISTENCY_TARGET = 3
         private const val WEEK_MS: Long = 7L * 24 * 60 * 60 * 1000
         private const val HEATMAP_DAYS = 49
         private const val HEATMAP_WINDOW_MS: Long = HEATMAP_DAYS.toLong() * 24 * 60 * 60 * 1000

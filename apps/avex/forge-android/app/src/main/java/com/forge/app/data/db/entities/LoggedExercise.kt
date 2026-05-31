@@ -30,7 +30,10 @@ import com.forge.app.data.db.types.EffortRating
             onDelete = ForeignKey.CASCADE
         )
     ],
-    indices = [Index("session_id")]
+    // exercise_id is filtered by every day-screen build (history, last-session,
+    // session aggregates, all-time PB). Without this index those joins full-scan
+    // logged_exercise on every set logged — a cliff as history grows.
+    indices = [Index("session_id"), Index("exercise_id")]
 )
 data class LoggedExercise(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,

@@ -24,8 +24,9 @@ internal fun DayViewModel.handleSessionEvent(event: DayUiEvent) {
             _state.update { it.copy(undoableSetId = null) }
             viewModelScope.launch {
                 val set = findSet(setId) ?: return@launch
+                val exId = findExerciseIdForSet(setId)
                 workoutRepo.deleteSet(set)
-                refreshExercises()
+                if (exId != null) refreshExercise(exId) else refreshExercises()
             }
         }
         is DayUiEvent.SetSessionType -> {

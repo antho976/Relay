@@ -111,6 +111,15 @@ fun ExerciseChartSheet(
                 letterSpacing = 1.sp
             )
 
+            if (history.isEmpty()) {
+                Text(
+                    "No past sessions yet — finish a workout and it'll show up here.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = muted,
+                    fontStyle = FontStyle.Italic
+                )
+            }
+
             history.take(5).forEach { pt ->
                 val dateStr = Instant.ofEpochMilli(pt.sessionStartedAt).atZone(zone).toLocalDate().format(dateFmt)
                 Row(

@@ -17,7 +17,8 @@ data class SetWithExerciseAndSession(
     @ColumnInfo(name = "weight_lb") val weightLb: Double?,
     @ColumnInfo(name = "reps") val reps: Int,
     @ColumnInfo(name = "exercise_id") val exerciseId: String,
-    @ColumnInfo(name = "started_at") val sessionStartedAt: Long
+    @ColumnInfo(name = "started_at") val sessionStartedAt: Long,
+    @ColumnInfo(name = "rpe") val rpe: Double? = null
 )
 
 /**

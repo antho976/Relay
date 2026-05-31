@@ -1,5 +1,6 @@
 package com.forge.app.ui.gym.train.state
 
+import androidx.compose.runtime.Immutable
 import com.forge.app.data.db.entities.LoggedSet
 import com.forge.app.data.db.types.EffortRating
 import com.forge.app.domain.timer.RestTimerState
@@ -100,6 +101,7 @@ data class DayUiState(
             .sumOf { maxOf(0, it.targetSets - it.loggedSets.size) }
 }
 
+@Immutable
 data class ExerciseUiState(
     val plan: ExercisePlan,
     val loggedExerciseId: Long? = null,

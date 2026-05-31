@@ -15,6 +15,8 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.key
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -50,6 +52,7 @@ fun ExerciseCard(
     onOpenSwapPicker: () -> Unit,
     onOpenGoalSetter: () -> Unit = {},
     onOpenRestTimerSetter: () -> Unit = {},
+    onSkipRest: () -> Unit = {},
     onSetExerciseUnit: (String?) -> Unit = {},
     onPinNote: (String) -> Unit = {},
     onToggleSetDifficultyTag: (setId: Long, currentTag: String?) -> Unit = { _, _ -> },
@@ -130,6 +133,8 @@ fun ExerciseCard(
                                 val rpeStr = if (rpe % 1.0 == 0.0) "${rpe.toInt()}" else "%.1f".format(rpe)
                                 append(" @ RPE $rpeStr")
                             }
+                        } else {
+                            append(" · first time — no history yet")
                         }
                     }
                 }
@@ -160,15 +165,25 @@ fun ExerciseCard(
                     )
                 }
 
+                // Per-set volume is derived three ways below; memoize so the rest-timer's
+                // per-second ticks (which recompose this card) don't re-walk the set list.
+                val currentVolumes = remember(state.loggedSets) {
+                    state.loggedSets.map { (it.weightLb ?: 0.0) * it.reps }
+                }
+                val currentVolumeLb = remember(currentVolumes) { currentVolumes.sum() }
+                val priorVolumes = remember(state.priorSets) {
+                    state.priorSets.map { (it.weightLb ?: 0.0) * it.reps }
+                }
+
                 // Live current-session readout + per-set volume comparison (current vs last).
                 Spacer(Modifier.height(12.dp))
                 LastSessionStrip(
                     sessionStartedAtMs = sessionStartedAtMs,
-                    currentVolumeLb = state.loggedSets.sumOf { (it.weightLb ?: 0.0) * it.reps },
+                    currentVolumeLb = currentVolumeLb,
                     currentSets = state.loggedSets.size,
                     targetSets = state.targetSets,
-                    currentVolumes = state.loggedSets.map { (it.weightLb ?: 0.0) * it.reps },
-                    priorVolumes = state.priorSets.map { (it.weightLb ?: 0.0) * it.reps },
+                    currentVolumes = currentVolumes,
+                    priorVolumes = priorVolumes,
                     onClick = onOpenChart
                 )
 
@@ -176,8 +191,7 @@ fun ExerciseCard(
 
                 // Session stats chip (sets progress + volume)
                 if (state.loggedSets.isNotEmpty()) {
-                    val totalVolumeLb = state.loggedSets.sumOf { (it.weightLb ?: 0.0) * it.reps }
-                    val volumeText = if (totalVolumeLb > 0) "  ·  ${totalVolumeLb.toInt()} LB" else ""
+                    val volumeText = if (currentVolumeLb > 0) "  ·  ${currentVolumeLb.toInt()} LB" else ""
                     Text(
                         "${state.loggedSets.size} / ${state.targetSets} SETS$volumeText",
                         style = MaterialTheme.typography.labelSmall,
@@ -203,17 +217,19 @@ fun ExerciseCard(
 
                 // Logged set rows, with the actual rest taken shown between consecutive sets
                 state.loggedSets.forEachIndexed { i, set ->
-                    SetRow(
-                        set = set,
-                        setIndex = i + 1,
-                        isPr = set.id in state.prSetIds,
-                        priorSet = state.priorSets.getOrNull(i),
-                        onDelete = { onDeleteSet(set.id) },
-                        onEdit = { w, r -> onEditSet(set.id, w, r) },
-                        onLongPress = { onLogSameAsLast(set.id) },
-                        onToggleDifficultyTag = { tag -> onToggleSetDifficultyTag(set.id, tag) },
-                        onSetRpe = { rpe -> onSetRpe(set.id, rpe) }
-                    )
+                    key(set.id) {
+                        SetRow(
+                            set = set,
+                            setIndex = i + 1,
+                            isPr = set.id in state.prSetIds,
+                            priorSet = state.priorSets.getOrNull(i),
+                            onDelete = { onDeleteSet(set.id) },
+                            onEdit = { w, r -> onEditSet(set.id, w, r) },
+                            onLongPress = { onLogSameAsLast(set.id) },
+                            onToggleDifficultyTag = { tag -> onToggleSetDifficultyTag(set.id, tag) },
+                            onSetRpe = { rpe -> onSetRpe(set.id, rpe) }
+                        )
+                    }
                     val next = state.loggedSets.getOrNull(i + 1)
                     if (next != null) {
                         val restSec = ((next.completedAt - set.completedAt) / 1000L).toInt()
@@ -225,7 +241,7 @@ fun ExerciseCard(
                 // Inline rest timer row
                 restTimerState?.let { timer ->
                     Spacer(Modifier.height(8.dp))
-                    InlineRestTimer(timer = timer, onTap = onOpenRestTimerSetter)
+                    InlineRestTimer(timer = timer, onTap = onOpenRestTimerSetter, onSkip = onSkipRest)
                     Spacer(Modifier.height(8.dp))
                 }
 

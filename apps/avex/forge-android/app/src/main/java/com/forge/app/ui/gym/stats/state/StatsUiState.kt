@@ -64,8 +64,66 @@ data class StatsUiState(
     /** Mon–Sun rows for "What I did this week" editorial section. Always 7 entries. */
     val weekActivity: List<WeekActivityRow> = emptyList(),
     /** Cardio minutes this ISO week (excludes rest-type entries). */
-    val thisWeekCardioMin: Int = 0
+    val thisWeekCardioMin: Int = 0,
+    /** Estimated 1RM per main lift — current value + per-session history (Phase 1b). */
+    val e1rmLifts: List<E1rmLift> = emptyList(),
+    /** Best weight at each rep count for the most-trained lift (Phase 1b). */
+    val repMaxes: RepMaxSet? = null,
+    /** Working sets per muscle this ISO week vs the productive range (Phase 2). */
+    val weeklySetsByMuscle: List<MuscleSetCount> = emptyList(),
+    /** Distribution of logged sets across rep ranges (Phase 2). */
+    val repRangeDist: RepRangeDist? = null,
+    /** Count of sets at each RPE value + overall average (Phase 3). */
+    val rpeDistribution: List<RpeBucket> = emptyList(),
+    val avgRpe: Double? = null,
+    /** Bodyweight (lb) over time, oldest → newest (Phase 4). */
+    val bodyweightTrend: List<Double> = emptyList(),
+    /** Consecutive recent weeks meeting the session target (Snapshot). */
+    val consistencyStreakWeeks: Int = 0,
+    /** Avg estimated-1RM growth per month across lifts, as a percent (Snapshot). */
+    val progressiveOverloadPct: Double? = null,
+    /** Average RPE per session, oldest → newest (Trends RPE line). */
+    val avgRpePerSession: List<Double> = emptyList(),
+    /** Session count per ISO week for the last ~12 weeks, oldest → newest (Trends consistency). */
+    val weeklySessionCounts: List<Int> = emptyList()
 )
+
+/** Working-set count for one muscle group in the current week (Phase 2). */
+data class MuscleSetCount(val muscle: MuscleGroup, val sets: Int) {
+    /** Rudimentary landmark guidance: under ~10 = low, over ~20 = high. */
+    val low: Int get() = 10
+    val high: Int get() = 20
+}
+
+/** How logged sets split across rep ranges (Phase 2). */
+data class RepRangeDist(val strength: Int, val hypertrophy: Int, val endurance: Int) {
+    val total: Int get() = strength + hypertrophy + endurance
+}
+
+/** Number of sets logged at a given RPE value (Phase 3). */
+data class RpeBucket(val rpe: Double, val count: Int)
+
+/** Estimated 1RM progression for one lift (Epley: w × (1 + reps/30)). */
+data class E1rmLift(
+    val exerciseId: String,
+    val exerciseName: String,
+    val currentE1rm: Double,
+    /** Best e1RM per session, oldest → newest. */
+    val history: List<Double>,
+    /** Average growth per month, as a percent. Null if <2 sessions. */
+    val monthlyPct: Double? = null,
+    /** True when the last few sessions have been flat (no meaningful progress). */
+    val stalling: Boolean = false
+) {
+    /** Change from first recorded e1RM to current. */
+    val delta: Double get() = if (history.size >= 2) currentE1rm - history.first() else 0.0
+}
+
+/** Best weight achieved at a given rep count. */
+data class RepMaxEntry(val reps: Int, val weightLb: Double)
+
+/** Rep-max table for a single exercise. */
+data class RepMaxSet(val exerciseName: String, val entries: List<RepMaxEntry>)
 
 data class Totals(
     val workouts: Int = 0,

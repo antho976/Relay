@@ -1,5 +1,7 @@
 package com.forge.app.ui.gym.train.components
 
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.animateIntAsState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -140,6 +142,8 @@ internal fun LastSessionStrip(
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val outline = MaterialTheme.colorScheme.outline
+    // Count the volume up to its new total when a set lands, instead of snapping.
+    val animatedVolume by animateIntAsState(targetValue = currentVolumeLb.toInt(), label = "volume")
 
     // Tick once a second so the elapsed time advances live.
     var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
@@ -164,17 +168,19 @@ internal fun LastSessionStrip(
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(elapsedStr, style = MaterialTheme.typography.labelMedium, color = onBg, fontSize = 11.sp)
             Text("·", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.5f))
-            Text("${currentVolumeLb.toInt()} lb", style = MaterialTheme.typography.labelMedium, color = onBg, fontSize = 11.sp)
+            Text("$animatedVolume lb", style = MaterialTheme.typography.labelMedium, color = onBg, fontSize = 11.sp)
             Text("·", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.5f))
             Text("$currentSets/$targetSets", style = MaterialTheme.typography.labelMedium, color = muted, fontSize = 11.sp)
         }
         Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
-            if (currentVolumes.isNotEmpty() || priorVolumes.size >= 2) {
+            // Only show the comparison line once you've logged a set this session —
+            // a lone prior line over an empty session just looks like noise.
+            if (currentVolumes.isNotEmpty()) {
                 DualSparkline(
                     current = currentVolumes,
                     previous = priorVolumes,
                     currentColor = onBg,
-                    previousColor = muted.copy(alpha = 0.5f),
+                    previousColor = muted.copy(alpha = 0.75f),
                     modifier = Modifier.width(60.dp).height(16.dp)
                 )
             }
@@ -202,7 +208,7 @@ internal fun DualSparkline(
 
     Canvas(modifier = modifier) {
         fun yFor(v: Double) = size.height - ((v - minV) / range * size.height).toFloat()
-        fun drawSeries(values: List<Double>, color: Color, stroke: Float) {
+        fun drawSeries(values: List<Double>, color: Color, stroke: Float, dashed: Boolean) {
             if (values.isEmpty()) return
             if (values.size == 1) {
                 drawCircle(color, radius = stroke + 1f, center = Offset(size.width / 2f, yFor(values[0])))
@@ -215,10 +221,12 @@ internal fun DualSparkline(
                 val y = yFor(v)
                 if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
             }
-            drawPath(path, color = color, style = Stroke(width = stroke))
+            val effect = if (dashed) androidx.compose.ui.graphics.PathEffect.dashPathEffect(floatArrayOf(6f, 5f)) else null
+            drawPath(path, color = color, style = Stroke(width = stroke, pathEffect = effect))
         }
-        drawSeries(previous, previousColor, 2f)
-        drawSeries(current, currentColor, 3f)
+        // Last workout = dashed reference; current session = solid.
+        drawSeries(previous, previousColor, 2f, dashed = true)
+        drawSeries(current, currentColor, 3f, dashed = false)
     }
 }
 
@@ -259,7 +267,7 @@ internal fun RestBetweenSets(seconds: Int) {
 }
 
 @Composable
-internal fun InlineRestTimer(timer: RestTimerState, onTap: () -> Unit) {
+internal fun InlineRestTimer(timer: RestTimerState, onTap: () -> Unit, onSkip: (() -> Unit)? = null) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val readyColor = Color(0xFF5CB85C)
     val isReady = timer.isFinished
@@ -293,6 +301,17 @@ internal fun InlineRestTimer(timer: RestTimerState, onTap: () -> Unit) {
             Text("/ ${timer.totalSeconds.toTimerLabel()}", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.45f), fontSize = 9.sp)
         }
         HorizontalDivider(modifier = Modifier.weight(1f), color = muted.copy(alpha = 0.25f))
+        // One-tap skip — the common "I'm ready, move on" action without opening a dialog.
+        if (onSkip != null) {
+            Text(
+                if (isReady) "done" else "skip",
+                style = MaterialTheme.typography.labelSmall,
+                color = (if (isReady) readyColor else muted).copy(alpha = 0.8f),
+                fontSize = 9.sp,
+                letterSpacing = 1.sp,
+                modifier = Modifier.clickable { onSkip() }.padding(start = 2.dp)
+            )
+        }
     }
 }
 
@@ -367,7 +386,7 @@ internal fun UpNextBubble(
     val outline = MaterialTheme.colorScheme.outline
     var expanded by remember { mutableStateOf(false) }
 
-    Column(modifier = Modifier.fillMaxWidth()) {
+    Column(modifier = Modifier.fillMaxWidth().animateContentSize()) {
         // Collapsed header — always visible, toggles the list.
         Row(
             modifier = Modifier

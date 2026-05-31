@@ -14,6 +14,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -48,6 +49,10 @@ import com.forge.app.ui.theme.LocalForgeSettings
 private val SET_COL_W = 36.dp
 private val REPS_COL_W = 48.dp
 private val DELTA_COL_W = 72.dp
+
+// Hoisted so it isn't recompiled on every weight keystroke. Matches a full "WxR"
+// entry (e.g. a pasted "45x10") so it splits into both fields at once.
+private val WEIGHT_REPS_REGEX = Regex("""^([0-9]*\.?[0-9]+)\s*[xX]\s*([0-9]+)$""")
 
 /**
  * Input row for the next set. When [nextSetNumber] is provided the layout
@@ -100,9 +105,19 @@ fun SetInputRow(
             }
         }
         // A complete "WxR" (e.g. pasted) splits into both fields at once.
-        val match = Regex("""^([0-9]*\.?[0-9]+)\s*[xX]\s*([0-9]+)$""").matchEntire(new.trim())
+        val match = WEIGHT_REPS_REGEX.matchEntire(new.trim())
         if (match != null) { weight = match.groupValues[1]; reps = match.groupValues[2] }
         else weight = new
+    }
+
+    // Single log path shared by the LOG SET button and the keyboard's "Done" key, so
+    // you can log a set without reaching for the button. Refocuses reps afterward to
+    // keep the keyboard up and ready for the next set.
+    fun submitSet() {
+        val r = reps.toIntOrNull() ?: return
+        onSubmit(weight.trim(), r)
+        reps = ""
+        repsFocus.requestFocus()
     }
 
     val canSubmit = remember(weight, reps) {
@@ -173,7 +188,8 @@ fun SetInputRow(
                                 placeholder = "0",
                                 keyboardType = KeyboardType.Number,
                                 imeAction = ImeAction.Done,
-                                focusRequester = repsFocus
+                                focusRequester = repsFocus,
+                                keyboardActions = KeyboardActions(onDone = { submitSet() })
                             )
                         }
                     }
@@ -244,11 +260,7 @@ fun SetInputRow(
                 }
             } else {
                 Button(
-                    onClick = {
-                        val r = reps.toIntOrNull() ?: return@Button
-                        onSubmit(weight.trim(), r)
-                        reps = ""
-                    },
+                    onClick = { submitSet() },
                     enabled = canSubmit,
                     modifier = Modifier.fillMaxWidth(),
                     shape = ctaShape,
@@ -322,7 +334,8 @@ private fun UnderlineNumberField(
     imeAction: ImeAction,
     modifier: Modifier = Modifier,
     supportingText: String? = null,
-    focusRequester: FocusRequester? = null
+    focusRequester: FocusRequester? = null,
+    keyboardActions: KeyboardActions = KeyboardActions.Default
 ) {
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
@@ -337,6 +350,7 @@ private fun UnderlineNumberField(
             singleLine = true,
             cursorBrush = SolidColor(accent),
             keyboardOptions = KeyboardOptions(keyboardType = keyboardType, imeAction = imeAction),
+            keyboardActions = keyboardActions,
             modifier = focusRequester?.let { Modifier.focusRequester(it) } ?: Modifier,
             decorationBox = { inner ->
                 Box {

@@ -70,7 +70,7 @@ interface LoggedSetDao {
 
     /** Every set across every finished session, joined to exercise + session date. Used by strength curves. */
     @Query("""
-        SELECT ls.weight_lb, ls.reps, le.exercise_id, s.started_at
+        SELECT ls.weight_lb, ls.reps, ls.rpe, le.exercise_id, s.started_at
         FROM logged_set ls
         INNER JOIN logged_exercise le ON ls.logged_exercise_id = le.id
         INNER JOIN session s ON le.session_id = s.id

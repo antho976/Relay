@@ -39,12 +39,9 @@ object WeightParser {
             return lbMatch.groupValues[1].toDoubleOrNull()
         }
 
-        // Bare number — interpret per unit hint
-        val bareNumber = text.toDoubleOrNull() ?: return null
-        return when (unit) {
-            ExerciseUnit.PLATES -> bareNumber * PLATE_LB
-            ExerciseUnit.DUMBBELL -> bareNumber
-            ExerciseUnit.BODYWEIGHT -> null
-        }
+        // Bare number — always literal pounds. The weight field is labelled "· LB", so
+        // typing "12" means 12 lb regardless of the exercise's default unit. Plate counts
+        // must be entered explicitly as "N plates" (handled above).
+        return text.toDoubleOrNull()
     }
 }

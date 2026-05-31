@@ -50,7 +50,18 @@ class StatsViewModel @Inject constructor(
             lifetimeMetrics = snapshot.lifetimeMetrics,
             moodOverTime = snapshot.moodOverTime,
             weekActivity = snapshot.weekActivity,
-            thisWeekCardioMin = snapshot.thisWeekCardioMin
+            thisWeekCardioMin = snapshot.thisWeekCardioMin,
+            e1rmLifts = snapshot.e1rmLifts,
+            repMaxes = snapshot.repMaxes,
+            weeklySetsByMuscle = snapshot.weeklySetsByMuscle,
+            repRangeDist = snapshot.repRangeDist,
+            rpeDistribution = snapshot.rpeDistribution,
+            avgRpe = snapshot.avgRpe,
+            bodyweightTrend = snapshot.bodyweightTrend,
+            consistencyStreakWeeks = snapshot.consistencyStreakWeeks,
+            progressiveOverloadPct = snapshot.progressiveOverloadPct,
+            avgRpePerSession = snapshot.avgRpePerSession,
+            weeklySessionCounts = snapshot.weeklySessionCounts
         )
     }.stateIn(
         scope = viewModelScope,

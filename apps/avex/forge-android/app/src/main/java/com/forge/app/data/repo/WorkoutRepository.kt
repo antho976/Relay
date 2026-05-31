@@ -106,6 +106,14 @@ class WorkoutRepository @Inject constructor(
     fun observeExercisesForSession(sessionId: Long): Flow<List<LoggedExercise>> =
         loggedExerciseDao.observeForSession(sessionId)
 
+    /**
+     * One-shot read of a session's logged exercises. Preferred over collecting
+     * [observeExercisesForSession] once — the Flow variant spins up an invalidation
+     * observer just to grab a single value.
+     */
+    suspend fun loggedExercisesForSession(sessionId: Long): List<LoggedExercise> =
+        loggedExerciseDao.forSession(sessionId)
+
     suspend fun addExerciseToSession(
         sessionId: Long,
         exerciseId: String,

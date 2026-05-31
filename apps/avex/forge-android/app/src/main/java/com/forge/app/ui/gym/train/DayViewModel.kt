@@ -146,7 +146,7 @@ class DayViewModel @Inject constructor(
 
     internal suspend fun refreshExercises() {
         val sessionId = _state.value.sessionId ?: return
-        val loggedExercises = workoutRepo.observeExercisesForSession(sessionId).firstOrNull().orEmpty()
+        val loggedExercises = workoutRepo.loggedExercisesForSession(sessionId)
         val byExerciseId = loggedExercises.associateBy { it.exerciseId }
         val previousExpandedById = _state.value.exercises.associate { it.plan.id to it.isExpanded }
         val previousBonusById = _state.value.exercises.associate { it.plan.id to it.bonusSets }
@@ -163,6 +163,40 @@ class DayViewModel @Inject constructor(
         val annotated = annotateNextExerciseDeltas(exercises)
         _state.update { it.copy(isLoading = false, exercises = annotated) }
     }
+
+    /**
+     * Rebuild only the one exercise the user just touched, instead of re-deriving every
+     * exercise in the day. Logging a set on a 6-exercise day was ~40 sequential DB
+     * round-trips (≈7 per exercise) re-deriving unchanged data; this makes it ≈7.
+     * Falls back to a full [refreshExercises] when the exercise isn't in the list yet.
+     */
+    internal suspend fun refreshExercise(exerciseId: String) {
+        val sessionId = _state.value.sessionId ?: return
+        val current = _state.value.exercises
+        val idx = current.indexOfFirst { it.plan.id == exerciseId }
+        if (idx < 0) { refreshExercises(); return }
+        val existing = current[idx]
+        val logged = workoutRepo.loggedExercisesForSession(sessionId)
+            .firstOrNull { it.exerciseId == exerciseId }
+        val rebuilt = buildExerciseUi(
+            plan = existing.plan,
+            logged = logged,
+            expandedDefault = idx == 0,
+            expandedOverride = existing.isExpanded,
+            bonusSets = existing.bonusSets
+        )
+        val newList = current.toMutableList().also { it[idx] = rebuilt }
+        _state.update { it.copy(isLoading = false, exercises = annotateNextExerciseDeltas(newList)) }
+    }
+
+    /** Resolve the exercise that owns [setId] and rebuild just it (per-set edits). */
+    internal suspend fun refreshExerciseForSet(setId: Long) {
+        val exId = findExerciseIdForSet(setId)
+        if (exId != null) refreshExercise(exId) else refreshExercises()
+    }
+
+    internal fun findExerciseIdForSet(setId: Long): String? =
+        _state.value.exercises.firstOrNull { ex -> ex.loggedSets.any { it.id == setId } }?.plan?.id
 
     internal suspend fun ensureLoggedExercise(exerciseId: String): Long? {
         val sessionId = _state.value.sessionId ?: return null

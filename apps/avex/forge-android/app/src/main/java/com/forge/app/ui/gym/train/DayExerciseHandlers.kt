@@ -24,8 +24,9 @@ internal fun DayViewModel.handleExerciseEvent(event: DayUiEvent) {
         }
         is DayUiEvent.DeleteSet -> viewModelScope.launch {
             val set = findSet(event.setId) ?: return@launch
+            val exId = findExerciseIdForSet(event.setId)
             workoutRepo.deleteSet(set)
-            refreshExercises()
+            if (exId != null) refreshExercise(exId) else refreshExercises()
         }
         is DayUiEvent.EditSet -> viewModelScope.launch {
             if (event.reps <= 0) return@launch
@@ -35,17 +36,17 @@ internal fun DayViewModel.handleExerciseEvent(event: DayUiEvent) {
             val set = exerciseUi.loggedSets.firstOrNull { it.id == event.setId } ?: return@launch
             val lb = WeightParser.parse(event.weightText, plan.unit)
             workoutRepo.updateSet(set.copy(weightText = event.weightText, weightLb = lb, reps = event.reps))
-            refreshExercises()
+            refreshExercise(exerciseUi.plan.id)
         }
         is DayUiEvent.RateExercise -> viewModelScope.launch {
             val leId = ensureLoggedExercise(event.exerciseId) ?: return@launch
             workoutRepo.setRating(leId, event.rating)
-            refreshExercises()
+            refreshExercise(event.exerciseId)
         }
         is DayUiEvent.UpdateNote -> viewModelScope.launch {
             val leId = ensureLoggedExercise(event.exerciseId) ?: return@launch
             workoutRepo.setNote(leId, event.note.ifBlank { null })
-            refreshExercises()
+            refreshExercise(event.exerciseId)
         }
         is DayUiEvent.ToggleSkipped -> viewModelScope.launch {
             val currentUi = _state.value.exercises
@@ -53,7 +54,7 @@ internal fun DayViewModel.handleExerciseEvent(event: DayUiEvent) {
             val leId = ensureLoggedExercise(event.exerciseId) ?: return@launch
             val newSkipped = !currentUi.skipped
             workoutRepo.setSkipped(leId, newSkipped)
-            refreshExercises()
+            refreshExercise(event.exerciseId)
             if (newSkipped) {
                 val nextEx = _state.value.exercises
                     .dropWhile { it.plan.id != event.exerciseId }.drop(1)
@@ -69,12 +70,12 @@ internal fun DayViewModel.handleExerciseEvent(event: DayUiEvent) {
         is DayUiEvent.SetGoal -> viewModelScope.launch {
             goalRepo.setGoal(event.exerciseId, event.targetWeightLb)
             _state.update { it.copy(goalSetterForExerciseId = null) }
-            refreshExercises()
+            refreshExercise(event.exerciseId)
         }
         is DayUiEvent.ClearGoal -> viewModelScope.launch {
             goalRepo.clearGoal(event.exerciseId)
             _state.update { it.copy(goalSetterForExerciseId = null) }
-            refreshExercises()
+            refreshExercise(event.exerciseId)
         }
         is DayUiEvent.DismissGoalSetter -> _state.update { it.copy(goalSetterForExerciseId = null) }
         is DayUiEvent.SetExerciseUnit -> viewModelScope.launch {
@@ -85,11 +86,11 @@ internal fun DayViewModel.handleExerciseEvent(event: DayUiEvent) {
             } else {
                 customizationRepo.setSwap(event.exerciseId, existing?.swappedName ?: "", event.unit)
             }
-            refreshExercises()
+            refreshExercise(event.exerciseId)
         }
         is DayUiEvent.SetRestTimerOverride -> viewModelScope.launch {
             customizationRepo.setRestTimerOverride(event.exerciseId, event.seconds)
-            refreshExercises()
+            refreshExercise(event.exerciseId)
         }
         is DayUiEvent.ConfirmWeightJump -> {
             val warning = _state.value.pendingWeightJumpWarning ?: return
@@ -104,12 +105,12 @@ internal fun DayViewModel.handleExerciseEvent(event: DayUiEvent) {
             }
         is DayUiEvent.SetPinnedNote -> viewModelScope.launch {
             customizationRepo.setPinnedNote(event.exerciseId, event.note)
-            refreshExercises()
+            refreshExercise(event.exerciseId)
         }
         is DayUiEvent.ToggleSetDifficultyTag -> viewModelScope.launch {
             val nextTag = when (event.currentTag) { null -> "easy"; "easy" -> "hard"; else -> null }
             workoutRepo.setDifficultyTag(event.setId, nextTag)
-            refreshExercises()
+            refreshExerciseForSet(event.setId)
         }
         is DayUiEvent.WarmupReaction -> {
             val current = _state.value.warmupReactions.toMutableMap()
@@ -144,29 +145,29 @@ internal fun DayViewModel.handleExerciseEvent(event: DayUiEvent) {
         is DayUiEvent.ToggleAmrap -> viewModelScope.launch {
             val set = findSet(event.setId) ?: return@launch
             workoutRepo.setAmrap(event.setId, !set.isAmrap)
-            refreshExercises()
+            refreshExerciseForSet(event.setId)
         }
         is DayUiEvent.ToggleAssisted -> viewModelScope.launch {
             val set = findSet(event.setId) ?: return@launch
             workoutRepo.setAssisted(event.setId, !set.isAssisted)
-            refreshExercises()
+            refreshExerciseForSet(event.setId)
         }
         is DayUiEvent.ToggleFailure -> viewModelScope.launch {
             val set = findSet(event.setId) ?: return@launch
             workoutRepo.setToFailure(event.setId, !set.toFailure)
-            refreshExercises()
+            refreshExerciseForSet(event.setId)
         }
         is DayUiEvent.SetSetType -> viewModelScope.launch {
             workoutRepo.setSetType(event.setId, event.type)
-            refreshExercises()
+            refreshExerciseForSet(event.setId)
         }
         is DayUiEvent.SetDropAnnotation -> viewModelScope.launch {
             workoutRepo.setDropAnnotation(event.setId, event.annotation)
-            refreshExercises()
+            refreshExerciseForSet(event.setId)
         }
         is DayUiEvent.SetRpe -> viewModelScope.launch {
             workoutRepo.setRpe(event.setId, event.rpe)
-            refreshExercises()
+            refreshExerciseForSet(event.setId)
         }
         is DayUiEvent.AddBonusSet -> _state.update { s ->
             s.copy(exercises = s.exercises.map {
@@ -178,7 +179,7 @@ internal fun DayViewModel.handleExerciseEvent(event: DayUiEvent) {
             val loggedId = _state.value.exercises
                 .firstOrNull { it.plan.id == event.exerciseId }?.loggedExerciseId ?: return@launch
             workoutRepo.setSupersetGroup(loggedId, event.group)
-            refreshExercises()
+            refreshExercise(event.exerciseId)
         }
         is DayUiEvent.ShowWarmupSuggester -> _state.update { it.copy(warmupSuggesterForExerciseId = event.exerciseId) }
         is DayUiEvent.ShowPlateCalculator -> _state.update { it.copy(plateCalculatorForExerciseId = event.exerciseId) }
@@ -216,6 +217,10 @@ internal fun DayViewModel.logSet(exerciseId: String, weightText: String, reps: I
             return@launch
         }
 
+        // Start the rest timer before the DB write so the bubble + countdown appear the
+        // instant you tap — not after the insert and per-exercise rebuild round-trip.
+        restTimer.start(computeTimerDuration(plan, currentUi.difficulty, currentUi.restTimerOverrideSeconds))
+
         val leId = currentUi.loggedExerciseId
             ?: workoutRepo.addExerciseToSession(
                 sessionId = sessionId,
@@ -232,8 +237,7 @@ internal fun DayViewModel.logSet(exerciseId: String, weightText: String, reps: I
             weightLb = newWeightLb,
             reps = reps
         )
-        restTimer.start(computeTimerDuration(plan, currentUi.difficulty, currentUi.restTimerOverrideSeconds))
-        refreshExercises()
+        refreshExercise(exerciseId)
 
         val updatedEx = _state.value.exercises.firstOrNull { it.plan.id == exerciseId }
         if (updatedEx != null && updatedEx.loggedSets.size >= updatedEx.targetSets) {

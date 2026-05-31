@@ -1,5 +1,6 @@
 package com.forge.app.ui.gym.train
 
+import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -116,57 +117,64 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
             }
 
             if (shownExercise != null) {
-                val shownId = shownExercise.plan.id
                 val idx = state.exercises.indexOf(shownExercise)
-                val isNowExercise = shownId == firstIncompleteId
                 val upcoming = state.exercises
                     .withIndex()
                     .filter { it.index > idx && !it.value.skipped }
                     .map { it.index to it.value }
                 val nextEx = upcoming.firstOrNull()?.second
-                val nextId = nextEx?.plan?.id
-                val advanceLabel = if (nextId != null) "MOVE TO NEXT →" else "FINISH WORKOUT →"
-                val onAdvance: () -> Unit = {
-                    if (nextId != null) shownExerciseId = nextId else onEvent(DayUiEvent.FinishWorkout)
-                }
 
                 item(key = "current-exercise") {
-                    ExerciseCard(
-                        exerciseIndex = idx,
-                        // Force-expand: the focused view always shows the full ledger.
-                        state = shownExercise.copy(isExpanded = true),
-                        isNow = isNowExercise,
-                        totalExercises = state.exercises.size,
-                        restTimerState = if (isNowExercise) state.restTimer else null,
-                        sessionStartedAtMs = state.sessionStartedAt,
-                        advanceLabel = advanceLabel,
-                        onAdvance = onAdvance,
-                        onToggle = { },
-                        onLogSet = { weight, reps ->
-                            val storedWeight = if (useKg) {
-                                val lb = parseToLb(weight, useKg = true)
-                                if (lb != null) "%.1f".format(lb).trimEnd('0').trimEnd('.') else weight
-                            } else weight
-                            onEvent(DayUiEvent.LogSet(shownId, storedWeight, reps))
-                        },
-                        onDeleteSet = { setId -> onEvent(DayUiEvent.DeleteSet(setId)) },
-                        onEditSet = { setId, w, r -> onEvent(DayUiEvent.EditSet(setId, w, r)) },
-                        onLogSameAsLast = { setId -> onEvent(DayUiEvent.LogSameAsLast(shownId, setId)) },
-                        onRate = { rating -> onEvent(DayUiEvent.RateExercise(shownId, rating)) },
-                        onNoteChange = { note -> onEvent(DayUiEvent.UpdateNote(shownId, note)) },
-                        onToggleSkipped = { onEvent(DayUiEvent.ToggleSkipped(shownId)) },
-                        onOpenSwapPicker = { onEvent(DayUiEvent.OpenSwapPicker(shownId)) },
-                        onOpenGoalSetter = { onEvent(DayUiEvent.OpenGoalSetter(shownId)) },
-                        onLongPress = { onEvent(DayUiEvent.LongPressExercise(shownId)) },
-                        onOpenRestTimerSetter = { restTimerSetterForId = shownId },
-                        onSetExerciseUnit = { unit -> onEvent(DayUiEvent.SetExerciseUnit(shownId, unit)) },
-                        onPinNote = { note -> onEvent(DayUiEvent.SetPinnedNote(shownId, note)) },
-                        onToggleSetDifficultyTag = { setId, tag -> onEvent(DayUiEvent.ToggleSetDifficultyTag(setId, tag)) },
-                        onSetRpe = { setId, rpe -> onEvent(DayUiEvent.SetRpe(setId, rpe)) },
-                        onAddSet = { onEvent(DayUiEvent.AddBonusSet(shownId)) },
-                        onSwitchUnit = { onEvent(DayUiEvent.SetUseKg(!useKg)) },
-                        onOpenChart = { chartForExerciseId = shownId }
-                    )
+                    // Crossfade keyed on the exercise id (not the whole state) so it only
+                    // animates on an actual exercise switch — not on every set logged.
+                    Crossfade(targetState = shownExercise.plan.id, label = "exercise-switch") { id ->
+                        val ex = state.exercises.firstOrNull { it.plan.id == id }
+                        if (ex != null) {
+                            val exIdx = state.exercises.indexOfFirst { it.plan.id == id }
+                            val exIsNow = id == firstIncompleteId
+                            val exNextId = state.exercises
+                                .withIndex()
+                                .firstOrNull { it.index > exIdx && !it.value.skipped }
+                                ?.value?.plan?.id
+                            ExerciseCard(
+                                exerciseIndex = exIdx,
+                                // Force-expand: the focused view always shows the full ledger.
+                                state = ex.copy(isExpanded = true),
+                                isNow = exIsNow,
+                                totalExercises = state.exercises.size,
+                                restTimerState = if (exIsNow) state.restTimer else null,
+                                sessionStartedAtMs = state.sessionStartedAt,
+                                advanceLabel = if (exNextId != null) "MOVE TO NEXT →" else "FINISH WORKOUT →",
+                                onAdvance = { if (exNextId != null) shownExerciseId = exNextId else onEvent(DayUiEvent.FinishWorkout) },
+                                onToggle = { },
+                                onLogSet = { weight, reps ->
+                                    val storedWeight = if (useKg) {
+                                        val lb = parseToLb(weight, useKg = true)
+                                        if (lb != null) "%.1f".format(lb).trimEnd('0').trimEnd('.') else weight
+                                    } else weight
+                                    onEvent(DayUiEvent.LogSet(id, storedWeight, reps))
+                                },
+                                onDeleteSet = { setId -> onEvent(DayUiEvent.DeleteSet(setId)) },
+                                onEditSet = { setId, w, r -> onEvent(DayUiEvent.EditSet(setId, w, r)) },
+                                onLogSameAsLast = { setId -> onEvent(DayUiEvent.LogSameAsLast(id, setId)) },
+                                onRate = { rating -> onEvent(DayUiEvent.RateExercise(id, rating)) },
+                                onNoteChange = { note -> onEvent(DayUiEvent.UpdateNote(id, note)) },
+                                onToggleSkipped = { onEvent(DayUiEvent.ToggleSkipped(id)) },
+                                onOpenSwapPicker = { onEvent(DayUiEvent.OpenSwapPicker(id)) },
+                                onOpenGoalSetter = { onEvent(DayUiEvent.OpenGoalSetter(id)) },
+                                onLongPress = { onEvent(DayUiEvent.LongPressExercise(id)) },
+                                onOpenRestTimerSetter = { restTimerSetterForId = id },
+                                onSkipRest = { onEvent(DayUiEvent.RestTimerSkip) },
+                                onSetExerciseUnit = { unit -> onEvent(DayUiEvent.SetExerciseUnit(id, unit)) },
+                                onPinNote = { note -> onEvent(DayUiEvent.SetPinnedNote(id, note)) },
+                                onToggleSetDifficultyTag = { setId, tag -> onEvent(DayUiEvent.ToggleSetDifficultyTag(setId, tag)) },
+                                onSetRpe = { setId, rpe -> onEvent(DayUiEvent.SetRpe(setId, rpe)) },
+                                onAddSet = { onEvent(DayUiEvent.AddBonusSet(id)) },
+                                onSwitchUnit = { onEvent(DayUiEvent.SetUseKg(!useKg)) },
+                                onOpenChart = { chartForExerciseId = id }
+                            )
+                        }
+                    }
                 }
 
                 item(key = "up-next") {

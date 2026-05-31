@@ -12,11 +12,11 @@ import com.forge.app.ui.gym.train.state.VsLastStatus
 import java.util.concurrent.TimeUnit
 
 /**
- * TEMP: fills the day screen with placeholder "last session", "suggested next", and
- * sparkline data when no real history exists yet, so the UI can be evaluated against
- * the mockup. Flip to false (or delete the dummy blocks) once real sessions accumulate.
+ * When true, fills the day screen with fabricated "last session" / "suggested next" /
+ * sparkline data. Off by default — the UI shows real data only, with empty-state hints
+ * (e.g. "first time", "Log a couple of sessions…") where there's nothing yet.
  */
-private const val DUMMY_TRAINING_DATA = true
+private const val DUMMY_TRAINING_DATA = false
 
 internal suspend fun DayViewModel.buildExerciseUi(
     plan: ExercisePlan,

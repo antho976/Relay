@@ -1,9 +1,5 @@
 package com.forge.app.ui.gym.train
 
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -28,8 +24,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Tab
-import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -38,10 +32,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -70,8 +62,6 @@ fun DayListScreen(
     initialTab: Int = 0,
     viewModel: DayListViewModel = hiltViewModel()
 ) {
-    var selectedTab by rememberSaveable(initialTab) { mutableIntStateOf(initialTab) }
-
     Scaffold(
         topBar = {
             TopAppBar(
@@ -86,49 +76,18 @@ fun DayListScreen(
         },
         containerColor = Color.Transparent
     ) { inner ->
-        Column(Modifier.fillMaxSize().padding(inner)) {
-            TabRow(
-                selectedTabIndex = selectedTab,
-                containerColor = MaterialTheme.colorScheme.background,
-                contentColor = MaterialTheme.colorScheme.primary
-            ) {
-                Tab(
-                    selected = selectedTab == 0,
-                    onClick = { selectedTab = 0 },
-                    text = { Text("Train") }
+        Box(Modifier.fillMaxSize().padding(inner)) {
+            // No Train/Stats/PRs tab row — each is its own screen reached from Overview
+            // (Gym tile → Train, Stats tile → Stats). Content is chosen by the route.
+            when (initialTab) {
+                1 -> StatsContent(modifier = Modifier.fillMaxSize(), onOpenHistory = onOpenHistory, onOpenNotes = onOpenNotes, onOpenRecap = onOpenRecap)
+                2 -> PrsContent(modifier = Modifier.fillMaxSize())
+                else -> TrainTab(
+                    onOpenDay = onOpenDay,
+                    onOpenDayQuick = onOpenDayQuick,
+                    onEditProgram = onEditProgram,
+                    viewModel = viewModel
                 )
-                Tab(
-                    selected = selectedTab == 1,
-                    onClick = { selectedTab = 1 },
-                    text = { Text("Stats") }
-                )
-                Tab(
-                    selected = selectedTab == 2,
-                    onClick = { selectedTab = 2 },
-                    text = { Text("PRs") }
-                )
-            }
-
-            AnimatedContent(
-                targetState = selectedTab,
-                transitionSpec = {
-                    val dir = if (targetState > initialState) 1 else -1
-                    slideInHorizontally { it * dir } togetherWith slideOutHorizontally { -it * dir }
-                },
-                modifier = Modifier.fillMaxSize(),
-                label = "tab_transition"
-            ) { tab ->
-                when (tab) {
-                    0 -> TrainTab(
-                        onOpenDay = onOpenDay,
-                        onOpenDayQuick = onOpenDayQuick,
-                        onEditProgram = onEditProgram,
-                        viewModel = viewModel
-                    )
-                    1 -> StatsContent(modifier = Modifier.fillMaxSize(), onOpenHistory = onOpenHistory, onOpenNotes = onOpenNotes, onOpenRecap = onOpenRecap)
-                    2 -> PrsContent(modifier = Modifier.fillMaxSize())
-                    else -> Unit
-                }
             }
         }
     }
