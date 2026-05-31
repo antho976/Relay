@@ -27,9 +27,6 @@ interface LoggedExerciseDao {
     suspend fun get(id: Long): LoggedExercise?
 
     @Query("SELECT * FROM logged_exercise WHERE session_id = :sessionId ORDER BY order_index")
-    fun observeForSession(sessionId: Long): Flow<List<LoggedExercise>>
-
-    @Query("SELECT * FROM logged_exercise WHERE session_id = :sessionId ORDER BY order_index")
     suspend fun forSession(sessionId: Long): List<LoggedExercise>
 
     /**
@@ -49,9 +46,6 @@ interface LoggedExerciseDao {
 
     @Query("SELECT COUNT(*) FROM logged_exercise WHERE was_pr = 1")
     suspend fun prCount(): Int
-
-    @Query("SELECT COUNT(*) FROM logged_exercise WHERE difficulty = :rating")
-    fun observeCountWithRating(rating: EffortRating): Flow<Int>
 
     @Query("SELECT COUNT(*) FROM logged_exercise WHERE difficulty = :rating")
     suspend fun countWithRating(rating: EffortRating): Int
@@ -97,30 +91,6 @@ interface LoggedExerciseDao {
         ORDER BY s.started_at DESC
     """)
     fun observeAllPrs(): Flow<List<RecentPrRow>>
-
-    /** Count of PRs in a given calendar month [fromMs, toMs). For monthly PR target (#84). */
-    @Query("""
-        SELECT COUNT(*) FROM logged_exercise le
-        INNER JOIN session s ON le.session_id = s.id
-        WHERE le.was_pr = 1 AND s.finished_at IS NOT NULL AND s.started_at >= :fromMs AND s.started_at < :toMs
-    """)
-    fun observePrCountInRange(fromMs: Long, toMs: Long): Flow<Int>
-
-    /** Counts per exercise_id across all finished sessions — used to pick top N for strength curves. */
-    @Query("""
-        SELECT le.exercise_id, COUNT(*) AS cnt
-        FROM logged_exercise le
-        INNER JOIN session s ON le.session_id = s.id
-        WHERE s.finished_at IS NOT NULL
-        GROUP BY le.exercise_id
-        ORDER BY cnt DESC
-    """)
-    suspend fun exerciseFrequencyOrdered(): List<ExerciseFrequencyRow>
-
-    data class ExerciseFrequencyRow(
-        @androidx.room.ColumnInfo(name = "exercise_id") val exerciseId: String,
-        @androidx.room.ColumnInfo(name = "cnt") val count: Int
-    )
 
     /** Exercise frequency in past N weeks — distinct sessions containing each exercise (#73). */
     @Query("""

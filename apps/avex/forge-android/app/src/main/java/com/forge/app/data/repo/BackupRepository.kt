@@ -202,11 +202,6 @@ class BackupRepository @Inject constructor(
         return file
     }
 
-    /** List all backup files in app-private dir. */
-    fun listBackupFiles(): List<File> =
-        context.filesDir.listFiles { f -> f.name.startsWith("forge_") && f.name.endsWith(".json") }
-            ?.sortedByDescending { it.lastModified() } ?: emptyList()
-
     // ─── Complete database backup & restore ───────────────────────────────────
     // Unlike the JSON exports above (lossy + app-private), these copy the *entire*
     // database file. A backup captures every table and column — including any added

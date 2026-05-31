@@ -103,13 +103,10 @@ class WorkoutRepository @Inject constructor(
 
     // ─── Logged exercises ──────────────────────────────────────────────────────
 
-    fun observeExercisesForSession(sessionId: Long): Flow<List<LoggedExercise>> =
-        loggedExerciseDao.observeForSession(sessionId)
-
     /**
-     * One-shot read of a session's logged exercises. Preferred over collecting
-     * [observeExercisesForSession] once — the Flow variant spins up an invalidation
-     * observer just to grab a single value.
+     * One-shot read of a session's logged exercises. Preferred over a Flow + single
+     * collect — the Flow variant spins up an invalidation observer just to grab a
+     * single value.
      */
     suspend fun loggedExercisesForSession(sessionId: Long): List<LoggedExercise> =
         loggedExerciseDao.forSession(sessionId)
@@ -152,9 +149,6 @@ class WorkoutRepository @Inject constructor(
         loggedExerciseDao.lastLoggedBefore(exerciseId, excludeSessionId)
 
     // ─── Sets ──────────────────────────────────────────────────────────────────
-
-    fun observeSets(loggedExerciseId: Long): Flow<List<LoggedSet>> =
-        loggedSetDao.observeForLoggedExercise(loggedExerciseId)
 
     suspend fun setsFor(loggedExerciseId: Long): List<LoggedSet> =
         loggedSetDao.forLoggedExercise(loggedExerciseId)
@@ -203,8 +197,6 @@ class WorkoutRepository @Inject constructor(
 
     suspend fun logBreak(sessionId: Long, type: String) =
         sessionBreakDao.insert(SessionBreak(sessionId = sessionId, type = type, loggedAt = clock.nowMs()))
-
-    fun observeBreaks(sessionId: Long) = sessionBreakDao.observeForSession(sessionId)
 
     // ─── Mood ──────────────────────────────────────────────────────────────────
 

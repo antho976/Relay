@@ -346,7 +346,4 @@ object Trophies {
         )
     )
 
-    fun byCategory(): Map<TrophyCategory, List<Trophy>> = all.groupBy { it.category }
-
-    fun byId(id: String): Trophy? = all.firstOrNull { it.id == id }
 }

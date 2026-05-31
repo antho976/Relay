@@ -142,29 +142,3 @@ internal fun StrengthStandardsCard(lifts: List<E1rmLift>, bodyweightLb: Double?,
         Spacer(Modifier.height(20.dp))
     }
 }
-
-/** Top lifts expressed as a multiple of bodyweight (needs a logged bodyweight). */
-@Composable
-internal fun RelativeStrengthCard(records: List<PrRecord>, onBg: Color, muted: Color, outline: Color) {
-    val rel = records.filter { it.relativeStrength != null }.sortedByDescending { it.relativeStrength }
-    Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
-        Text("RELATIVE STRENGTH · × bodyweight", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
-        Spacer(Modifier.height(10.dp))
-        if (rel.isEmpty()) {
-            Text("Log your bodyweight to see lifts as a multiple of it.",
-                style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic)
-        } else {
-            rel.take(8).forEach { r ->
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(r.exerciseName, style = MaterialTheme.typography.bodySmall, color = onBg, modifier = Modifier.weight(1f))
-                    Text("%.2f× BW".format(r.relativeStrength ?: 0.0), style = MaterialTheme.typography.labelMedium, color = ForgeLastGreen, fontWeight = FontWeight.SemiBold)
-                }
-            }
-        }
-        Spacer(Modifier.height(8.dp))
-    }
-}

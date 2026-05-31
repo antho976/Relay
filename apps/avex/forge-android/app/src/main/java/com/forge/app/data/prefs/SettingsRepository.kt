@@ -27,15 +27,6 @@ class SettingsRepository @Inject constructor(
         }
     }
 
-    val welcomed: Flow<Boolean> = context.forgePreferences.data
-        .map { prefs -> prefs[PreferenceKeys.WELCOMED] ?: false }
-
-    suspend fun setWelcomed(value: Boolean) {
-        context.forgePreferences.edit { prefs ->
-            prefs[PreferenceKeys.WELCOMED] = value
-        }
-    }
-
     val shownMilestones: Flow<Set<String>> = context.forgePreferences.data
         .map { prefs -> prefs[PreferenceKeys.SHOWN_MILESTONES] ?: emptySet() }
 
@@ -47,9 +38,6 @@ class SettingsRepository @Inject constructor(
     }
 
     // ─── Per-day accent color (#65) ───────────────────────────────────────────
-
-    fun getDayColor(dayKey: String): kotlinx.coroutines.flow.Flow<String?> =
-        context.forgePreferences.data.map { it[PreferenceKeys.dayColorKey(dayKey)] }
 
     suspend fun setDayColor(dayKey: String, hex: String?) =
         context.forgePreferences.edit { prefs ->
@@ -119,8 +107,6 @@ class SettingsRepository @Inject constructor(
 
     val noteTemplates: Flow<Set<String>> = context.forgePreferences.data
         .map { it[PreferenceKeys.NOTE_TEMPLATES] ?: defaultNoteTemplates }
-    suspend fun setNoteTemplates(templates: Set<String>) =
-        context.forgePreferences.edit { it[PreferenceKeys.NOTE_TEMPLATES] = templates }
 
     // ─── Units (#2) ───────────────────────────────────────────────────────────
 
@@ -143,8 +129,6 @@ class SettingsRepository @Inject constructor(
 
     val fontChoice: Flow<String> = context.forgePreferences.data
         .map { it[PreferenceKeys.FONT_CHOICE] ?: "default" }
-    suspend fun setFontChoice(key: String) =
-        context.forgePreferences.edit { it[PreferenceKeys.FONT_CHOICE] = key }
 
     // ─── Locale (#116) ────────────────────────────────────────────────────────
 
@@ -212,8 +196,6 @@ class SettingsRepository @Inject constructor(
         .map { it[PreferenceKeys.PLANNED_NEXT_DAY] ?: "" }
     suspend fun setPlannedNextDay(dayKey: String) =
         context.forgePreferences.edit { it[PreferenceKeys.PLANNED_NEXT_DAY] = dayKey }
-    suspend fun clearPlannedNextDay() =
-        context.forgePreferences.edit { it.remove(PreferenceKeys.PLANNED_NEXT_DAY) }
 
     // ─── Warmup disable (#156) ────────────────────────────────────────────────
 

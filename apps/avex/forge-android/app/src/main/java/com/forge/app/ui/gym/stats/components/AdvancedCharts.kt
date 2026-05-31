@@ -18,64 +18,6 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.forge.app.program.Program
-import com.forge.app.ui.gym.stats.state.VolumePoint
-import java.time.Instant
-import java.time.ZoneId
-
-// ─── Volume per exercise over time (#72) ─────────────────────────────────────
-
-@Composable
-fun ExerciseVolumeChart(
-    exerciseId: String,
-    points: List<VolumePoint>,
-    modifier: Modifier = Modifier
-) {
-    if (points.size < 2) return
-    val exerciseName = Program.exercise(exerciseId)?.name ?: exerciseId
-    val primaryColor = MaterialTheme.colorScheme.primary
-    val surfaceVar = MaterialTheme.colorScheme.surfaceVariant
-    val maxVol = points.maxOf { it.totalVolumeLb }.coerceAtLeast(1.0)
-    val zone = ZoneId.systemDefault()
-
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .background(surfaceVar, RoundedCornerShape(12.dp))
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        Text("VOLUME OVER TIME · ${exerciseName.uppercase()} · lb",
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontWeight = FontWeight.SemiBold)
-        Canvas(modifier = Modifier.fillMaxWidth().height(80.dp)) {
-            val step = size.width / (points.size - 1).coerceAtLeast(1)
-            val path = Path()
-            points.forEachIndexed { i, pt ->
-                val x = i * step
-                val y = size.height - (pt.totalVolumeLb / maxVol * size.height).toFloat()
-                if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
-            }
-            drawPath(path, color = primaryColor, style = Stroke(width = 3f))
-            points.forEachIndexed { i, pt ->
-                val x = i * step
-                val y = size.height - (pt.totalVolumeLb / maxVol * size.height).toFloat()
-                drawCircle(primaryColor, radius = 4f, center = Offset(x, y))
-            }
-        }
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            val first = Instant.ofEpochMilli(points.first().sessionDate).atZone(zone).toLocalDate()
-            val last = Instant.ofEpochMilli(points.last().sessionDate).atZone(zone).toLocalDate()
-            Text(first.toString().substring(5), style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text("${maxVol.toInt()} lb peak", style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.primary)
-            Text(last.toString().substring(5), style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
-}
 
 // ─── Strength Curve Overlay (#94) — two exercises on same chart ───────────────
 

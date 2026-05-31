@@ -17,7 +17,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.ui.gym.stats.components.ExerciseFrequencySection
 import com.forge.app.ui.gym.stats.components.LifetimeStat
-import com.forge.app.ui.gym.stats.components.SparklineWithAxis
 import com.forge.app.ui.gym.stats.components.VolumeBarsSection
 import com.forge.app.ui.gym.stats.components.formatVolume
 import com.forge.app.ui.gym.stats.components.numberWord
@@ -25,7 +24,6 @@ import com.forge.app.ui.gym.stats.components.weekCommentary
 import com.forge.app.ui.gym.stats.state.ExerciseFrequency
 import com.forge.app.ui.gym.stats.state.LifetimeMetrics
 import com.forge.app.ui.gym.stats.state.MuscleVolume
-import com.forge.app.ui.gym.stats.state.StrengthCurve
 
 @Composable
 internal fun StatsHeroSection(
@@ -83,47 +81,6 @@ internal fun StatsHeroSection(
                 fontStyle = FontStyle.Italic
             )
         }
-        Spacer(Modifier.height(20.dp))
-    }
-}
-
-@Composable
-internal fun StatsStrengthSection(
-    curve: StrengthCurve,
-    accent: Color,
-    muted: Color,
-    outline: Color,
-    onBg: Color
-) {
-    Column(modifier = Modifier.padding(horizontal = 24.dp)) {
-        Text(
-            "Where I'm going",
-            style = MaterialTheme.typography.headlineSmall,
-            color = onBg,
-            fontStyle = FontStyle.Italic
-        )
-        Spacer(Modifier.height(4.dp))
-        val delta = if (curve.points.size >= 2) curve.points.last() - curve.points.first() else 0.0
-        val deltaText = when {
-            delta > 0 -> "+${delta.toInt()} lb since first session"
-            delta < 0 -> "${delta.toInt()} lb since first session"
-            curve.points.isNotEmpty() -> "${curve.points.size} sessions logged"
-            else -> "no data yet"
-        }
-        Text(
-            "${curve.plan.name} — $deltaText.",
-            style = MaterialTheme.typography.bodySmall,
-            color = muted,
-            fontStyle = FontStyle.Italic
-        )
-        Spacer(Modifier.height(12.dp))
-        SparklineWithAxis(
-            values = curve.points,
-            lineColor = accent,
-            modifier = Modifier.fillMaxWidth().height(80.dp)
-        )
-        Spacer(Modifier.height(20.dp))
-        HorizontalDivider(color = outline.copy(alpha = 0.25f))
         Spacer(Modifier.height(20.dp))
     }
 }

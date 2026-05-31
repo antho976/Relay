@@ -23,61 +23,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.forge.app.ui.gym.stats.state.ExerciseFrequency
 import com.forge.app.ui.gym.stats.state.MuscleVolume
 import com.forge.app.ui.gym.stats.state.TimeToPrEntry
-
-// ─── Exercise Frequency (#73) ─────────────────────────────────────────────────
-
-@Composable
-fun ExerciseFrequencyCard(data: List<ExerciseFrequency>, modifier: Modifier = Modifier) {
-    if (data.isEmpty()) return
-    StatCard(title = "EXERCISE FREQUENCY · 8 WEEKS", modifier = modifier) {
-        data.take(8).forEach { item ->
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    item.exerciseName,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.weight(1f)
-                )
-                Spacer(Modifier.width(8.dp))
-                FreqBar(item.sessionCount, item.outOf)
-                Spacer(Modifier.width(6.dp))
-                Text(
-                    "${item.sessionCount}×",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.SemiBold
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun FreqBar(count: Int, max: Int) {
-    val fraction = count.toFloat() / max.coerceAtLeast(1)
-    Box(
-        modifier = Modifier
-            .width(64.dp)
-            .height(6.dp)
-            .clip(RoundedCornerShape(3.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth(fraction)
-                .height(6.dp)
-                .clip(RoundedCornerShape(3.dp))
-                .background(MaterialTheme.colorScheme.primary)
-        )
-    }
-}
 
 // ─── Time to Next PR (#74) ────────────────────────────────────────────────────
 

@@ -5,7 +5,6 @@ import androidx.room.Delete
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
-import androidx.room.Update
 import com.forge.app.data.db.entities.WarmupRoutineItem
 import kotlinx.coroutines.flow.Flow
 
@@ -14,9 +13,6 @@ interface WarmupRoutineDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(item: WarmupRoutineItem): Long
-
-    @Update
-    suspend fun update(item: WarmupRoutineItem)
 
     @Delete
     suspend fun delete(item: WarmupRoutineItem)

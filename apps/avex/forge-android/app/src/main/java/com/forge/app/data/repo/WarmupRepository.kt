@@ -35,7 +35,5 @@ class WarmupRepository @Inject constructor(private val dao: WarmupRoutineDao) {
 
     suspend fun removeItem(item: WarmupRoutineItem) = dao.delete(item)
 
-    suspend fun updateItem(item: WarmupRoutineItem) = dao.update(item)
-
     suspend fun resetDay(dayKey: String) = dao.clearDay(dayKey)
 }

@@ -1,15 +1,6 @@
 package com.forge.app.ui.gym.stats.components
 
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
-import androidx.compose.foundation.layout.width
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -18,48 +9,6 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.ui.unit.dp
-
-/**
- * A line chart with Y-axis labels (max / mid / min) and dashed grid lines.
- * Shared by [StrengthCurveCard] and [ExerciseHistorySheet].
- */
-@Composable
-internal fun SparklineWithAxis(
-    values: List<Double>,
-    lineColor: Color,
-    modifier: Modifier = Modifier
-) {
-    if (values.size < 2) return
-    val minValue = values.min()
-    val maxValue = values.max()
-    val midValue = (minValue + maxValue) / 2
-    val labelStyle = MaterialTheme.typography.labelSmall
-    val labelColor = MaterialTheme.colorScheme.onSurfaceVariant
-
-    Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
-        Column(
-            modifier = Modifier
-                .width(36.dp)
-                .fillMaxHeight(),
-            verticalArrangement = Arrangement.SpaceBetween,
-            horizontalAlignment = Alignment.End
-        ) {
-            Text("${maxValue.toInt()}", style = labelStyle, color = labelColor)
-            Text("${midValue.toInt()}", style = labelStyle, color = labelColor)
-            Text("${minValue.toInt()}", style = labelStyle, color = labelColor)
-        }
-        Spacer(Modifier.width(6.dp))
-        Sparkline(
-            values = values,
-            lineColor = lineColor,
-            minValue = minValue,
-            maxValue = maxValue,
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxHeight()
-        )
-    }
-}
 
 @Composable
 internal fun Sparkline(

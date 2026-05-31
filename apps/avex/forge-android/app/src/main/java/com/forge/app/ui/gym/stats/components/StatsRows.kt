@@ -122,18 +122,6 @@ internal fun WeekDayRow(
 }
 
 @Composable
-internal fun VsLastWeekRow(label: String, current: Int, previous: Int, muted: Color, onBg: Color, accent: Color) {
-    val delta = current - previous
-    val deltaText = when { delta > 0 -> "+$delta"; delta < 0 -> "$delta"; else -> "same" }
-    val deltaColor = when { delta > 0 -> accent; delta < 0 -> muted.copy(alpha = 0.6f); else -> muted }
-    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(label, style = MaterialTheme.typography.labelSmall, color = muted, modifier = Modifier.weight(1f))
-        Text(current.toString(), style = MaterialTheme.typography.bodySmall, color = onBg, modifier = Modifier.width(48.dp))
-        Text(deltaText, style = MaterialTheme.typography.labelSmall, color = deltaColor, fontWeight = FontWeight.SemiBold)
-    }
-}
-
-@Composable
 internal fun VolumeBarsSection(rows: List<MuscleVolume>, muted: Color, accent: Color, modifier: Modifier = Modifier) {
     val maxVol = rows.maxOfOrNull { it.volumeLb }?.coerceAtLeast(1.0) ?: 1.0
     val annotations = when (rows.size) {

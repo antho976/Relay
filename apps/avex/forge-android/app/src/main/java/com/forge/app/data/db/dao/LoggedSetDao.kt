@@ -24,9 +24,6 @@ interface LoggedSetDao {
     suspend fun delete(set: LoggedSet)
 
     @Query("SELECT * FROM logged_set WHERE logged_exercise_id = :loggedExerciseId ORDER BY set_index")
-    fun observeForLoggedExercise(loggedExerciseId: Long): Flow<List<LoggedSet>>
-
-    @Query("SELECT * FROM logged_set WHERE logged_exercise_id = :loggedExerciseId ORDER BY set_index")
     suspend fun forLoggedExercise(loggedExerciseId: Long): List<LoggedSet>
 
     /**

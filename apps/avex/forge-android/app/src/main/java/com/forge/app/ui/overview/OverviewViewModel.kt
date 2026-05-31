@@ -176,7 +176,6 @@ class OverviewViewModel @Inject constructor(
     fun setPlanNextDay(dayKey: String) = viewModelScope.launch {
         settingsRepo.setPlannedNextDay(dayKey)
     }
-    fun clearPlanNextDay() = viewModelScope.launch { settingsRepo.clearPlannedNextDay() }
 
     private val _selectedItem = MutableStateFlow<OverviewRecentItem?>(null)
     val selectedItem: StateFlow<OverviewRecentItem?> = _selectedItem

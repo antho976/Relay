@@ -28,11 +28,6 @@ class SampleDataSeeder @Inject constructor(
     private val clock: Clock
 ) {
 
-    suspend fun seedIfEmpty() {
-        if (sessionDao.finishedCount() > 0) return
-        seed()
-    }
-
     suspend fun seed() {
         val zone = ZoneId.systemDefault()
         val today = LocalDate.now(zone)

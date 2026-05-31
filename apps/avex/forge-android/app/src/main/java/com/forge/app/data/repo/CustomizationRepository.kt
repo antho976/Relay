@@ -21,8 +21,6 @@ class CustomizationRepository @Inject constructor(
 
     // ─── Exercise swap overrides ───────────────────────────────────────────────
 
-    fun observeAllSwaps(): Flow<List<ExerciseCustomization>> = customizationDao.observeAll()
-
     suspend fun getSwap(exerciseId: String): ExerciseCustomization? =
         customizationDao.get(exerciseId)
 
@@ -43,9 +41,6 @@ class CustomizationRepository @Inject constructor(
             customizationDao.upsert(ExerciseCustomization(exerciseId, "", "", seconds))
         }
     }
-
-    suspend fun getRestTimerOverride(exerciseId: String): Int? =
-        customizationDao.get(exerciseId)?.restTimerOverrideSeconds
 
     suspend fun setPinnedNote(exerciseId: String, note: String) {
         val existing = customizationDao.get(exerciseId)

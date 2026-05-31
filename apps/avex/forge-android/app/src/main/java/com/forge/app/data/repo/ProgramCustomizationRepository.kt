@@ -111,12 +111,6 @@ class ProgramCustomizationRepository @Inject constructor(
         return id
     }
 
-    /** Persist exercise order within a day (#92). */
-    suspend fun setOrder(dayKey: String, exerciseId: String, order: Int) {
-        val existing = dao.forDay(dayKey).firstOrNull { it.exerciseId == exerciseId }
-        dao.upsert((existing ?: ProgramCustomization(dayKey, exerciseId)).copy(orderOverride = order))
-    }
-
     /** Reset all customizations for a day. */
     suspend fun resetDay(dayKey: String) = dao.clearDay(dayKey)
 }

@@ -33,13 +33,6 @@ interface SessionDao {
     @Query("SELECT * FROM session WHERE finished_at IS NOT NULL ORDER BY finished_at DESC LIMIT :limit")
     fun observeRecent(limit: Int = 10): Flow<List<Session>>
 
-    @Query("""
-        SELECT * FROM session
-        WHERE day_key = :dayKey AND finished_at IS NOT NULL
-        ORDER BY finished_at DESC LIMIT 1
-    """)
-    suspend fun lastFinishedForDay(dayKey: String): Session?
-
     /** Used by the "Showing Up" / "Through the Door" trophy rules. */
     @Query("SELECT COUNT(*) FROM session WHERE finished_at IS NOT NULL")
     fun observeFinishedCount(): Flow<Int>

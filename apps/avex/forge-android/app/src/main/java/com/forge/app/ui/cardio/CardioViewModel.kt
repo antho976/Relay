@@ -121,8 +121,6 @@ class CardioViewModel @Inject constructor(
         }
     }
 
-    fun setTypeFilter(type: String?) = transient.update { it.copy(selectedTypeFilter = type) }
-
     private data class TransientState(
         val sheetOpen: Boolean = false,
         val pendingDeleteId: Long? = null,

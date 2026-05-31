@@ -2,8 +2,8 @@ package com.forge.app.program
 
 /**
  * A single exercise slot within a day's plan. The `id` matches the React prototype
- * (ua1, la3, ub7, lb6 — letter day + position). Tutorials live in [Tutorials] keyed
- * by the same id; swap candidates live in [Swaps] keyed by [muscle].
+ * (ua1, la3, ub7, lb6 — letter day + position). Swap candidates live in [Swaps]
+ * keyed by [muscle].
  *
  * [reps] is stored as a display string ("8-10", "10/leg", "12-15") because the
  * prototype uses a mix of ranges and per-side notations. PR detection (Phase 6+)
