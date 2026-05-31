@@ -1,9 +1,10 @@
 package com.forge.app.ui.gym.stats
 
-import androidx.compose.foundation.background
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -19,12 +20,22 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.program.Program
 import com.forge.app.ui.gym.stats.components.DayTypeBestVsAvgCard
 import com.forge.app.ui.gym.stats.components.EffortOverTimeCard
@@ -60,35 +71,66 @@ fun StatsTabBar(selected: StatsTab, onSelect: (StatsTab) -> Unit) {
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val outline = MaterialTheme.colorScheme.outline
-    Row(
+
+    // Each chip reports its rect (in the Row's coordinate space) so the filled "pill" can be
+    // drawn behind the chips and slide between them instead of teleporting on selection.
+    val bounds = remember { mutableStateMapOf<StatsTab, TabBounds>() }
+    val sel = bounds[selected]
+    val animLeft by animateFloatAsState(sel?.left ?: 0f, ForgeMotion.snappy(), label = "pill-x")
+    val animWidth by animateFloatAsState(sel?.width ?: 0f, ForgeMotion.snappy(), label = "pill-w")
+
+    // Outer Box scrolls; the inner Row carries the pill (drawBehind) AND the chips, so the
+    // pill and the chips it tracks live in one coordinate space and stay aligned when scrolled.
+    Box(
         modifier = Modifier
             .fillMaxWidth()
             .horizontalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp, vertical = 8.dp)
     ) {
-        StatsTab.entries.forEach { tab ->
-            val isSel = tab == selected
-            Box(
-                modifier = Modifier
-                    .padding(end = 8.dp)
-                    .clickable { onSelect(tab) }
-                    .then(
-                        if (isSel) Modifier.background(onBg, RoundedCornerShape(50))
-                        else Modifier.border(1.dp, outline.copy(alpha = 0.5f), RoundedCornerShape(50))
+        Row(
+            modifier = Modifier
+                .drawBehind {
+                    if (sel != null && animWidth > 0f) {
+                        drawRoundRect(
+                            color = onBg,
+                            topLeft = Offset(animLeft, sel.top),
+                            size = Size(animWidth, sel.height),
+                            cornerRadius = CornerRadius(sel.height / 2f)
+                        )
+                    }
+                }
+                .padding(horizontal = 20.dp, vertical = 8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            StatsTab.entries.forEach { tab ->
+                val isSel = tab == selected
+                Box(
+                    modifier = Modifier
+                        .onGloballyPositioned { coords ->
+                            val pos = coords.positionInParent()
+                            bounds[tab] = TabBounds(pos.x, pos.y, coords.size.width.toFloat(), coords.size.height.toFloat())
+                        }
+                        .then(
+                            if (isSel) Modifier
+                            else Modifier.border(1.dp, outline.copy(alpha = 0.5f), RoundedCornerShape(50))
+                        )
+                        .clickable { onSelect(tab) }
+                        .padding(horizontal = 14.dp, vertical = 7.dp)
+                ) {
+                    Text(
+                        tab.label,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (isSel) MaterialTheme.colorScheme.background else muted,
+                        fontWeight = if (isSel) FontWeight.SemiBold else FontWeight.Normal
                     )
-                    .padding(horizontal = 14.dp, vertical = 7.dp)
-            ) {
-                Text(
-                    tab.label,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = if (isSel) MaterialTheme.colorScheme.background else muted,
-                    fontWeight = if (isSel) FontWeight.SemiBold else FontWeight.Normal
-                )
+                }
             }
         }
     }
     HorizontalDivider(color = outline.copy(alpha = 0.2f))
 }
+
+/** Measured chip rect in the tab Row's coordinate space, used to position the sliding pill. */
+private data class TabBounds(val left: Float, val top: Float, val width: Float, val height: Float)
 
 private fun LazyListScope.sectionTitle(key: String, title: String, c: StatsColors) {
     item(key) {

@@ -1,9 +1,12 @@
 package com.forge.app.ui.nav
 
-import androidx.compose.animation.AnimatedContentTransitionScope
-import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -18,9 +21,15 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontStyle
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -36,29 +45,60 @@ import com.forge.app.ui.overview.OverviewScreen
 import com.forge.app.ui.programeditor.ProgramEditorScreen
 import com.forge.app.ui.recap.RecapScreen
 import com.forge.app.ui.settings.SettingsScreen
+import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.trophies.TrophiesScreen
 import com.forge.app.ui.welcome.WelcomeScreen
 
 @Composable
 fun ForgeNavHost() {
     val nav = rememberNavController()
-    // App-wide "push" navigation: forward screens slide in from the right, back from the
-    // left, both with a fade. One place gives every screen transition a premium feel.
-    val dur = 280
+    // App-wide "push" navigation (Material shared-axis X): a short directional slide + fade
+    // rather than a full-width slide-and-fade — the eye travels less so it reads snappier.
+    // Incoming content decelerates in; outgoing accelerates away (ForgeMotion easings).
+    //
+    // "Mode" destinations (a focused session, recap, program editor) instead RISE from below
+    // and drop back down, so motion expresses the hierarchy — you enter/exit a mode rather
+    // than stepping sideways between sibling hubs. The screen underneath just fades.
+    val dur = ForgeMotion.DurationEmphasized
+    val slide: (Int) -> Int = { it / 6 }       // horizontal distance — modest, not full width
+    val rise: (Int) -> Int = { it / 4 }        // vertical distance for modal mode screens
+    val modalRoutes = setOf(Routes.GYM_DAY, Routes.RECAP, Routes.PROGRAM_EDITOR)
+    // One-shot fade so the first screen eases in on cold launch instead of snapping on.
+    var appeared by remember { mutableStateOf(false) }
+    val rootAlpha by animateFloatAsState(
+        targetValue = if (appeared) 1f else 0f,
+        animationSpec = ForgeMotion.standardTween(dur),
+        label = "cold-start"
+    )
+    LaunchedEffect(Unit) { appeared = true }
+
     NavHost(
         navController = nav,
         startDestination = Routes.OVERVIEW,
+        modifier = Modifier.fillMaxSize().graphicsLayer { alpha = rootAlpha },
         enterTransition = {
-            slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Start, tween(dur)) + fadeIn(tween(dur))
+            if (targetState.destination.route in modalRoutes)
+                slideInVertically(ForgeMotion.enterTween(dur)) { rise(it) } + fadeIn(ForgeMotion.enterTween(dur))
+            else
+                slideInHorizontally(ForgeMotion.enterTween(dur)) { slide(it) } + fadeIn(ForgeMotion.enterTween(dur))
         },
         exitTransition = {
-            slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Start, tween(dur)) + fadeOut(tween(dur))
+            if (targetState.destination.route in modalRoutes)
+                fadeOut(ForgeMotion.exitTween(dur))
+            else
+                slideOutHorizontally(ForgeMotion.exitTween(dur)) { -slide(it) } + fadeOut(ForgeMotion.exitTween(dur))
         },
         popEnterTransition = {
-            slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.End, tween(dur)) + fadeIn(tween(dur))
+            if (initialState.destination.route in modalRoutes)
+                fadeIn(ForgeMotion.enterTween(dur))
+            else
+                slideInHorizontally(ForgeMotion.enterTween(dur)) { -slide(it) } + fadeIn(ForgeMotion.enterTween(dur))
         },
         popExitTransition = {
-            slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.End, tween(dur)) + fadeOut(tween(dur))
+            if (initialState.destination.route in modalRoutes)
+                slideOutVertically(ForgeMotion.exitTween(dur)) { rise(it) } + fadeOut(ForgeMotion.exitTween(dur))
+            else
+                slideOutHorizontally(ForgeMotion.exitTween(dur)) { slide(it) } + fadeOut(ForgeMotion.exitTween(dur))
         }
     ) {
         composable(Routes.WELCOME) {

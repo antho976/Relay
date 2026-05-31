@@ -14,6 +14,8 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.platform.LocalDensity
+import com.forge.app.ui.theme.ForgeMotion
+import kotlin.math.sin
 import kotlin.random.Random
 
 /**
@@ -21,16 +23,23 @@ import kotlin.random.Random
  * call sites typically use `Modifier.fillMaxSize()` or `Modifier.matchParentSize()`.
  *
  * Non-blocking: Canvas has no pointer-input handler so touches pass through.
- * Calls [onComplete] once the animation finishes (~2.5 s).
+ * Calls [onComplete] once the animation finishes.
+ *
+ * Particles accelerate downward (gravity) and flutter sideways (a sine sway) instead of
+ * drifting at a constant velocity, the layout is re-seeded on every appearance so the burst
+ * never reads as canned, and they start at/just-above the top edge so the opening beat is
+ * populated immediately. [progress] is read inside the Canvas draw lambda so frames redraw
+ * without recomposing.
  */
 @Composable
 fun ConfettiOverlay(
     modifier: Modifier = Modifier,
-    durationMs: Int = 2500,
+    durationMs: Int = ForgeMotion.DurationCelebration,
     onComplete: () -> Unit = {}
 ) {
     val density = LocalDensity.current.density
-    val particles = remember { buildParticles(42, density) }
+    // New random layout each time the overlay appears — never the same burst twice.
+    val particles = remember { buildParticles(54, density, seed = Random.nextLong()) }
     val progress = remember { Animatable(0f) }
 
     LaunchedEffect(Unit) {
@@ -41,13 +50,14 @@ fun ConfettiOverlay(
         onComplete()
     }
 
-    val p = progress.value
-
     Canvas(modifier = modifier) {
+        val p = progress.value           // draw-phase read → redraw without recompose
+        val fall = p * p                 // gravity: vertical travel accelerates over time
         particles.forEach { q ->
-            val x = (q.nx + q.dx * p) * size.width
-            val y = (q.ny + q.vy * p) * size.height
-            val alpha = if (p > 0.7f) ((1f - p) / 0.3f).coerceIn(0f, 1f) else 1f
+            val sway = q.sway * sin(p * q.swayFreq + q.phase)
+            val x = (q.nx + q.dx * p + sway) * size.width
+            val y = (q.ny + q.vy * fall) * size.height
+            val alpha = if (p > 0.75f) ((1f - p) / 0.25f).coerceIn(0f, 1f) else 1f
 
             withTransform({
                 translate(x, y)
@@ -64,14 +74,17 @@ fun ConfettiOverlay(
 }
 
 private data class Particle(
-    val nx: Float,  // normalized start x  (0..1)
-    val ny: Float,  // normalized start y  (-0.25..0, above the visible area)
-    val dx: Float,  // x drift across the full animation (-0.2..0.2)
-    val vy: Float,  // y travel expressed as multiples of the canvas height (1.3..2.0)
-    val w: Float,   // width  in px
-    val h: Float,   // height in px
-    val r0: Float,  // initial rotation  (degrees)
-    val rs: Float,  // rotation over the full animation (degrees, ±300)
+    val nx: Float,        // normalized start x  (0..1)
+    val ny: Float,        // normalized start y  (-0.08..0.05 — at/just above the top edge)
+    val dx: Float,        // steady x drift across the animation
+    val vy: Float,        // y travel expressed as multiples of the canvas height
+    val sway: Float,      // horizontal flutter amplitude (fraction of width)
+    val swayFreq: Float,  // flutter frequency
+    val phase: Float,     // flutter phase offset so particles don't sway in unison
+    val w: Float,         // width  in px
+    val h: Float,         // height in px
+    val r0: Float,        // initial rotation  (degrees)
+    val rs: Float,        // rotation over the full animation (degrees, ±300)
     val color: Color
 )
 
@@ -86,14 +99,18 @@ private val palette = listOf(
     Color(0xFFFFEB3B),
 )
 
-private fun buildParticles(count: Int, density: Float): List<Particle> {
-    val rng = Random(seed = 42)
+private fun buildParticles(count: Int, density: Float, seed: Long): List<Particle> {
+    val rng = Random(seed)
     return List(count) { i ->
         Particle(
             nx = rng.nextFloat(),
-            ny = -rng.nextFloat() * 0.25f,
-            dx = (rng.nextFloat() - 0.5f) * 0.25f,
-            vy = 1.3f + rng.nextFloat() * 0.7f,
+            // Start at or just above the top edge so confetti is on screen from the first frame.
+            ny = -0.08f + rng.nextFloat() * 0.13f,
+            dx = (rng.nextFloat() - 0.5f) * 0.15f,
+            vy = 1.2f + rng.nextFloat() * 0.8f,
+            sway = 0.02f + rng.nextFloat() * 0.05f,
+            swayFreq = 6f + rng.nextFloat() * 6f,
+            phase = rng.nextFloat() * 6.2832f,
             w = (8f + rng.nextFloat() * 12f) * density,
             h = (4f + rng.nextFloat() * 8f) * density,
             r0 = rng.nextFloat() * 360f,

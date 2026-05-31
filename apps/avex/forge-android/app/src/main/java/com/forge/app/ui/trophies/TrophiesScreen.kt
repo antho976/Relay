@@ -133,7 +133,8 @@ fun TrophiesScreen(
                         onBg = onBg,
                         muted = muted,
                         bg = bg,
-                        outline = outline
+                        outline = outline,
+                        modifier = Modifier.animateItem()
                     )
                     HorizontalDivider(
                         modifier = Modifier.padding(horizontal = 24.dp),

@@ -81,7 +81,7 @@ internal fun TrophyUnlockRow(t: UnlockedTrophyHighlight, onBg: Color, muted: Col
             .padding(12.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            TrophyIconBadge(icon = t.icon, unlocked = true, size = 40.dp)
+            TrophyIconBadge(icon = t.icon, unlocked = true, size = 40.dp, animateEntrance = true)
             Column(modifier = Modifier.weight(1f).padding(start = 12.dp)) {
                 Text(t.name, style = MaterialTheme.typography.bodyMedium, color = onBg, fontWeight = FontWeight.SemiBold)
                 Text(t.description, style = MaterialTheme.typography.bodySmall, color = muted)

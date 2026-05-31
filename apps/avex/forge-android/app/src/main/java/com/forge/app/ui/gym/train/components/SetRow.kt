@@ -1,7 +1,6 @@
 package com.forge.app.ui.gym.train.components
 
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -48,6 +47,7 @@ import androidx.compose.ui.unit.sp
 import com.forge.app.data.db.entities.LoggedSet
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.ui.theme.ForgeLastGreen
+import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.theme.ForgePrGold
 import com.forge.app.ui.theme.LocalForgeSettings
 
@@ -80,9 +80,13 @@ fun SetRow(
     var editReps by remember { mutableStateOf(set.reps.toString()) }
     var showRpePicker by remember { mutableStateOf(false) }
 
-    // Rise + fade in when the row first appears — the visible "set logged" beat.
+    // The visible "set logged" beat: rise + fade + a scale that lands with a spring so the
+    // row "thunks" into place (matching the haptic). A PR row gets a bouncier overshoot so
+    // it lands harder than a normal set.
     val appear = remember { Animatable(0f) }
-    LaunchedEffect(Unit) { appear.animateTo(1f, animationSpec = tween(250)) }
+    LaunchedEffect(Unit) {
+        appear.animateTo(1f, animationSpec = if (isPr) ForgeMotion.bouncy() else ForgeMotion.snappy())
+    }
 
     val accent = MaterialTheme.colorScheme.primary
     val onBg = MaterialTheme.colorScheme.onBackground
@@ -154,8 +158,12 @@ fun SetRow(
             modifier = tapMod
                 .fillMaxWidth()
                 .graphicsLayer {
-                    alpha = appear.value
-                    translationY = (1f - appear.value) * 10.dp.toPx()
+                    alpha = appear.value.coerceIn(0f, 1f)
+                    translationY = (1f - appear.value) * 12.dp.toPx()
+                    // PR rows start smaller and overshoot for a celebratory pop.
+                    val s = if (isPr) 0.85f + 0.15f * appear.value else 0.96f + 0.04f * appear.value
+                    scaleX = s
+                    scaleY = s
                 }
                 .padding(vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically

@@ -1,8 +1,13 @@
 package com.forge.app.ui.gym.train.components
 
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -22,6 +27,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -39,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.forge.app.domain.timer.RestTimerState
+import com.forge.app.ui.theme.ForgeMotion
 
 /**
  * Floating timer circle. Tap = open controls, long-press = +30s quick-extend (#96).
@@ -56,16 +63,31 @@ fun RestTimerBubble(
     val isPaused = state.isPaused && !state.isFinished
     val fraction = if (state.totalSeconds > 0)
         (state.secondsRemaining.toFloat() / state.totalSeconds).coerceIn(0f, 1f) else 0f
+    // Deplete the ring smoothly between the per-second ticks instead of stepping each second.
+    val animFraction by animateFloatAsState(
+        targetValue = fraction,
+        animationSpec = tween(durationMillis = 1000, easing = LinearEasing),
+        label = "ring-fraction"
+    )
 
     // Springy pop-in each time the bubble appears (a rest begins).
     val appear = remember { Animatable(0f) }
     LaunchedEffect(Unit) {
-        appear.animateTo(1f, animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy))
+        appear.animateTo(1f, animationSpec = ForgeMotion.bouncy<Float>())
     }
+    // When the rest is up, the bubble breathes so the "ready" state pulls the eye.
+    val pulse = rememberInfiniteTransition(label = "rest-finished-pulse")
+    val pulseScale by pulse.animateFloat(
+        initialValue = 1f,
+        targetValue = 1.07f,
+        animationSpec = infiniteRepeatable(tween(650), RepeatMode.Reverse),
+        label = "pulse-scale"
+    )
+    val scale = appear.value * if (state.isFinished) pulseScale else 1f
 
     Box(
         modifier = modifier
-            .graphicsLayer { scaleX = appear.value; scaleY = appear.value }
+            .graphicsLayer { scaleX = scale; scaleY = scale }
             .size(60.dp)
             .clip(CircleShape)
             .then(
@@ -95,7 +117,7 @@ fun RestTimerBubble(
                     drawArc(
                         color = onBg.copy(alpha = 0.85f),
                         startAngle = -90f,
-                        sweepAngle = 360f * fraction,
+                        sweepAngle = 360f * animFraction,
                         useCenter = false,
                         topLeft = Offset(sw / 2f, sw / 2f),
                         size = Size(size.width - sw, size.height - sw),

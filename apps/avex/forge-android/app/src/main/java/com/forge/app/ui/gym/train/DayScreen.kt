@@ -1,6 +1,10 @@
 package com.forge.app.ui.gym.train
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -46,6 +50,7 @@ import com.forge.app.ui.gym.train.components.SwapPickerSheet
 import com.forge.app.ui.gym.train.components.WarmupSuggesterDialog
 import com.forge.app.ui.gym.train.state.DayUiEvent
 import com.forge.app.ui.gym.train.state.DayUiState
+import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.theme.LocalForgeSettings
 
 @Suppress("UNUSED_PARAMETER")
@@ -103,10 +108,21 @@ fun DayScreen(
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         floatingActionButton = {
-            state.restTimer?.let { timer ->
-                RestTimerBubble(state = timer,
-                    onOpenControls = { viewModel.onEvent(DayUiEvent.RestTimerOpen) },
-                    onLongClick = { viewModel.onEvent(DayUiEvent.RestTimerAddSeconds(30)) })
+            // Retain the last timer so the bubble can animate OUT (scale + fade) when the rest
+            // ends instead of snapping away. Enter is handled by the bubble's own pop-in spring.
+            val timer = state.restTimer
+            var lastTimer by remember { mutableStateOf(timer) }
+            LaunchedEffect(timer) { if (timer != null) lastTimer = timer }
+            AnimatedVisibility(
+                visible = timer != null,
+                enter = fadeIn(ForgeMotion.enterTween(ForgeMotion.DurationFast)),
+                exit = scaleOut(ForgeMotion.exitTween(), targetScale = 0.6f) + fadeOut(ForgeMotion.exitTween())
+            ) {
+                (timer ?: lastTimer)?.let { t ->
+                    RestTimerBubble(state = t,
+                        onOpenControls = { viewModel.onEvent(DayUiEvent.RestTimerOpen) },
+                        onLongClick = { viewModel.onEvent(DayUiEvent.RestTimerAddSeconds(30)) })
+                }
             }
         },
         containerColor = Color.Transparent

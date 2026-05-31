@@ -1,9 +1,12 @@
 package com.forge.app.ui.onboarding
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import com.forge.app.ui.theme.ForgeMotion
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -109,8 +112,10 @@ fun OnboardingScreen(
             AnimatedContent(
                 targetState = step,
                 transitionSpec = {
+                    // Slide + fade so steps cross-dissolve instead of smearing as two opaque pages.
                     val dir = if (targetState > initialState) 1 else -1
-                    slideInHorizontally { it * dir } togetherWith slideOutHorizontally { -it * dir }
+                    (slideInHorizontally(ForgeMotion.enterTween()) { it * dir } + fadeIn(ForgeMotion.enterTween())) togetherWith
+                        (slideOutHorizontally(ForgeMotion.exitTween()) { -it * dir } + fadeOut(ForgeMotion.exitTween()))
                 },
                 label = "onboarding_step"
             ) { s ->

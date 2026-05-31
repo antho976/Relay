@@ -20,16 +20,21 @@ import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.SwapHoriz
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.WorkspacePremium
+import androidx.compose.animation.core.Animatable
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.forge.app.program.TrophyIcon
+import com.forge.app.ui.theme.ForgeMotion
 
 /**
  * Round badge with a Material icon at its centre. Phase 6 uses stock Material icons —
@@ -41,14 +46,19 @@ fun TrophyIconBadge(
     icon: TrophyIcon,
     unlocked: Boolean,
     modifier: Modifier = Modifier,
-    size: Dp = 48.dp
+    size: Dp = 48.dp,
+    animateEntrance: Boolean = false
 ) {
     val accent = MaterialTheme.colorScheme.primary
     val bg = if (unlocked) accent.copy(alpha = 0.20f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.30f)
     val fg = if (unlocked) accent else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+    // The "just unlocked" moment: the badge pops in with a bouncy scale instead of appearing static.
+    val pop = remember { Animatable(if (animateEntrance) 0.4f else 1f) }
+    LaunchedEffect(Unit) { if (animateEntrance) pop.animateTo(1f, animationSpec = ForgeMotion.bouncy<Float>()) }
     Box(
         modifier = modifier
             .size(size)
+            .graphicsLayer { scaleX = pop.value; scaleY = pop.value }
             .clip(CircleShape)
             .background(bg),
         contentAlignment = Alignment.Center

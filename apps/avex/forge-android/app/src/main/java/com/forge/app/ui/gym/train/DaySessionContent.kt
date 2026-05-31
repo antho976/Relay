@@ -1,6 +1,11 @@
 package com.forge.app.ui.gym.train
 
-import androidx.compose.animation.Crossfade
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -43,6 +48,7 @@ import com.forge.app.ui.gym.train.components.UpNextBubble
 import com.forge.app.ui.gym.train.components.WarmupGate
 import com.forge.app.ui.gym.train.state.DayUiEvent
 import com.forge.app.ui.gym.train.state.DayUiState
+import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.theme.LocalForgeSettings
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -125,9 +131,22 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
                 val nextEx = upcoming.firstOrNull()?.second
 
                 item(key = "current-exercise") {
-                    // Crossfade keyed on the exercise id (not the whole state) so it only
-                    // animates on an actual exercise switch — not on every set logged.
-                    Crossfade(targetState = shownExercise.plan.id, label = "exercise-switch") { id ->
+                    // Shared-axis X keyed on the exercise id (not the whole state) so it only
+                    // animates on an actual exercise switch — not on every set logged. The new
+                    // exercise slides in from the direction of travel (right = later in the list).
+                    AnimatedContent(
+                        targetState = shownExercise.plan.id,
+                        transitionSpec = {
+                            val fromIdx = state.exercises.indexOfFirst { it.plan.id == initialState }
+                            val toIdx = state.exercises.indexOfFirst { it.plan.id == targetState }
+                            val dir = if (toIdx >= fromIdx) 1 else -1
+                            (slideInHorizontally(ForgeMotion.enterTween()) { (it / 4) * dir } +
+                                fadeIn(ForgeMotion.enterTween())) togetherWith
+                                (slideOutHorizontally(ForgeMotion.exitTween()) { -(it / 4) * dir } +
+                                    fadeOut(ForgeMotion.exitTween()))
+                        },
+                        label = "exercise-switch"
+                    ) { id ->
                         val ex = state.exercises.firstOrNull { it.plan.id == id }
                         if (ex != null) {
                             val exIdx = state.exercises.indexOfFirst { it.plan.id == id }

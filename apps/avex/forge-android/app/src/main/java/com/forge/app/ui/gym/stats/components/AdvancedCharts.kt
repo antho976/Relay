@@ -1,5 +1,7 @@
 package com.forge.app.ui.gym.stats.components
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -10,14 +12,18 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
+import androidx.compose.material3.Text
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathMeasure
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.forge.app.ui.theme.ForgeMotion
 
 // ─── Strength Curve Overlay (#94) — two exercises on same chart ───────────────
 
@@ -48,7 +54,11 @@ fun StrengthOverlayCard(
             LegendItem(history1.first, primaryColor)
             LegendItem(history2.first, secondaryColor)
         }
+        // Curves draw themselves on first appearance (path-trim 0→1) instead of snapping in.
+        val drawProgress = remember { Animatable(0f) }
+        LaunchedEffect(Unit) { drawProgress.animateTo(1f, animationSpec = tween(700, easing = ForgeMotion.Decelerate)) }
         Canvas(modifier = Modifier.fillMaxWidth().height(100.dp)) {
+            val p = drawProgress.value
             fun drawCurve(pts: List<com.forge.app.ui.gym.stats.state.HistoryPoint>, color: androidx.compose.ui.graphics.Color) {
                 if (pts.size < 2) return
                 val path = Path()
@@ -57,7 +67,10 @@ fun StrengthOverlayCard(
                     val y = size.height - (pt.maxWeightLb / maxW * size.height).toFloat()
                     if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
                 }
-                drawPath(path, color, style = Stroke(3f))
+                val measure = PathMeasure().apply { setPath(path, false) }
+                val drawn = Path()
+                measure.getSegment(0f, measure.length * p, drawn, true)
+                drawPath(drawn, color, style = Stroke(2.dp.toPx()))
             }
             drawCurve(history1.second, primaryColor)
             drawCurve(history2.second, secondaryColor)
@@ -88,7 +101,10 @@ fun EffortOverTimeCard(
         Text("ENERGY TREND · last ${recentPoints.size} sessions",
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.SemiBold)
+        val drawProgress = remember { Animatable(0f) }
+        LaunchedEffect(Unit) { drawProgress.animateTo(1f, animationSpec = tween(700, easing = ForgeMotion.Decelerate)) }
         Canvas(modifier = Modifier.fillMaxWidth().height(80.dp)) {
+            val p = drawProgress.value
             val step = size.width / (recentPoints.size - 1).coerceAtLeast(1)
             val path = Path()
             recentPoints.forEachIndexed { i, pt ->
@@ -97,10 +113,17 @@ fun EffortOverTimeCard(
                 val y = size.height - (score / 5f * size.height)
                 if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
             }
-            drawPath(path, primaryColor, style = Stroke(3f))
+            val measure = PathMeasure().apply { setPath(path, false) }
+            val drawn = Path()
+            measure.getSegment(0f, measure.length * p, drawn, true)
+            drawPath(drawn, primaryColor, style = Stroke(2.dp.toPx()))
+            // Reveal each point's dot as the line reaches it.
             recentPoints.forEachIndexed { i, pt ->
-                val score = MOOD_VALUES[pt.mood.lowercase()] ?: 3
-                drawCircle(primaryColor, 4f, center = Offset(i * step, size.height - score / 5f * size.height))
+                val frac = if (recentPoints.size <= 1) 1f else i.toFloat() / (recentPoints.size - 1)
+                if (frac <= p) {
+                    val score = MOOD_VALUES[pt.mood.lowercase()] ?: 3
+                    drawCircle(primaryColor, 3.dp.toPx(), center = Offset(i * step, size.height - score / 5f * size.height))
+                }
             }
         }
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
