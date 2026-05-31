@@ -147,14 +147,19 @@ internal fun AccentColorRow(currentHex: String, onSelect: (String) -> Unit) {
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val accentColors = listOf(
-        "#3D4F73" to "Navy", "#8B3535" to "Red", "#4D6040" to "Olive", "#7A6435" to "Gold"
+        "#3D4F73" to "Navy", "#8B3535" to "Red", "#4D6040" to "Olive", "#7A6435" to "Gold",
+        "#356B6B" to "Teal", "#5B4570" to "Purple", "#8B3556" to "Rose", "#3E5E3E" to "Forest",
+        "#8B5A35" to "Copper", "#445A6B" to "Steel", "#6B4535" to "Rust", "#556B35" to "Moss"
     )
     Column(
         modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Text("Accent color", style = MaterialTheme.typography.bodyMedium, color = onBg)
-        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
             accentColors.forEach { (hex, label) ->
                 val isSelected = currentHex == hex || (currentHex.isEmpty() && hex == "#3D4F73")
                 val swatchColor = remember(hex) { Color(android.graphics.Color.parseColor(hex)) }

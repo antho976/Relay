@@ -1,6 +1,8 @@
 package com.forge.app.data.repo
 
 import android.content.Context
+import android.net.Uri
+import com.forge.app.data.db.ForgeDatabase
 import com.forge.app.data.db.dao.CardioDao
 import com.forge.app.data.db.dao.LoggedExerciseDao
 import com.forge.app.data.db.dao.LoggedSetDao
@@ -15,6 +17,8 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * Handles data export and backup operations (#5, #6, #86, #138).
@@ -27,7 +31,8 @@ class BackupRepository @Inject constructor(
     private val loggedExerciseDao: LoggedExerciseDao,
     private val loggedSetDao: LoggedSetDao,
     private val cardioDao: CardioDao,
-    private val settingsRepo: SettingsRepository
+    private val settingsRepo: SettingsRepository,
+    private val db: ForgeDatabase
 ) {
 
     private val zone = ZoneId.systemDefault()
@@ -201,4 +206,91 @@ class BackupRepository @Inject constructor(
     fun listBackupFiles(): List<File> =
         context.filesDir.listFiles { f -> f.name.startsWith("forge_") && f.name.endsWith(".json") }
             ?.sortedByDescending { it.lastModified() } ?: emptyList()
+
+    // ─── Complete database backup & restore ───────────────────────────────────
+    // Unlike the JSON exports above (lossy + app-private), these copy the *entire*
+    // database file. A backup captures every table and column — including any added
+    // later — and restore brings it back byte-for-byte. The real safety net.
+
+    /**
+     * Consolidated single-file snapshot of the whole DB via `VACUUM INTO` — one file, no
+     * WAL/-shm sidecars, a consistent point-in-time copy. Written to cache; callers stream
+     * it to a user-chosen destination.
+     */
+    private fun snapshotDatabase(): File {
+        val temp = File(context.cacheDir, "forge_snapshot_${System.currentTimeMillis()}.db")
+        if (temp.exists()) temp.delete()
+        val safePath = temp.absolutePath.replace("'", "''")
+        db.openHelper.writableDatabase.execSQL("VACUUM INTO '$safePath'")
+        return temp
+    }
+
+    /**
+     * Write a complete backup to a user-picked [uri] (e.g. Downloads). Survives uninstall,
+     * unlike the app-private exports.
+     */
+    suspend fun backupToUri(uri: Uri) = withContext(Dispatchers.IO) {
+        val snap = snapshotDatabase()
+        try {
+            context.contentResolver.openOutputStream(uri)?.use { out ->
+                snap.inputStream().use { it.copyTo(out) }
+            } ?: error("Could not open the chosen destination")
+        } finally {
+            snap.delete()
+        }
+    }
+
+    /**
+     * Replace the live database with the backup at [uri]. Validates it's a real Forge DB
+     * first; only then closes Room and swaps the file. Returns true on success — the caller
+     * MUST restart the app afterward (Room is closed and the file replaced underneath it).
+     */
+    suspend fun restoreFromUri(uri: Uri): Boolean = withContext(Dispatchers.IO) {
+        val temp = File(context.cacheDir, "forge_restore_${System.currentTimeMillis()}.db")
+        if (temp.exists()) temp.delete()
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            temp.outputStream().use { input.copyTo(it) }
+        } ?: return@withContext false
+
+        if (!isForgeDatabase(temp)) { temp.delete(); return@withContext false }
+
+        db.close()
+        val live = context.getDatabasePath("forge.db")
+        temp.copyTo(live, overwrite = true)
+        // The restored file is authoritative; drop stale WAL/-shm so they can't override it.
+        File(live.path + "-wal").delete()
+        File(live.path + "-shm").delete()
+        temp.delete()
+        return@withContext true
+    }
+
+    /** Cheap sanity check that a candidate file is a SQLite DB containing our `session` table. */
+    private fun isForgeDatabase(file: File): Boolean = runCatching {
+        android.database.sqlite.SQLiteDatabase.openDatabase(
+            file.path, null, android.database.sqlite.SQLiteDatabase.OPEN_READONLY
+        ).use { dbFile ->
+            dbFile.rawQuery(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='session'", null
+            ).use { c -> c.moveToFirst() && c.getInt(0) > 0 }
+        }
+    }.getOrDefault(false)
+
+    /**
+     * Zip the crash logs (ForgeApp writes them to filesDir/crashes) into [uri].
+     * Returns how many logs were included (0 = none yet).
+     */
+    suspend fun exportCrashLogsToUri(uri: Uri): Int = withContext(Dispatchers.IO) {
+        val dir = File(context.filesDir, "crashes")
+        val files = dir.listFiles()?.filter { it.isFile }?.sortedByDescending { it.lastModified() } ?: emptyList()
+        context.contentResolver.openOutputStream(uri)?.use { out ->
+            java.util.zip.ZipOutputStream(out).use { zip ->
+                files.forEach { f ->
+                    zip.putNextEntry(java.util.zip.ZipEntry(f.name))
+                    f.inputStream().use { it.copyTo(zip) }
+                    zip.closeEntry()
+                }
+            }
+        } ?: error("Could not open the chosen destination")
+        files.size
+    }
 }

@@ -68,6 +68,7 @@ internal fun CollapsedRow(
 ) {
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val accent = MaterialTheme.colorScheme.primary
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -84,7 +85,7 @@ internal fun CollapsedRow(
         Column(modifier = Modifier.weight(1f).clickable { onToggle() }) {
             val nameText = buildAnnotatedString {
                 append(state.effectiveName)
-                if (isNow) withStyle(SpanStyle(fontSize = 10.sp, color = muted)) { append("  ● NOW") }
+                if (isNow) withStyle(SpanStyle(fontSize = 10.sp, color = accent)) { append("  ● NOW") }
             }
             Text(
                 nameText,

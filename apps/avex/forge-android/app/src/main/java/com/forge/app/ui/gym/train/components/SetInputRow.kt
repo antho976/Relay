@@ -54,6 +54,9 @@ private val DELTA_COL_W = 72.dp
 // entry (e.g. a pasted "45x10") so it splits into both fields at once.
 private val WEIGHT_REPS_REGEX = Regex("""^([0-9]*\.?[0-9]+)\s*[xX]\s*([0-9]+)$""")
 
+/** Which value the in-app keypad is currently editing. */
+private enum class Field { WEIGHT, REPS }
+
 /**
  * Input row for the next set. When [nextSetNumber] is provided the layout
  * matches the set-table columns and the LOG SET button is rendered full-width below.
@@ -76,6 +79,10 @@ fun SetInputRow(
 ) {
     var weight by rememberSaveable(prefillWeight) { mutableStateOf(prefillWeight.orEmpty()) }
     var reps by rememberSaveable { mutableStateOf("") }
+    // Weight is usually prefilled from last session, so start the keypad aimed at reps.
+    var activeField by remember(prefillWeight) {
+        mutableStateOf(if (prefillWeight.isNullOrBlank()) Field.WEIGHT else Field.REPS)
+    }
     val useKg = LocalForgeSettings.current.useKg
     val repsFocus = remember { FocusRequester() }
     var showUnitDialog by remember { mutableStateOf(false) }
@@ -110,14 +117,32 @@ fun SetInputRow(
         else weight = new
     }
 
-    // Single log path shared by the LOG SET button and the keyboard's "Done" key, so
-    // you can log a set without reaching for the button. Refocuses reps afterward to
-    // keep the keyboard up and ready for the next set.
+    // Single log path used by the keypad's ✓ key.
     fun submitSet() {
         val r = reps.toIntOrNull() ?: return
         onSubmit(weight.trim(), r)
         reps = ""
-        repsFocus.requestFocus()
+        // Weight persists for straight sets; aim the keypad at reps for the next one.
+        activeField = Field.REPS
+    }
+
+    // ── In-app keypad edits, applied to whichever field is active ──────────────
+    fun keypadDigit(c: Char) {
+        when (activeField) {
+            Field.WEIGHT -> weight = if (weight == "BW") c.toString() else weight + c
+            Field.REPS -> reps += c
+        }
+    }
+    fun keypadDecimal() {
+        if (activeField == Field.WEIGHT && weight != "BW" && !weight.contains('.')) {
+            weight = if (weight.isEmpty()) "0." else "$weight."
+        }
+    }
+    fun keypadBackspace() {
+        when (activeField) {
+            Field.WEIGHT -> weight = if (weight == "BW") "" else weight.dropLast(1)
+            Field.REPS -> reps = reps.dropLast(1)
+        }
     }
 
     val canSubmit = remember(weight, reps) {
@@ -167,12 +192,10 @@ fun SetInputRow(
                             modifier = Modifier.clickable { showUnitDialog = true }
                         )
                         Spacer(Modifier.height(2.dp))
-                        UnderlineNumberField(
+                        KeypadValue(
                             value = weight,
-                            onValueChange = ::onWeightChange,
-                            placeholder = "0",
-                            keyboardType = KeyboardType.Text,
-                            imeAction = ImeAction.Next,
+                            active = activeField == Field.WEIGHT,
+                            onClick = { activeField = Field.WEIGHT },
                             supportingText = prRepsHint?.let { "$it for PR" }
                         )
                     }
@@ -182,14 +205,10 @@ fun SetInputRow(
                         Column {
                             Text("REPS", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
                             Spacer(Modifier.height(2.dp))
-                            UnderlineNumberField(
+                            KeypadValue(
                                 value = reps,
-                                onValueChange = { new -> if (new.all { it.isDigit() }) reps = new },
-                                placeholder = "0",
-                                keyboardType = KeyboardType.Number,
-                                imeAction = ImeAction.Done,
-                                focusRequester = repsFocus,
-                                keyboardActions = KeyboardActions(onDone = { submitSet() })
+                                active = activeField == Field.REPS,
+                                onClick = { activeField = Field.REPS }
                             )
                         }
                     }
@@ -239,36 +258,32 @@ fun SetInputRow(
 
             Spacer(Modifier.height(10.dp))
 
-            // Full-width primary CTA — solid white. Logs the current input, or advances
-            // to the next exercise once the target sets are met. Disabled state stays
-            // clearly visible (not faded to "broken").
-            val ctaColors = ButtonDefaults.buttonColors(
-                containerColor = Color.White,
-                contentColor = Color.Black,
-                disabledContainerColor = Color.White.copy(alpha = 0.6f),
-                disabledContentColor = Color.Black.copy(alpha = 0.7f)
-            )
             if (targetsMet) {
+                // Solid white advance CTA — input is done; move to the next exercise.
                 Button(
                     onClick = onAdvance,
                     modifier = Modifier.fillMaxWidth(),
                     shape = ctaShape,
                     contentPadding = PaddingValues(vertical = 16.dp),
-                    colors = ctaColors
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color.White,
+                        contentColor = Color.Black
+                    )
                 ) {
                     Text(advanceLabel, style = MaterialTheme.typography.labelLarge)
                 }
             } else {
-                Button(
-                    onClick = { submitSet() },
-                    enabled = canSubmit,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = ctaShape,
-                    contentPadding = PaddingValues(vertical = 16.dp),
-                    colors = ctaColors
-                ) {
-                    Text("LOG SET $nextSetNumber →", style = MaterialTheme.typography.labelLarge)
-                }
+                // In-app keypad replaces the system keyboard. Its ✓ key logs the set.
+                NumericKeypad(
+                    onDigit = { keypadDigit(it) },
+                    onDecimal = { keypadDecimal() },
+                    onBackspace = { keypadBackspace() },
+                    onNext = { activeField = Field.REPS },
+                    onBodyweight = { weight = "BW"; activeField = Field.REPS },
+                    onSubmit = { submitSet() },
+                    submitEnabled = canSubmit,
+                    submitLabel = "LOG SET $nextSetNumber  ✓"
+                )
             }
         }
     } else {
@@ -364,6 +379,45 @@ private fun UnderlineNumberField(
         HorizontalDivider(modifier = Modifier.padding(top = 2.dp), thickness = 1.dp, color = outline.copy(alpha = 0.5f))
         if (supportingText != null) {
             Text(supportingText, style = MaterialTheme.typography.labelSmall, color = accent, modifier = Modifier.padding(top = 2.dp))
+        }
+    }
+}
+
+/**
+ * Tappable value display for the keypad-driven input. Shows the current value (or a
+ * dimmed "0"), an accent underline when it's the active field, and the optional PR hint.
+ * No system IME — edits arrive via [NumericKeypad].
+ */
+@Composable
+private fun KeypadValue(
+    value: String,
+    active: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    supportingText: String? = null
+) {
+    val onBg = MaterialTheme.colorScheme.onBackground
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val accent = MaterialTheme.colorScheme.primary
+    val outline = MaterialTheme.colorScheme.outline
+    Column(modifier = modifier.clickable { onClick() }) {
+        Text(
+            value.ifEmpty { "0" },
+            style = MaterialTheme.typography.headlineMedium,
+            color = if (value.isEmpty()) muted.copy(alpha = 0.4f) else onBg
+        )
+        HorizontalDivider(
+            modifier = Modifier.padding(top = 2.dp),
+            thickness = if (active) 2.dp else 1.dp,
+            color = if (active) accent else outline.copy(alpha = 0.5f)
+        )
+        if (supportingText != null) {
+            Text(
+                supportingText,
+                style = MaterialTheme.typography.labelSmall,
+                color = accent,
+                modifier = Modifier.padding(top = 2.dp)
+            )
         }
     }
 }

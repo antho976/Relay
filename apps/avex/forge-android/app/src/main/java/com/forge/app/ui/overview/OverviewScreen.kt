@@ -1,5 +1,8 @@
 package com.forge.app.ui.overview
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateIntAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -38,6 +41,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -78,6 +82,10 @@ fun OverviewScreen(
     LaunchedEffect(state.pendingMilestone) {
         state.pendingMilestone?.let { event -> viewModel.onMilestoneShown(event.id) }
     }
+
+    // Content rises + fades in on open — a premium reveal instead of snapping in.
+    val entry = remember { Animatable(0f) }
+    LaunchedEffect(Unit) { entry.animateTo(1f, animationSpec = tween(450)) }
 
     val today = LocalDate.now()
     val todayDow = today.dayOfWeek.value - 1
@@ -135,6 +143,10 @@ fun OverviewScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(inner)
+                .graphicsLayer {
+                    alpha = entry.value
+                    translationY = (1f - entry.value) * 24.dp.toPx()
+                }
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 24.dp)
         ) {
@@ -232,10 +244,13 @@ fun OverviewScreen(
 
             Spacer(Modifier.height(16.dp))
 
+            val animWorkouts by animateIntAsState(state.workoutsThisWeek.coerceAtLeast(0), label = "workouts")
+            val animVolume by animateIntAsState(state.volumeThisWeekLb.coerceAtLeast(0.0).toInt(), label = "volume")
+            val animCardio by animateIntAsState(state.cardioMinutesThisWeek.coerceAtLeast(0), label = "cardio")
             Row(modifier = Modifier.fillMaxWidth()) {
-                OverviewStat(value = "${state.workoutsThisWeek.coerceAtLeast(0)}", label = "WORKOUTS", modifier = Modifier.weight(1f))
-                OverviewStat(value = "${state.volumeThisWeekLb.coerceAtLeast(0.0).toInt()}", label = "LB", modifier = Modifier.weight(1f))
-                OverviewStat(value = "${state.cardioMinutesThisWeek.coerceAtLeast(0)}", label = "CARDIO MIN", modifier = Modifier.weight(1f))
+                OverviewStat(value = "$animWorkouts", label = "WORKOUTS", modifier = Modifier.weight(1f))
+                OverviewStat(value = "$animVolume", label = "LB", modifier = Modifier.weight(1f))
+                OverviewStat(value = "$animCardio", label = "CARDIO MIN", modifier = Modifier.weight(1f))
             }
 
             Spacer(Modifier.height(20.dp))

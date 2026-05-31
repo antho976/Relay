@@ -2,6 +2,7 @@ package com.forge.app.di
 
 import android.content.Context
 import androidx.room.Room
+import com.forge.app.data.db.ALL_MIGRATIONS
 import com.forge.app.data.db.ForgeDatabase
 import com.forge.app.data.db.dao.BodyweightDao
 import com.forge.app.data.db.dao.CardioDao
@@ -30,8 +31,11 @@ object DatabaseModule {
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): ForgeDatabase =
         Room.databaseBuilder(context, ForgeDatabase::class.java, "forge.db")
-            // Destructive until first real workout is logged. See ForgeDatabase docs.
-            .fallbackToDestructiveMigration(dropAllTables = true)
+            // Schema is LOCKED from v12 onward — real migrations preserve data (see Migrations.kt).
+            .addMigrations(*ALL_MIGRATIONS)
+            // Only the pre-lock versions (≤11) may still reset rather than crash. Future bumps
+            // without a migration will fail loudly at startup instead of silently wiping data.
+            .fallbackToDestructiveMigrationFrom(true, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)
             .build()
 
     @Provides fun provideSessionDao(db: ForgeDatabase): SessionDao = db.sessionDao()

@@ -28,25 +28,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 
-private data class ExportOption(val label: String, val format: String, val action: () -> Unit)
-
 @Composable
-internal fun DataExportDialog(viewModel: SettingsViewModel, onDismiss: () -> Unit) {
-    var selectedIdx by remember { mutableStateOf<Int?>(null) }
-    var selectedFormat by remember { mutableStateOf<String?>(null) }
-
-    val options = remember(viewModel) {
-        listOf(
-            ExportOption("Sessions", "CSV") { viewModel.exportSessionsCsv() },
-            ExportOption("Weekly summary", "JSON") { viewModel.exportWeeklyJson() },
-            ExportOption("Full backup", "JSON") { viewModel.exportFullBackup() },
-            ExportOption("Last session", "PDF") { viewModel.exportLastSessionPdf() }
-        )
-    }
-
-    val validFormat = selectedIdx?.let { options[it].format }
-    val canExport = selectedIdx != null && selectedFormat == validFormat
-
+internal fun DataExportDialog(
+    viewModel: SettingsViewModel,
+    onBackup: () -> Unit,
+    onRestore: () -> Unit,
+    onExportCrashLogs: () -> Unit,
+    onDismiss: () -> Unit
+) {
     Dialog(onDismissRequest = onDismiss) {
         val onBg = MaterialTheme.colorScheme.onBackground
         val muted = MaterialTheme.colorScheme.onSurfaceVariant
@@ -57,46 +46,59 @@ internal fun DataExportDialog(viewModel: SettingsViewModel, onDismiss: () -> Uni
             modifier = Modifier.fillMaxWidth().background(bg, RoundedCornerShape(8.dp)).padding(horizontal = 24.dp, vertical = 20.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Text("EXPORT DATA", style = MaterialTheme.typography.labelSmall, color = muted, letterSpacing = 1.5.sp)
+            Text("DATA", style = MaterialTheme.typography.labelSmall, color = muted, letterSpacing = 1.5.sp)
 
+            // ── Backup & restore — the real safety net ───────────────────────────
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("What?", style = MaterialTheme.typography.bodyMedium, color = onBg)
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    options.forEachIndexed { idx, opt ->
-                        PillChip("${opt.label}\n${opt.format}", selected = selectedIdx == idx) {
-                            selectedIdx = idx; selectedFormat = opt.format
-                        }
-                    }
-                }
-            }
-
-            HorizontalDivider(color = outline.copy(alpha = 0.2f))
-
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Format?", style = MaterialTheme.typography.bodyMedium, color = onBg)
+                Text("Backup & restore (.db)", style = MaterialTheme.typography.bodyMedium, color = onBg)
+                Text(
+                    "Your whole database in one file. Save it somewhere safe; restore replaces all current data and restarts the app.",
+                    style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp
+                )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf("CSV", "JSON", "PDF").forEach { fmt ->
-                        val isValid = validFormat == fmt
-                        PillChip(fmt, selected = selectedFormat == fmt, enabled = isValid) {
-                            if (isValid) selectedFormat = fmt
-                        }
-                    }
+                    PillChip("Back up", selected = false) { onBackup(); onDismiss() }
+                    PillChip("Restore", selected = false) { onRestore(); onDismiss() }
                 }
             }
 
             HorizontalDivider(color = outline.copy(alpha = 0.2f))
 
-            Row(modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(20.dp, Alignment.End),
-                verticalAlignment = Alignment.CenterVertically) {
-                Text("cancel", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.6f),
+            // ── Quick export — one tap, format baked into each row ───────────────
+            Text("Quick export", style = MaterialTheme.typography.bodyMedium, color = onBg)
+            ExportRow("This week", "JSON", "summary for AI analysis", onBg, muted) { viewModel.exportWeeklyJson(); onDismiss() }
+            ExportRow("All sessions", "CSV", "spreadsheet of every session", onBg, muted) { viewModel.exportSessionsCsv(); onDismiss() }
+            ExportRow("Last session", "PDF", "printable session sheet", onBg, muted) { viewModel.exportLastSessionPdf(); onDismiss() }
+            ExportRow("Crash logs", "ZIP", "diagnostics if something broke", onBg, muted) { onExportCrashLogs(); onDismiss() }
+
+            HorizontalDivider(color = outline.copy(alpha = 0.2f))
+
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp, Alignment.End)) {
+                Text("close", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.6f),
                     modifier = Modifier.clickable(onClick = onDismiss).padding(4.dp))
-                Text("Export →", style = MaterialTheme.typography.bodyMedium,
-                    color = if (canExport) onBg else onBg.copy(alpha = 0.3f),
-                    modifier = if (canExport) Modifier.clickable { options[selectedIdx!!].action(); onDismiss() }.padding(4.dp)
-                    else Modifier.padding(4.dp))
             }
         }
+    }
+}
+
+@Composable
+private fun ExportRow(
+    label: String,
+    format: String,
+    hint: String,
+    onBg: androidx.compose.ui.graphics.Color,
+    muted: androidx.compose.ui.graphics.Color,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().clickable { onClick() }.padding(vertical = 8.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Text(label, style = MaterialTheme.typography.bodyMedium, color = onBg)
+            Text(hint, style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.6f), fontSize = 9.sp)
+        }
+        Text(format, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp, letterSpacing = 1.sp)
     }
 }
 

@@ -1,5 +1,9 @@
 package com.forge.app.ui.nav
 
+import androidx.compose.animation.AnimatedContentTransitionScope
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -38,7 +42,25 @@ import com.forge.app.ui.welcome.WelcomeScreen
 @Composable
 fun ForgeNavHost() {
     val nav = rememberNavController()
-    NavHost(navController = nav, startDestination = Routes.OVERVIEW) {
+    // App-wide "push" navigation: forward screens slide in from the right, back from the
+    // left, both with a fade. One place gives every screen transition a premium feel.
+    val dur = 280
+    NavHost(
+        navController = nav,
+        startDestination = Routes.OVERVIEW,
+        enterTransition = {
+            slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.Start, tween(dur)) + fadeIn(tween(dur))
+        },
+        exitTransition = {
+            slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.Start, tween(dur)) + fadeOut(tween(dur))
+        },
+        popEnterTransition = {
+            slideIntoContainer(AnimatedContentTransitionScope.SlideDirection.End, tween(dur)) + fadeIn(tween(dur))
+        },
+        popExitTransition = {
+            slideOutOfContainer(AnimatedContentTransitionScope.SlideDirection.End, tween(dur)) + fadeOut(tween(dur))
+        }
+    ) {
         composable(Routes.WELCOME) {
             WelcomeScreen(onFinished = {
                 nav.navigate(Routes.OVERVIEW) { popUpTo(Routes.WELCOME) { inclusive = true } }

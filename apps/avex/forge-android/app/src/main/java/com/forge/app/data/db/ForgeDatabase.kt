@@ -39,10 +39,14 @@ import com.forge.app.data.db.entities.SessionBreak
 import com.forge.app.data.db.entities.VacationPeriod
 
 /**
- * Schema is currently v13 (v13 added an index on LoggedExercise.exercise_id; v12 added LoggedSet.rpe; v11 added per-set annotations; prior versions are destructively migrated).
- * Migrations are deliberately destructive until Antho logs his first "real" workout
- * — at that point we lock the schema, write real Migration objects per change, and
- * remove the destructive fallback in [com.forge.app.di.DatabaseModule].
+ * Schema is v13 (v13 added an index on LoggedExercise.exercise_id; v12 added LoggedSet.rpe;
+ * v11 added per-set annotations).
+ *
+ * The schema is now LOCKED from v12 onward: every change needs a real Migration in
+ * [com.forge.app.data.db.Migrations] (registered in ALL_MIGRATIONS), a bumped version here,
+ * an exported schema JSON, and a case in MigrationTest. Only the pre-lock versions (≤11) still
+ * reset destructively (see [com.forge.app.di.DatabaseModule]). A version bump without a matching
+ * migration fails loudly at startup — intended, so data is never silently wiped.
  */
 @Database(
     entities = [

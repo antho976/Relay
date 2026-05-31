@@ -135,4 +135,34 @@ class SettingsViewModel @Inject constructor(
         _exportPath.value = file.absolutePath
     }
     fun clearExportPath() { _exportPath.value = null }
+
+    // ── Complete DB backup & restore (the real safety net) ─────────────────────
+    private val _statusMessage = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+    val statusMessage: StateFlow<String?> = _statusMessage.asStateFlow()
+    fun clearStatusMessage() { _statusMessage.value = null }
+
+    /** Set true once a restore lands; the UI shows "restarting" and relaunches the app. */
+    private val _restoreSucceeded = kotlinx.coroutines.flow.MutableStateFlow(false)
+    val restoreSucceeded: StateFlow<Boolean> = _restoreSucceeded.asStateFlow()
+
+    fun backupDatabase(uri: android.net.Uri) = viewModelScope.launch {
+        runCatching { backupRepo.backupToUri(uri) }
+            .onSuccess { _statusMessage.value = "Backup saved." }
+            .onFailure { _statusMessage.value = "Backup failed: ${it.message}" }
+    }
+
+    fun restoreDatabase(uri: android.net.Uri) = viewModelScope.launch {
+        val ok = runCatching { backupRepo.restoreFromUri(uri) }.getOrDefault(false)
+        if (ok) _restoreSucceeded.value = true
+        else _statusMessage.value = "Restore failed — that file isn't a valid Forge backup."
+    }
+
+    fun exportCrashLogs(uri: android.net.Uri) = viewModelScope.launch {
+        runCatching { backupRepo.exportCrashLogsToUri(uri) }
+            .onSuccess { n ->
+                _statusMessage.value =
+                    if (n == 0) "No crash logs yet — nothing to export." else "Exported $n crash log(s)."
+            }
+            .onFailure { _statusMessage.value = "Crash log export failed: ${it.message}" }
+    }
 }

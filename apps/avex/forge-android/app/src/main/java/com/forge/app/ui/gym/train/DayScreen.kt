@@ -23,7 +23,9 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -32,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.forge.app.ui.common.ConfettiOverlay
 import com.forge.app.ui.common.ForgeHapticType
 import com.forge.app.ui.common.forgeHaptic
 import com.forge.app.ui.gym.train.components.AddExerciseSheet
@@ -62,10 +65,13 @@ fun DayScreen(
     val totalPrSets by remember { derivedStateOf { state.exercises.sumOf { it.prSetIds.size } } }
     var prevTotalSets = remember { mutableIntStateOf(-1) }
     var prevTotalPrs = remember { mutableIntStateOf(-1) }
+    var showPrBurst by remember { mutableStateOf(false) }
     LaunchedEffect(totalSets, totalPrSets) {
         when {
-            prevTotalPrs.intValue >= 0 && totalPrSets > prevTotalPrs.intValue ->
+            prevTotalPrs.intValue >= 0 && totalPrSets > prevTotalPrs.intValue -> {
                 view.forgeHaptic(ForgeHapticType.PR_OR_FINISH, hapticStrength)
+                showPrBurst = true
+            }
             prevTotalSets.intValue >= 0 && totalSets > prevTotalSets.intValue ->
                 view.forgeHaptic(ForgeHapticType.SET_LOGGED, hapticStrength)
         }
@@ -107,6 +113,9 @@ fun DayScreen(
     ) { inner ->
         Box(Modifier.fillMaxSize().padding(inner)) {
             DayContent(state = state, onEvent = viewModel::onEvent)
+            if (showPrBurst) {
+                ConfettiOverlay(modifier = Modifier.fillMaxSize(), onComplete = { showPrBurst = false })
+            }
         }
     }
 

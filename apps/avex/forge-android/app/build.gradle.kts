@@ -43,6 +43,9 @@ android {
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
     }
+
+    // Make the exported Room schemas available to the migration test (androidTest).
+    sourceSets["androidTest"].assets.srcDir("$projectDir/schemas")
 }
 
 // Room schema export directory (required because we set exportSchema = true)
@@ -98,6 +101,7 @@ dependencies {
     // Test
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.test.junit)
+    androidTestImplementation("androidx.room:room-testing:2.7.2")
     androidTestImplementation(libs.androidx.test.espresso.core)
     androidTestImplementation(platform(libs.compose.bom))
     androidTestImplementation(libs.compose.ui.test.junit4)

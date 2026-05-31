@@ -1,7 +1,9 @@
 package com.forge.app.ui.settings
 
+import android.net.Uri
 import androidx.activity.compose.BackHandler
-import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -30,6 +32,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
@@ -106,6 +109,25 @@ fun SettingsScreen(
     var searchQuery by remember { mutableStateOf("") }
     var confirmReset by remember { mutableStateOf<ResetTarget?>(null) }
     var showDataDialog by remember { mutableStateOf(false) }
+
+    // Complete DB backup & restore via the system file picker (survives uninstall).
+    val context = LocalContext.current
+    val statusMessage by viewModel.statusMessage.collectAsStateWithLifecycle()
+    val restoreSucceeded by viewModel.restoreSucceeded.collectAsStateWithLifecycle()
+    var pendingRestoreUri by remember { mutableStateOf<Uri?>(null) }
+    val dateStamp = remember {
+        java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()).format(java.util.Date())
+    }
+    val backupLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/octet-stream")
+    ) { uri -> uri?.let { viewModel.backupDatabase(it) } }
+    val restoreLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri -> uri?.let { pendingRestoreUri = it } }
+    val crashLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/zip")
+    ) { uri -> uri?.let { viewModel.exportCrashLogs(it) } }
+    LaunchedEffect(restoreSucceeded) { if (restoreSucceeded) restartApp(context) }
 
     val focusRequester = remember { FocusRequester() }
     LaunchedEffect(searchActive) {
@@ -241,7 +263,36 @@ fun SettingsScreen(
     }
 
     if (showDataDialog) {
-        DataExportDialog(viewModel = viewModel, onDismiss = { showDataDialog = false })
+        DataExportDialog(
+            viewModel = viewModel,
+            onBackup = { backupLauncher.launch("forge_backup_$dateStamp.db") },
+            onRestore = { restoreLauncher.launch(arrayOf("*/*")) },
+            onExportCrashLogs = { crashLauncher.launch("forge_crash_logs_$dateStamp.zip") },
+            onDismiss = { showDataDialog = false }
+        )
+    }
+
+    statusMessage?.let { msg ->
+        AlertDialog(
+            onDismissRequest = viewModel::clearStatusMessage,
+            title = { Text("Backup & restore") },
+            text = { Text(msg) },
+            confirmButton = { TextButton(onClick = viewModel::clearStatusMessage) { Text("OK") } }
+        )
+    }
+
+    pendingRestoreUri?.let { uri ->
+        AlertDialog(
+            onDismissRequest = { pendingRestoreUri = null },
+            title = { Text("Restore from backup?") },
+            text = { Text("This replaces ALL current data with the chosen backup, then restarts the app. It can't be undone — back up first if you're unsure.") },
+            confirmButton = {
+                TextButton(onClick = { viewModel.restoreDatabase(uri); pendingRestoreUri = null }) {
+                    Text("Restore & restart", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = { TextButton(onClick = { pendingRestoreUri = null }) { Text("Cancel") } }
+        )
     }
 
     exportPath?.let { path ->
@@ -269,5 +320,13 @@ fun SettingsScreen(
             onDismiss = { confirmReset = null }
         )
     }
+}
+
+/** Relaunch the app — used after a restore, since the database file was swapped underneath Room. */
+private fun restartApp(context: android.content.Context) {
+    val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)
+    intent?.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK)
+    if (intent != null) context.startActivity(intent)
+    Runtime.getRuntime().exit(0)
 }
 

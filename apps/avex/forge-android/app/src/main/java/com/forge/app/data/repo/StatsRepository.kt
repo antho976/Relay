@@ -39,10 +39,14 @@ import com.forge.app.ui.gym.stats.state.Totals
 import com.forge.app.ui.gym.stats.state.VolumeDeloadPoint
 import com.forge.app.ui.gym.stats.state.WeeklyEffortCounts
 import com.forge.app.ui.overview.state.OnThisDayMemory
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import java.time.Instant
 import java.time.LocalDate
@@ -124,7 +128,7 @@ class StatsRepository @Inject constructor(
         }
         return baseFlow.combine(sessionDao.observeFirstFinishedSessionStartedAt()) { stats, firstMs ->
             stats.copy(firstFinishedSessionMs = firstMs)
-        }
+        }.flowOn(Dispatchers.Default)
     }
 
     private fun computeStreak(finishedAts: List<Long>): Int {
@@ -273,24 +277,39 @@ class StatsRepository @Inject constructor(
             loggedSetDao.observeAllFinishedSetsWithSession(),
             loggedExerciseDao.observeRecentPrs()
         ) { totals, heatmapRows, volumeSets, allSets, prRows ->
-            val freqRows = loggedExerciseDao.frequencySince(eightWeeksMs)
-            val prDates = loggedExerciseDao.prDatesPerExercise()
-            val effortRows = loggedExerciseDao.effortRatingsSince(eightWeeksMs)
-            val prTimes = sessionDao.prSessionStartTimes()
-            val deloadRows = sessionDao.allFinishedVolumeDeload()
-            val dayStats = sessionDao.avgMaxVolumeByDayKey()
-            val latestBwLb = bodyweightRepo.latestWeightLb()
-            val weekComp = buildWeekComparison()
-            val monthComp = buildMonthComparison()
+          coroutineScope {
+            // The independent aggregate queries below ran one-by-one, so their latencies
+            // stacked. Fire them concurrently and await — cuts the Stats-tab open time.
+            val freqRowsD = async { loggedExerciseDao.frequencySince(eightWeeksMs) }
+            val prDatesD = async { loggedExerciseDao.prDatesPerExercise() }
+            val effortRowsD = async { loggedExerciseDao.effortRatingsSince(eightWeeksMs) }
+            val prTimesD = async { sessionDao.prSessionStartTimes() }
+            val deloadRowsD = async { sessionDao.allFinishedVolumeDeload() }
+            val dayStatsD = async { sessionDao.avgMaxVolumeByDayKey() }
+            val latestBwLbD = async { bodyweightRepo.latestWeightLb() }
+            val weekCompD = async { buildWeekComparison() }
+            val monthCompD = async { buildMonthComparison() }
+            val lifetimeAggD = async { sessionDao.lifetimeAggregate() }
+            val dayTypeRowsD = async { sessionDao.perDayTypeStats() }
+
+            val freqRows = freqRowsD.await()
+            val prDates = prDatesD.await()
+            val effortRows = effortRowsD.await()
+            val prTimes = prTimesD.await()
+            val deloadRows = deloadRowsD.await()
+            val dayStats = dayStatsD.await()
+            val latestBwLb = latestBwLbD.await()
+            val weekComp = weekCompD.await()
+            val monthComp = monthCompD.await()
             val yoy = buildExerciseYoY(allSets)
-            val lifetimeAgg = sessionDao.lifetimeAggregate()
+            val lifetimeAgg = lifetimeAggD.await()
             val lifetimeMetrics = LifetimeMetrics(
                 lifetimeVolumeLb = lifetimeAgg.totalVolume ?: 0.0,
                 totalSessions = lifetimeAgg.sessionCount,
                 avgSessionVolumeLb = if (lifetimeAgg.sessionCount > 0) (lifetimeAgg.totalVolume ?: 0.0) / lifetimeAgg.sessionCount else 0.0,
                 avgSetCount = lifetimeAgg.avgSets ?: 0.0
             )
-            val dayTypeRows = sessionDao.perDayTypeStats()
+            val dayTypeRows = dayTypeRowsD.await()
             val dayTypeBreakdown = buildDayTypeBreakdown(dayTypeRows)
             val insights = buildInsights(allSets, volumeSets, dayTypeRows)
             val e1lifts = buildE1rmLifts(allSets)
@@ -328,6 +347,7 @@ class StatsRepository @Inject constructor(
                 dayTypeBreakdown = dayTypeBreakdown,
                 lifetimeMetrics = lifetimeMetrics
             )
+          }
         }.combine(moodFlow) { stats, moods ->
             stats.copy(moodOverTime = moods)
         }.combine(sessionDao.observeFinishedInRange(weekStartMs, weekEndMs)) { stats, sessions ->
@@ -341,7 +361,7 @@ class StatsRepository @Inject constructor(
         }.combine(bodyweightRepo.observeRecent(90)) { stats, bw ->
             // observeRecent is newest-first; reverse to chronological for the trend chart.
             stats.copy(bodyweightTrend = bw.reversed().map { it.weightLb })
-        }
+        }.flowOn(Dispatchers.Default)
     }
 
     // ─── Aggregation helpers ──────────────────────────────────────────────────

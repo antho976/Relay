@@ -23,7 +23,9 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -46,7 +48,9 @@ import java.util.Locale
 
 @Composable
 internal fun HeroSection(state: TrophiesUiState, nextLocked: TrophyDisplay?, onBg: Color, muted: Color, outline: Color) {
+    val accent = MaterialTheme.colorScheme.primary
     val frac = if (state.totalCount == 0) 0f else state.unlockedCount.toFloat() / state.totalCount
+    val animFrac by animateFloatAsState(frac.coerceIn(0f, 1f), label = "trophyProgress")
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -57,8 +61,8 @@ internal fun HeroSection(state: TrophiesUiState, nextLocked: TrophyDisplay?, onB
         Spacer(Modifier.height(8.dp))
         Text("${numberWord(state.unlockedCount)} of ${numberWord(state.totalCount)}.", style = MaterialTheme.typography.displayLarge, color = onBg)
         Spacer(Modifier.height(14.dp))
-        Box(modifier = Modifier.fillMaxWidth().height(2.dp).background(outline.copy(alpha = 0.2f))) {
-            Box(modifier = Modifier.fillMaxWidth(frac.coerceIn(0f, 1f)).fillMaxHeight().background(onBg.copy(alpha = 0.7f)))
+        Box(modifier = Modifier.fillMaxWidth().height(3.dp).clip(RoundedCornerShape(50)).background(outline.copy(alpha = 0.2f))) {
+            Box(modifier = Modifier.fillMaxWidth(animFrac).fillMaxHeight().clip(RoundedCornerShape(50)).background(accent))
         }
         if (nextLocked != null) {
             Spacer(Modifier.height(12.dp))
@@ -78,6 +82,7 @@ internal fun HeroSection(state: TrophiesUiState, nextLocked: TrophyDisplay?, onB
 
 @Composable
 internal fun TrophyRow(display: TrophyDisplay, onBg: Color, muted: Color, bg: Color, outline: Color, modifier: Modifier = Modifier) {
+    val accent = MaterialTheme.colorScheme.primary
     val unlocked = display.isUnlocked
     val nameColor = if (unlocked) onBg else muted.copy(alpha = 0.65f)
     val descColor = muted.copy(alpha = if (unlocked) 0.6f else 0.45f)
@@ -101,9 +106,10 @@ internal fun TrophyRow(display: TrophyDisplay, onBg: Color, muted: Color, bg: Co
             Text(display.trophy.description, style = MaterialTheme.typography.bodySmall, color = descColor, fontStyle = FontStyle.Italic, fontSize = 11.sp)
             val frac = display.progressFraction
             if (!display.isUnlocked && frac != null && frac > 0f) {
+                val animFrac by animateFloatAsState(frac.coerceIn(0f, 1f), label = "rowProgress")
                 Spacer(Modifier.height(5.dp))
-                Box(modifier = Modifier.fillMaxWidth().height(2.dp).background(outline.copy(alpha = 0.18f))) {
-                    Box(modifier = Modifier.fillMaxWidth(frac.coerceIn(0f, 1f)).fillMaxHeight().background(onBg.copy(alpha = 0.5f)))
+                Box(modifier = Modifier.fillMaxWidth().height(2.dp).clip(RoundedCornerShape(50)).background(outline.copy(alpha = 0.18f))) {
+                    Box(modifier = Modifier.fillMaxWidth(animFrac).fillMaxHeight().clip(RoundedCornerShape(50)).background(accent.copy(alpha = 0.7f)))
                 }
             }
         }
@@ -120,6 +126,7 @@ internal fun TrophyRow(display: TrophyDisplay, onBg: Color, muted: Color, bg: Co
 
 @Composable
 internal fun FilterChips(selected: TrophyFilter, onSelect: (TrophyFilter) -> Unit, onBg: Color, muted: Color, outline: Color) {
+    val accent = MaterialTheme.colorScheme.primary
     Row(
         modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -129,8 +136,8 @@ internal fun FilterChips(selected: TrophyFilter, onSelect: (TrophyFilter) -> Uni
             Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(50))
-                    .border(0.5.dp, if (isSelected) onBg else outline.copy(alpha = 0.35f), RoundedCornerShape(50))
-                    .background(if (isSelected) onBg.copy(alpha = 0.08f) else Color.Transparent)
+                    .border(0.5.dp, if (isSelected) accent else outline.copy(alpha = 0.35f), RoundedCornerShape(50))
+                    .background(if (isSelected) accent.copy(alpha = 0.15f) else Color.Transparent)
                     .clickable { onSelect(filter) }
                     .padding(horizontal = 12.dp, vertical = 5.dp)
             ) {
