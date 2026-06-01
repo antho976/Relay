@@ -17,6 +17,7 @@ import com.forge.app.data.db.dao.TrophyNearMissDao
 import com.forge.app.data.db.dao.UnlockedTrophyDao
 import com.forge.app.data.db.dao.ExtendedGoalDao
 import com.forge.app.data.db.dao.ProgramCustomizationDao
+import com.forge.app.data.db.dao.ProgramDao
 import com.forge.app.data.db.dao.WarmupRoutineDao
 import com.forge.app.data.db.dao.SessionBreakDao
 import com.forge.app.data.db.dao.VacationDao
@@ -35,12 +36,14 @@ import com.forge.app.data.db.entities.UnlockedTrophy
 import com.forge.app.data.db.entities.ExtendedGoal
 import com.forge.app.data.db.entities.WarmupRoutineItem
 import com.forge.app.data.db.entities.ProgramCustomization
+import com.forge.app.data.db.entities.ProgramDay
+import com.forge.app.data.db.entities.ProgramSlot
 import com.forge.app.data.db.entities.SessionBreak
 import com.forge.app.data.db.entities.VacationPeriod
 
 /**
- * Schema is v13 (v13 added an index on LoggedExercise.exercise_id; v12 added LoggedSet.rpe;
- * v11 added per-set annotations).
+ * Schema is v14 (v14 added the data-driven program tables program_day/program_slot;
+ * v13 added an index on LoggedExercise.exercise_id; v12 added LoggedSet.rpe; v11 added per-set annotations).
  *
  * The schema is now LOCKED from v12 onward: every change needs a real Migration in
  * [com.forge.app.data.db.Migrations] (registered in ALL_MIGRATIONS), a bumped version here,
@@ -66,9 +69,11 @@ import com.forge.app.data.db.entities.VacationPeriod
         ExtendedGoal::class,
         SessionBreak::class,
         ProgramCustomization::class,
-        WarmupRoutineItem::class
+        WarmupRoutineItem::class,
+        ProgramDay::class,
+        ProgramSlot::class
     ],
-    version = 13,
+    version = 14,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -90,4 +95,5 @@ abstract class ForgeDatabase : RoomDatabase() {
     abstract fun sessionBreakDao(): SessionBreakDao
     abstract fun programCustomizationDao(): ProgramCustomizationDao
     abstract fun warmupRoutineDao(): WarmupRoutineDao
+    abstract fun programDao(): ProgramDao
 }

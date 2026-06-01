@@ -36,6 +36,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.domain.cardio.CardioType
 import com.forge.app.ui.cardio.components.CardioEntryRow
+import com.forge.app.ui.common.forgeItemMotion
 import com.forge.app.ui.cardio.components.CardioLogSheet
 import com.forge.app.ui.cardio.state.CardioUiState
 import java.time.LocalDate
@@ -182,7 +183,8 @@ private fun CardioListContent(
                     CardioEntryRow(
                         entry = entry,
                         today = today,
-                        onRequestDelete = { onRequestDelete(entry.id) }
+                        onRequestDelete = { onRequestDelete(entry.id) },
+                        modifier = forgeItemMotion()
                     )
                     HorizontalDivider(
                         modifier = Modifier.padding(horizontal = 24.dp),

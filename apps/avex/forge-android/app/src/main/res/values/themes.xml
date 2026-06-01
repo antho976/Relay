@@ -11,4 +11,15 @@
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">false</item>
     </style>
+
+    <!--
+        Launch theme: the Android 12+ splash, backported via androidx.core:core-splashscreen.
+        Shows the app icon on the brand background, then hands off to Theme.Forge once the first
+        frame is ready. Set as the activity theme; installSplashScreen() applies postSplashScreenTheme.
+    -->
+    <style name="Theme.Forge.Splash" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/forge_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="postSplashScreenTheme">@style/Theme.Forge</item>
+    </style>
 </resources>

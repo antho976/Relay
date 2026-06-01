@@ -6,41 +6,52 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
+// `fontFeatureSettings = "tnum"` forces tabular (fixed-width) figures on the styles that render
+// big numbers — stat values, hero figures, counters. Without it, proportional digits shift the
+// layout horizontally as values change or animate (e.g. a count-up from 9 → 10). Prose body styles
+// keep proportional figures; label styles are already Monospace, so tabular comes for free there.
+private const val TabularFigures = "tnum"
+
 val ForgeTypography = Typography(
     displayLarge = TextStyle(
         fontFamily = FontFamily.Serif,
         fontWeight = FontWeight.Normal,
         fontSize = 52.sp,
         lineHeight = 58.sp,
-        letterSpacing = 0.sp
+        letterSpacing = 0.sp,
+        fontFeatureSettings = TabularFigures
     ),
     headlineLarge = TextStyle(
         fontFamily = FontFamily.Serif,
         fontWeight = FontWeight.Normal,
         fontSize = 36.sp,
         lineHeight = 42.sp,
-        letterSpacing = 0.sp
+        letterSpacing = 0.sp,
+        fontFeatureSettings = TabularFigures
     ),
     headlineMedium = TextStyle(
         fontFamily = FontFamily.Serif,
         fontWeight = FontWeight.Normal,
         fontSize = 28.sp,
         lineHeight = 34.sp,
-        letterSpacing = 0.sp
+        letterSpacing = 0.sp,
+        fontFeatureSettings = TabularFigures
     ),
     headlineSmall = TextStyle(
         fontFamily = FontFamily.Serif,
         fontWeight = FontWeight.Normal,
         fontSize = 22.sp,
         lineHeight = 28.sp,
-        letterSpacing = 0.sp
+        letterSpacing = 0.sp,
+        fontFeatureSettings = TabularFigures
     ),
     titleLarge = TextStyle(
         fontFamily = FontFamily.SansSerif,
         fontWeight = FontWeight.Medium,
         fontSize = 18.sp,
         lineHeight = 24.sp,
-        letterSpacing = 0.sp
+        letterSpacing = 0.sp,
+        fontFeatureSettings = TabularFigures
     ),
     titleMedium = TextStyle(
         fontFamily = FontFamily.SansSerif,

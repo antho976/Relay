@@ -56,7 +56,7 @@ fun StrengthOverlayCard(
         }
         // Curves draw themselves on first appearance (path-trim 0→1) instead of snapping in.
         val drawProgress = remember { Animatable(0f) }
-        LaunchedEffect(Unit) { drawProgress.animateTo(1f, animationSpec = tween(700, easing = ForgeMotion.Decelerate)) }
+        LaunchedEffect(Unit) { drawProgress.animateTo(1f, animationSpec = tween(ForgeMotion.scaledDuration(700), easing = ForgeMotion.Decelerate)) }
         Canvas(modifier = Modifier.fillMaxWidth().height(100.dp)) {
             val p = drawProgress.value
             fun drawCurve(pts: List<com.forge.app.ui.gym.stats.state.HistoryPoint>, color: androidx.compose.ui.graphics.Color) {
@@ -102,7 +102,7 @@ fun EffortOverTimeCard(
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.SemiBold)
         val drawProgress = remember { Animatable(0f) }
-        LaunchedEffect(Unit) { drawProgress.animateTo(1f, animationSpec = tween(700, easing = ForgeMotion.Decelerate)) }
+        LaunchedEffect(Unit) { drawProgress.animateTo(1f, animationSpec = tween(ForgeMotion.scaledDuration(700), easing = ForgeMotion.Decelerate)) }
         Canvas(modifier = Modifier.fillMaxWidth().height(80.dp)) {
             val p = drawProgress.value
             val step = size.width / (recentPoints.size - 1).coerceAtLeast(1)

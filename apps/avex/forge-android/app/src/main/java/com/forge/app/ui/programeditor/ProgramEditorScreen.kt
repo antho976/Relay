@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import com.forge.app.ui.common.forgeItemMotion
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -173,7 +174,8 @@ fun ProgramEditorScreen(
                 ExerciseEditorRow(
                     item = ex,
                     onEditReps = { editRepsFor = ex },
-                    onRemove = { viewModel.removeExercise(ex.id) }
+                    onRemove = { viewModel.removeExercise(ex.id) },
+                    modifier = forgeItemMotion()
                 )
             }
         }
@@ -208,10 +210,11 @@ fun ProgramEditorScreen(
 private fun ExerciseEditorRow(
     item: ProgramExerciseItem,
     onEditReps: () -> Unit,
-    onRemove: () -> Unit
+    onRemove: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(10.dp))
             .padding(12.dp),

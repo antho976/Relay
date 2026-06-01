@@ -45,7 +45,7 @@ fun ConfettiOverlay(
     LaunchedEffect(Unit) {
         progress.animateTo(
             targetValue = 1f,
-            animationSpec = tween(durationMillis = durationMs, easing = LinearEasing)
+            animationSpec = tween(durationMillis = ForgeMotion.scaledDuration(durationMs), easing = LinearEasing)
         )
         onComplete()
     }

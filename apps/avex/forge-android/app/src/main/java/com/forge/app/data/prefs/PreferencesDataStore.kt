@@ -101,4 +101,23 @@ object PreferenceKeys {
     val ONBOARDING_DONE = booleanPreferencesKey("onboarding_done")
     /** User's initial goal: "build_muscle" | "lose_weight" | "get_stronger" | "general_fitness" */
     val USER_GOAL = stringPreferencesKey("user_goal")
+
+    // ─── Program generation (program-unlock) ──────────────────────────────────
+    /** Training days/week the program targets — drives the split template (3-day ≠ 7-day). */
+    val DAYS_PER_WEEK = intPreferencesKey("days_per_week")
+    /** Program focus, e.g. "balanced" | "arms_shoulders" | "legs". Empty = balanced. */
+    val PROGRAM_EMPHASIS = stringPreferencesKey("program_emphasis")
+    /** Rotation cadence: "never" | "every_n". */
+    val ROTATION_CADENCE = stringPreferencesKey("rotation_cadence")
+    /** N for the "every_n" cadence. */
+    val ROTATION_EVERY_N = intPreferencesKey("rotation_every_n")
+    /** Unit for ROTATION_EVERY_N: "sessions" | "weeks". */
+    val ROTATION_UNIT = stringPreferencesKey("rotation_unit")
+    /** Progress toward the next rotation. */
+    val ROTATION_COUNTER = intPreferencesKey("rotation_counter")
+    val LAST_ROTATED_AT_MS = longPreferencesKey("last_rotated_at_ms")
+    /** ExerciseLibrary ids the user LIKES — weighted up in selection (recurs more). */
+    val LIKED_EXERCISES = stringSetPreferencesKey("liked_exercises")
+    /** ExerciseLibrary ids the user DISLIKES — excluded from generation + swaps. */
+    val DISLIKED_EXERCISES = stringSetPreferencesKey("disliked_exercises")
 }

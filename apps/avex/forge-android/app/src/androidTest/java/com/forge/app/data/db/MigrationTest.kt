@@ -35,4 +35,16 @@ class MigrationTest {
         )
         cursor.use { assertEquals("exercise_id index should exist after 12→13", 1, it.count) }
     }
+
+    @Test
+    fun migrate13To14_addsProgramTables() {
+        // Create the v13 schema, then migrate to v14 and validate it matches the v14 schema.
+        helper.createDatabase(dbName, 13).close()
+        val db = helper.runMigrationsAndValidate(dbName, 14, true, MIGRATION_13_14)
+
+        val cursor = db.query(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('program_day','program_slot')"
+        )
+        cursor.use { assertEquals("program tables should exist after 13→14", 2, it.count) }
+    }
 }

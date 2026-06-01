@@ -4,17 +4,33 @@ import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.Easing
 import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.Spring
-import androidx.compose.animation.core.SpringSpec
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import kotlin.math.roundToInt
 
 /**
  * Central motion tokens. Every animated surface pulls its duration / easing / spring from
  * here so motion reads as one coherent system instead of a dozen independently-tuned magic
  * numbers. Easings follow the Material 3 "emphasized" family — incoming content decelerates
  * into place, outgoing content accelerates away.
+ *
+ * Reduced motion: [durationScale] mirrors the system "Remove animations" preference
+ * (Settings.Global.ANIMATOR_DURATION_SCALE, set once in MainActivity). Because every spec below
+ * is derived through [scaled] / [reduceMotion], honoring that preference is automatic — tweens
+ * collapse to 0 ms and springs snap instantly. No call site has to check it.
  */
 object ForgeMotion {
+
+    /** 1f = normal speed · 0f = the user disabled animations. Set once at app start. */
+    @Volatile var durationScale: Float = 1f
+
+    private val reduceMotion: Boolean get() = durationScale <= 0f
+    private fun scaled(durationMs: Int): Int = (durationMs * durationScale).roundToInt()
+
+    /** Scale a one-off raw duration (for animations not built from the helpers below — e.g. a
+     *  literal tween in a Canvas) by the reduced-motion preference; 0 when animations are off. */
+    fun scaledDuration(durationMs: Int): Int = scaled(durationMs)
 
     // ── Durations (ms) ──────────────────────────────────────────────────────────
     const val DurationFast = 150          // micro: press, tiny fades
@@ -32,24 +48,22 @@ object ForgeMotion {
 
     // ── Springs ───────────────────────────────────────────────────────────────--
     /** Lands with a subtle bounce — set-logged "thunk", PR pop, bubble pop-in. */
-    fun <T> bouncy(): SpringSpec<T> = spring(
-        dampingRatio = 0.55f,
-        stiffness = Spring.StiffnessMediumLow
-    )
+    fun <T> bouncy(): FiniteAnimationSpec<T> =
+        if (reduceMotion) snap()
+        else spring(dampingRatio = 0.55f, stiffness = Spring.StiffnessMediumLow)
 
     /** Quick, no overshoot — pill slide, content size, value follows. */
-    fun <T> snappy(): SpringSpec<T> = spring(
-        dampingRatio = Spring.DampingRatioNoBouncy,
-        stiffness = Spring.StiffnessMedium
-    )
+    fun <T> snappy(): FiniteAnimationSpec<T> =
+        if (reduceMotion) snap()
+        else spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium)
 
     // ── Tween helpers ─────────────────────────────────────────────────────────--
     fun <T> enterTween(durationMs: Int = DurationStandard): FiniteAnimationSpec<T> =
-        tween(durationMs, easing = Decelerate)
+        tween(scaled(durationMs), easing = Decelerate)
 
     fun <T> exitTween(durationMs: Int = DurationStandard): FiniteAnimationSpec<T> =
-        tween(durationMs, easing = Accelerate)
+        tween(scaled(durationMs), easing = Accelerate)
 
     fun <T> standardTween(durationMs: Int = DurationStandard): FiniteAnimationSpec<T> =
-        tween(durationMs, easing = Standard)
+        tween(scaled(durationMs), easing = Standard)
 }

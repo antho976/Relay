@@ -4,11 +4,13 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.view.KeyEvent
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
@@ -17,6 +19,7 @@ import androidx.compose.runtime.remember
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.service.AutoBackupWorker
 import com.forge.app.ui.nav.ForgeNavHost
+import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.theme.ForgeTheme
 import com.forge.app.ui.theme.ForgeUiSettings
 import com.forge.app.ui.theme.LocalForgeSettings
@@ -54,8 +57,13 @@ class MainActivity : ComponentActivity() {
     ) { /* proceed either way; notifications no-op if denied */ }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        installSplashScreen()
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
+        // Honor the system "Remove animations" preference so ForgeMotion gates every transition.
+        ForgeMotion.durationScale =
+            Settings.Global.getFloat(contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED

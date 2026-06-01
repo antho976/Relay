@@ -4,7 +4,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -30,7 +29,7 @@ fun EmptyState(
     Surface(
         modifier = modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(14.dp)
+        shape = MaterialTheme.shapes.large
     ) {
         Column(
             modifier = Modifier.padding(horizontal = 24.dp, vertical = 32.dp),

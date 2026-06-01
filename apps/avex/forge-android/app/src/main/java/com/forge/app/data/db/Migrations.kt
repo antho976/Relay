@@ -24,7 +24,27 @@ val MIGRATION_12_13 = object : Migration(12, 13) {
     }
 }
 
+/** v13 → v14: add the data-driven program tables (program-unlock). New empty tables — additive, no existing data touched. */
+val MIGRATION_13_14 = object : Migration(13, 14) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `program_day` (`id` TEXT NOT NULL, `position` INTEGER NOT NULL, " +
+                "`name` TEXT NOT NULL, `word` TEXT NOT NULL, `accent_hex` TEXT NOT NULL, " +
+                "`archetype` TEXT NOT NULL, PRIMARY KEY(`id`))"
+        )
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `program_slot` (`id` TEXT NOT NULL, `day_id` TEXT NOT NULL, " +
+                "`position` INTEGER NOT NULL, `exercise_lib_id` TEXT NOT NULL, `sets` INTEGER NOT NULL, " +
+                "`reps` TEXT NOT NULL, PRIMARY KEY(`id`))"
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_program_slot_day_id` ON `program_slot` (`day_id`)"
+        )
+    }
+}
+
 /** All migrations, in order. Register every new one here. */
 val ALL_MIGRATIONS: Array<Migration> = arrayOf(
-    MIGRATION_12_13
+    MIGRATION_12_13,
+    MIGRATION_13_14
 )

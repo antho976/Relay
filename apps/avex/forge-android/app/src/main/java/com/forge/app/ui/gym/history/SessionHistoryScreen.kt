@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import com.forge.app.ui.common.forgeItemMotion
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -119,7 +120,7 @@ fun SessionHistoryScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(state.filtered, key = { it.id }) { session ->
-                        SessionRow(session = session, modifier = Modifier.animateItem())
+                        SessionRow(session = session, modifier = forgeItemMotion())
                     }
                 }
             }

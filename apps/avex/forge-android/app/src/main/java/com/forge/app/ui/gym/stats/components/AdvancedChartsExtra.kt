@@ -68,7 +68,7 @@ fun StrengthRadarCard(compoundMaxes: Map<String, Double>, modifier: Modifier = M
                     if (i == 0) gridPath.moveTo(x, y) else gridPath.lineTo(x, y)
                 }
                 gridPath.close()
-                drawPath(gridPath, color = outlineColor, style = Stroke(1f))
+                drawPath(gridPath, color = outlineColor, style = Stroke(1.dp.toPx()))
             }
             val dataPath = Path()
             values.forEachIndexed { i, v ->
@@ -80,11 +80,11 @@ fun StrengthRadarCard(compoundMaxes: Map<String, Double>, modifier: Modifier = M
             }
             dataPath.close()
             drawPath(dataPath, color = primaryColor.copy(alpha = 0.25f))
-            drawPath(dataPath, color = primaryColor, style = Stroke(2f))
+            drawPath(dataPath, color = primaryColor, style = Stroke(2.dp.toPx()))
             values.forEachIndexed { i, v ->
                 val angle = (i * angleStep - Math.PI / 2).toFloat()
                 val vr = (v / maxVal * r).toFloat()
-                drawCircle(primaryColor, radius = 5f, center = Offset(cx + cos(angle) * vr, cy + sin(angle) * vr))
+                drawCircle(primaryColor, radius = 2.5.dp.toPx(), center = Offset(cx + cos(angle) * vr, cy + sin(angle) * vr))
             }
         }
         labels.forEachIndexed { i, label ->
