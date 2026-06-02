@@ -190,6 +190,67 @@ class SettingsRepository @Inject constructor(
     suspend fun setAvailableEquipment(codes: Set<String>) =
         context.forgePreferences.edit { it[PreferenceKeys.AVAILABLE_EQUIPMENT] = codes }
 
+    // ─── Program generation (program-unlock) ──────────────────────────────────
+
+    val daysPerWeek: Flow<Int> = context.forgePreferences.data
+        .map { it[PreferenceKeys.DAYS_PER_WEEK] ?: 4 }
+    suspend fun setDaysPerWeek(n: Int) =
+        context.forgePreferences.edit { it[PreferenceKeys.DAYS_PER_WEEK] = n.coerceIn(1, 7) }
+
+    val programEmphasis: Flow<String> = context.forgePreferences.data
+        .map { it[PreferenceKeys.PROGRAM_EMPHASIS] ?: "balanced" }
+    suspend fun setProgramEmphasis(v: String) =
+        context.forgePreferences.edit { it[PreferenceKeys.PROGRAM_EMPHASIS] = v }
+
+    val likedExercises: Flow<Set<String>> = context.forgePreferences.data
+        .map { it[PreferenceKeys.LIKED_EXERCISES] ?: emptySet() }
+    val dislikedExercises: Flow<Set<String>> = context.forgePreferences.data
+        .map { it[PreferenceKeys.DISLIKED_EXERCISES] ?: emptySet() }
+
+    /** Like is mutually exclusive with dislike (and vice-versa) — setting one clears the other. */
+    suspend fun setExerciseLiked(libId: String, liked: Boolean) =
+        context.forgePreferences.edit { prefs ->
+            val cur = prefs[PreferenceKeys.LIKED_EXERCISES] ?: emptySet()
+            prefs[PreferenceKeys.LIKED_EXERCISES] = if (liked) cur + libId else cur - libId
+            if (liked) prefs[PreferenceKeys.DISLIKED_EXERCISES] =
+                (prefs[PreferenceKeys.DISLIKED_EXERCISES] ?: emptySet()) - libId
+        }
+
+    suspend fun setExerciseDisliked(libId: String, disliked: Boolean) =
+        context.forgePreferences.edit { prefs ->
+            val cur = prefs[PreferenceKeys.DISLIKED_EXERCISES] ?: emptySet()
+            prefs[PreferenceKeys.DISLIKED_EXERCISES] = if (disliked) cur + libId else cur - libId
+            if (disliked) prefs[PreferenceKeys.LIKED_EXERCISES] =
+                (prefs[PreferenceKeys.LIKED_EXERCISES] ?: emptySet()) - libId
+        }
+
+    /** Rotation cadence: "never" | "every_n" (count = finished sessions). */
+    val rotationCadence: Flow<String> = context.forgePreferences.data
+        .map { it[PreferenceKeys.ROTATION_CADENCE] ?: "never" }
+    suspend fun setRotationCadence(v: String) =
+        context.forgePreferences.edit { it[PreferenceKeys.ROTATION_CADENCE] = v }
+
+    val rotationEveryN: Flow<Int> = context.forgePreferences.data
+        .map { it[PreferenceKeys.ROTATION_EVERY_N] ?: 4 }
+    suspend fun setRotationEveryN(n: Int) =
+        context.forgePreferences.edit { it[PreferenceKeys.ROTATION_EVERY_N] = n.coerceAtLeast(1) }
+
+    val rotationCounter: Flow<Int> = context.forgePreferences.data
+        .map { it[PreferenceKeys.ROTATION_COUNTER] ?: 0 }
+    suspend fun setRotationCounter(n: Int) =
+        context.forgePreferences.edit { it[PreferenceKeys.ROTATION_COUNTER] = n }
+
+    // ─── Cardio layer (program-unlock Phase 6) ────────────────────────────────
+    val cardioWeeklyTargetMin: Flow<Int> = context.forgePreferences.data
+        .map { it[PreferenceKeys.CARDIO_WEEKLY_TARGET_MIN] ?: 0 }
+    suspend fun setCardioWeeklyTargetMin(min: Int) =
+        context.forgePreferences.edit { it[PreferenceKeys.CARDIO_WEEKLY_TARGET_MIN] = min.coerceAtLeast(0) }
+
+    val cardioDaysPerWeek: Flow<Int> = context.forgePreferences.data
+        .map { it[PreferenceKeys.CARDIO_DAYS_PER_WEEK] ?: 0 }
+    suspend fun setCardioDaysPerWeek(n: Int) =
+        context.forgePreferences.edit { it[PreferenceKeys.CARDIO_DAYS_PER_WEEK] = n.coerceAtLeast(0) }
+
     // ─── Plan tomorrow (#147) ─────────────────────────────────────────────────
 
     val plannedNextDay: Flow<String> = context.forgePreferences.data
@@ -219,6 +280,42 @@ class SettingsRepository @Inject constructor(
         .map { it[PreferenceKeys.USER_NAME] ?: "" }
     val userGoal: Flow<String> = context.forgePreferences.data
         .map { it[PreferenceKeys.USER_GOAL] ?: "" }
+    suspend fun setUserGoal(goal: String) =
+        context.forgePreferences.edit { it[PreferenceKeys.USER_GOAL] = goal }
+
+    /** Training experience drives generation volume + difficulty filter (program-unlock Phase 4 / Phase 2). */
+    val programExperience: Flow<String> = context.forgePreferences.data
+        .map { it[PreferenceKeys.PROGRAM_EXPERIENCE] ?: "intermediate" }
+    suspend fun setProgramExperience(level: String) =
+        context.forgePreferences.edit { it[PreferenceKeys.PROGRAM_EXPERIENCE] = level }
+
+    // ─── Personalization & safety (program-unlock Phase 3) ────────────────────
+    /** Flagged problem-area codes — generation steers around movements that stress them. */
+    val problemAreas: Flow<Set<String>> = context.forgePreferences.data
+        .map { it[PreferenceKeys.PROBLEM_AREAS] ?: emptySet() }
+    suspend fun toggleProblemArea(code: String, on: Boolean) =
+        context.forgePreferences.edit { prefs ->
+            val cur = prefs[PreferenceKeys.PROBLEM_AREAS] ?: emptySet()
+            prefs[PreferenceKeys.PROBLEM_AREAS] = if (on) cur + code else cur - code
+        }
+
+    /** Priority muscle codes — granular emphasis (extra volume). */
+    val priorityMuscles: Flow<Set<String>> = context.forgePreferences.data
+        .map { it[PreferenceKeys.PRIORITY_MUSCLES] ?: emptySet() }
+    suspend fun togglePriorityMuscle(code: String, on: Boolean) =
+        context.forgePreferences.edit { prefs ->
+            val cur = prefs[PreferenceKeys.PRIORITY_MUSCLES] ?: emptySet()
+            prefs[PreferenceKeys.PRIORITY_MUSCLES] = if (on) cur + code else cur - code
+        }
+
+    /** Pinned exercise ids — kept across regenerations when their muscle is trained. */
+    val pinnedExercises: Flow<Set<String>> = context.forgePreferences.data
+        .map { it[PreferenceKeys.PINNED_EXERCISES] ?: emptySet() }
+    suspend fun togglePinned(libId: String, on: Boolean) =
+        context.forgePreferences.edit { prefs ->
+            val cur = prefs[PreferenceKeys.PINNED_EXERCISES] ?: emptySet()
+            prefs[PreferenceKeys.PINNED_EXERCISES] = if (on) cur + libId else cur - libId
+        }
 
     suspend fun completeOnboarding(name: String, useKgChoice: Boolean, goal: String, bodyweightLb: Double?) {
         context.forgePreferences.edit { prefs ->

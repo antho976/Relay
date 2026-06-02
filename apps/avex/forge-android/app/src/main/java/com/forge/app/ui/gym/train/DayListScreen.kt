@@ -59,6 +59,7 @@ fun DayListScreen(
     onOpenNotes: () -> Unit = {},
     onOpenRecap: () -> Unit = {},
     onEditProgram: (String) -> Unit = {},
+    onOpenCardio: () -> Unit = {},
     initialTab: Int = 0,
     viewModel: DayListViewModel = hiltViewModel()
 ) {
@@ -86,6 +87,7 @@ fun DayListScreen(
                     onOpenDay = onOpenDay,
                     onOpenDayQuick = onOpenDayQuick,
                     onEditProgram = onEditProgram,
+                    onOpenCardio = onOpenCardio,
                     viewModel = viewModel
                 )
             }
@@ -98,6 +100,7 @@ private fun TrainTab(
     onOpenDay: (String) -> Unit,
     onOpenDayQuick: (String) -> Unit,
     onEditProgram: (String) -> Unit = {},
+    onOpenCardio: () -> Unit = {},
     viewModel: DayListViewModel
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -125,14 +128,18 @@ private fun TrainTab(
             DayCard(
                 item = item,
                 onClick = {
-                    val active = state.activeSession
-                    if (active != null && active.dayKey != item.plan.key) {
-                        pendingOpenDayKey = item.plan.key
+                    if (item.plan.key.startsWith("cardio")) {
+                        onOpenCardio()
                     } else {
-                        onOpenDay(item.plan.key)
+                        val active = state.activeSession
+                        if (active != null && active.dayKey != item.plan.key) {
+                            pendingOpenDayKey = item.plan.key
+                        } else {
+                            onOpenDay(item.plan.key)
+                        }
                     }
                 },
-                onQuickStart = if (item.isNextUp && !item.isActive) {
+                onQuickStart = if (item.isNextUp && !item.isActive && !item.plan.key.startsWith("cardio")) {
                     { onOpenDayQuick(item.plan.key) }
                 } else null,
                 onLongPress = { longPressMenuForDayKey = item.plan.key }
@@ -148,6 +155,12 @@ private fun TrainTab(
             title = { Text(item?.displayName ?: dayKey) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    if (!dayKey.startsWith("cardio")) {
+                        TextButton(modifier = Modifier.fillMaxWidth(), onClick = {
+                            longPressMenuForDayKey = null
+                            viewModel.rerollDay(dayKey)
+                        }) { Text("Re-roll this day's exercises") }
+                    }
                     TextButton(modifier = Modifier.fillMaxWidth(), onClick = {
                         longPressMenuForDayKey = null
                         colorPickerForDayKey = dayKey

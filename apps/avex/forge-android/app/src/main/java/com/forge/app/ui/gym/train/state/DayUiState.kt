@@ -5,6 +5,7 @@ import com.forge.app.data.db.entities.LoggedSet
 import com.forge.app.data.db.types.EffortRating
 import com.forge.app.domain.timer.RestTimerState
 import com.forge.app.program.DayPlan
+import com.forge.app.program.Equipment
 import com.forge.app.program.ExercisePlan
 
 /** How the current session compares to the previous session on the same exercise. */
@@ -66,7 +67,11 @@ data class DayUiState(
     /** Warmup suggester dialog: exerciseId whose working weight to suggest from (#10). */
     val warmupSuggesterForExerciseId: String? = null,
     /** Plate calculator dialog: exerciseId whose weight to calculate plates for (#11). */
-    val plateCalculatorForExerciseId: String? = null
+    val plateCalculatorForExerciseId: String? = null,
+    /** Available equipment — filters the swap picker's candidate pool. Empty = all (program-unlock). */
+    val swapAvailableEquipment: Set<Equipment> = emptySet(),
+    /** Disliked library ids — excluded from the swap picker, same as generation (program-unlock). */
+    val swapDislikedIds: Set<String> = emptySet()
 ) {
     val hasUnsavedWork: Boolean
         get() = exercises.any { it.loggedSets.isNotEmpty() }

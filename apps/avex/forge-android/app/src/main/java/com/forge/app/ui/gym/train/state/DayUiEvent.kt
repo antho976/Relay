@@ -2,7 +2,7 @@ package com.forge.app.ui.gym.train.state
 
 import com.forge.app.data.db.types.EffortRating
 import com.forge.app.domain.mood.Mood
-import com.forge.app.program.Swap
+import com.forge.app.program.ExerciseDef
 
 sealed interface DayUiEvent {
     // Exercise card interactions
@@ -20,9 +20,9 @@ sealed interface DayUiEvent {
     data class OpenSwapPicker(val exerciseId: String) : DayUiEvent
     data object CloseSwapPicker : DayUiEvent
     /** Apply [swap] for this session only — does not change the default exercise. */
-    data class PickSwapForSession(val exerciseId: String, val swap: Swap) : DayUiEvent
+    data class PickSwapForSession(val exerciseId: String, val swap: ExerciseDef) : DayUiEvent
     /** Apply [swap] for this session AND persist as the new default for this exercise. */
-    data class PickSwapPersistent(val exerciseId: String, val swap: Swap) : DayUiEvent
+    data class PickSwapPersistent(val exerciseId: String, val swap: ExerciseDef) : DayUiEvent
     /** Clear any persistent swap for this exercise (revert to program default). */
     data class ClearPersistentSwap(val exerciseId: String) : DayUiEvent
 

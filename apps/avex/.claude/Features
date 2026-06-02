@@ -100,6 +100,7 @@ These are in `ForgeNavHost.kt` but nothing in the visible UI navigates to them:
 - Smooth radial bloom gradient via drawBehind (centered at 92–95% card width, fades to transparent)
 - ACTIVE dot on card when a session is in progress for that day
 - bounceClick spring animation on all cards
+- **Reachable from Overview** via the "view program →" link in the THIS WEEK row (program-unlock Phase 4 — previously orphaned, no nav path). Shows the full generated week including any cardio days; cardio cards route to the Cardio screen.
 
 ---
 
@@ -231,6 +232,10 @@ All 4 days fully specified with:
 - Swap catalog: alternate exercises keyed by muscle group
 - Tutorial text per exercise
 - Exercise IDs: ua1–ua6, la1–la6, ub1–ub7, lb1–lb6
+
+> **Superseded by the program-unlock (un-hardlock) work:** the program is now data-driven + auto-generated from `ExerciseLibrary` (a single equipment-tagged pool of 52 movements with per-exercise coaching rationale). The old `Swaps` catalog was merged into the library, so the **swap picker and the generator now draw from the same pool**, filtered by available equipment + dislikes.
+>
+> **"Professional plans" engine (all 6 phases complete):** the generator is goal-aware (rep ranges), experience-aware (volume scale + difficulty cap), frequency-aware (weekly volume via `VolumeModel`), role/pattern-aware (heavy slots → bilateral compounds, no duplicate movement patterns), and safety-aware (problem-area avoidance). Tunable from **Settings → Program**: days/week, goal, experience, priority muscles, problem areas, cadence, deload week, + a **live per-muscle weekly-volume readout**; per-exercise ♥/✕/📌 (like/dislike/pin) on the Exercise-likes page; single-day re-roll from the day-card long-press menu. Onboarding (10 steps) collects all inputs and shows a **live sample-week preview** before finishing. Rest-timer durations + day-card "~min" estimates come from `SessionEstimate`. See `.claude/program-unlock-plan.md`.
 
 ---
 

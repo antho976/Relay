@@ -28,7 +28,11 @@ import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.sin
 
-private val RADAR_IDS = listOf("ua1", "ua2", "la1", "ub1", "ub2", "lb1")
+// Library ids for the strength radar's key compounds (program-unlock: logged sets now use library ids).
+private val RADAR_IDS = listOf(
+    "db-bench-press", "machine-chest-press", "goblet-squat",
+    "machine-seated-row", "incline-db-bench-press", "db-bulgarian-split-squat"
+)
 
 @Composable
 fun StrengthRadarCard(compoundMaxes: Map<String, Double>, modifier: Modifier = Modifier) {

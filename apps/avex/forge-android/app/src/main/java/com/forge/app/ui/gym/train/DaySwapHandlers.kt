@@ -17,7 +17,7 @@ internal fun DayViewModel.handleSwapEvent(event: DayUiEvent) {
     }
 }
 
-private fun DayViewModel.applySessionSwap(exerciseId: String, swap: com.forge.app.program.Swap) {
+private fun DayViewModel.applySessionSwap(exerciseId: String, swap: com.forge.app.program.ExerciseDef) {
     viewModelScope.launch {
         val leId = ensureLoggedExercise(exerciseId) ?: return@launch
         val current = _state.value.exercises.firstOrNull { it.plan.id == exerciseId } ?: return@launch
@@ -41,7 +41,7 @@ private fun DayViewModel.applySessionSwap(exerciseId: String, swap: com.forge.ap
     }
 }
 
-private fun DayViewModel.applyPersistentSwap(exerciseId: String, swap: com.forge.app.program.Swap) {
+private fun DayViewModel.applyPersistentSwap(exerciseId: String, swap: com.forge.app.program.ExerciseDef) {
     viewModelScope.launch {
         customizationRepo.setSwap(exerciseId, swap.name, swap.unit.code)
         applySessionSwap(exerciseId, swap)

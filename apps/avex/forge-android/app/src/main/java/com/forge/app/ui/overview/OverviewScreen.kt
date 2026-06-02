@@ -231,7 +231,13 @@ fun OverviewScreen(
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically) {
                 Text("THIS WEEK", style = MaterialTheme.typography.labelMedium, color = muted)
-                Text("${state.workoutsThisWeek} of 6 target", style = MaterialTheme.typography.labelSmall, color = muted)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("${state.workoutsThisWeek} of 6 target", style = MaterialTheme.typography.labelSmall, color = muted)
+                    Text("·", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.5f))
+                    Text("view program →", style = MaterialTheme.typography.labelSmall,
+                        color = muted, fontSize = 10.sp,
+                        modifier = Modifier.clickable { onGoToGym() }.padding(vertical = 2.dp))
+                }
             }
             Spacer(Modifier.height(12.dp))
 
@@ -250,7 +256,10 @@ fun OverviewScreen(
             Row(modifier = Modifier.fillMaxWidth()) {
                 OverviewStat(value = "$animWorkouts", label = "WORKOUTS", modifier = Modifier.weight(1f))
                 OverviewStat(value = "$animVolume", label = "LB", modifier = Modifier.weight(1f))
-                OverviewStat(value = "$animCardio", label = "CARDIO MIN", modifier = Modifier.weight(1f))
+                OverviewStat(
+                    value = if (state.cardioWeeklyTargetMin > 0) "$animCardio/${state.cardioWeeklyTargetMin}" else "$animCardio",
+                    label = "CARDIO MIN", modifier = Modifier.weight(1f)
+                )
             }
 
             Spacer(Modifier.height(20.dp))

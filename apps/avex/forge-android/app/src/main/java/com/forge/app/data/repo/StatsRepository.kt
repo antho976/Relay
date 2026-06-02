@@ -115,7 +115,7 @@ class StatsRepository @Inject constructor(
                 }
                 .toSet()
             val lastFinished = recentSessions.filter { it.finishedAt != null }.maxByOrNull { it.finishedAt!! }
-            val nextUpDayKey = if (lastFinished == null) Program.UPPER_A
+            val nextUpDayKey = if (lastFinished == null) (Program.dayKeys.firstOrNull() ?: Program.UPPER_A)
                 else { val idx = Program.dayKeys.indexOf(lastFinished.dayKey); Program.dayKeys[(idx + 1) % Program.dayKeys.size] }
             WeeklyStats(
                 workouts = workouts,

@@ -2,8 +2,8 @@ package com.forge.app.program
 
 /**
  * A single exercise slot within a day's plan. The `id` matches the React prototype
- * (ua1, la3, ub7, lb6 — letter day + position). Swap candidates live in [Swaps]
- * keyed by [muscle].
+ * (ua1, la3, ub7, lb6 — letter day + position). Swap candidates come from
+ * [ExerciseLibrary], filtered by [muscle].
  *
  * [reps] is stored as a display string ("8-10", "10/leg", "12-15") because the
  * prototype uses a mix of ranges and per-side notations. PR detection (Phase 6+)
@@ -75,9 +75,7 @@ object Program {
     const val UPPER_B = "upper-b"
     const val LOWER_B = "lower-b"
 
-    val dayKeys: List<String> = listOf(UPPER_A, LOWER_A, UPPER_B, LOWER_B)
-
-    val days: List<DayPlan> = listOf(
+    private val defaultDays: List<DayPlan> = listOf(
         DayPlan(
             key = UPPER_A,
             defaultName = "Upper A",
@@ -165,10 +163,25 @@ object Program {
         )
     )
 
+    @Volatile
+    private var active: List<DayPlan> = defaultDays
+
+    /** The hard-coded split, used to seed the DB the first time (program-unlock Phase 1). */
+    val seedDays: List<DayPlan> get() = defaultDays
+
+    /** The live program — DB-backed once [setActive] runs; defaults to the seed split. */
+    val days: List<DayPlan> get() = active
+    val dayKeys: List<String> get() = active.map { it.key }
+
+    /** Swap in a new active program (ProgramRepository, after load / generate). */
+    fun setActive(newDays: List<DayPlan>) { active = newDays }
+
     fun day(key: String): DayPlan =
-        days.firstOrNull { it.key == key }
-            ?: error("Unknown day key: $key. Valid keys are $dayKeys")
+        active.firstOrNull { it.key == key }
+            ?: defaultDays.firstOrNull { it.key == key }
+            ?: error("Unknown day key: $key")
 
     fun exercise(id: String): ExercisePlan? =
-        days.flatMap { it.exercises }.firstOrNull { it.id == id }
+        active.flatMap { it.exercises }.firstOrNull { it.id == id }
+            ?: ExerciseLibrary.byId(id)?.toPlan()
 }

@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -32,7 +33,21 @@ data class SettingsUiState(
     val privacyMode: Boolean = false,
     val availableEquipment: Set<String> = emptySet(),
     val accentColorHex: String = "",
-    val timezone: String = java.util.TimeZone.getDefault().id
+    val timezone: String = java.util.TimeZone.getDefault().id,
+    val daysPerWeek: Int = 4,
+    val liked: Set<String> = emptySet(),
+    val disliked: Set<String> = emptySet(),
+    val rotationCadence: String = "never",
+    val rotationEveryN: Int = 4,
+    val cardioWeeklyTargetMin: Int = 0,
+    val cardioDaysPerWeek: Int = 0,
+    val userGoal: String = "build_muscle",
+    val experience: String = "intermediate",
+    val problemAreas: Set<String> = emptySet(),
+    val priorityMuscles: Set<String> = emptySet(),
+    val pinnedExercises: Set<String> = emptySet(),
+    /** Current program's weekly sets per muscle (display name → sets), busiest first (Phase 6). */
+    val weeklyVolume: List<Pair<String, Int>> = emptyList()
 )
 
 @HiltViewModel
@@ -41,7 +56,8 @@ class SettingsViewModel @Inject constructor(
     private val resetRepo: ResetRepository,
     private val backupRepo: com.forge.app.data.repo.BackupRepository,
     private val sampleDataSeeder: com.forge.app.data.repo.SampleDataSeeder,
-    private val pdfExport: com.forge.app.data.repo.PdfExportRepository
+    private val pdfExport: com.forge.app.data.repo.PdfExportRepository,
+    private val programRepository: com.forge.app.data.repo.ProgramRepository
 ) : ViewModel() {
 
     val state: StateFlow<SettingsUiState> = combine(
@@ -84,7 +100,42 @@ class SettingsViewModel @Inject constructor(
         s.copy(accentColorHex = v)
     }.combine(settingsRepo.timezone) { s, v ->
         s.copy(timezone = v)
+    }.combine(settingsRepo.daysPerWeek) { s, v ->
+        s.copy(daysPerWeek = v)
+    }.combine(settingsRepo.likedExercises) { s, v ->
+        s.copy(liked = v)
+    }.combine(settingsRepo.dislikedExercises) { s, v ->
+        s.copy(disliked = v)
+    }.combine(settingsRepo.rotationCadence) { s, v ->
+        s.copy(rotationCadence = v)
+    }.combine(settingsRepo.rotationEveryN) { s, v ->
+        s.copy(rotationEveryN = v)
+    }.combine(settingsRepo.cardioWeeklyTargetMin) { s, v ->
+        s.copy(cardioWeeklyTargetMin = v)
+    }.combine(settingsRepo.cardioDaysPerWeek) { s, v ->
+        s.copy(cardioDaysPerWeek = v)
+    }.combine(settingsRepo.userGoal) { s, v ->
+        s.copy(userGoal = v.ifBlank { "build_muscle" })
+    }.combine(settingsRepo.programExperience) { s, v ->
+        s.copy(experience = v)
+    }.combine(settingsRepo.problemAreas) { s, v ->
+        s.copy(problemAreas = v)
+    }.combine(settingsRepo.priorityMuscles) { s, v ->
+        s.copy(priorityMuscles = v)
+    }.combine(settingsRepo.pinnedExercises) { s, v ->
+        s.copy(pinnedExercises = v)
+    }.combine(programRepository.revision) { s, _ ->
+        s.copy(weeklyVolume = computeWeeklyVolume())
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsUiState())
+
+    /** Sets-per-muscle across the active program (busiest first) — drives the Program page readout. */
+    private fun computeWeeklyVolume(): List<Pair<String, Int>> =
+        com.forge.app.program.Program.days
+            .flatMap { it.exercises }
+            .groupBy { it.muscle }
+            .map { (muscle, exs) -> muscle to exs.sumOf { it.sets } }
+            .sortedByDescending { it.second }
+            .map { (muscle, sets) -> muscle.displayName to sets }
 
     fun setAmoledMode(v: Boolean) = viewModelScope.launch { settingsRepo.setAmoledMode(v) }
     fun setUseKg(v: Boolean) = viewModelScope.launch { settingsRepo.setUseKg(v) }
@@ -112,6 +163,95 @@ class SettingsViewModel @Inject constructor(
     fun loadSampleData() = viewModelScope.launch { sampleDataSeeder.seed() }
     fun setPrivacyMode(v: Boolean) = viewModelScope.launch { settingsRepo.setPrivacyMode(v) }
     fun setAvailableEquipment(codes: Set<String>) = viewModelScope.launch { settingsRepo.setAvailableEquipment(codes) }
+    fun setDaysPerWeek(n: Int) = viewModelScope.launch { settingsRepo.setDaysPerWeek(n) }
+    fun setCardioWeeklyTargetMin(min: Int) = viewModelScope.launch {
+        settingsRepo.setCardioWeeklyTargetMin(min)
+        if (min > 0) settingsRepo.setCardioDaysPerWeek(0) // goal and days are mutually exclusive
+    }
+    fun setCardioDaysPerWeek(n: Int) = viewModelScope.launch {
+        settingsRepo.setCardioDaysPerWeek(n)
+        if (n > 0) settingsRepo.setCardioWeeklyTargetMin(0)
+        regenerateProgram() // rebuild so cardio days appear/disappear in the week
+        _statusMessage.value =
+            if (n > 0) "Added $n cardio day(s). Open Gym to see them." else "Cardio days removed."
+    }
+    /** All generation inputs read from prefs — keeps the three generate paths in sync (Phase 2 / 3). */
+    private suspend fun buildParams(days: Int) = com.forge.app.program.GenerationParams(
+        daysPerWeek = days,
+        emphasis = settingsRepo.programEmphasis.first(),
+        cardioDays = settingsRepo.cardioDaysPerWeek.first(),
+        goal = settingsRepo.userGoal.first().ifBlank { "build_muscle" },
+        experience = settingsRepo.programExperience.first(),
+        problemAreas = settingsRepo.problemAreas.first()
+            .mapNotNull { com.forge.app.program.ProblemArea.fromCode(it) }.toSet(),
+        priorityMuscles = settingsRepo.priorityMuscles.first()
+            .mapNotNull { runCatching { com.forge.app.program.MuscleGroup.fromCode(it) }.getOrNull() }.toSet(),
+        pinned = settingsRepo.pinnedExercises.first()
+    )
+    private suspend fun currentEquipment(): Set<com.forge.app.program.Equipment> =
+        settingsRepo.availableEquipment.first()
+            .mapNotNull { runCatching { com.forge.app.program.Equipment.valueOf(it) }.getOrNull() }.toSet()
+
+    private suspend fun regenerateProgram() {
+        programRepository.generate(
+            buildParams(settingsRepo.daysPerWeek.first()),
+            currentEquipment(), settingsRepo.likedExercises.first(), settingsRepo.dislikedExercises.first()
+        )
+    }
+    fun toggleLike(libId: String) = viewModelScope.launch {
+        settingsRepo.setExerciseLiked(libId, libId !in settingsRepo.likedExercises.first())
+    }
+    fun toggleDislike(libId: String) = viewModelScope.launch {
+        settingsRepo.setExerciseDisliked(libId, libId !in settingsRepo.dislikedExercises.first())
+    }
+    fun setRotationCadence(cadence: String, n: Int) = viewModelScope.launch {
+        settingsRepo.setRotationCadence(cadence)
+        if (cadence == "every_n") settingsRepo.setRotationEveryN(n)
+        settingsRepo.setRotationCounter(0)
+    }
+    fun rerollProgram() = viewModelScope.launch {
+        programRepository.reroll(
+            buildParams(settingsRepo.daysPerWeek.first()),
+            currentEquipment(),
+            settingsRepo.likedExercises.first(),
+            settingsRepo.dislikedExercises.first()
+        )
+        _statusMessage.value = "Re-rolled — same split, fresh exercises. Open Gym to see it."
+    }
+
+    // Goal/experience/problem-areas/priority/pins are staged config — applied when the user taps
+    // Generate or Re-roll (avoids reshuffling the whole plan on every chip tap).
+    fun setUserGoal(goal: String) = viewModelScope.launch { settingsRepo.setUserGoal(goal) }
+    fun setExperience(level: String) = viewModelScope.launch { settingsRepo.setProgramExperience(level) }
+    fun toggleProblemArea(code: String) = viewModelScope.launch {
+        settingsRepo.toggleProblemArea(code, code !in settingsRepo.problemAreas.first())
+    }
+    fun togglePriorityMuscle(code: String) = viewModelScope.launch {
+        settingsRepo.togglePriorityMuscle(code, code !in settingsRepo.priorityMuscles.first())
+    }
+    fun togglePin(libId: String) = viewModelScope.launch {
+        settingsRepo.togglePinned(libId, libId !in settingsRepo.pinnedExercises.first())
+    }
+
+    /** Generate a fresh program from the chosen day-count + current equipment/likes/dislikes (Phase 2). */
+    fun generateProgram(days: Int) = viewModelScope.launch {
+        settingsRepo.setDaysPerWeek(days)
+        programRepository.generate(
+            buildParams(days),
+            currentEquipment(), settingsRepo.likedExercises.first(), settingsRepo.dislikedExercises.first()
+        )
+        _statusMessage.value = "New $days-day program generated. Open Gym to see it."
+    }
+
+    /** Regenerate the current split at reduced volume for a recovery week (Phase 4 periodization). */
+    fun generateDeloadWeek() = viewModelScope.launch {
+        val days = settingsRepo.daysPerWeek.first()
+        programRepository.generate(
+            buildParams(days).copy(deload = true),
+            currentEquipment(), settingsRepo.likedExercises.first(), settingsRepo.dislikedExercises.first()
+        )
+        _statusMessage.value = "Deload week generated — lighter volume. Open Gym to see it."
+    }
     fun setAccentColorHex(hex: String) = viewModelScope.launch { settingsRepo.setAccentColorHex(hex) }
     fun setTimezone(id: String) = viewModelScope.launch { settingsRepo.setTimezone(id) }
     fun exportLastSessionPdf() = viewModelScope.launch {

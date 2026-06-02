@@ -108,8 +108,8 @@ fun ForgeNavHost() {
         }
         composable(Routes.OVERVIEW) {
             OverviewScreen(
-                onStartSession = { dayKey -> nav.navigate(Routes.gymDay(dayKey)) },
-                onStartSessionSkipWarmup = { dayKey -> nav.navigate(Routes.gymDay(dayKey, skipWarmup = true)) },
+                onStartSession = { dayKey -> if (dayKey.startsWith("cardio")) nav.navigate(Routes.CARDIO) else nav.navigate(Routes.gymDay(dayKey)) },
+                onStartSessionSkipWarmup = { dayKey -> if (dayKey.startsWith("cardio")) nav.navigate(Routes.CARDIO) else nav.navigate(Routes.gymDay(dayKey, skipWarmup = true)) },
                 onGoToGym = { nav.navigate(Routes.GYM_TRAIN) },
                 onGoToCardio = { nav.navigate(Routes.CARDIO) },
                 onGoToTrophies = { nav.navigate(Routes.TROPHIES) },
@@ -126,7 +126,8 @@ fun ForgeNavHost() {
                 onOpenHistory = { nav.navigate(Routes.SESSION_HISTORY) },
                 onOpenNotes = { nav.navigate(Routes.NOTES_SEARCH) },
                 onOpenRecap = { nav.navigate(Routes.RECAP) },
-                onEditProgram = { dayKey -> nav.navigate(Routes.programEditor(dayKey)) }
+                onEditProgram = { dayKey -> nav.navigate(Routes.programEditor(dayKey)) },
+                onOpenCardio = { nav.navigate(Routes.CARDIO) }
             )
         }
         composable(Routes.GYM_STATS) {
@@ -138,6 +139,7 @@ fun ForgeNavHost() {
                 onOpenNotes = { nav.navigate(Routes.NOTES_SEARCH) },
                 onOpenRecap = { nav.navigate(Routes.RECAP) },
                 onEditProgram = { dayKey -> nav.navigate(Routes.programEditor(dayKey)) },
+                onOpenCardio = { nav.navigate(Routes.CARDIO) },
                 initialTab = 1
             )
         }

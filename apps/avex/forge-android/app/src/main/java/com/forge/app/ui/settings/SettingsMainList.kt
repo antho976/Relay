@@ -109,6 +109,8 @@ internal fun rowSubtitle(page: SettingsPage, s: SettingsUiState): String = when 
     SettingsPage.Tiles -> "${s.overviewTileOrder.count { it !in s.hiddenOverviewTiles }} of ${s.overviewTileOrder.size} visible"
     SettingsPage.Equipment -> if (s.availableEquipment.isEmpty()) "All equipment" else "${s.availableEquipment.size} selected"
     SettingsPage.Privacy -> if (s.privacyMode) "Screen blur on" else "Screen blur off"
+    SettingsPage.Program -> "${s.daysPerWeek} days/week · auto-generate"
+    SettingsPage.ExercisePrefs -> "${s.liked.size} liked · ${s.disliked.size} disliked"
 }
 
 internal fun dateShort(f: String) = when (f) {

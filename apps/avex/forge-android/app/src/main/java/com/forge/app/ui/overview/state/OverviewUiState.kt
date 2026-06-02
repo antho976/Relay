@@ -33,6 +33,7 @@ data class OverviewUiState(
     val workoutsThisWeek: Int = 0,
     val volumeThisWeekLb: Double = 0.0,
     val cardioMinutesThisWeek: Int = 0,
+    val cardioWeeklyTargetMin: Int = 0,
     val totalFinishedSessions: Int = 0,
     val lastDeloadAtSessionCount: Int = 0,
     val streakDays: Int = 0,

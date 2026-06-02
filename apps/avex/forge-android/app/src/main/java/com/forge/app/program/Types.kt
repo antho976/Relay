@@ -51,3 +51,32 @@ enum class Difficulty(val code: String, val displayName: String) {
             entries.first { it.code == code }
     }
 }
+
+/**
+ * Movement pattern of an exercise (program-unlock Phase 4 — generator intelligence). Used to keep a
+ * day/week from stacking near-duplicate movements (e.g. three horizontal pulls). [ISOLATION] is the
+ * catch-all for single-joint accessory work and is *not* penalized for repeating (you can do several
+ * different isolations in a day); the compound patterns are.
+ */
+enum class MovementPattern {
+    HORIZONTAL_PUSH, VERTICAL_PUSH,
+    HORIZONTAL_PULL, VERTICAL_PULL,
+    SQUAT, HINGE, LUNGE,
+    CORE, ISOLATION
+}
+
+/**
+ * A joint/area a user can flag as a problem (program-unlock Phase 3). Movements that stress a flagged
+ * area are strongly down-weighted in generation so the plan steers around it (soft, not a hard ban —
+ * if it's the only option for a muscle it can still appear). [code] is the persisted value.
+ */
+enum class ProblemArea(val code: String, val displayName: String) {
+    KNEES("knees", "Knees"),
+    SHOULDERS("shoulders", "Shoulders"),
+    LOWER_BACK("lower_back", "Lower back"),
+    WRISTS("wrists", "Wrists");
+
+    companion object {
+        fun fromCode(code: String): ProblemArea? = entries.firstOrNull { it.code == code }
+    }
+}

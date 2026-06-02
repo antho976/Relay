@@ -32,7 +32,8 @@ internal fun buildOverviewUiState(
     plannedDay: String,
     trophiesUnlocked: Int,
     distanceKm: Double,
-    dayVolStats: Map<String, SessionDao.DayVolumeStats>
+    dayVolStats: Map<String, SessionDao.DayVolumeStats>,
+    cardioTargetMin: Int = 0
 ): OverviewUiState {
     val gymItems = stats.recentGymSessions.map { session ->
         val day = Program.days.firstOrNull { it.key == session.dayKey }
@@ -98,6 +99,7 @@ internal fun buildOverviewUiState(
         workoutsThisWeek = stats.workouts,
         volumeThisWeekLb = stats.volumeLb,
         cardioMinutesThisWeek = stats.cardioMinutes,
+        cardioWeeklyTargetMin = cardioTargetMin,
         totalFinishedSessions = stats.totalFinishedSessions,
         lastDeloadAtSessionCount = lastDeload,
         streakDays = stats.streakDays,

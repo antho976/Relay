@@ -47,7 +47,8 @@ class OverviewViewModel @Inject constructor(
         settingsRepo.plannedNextDay,
         trophyRepo.observeUnlockedIds(),
         cardioRepo.observeDistanceKmSince(weekStartMs),
-        statsRepo.observeDayVolumeStats()
+        statsRepo.observeDayVolumeStats(),
+        settingsRepo.cardioWeeklyTargetMin
     ) { args ->
         val stats = args[0] as StatsRepository.WeeklyStats
         @Suppress("UNCHECKED_CAST")
@@ -61,6 +62,7 @@ class OverviewViewModel @Inject constructor(
         val distanceKm = (args[7] as Double?) ?: 0.0
         @Suppress("UNCHECKED_CAST")
         val dayVolStats = args[8] as Map<String, SessionDao.DayVolumeStats>
+        val cardioTarget = args[9] as Int
 
         buildOverviewUiState(
             stats = stats,
@@ -71,7 +73,8 @@ class OverviewViewModel @Inject constructor(
             plannedDay = plannedDay,
             trophiesUnlocked = unlockedIds.size,
             distanceKm = distanceKm,
-            dayVolStats = dayVolStats
+            dayVolStats = dayVolStats,
+            cardioTargetMin = cardioTarget
         )
     }.combine(customizationRepo.observeAllDayNames()) { s, names ->
         val customName = names.firstOrNull { it.dayKey == s.nextUpDayKey }?.customName

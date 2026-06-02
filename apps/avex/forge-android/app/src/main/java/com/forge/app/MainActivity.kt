@@ -19,6 +19,7 @@ import androidx.compose.runtime.remember
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.service.AutoBackupWorker
 import com.forge.app.ui.nav.ForgeNavHost
+import com.forge.app.ui.onboarding.OnboardingScreen
 import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.theme.ForgeTheme
 import com.forge.app.ui.theme.ForgeUiSettings
@@ -115,13 +116,18 @@ class MainActivity : ComponentActivity() {
                 }
             }
             val uiSettings by uiSettingsFlow.collectAsState(initial = ForgeUiSettings())
+            val onboardingDone by settingsRepo.onboardingDone.collectAsState(initial = null)
 
             CompositionLocalProvider(LocalForgeSettings provides uiSettings) {
                 ForgeTheme(
                     amoledMode     = uiSettings.amoledMode,
                     accentColorHex = uiSettings.accentColorHex
                 ) {
-                    ForgeNavHost()
+                    when (onboardingDone) {
+                        false -> OnboardingScreen(onFinished = {})
+                        true -> ForgeNavHost()
+                        null -> {} // DataStore still loading; the theme's gradient shows briefly
+                    }
                 }
             }
         }

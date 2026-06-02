@@ -50,7 +50,9 @@ enum class SettingsPage(val title: String) {
     Notifications("Notifications"),
     Tiles("Overview tiles"),
     Equipment("Equipment"),
-    Privacy("Privacy")
+    Privacy("Privacy"),
+    Program("Program"),
+    ExercisePrefs("Exercise likes")
 }
 
 internal data class SettingsRow(val label: String, val tags: String, val page: SettingsPage)
@@ -62,7 +64,9 @@ internal val ALL_ROWS = listOf(
     SettingsRow("Notifications", "quiet hours notify suppress", SettingsPage.Notifications),
     SettingsRow("Overview tiles", "tiles order visible hidden gym cardio trophies streak deload", SettingsPage.Tiles),
     SettingsRow("Equipment", "equipment available barbell dumbbell cable machine", SettingsPage.Equipment),
-    SettingsRow("Privacy", "privacy mode blur screenshot", SettingsPage.Privacy)
+    SettingsRow("Privacy", "privacy mode blur screenshot", SettingsPage.Privacy),
+    SettingsRow("Program", "program generate auto split days routine rotate trainings workouts", SettingsPage.Program),
+    SettingsRow("Exercise likes", "like dislike favourite exclude exercises preferences movements heart", SettingsPage.ExercisePrefs)
 )
 
 internal data class SettingsItem(val name: String, val tags: String, val page: SettingsPage)
@@ -259,6 +263,8 @@ fun SettingsScreen(
             SettingsPage.Tiles -> TilesPage(state, viewModel, Modifier.padding(inner))
             SettingsPage.Equipment -> EquipmentPage(state, viewModel, Modifier.padding(inner))
             SettingsPage.Privacy -> PrivacyPage(state, viewModel, Modifier.padding(inner))
+            SettingsPage.Program -> ProgramPage(state, viewModel, Modifier.padding(inner))
+            SettingsPage.ExercisePrefs -> ExercisePrefsPage(state, viewModel, Modifier.padding(inner))
         }
     }
 

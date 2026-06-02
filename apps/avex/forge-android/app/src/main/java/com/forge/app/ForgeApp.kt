@@ -5,9 +5,13 @@ import android.content.pm.ApplicationInfo
 import android.os.StrictMode
 import androidx.hilt.work.HiltWorkerFactory
 import androidx.work.Configuration
+import com.forge.app.data.repo.ProgramRepository
 import com.forge.app.service.WeeklyRecapWorker
 import com.forge.app.service.WorkoutSessionService
 import dagger.hilt.android.HiltAndroidApp
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import java.io.File
 import java.io.PrintWriter
 import java.io.StringWriter
@@ -18,6 +22,7 @@ import javax.inject.Inject
 class ForgeApp : Application(), Configuration.Provider {
 
     @Inject lateinit var workerFactory: HiltWorkerFactory
+    @Inject lateinit var programRepository: ProgramRepository
 
     override val workManagerConfiguration: Configuration
         get() = Configuration.Builder().setWorkerFactory(workerFactory).build()
@@ -28,6 +33,8 @@ class ForgeApp : Application(), Configuration.Provider {
         if (isDebuggable()) installStrictMode()
         WorkoutSessionService.createChannels(this)
         WeeklyRecapWorker.schedule(this)
+        // Seed-if-empty + load the DB-backed active program into the Program facade (program-unlock Phase 1).
+        CoroutineScope(Dispatchers.IO).launch { programRepository.ensureLoaded() }
     }
 
     /**

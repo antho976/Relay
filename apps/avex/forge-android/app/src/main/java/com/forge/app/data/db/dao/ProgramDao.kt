@@ -40,6 +40,16 @@ interface ProgramDao {
     @Query("DELETE FROM program_slot")
     suspend fun clearSlots()
 
+    @Query("DELETE FROM program_slot WHERE day_id = :dayId")
+    suspend fun clearSlotsForDay(dayId: String)
+
+    /** Replace just one day's slots (single-day re-roll, Phase 6) — other days untouched. */
+    @Transaction
+    suspend fun replaceDaySlots(dayId: String, slots: List<ProgramSlot>) {
+        clearSlotsForDay(dayId)
+        insertSlots(slots)
+    }
+
     /** Replace the entire active program atomically (generate / rotate / custom edit). */
     @Transaction
     suspend fun replaceProgram(days: List<ProgramDay>, slots: List<ProgramSlot>) {

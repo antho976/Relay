@@ -24,12 +24,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.forge.app.program.ExerciseDef
 import com.forge.app.program.ExercisePlan
-import com.forge.app.program.Swap
-import com.forge.app.program.Swaps
 
 /**
- * Modal bottom sheet showing swap candidates for [forExercise]'s muscle group.
+ * Modal bottom sheet showing swap [candidates] for [forExercise]'s muscle group, drawn from the
+ * single [com.forge.app.program.ExerciseLibrary] pool (already filtered by equipment + dislikes).
  * Each variant has "Just Today" (session-only) and "Make Default" (persistent) pill buttons.
  * [currentSwapName] marks which swap is currently active with a CURRENT badge.
  */
@@ -37,15 +37,16 @@ import com.forge.app.program.Swaps
 @Composable
 fun SwapPickerSheet(
     forExercise: ExercisePlan,
+    candidates: List<ExerciseDef>,
     hasPersistentSwap: Boolean,
     currentSwapName: String? = null,
-    onPickForSession: (Swap) -> Unit,
-    onPickPersistent: (Swap) -> Unit,
+    onPickForSession: (ExerciseDef) -> Unit,
+    onPickPersistent: (ExerciseDef) -> Unit,
     onClearPersistent: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val swaps = Swaps.forMuscle(forExercise.muscle)
+    val swaps = candidates
 
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
@@ -88,6 +89,15 @@ fun SwapPickerSheet(
             Spacer(Modifier.height(24.dp))
             HorizontalDivider(color = outline.copy(alpha = 0.3f))
             Spacer(Modifier.height(20.dp))
+
+            if (swaps.isEmpty()) {
+                Text(
+                    "No alternatives for your current equipment. Add equipment in Settings to see more options.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = muted,
+                    fontStyle = FontStyle.Italic
+                )
+            }
 
             // ── Variants ─────────────────────────────────────────────────────
             swaps.forEachIndexed { index, swap ->
@@ -132,7 +142,7 @@ fun SwapPickerSheet(
                             }
                         }
                         Text(
-                            swap.muscleTarget,
+                            swap.muscleTarget ?: swap.muscle.displayName,
                             style = MaterialTheme.typography.bodySmall,
                             color = muted,
                             fontStyle = FontStyle.Italic
@@ -140,30 +150,34 @@ fun SwapPickerSheet(
                     }
                 }
 
-                Spacer(Modifier.height(10.dp))
-                Text(
-                    swap.why,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = muted
-                )
+                swap.why?.let { why ->
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        why,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = muted
+                    )
+                }
 
-                Spacer(Modifier.height(8.dp))
-                Row(
-                    verticalAlignment = Alignment.Top,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        "WHEN",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = accent,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    Text(
-                        swap.whenToUse,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = muted,
-                        fontStyle = FontStyle.Italic
-                    )
+                swap.whenToUse?.let { whenToUse ->
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        verticalAlignment = Alignment.Top,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            "WHEN",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = accent,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            whenToUse,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = muted,
+                            fontStyle = FontStyle.Italic
+                        )
+                    }
                 }
 
                 Spacer(Modifier.height(14.dp))

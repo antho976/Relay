@@ -9,6 +9,7 @@ import com.forge.app.data.repo.GoalRepository
 import com.forge.app.data.repo.TrophyRepository
 import com.forge.app.data.repo.WorkoutRepository
 import com.forge.app.domain.timer.RestTimerController
+import com.forge.app.program.Equipment
 import com.forge.app.program.Program
 import com.forge.app.service.WorkoutSessionBridge
 import com.forge.app.ui.gym.train.state.DayUiEvent
@@ -22,6 +23,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
@@ -97,6 +99,17 @@ class DayViewModel @Inject constructor(
                     _state.update { it.copy(customWarmupItems = custom) }
                 }
             }
+        }
+        // Equipment + dislikes drive the swap picker's candidate pool (program-unlock Phase 4).
+        viewModelScope.launch {
+            settingsRepo.availableEquipment
+                .combine(settingsRepo.dislikedExercises) { equip, disliked -> equip to disliked }
+                .collect { (equip, disliked) ->
+                    val available = equip.mapNotNull {
+                        runCatching { Equipment.valueOf(it) }.getOrNull()
+                    }.toSet()
+                    _state.update { it.copy(swapAvailableEquipment = available, swapDislikedIds = disliked) }
+                }
         }
     }
 

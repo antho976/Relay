@@ -12,7 +12,11 @@ import com.forge.app.data.db.entities.MoodEntry
 import com.forge.app.data.db.entities.Session
 import com.forge.app.data.db.entities.SessionBreak
 import com.forge.app.data.db.types.EffortRating
+import com.forge.app.data.prefs.SettingsRepository
+import com.forge.app.program.Equipment
+import com.forge.app.program.GenerationParams
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -31,7 +35,9 @@ class WorkoutRepository @Inject constructor(
     private val loggedSetDao: LoggedSetDao,
     private val moodDao: MoodDao,
     private val sessionBreakDao: SessionBreakDao,
-    private val clock: Clock
+    private val clock: Clock,
+    private val settingsRepo: SettingsRepository,
+    private val programRepository: ProgramRepository
 ) {
 
     // ─── Session lifecycle ─────────────────────────────────────────────────────
@@ -62,6 +68,27 @@ class WorkoutRepository @Inject constructor(
                 prCount = prCount,
                 setCount = setCount
             )
+        )
+        maybeRotateProgram()
+    }
+
+    /** Rotation (program-unlock Phase 3): re-roll the program every N finished sessions, if enabled. */
+    private suspend fun maybeRotateProgram() {
+        if (settingsRepo.rotationCadence.first() != "every_n") return
+        val n = settingsRepo.rotationEveryN.first().coerceAtLeast(1)
+        val next = settingsRepo.rotationCounter.first() + 1
+        if (next < n) {
+            settingsRepo.setRotationCounter(next)
+            return
+        }
+        settingsRepo.setRotationCounter(0)
+        val equip = settingsRepo.availableEquipment.first()
+            .mapNotNull { runCatching { Equipment.valueOf(it) }.getOrNull() }.toSet()
+        programRepository.reroll(
+            GenerationParams(settingsRepo.daysPerWeek.first(), cardioDays = settingsRepo.cardioDaysPerWeek.first()),
+            equip,
+            settingsRepo.likedExercises.first(),
+            settingsRepo.dislikedExercises.first()
         )
     }
 

@@ -127,7 +127,11 @@ private fun NextUpCard(
                         fontWeight = FontWeight.Bold
                     )
                     Text(
-                        "${item.plan.subtitle} · ${item.exerciseCount} exercises",
+                        buildString {
+                            append("${item.plan.subtitle} · ${item.exerciseCount} exercises")
+                            val mins = com.forge.app.program.SessionEstimate.estimateMinutes(item.plan)
+                            if (mins > 0) append(" · ~$mins min")
+                        },
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

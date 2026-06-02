@@ -189,12 +189,9 @@ internal fun DayViewModel.computeTimerDuration(
     overrideSeconds: Int? = null
 ): Int {
     if (overrideSeconds != null) return overrideSeconds
-    val base = when (plan.muscle) {
-        MuscleGroup.CHEST, MuscleGroup.BACK, MuscleGroup.QUADS,
-        MuscleGroup.HAMSTRINGS, MuscleGroup.GLUTES -> 180
-        else -> 90
-    }
-    return base + if (effortRating == EffortRating.BRUTAL) 30 else 0
+    // Movement-type + rep-weight aware rest (Phase 4); a brutal set buys 30s more.
+    return com.forge.app.program.SessionEstimate.restSeconds(plan) +
+        if (effortRating == EffortRating.BRUTAL) 30 else 0
 }
 
 internal fun computePrFlags(

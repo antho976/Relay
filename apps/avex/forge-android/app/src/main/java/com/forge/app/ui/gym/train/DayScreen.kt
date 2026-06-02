@@ -156,8 +156,14 @@ fun DayScreen(
     }
 
     state.swapPickerExercise?.let { exerciseUi ->
+        val swapCandidates = com.forge.app.program.ExerciseLibrary.swapCandidates(
+            muscle = exerciseUi.plan.muscle,
+            available = state.swapAvailableEquipment,
+            disliked = state.swapDislikedIds
+        )
         SwapPickerSheet(
             forExercise = exerciseUi.plan,
+            candidates = swapCandidates,
             hasPersistentSwap = exerciseUi.persistentSwapName != null,
             currentSwapName = exerciseUi.sessionSwapName ?: exerciseUi.persistentSwapName,
             onPickForSession = { swap -> viewModel.onEvent(DayUiEvent.PickSwapForSession(exerciseUi.plan.id, swap)) },

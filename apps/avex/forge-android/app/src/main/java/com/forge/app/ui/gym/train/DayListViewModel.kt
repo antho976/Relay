@@ -22,15 +22,17 @@ class DayListViewModel @Inject constructor(
     private val workoutRepo: WorkoutRepository,
     private val customizationRepo: CustomizationRepository,
     private val sessionDao: SessionDao,
-    private val settingsRepo: SettingsRepository
+    private val settingsRepo: SettingsRepository,
+    private val programRepository: com.forge.app.data.repo.ProgramRepository
 ) : ViewModel() {
 
     val state: StateFlow<DayListUiState> = combine(
         customizationRepo.observeAllDayNames(),
         workoutRepo.observeActiveSession(),
         sessionDao.observeRecent(50),
-        settingsRepo.observeAllDayColors()
-    ) { dayNames, activeSession, recentSessions, dayColors ->
+        settingsRepo.observeAllDayColors(),
+        programRepository.revision
+    ) { dayNames, activeSession, recentSessions, dayColors, _ ->
         val nameByKey = dayNames.associate { it.dayKey to it.customName }
         val lastFinishedByKey = recentSessions
             .filter { it.finishedAt != null }
@@ -43,7 +45,7 @@ class DayListViewModel @Inject constructor(
                 val lastFinished = recentSessions
                     .filter { it.finishedAt != null }
                     .maxByOrNull { it.finishedAt!! }
-                if (lastFinished == null) Program.UPPER_A
+                if (lastFinished == null) (Program.dayKeys.firstOrNull() ?: Program.UPPER_A)
                 else {
                     val idx = Program.dayKeys.indexOf(lastFinished.dayKey)
                     Program.dayKeys[(idx + 1) % Program.dayKeys.size]
@@ -73,5 +75,10 @@ class DayListViewModel @Inject constructor(
 
     fun setDayColor(dayKey: String, hex: String?) {
         viewModelScope.launch { settingsRepo.setDayColor(dayKey, hex) }
+    }
+
+    /** Re-roll just this day's exercises, keeping the rest of the week (Phase 6). */
+    fun rerollDay(dayKey: String) {
+        viewModelScope.launch { programRepository.rerollDay(dayKey) }
     }
 }

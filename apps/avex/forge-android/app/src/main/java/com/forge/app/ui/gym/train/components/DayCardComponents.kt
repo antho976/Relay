@@ -87,6 +87,8 @@ internal fun CompactCard(
                         buildString {
                             append(item.lastFinishedAt?.let { formatRelative(it) } ?: "Never trained")
                             append(" · ${item.exerciseCount} exercises")
+                            val mins = com.forge.app.program.SessionEstimate.estimateMinutes(item.plan)
+                            if (mins > 0) append(" · ~$mins min")
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant

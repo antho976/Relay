@@ -107,6 +107,14 @@ object PreferenceKeys {
     val DAYS_PER_WEEK = intPreferencesKey("days_per_week")
     /** Program focus, e.g. "balanced" | "arms_shoulders" | "legs". Empty = balanced. */
     val PROGRAM_EMPHASIS = stringPreferencesKey("program_emphasis")
+    /** Training experience: "beginner" | "intermediate" | "advanced". Drives volume + difficulty filter. */
+    val PROGRAM_EXPERIENCE = stringPreferencesKey("program_experience")
+    /** Flagged problem areas (ProblemArea codes) — generation avoids movements that stress them. */
+    val PROBLEM_AREAS = stringSetPreferencesKey("problem_areas")
+    /** Priority muscles (MuscleGroup codes) — granular emphasis, extra volume. */
+    val PRIORITY_MUSCLES = stringSetPreferencesKey("priority_muscles")
+    /** Pinned exercise library ids — kept across regenerations when their muscle is trained. */
+    val PINNED_EXERCISES = stringSetPreferencesKey("pinned_exercises")
     /** Rotation cadence: "never" | "every_n". */
     val ROTATION_CADENCE = stringPreferencesKey("rotation_cadence")
     /** N for the "every_n" cadence. */
@@ -120,4 +128,10 @@ object PreferenceKeys {
     val LIKED_EXERCISES = stringSetPreferencesKey("liked_exercises")
     /** ExerciseLibrary ids the user DISLIKES — excluded from generation + swaps. */
     val DISLIKED_EXERCISES = stringSetPreferencesKey("disliked_exercises")
+
+    // ─── Cardio layer (program-unlock Phase 6) ────────────────────────────────
+    /** Weekly cardio goal in minutes. 0 = no goal. */
+    val CARDIO_WEEKLY_TARGET_MIN = intPreferencesKey("cardio_weekly_target_min")
+    /** Dedicated cardio days per week the generator should add. 0 = none (Phase 6 days mode). */
+    val CARDIO_DAYS_PER_WEEK = intPreferencesKey("cardio_days_per_week")
 }
