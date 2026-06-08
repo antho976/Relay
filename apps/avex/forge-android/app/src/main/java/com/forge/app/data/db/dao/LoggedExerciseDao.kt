@@ -146,7 +146,7 @@ interface LoggedExerciseDao {
         SELECT le.id, le.exercise_id, le.swapped_name, le.note, s.started_at AS session_started_at
         FROM logged_exercise le
         INNER JOIN session s ON le.session_id = s.id
-        WHERE le.note IS NOT NULL AND le.note != '' AND le.note LIKE '%' || :query || '%'
+        WHERE le.note IS NOT NULL AND le.note != '' AND le.note LIKE '%' || :query || '%' ESCAPE '\'
         ORDER BY s.started_at DESC
         LIMIT 100
     """)

@@ -78,7 +78,12 @@ fun StrengthOverlayCard(
     }
 }
 
-private fun LegendItem(label: String, color: androidx.compose.ui.graphics.Color) {}
+@Composable
+private fun LegendItem(label: String, color: androidx.compose.ui.graphics.Color) {
+    // Was an empty no-op, so the two comparison curves were unlabeled. Colour the label to match
+    // its curve.
+    Text("● $label", style = MaterialTheme.typography.labelSmall, color = color)
+}
 
 // ─── Effort over time (#95) — mood trend ─────────────────────────────────────
 

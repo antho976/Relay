@@ -85,7 +85,7 @@ fun NoteField(
 
         if (text.isNotBlank()) {
             Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
-                TextButton(onClick = { onPinNote(if (currentPinnedNote == text) "" else text) }) {
+                TextButton(onClick = { onPinNote(if (currentPinnedNote == text.trim()) "" else text.trim()) }) {
                     Text(if (currentPinnedNote == text.trim()) "Unpin cue" else "Pin as cue")
                 }
             }

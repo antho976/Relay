@@ -93,6 +93,19 @@ class ProgramRepository @Inject constructor(
     private suspend fun currentEquipment(): Set<Equipment> = settings.availableEquipment.first()
         .mapNotNull { runCatching { Equipment.valueOf(it) }.getOrNull() }.toSet()
 
+    /**
+     * Re-roll the WHOLE program using the user's full saved generation profile (goal, experience,
+     * emphasis, problem areas, priority muscles, pinned). Used by automatic rotation, so a rotated
+     * program reflects the same inputs a manual re-roll would — including avoiding flagged injuries.
+     */
+    suspend fun rerollAll() {
+        val recent = Program.days.flatMap { it.exercises }.map { it.id }.toSet()
+        generate(
+            currentParams(), currentEquipment(),
+            settings.likedExercises.first(), settings.dislikedExercises.first(), recent
+        )
+    }
+
     /** Re-roll just one day's exercises (anti-repeating its current picks), keeping the rest intact. */
     suspend fun rerollDay(dayKey: String) {
         val recent = Program.day(dayKey).exercises.map { it.id }.toSet()

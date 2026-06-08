@@ -110,7 +110,9 @@ class StatsRepository @Inject constructor(
             val weekDaysTrained = recentSessions
                 .filter { it.finishedAt != null && it.finishedAt >= isoWeekStartMs }
                 .map {
-                    val d = Instant.ofEpochMilli(it.startedAt).atZone(zone).toLocalDate()
+                    // Bucket by the same timestamp the week filter uses (finishedAt), so a session
+                    // that started before midnight but finished this week lands on the right day.
+                    val d = Instant.ofEpochMilli(it.finishedAt!!).atZone(zone).toLocalDate()
                     d.dayOfWeek.value - 1 // 0=Mon..6=Sun
                 }
                 .toSet()
@@ -411,7 +413,7 @@ class StatsRepository @Inject constructor(
             val windowMs = 3L * 24 * 60 * 60 * 1000
             val session = sessionDao.sessionNearDate(
                 targetMs = targetMs + 12 * 60 * 60 * 1000,
-                fromMs = targetMs,
+                fromMs = targetMs - windowMs, // ±3 days around the target date (was forward-only)
                 toMs = targetMs + windowMs
             ) ?: continue
             val dayName = Program.days.firstOrNull { it.key == session.dayKey }?.defaultName ?: session.dayKey

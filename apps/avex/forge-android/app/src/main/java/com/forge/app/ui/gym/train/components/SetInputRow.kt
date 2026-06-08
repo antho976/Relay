@@ -113,9 +113,11 @@ fun SetInputRow(
         else weight = new
     }
 
-    // Single log path used by the LOG SET button and the reps field's "done" action.
+    // Single log path used by the LOG SET button and the reps field's "done" action. Validates the
+    // weight too (the keyboard's Done bypassed the disabled-button guard, logging a weightless set).
     fun submitSet() {
-        val r = reps.toIntOrNull() ?: return
+        if (weight.isBlank()) return
+        val r = reps.toIntOrNull()?.takeIf { it > 0 } ?: return
         onSubmit(weight.trim(), r)
         reps = ""
     }

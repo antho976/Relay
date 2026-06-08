@@ -39,6 +39,9 @@ class SampleDataSeeder @Inject constructor(
         val programDays = Program.days
         if (programDays.isEmpty()) return
         var sessionIndex = 0
+        // All-time best working weight per exercise, accumulated oldest-week-first so PR flags are
+        // realistic across the seeded history.
+        val maxByExercise = mutableMapOf<String, Double>()
 
         for (weekOffset in 7 downTo 0) {
             val weekStart = today.minusWeeks(weekOffset.toLong())
@@ -63,27 +66,41 @@ class SampleDataSeeder @Inject constructor(
                     finishedAt = null
                 ))
 
+                val totalSetsInSession = day.exercises.sumOf { it.sets }
+                var setCounter = 0
+
                 day.exercises.forEachIndexed { exIdx, plan ->
-                    val loggedExId = loggedExerciseDao.insert(LoggedExercise(
-                        sessionId = sessionId,
-                        exerciseId = plan.id,
-                        orderIndex = exIdx
-                    ))
                     val baseWeight = when (plan.unit) {
                         com.forge.app.program.ExerciseUnit.BODYWEIGHT -> 0.0
                         com.forge.app.program.ExerciseUnit.PLATES -> 30.0 + exIdx * 5.0
-                        else -> 20.0 + exIdx * 5.0 + weekOffset * 0.0 // will add progression
+                        else -> 20.0 + exIdx * 5.0
                     }
-                    // progressive overload: +2.5 lb per 2 weeks roughly
+                    // progressive overload: ~+1.25 lb per week
                     val progressionLb = (7 - weekOffset) * 1.25
                     val workingWeight = max(0.0, baseWeight + progressionLb + rng.nextDouble(-2.0, 2.0))
-
                     val reps = 8 + rng.nextInt(3) // 8–10 reps
+
+                    // A set counts as a PR the first time an exercise appears, or when it beats its prior
+                    // seeded best — so the demo data has realistic PRs (#148) instead of prCount = 0.
+                    val prevMax = maxByExercise[plan.id]
+                    val isPr = plan.unit != com.forge.app.program.ExerciseUnit.BODYWEIGHT && workingWeight > 0 &&
+                        (prevMax == null || workingWeight > prevMax)
+                    if (isPr) { maxByExercise[plan.id] = workingWeight; prCount++ }
+
+                    val loggedExId = loggedExerciseDao.insert(LoggedExercise(
+                        sessionId = sessionId,
+                        exerciseId = plan.id,
+                        orderIndex = exIdx,
+                        wasPr = isPr
+                    ))
 
                     repeat(plan.sets) { setIdx ->
                         val weightLb = if (plan.unit == com.forge.app.program.ExerciseUnit.BODYWEIGHT) null else workingWeight
                         val setReps = reps + rng.nextInt(2)
-                        val completedAt = startMs + (setIdx + exIdx * plan.sets) * 3 * 60_000L
+                        // Space sets evenly across the session so completedAt is monotonic and stays
+                        // within [startMs, finishedMs] (was index*3min, which could overshoot the finish).
+                        val completedAt = startMs + durationMs * (setCounter + 1) / (totalSetsInSession + 1)
+                        setCounter++
                         loggedSetDao.insert(LoggedSet(
                             loggedExerciseId = loggedExId,
                             setIndex = setIdx,

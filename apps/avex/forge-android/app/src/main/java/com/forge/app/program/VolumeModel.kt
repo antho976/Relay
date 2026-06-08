@@ -69,7 +69,10 @@ object VolumeModel {
             day.targets.forEachIndexed { si, slot -> positions.getOrPut(slot.muscle) { mutableListOf() }.add(di to si) }
         }
         positions.forEach { (muscle, slots) ->
-            val cap = weeklyCap[muscle] ?: return@forEach
+            // Focused muscles get extra weekly headroom equal to the emphasis bonus, so the cap
+            // doesn't immediately trim away the emphasis the user asked for.
+            val cap = (weeklyCap[muscle] ?: return@forEach) +
+                if (muscle in focus) slots.size * EMPHASIS_BONUS_SETS else 0
             var total = slots.sumOf { (di, si) -> result[di][si] }
             while (total > cap) {
                 val biggest = slots.filter { (di, si) -> result[di][si] > MIN_SETS }

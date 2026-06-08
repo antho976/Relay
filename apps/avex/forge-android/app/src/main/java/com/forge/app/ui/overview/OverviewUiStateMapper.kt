@@ -44,10 +44,14 @@ internal fun buildOverviewUiState(
             durationMin?.let { "${it} min" }
         ).joinToString(" · ")
         val volStats = dayVolStats[session.dayKey]
-        val vsAvgPct = if (volStats != null && session.totalVolumeLb != null && volStats.avgVolume > 0)
-            (((session.totalVolumeLb - volStats.avgVolume) / volStats.avgVolume) * 100).toInt()
-        else null
-        val isBest = volStats != null && session.totalVolumeLb != null &&
+        // Compare against the average of the OTHER sessions for this day type, not an average that
+        // includes this very session (which diluted the % and read 0% for a day's only session).
+        val vsAvgPct = if (volStats != null && session.totalVolumeLb != null && volStats.sessionCount > 1) {
+            val othersAvg = (volStats.avgVolume * volStats.sessionCount - session.totalVolumeLb) /
+                (volStats.sessionCount - 1)
+            if (othersAvg > 0) (((session.totalVolumeLb - othersAvg) / othersAvg) * 100).toInt() else null
+        } else null
+        val isBest = volStats != null && session.totalVolumeLb != null && volStats.sessionCount > 1 &&
             session.totalVolumeLb >= volStats.maxVolume
         Pair(session.startedAt, OverviewRecentItem(
             dayLabel = relativeDay(session.startedAt),

@@ -203,7 +203,8 @@ internal fun computePrFlags(
     // first-ever set on an exercise would falsely flag as a PR and render gold.)
     if (prior.isEmpty()) return emptySet<Long>() to false
     val prIds = currentSets
-        .filter { PrDetector.isPr(prior, it.weightLb, it.reps) }
+        // An assisted set is never itself a PR (and assisted history is excluded inside isPr).
+        .filter { !it.isAssisted && PrDetector.isPr(prior, it.weightLb, it.reps) }
         .map { it.id }.toSet()
     return prIds to prIds.isNotEmpty()
 }

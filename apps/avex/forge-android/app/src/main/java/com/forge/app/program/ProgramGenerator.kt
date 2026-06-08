@@ -82,9 +82,13 @@ object ProgramGenerator {
             val usedInDay = HashSet<String>()
             val usedPatterns = HashSet<MovementPattern>()
             val exercises = day.targets.mapIndexedNotNull { si, slot ->
-                val base = ExerciseLibrary.forMuscle(slot.muscle).filter { def ->
-                    def.id !in disliked && def.id !in usedInDay && isAvailable(def, available)
+                val forMuscle = ExerciseLibrary.forMuscle(slot.muscle).filter { def ->
+                    def.id !in disliked && isAvailable(def, available)
                 }
+                // Prefer movements not already used today; but if the (equipment-limited) pool is
+                // exhausted, allow a repeat rather than dropping the slot and silently undersizing the
+                // day (e.g. 3 BACK slots with only 2 available back lifts on a dumbbells+bench setup).
+                val base = forMuscle.filterNot { it.id in usedInDay }.ifEmpty { forMuscle }
                 // Experience caps movement difficulty, but never empty the slot — fall back if needed.
                 val candidates = base.filter { it.difficulty.ordinal <= maxDifficulty.ordinal }.ifEmpty { base }
                 // A pinned exercise for this muscle is forced into the slot when it's a valid candidate.

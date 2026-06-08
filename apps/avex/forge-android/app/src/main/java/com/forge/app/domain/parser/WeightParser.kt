@@ -41,7 +41,8 @@ object WeightParser {
 
         // Bare number — always literal pounds. The weight field is labelled "· LB", so
         // typing "12" means 12 lb regardless of the exercise's default unit. Plate counts
-        // must be entered explicitly as "N plates" (handled above).
-        return text.toDoubleOrNull()
+        // must be entered explicitly as "N plates" (handled above). Reject negatives (which
+        // would otherwise produce negative volume and false PRs).
+        return text.toDoubleOrNull()?.takeIf { it >= 0.0 }
     }
 }

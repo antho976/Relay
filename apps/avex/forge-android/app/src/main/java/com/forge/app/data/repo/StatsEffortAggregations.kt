@@ -186,14 +186,17 @@ internal fun buildInsights(
             insights.add(InsightFlag("⚖️", "Muscle balance", "${dominant.key} is over 50% of your weekly volume. Consider balancing."))
         }
     }
-    // Volume drop deload suggestion (#80)
-    val recentDeload = allSets.map { it.sessionStartedAt }.sorted().takeLast(6)
-    if (recentDeload.size == 6) {
-        val halfStart = recentDeload[3]
-        val firstHalfVol = allSets.filter { it.sessionStartedAt < halfStart && it.weightLb != null }
-            .sumOf { (it.weightLb ?: 0.0) * it.reps }
-        val secondHalfVol = allSets.filter { it.sessionStartedAt >= halfStart && it.weightLb != null }
-            .sumOf { (it.weightLb ?: 0.0) * it.reps }
+    // Volume drop deload suggestion (#80): compare the older 3 vs the newer 3 of the most recent
+    // 6 *sessions*. (Was comparing raw set-timestamps without .distinct(), so a single full workout
+    // collapsed the window and the banner fired almost always.)
+    val volBySession = allSets
+        .filter { it.weightLb != null }
+        .groupBy { it.sessionStartedAt }
+        .mapValues { (_, ss) -> ss.sumOf { (it.weightLb ?: 0.0) * it.reps } }
+    val recent6 = volBySession.toSortedMap().entries.toList().takeLast(6)
+    if (recent6.size == 6) {
+        val firstHalfVol = recent6.take(3).sumOf { it.value }
+        val secondHalfVol = recent6.drop(3).sumOf { it.value }
         if (firstHalfVol > 0 && secondHalfVol < firstHalfVol * 0.8) {
             insights.add(InsightFlag("💤", "Consider a deload", "Volume has dropped 20%+ recently. You might benefit from a recovery week."))
         }

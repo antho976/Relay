@@ -76,9 +76,13 @@ interface LoggedSetDao {
     """)
     fun observeAllFinishedSetsWithSession(): Flow<List<SetWithExerciseAndSession>>
 
-    /** Max reps in any single logged set — feeds the "Rep Machine" trophy (#105). */
+    /** Max reps in any single logged set. */
     @Query("SELECT MAX(reps) FROM logged_set")
     suspend fun maxRepsAnySet(): Int?
+
+    /** Max reps summed across one exercise's sets (per logged exercise) — the "Rep Machine" trophy (#105). */
+    @Query("SELECT MAX(total_reps) FROM (SELECT SUM(reps) AS total_reps FROM logged_set GROUP BY logged_exercise_id)")
+    suspend fun maxRepsSummedPerExercise(): Int?
 
     /** Toggle per-set difficulty tag (#68). */
     @Query("UPDATE logged_set SET difficulty_tag = :tag WHERE id = :id")

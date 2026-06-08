@@ -42,7 +42,13 @@ class CardioViewModel @Inject constructor(
 ) : ViewModel() {
 
     private val transient = MutableStateFlow(TransientState())
-    private val weekStartMs: Long = clock.nowMs() - WEEK_MS
+    // Start of the current ISO week (Monday) — matches the "this week" label and the Mon–Sun bars
+    // (was a rolling now-minus-7-days window). Captured once at construction.
+    private val weekStartMs: Long = run {
+        val zone = ZoneId.systemDefault()
+        Instant.ofEpochMilli(clock.nowMs()).atZone(zone).toLocalDate()
+            .with(DayOfWeek.MONDAY).atStartOfDay(zone).toInstant().toEpochMilli()
+    }
 
     private val dbFlow = combine(
         cardioRepo.observeRecent(limit = 20),

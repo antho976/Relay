@@ -37,7 +37,8 @@ class NotesSearchViewModel @Inject constructor(
         _query
             .debounce(300)
             .flatMapLatest { q ->
-                flow { emit(if (q.isBlank()) emptyList() else loggedExerciseDao.searchNotes(q)) }
+                // Escape LIKE wildcards so a literal '%' or '_' in the query isn't a wildcard.
+                flow { emit(if (q.isBlank()) emptyList() else loggedExerciseDao.searchNotes(escapeLikePattern(q))) }
             }
             .onStart { emit(emptyList()) }
     ) { query, results ->
@@ -46,3 +47,7 @@ class NotesSearchViewModel @Inject constructor(
 
     fun setQuery(q: String) = _query.update { q }
 }
+
+/** Escape SQL LIKE wildcards (matching `ESCAPE '\'` in the query) so user text matches literally. */
+private fun escapeLikePattern(q: String): String =
+    q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")

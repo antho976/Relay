@@ -25,7 +25,8 @@ object PrDetector {
     fun isPr(history: List<LoggedSet>, newWeightLb: Double?, newReps: Int): Boolean {
         if (newWeightLb == null || newReps <= 0) return false
         val competingMax = history
-            .filter { it.weightLb != null && it.reps >= newReps }
+            // Assisted sets (bands/spotter) are excluded from all-time PR comparison (LoggedSet.isAssisted).
+            .filter { it.weightLb != null && !it.isAssisted && it.reps >= newReps }
             .maxOfOrNull { it.weightLb!! }
             ?: return true // No prior set at >= this rep count — any weight is a PR
         return newWeightLb > competingMax

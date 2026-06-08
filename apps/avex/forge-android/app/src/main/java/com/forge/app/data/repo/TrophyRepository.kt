@@ -70,8 +70,8 @@ class TrophyRepository @Inject constructor(
             sundaysTrainedCount = countSundays(allSessions, zone),
             maxSessionDurationMinutes = maxDurationMinutes(allSessions),
             minFinishedSessionDurationMinutes = minDurationMinutes(allSessions),
-            maxSingleExerciseReps = loggedSetDao.maxRepsAnySet() ?: 0,
-            comebackKidEarned = checkComebackKid(allSessions),
+            maxSingleExerciseReps = loggedSetDao.maxRepsSummedPerExercise() ?: 0,
+            comebackKidEarned = checkComebackKid(allSessions, zone),
             consistencyKingEarned = checkConsistencyKing(allSessions, zone),
             varietyPackEarned = checkVarietyPack(allSessions, zone)
         )
@@ -82,7 +82,10 @@ class TrophyRepository @Inject constructor(
         val satisfied = TrophyEvaluator.unlockedByRule(snapshot)
         val already = unlockedIds()
         val newlyUnlockedIds = satisfied - already
-        recordNearMisses(snapshot, already - satisfied)
+        // Near-misses are LOCKED trophies (not yet unlocked and not yet satisfied). The old
+        // `already - satisfied` was the unlocked-but-unsatisfied set, which is virtually always empty.
+        val lockedIds = Trophies.all.mapTo(mutableSetOf()) { it.id } - already - satisfied
+        recordNearMisses(snapshot, lockedIds)
         if (newlyUnlockedIds.isEmpty()) return emptyList()
         unlockMany(newlyUnlockedIds)
         return Trophies.all.filter { it.id in newlyUnlockedIds }
@@ -162,14 +165,14 @@ class TrophyRepository @Inject constructor(
         } ?: Int.MAX_VALUE
     }
 
-    private fun checkComebackKid(sessions: List<Session>): Boolean {
+    private fun checkComebackKid(sessions: List<Session>, zone: ZoneId): Boolean {
         if (sessions.size < 2) return false
         for (i in 1 until sessions.size) {
-            val prev = sessions[i - 1]
-            val curr = sessions[i]
-            val gapDays = (curr.startedAt - prev.startedAt) / (24 * 60 * 60 * 1000L)
-            val withinTwoWeeks = gapDays in 5..14
-            if (withinTwoWeeks && curr.prCount > 0) return true
+            val prevDate = Instant.ofEpochMilli(sessions[i - 1].startedAt).atZone(zone).toLocalDate()
+            val currDate = Instant.ofEpochMilli(sessions[i].startedAt).atZone(zone).toLocalDate()
+            // Calendar-day gap, not raw-millisecond truncation (which rounded e.g. 4d23h down to 4).
+            val gapDays = ChronoUnit.DAYS.between(prevDate, currDate)
+            if (gapDays in 5..14 && sessions[i].prCount > 0) return true
         }
         return false
     }

@@ -25,7 +25,9 @@ object SessionEstimate {
         val compound = if (plan.tags.isNotEmpty()) ExerciseTag.COMPOUND in plan.tags
                        else plan.muscle in BIG_MUSCLES
         val base = if (compound) COMPOUND_REST else ISOLATION_REST
-        val heavy = maxReps(plan.reps)?.let { if (it <= 8) HEAVY_REST_BONUS else 0 } ?: 0
+        // Heaviness = the LOW end of the range (the heaviest set you'd do). Using the max rep
+        // meant strength ranges like "6-10" were never flagged heavy.
+        val heavy = minReps(plan.reps)?.let { if (it <= 8) HEAVY_REST_BONUS else 0 } ?: 0
         return base + heavy
     }
 
@@ -39,7 +41,7 @@ object SessionEstimate {
         return ((minutes + 2) / 5) * 5 // nearest 5
     }
 
-    /** Largest number embedded in a rep string ("6-10"→10, "AMRAP"→null, "30-60s"→60). */
-    private fun maxReps(reps: String): Int? =
-        Regex("\\d+").findAll(reps).map { it.value.toInt() }.maxOrNull()
+    /** Smallest number embedded in a rep string ("6-10"→6) — the heaviest set of the range. */
+    private fun minReps(reps: String): Int? =
+        Regex("\\d+").findAll(reps).map { it.value.toInt() }.minOrNull()
 }

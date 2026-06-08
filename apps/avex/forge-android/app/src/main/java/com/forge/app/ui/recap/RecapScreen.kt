@@ -76,7 +76,7 @@ fun RecapScreen(
                     emoji = "📅"
                 ) {
                     BigStat("${recap.sessionCount}", "workouts")
-                    BigStat("${(recap.totalVolumeLb / 1000).toInt()}k lb", "total volume")
+                    BigStat(formatRecapVolume(recap.totalVolumeLb), "total volume")
                     BigStat("${recap.totalPrs}", "PRs")
                     BigStat("${recap.totalSets}", "sets logged")
                     if (recap.topExercise != null) RecapRow("Most trained", recap.topExercise)
@@ -93,7 +93,7 @@ fun RecapScreen(
                     emoji = "🏆"
                 ) {
                     BigStat("${recap.sessionCount}", "workouts")
-                    BigStat("${(recap.totalVolumeLb / 1000).toInt()}k lb", "total volume")
+                    BigStat(formatRecapVolume(recap.totalVolumeLb), "total volume")
                     BigStat("${recap.totalPrs}", "total PRs")
                     BigStat("${recap.longestStreak}d", "longest streak")
                     if (recap.avgWeeklyVolume > 0) RecapRow("Avg weekly volume", "${recap.avgWeeklyVolume.toInt()} lb")
@@ -137,6 +137,10 @@ private fun BigStat(value: String, label: String) {
             color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
+
+/** Volume for the recap cards: "12.5k lb" for big numbers, the exact value under 1000 lb (no "0k"). */
+private fun formatRecapVolume(lb: Double): String =
+    if (lb >= 1000) "${"%.1f".format(lb / 1000).trimEnd('0').trimEnd('.')}k lb" else "${lb.toInt()} lb"
 
 @Composable
 private fun RecapRow(label: String, value: String) {

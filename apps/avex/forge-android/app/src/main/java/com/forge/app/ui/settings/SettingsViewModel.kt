@@ -166,7 +166,10 @@ class SettingsViewModel @Inject constructor(
     fun setDaysPerWeek(n: Int) = viewModelScope.launch { settingsRepo.setDaysPerWeek(n) }
     fun setCardioWeeklyTargetMin(min: Int) = viewModelScope.launch {
         settingsRepo.setCardioWeeklyTargetMin(min)
-        if (min > 0) settingsRepo.setCardioDaysPerWeek(0) // goal and days are mutually exclusive
+        if (min > 0) {
+            settingsRepo.setCardioDaysPerWeek(0) // goal and days are mutually exclusive
+            regenerateProgram() // drop any dedicated cardio days now that we're on a minute goal
+        }
     }
     fun setCardioDaysPerWeek(n: Int) = viewModelScope.launch {
         settingsRepo.setCardioDaysPerWeek(n)

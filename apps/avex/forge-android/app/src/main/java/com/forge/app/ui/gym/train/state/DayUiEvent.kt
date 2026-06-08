@@ -43,8 +43,8 @@ sealed interface DayUiEvent {
 
     // Session lifecycle
     data object FinishWorkout : DayUiEvent
-    /** Dismiss the summary sheet. [mood] and [tags] are saved against the session. */
-    data class DismissSummary(val mood: Mood? = null, val tags: List<String> = emptyList()) : DayUiEvent
+    /** Dismiss the summary sheet. [mood], [tags] and [journal] are saved against the session. */
+    data class DismissSummary(val mood: Mood? = null, val tags: List<String> = emptyList(), val journal: String = "") : DayUiEvent
     data object RequestBack : DayUiEvent
     data object ConfirmDiscard : DayUiEvent
     data object DismissDiscardConfirm : DayUiEvent

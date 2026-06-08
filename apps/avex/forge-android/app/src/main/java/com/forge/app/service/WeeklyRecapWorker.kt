@@ -12,8 +12,10 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.data.repo.StatsRepository
+import com.forge.app.domain.units.formatWeight
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
 import java.util.concurrent.TimeUnit
 
@@ -30,15 +32,17 @@ class WeeklyRecapWorker @AssistedInject constructor(
 ) : CoroutineWorker(ctx, params) {
 
     override suspend fun doWork(): Result {
-        if (settingsRepo.isQuietNow()) return Result.success()
+        // Defer (retry) rather than silently drop the recap if we land in quiet hours.
+        if (settingsRepo.isQuietNow()) return Result.retry()
         val stats = statsRepo.observeWeeklyStats().firstOrNull() ?: return Result.success()
         if (stats.workouts == 0) return Result.success() // nothing to recap
+        val useKg = settingsRepo.useKg.first()
 
         ensureChannel(ctx)
         val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         val body = buildString {
             append("${stats.workouts} workout${if (stats.workouts != 1) "s" else ""}")
-            if (stats.volumeLb > 0) append(" · ${stats.volumeLb.toInt()} lb")
+            if (stats.volumeLb > 0) append(" · ${formatWeight(stats.volumeLb, useKg)}")
             if (stats.cardioMinutes > 0) append(" · ${stats.cardioMinutes} min cardio")
             if (stats.streakDays > 0) append(" · ${stats.streakDays}-day streak")
         }

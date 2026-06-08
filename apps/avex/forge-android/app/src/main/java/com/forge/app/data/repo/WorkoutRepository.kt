@@ -82,14 +82,9 @@ class WorkoutRepository @Inject constructor(
             return
         }
         settingsRepo.setRotationCounter(0)
-        val equip = settingsRepo.availableEquipment.first()
-            .mapNotNull { runCatching { Equipment.valueOf(it) }.getOrNull() }.toSet()
-        programRepository.reroll(
-            GenerationParams(settingsRepo.daysPerWeek.first(), cardioDays = settingsRepo.cardioDaysPerWeek.first()),
-            equip,
-            settingsRepo.likedExercises.first(),
-            settingsRepo.dislikedExercises.first()
-        )
+        // Use the user's full saved generation profile (goal/experience/emphasis/problem-areas/
+        // priority-muscles/pinned), not a near-empty GenerationParams that dropped them all.
+        programRepository.rerollAll()
     }
 
     /** Persists the comma-separated tag list for a finished session (#107). */
@@ -101,7 +96,9 @@ class WorkoutRepository @Inject constructor(
     /** True if the session was just created (no sets yet). Used to decide whether to show the pre-session picker. */
     suspend fun isNewSession(sessionId: Long): Boolean {
         val s = sessionDao.get(sessionId) ?: return false
-        return s.finishedAt == null && s.setCount == 0
+        if (s.finishedAt != null) return false
+        // setCount is only stamped at finish (0 throughout an active session) — check actual work.
+        return loggedExerciseDao.forSession(sessionId).isEmpty()
     }
 
     suspend fun setDifficultyTag(setId: Long, tag: String?) = loggedSetDao.setDifficultyTag(setId, tag)

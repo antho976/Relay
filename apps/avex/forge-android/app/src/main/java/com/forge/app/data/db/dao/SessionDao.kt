@@ -195,7 +195,7 @@ interface SessionDao {
     /** Per-day-type: avg duration, PR rate, set count — for #134. */
     @Query("""
         SELECT day_key, COUNT(*) AS session_count,
-               AVG((finished_at - started_at) / 60000) AS avg_duration_min,
+               AVG((finished_at - started_at) / 60000.0) AS avg_duration_min,
                AVG(CAST(pr_count AS FLOAT) / NULLIF(set_count, 0)) AS pr_rate,
                SUM(total_volume_lb) AS total_vol
         FROM session WHERE finished_at IS NOT NULL

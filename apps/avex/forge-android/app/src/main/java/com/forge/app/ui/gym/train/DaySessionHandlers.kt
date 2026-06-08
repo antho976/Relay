@@ -13,7 +13,7 @@ import kotlinx.coroutines.launch
 internal fun DayViewModel.handleSessionEvent(event: DayUiEvent) {
     when (event) {
         is DayUiEvent.FinishWorkout -> finishWorkout()
-        is DayUiEvent.DismissSummary -> dismissSummary(event.mood, event.tags)
+        is DayUiEvent.DismissSummary -> dismissSummary(event.mood, event.tags, event.journal)
         is DayUiEvent.RequestBack -> requestBack()
         is DayUiEvent.ConfirmDiscard -> discardAndExit()
         is DayUiEvent.DismissDiscardConfirm -> _state.update { it.copy(showDiscardConfirm = false) }
@@ -141,12 +141,13 @@ private fun DayViewModel.saveAndExit() {
     }
 }
 
-private fun DayViewModel.dismissSummary(mood: com.forge.app.domain.mood.Mood?, tags: List<String>) {
+private fun DayViewModel.dismissSummary(mood: com.forge.app.domain.mood.Mood?, tags: List<String>, journal: String) {
     viewModelScope.launch {
         val sessionId = _state.value.sessionId
         if (sessionId != null) {
             if (mood != null) workoutRepo.recordMood(sessionId, dayKey, mood.code)
             if (tags.isNotEmpty()) workoutRepo.setSessionTags(sessionId, tags)
+            if (journal.isNotBlank()) workoutRepo.setJournal(sessionId, journal)
         }
         _state.update { it.copy(summary = null) }
         _navigation.send(DayNavigationEffect.PopBack)

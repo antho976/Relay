@@ -44,8 +44,11 @@ internal fun BodyweightCard(trend: List<Double>, onBg: Color, muted: Color, acce
                 Text("${current.toInt()}", style = MaterialTheme.typography.displaySmall, color = onBg)
                 Text("lb", style = MaterialTheme.typography.bodyMedium, color = muted, modifier = Modifier.padding(bottom = 6.dp))
                 if (kotlin.math.abs(delta) >= 0.5) {
-                    val sign = if (delta > 0) "+" else ""
-                    Text("$sign${delta.toInt()}", style = MaterialTheme.typography.labelMedium,
+                    // Show one decimal for sub-1 lb changes instead of truncating to "0".
+                    val mag = kotlin.math.abs(delta)
+                    val magStr = if (mag % 1.0 == 0.0) "${mag.toInt()}" else "%.1f".format(mag)
+                    val sign = if (delta > 0) "+" else "-"
+                    Text("$sign$magStr", style = MaterialTheme.typography.labelMedium,
                         color = muted, modifier = Modifier.padding(bottom = 6.dp))
                 }
             }

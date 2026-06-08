@@ -87,8 +87,9 @@ fun TrophiesScreen(
         },
         containerColor = Color.Transparent
     ) { inner ->
-        val nextLocked = remember(state.sections) {
-            state.sections.flatMap { it.displays }.firstOrNull { !it.isUnlocked }
+        val nextLocked = remember(state.filteredSections) {
+            // Respect the active filter so "up next" reflects what's actually shown.
+            state.filteredSections.flatMap { it.displays }.firstOrNull { !it.isUnlocked }
         }
 
         LazyColumn(

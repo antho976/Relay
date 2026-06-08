@@ -20,8 +20,15 @@ import java.time.ZoneId
 
 private const val STRENGTH_CURVE_MAX_POINTS = 10
 
-/** Compound lifts shown on the radar chart (#124). */
-private val RADAR_EXERCISE_IDS = listOf("ua1", "ua2", "la1", "ub1", "ub2", "lb1")
+/**
+ * Compound lifts shown on the radar chart (#124). These are library ids — logged sets store
+ * library ids (program-unlock), and StrengthRadarCard looks them up by the same ids. (Was the old
+ * slot ids ua1/la1/…, so the map never matched and the radar always rendered empty.)
+ */
+private val RADAR_EXERCISE_IDS = listOf(
+    "db-bench-press", "machine-chest-press", "goblet-squat",
+    "machine-seated-row", "incline-db-bench-press", "db-bulgarian-split-squat"
+)
 
 internal fun buildStrengthCurveFor(
     exerciseId: String,
@@ -175,8 +182,11 @@ internal fun buildExerciseYoY(
     val zone = ZoneId.systemDefault()
     val now = LocalDate.now(zone)
     val thisYearStart = now.withDayOfYear(1).atStartOfDay(zone).toInstant().toEpochMilli()
+    val todayStart = now.atStartOfDay(zone).toInstant().toEpochMilli()
     val lastYearStart = now.minusYears(1).withDayOfYear(1).atStartOfDay(zone).toInstant().toEpochMilli()
-    val lastYearEnd = thisYearStart
+    // Compare like periods: last year only up to the same elapsed point in the year, so a partial
+    // year-to-date isn't measured against a full prior year (which biased the delta negative early on).
+    val lastYearEnd = lastYearStart + (todayStart - thisYearStart)
 
     return allSets
         .filter { it.weightLb != null }

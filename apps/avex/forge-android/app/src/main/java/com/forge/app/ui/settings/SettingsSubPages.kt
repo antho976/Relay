@@ -98,6 +98,22 @@ internal fun FormatPage(state: SettingsUiState, vm: SettingsViewModel, modifier:
         item("timezone-header") {
             SubSectionLabel("Timezone")
         }
+        item("timezone-current") {
+            // If the saved/device timezone isn't one of the presets, show it as a selected row so
+            // there's always a visible selection (was: nothing highlighted).
+            if (TIMEZONE_OPTIONS.none { it.first == state.timezone }) {
+                val current = state.timezone.ifBlank { java.util.TimeZone.getDefault().id }
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("$current (device)", style = MaterialTheme.typography.bodyMedium, color = onBg)
+                    Text("●", style = MaterialTheme.typography.labelSmall, color = onBg)
+                }
+                HorizontalDivider(color = outline.copy(alpha = 0.12f), modifier = Modifier.padding(horizontal = 24.dp))
+            }
+        }
         items(TIMEZONE_OPTIONS, { it.first }) { (id, label) ->
             val selected = state.timezone == id
             Row(

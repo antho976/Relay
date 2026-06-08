@@ -192,49 +192,49 @@ _2026-06-07. 80 confirmed bugs from the deep audit ([CODE_AUDIT.md](CODE_AUDIT.m
 
 > Aggregation/keying/threshold correctness. Mostly pure functions — pair each fix with a unit test.
 
-- [ ] **🟡 MED** Deload insight compares set-timestamps, not sessions (missing .distinct()), so the 'recent 6 sessions' window collapses
+- [x] **🟡 MED** Deload insight compares set-timestamps, not sessions (missing .distinct()), so the 'recent 6 sessions' window collapses
   - [data/repo/StatsEffortAggregations.kt:190-200](forge-android/app/src/main/java/com/forge/app/data/repo/StatsEffortAggregations.kt#L190)
   - Fix: Compute per-session totals first: group `allSets` by `sessionStartedAt`, take the 6 most recent DISTINCT sessions, split those 6 into two groups of 3, and compare summed volume. e.g. `val sessions =…
-- [ ] **🟡 MED** TrophyRepository near-miss recording uses the wrong set (passes unlocked-not-satisfied instead of locked trophies)
+- [x] **🟡 MED** TrophyRepository near-miss recording uses the wrong set (passes unlocked-not-satisfied instead of locked trophies)
   - [data/repo/TrophyRepository.kt:85,93](forge-android/app/src/main/java/com/forge/app/data/repo/TrophyRepository.kt#L85)
   - Fix: Pass the locked-and-not-satisfied set: `recordNearMisses(snapshot, Trophies.all.mapTo(mutableSetOf()){it.id} - already - satisfied)` (or at least `- already`).
-- [ ] **🟡 MED** PrDetector ignores isAssisted, contradicting the documented 'excluded from all-time PR comparison' contract
+- [x] **🟡 MED** PrDetector ignores isAssisted, contradicting the documented 'excluded from all-time PR comparison' contract
   - [domain/pr/PrDetector.kt:25-32](forge-android/app/src/main/java/com/forge/app/domain/pr/PrDetector.kt#L25)
   - Fix: Either drop the entity contract, or honor it: filter history with `!it.isAssisted` inside isPr and have the caller skip assisted current sets (pass the flag in, or exclude in computePrFlags).
-- [ ] **🟡 MED** Strength radar uses library ids but its data map is keyed by old slot ids — card never renders correct data
+- [x] **🟡 MED** Strength radar uses library ids but its data map is keyed by old slot ids — card never renders correct data
   - [ui/gym/stats/components/AdvancedChartsExtra.kt:32-42](forge-android/app/src/main/java/com/forge/app/ui/gym/stats/components/AdvancedChartsExtra.kt#L32)
   - Fix: Make the two id lists identical. Change RADAR_EXERCISE_IDS in StatsStrengthAggregations.kt to the library ids used by RADAR_IDS (the ids logged sets now store), or share a single constant between the…
-- [ ] **🟡 MED** StrengthOverlayCard legend is a no-op — comparison chart's two curves are unlabeled
+- [x] **🟡 MED** StrengthOverlayCard legend is a no-op — comparison chart's two curves are unlabeled
   - [ui/gym/stats/components/AdvancedCharts.kt:81](forge-android/app/src/main/java/com/forge/app/ui/gym/stats/components/AdvancedCharts.kt#L81)
   - Fix: Implement LegendItem as a @Composable: a small colored dot/swatch plus the label Text, e.g. a Row with a Box(Modifier.size(8.dp).background(color, CircleShape)) and Text(label). Mark it @Composable…
-- [ ] **🟡 MED** vs-AVG % and BEST badge compute average/max including the session being compared
+- [x] **🟡 MED** vs-AVG % and BEST badge compute average/max including the session being compared
   - [ui/overview/OverviewUiStateMapper.kt:46-51](forge-android/app/src/main/java/com/forge/app/ui/overview/OverviewUiStateMapper.kt#L46)
   - Fix: Compute the comparison baseline excluding the current session (e.g. avg over sessions other than s.id, or query a per-session excludeSessionId aggregate as maxVolumeForDay already does), or document…
-- [ ] **⚪ LOW** perDayTypeStats avg duration uses integer division, truncating each session before averaging
+- [x] **⚪ LOW** perDayTypeStats avg duration uses integer division, truncating each session before averaging
   - [data/db/dao/SessionDao.kt:189-197](forge-android/app/src/main/java/com/forge/app/data/db/dao/SessionDao.kt#L189)
   - Fix: Use floating-point division so truncation happens once, after averaging: AVG((finished_at - started_at) / 60000.0). The result column is already mapped to Double? (DayTypeStats.avgDurationMin), so no…
-- [ ] **⚪ LOW** weekDaysTrained filters on finishedAt week-boundary but indexes the day by startedAt — cross-midnight sessions mark the wrong day/week
+- [x] **⚪ LOW** weekDaysTrained filters on finishedAt week-boundary but indexes the day by startedAt — cross-midnight sessions mark the wrong day/week
   - [data/repo/StatsRepository.kt:110-116](forge-android/app/src/main/java/com/forge/app/data/repo/StatsRepository.kt#L110)
   - Fix: Pick one timestamp for both the membership test and the day index. e.g. compute `val d = Instant.ofEpochMilli(it.startedAt).atZone(zone).toLocalDate()` once, then keep it only if…
-- [ ] **⚪ LOW** findOnThisDayMemory uses a forward-only [day, day+3] window, not the documented ±3-day window
+- [x] **⚪ LOW** findOnThisDayMemory uses a forward-only [day, day+3] window, not the documented ±3-day window
   - [data/repo/StatsRepository.kt:405-416](forge-android/app/src/main/java/com/forge/app/data/repo/StatsRepository.kt#L405)
   - Fix: Center the window on the anniversary: `fromMs = targetMs - windowMs` and `toMs = targetMs + windowMs` (with the ABS center at targetMs or targetMs+12h), to actually search ±3 days.
-- [ ] **⚪ LOW** buildExerciseYoY counts the current partial year against a full prior year, biasing YoY 'delta' negative early in the year
+- [x] **⚪ LOW** buildExerciseYoY counts the current partial year against a full prior year, biasing YoY 'delta' negative early in the year
   - [data/repo/StatsStrengthAggregations.kt:176-196](forge-android/app/src/main/java/com/forge/app/data/repo/StatsStrengthAggregations.kt#L176)
   - Fix: Compare like windows — e.g. trailing 365 days vs the prior 365 days, or gate to only show YoY once the current year has comparable elapsed time / data. At minimum document that thisYearMax is…
-- [ ] **⚪ LOW** buildPrEntries matches PR row to sets by (exerciseId + sessionStartedAt), picking the wrong set when an exercise is logged twice in one session
+- [ ] **⚪ LOW** buildPrEntries matches PR row to sets by (exerciseId + sessionStartedAt), picking the wrong set when an exercise is logged twice in one session — _DEFERRED: needs logged_exercise_id added to the SetWithExerciseAndSession projection + its query; display-only and only wrong in the rare twice-in-one-session case_
   - [data/repo/StatsStrengthAggregations.kt:47-61](forge-android/app/src/main/java/com/forge/app/data/repo/StatsStrengthAggregations.kt#L47)
   - Fix: Carry weight/reps for the PR set directly in the RecentPrRow query (join the specific LoggedExercise's top set), or add loggedExerciseId to the SetWithExerciseAndSession projection and match on it…
-- [ ] **⚪ LOW** checkComebackKid measures the gap with raw millisecond truncation instead of calendar days
+- [x] **⚪ LOW** checkComebackKid measures the gap with raw millisecond truncation instead of calendar days
   - [data/repo/TrophyRepository.kt:170,171](forge-android/app/src/main/java/com/forge/app/data/repo/TrophyRepository.kt#L170)
   - Fix: Compute the gap in calendar days: ChronoUnit.DAYS.between(prevDate, currDate) where prevDate/currDate are Instant.ofEpochMilli(...).atZone(zone).toLocalDate(), then test the range.
-- [ ] **⚪ LOW** Rep Machine trophy unlocks on max reps in a single SET, not summed across the exercise as described
+- [x] **⚪ LOW** Rep Machine trophy unlocks on max reps in a single SET, not summed across the exercise as described
   - [domain/trophy/TrophyStatsSnapshot.kt:29](forge-android/app/src/main/java/com/forge/app/domain/trophy/TrophyStatsSnapshot.kt#L29)
   - Fix: Either rename the field/description to 'reps in a single set', or change the data source to a per-loggedExercise SUM(reps) MAX (GROUP BY logged_exercise_id) so it matches the 'single exercise'…
-- [ ] **⚪ LOW** Bodyweight delta truncates to 0 for sub-1 lb changes, showing "0"/"+0" as if no change
+- [x] **⚪ LOW** Bodyweight delta truncates to 0 for sub-1 lb changes, showing "0"/"+0" as if no change
   - [ui/gym/stats/StatsBodyExtra.kt:46](forge-android/app/src/main/java/com/forge/app/ui/gym/stats/StatsBodyExtra.kt#L46)
   - Fix: Render the delta with one decimal ("%+.1f".format(delta)) or round instead of truncate (delta.roundToInt()), and/or raise the display threshold to >= 1.0 if integer display is desired.
-- [ ] **⚪ LOW** Muscle filter silently drops PRs for exercises not in the static program catalogue
+- [ ] **⚪ LOW** Muscle filter silently drops PRs for exercises not in the static program catalogue — _DEFERRED: largely by-design (a custom exercise has no catalogued muscle, so it can't match a specific-muscle filter; it still appears under "All muscles"). Would need to thread the customization muscle into PrsViewModel_
   - [ui/gym/stats/PrsViewModel.kt:72](forge-android/app/src/main/java/com/forge/app/ui/gym/stats/PrsViewModel.kt#L72)
   - Fix: Either persist the muscle on the logged record, or fall back to a stored/last-known muscle, or document that catalogue-less PRs only appear under "All muscles". At minimum, surface them in an "Other"…
 
@@ -242,16 +242,16 @@ _2026-06-07. 80 confirmed bugs from the deep audit ([CODE_AUDIT.md](CODE_AUDIT.m
 
 > Volume math + unit labels + quiet-hours handling in the recap surfaces.
 
-- [ ] **🟡 MED** Recap 'Avg weekly volume' divides by sessions/7 instead of calendar weeks — grossly inflated
+- [x] **🟡 MED** Recap 'Avg weekly volume' divides by sessions/7 instead of calendar weeks — grossly inflated
   - [ui/recap/RecapViewModel.kt:100-101](forge-android/app/src/main/java/com/forge/app/ui/recap/RecapViewModel.kt#L100)
   - Fix: Divide total volume by the number of calendar weeks in the period that has actually elapsed, e.g. weeks = max(1, ChronoUnit.WEEKS.between(yearStartDate, today)+1) or weeks = ceil(daysElapsed / 7.0).…
-- [ ] **⚪ LOW** Weekly recap notification always shows volume in 'lb', ignoring the user's kg preference
+- [x] **⚪ LOW** Weekly recap notification always shows volume in 'lb', ignoring the user's kg preference
   - [service/WeeklyRecapWorker.kt:41](forge-android/app/src/main/java/com/forge/app/service/WeeklyRecapWorker.kt#L41)
   - Fix: Read settingsRepo.useKg (the worker already injects settingsRepo) and format the volume via the shared unit helpers, e.g. ${(if (useKg) volumeLb*KG_PER_LB else volumeLb).toInt()} ${unitLabel(useKg)}.
-- [ ] **⚪ LOW** Weekly recap silently dropped (not deferred) when its 7-day trigger lands in quiet hours
+- [x] **⚪ LOW** Weekly recap silently dropped (not deferred) when its 7-day trigger lands in quiet hours
   - [service/WeeklyRecapWorker.kt:33](forge-android/app/src/main/java/com/forge/app/service/WeeklyRecapWorker.kt#L33)
   - Fix: When isQuietNow() is true, schedule a one-time delayed WorkRequest to post the recap just after quiet hours end (or return Result.retry() with a backoff that lands outside the window) instead of…
-- [ ] **⚪ LOW** Recap monthly/yearly volume shown as integer 'k lb' truncates, hiding all volume under 1000 lb as '0k'
+- [x] **⚪ LOW** Recap monthly/yearly volume shown as integer 'k lb' truncates, hiding all volume under 1000 lb as '0k'
   - [ui/recap/RecapScreen.kt:79,96](forge-android/app/src/main/java/com/forge/app/ui/recap/RecapScreen.kt#L79)
   - Fix: Format with rounding and a fractional 'k' below a threshold, e.g. show the raw lb when < 1000, or use String.format("%.1fk", totalVolumeLb/1000) / Math.round so 2900 -> '2.9k' instead of '2k'.
 
@@ -259,22 +259,22 @@ _2026-06-07. 80 confirmed bugs from the deep audit ([CODE_AUDIT.md](CODE_AUDIT.m
 
 > Rotation/profile fidelity, undersized presets, and realistic seed data.
 
-- [ ] **🟡 MED** Automatic program rotation ignores the user's goal/experience/emphasis/problem-areas/priority-muscles/pinned (builds a near-empty GenerationParams)
+- [x] **🟡 MED** Automatic program rotation ignores the user's goal/experience/emphasis/problem-areas/priority-muscles/pinned (builds a near-empty GenerationParams)
   - [data/repo/WorkoutRepository.kt:87-92](forge-android/app/src/main/java/com/forge/app/data/repo/WorkoutRepository.kt#L87)
   - Fix: Have maybeRotateProgram build the same full params as ProgramRepository.currentParams(). Simplest: add a public reroll-with-current-params entry point on ProgramRepository (e.g. `rerollAll()` that…
-- [ ] **🟡 MED** SampleDataSeeder never sets PRs — seeded sessions have prCount=0 and no was_pr exercises
+- [x] **🟡 MED** SampleDataSeeder never sets PRs — seeded sessions have prCount=0 and no was_pr exercises
   - [data/repo/SampleDataSeeder.kt:54,98](forge-android/app/src/main/java/com/forge/app/data/repo/SampleDataSeeder.kt#L54)
   - Fix: Mark a realistic subset of exercises as PRs (e.g. when the working weight exceeds the prior seeded max for that exerciseId), set LoggedExercise.was_pr accordingly, and accumulate prCount before the…
-- [ ] **🟡 MED** Generator silently produces undersized days for the user-selectable "Dumbbells + bench" preset (BACK x3 vs only 2 available back lifts)
+- [x] **🟡 MED** Generator silently produces undersized days for the user-selectable "Dumbbells + bench" preset (BACK x3 vs only 2 available back lifts)
   - [program/ProgramGenerator.kt:84-108](forge-android/app/src/main/java/com/forge/app/program/ProgramGenerator.kt#L84)
   - Fix: When a slot can't be filled with a distinct exercise, fall back to allowing a repeat of an already-used exercise for that muscle (e.g. relax the `usedInDay` exclusion for the last resort) or merge…
-- [ ] **⚪ LOW** SampleDataSeeder set timestamps can exceed the session's finishedAt and interleave non-monotonically
+- [x] **⚪ LOW** SampleDataSeeder set timestamps can exceed the session's finishedAt and interleave non-monotonically
   - [data/repo/SampleDataSeeder.kt:82,49,50](forge-android/app/src/main/java/com/forge/app/data/repo/SampleDataSeeder.kt#L82)
   - Fix: Accumulate a running set counter across exercises for the time offset (track a mutable index instead of exIdx*plan.sets), and clamp/derive completedAt so the last set is <= finishedMs (e.g. spread…
-- [ ] **⚪ LOW** restSeconds "heavy" detection uses the MAX rep of the range, so heavy strength slots are never flagged heavy
+- [x] **⚪ LOW** restSeconds "heavy" detection uses the MAX rep of the range, so heavy strength slots are never flagged heavy
   - [program/SessionEstimate.kt:22-29](forge-android/app/src/main/java/com/forge/app/program/SessionEstimate.kt#L22)
   - Fix: Base the heavy check on the LOWER bound of the rep range, e.g. `minReps(plan.reps)?.let { if (it <= 8) HEAVY_REST_BONUS else 0 }`, or key it off the slot's RepScheme (STRENGTH) instead of parsing the…
-- [ ] **⚪ LOW** Emphasis volume bonus can be entirely cancelled by the weekly cap on high-frequency splits, silently undoing the user's emphasis
+- [x] **⚪ LOW** Emphasis volume bonus can be entirely cancelled by the weekly cap on high-frequency splits, silently undoing the user's emphasis
   - [program/VolumeModel.kt:59-80](forge-android/app/src/main/java/com/forge/app/program/VolumeModel.kt#L59)
   - Fix: Apply emphasis as a cap bump too (raise weeklyCap for focused muscles), or trim non-emphasized muscles first / exclude the emphasis bonus sets from the trimmable pool, so emphasis survives the cap.
 
@@ -282,16 +282,16 @@ _2026-06-07. 80 confirmed bugs from the deep audit ([CODE_AUDIT.md](CODE_AUDIT.m
 
 > Week-window semantics and a couple of dead/inconsistent settings controls.
 
-- [ ] **🟡 MED** Hero "minutes this week" uses a rolling 7-day window but is labelled and visualized as the ISO Mon–Sun week
+- [x] **🟡 MED** Hero "minutes this week" uses a rolling 7-day window but is labelled and visualized as the ISO Mon–Sun week
   - [ui/cardio/CardioViewModel.kt:45-49, 62](forge-android/app/src/main/java/com/forge/app/ui/cardio/CardioViewModel.kt#L45)
   - Fix: Derive the week-start used for observeMinutesSince from the ISO week (isoWeekStart.atStartOfDay(zone).toEpochMilli()), matching what CardioScreen and buildDailyMinutes use, rather than…
-- [ ] **🟡 MED** Switching cardio from dedicated days to a weekly minute goal leaves stale cardio days in the program
+- [x] **🟡 MED** Switching cardio from dedicated days to a weekly minute goal leaves stale cardio days in the program
   - [ui/settings/SettingsViewModel.kt:167-177](forge-android/app/src/main/java/com/forge/app/ui/settings/SettingsViewModel.kt#L167)
   - Fix: Make setCardioWeeklyTargetMin symmetric: when min>0 and cardioDaysPerWeek was non-zero, call regenerateProgram() (and surface the same status message) so the cardio days actually disappear from the…
-- [ ] **⚪ LOW** Holiday/Vacation settings row is a dead no-op that silently does nothing
+- [ ] **⚪ LOW** Holiday/Vacation settings row is a dead no-op that silently does nothing — _DEFERRED: the vacation feature is entirely unbuilt (VacationDao exists but no repository/UI/logic uses it). Product decision: build the feature or remove the placeholder row_
   - [ui/settings/SettingsMainList.kt:41-44](forge-android/app/src/main/java/com/forge/app/ui/settings/SettingsMainList.kt#L41)
   - Fix: Either remove the row until the feature exists, or wire it to a real page/dialog. If kept as a placeholder, visually disable it (greyed, no chevron) so it doesn't read as tappable.
-- [ ] **⚪ LOW** FormatPage timezone list shows no selection when device timezone is not one of the 12 presets
+- [x] **⚪ LOW** FormatPage timezone list shows no selection when device timezone is not one of the 12 presets
   - [ui/settings/SettingsSubPages.kt:101-121](forge-android/app/src/main/java/com/forge/app/ui/settings/SettingsSubPages.kt#L101)
   - Fix: Either add the device default to the option list when it isn't already present, or render a synthesized 'current timezone' row at top when state.timezone is not in TIMEZONE_OPTIONS so the active…
 
@@ -299,37 +299,37 @@ _2026-06-07. 80 confirmed bugs from the deep audit ([CODE_AUDIT.md](CODE_AUDIT.m
 
 > Smaller correctness/validation/state cleanups across the session and misc screens.
 
-- [ ] **🟡 MED** Reps-field 'Done' action logs a set with no validation on the weight, bypassing the disabled-button guard
+- [x] **🟡 MED** Reps-field 'Done' action logs a set with no validation on the weight, bypassing the disabled-button guard
   - [ui/gym/train/components/SetInputRow.kt:115-119, 190](forge-android/app/src/main/java/com/forge/app/ui/gym/train/components/SetInputRow.kt#L115)
   - Fix: Have submitSet() also check that weight is valid (mirror canSubmit: weight.isNotBlank() and parses), and no-op otherwise; or wire onDone to only fire when canSubmit is true.
-- [ ] **⚪ LOW** searchNotes does not escape LIKE wildcards in the user query
+- [x] **⚪ LOW** searchNotes does not escape LIKE wildcards in the user query
   - [data/db/dao/LoggedExerciseDao.kt:145-153](forge-android/app/src/main/java/com/forge/app/data/db/dao/LoggedExerciseDao.kt#L145)
   - Fix: Escape LIKE metacharacters before binding (e.g. replace \\, %, _ with an escaped form) and add an ESCAPE clause: ... LIKE '%' || :query || '%' ESCAPE '\\', passing a pre-escaped query; or switch to…
-- [ ] **⚪ LOW** setRestTimerOverride UPDATE is a silent no-op when no customization row exists yet (mislabeled 'Upsert')
+- [x] **⚪ LOW** setRestTimerOverride UPDATE is a silent no-op when no customization row exists yet (mislabeled 'Upsert') — _removed the dead DAO method; the repository already does a correct get-then-upsert_
   - [data/db/dao/ExerciseCustomizationDao.kt:21-23](forge-android/app/src/main/java/com/forge/app/data/db/dao/ExerciseCustomizationDao.kt#L21)
   - Fix: Either remove this method (the repository already handles upsert correctly), or implement true upsert semantics (INSERT ... ON CONFLICT, or a @Transaction get-or-create + UPDATE), and fix the comment…
-- [ ] **⚪ LOW** isNewSession relies on setCount, which is only stamped at finish — stale (always 0) during an active session
+- [x] **⚪ LOW** isNewSession relies on setCount, which is only stamped at finish — stale (always 0) during an active session
   - [data/repo/WorkoutRepository.kt:102-105](forge-android/app/src/main/java/com/forge/app/data/repo/WorkoutRepository.kt#L102)
   - Fix: Derive emptiness from actual logged data rather than the denormalized setCount, e.g. `s.finishedAt == null && loggedExerciseDao.forSession(sessionId).isEmpty()` (or a COUNT(*) of logged_set rows for…
-- [ ] **⚪ LOW** WeightParser accepts negative numbers, producing negative volume and false PRs
+- [x] **⚪ LOW** WeightParser accepts negative numbers, producing negative volume and false PRs
   - [domain/parser/WeightParser.kt:45](forge-android/app/src/main/java/com/forge/app/domain/parser/WeightParser.kt#L45)
   - Fix: Reject non-positive results in the bare-number and lb branches, e.g. `text.toDoubleOrNull()?.takeIf { it >= 0 }`.
-- [ ] **⚪ LOW** Privacy mode (FLAG_SECURE) applied asynchronously despite comment claiming synchronous application — first frame can be unsecured
+- [x] **⚪ LOW** Privacy mode (FLAG_SECURE) applied asynchronously despite comment claiming synchronous application — first frame can be unsecured
   - [MainActivity.kt:77-80](forge-android/app/src/main/java/com/forge/app/MainActivity.kt#L77)
   - Fix: Apply FLAG_SECURE before setContent using a synchronous first read of the preference (e.g. runBlocking { settingsRepo.privacyMode.first() }) as the comment describes, then keep the collector for live…
-- [ ] **⚪ LOW** Journal text can be lost: DismissSummary navigates back (clears VM) before the separately-launched UpdateJournal write completes
+- [x] **⚪ LOW** Journal text can be lost: DismissSummary navigates back (clears VM) before the separately-launched UpdateJournal write completes
   - [ui/gym/train/DaySessionHandlers.kt:144-154](forge-android/app/src/main/java/com/forge/app/ui/gym/train/DaySessionHandlers.kt#L144)
   - Fix: Persist the journal inside the DismissSummary coroutine before sending PopBack (pass journal into DismissSummary), so the write is sequenced ahead of navigation rather than racing a second coroutine…
-- [ ] **⚪ LOW** isNewSession() result is computed then discarded; pre-session picker (showPreSessionPicker) is never shown
+- [ ] **⚪ LOW** isNewSession() result is computed then discarded; pre-session picker (showPreSessionPicker) is never shown — _DEFERRED: the pre-session picker UI is unbuilt (showPreSessionPicker has no renderer — only a state flag + dismiss handler). Build-or-remove product decision. (isNewSession's own logic bug is now fixed.)_
   - [ui/gym/train/DayViewModel.kt:91](forge-android/app/src/main/java/com/forge/app/ui/gym/train/DayViewModel.kt#L91)
   - Fix: Use the result: `_state.update { it.copy(showPreSessionPicker = workoutRepo.isNewSession(sessionId)) }` (or remove the call if the picker is intentionally retired).
-- [ ] **⚪ LOW** NoteField pin/unpin toggle compares trimmed text for the label but untrimmed text for the action
+- [x] **⚪ LOW** NoteField pin/unpin toggle compares trimmed text for the label but untrimmed text for the action
   - [ui/gym/train/components/NoteField.kt:88-89](forge-android/app/src/main/java/com/forge/app/ui/gym/train/components/NoteField.kt#L88)
   - Fix: Use a single, trimmed comparison and store the trimmed value consistently: `val t = text.trim(); onPinNote(if (currentPinnedNote == t) "" else t)` and label off the same `t`.
-- [ ] **⚪ LOW** Notes search treats user input as a LIKE pattern — '%' and '_' act as wildcards
+- [x] **⚪ LOW** Notes search treats user input as a LIKE pattern — '%' and '_' act as wildcards
   - [data/db/dao/LoggedExerciseDao.kt:149](forge-android/app/src/main/java/com/forge/app/data/db/dao/LoggedExerciseDao.kt#L149)
   - Fix: Escape LIKE metacharacters in the query before binding, and add an ESCAPE clause: replace `%`,`_`,`\` with escaped forms in Kotlin and use `... LIKE :pattern ESCAPE '\'`. Alternatively use FTS or an…
-- [ ] **⚪ LOW** Trophy 'Up next' nudge is computed from unfiltered sections, ignoring the active filter
+- [x] **⚪ LOW** Trophy 'Up next' nudge is computed from unfiltered sections, ignoring the active filter
   - [ui/trophies/TrophiesScreen.kt:90-92](forge-android/app/src/main/java/com/forge/app/ui/trophies/TrophiesScreen.kt#L90)
   - Fix: Either always source `nextLocked` from the full catalog by design (and document it as a global hint), or derive it from `state.filteredSections` so it matches what the user is currently viewing; hide…
 

@@ -97,8 +97,10 @@ class RecapViewModel @Inject constructor(
             val exFreq = loggedExerciseDao.frequencySince(yearStart)
             val topEx = exFreq.maxByOrNull { it.sessionCount }?.let { Program.exercise(it.exerciseId)?.name }
             val totalVol = yearSessions.sumOf { it.totalVolumeLb ?: 0.0 }
-            val weeks = (yearSessions.size / 7.0).coerceAtLeast(1.0)
-            val avgWeekly = totalVol / weeks
+            // Divide by calendar weeks elapsed this year, not sessions/7 (which wildly inflated it).
+            val weeksElapsed = (java.time.temporal.ChronoUnit.DAYS
+                .between(LocalDate.of(thisYear, 1, 1), LocalDate.now(zone)) / 7.0).coerceAtLeast(1.0)
+            val avgWeekly = totalVol / weeksElapsed
             val bestMonth = yearSessions
                 .groupBy { Instant.ofEpochMilli(it.startedAt).atZone(zone).month.name.lowercase().replaceFirstChar { c -> c.uppercase() } }
                 .maxByOrNull { (_, sessions) -> sessions.sumOf { it.totalVolumeLb ?: 0.0 } }?.key

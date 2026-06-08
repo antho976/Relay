@@ -27,7 +27,9 @@ import com.forge.app.ui.theme.LocalForgeSettings
 import androidx.lifecycle.lifecycleScope
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import javax.inject.Inject
 
 @AndroidEntryPoint
@@ -74,7 +76,9 @@ class MainActivity : ComponentActivity() {
 
         AutoBackupWorker.schedule(this)
 
-        // Apply privacy mode (#152) — collect once synchronously via runBlocking to avoid layout flash
+        // Apply privacy mode (#152) synchronously BEFORE the first frame so it's never unsecured,
+        // then keep a collector for live changes.
+        runBlocking { applyPrivacyMode(settingsRepo.privacyMode.first()) }
         lifecycleScope.launch {
             settingsRepo.privacyMode.collect { enabled -> applyPrivacyMode(enabled) }
         }
