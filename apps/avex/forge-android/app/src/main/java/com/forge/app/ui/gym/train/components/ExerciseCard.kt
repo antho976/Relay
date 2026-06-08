@@ -32,7 +32,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.data.db.types.EffortRating
 import com.forge.app.domain.timer.RestTimerState
+import com.forge.app.program.ExerciseUnit
 import com.forge.app.ui.gym.train.state.ExerciseUiState
+
+/** Recommended reps from a plan rep string ("8-12" → 12, "15" → 15); null for AMRAP/timed/per-leg. */
+private val TARGET_REPS_REGEX = Regex("""^(\d+)(?:-(\d+))?$""")
+private fun targetRepsOf(reps: String): Int? {
+    val m = TARGET_REPS_REGEX.matchEntire(reps.trim()) ?: return null
+    return m.groupValues[2].ifEmpty { m.groupValues[1] }.toIntOrNull()
+}
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -102,6 +110,8 @@ fun ExerciseCard(
                     .padding(horizontal = 24.dp)
             ) {
                 Spacer(Modifier.height(8.dp))
+
+                val isBodyweight = state.plan.unit == ExerciseUnit.BODYWEIGHT
 
                 // Exercise counter
                 if (totalExercises > 0) {
@@ -211,7 +221,7 @@ fun ExerciseCard(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text("SET", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, modifier = Modifier.width(36.dp))
-                    Text("WEIGHT · LB", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, modifier = Modifier.weight(1f))
+                    Text(if (isBodyweight) "BODYWEIGHT" else "WEIGHT · LB", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, modifier = Modifier.weight(1f))
                     Text("REPS", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, modifier = Modifier.width(48.dp))
                     Text("RPE", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, modifier = Modifier.width(44.dp), textAlign = TextAlign.Center)
                     Text("LAST", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, modifier = Modifier.width(72.dp), textAlign = TextAlign.End)
@@ -261,6 +271,8 @@ fun ExerciseCard(
                         priorSetForActiveRow = state.priorSets.getOrNull(state.loggedSets.size),
                         targetsMet = targetsMet,
                         advanceLabel = advanceLabel,
+                        isBodyweight = isBodyweight,
+                        targetReps = targetRepsOf(state.plan.reps),
                         onAdvance = onAdvance,
                         onSubmit = onLogSet,
                         onAddSet = onAddSet,

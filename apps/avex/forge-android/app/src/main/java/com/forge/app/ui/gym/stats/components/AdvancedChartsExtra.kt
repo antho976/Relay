@@ -30,8 +30,8 @@ import kotlin.math.sin
 
 // Library ids for the strength radar's key compounds (program-unlock: logged sets now use library ids).
 private val RADAR_IDS = listOf(
-    "db-bench-press", "machine-chest-press", "goblet-squat",
-    "machine-seated-row", "incline-db-bench-press", "db-bulgarian-split-squat"
+    "db-bench-press", "mwm-seated-bench-press", "goblet-squat",
+    "mwm-wide-lat-pulldown", "incline-db-bench-press", "db-bulgarian-split-squat"
 )
 
 @Composable

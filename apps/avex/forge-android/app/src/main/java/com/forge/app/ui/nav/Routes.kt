@@ -13,6 +13,7 @@ object Routes {
     const val NOTES_SEARCH = "gym/notes-search"
     const val RECAP = "recap"
     const val PROGRAM_EDITOR = "program-editor/{dayKey}"
+    const val PROGRAM_VIEWER = "program-viewer"
 
     fun programEditor(dayKey: String) = "program-editor/$dayKey"
 

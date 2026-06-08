@@ -18,10 +18,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.SkipNext
 import androidx.compose.material.icons.outlined.SwapHoriz
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -58,6 +62,13 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
+/** A YouTube search for how to perform [exerciseName] — no per-exercise link curation needed. */
+internal fun youTubeSearchIntent(exerciseName: String): Intent =
+    Intent(
+        Intent.ACTION_VIEW,
+        Uri.parse("https://www.youtube.com/results?search_query=" + Uri.encode("$exerciseName exercise how to"))
+    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
 @Composable
 internal fun CollapsedRow(
     exerciseIndex: Int,
@@ -69,6 +80,7 @@ internal fun CollapsedRow(
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val accent = MaterialTheme.colorScheme.primary
+    val context = LocalContext.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -115,6 +127,16 @@ internal fun CollapsedRow(
                 )
             }
         }
+        // Eye → opens a YouTube demo search for this exercise.
+        Icon(
+            Icons.Outlined.Visibility,
+            contentDescription = "Watch a demo",
+            tint = muted.copy(alpha = 0.55f),
+            modifier = Modifier
+                .padding(start = 8.dp, top = 4.dp)
+                .size(18.dp)
+                .clickable { runCatching { context.startActivity(youTubeSearchIntent(state.effectiveName)) } }
+        )
         Text(
             "⇌",
             style = MaterialTheme.typography.bodyLarge,
@@ -335,9 +357,13 @@ internal fun ExerciseCardFooter(
     HorizontalDivider(color = outline.copy(alpha = 0.2f))
     Spacer(Modifier.height(12.dp))
 
+    val context = LocalContext.current
     var showNote by remember(state.effectiveName) { mutableStateOf(!state.note.isNullOrBlank()) }
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
         ActionChip(icon = Icons.Outlined.Description, label = "NOTE") { showNote = !showNote }
+        ActionChip(icon = Icons.Outlined.Visibility, label = "VIDEO") {
+            runCatching { context.startActivity(youTubeSearchIntent(state.effectiveName)) }
+        }
         ActionChip(icon = Icons.Outlined.SwapHoriz, label = "SWAP") { onOpenSwapPicker() }
         ActionChip(icon = Icons.Outlined.SkipNext, label = if (state.skipped) "UN-SKIP" else "SKIP") { onToggleSkipped() }
     }

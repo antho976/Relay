@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.glance.appwidget.updateAll
 import com.forge.app.data.db.dao.ProgramCustomizationDao
 import com.forge.app.data.db.dao.ProgramDao
+import com.forge.app.data.db.dao.SessionDao
 import com.forge.app.data.db.entities.ProgramDay
 import com.forge.app.data.db.entities.ProgramSlot
 import com.forge.app.data.prefs.SettingsRepository
@@ -38,6 +39,7 @@ import javax.inject.Singleton
 class ProgramRepository @Inject constructor(
     private val dao: ProgramDao,
     private val customizationDao: ProgramCustomizationDao,
+    private val sessionDao: SessionDao,
     private val settings: SettingsRepository,
     @ApplicationContext private val context: Context
 ) {
@@ -74,6 +76,9 @@ class ProgramRepository @Inject constructor(
         // overrides so they can't silently re-bind to (or delete) a freshly generated exercise, and
         // drop user-added exercises whose day no longer exists. See [reconcileCustomizations].
         reconcileCustomizations(days)
+        // The exercises just changed under any in-progress workout — discard it so the user isn't
+        // shown a "resume" for a session whose exercises no longer match the program.
+        discardActiveSession()
         loadIntoFacade(refreshWidget = true)
     }
 
@@ -131,6 +136,8 @@ class ProgramRepository @Inject constructor(
         dao.replaceDaySlots(dayKey, slots)
         // This day's exercises just changed — drop its stale static overrides (keep user-added ones).
         reconcileDayCustomizations(dayKey)
+        // If a workout is in progress ON THIS day, its exercises just changed — discard it.
+        sessionDao.getActiveSession()?.takeIf { it.dayKey == dayKey }?.let { sessionDao.delete(it) }
         loadIntoFacade(refreshWidget = true)
     }
 
@@ -224,6 +231,11 @@ class ProgramRepository @Inject constructor(
         customizationDao.forDay(dayKey).forEach { c ->
             if (!c.exerciseId.startsWith("custom_")) customizationDao.delete(dayKey, c.exerciseId)
         }
+    }
+
+    /** Discard any in-progress (unfinished) session — its exercises no longer match a rebuilt program. */
+    private suspend fun discardActiveSession() {
+        sessionDao.getActiveSession()?.let { sessionDao.delete(it) }
     }
 
     private fun ProgramSlot.toPlan(): ExercisePlan {

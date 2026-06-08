@@ -71,6 +71,10 @@ fun SetInputRow(
     priorSetForActiveRow: LoggedSet? = null,
     targetsMet: Boolean = false,
     advanceLabel: String = "",
+    /** Bodyweight exercise (push-ups, planks…) — no weight field; logs reps only as "BW". */
+    isBodyweight: Boolean = false,
+    /** Recommended reps from the plan (e.g. 12 from "8-12") — pre-filled into the reps field. */
+    targetReps: Int? = null,
     onAdvance: () -> Unit = {},
     onSubmit: (weightText: String, reps: Int) -> Unit,
     onAddSet: (() -> Unit)? = null,
@@ -78,7 +82,8 @@ fun SetInputRow(
     modifier: Modifier = Modifier
 ) {
     var weight by rememberSaveable(prefillWeight) { mutableStateOf(prefillWeight.orEmpty()) }
-    var reps by rememberSaveable { mutableStateOf("") }
+    // Pre-fill the recommended reps, and refresh it for each new set (keyed on the set number).
+    var reps by rememberSaveable(nextSetNumber, targetReps) { mutableStateOf(targetReps?.toString().orEmpty()) }
     val useKg = LocalForgeSettings.current.useKg
     val repsFocus = remember { FocusRequester() }
     var showUnitDialog by remember { mutableStateOf(false) }
@@ -115,15 +120,20 @@ fun SetInputRow(
 
     // Single log path used by the LOG SET button and the reps field's "done" action. Validates the
     // weight too (the keyboard's Done bypassed the disabled-button guard, logging a weightless set).
+    // Bodyweight exercises log "BW" and skip the weight requirement.
     fun submitSet() {
-        if (weight.isBlank()) return
         val r = reps.toIntOrNull()?.takeIf { it > 0 } ?: return
-        onSubmit(weight.trim(), r)
-        reps = ""
+        if (isBodyweight) {
+            onSubmit("BW", r)
+        } else {
+            if (weight.isBlank()) return
+            onSubmit(weight.trim(), r)
+        }
+        reps = targetReps?.toString().orEmpty()
     }
 
-    val canSubmit = remember(weight, reps) {
-        weight.isNotBlank() && reps.toIntOrNull()?.let { it > 0 } == true
+    val canSubmit = remember(weight, reps, isBodyweight) {
+        reps.toIntOrNull()?.let { it > 0 } == true && (isBodyweight || weight.isNotBlank())
     }
 
     val prRepsHint = remember(weight, priorSets, useKg) {
@@ -160,24 +170,33 @@ fun SetInputRow(
                         )
                     }
 
-                    // Weight input — tapping the "· LB/KG" label offers a unit switch.
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            "WEIGHT${if (useKg) " · KG" else " · LB"}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = muted,
-                            fontSize = 9.sp,
-                            modifier = Modifier.clickable { showUnitDialog = true }
-                        )
-                        Spacer(Modifier.height(2.dp))
-                        UnderlineNumberField(
-                            value = weight,
-                            onValueChange = ::onWeightChange,
-                            placeholder = "0",
-                            keyboardType = KeyboardType.Text,
-                            imeAction = ImeAction.Next,
-                            supportingText = prRepsHint?.let { "$it for PR" }
-                        )
+                    // Weight input — tapping the "· LB/KG" label offers a unit switch. Bodyweight
+                    // exercises have no weight to enter, so we show a static "BW" instead of a field.
+                    if (isBodyweight) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("BODYWEIGHT", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
+                            Spacer(Modifier.height(2.dp))
+                            Text("BW", style = MaterialTheme.typography.headlineMedium, color = onBg)
+                        }
+                    } else {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "WEIGHT${if (useKg) " · KG" else " · LB"}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = muted,
+                                fontSize = 9.sp,
+                                modifier = Modifier.clickable { showUnitDialog = true }
+                            )
+                            Spacer(Modifier.height(2.dp))
+                            UnderlineNumberField(
+                                value = weight,
+                                onValueChange = ::onWeightChange,
+                                placeholder = "0",
+                                keyboardType = KeyboardType.Text,
+                                imeAction = ImeAction.Next,
+                                supportingText = prRepsHint?.let { "$it for PR" }
+                            )
+                        }
                     }
 
                     // Reps input

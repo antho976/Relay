@@ -90,10 +90,10 @@ object ProgramGenerator {
                 // can train this muscle — so an equipped user never gets a bodyweight squat, but a
                 // bodyweight-only / minimal setup is never starved into an empty day.
                 val forMuscle = avail.filterNot { it.fallbackOnly }.ifEmpty { avail }
-                // Prefer movements not already used today; but if the (equipment-limited) pool is
-                // exhausted, allow a repeat rather than dropping the slot and silently undersizing the
-                // day (e.g. 3 BACK slots with only 2 available back lifts on a dumbbells+bench setup).
-                val base = forMuscle.filterNot { it.id in usedInDay }.ifEmpty { forMuscle }
+                // Never place the same exercise twice in one day: if the (equipment-limited) pool is
+                // exhausted, DROP the slot (a slightly shorter day) rather than repeat a movement —
+                // a duplicate reads as a bug, breaks per-exercise logging, and crashed the session list.
+                val base = forMuscle.filterNot { it.id in usedInDay }
                 // Experience caps movement difficulty, but never empty the slot — fall back if needed.
                 val candidates = base.filter { it.difficulty.ordinal <= maxDifficulty.ordinal }.ifEmpty { base }
                 // A pinned exercise for this muscle is forced into the slot when it's a valid candidate —

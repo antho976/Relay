@@ -26,8 +26,8 @@ private const val STRENGTH_CURVE_MAX_POINTS = 10
  * slot ids ua1/la1/…, so the map never matched and the radar always rendered empty.)
  */
 private val RADAR_EXERCISE_IDS = listOf(
-    "db-bench-press", "machine-chest-press", "goblet-squat",
-    "machine-seated-row", "incline-db-bench-press", "db-bulgarian-split-squat"
+    "db-bench-press", "mwm-seated-bench-press", "goblet-squat",
+    "mwm-wide-lat-pulldown", "incline-db-bench-press", "db-bulgarian-split-squat"
 )
 
 internal fun buildStrengthCurveFor(

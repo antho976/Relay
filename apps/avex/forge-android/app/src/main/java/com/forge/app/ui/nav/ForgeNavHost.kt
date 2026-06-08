@@ -40,6 +40,7 @@ import com.forge.app.ui.cardio.CardioScreen
 import com.forge.app.ui.gym.history.SessionHistoryScreen
 import com.forge.app.ui.gym.notes.NotesSearchScreen
 import com.forge.app.ui.gym.train.DayListScreen
+import com.forge.app.ui.gym.train.ProgramViewerScreen
 import com.forge.app.ui.gym.train.DayScreen
 import com.forge.app.ui.overview.OverviewScreen
 import com.forge.app.ui.programeditor.ProgramEditorScreen
@@ -104,7 +105,7 @@ fun ForgeNavHost() {
             OverviewScreen(
                 onStartSession = { dayKey -> if (dayKey.startsWith("cardio")) nav.navigate(Routes.CARDIO) else nav.navigate(Routes.gymDay(dayKey)) },
                 onStartSessionSkipWarmup = { dayKey -> if (dayKey.startsWith("cardio")) nav.navigate(Routes.CARDIO) else nav.navigate(Routes.gymDay(dayKey, skipWarmup = true)) },
-                onGoToGym = { nav.navigate(Routes.GYM_TRAIN) },
+                onViewProgram = { nav.navigate(Routes.PROGRAM_VIEWER) },
                 onGoToCardio = { nav.navigate(Routes.CARDIO) },
                 onGoToTrophies = { nav.navigate(Routes.TROPHIES) },
                 onGoToStats = { nav.navigate(Routes.GYM_STATS) },
@@ -136,6 +137,9 @@ fun ForgeNavHost() {
                 onOpenCardio = { nav.navigate(Routes.CARDIO) },
                 initialTab = 1
             )
+        }
+        composable(Routes.PROGRAM_VIEWER) {
+            ProgramViewerScreen(onBack = { nav.popBackStack() })
         }
         composable(Routes.NUTRITION) {
             NutritionPlaceholderScreen(onBack = { nav.popBackStack() })

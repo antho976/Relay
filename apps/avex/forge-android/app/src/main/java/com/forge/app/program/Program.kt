@@ -106,8 +106,8 @@ object Program {
             ),
             exercises = listOf(
                 ExercisePlan("ua1", "DB Bench Press", 3, "8-10", ExerciseUnit.DUMBBELL, MuscleGroup.CHEST, Difficulty.BEGINNER, "1-2 reps shy of failure"),
-                ExercisePlan("ua2", "Machine Chest Press", 3, "10-12", ExerciseUnit.PLATES, MuscleGroup.CHEST, Difficulty.BEGINNER, "MWM-989 press arm"),
-                ExercisePlan("ua3", "Lat Pulldown", 4, "8-12", ExerciseUnit.PLATES, MuscleGroup.BACK, Difficulty.BEGINNER, "Wide grip, pull to upper chest"),
+                ExercisePlan("ua2", "Seated Bench Press", 3, "10-12", ExerciseUnit.PLATES, MuscleGroup.CHEST, Difficulty.BEGINNER, "MWM-989 chest press station"),
+                ExercisePlan("ua3", "Wide Lat Pulldown", 4, "8-12", ExerciseUnit.PLATES, MuscleGroup.BACK, Difficulty.BEGINNER, "Wide grip, pull to upper chest"),
                 ExercisePlan("ua4", "DB Lateral Raise", 4, "12-15", ExerciseUnit.DUMBBELL, MuscleGroup.SHOULDERS, Difficulty.BEGINNER, "Priority — slow eccentric"),
                 ExercisePlan("ua5", "DB Overhead Tricep Ext.", 3, "10-12", ExerciseUnit.DUMBBELL, MuscleGroup.TRICEPS, Difficulty.BEGINNER, "Long head — biggest visual lever"),
                 ExercisePlan("ua6", "DB Hammer Curl", 3, "10-12", ExerciseUnit.DUMBBELL, MuscleGroup.BICEPS, Difficulty.BEGINNER, "Bicep + forearm")
@@ -147,13 +147,13 @@ object Program {
                 "Light face pulls on the machine — 15 reps"
             ),
             exercises = listOf(
-                ExercisePlan("ub1", "Machine Seated Row", 4, "8-12", ExerciseUnit.PLATES, MuscleGroup.BACK, Difficulty.BEGINNER, "Mid-back thickness"),
+                ExercisePlan("ub1", "DB Row (1-arm)", 4, "8-12", ExerciseUnit.DUMBBELL, MuscleGroup.BACK, Difficulty.BEGINNER, "Mid-back thickness"),
                 ExercisePlan("ub2", "Incline DB Bench Press", 3, "8-10", ExerciseUnit.DUMBBELL, MuscleGroup.CHEST, Difficulty.BEGINNER, "Fills tee neckline"),
-                ExercisePlan("ub3", "Close-Grip Lat Pulldown", 3, "10-12", ExerciseUnit.PLATES, MuscleGroup.BACK, Difficulty.BEGINNER, "Different angle"),
+                ExercisePlan("ub3", "Chest-Supported DB Row", 3, "10-12", ExerciseUnit.DUMBBELL, MuscleGroup.BACK, Difficulty.BEGINNER, "Chest down on the bench"),
                 ExercisePlan("ub4", "DB Lateral Raise", 4, "12-15", ExerciseUnit.DUMBBELL, MuscleGroup.SHOULDERS, Difficulty.BEGINNER, "Twice a week, by design"),
                 ExercisePlan("ub5", "DB Skull Crusher", 3, "10-12", ExerciseUnit.DUMBBELL, MuscleGroup.TRICEPS, Difficulty.INTERMEDIATE, "Tricep mass"),
                 ExercisePlan("ub6", "DB Incline Curl", 3, "10-12", ExerciseUnit.DUMBBELL, MuscleGroup.BICEPS, Difficulty.BEGINNER, "Stretched bicep = growth"),
-                ExercisePlan("ub7", "Face Pull (cable)", 3, "15", ExerciseUnit.PLATES, MuscleGroup.REAR_DELTS, Difficulty.BEGINNER, "Posture fix — non-negotiable")
+                ExercisePlan("ub7", "Rear Delt DB Fly", 3, "12-15", ExerciseUnit.DUMBBELL, MuscleGroup.REAR_DELTS, Difficulty.BEGINNER, "Posture fix — non-negotiable")
             )
         ),
         DayPlan(
@@ -174,7 +174,7 @@ object Program {
                 ExercisePlan("lb3", "Leg Curl", 3, "12-15", ExerciseUnit.PLATES, MuscleGroup.HAMSTRINGS, Difficulty.BEGINNER, "MWM-989 leg developer"),
                 ExercisePlan("lb4", "Goblet Squat", 3, "12-15", ExerciseUnit.DUMBBELL, MuscleGroup.QUADS, Difficulty.BEGINNER, "Higher reps today"),
                 ExercisePlan("lb5", "Seated Calf Raise", 4, "12-15", ExerciseUnit.DUMBBELL, MuscleGroup.CALVES, Difficulty.BEGINNER, "Different head"),
-                ExercisePlan("lb6", "Cable Crunch", 3, "10-15", ExerciseUnit.PLATES, MuscleGroup.CORE, Difficulty.BEGINNER, "Loaded abs")
+                ExercisePlan("lb6", "High Pulley Ab Crunch", 3, "10-15", ExerciseUnit.PLATES, MuscleGroup.CORE, Difficulty.BEGINNER, "Loaded abs")
             )
         )
     )

@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -42,6 +43,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.domain.units.toStoredWeightText
+import com.forge.app.ui.gym.train.components.CollapsedRow
 import com.forge.app.ui.gym.train.components.ExerciseCard
 import com.forge.app.ui.gym.train.components.ExerciseChartSheet
 import com.forge.app.ui.gym.train.components.UpNextBubble
@@ -175,7 +177,19 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
                                 onLogSameAsLast = { setId -> onEvent(DayUiEvent.LogSameAsLast(id, setId)) },
                                 onRate = { rating -> onEvent(DayUiEvent.RateExercise(id, rating)) },
                                 onNoteChange = { note -> onEvent(DayUiEvent.UpdateNote(id, note)) },
-                                onToggleSkipped = { onEvent(DayUiEvent.ToggleSkipped(id)) },
+                                onToggleSkipped = {
+                                    onEvent(DayUiEvent.ToggleSkipped(id))
+                                    // Skipping the focused exercise jumps to the next one — the skipped
+                                    // exercise drops into the DONE / SKIPPED section below. Un-skipping
+                                    // leaves you on it.
+                                    if (!ex.skipped) {
+                                        val advanceTo = exNextId
+                                            ?: state.exercises.firstOrNull {
+                                                it.plan.id != id && !it.skipped && it.loggedSets.size < it.targetSets
+                                            }?.plan?.id
+                                        if (advanceTo != null) shownExerciseId = advanceTo
+                                    }
+                                },
                                 onOpenSwapPicker = { onEvent(DayUiEvent.OpenSwapPicker(id)) },
                                 onOpenGoalSetter = { onEvent(DayUiEvent.OpenGoalSetter(id)) },
                                 onLongPress = { onEvent(DayUiEvent.LongPressExercise(id)) },
@@ -205,6 +219,43 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
                         onAddExercise = { onEvent(DayUiEvent.OpenAddExercisePicker) }
                     )
                     Spacer(Modifier.height(16.dp))
+                }
+
+                // ── DONE ─────────────────────────────────────────────────────────
+                // Exercises you've finished or skipped stay here, below Up Next — tap one to
+                // re-open it in the card above and keep editing its sets.
+                val done = state.exercises.withIndex().filter { (_, ex) ->
+                    ex.plan.id != shownExercise.plan.id && (ex.skipped || ex.loggedSets.size >= ex.targetSets)
+                }
+                if (done.isNotEmpty()) {
+                    item(key = "done-header") {
+                        val outline = MaterialTheme.colorScheme.outline
+                        HorizontalDivider(color = outline.copy(alpha = 0.2f))
+                        Text(
+                            "DONE / SKIPPED",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            fontSize = 9.sp,
+                            modifier = Modifier.padding(start = 24.dp, top = 14.dp, bottom = 2.dp)
+                        )
+                    }
+                    // Key by position, not exercise id — a day can legitimately hold the same exercise
+                    // twice (a tiny equipment pool), and duplicate keys crash LazyColumn.
+                    items(done, key = { "done-${it.index}" }) { entry ->
+                        val ex = entry.value
+                        CollapsedRow(
+                            exerciseIndex = entry.index,
+                            state = ex,
+                            isNow = false,
+                            onToggle = { shownExerciseId = ex.plan.id },
+                            onOpenSwapPicker = { onEvent(DayUiEvent.OpenSwapPicker(ex.plan.id)) }
+                        )
+                        HorizontalDivider(
+                            modifier = Modifier.padding(horizontal = 24.dp),
+                            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.12f)
+                        )
+                    }
+                    item(key = "done-bottom") { Spacer(Modifier.height(16.dp)) }
                 }
             }
         }

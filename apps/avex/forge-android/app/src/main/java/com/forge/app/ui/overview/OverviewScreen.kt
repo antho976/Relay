@@ -66,7 +66,7 @@ import java.util.Locale
 fun OverviewScreen(
     onStartSession: (dayKey: String) -> Unit,
     onStartSessionSkipWarmup: (dayKey: String) -> Unit = onStartSession,
-    onGoToGym: () -> Unit,
+    onViewProgram: () -> Unit,
     onGoToCardio: () -> Unit,
     onGoToTrophies: () -> Unit,
     onGoToStats: () -> Unit = {},
@@ -267,7 +267,7 @@ fun OverviewScreen(
                     Text("·", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.5f))
                     Text("view program →", style = MaterialTheme.typography.labelSmall,
                         color = muted, fontSize = 10.sp,
-                        modifier = Modifier.clickable { onGoToGym() }.padding(vertical = 2.dp))
+                        modifier = Modifier.clickable { onViewProgram() }.padding(vertical = 2.dp))
                 }
             }
             Spacer(Modifier.height(12.dp))
