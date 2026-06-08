@@ -1,5 +1,8 @@
 package com.forge.app.data.repo
 
+import android.content.Context
+import androidx.glance.appwidget.updateAll
+import com.forge.app.data.db.dao.ProgramCustomizationDao
 import com.forge.app.data.db.dao.ProgramDao
 import com.forge.app.data.db.entities.ProgramDay
 import com.forge.app.data.db.entities.ProgramSlot
@@ -15,6 +18,8 @@ import com.forge.app.program.MuscleGroup
 import com.forge.app.program.ProblemArea
 import com.forge.app.program.Program
 import com.forge.app.program.ProgramGenerator
+import com.forge.app.widget.ForgeWidget
+import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -32,7 +37,9 @@ import javax.inject.Singleton
 @Singleton
 class ProgramRepository @Inject constructor(
     private val dao: ProgramDao,
-    private val settings: SettingsRepository
+    private val customizationDao: ProgramCustomizationDao,
+    private val settings: SettingsRepository,
+    @ApplicationContext private val context: Context
 ) {
     private val _revision = MutableStateFlow(0L)
     /** Bumps whenever the active program changes (load/generate) so program-display VMs can refresh. */
@@ -63,7 +70,11 @@ class ProgramRepository @Inject constructor(
             }
         }
         dao.replaceProgram(days, slots)
-        loadIntoFacade()
+        // A wholesale rebuild invalidates the old customization overlay — drop stale rep/set/removed
+        // overrides so they can't silently re-bind to (or delete) a freshly generated exercise, and
+        // drop user-added exercises whose day no longer exists. See [reconcileCustomizations].
+        reconcileCustomizations(days)
+        loadIntoFacade(refreshWidget = true)
     }
 
     /** Re-roll the active program's exercise picks, keeping the same split structure (rotation). */
@@ -81,7 +92,6 @@ class ProgramRepository @Inject constructor(
     private suspend fun currentParams(): GenerationParams = GenerationParams(
         daysPerWeek = settings.daysPerWeek.first(),
         emphasis = settings.programEmphasis.first(),
-        cardioDays = settings.cardioDaysPerWeek.first(),
         goal = settings.userGoal.first().ifBlank { "build_muscle" },
         experience = settings.programExperience.first(),
         problemAreas = settings.problemAreas.first().mapNotNull { ProblemArea.fromCode(it) }.toSet(),
@@ -108,7 +118,9 @@ class ProgramRepository @Inject constructor(
 
     /** Re-roll just one day's exercises (anti-repeating its current picks), keeping the rest intact. */
     suspend fun rerollDay(dayKey: String) {
-        val recent = Program.day(dayKey).exercises.map { it.id }.toSet()
+        // Anti-repeat against the WHOLE current week, not just this day, so a single-day re-roll
+        // doesn't hand back a movement another (unchanged) day already uses.
+        val recent = Program.days.flatMap { it.exercises }.map { it.id }.toSet()
         val fresh = ProgramGenerator.generate(
             currentParams(), currentEquipment(),
             settings.likedExercises.first(), settings.dislikedExercises.first(),
@@ -117,7 +129,9 @@ class ProgramRepository @Inject constructor(
         val day = fresh.firstOrNull { it.key == dayKey } ?: return
         val slots = day.exercises.mapIndexed { j, ge -> ProgramSlot("$dayKey-$j", dayKey, j, ge.libId, ge.sets, ge.reps) }
         dao.replaceDaySlots(dayKey, slots)
-        loadIntoFacade()
+        // This day's exercises just changed — drop its stale static overrides (keep user-added ones).
+        reconcileDayCustomizations(dayKey)
+        loadIntoFacade(refreshWidget = true)
     }
 
     /** First-run seed: mirror the hard-coded split into the tables, mapping each movement to its library id. */
@@ -148,26 +162,68 @@ class ProgramRepository @Inject constructor(
         dao.replaceProgram(days, slots)
     }
 
-    /** Build [DayPlan]s from the stored rows and push them into the facade. */
-    private suspend fun loadIntoFacade() {
+    /**
+     * Build [DayPlan]s from the stored rows and push them into the facade. Subtitle/warmup aren't
+     * stored (decided: derive, don't store): the seeded 4-day keys reuse the original split's
+     * hand-written copy; every other generated day derives a presentable subtitle + a generic warmup
+     * from its archetype (via [archetypeMeta]) so non-4-day splits aren't warmup-less or shown a raw
+     * lowercase key. [refreshWidget] pushes a Glance update after a real program change (NOT on the
+     * widget's own ensureLoaded path, to avoid a render→update→render loop).
+     */
+    private suspend fun loadIntoFacade(refreshWidget: Boolean = false) {
         val dbDays = dao.days()
         if (dbDays.isEmpty()) return
         val plans = dbDays.map { pd ->
-            // Subtitle/warmup aren't stored (decided: derive, don't store). Seeded days reuse the
-            // original split's copy for parity; generated days fall back to the archetype label.
             val seed = Program.seedDays.firstOrNull { it.key == pd.id }
+            val meta = archetypeMeta(pd.archetype)
             DayPlan(
                 key = pd.id,
                 defaultName = pd.name,
-                subtitle = seed?.subtitle ?: pd.archetype,
+                subtitle = seed?.subtitle ?: meta.subtitle,
                 word = pd.word,
                 accentHex = pd.accentHex,
-                warmup = seed?.warmup ?: emptyList(),
+                warmup = seed?.warmup ?: meta.warmup,
                 exercises = dao.slotsForDay(pd.id).map { slot -> slot.toPlan() }
             )
         }
         Program.setActive(plans)
         _revision.value += 1
+        if (refreshWidget) runCatching { ForgeWidget().updateAll(context) }
+    }
+
+    /** Presentable subtitle + generic warmup for a generated day, derived from its archetype key. */
+    private fun archetypeMeta(archetype: String): DayMeta = when (archetype.substringBefore('-').lowercase()) {
+        "push" -> DayMeta("Push-leaning · chest, shoulders, triceps", WARMUP_PUSH)
+        "pull" -> DayMeta("Pull-leaning · back & biceps", WARMUP_PULL)
+        "legs" -> DayMeta("Legs · quads, hamstrings, glutes", WARMUP_LEGS)
+        "upper" -> DayMeta("Upper body", WARMUP_PUSH)
+        "lower" -> DayMeta("Lower body", WARMUP_LEGS)
+        "fb" -> DayMeta("Full body", WARMUP_FULL)
+        "arms" -> DayMeta("Arms & delts", WARMUP_ARMS)
+        else -> DayMeta(archetype.replace('-', ' ').replaceFirstChar { it.uppercase() }, WARMUP_FULL)
+    }
+
+    private data class DayMeta(val subtitle: String, val warmup: List<String>)
+
+    /**
+     * Drop the customization overlay rows that a wholesale rebuild has invalidated: every static
+     * rep/set/removed override (so it can't re-bind to or silently delete a freshly generated
+     * exercise), and user-added exercises whose day no longer exists. User-added ("custom_") exercises
+     * on days that survive are kept — re-attaching them is their whole point.
+     */
+    private suspend fun reconcileCustomizations(days: List<ProgramDay>) {
+        val validKeys = days.map { it.id }.toSet()
+        customizationDao.all().forEach { c ->
+            val keep = c.exerciseId.startsWith("custom_") && c.dayKey in validKeys
+            if (!keep) customizationDao.delete(c.dayKey, c.exerciseId)
+        }
+    }
+
+    /** Single-day variant: drop this day's stale static overrides, keep its user-added exercises. */
+    private suspend fun reconcileDayCustomizations(dayKey: String) {
+        customizationDao.forDay(dayKey).forEach { c ->
+            if (!c.exerciseId.startsWith("custom_")) customizationDao.delete(dayKey, c.exerciseId)
+        }
     }
 
     private fun ProgramSlot.toPlan(): ExercisePlan {
@@ -199,5 +255,39 @@ class ProgramRepository @Inject constructor(
                 note = ""
             )
         }
+    }
+
+    private companion object {
+        // Generic per-archetype warm-ups for generated days that don't reuse a seed key (Cluster C2).
+        val WARMUP_PUSH = listOf(
+            "Arm circles — 10 forward, 10 back",
+            "Push-ups — 10 slow reps",
+            "Band/empty-hand shoulder press — 15 reps",
+            "Scapular wall slides — 10 reps"
+        )
+        val WARMUP_PULL = listOf(
+            "Dead hangs or scapular pulls — 20 seconds",
+            "Cat-cow stretches — 10 reps",
+            "Band pull-aparts — 15 reps",
+            "Light face pulls — 15 reps"
+        )
+        val WARMUP_LEGS = listOf(
+            "Bodyweight squats — 15 reps slow",
+            "Leg swings — 10 each leg, front and side",
+            "Walking lunges — 10 steps",
+            "Glute bridges — 15 reps"
+        )
+        val WARMUP_FULL = listOf(
+            "Bodyweight squats — 15 reps",
+            "Push-ups — 10 reps",
+            "Arm circles — 10 forward, 10 back",
+            "Leg swings — 10 each leg"
+        )
+        val WARMUP_ARMS = listOf(
+            "Arm circles — 10 forward, 10 back",
+            "Band pull-aparts — 15 reps",
+            "Light curls with empty hands — 15 reps",
+            "Wrist circles — 10 each direction"
+        )
     }
 }

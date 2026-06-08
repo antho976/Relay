@@ -7,6 +7,7 @@ import com.forge.app.ui.gym.train.state.DayUiEvent
 import com.forge.app.ui.gym.train.state.ExerciseHighlight
 import com.forge.app.ui.gym.train.state.SessionSummary
 import com.forge.app.ui.gym.train.state.UnlockedTrophyHighlight
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -17,6 +18,9 @@ internal fun DayViewModel.handleSessionEvent(event: DayUiEvent) {
         is DayUiEvent.RequestBack -> requestBack()
         is DayUiEvent.ConfirmDiscard -> discardAndExit()
         is DayUiEvent.DismissDiscardConfirm -> _state.update { it.copy(showDiscardConfirm = false) }
+        is DayUiEvent.LeaveAndResume -> leaveAndResume()
+        is DayUiEvent.CrossDayDiscardAndStart -> crossDayDiscardAndStart()
+        is DayUiEvent.CrossDayGoBack -> crossDayGoBack()
         is DayUiEvent.SaveAndExit -> saveAndExit()
         is DayUiEvent.UndoLastSet -> {
             val setId = _state.value.undoableSetId ?: return
@@ -177,6 +181,53 @@ private fun DayViewModel.discardAndExit() {
         _state.update { it.copy(showDiscardConfirm = false) }
         _navigation.send(DayNavigationEffect.PopBack)
     }
+}
+
+/**
+ * Leave the screen but keep the session ACTIVE — not finished, not discarded. Logged sets are
+ * already persisted, so reopening this day resumes the workout exactly where it was left.
+ */
+private fun DayViewModel.leaveAndResume() {
+    viewModelScope.launch {
+        restTimer.stop()
+        stopSessionService()
+        _state.update { it.copy(showDiscardConfirm = false) }
+        _navigation.send(DayNavigationEffect.PopBack)
+    }
+}
+
+/** Cross-day prompt → discard the other in-progress workout, then start this day fresh. */
+private fun DayViewModel.crossDayDiscardAndStart() {
+    viewModelScope.launch {
+        workoutRepo.activeSession()?.let { workoutRepo.discardSession(it.id) }
+        _state.update { it.copy(crossDaySession = null) }
+        beginSessionForThisDay()
+    }
+}
+
+/** Cross-day prompt → leave so the other in-progress workout can be resumed from its own day. */
+private fun DayViewModel.crossDayGoBack() {
+    viewModelScope.launch { _navigation.send(DayNavigationEffect.PopBack) }
+}
+
+/** Start a new session for this day (or resume this day's existing one) and hydrate the screen. */
+internal suspend fun DayViewModel.beginSessionForThisDay() {
+    val sessionId = workoutRepo.startOrResumeSession(dayKey)
+    val nameOverride = customizationRepo.getDayName(dayKey)
+    val resolvedName = nameOverride?.customName ?: dayPlan.defaultName
+    val disabledUntilMs = settingsRepo.warmupDisabledUntilMs.firstOrNull() ?: 0L
+    val warmupAutoSkipped = clock.nowMs() < disabledUntilMs
+    _state.update {
+        it.copy(
+            sessionId = sessionId,
+            sessionStartedAt = clock.nowMs(),
+            displayName = resolvedName,
+            isWarmupComplete = it.isWarmupComplete || skipWarmup || warmupAutoSkipped
+        )
+    }
+    refreshExercises()
+    startSessionService(resolvedName)
+    workoutRepo.isNewSession(sessionId)
 }
 
 private fun computeAvgRestSeconds(sets: List<LoggedSet>): Int? {

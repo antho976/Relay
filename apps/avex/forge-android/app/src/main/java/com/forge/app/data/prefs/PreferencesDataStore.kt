@@ -56,6 +56,8 @@ object PreferenceKeys {
     val AMOLED_MODE = booleanPreferencesKey("amoled_mode")
     /** Stored hex string e.g. "#EF4444". Empty = use default. Reserved for UI pass. */
     val ACCENT_COLOR_HEX = stringPreferencesKey("accent_color_hex")
+    /** Accent emphasis for important text: "off" | "subtle" | "medium" | "strong". Default off. */
+    val ACCENT_EMPHASIS = stringPreferencesKey("accent_emphasis")
     /** Font choice key. Reserved for UI pass. */
     val FONT_CHOICE = stringPreferencesKey("font_choice")
 
@@ -132,6 +134,4 @@ object PreferenceKeys {
     // ─── Cardio layer (program-unlock Phase 6) ────────────────────────────────
     /** Weekly cardio goal in minutes. 0 = no goal. */
     val CARDIO_WEEKLY_TARGET_MIN = intPreferencesKey("cardio_weekly_target_min")
-    /** Dedicated cardio days per week the generator should add. 0 = none (Phase 6 days mode). */
-    val CARDIO_DAYS_PER_WEEK = intPreferencesKey("cardio_days_per_week")
 }

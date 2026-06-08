@@ -48,6 +48,12 @@ sealed interface DayUiEvent {
     data object RequestBack : DayUiEvent
     data object ConfirmDiscard : DayUiEvent
     data object DismissDiscardConfirm : DayUiEvent
+    /** Leave but keep the session active (not finished, not discarded) so it resumes when reopened. */
+    data object LeaveAndResume : DayUiEvent
+    /** Cross-day prompt: discard the other in-progress workout and start this day instead. */
+    data object CrossDayDiscardAndStart : DayUiEvent
+    /** Cross-day prompt: leave this day so the other in-progress workout can be resumed. */
+    data object CrossDayGoBack : DayUiEvent
     /** Save session immediately and exit without showing the summary sheet (#97). */
     data object SaveAndExit : DayUiEvent
     /** Undo the last logged set within the ~5s window (#46). */

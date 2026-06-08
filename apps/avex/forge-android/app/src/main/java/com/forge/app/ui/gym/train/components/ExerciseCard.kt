@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import com.forge.app.ui.theme.emphasized
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.key
@@ -117,7 +118,7 @@ fun ExerciseCard(
                 Text(
                     state.effectiveName,
                     style = MaterialTheme.typography.displayLarge,
-                    color = onBg,
+                    color = emphasized(onBg),
                     textDecoration = if (state.skipped) TextDecoration.LineThrough else TextDecoration.None,
                     modifier = Modifier.clickable { onOpenSwapPicker() }
                 )

@@ -42,19 +42,35 @@ class ForgeApp : Application(), Configuration.Provider {
      * If a restore staged a database file (see BackupRepository.restoreFromUri), swap it in NOW —
      * before Room is ever opened. Doing the swap at boot avoids closing/replacing the DB while
      * flows are still reading it (the old restore path raced with active observers until exit).
+     * A #14 backup also stages the DataStore preferences file; swap that in too, before DataStore
+     * is first read (it's lazily created on first access, which happens after this).
      */
     private fun applyPendingRestore() {
         val pending = File(filesDir, "pending_restore.db")
-        if (!pending.exists()) return
-        runCatching {
-            val live = getDatabasePath("forge.db")
-            live.parentFile?.mkdirs()
-            pending.copyTo(live, overwrite = true)
-            // The restored file is authoritative; drop stale WAL/-shm so they can't override it.
-            File(live.path + "-wal").delete()
-            File(live.path + "-shm").delete()
+        val pendingPrefs = File(filesDir, "pending_restore_prefs.pb")
+        if (!pending.exists() && !pendingPrefs.exists()) return
+        if (pending.exists()) {
+            val swapped = runCatching {
+                val live = getDatabasePath("forge.db")
+                live.parentFile?.mkdirs()
+                pending.copyTo(live, overwrite = true)
+                // The restored file is authoritative; drop stale WAL/-shm so they can't override it.
+                File(live.path + "-wal").delete()
+                File(live.path + "-shm").delete()
+            }.isSuccess
+            // Only discard the staged file once it's actually in place. If the swap failed (e.g.
+            // disk full), keep it so the next boot retries rather than silently losing the backup.
+            if (swapped) pending.delete()
         }
-        pending.delete()
+        if (pendingPrefs.exists()) {
+            val swapped = runCatching {
+                // Must match preferencesDataStore(name = "forge_settings").
+                val livePrefs = File(filesDir, "datastore/forge_settings.preferences_pb")
+                livePrefs.parentFile?.mkdirs()
+                pendingPrefs.copyTo(livePrefs, overwrite = true)
+            }.isSuccess
+            if (swapped) pendingPrefs.delete()
+        }
     }
 
     /**

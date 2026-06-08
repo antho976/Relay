@@ -199,13 +199,21 @@ internal fun computePrFlags(
     currentSets: List<LoggedSet>
 ): Pair<Set<Long>, Boolean> {
     if (currentSets.isEmpty()) return emptySet<Long>() to false
-    // No prior history → there's nothing to beat, so nothing is a PR. (Without this, the
-    // first-ever set on an exercise would falsely flag as a PR and render gold.)
+    // No prior history → first-ever time on this exercise; there's no record to beat, so
+    // nothing flags gold. (This intentionally diverges from PrDetector.isPr's documented
+    // "empty history = PR" rule — that rule is about a single proposed set, whereas here an
+    // entire first session shouldn't paint every set gold.)
     if (prior.isEmpty()) return emptySet<Long>() to false
-    val prIds = currentSets
+    // Judge each set against prior sessions AND the earlier sets of THIS session: once a
+    // heavier set beats the record, a later lighter set in the same session must not also
+    // flag as a PR. Walk sets in performed order, growing the comparison history as we go.
+    val running = prior.toMutableList()
+    val prIds = mutableSetOf<Long>()
+    for (set in currentSets.sortedBy { it.setIndex }) {
         // An assisted set is never itself a PR (and assisted history is excluded inside isPr).
-        .filter { !it.isAssisted && PrDetector.isPr(prior, it.weightLb, it.reps) }
-        .map { it.id }.toSet()
+        if (!set.isAssisted && PrDetector.isPr(running, set.weightLb, set.reps)) prIds.add(set.id)
+        running.add(set)
+    }
     return prIds to prIds.isNotEmpty()
 }
 

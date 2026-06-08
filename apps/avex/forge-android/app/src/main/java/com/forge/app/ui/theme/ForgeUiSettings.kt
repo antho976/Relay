@@ -21,7 +21,8 @@ data class ForgeUiSettings(
     val quietHoursEnabled: Boolean = false,
     val quietHoursStart: Int = 22,
     val quietHoursEnd: Int = 7,
-    val accentColorHex: String = ""          // empty = AccentNavy default
+    val accentColorHex: String = "",         // empty = AccentNavy default
+    val accentEmphasis: String = "off"       // off | subtle | medium | strong — colors important text
 )
 
 val LocalForgeSettings = compositionLocalOf { ForgeUiSettings() }

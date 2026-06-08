@@ -50,6 +50,9 @@ internal fun AppearancePage(state: SettingsUiState, vm: SettingsViewModel, modif
         Spacer(Modifier.height(8.dp))
         AccentColorRow(state.accentColorHex, vm::setAccentColorHex)
         SectionDivider()
+        Spacer(Modifier.height(8.dp))
+        AccentEmphasisRow(state.accentEmphasis, vm::setAccentEmphasis)
+        SectionDivider()
     }
 }
 
@@ -366,6 +369,31 @@ internal fun ProgramPage(state: SettingsUiState, vm: SettingsViewModel, modifier
         }
         Spacer(Modifier.height(24.dp))
 
+        // ── Emphasis ────────────────────────────────────────────────────────────
+        Text("Emphasis", style = MaterialTheme.typography.titleSmall, color = onBg,
+            modifier = Modifier.padding(horizontal = 24.dp))
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "A one-tap volume lean for a block — adds a little extra to a whole region. For finer control, " +
+                "use Priority muscles below.",
+            style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic,
+            modifier = Modifier.padding(horizontal = 24.dp)
+        )
+        Spacer(Modifier.height(12.dp))
+        FlowRow(
+            modifier = Modifier.padding(horizontal = 24.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            listOf(
+                "balanced" to "Balanced", "upper" to "Upper body",
+                "legs" to "Legs", "arms-shoulders" to "Arms & shoulders"
+            ).forEach { (value, label) ->
+                PillChip(label, state.programEmphasis == value) { vm.setProgramEmphasis(value) }
+            }
+        }
+        Spacer(Modifier.height(24.dp))
+
         // ── Priority muscles ────────────────────────────────────────────────────
         Text("Priority muscles", style = MaterialTheme.typography.titleSmall, color = onBg,
             modifier = Modifier.padding(horizontal = 24.dp))
@@ -481,7 +509,7 @@ internal fun ProgramPage(state: SettingsUiState, vm: SettingsViewModel, modifier
         )
         Spacer(Modifier.height(4.dp))
         Text(
-            "A weekly cardio target, tracked on the home screen. (Dedicated cardio days come next.)",
+            "A weekly cardio target, tracked on the home screen. Log your cardio in the Cardio tab whenever you do it.",
             style = MaterialTheme.typography.bodySmall,
             color = muted,
             fontStyle = FontStyle.Italic,
@@ -496,32 +524,6 @@ internal fun ProgramPage(state: SettingsUiState, vm: SettingsViewModel, modifier
             PillChip("Off", state.cardioWeeklyTargetMin == 0) { vm.setCardioWeeklyTargetMin(0) }
             listOf(60, 120, 150, 200).forEach { m ->
                 PillChip("$m min", state.cardioWeeklyTargetMin == m) { vm.setCardioWeeklyTargetMin(m) }
-            }
-        }
-        Spacer(Modifier.height(16.dp))
-        Text(
-            "Or dedicated cardio days",
-            style = MaterialTheme.typography.titleSmall,
-            color = onBg,
-            modifier = Modifier.padding(horizontal = 24.dp)
-        )
-        Spacer(Modifier.height(4.dp))
-        Text(
-            "Add standalone cardio days to your week (regenerates the program). Mutually exclusive with the goal above.",
-            style = MaterialTheme.typography.bodySmall,
-            color = muted,
-            fontStyle = FontStyle.Italic,
-            modifier = Modifier.padding(horizontal = 24.dp)
-        )
-        Spacer(Modifier.height(12.dp))
-        FlowRow(
-            modifier = Modifier.padding(horizontal = 24.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            PillChip("Off", state.cardioDaysPerWeek == 0) { vm.setCardioDaysPerWeek(0) }
-            listOf(1, 2, 3).forEach { n ->
-                PillChip(if (n == 1) "1 day" else "$n days", state.cardioDaysPerWeek == n) { vm.setCardioDaysPerWeek(n) }
             }
         }
         Spacer(Modifier.height(16.dp))

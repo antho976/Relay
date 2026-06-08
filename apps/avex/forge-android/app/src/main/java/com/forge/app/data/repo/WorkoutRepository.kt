@@ -44,6 +44,9 @@ class WorkoutRepository @Inject constructor(
 
     fun observeActiveSession(): Flow<Session?> = sessionDao.observeActiveSession()
 
+    /** The current in-progress session, if any. Does NOT create one (unlike [startOrResumeSession]). */
+    suspend fun activeSession(): Session? = sessionDao.getActiveSession()
+
     /**
      * Starts a new session, OR returns the id of the currently-active one if there
      * already is one. App invariant: at most one active session at a time.

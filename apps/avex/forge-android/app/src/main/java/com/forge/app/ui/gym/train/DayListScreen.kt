@@ -23,6 +23,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import com.forge.app.ui.theme.emphasized
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -122,7 +123,7 @@ private fun TrainTab(
         Text(
             "Pick your day.",
             style = MaterialTheme.typography.headlineMedium,
-            color = MaterialTheme.colorScheme.onSurface
+            color = emphasized(MaterialTheme.colorScheme.onSurface)
         )
         state.days.forEach { item ->
             DayCard(

@@ -33,6 +33,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.forge.app.ui.theme.emphasized
 import com.forge.app.ui.trophies.state.TrophiesUiState
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -123,7 +124,7 @@ fun TrophiesScreen(
                         Text(
                             section.category.displayName,
                             style = MaterialTheme.typography.headlineSmall,
-                            color = onBg,
+                            color = emphasized(onBg),
                             fontStyle = FontStyle.Italic
                         )
                         Spacer(Modifier.height(12.dp))

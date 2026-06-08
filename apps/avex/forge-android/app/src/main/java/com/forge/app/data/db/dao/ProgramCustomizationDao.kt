@@ -19,6 +19,9 @@ interface ProgramCustomizationDao {
     @Query("SELECT * FROM program_customization WHERE day_key = :dayKey ORDER BY order_override ASC")
     suspend fun forDay(dayKey: String): List<ProgramCustomization>
 
+    @Query("SELECT * FROM program_customization")
+    suspend fun all(): List<ProgramCustomization>
+
     @Query("DELETE FROM program_customization WHERE day_key = :dayKey AND exercise_id = :exerciseId")
     suspend fun delete(dayKey: String, exerciseId: String)
 

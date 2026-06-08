@@ -1,5 +1,6 @@
 package com.forge.app.domain.timer
 
+import com.forge.app.core.time.Clock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -28,9 +29,16 @@ data class RestTimerState(
  * The controller takes the scope it should run in via the constructor — passing
  * `viewModelScope` means the tick coroutine is cleaned up automatically when the
  * VM is cleared. No need for explicit dispose.
+ *
+ * Remaining time is derived from a wall-clock end instant ([endAtMs]) rather than by
+ * decrementing a counter once per `delay(1000)`. This means the countdown stays accurate
+ * across scheduling drift and app backgrounding (the Main dispatcher can stall while
+ * backgrounded; a decrement-based timer would lag real time), and makes the whole
+ * machine deterministically unit-testable with a fake [Clock].
  */
 class RestTimerController(
     private val scope: CoroutineScope,
+    private val clock: Clock,
     private val defaultSeconds: Int = DEFAULT_REST_SECONDS
 ) {
     private val _state = MutableStateFlow<RestTimerState?>(null)
@@ -38,8 +46,12 @@ class RestTimerController(
 
     private var tickJob: Job? = null
 
+    /** Wall-clock instant (ms) the countdown reaches zero. Authoritative while not paused. */
+    private var endAtMs: Long = 0L
+
     /** (Re)start the timer at [seconds] and begin counting down. */
     fun start(seconds: Int = defaultSeconds) {
+        endAtMs = clock.nowMs() + seconds * 1000L
         _state.value = RestTimerState(
             totalSeconds = seconds,
             secondsRemaining = seconds,
@@ -49,14 +61,17 @@ class RestTimerController(
     }
 
     fun pause() {
+        val current = _state.value ?: return
         tickJob?.cancel()
         tickJob = null
-        _state.update { it?.copy(isPaused = true) }
+        // Freeze the live remaining value so resume() can rebuild the end instant from it.
+        _state.value = current.copy(secondsRemaining = remainingNow(current), isPaused = true)
     }
 
     fun resume() {
         val current = _state.value ?: return
         if (!current.isPaused) return
+        endAtMs = clock.nowMs() + current.secondsRemaining * 1000L
         _state.update { it?.copy(isPaused = false) }
         relaunchTickJob()
     }
@@ -82,26 +97,39 @@ class RestTimerController(
     /** Add [seconds] to the remaining time. Resumes if the timer was paused. */
     fun addSeconds(seconds: Int) {
         val current = _state.value ?: return
-        val wasPaused = current.isPaused
-        _state.value = current.copy(
-            secondsRemaining = current.secondsRemaining + seconds,
-            isPaused = false
-        )
-        if (wasPaused) relaunchTickJob()
+        if (current.isPaused) {
+            val updated = (current.secondsRemaining + seconds).coerceAtLeast(0)
+            endAtMs = clock.nowMs() + updated * 1000L
+            _state.value = current.copy(secondsRemaining = updated, isPaused = false)
+        } else {
+            endAtMs += seconds * 1000L
+            _state.value = current.copy(secondsRemaining = remainingNow(current.copy(isPaused = false)))
+        }
+        relaunchTickJob()
+    }
+
+    /** Seconds left per the wall clock (never negative). Rounds up so a fresh 150 reads 150, not 149. */
+    private fun remainingNow(state: RestTimerState): Int {
+        if (state.isPaused) return state.secondsRemaining
+        val ms = endAtMs - clock.nowMs()
+        return if (ms <= 0) 0 else ((ms + 999) / 1000).toInt()
     }
 
     private fun relaunchTickJob() {
         tickJob?.cancel()
         tickJob = scope.launch {
             while (true) {
-                delay(1_000)
                 val current = _state.value ?: break
                 if (current.isPaused) break
-                if (current.secondsRemaining <= 1) {
+                val remaining = remainingNow(current)
+                if (remaining <= 0) {
                     _state.value = current.copy(secondsRemaining = 0, isPaused = true)
                     break
                 }
-                _state.value = current.copy(secondsRemaining = current.secondsRemaining - 1)
+                if (remaining != current.secondsRemaining) {
+                    _state.value = current.copy(secondsRemaining = remaining)
+                }
+                delay(1_000)
             }
         }
     }

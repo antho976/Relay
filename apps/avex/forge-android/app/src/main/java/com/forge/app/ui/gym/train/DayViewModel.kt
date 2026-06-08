@@ -12,6 +12,7 @@ import com.forge.app.domain.timer.RestTimerController
 import com.forge.app.program.Equipment
 import com.forge.app.program.Program
 import com.forge.app.service.WorkoutSessionBridge
+import com.forge.app.ui.gym.train.state.CrossDaySessionInfo
 import com.forge.app.ui.gym.train.state.DayUiEvent
 import com.forge.app.ui.gym.train.state.DayUiState
 import com.forge.app.ui.nav.Routes
@@ -50,7 +51,7 @@ class DayViewModel @Inject constructor(
     internal val dayPlan = Program.day(dayKey)
     internal val skipWarmup: Boolean = savedStateHandle.get<Boolean>(Routes.ARG_SKIP_WARMUP) ?: false
 
-    internal val restTimer = RestTimerController(viewModelScope)
+    internal val restTimer = RestTimerController(viewModelScope, clock)
 
     internal val _state = MutableStateFlow(
         DayUiState(dayPlan = dayPlan, displayName = dayPlan.defaultName)
@@ -73,22 +74,18 @@ class DayViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
-            val sessionId = workoutRepo.startOrResumeSession(dayKey)
-            val nameOverride = customizationRepo.getDayName(dayKey)
-            val resolvedName = nameOverride?.customName ?: dayPlan.defaultName
-            val disabledUntilMs = settingsRepo.warmupDisabledUntilMs.firstOrNull() ?: 0L
-            val warmupAutoSkipped = clock.nowMs() < disabledUntilMs
-            _state.update {
-                it.copy(
-                    sessionId = sessionId,
-                    sessionStartedAt = clock.nowMs(),
-                    displayName = resolvedName,
-                    isWarmupComplete = it.isWarmupComplete || skipWarmup || warmupAutoSkipped
-                )
+            // Only one session is active at a time. If a *different* day's workout is still in
+            // progress, prompt (resume it, or discard & start this one) instead of silently
+            // resuming the wrong day's sets under this plan.
+            val active = workoutRepo.activeSession()
+            if (active != null && active.dayKey != dayKey) {
+                val otherName = customizationRepo.getDayName(active.dayKey)?.customName
+                    ?: Program.days.firstOrNull { it.key == active.dayKey }?.defaultName
+                    ?: active.dayKey
+                _state.update { it.copy(isLoading = false, crossDaySession = CrossDaySessionInfo(active.dayKey, otherName)) }
+                return@launch
             }
-            refreshExercises()
-            startSessionService(resolvedName)
-            workoutRepo.isNewSession(sessionId)
+            beginSessionForThisDay()
         }
         viewModelScope.launch {
             val dbWarmup = warmupRepo.customWarmupForDay(dayKey)
@@ -148,6 +145,8 @@ class DayViewModel @Inject constructor(
             is DayUiEvent.FinishWorkout, is DayUiEvent.DismissSummary,
             is DayUiEvent.RequestBack, is DayUiEvent.ConfirmDiscard,
             is DayUiEvent.DismissDiscardConfirm, is DayUiEvent.SaveAndExit,
+            is DayUiEvent.LeaveAndResume, is DayUiEvent.CrossDayDiscardAndStart,
+            is DayUiEvent.CrossDayGoBack,
             is DayUiEvent.UndoLastSet, is DayUiEvent.SetSessionType,
             is DayUiEvent.SetUntracked, is DayUiEvent.SetIntensity,
             is DayUiEvent.ConfirmPreSessionPicker -> handleSessionEvent(event)

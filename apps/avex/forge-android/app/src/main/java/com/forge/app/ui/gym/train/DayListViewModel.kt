@@ -47,8 +47,11 @@ class DayListViewModel @Inject constructor(
                     .maxByOrNull { it.finishedAt!! }
                 if (lastFinished == null) (Program.dayKeys.firstOrNull() ?: Program.UPPER_A)
                 else {
+                    // A stale finished key (e.g. the user changed day-count since) isn't in the current
+                    // split — fall back to the first day instead of letting indexOf(-1) point at it.
                     val idx = Program.dayKeys.indexOf(lastFinished.dayKey)
-                    Program.dayKeys[(idx + 1) % Program.dayKeys.size]
+                    if (idx < 0) (Program.dayKeys.firstOrNull() ?: Program.UPPER_A)
+                    else Program.dayKeys[(idx + 1) % Program.dayKeys.size]
                 }
             }
         }

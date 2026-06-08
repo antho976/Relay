@@ -14,6 +14,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import com.forge.app.ui.theme.emphasized
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Text
@@ -82,7 +83,7 @@ fun SessionSummarySheet(
                     Text(
                         summary.displayName,
                         style = MaterialTheme.typography.headlineSmall,
-                        color = onBg
+                        color = emphasized(onBg)
                     )
                     Text(
                         "workout complete",

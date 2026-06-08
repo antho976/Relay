@@ -60,11 +60,16 @@ interface SessionDao {
     """)
     suspend fun maxVolumeForDay(dayKey: String, excludeSessionId: Long): Double?
 
-    /** Rolling-window queries for the Overview weekly stats strip. */
-    @Query("SELECT COUNT(*) FROM session WHERE finished_at IS NOT NULL AND finished_at >= :sinceEpochMs")
+    /**
+     * Rolling-window queries for the Overview weekly stats strip. Window on started_at
+     * (the day you trained) to stay consistent with aggregateInRange / finishedInRange /
+     * the week-comparison strip; only finished sessions are counted. The AI-export query
+     * below intentionally windows on finished_at instead — see its doc.
+     */
+    @Query("SELECT COUNT(*) FROM session WHERE finished_at IS NOT NULL AND started_at >= :sinceEpochMs")
     fun observeFinishedCountSince(sinceEpochMs: Long): Flow<Int>
 
-    @Query("SELECT SUM(total_volume_lb) FROM session WHERE finished_at IS NOT NULL AND finished_at >= :sinceEpochMs")
+    @Query("SELECT SUM(total_volume_lb) FROM session WHERE finished_at IS NOT NULL AND started_at >= :sinceEpochMs")
     fun observeVolumeSince(sinceEpochMs: Long): Flow<Double?>
 
     /** Earliest finished session timestamp — used for the "first full month" milestone (#56). */

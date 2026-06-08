@@ -89,6 +89,9 @@ object SplitTemplates {
             MuscleSlot(MuscleGroup.CHEST, STR),
             MuscleSlot(MuscleGroup.BACK, STR),
             MuscleSlot(MuscleGroup.SHOULDERS, HYP),
+            // Rear delts twice a week on the Upper/Lower split — posture work the seed split called
+            // "non-negotiable"; without this slot the default 4-day trained zero direct rear delts.
+            MuscleSlot(MuscleGroup.REAR_DELTS, PUMP),
             MuscleSlot(MuscleGroup.BICEPS, PUMP),
             MuscleSlot(MuscleGroup.TRICEPS, PUMP)
         ))
@@ -104,11 +107,16 @@ object SplitTemplates {
 
     private fun fullBody(key: String, name: String, word: String, accent: String = BLUE) =
         DayArchetype(key, name, word, accent, listOf(
+            // 1- and 2-day plans use only this template, so it has to cover the whole body — including
+            // arms and core, which the old 5-slot version left with zero weekly volume.
             MuscleSlot(MuscleGroup.QUADS, STR),
             MuscleSlot(MuscleGroup.CHEST, HYP),
             MuscleSlot(MuscleGroup.BACK, HYP),
+            MuscleSlot(MuscleGroup.HAMSTRINGS, HYP),
             MuscleSlot(MuscleGroup.SHOULDERS, PUMP),
-            MuscleSlot(MuscleGroup.HAMSTRINGS, HYP)
+            MuscleSlot(MuscleGroup.BICEPS, PUMP),
+            MuscleSlot(MuscleGroup.TRICEPS, PUMP),
+            MuscleSlot(MuscleGroup.CORE, PUMP)
         ))
 
     private fun arms(key: String, name: String = "Arms & Delts", word: String = "ARMS", accent: String = PURPLE) =

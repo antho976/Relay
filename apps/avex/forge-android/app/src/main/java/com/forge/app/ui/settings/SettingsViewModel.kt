@@ -33,6 +33,7 @@ data class SettingsUiState(
     val privacyMode: Boolean = false,
     val availableEquipment: Set<String> = emptySet(),
     val accentColorHex: String = "",
+    val accentEmphasis: String = "off",
     val timezone: String = java.util.TimeZone.getDefault().id,
     val daysPerWeek: Int = 4,
     val liked: Set<String> = emptySet(),
@@ -40,12 +41,13 @@ data class SettingsUiState(
     val rotationCadence: String = "never",
     val rotationEveryN: Int = 4,
     val cardioWeeklyTargetMin: Int = 0,
-    val cardioDaysPerWeek: Int = 0,
     val userGoal: String = "build_muscle",
     val experience: String = "intermediate",
     val problemAreas: Set<String> = emptySet(),
     val priorityMuscles: Set<String> = emptySet(),
     val pinnedExercises: Set<String> = emptySet(),
+    /** Coarse one-tap volume emphasis: "balanced" | "upper" | "legs" | "arms-shoulders". */
+    val programEmphasis: String = "balanced",
     /** Current program's weekly sets per muscle (display name → sets), busiest first (Phase 6). */
     val weeklyVolume: List<Pair<String, Int>> = emptyList()
 )
@@ -98,6 +100,8 @@ class SettingsViewModel @Inject constructor(
         s.copy(availableEquipment = equip)
     }.combine(settingsRepo.accentColorHex) { s, v ->
         s.copy(accentColorHex = v)
+    }.combine(settingsRepo.accentEmphasis) { s, v ->
+        s.copy(accentEmphasis = v)
     }.combine(settingsRepo.timezone) { s, v ->
         s.copy(timezone = v)
     }.combine(settingsRepo.daysPerWeek) { s, v ->
@@ -112,8 +116,6 @@ class SettingsViewModel @Inject constructor(
         s.copy(rotationEveryN = v)
     }.combine(settingsRepo.cardioWeeklyTargetMin) { s, v ->
         s.copy(cardioWeeklyTargetMin = v)
-    }.combine(settingsRepo.cardioDaysPerWeek) { s, v ->
-        s.copy(cardioDaysPerWeek = v)
     }.combine(settingsRepo.userGoal) { s, v ->
         s.copy(userGoal = v.ifBlank { "build_muscle" })
     }.combine(settingsRepo.programExperience) { s, v ->
@@ -124,6 +126,8 @@ class SettingsViewModel @Inject constructor(
         s.copy(priorityMuscles = v)
     }.combine(settingsRepo.pinnedExercises) { s, v ->
         s.copy(pinnedExercises = v)
+    }.combine(settingsRepo.programEmphasis) { s, v ->
+        s.copy(programEmphasis = v)
     }.combine(programRepository.revision) { s, _ ->
         s.copy(weeklyVolume = computeWeeklyVolume())
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsUiState())
@@ -164,25 +168,12 @@ class SettingsViewModel @Inject constructor(
     fun setPrivacyMode(v: Boolean) = viewModelScope.launch { settingsRepo.setPrivacyMode(v) }
     fun setAvailableEquipment(codes: Set<String>) = viewModelScope.launch { settingsRepo.setAvailableEquipment(codes) }
     fun setDaysPerWeek(n: Int) = viewModelScope.launch { settingsRepo.setDaysPerWeek(n) }
-    fun setCardioWeeklyTargetMin(min: Int) = viewModelScope.launch {
-        settingsRepo.setCardioWeeklyTargetMin(min)
-        if (min > 0) {
-            settingsRepo.setCardioDaysPerWeek(0) // goal and days are mutually exclusive
-            regenerateProgram() // drop any dedicated cardio days now that we're on a minute goal
-        }
-    }
-    fun setCardioDaysPerWeek(n: Int) = viewModelScope.launch {
-        settingsRepo.setCardioDaysPerWeek(n)
-        if (n > 0) settingsRepo.setCardioWeeklyTargetMin(0)
-        regenerateProgram() // rebuild so cardio days appear/disappear in the week
-        _statusMessage.value =
-            if (n > 0) "Added $n cardio day(s). Open Gym to see them." else "Cardio days removed."
-    }
+    /** Weekly cardio-minutes goal for the cardio tab (no effect on the lifting plan). */
+    fun setCardioWeeklyTargetMin(min: Int) = viewModelScope.launch { settingsRepo.setCardioWeeklyTargetMin(min) }
     /** All generation inputs read from prefs — keeps the three generate paths in sync (Phase 2 / 3). */
     private suspend fun buildParams(days: Int) = com.forge.app.program.GenerationParams(
         daysPerWeek = days,
         emphasis = settingsRepo.programEmphasis.first(),
-        cardioDays = settingsRepo.cardioDaysPerWeek.first(),
         goal = settingsRepo.userGoal.first().ifBlank { "build_muscle" },
         experience = settingsRepo.programExperience.first(),
         problemAreas = settingsRepo.problemAreas.first()
@@ -195,12 +186,6 @@ class SettingsViewModel @Inject constructor(
         settingsRepo.availableEquipment.first()
             .mapNotNull { runCatching { com.forge.app.program.Equipment.valueOf(it) }.getOrNull() }.toSet()
 
-    private suspend fun regenerateProgram() {
-        programRepository.generate(
-            buildParams(settingsRepo.daysPerWeek.first()),
-            currentEquipment(), settingsRepo.likedExercises.first(), settingsRepo.dislikedExercises.first()
-        )
-    }
     fun toggleLike(libId: String) = viewModelScope.launch {
         settingsRepo.setExerciseLiked(libId, libId !in settingsRepo.likedExercises.first())
     }
@@ -226,6 +211,7 @@ class SettingsViewModel @Inject constructor(
     // Generate or Re-roll (avoids reshuffling the whole plan on every chip tap).
     fun setUserGoal(goal: String) = viewModelScope.launch { settingsRepo.setUserGoal(goal) }
     fun setExperience(level: String) = viewModelScope.launch { settingsRepo.setProgramExperience(level) }
+    fun setProgramEmphasis(v: String) = viewModelScope.launch { settingsRepo.setProgramEmphasis(v) }
     fun toggleProblemArea(code: String) = viewModelScope.launch {
         settingsRepo.toggleProblemArea(code, code !in settingsRepo.problemAreas.first())
     }
@@ -256,6 +242,7 @@ class SettingsViewModel @Inject constructor(
         _statusMessage.value = "Deload week generated — lighter volume. Open Gym to see it."
     }
     fun setAccentColorHex(hex: String) = viewModelScope.launch { settingsRepo.setAccentColorHex(hex) }
+    fun setAccentEmphasis(level: String) = viewModelScope.launch { settingsRepo.setAccentEmphasis(level) }
     fun setTimezone(id: String) = viewModelScope.launch { settingsRepo.setTimezone(id) }
     fun exportLastSessionPdf() = viewModelScope.launch {
         val file = pdfExport.exportLastSessionPdf()
@@ -270,7 +257,7 @@ class SettingsViewModel @Inject constructor(
         _exportPath.value = file.absolutePath
     }
     fun exportFullBackup() = viewModelScope.launch {
-        val file = backupRepo.exportFullBackup()
+        val file = backupRepo.exportFullDataJson()
         _exportPath.value = file.absolutePath
     }
     fun exportSessionsCsv() = viewModelScope.launch {

@@ -142,6 +142,8 @@ fun PlateCalculatorDialog(
                 }
                 if (targetLb != null && targetLb > barLb) {
                     val perSide = (targetLb - barLb) / 2
+                    val perSideText = if (perSide % 1.0 == 0.0) "${perSide.toInt()}"
+                                      else String.format(java.util.Locale.US, "%.1f", perSide)
                     val plates = calculatePlates(perSide)
                     Column(
                         modifier = Modifier
@@ -150,7 +152,7 @@ fun PlateCalculatorDialog(
                             .padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Text("EACH SIDE (${perSide} lb):",
+                        Text("EACH SIDE ($perSideText lb):",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.SemiBold)
                         if (plates.isEmpty()) {
@@ -169,9 +171,11 @@ fun PlateCalculatorDialog(
                             }
                             HorizontalDivider()
                             val actualTotal = barLb + plates.sumOf { (p, c) -> p * c * 2 }
+                            // Float accumulation can leave actualTotal a hair off an exact target;
+                            // compare with a small epsilon so a correct load isn't painted as an error.
                             Text("Total: ${actualTotal.toInt()} lb",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = if (actualTotal == targetLb) MaterialTheme.colorScheme.primary
+                                color = if (kotlin.math.abs(actualTotal - targetLb) < 0.01) MaterialTheme.colorScheme.primary
                                         else MaterialTheme.colorScheme.error)
                         }
                     }

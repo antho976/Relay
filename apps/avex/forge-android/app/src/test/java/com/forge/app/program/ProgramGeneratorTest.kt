@@ -205,13 +205,84 @@ class ProgramGeneratorTest {
     }
 
     @Test
-    fun cardioDaysAppendedAfterLiftDays() {
-        val days = ProgramGenerator.generate(
-            GenerationParams(3, cardioDays = 2), emptySet(), emptySet(), emptySet(), seed = 1L
-        )
-        assertEquals(5, days.size) // 3 lift + 2 cardio
-        val cardio = days.filter { it.key.startsWith("cardio") }
-        assertEquals(2, cardio.size)
-        assertTrue(cardio.all { it.exercises.isEmpty() && it.archetype == "cardio" })
+    fun bodyweightOnlyNeverProducesAnEmptyLiftDay() {
+        // Regression: the "Bodyweight only" preset used to leave whole days (e.g. Pull) empty because
+        // the library had no bodyweight back/legs/arms movements. Every muscle now has a bodyweight
+        // fallback, so no lift day is ever starved — for any day-count.
+        val bodyweight = setOf(Equipment.BODYWEIGHT_ONLY)
+        (1..7).forEach { d ->
+            val days = ProgramGenerator.generate(GenerationParams(d), bodyweight, emptySet(), emptySet(), seed = 3L)
+            days.filterNot { it.key.startsWith("cardio") }.forEach { day ->
+                assertTrue("${day.key} is empty on a bodyweight-only $d-day plan", day.exercises.isNotEmpty())
+            }
+        }
+    }
+
+    @Test
+    fun equippedUserNeverGetsBodyweightFallbacks() {
+        // fallbackOnly movements must stay out of an equipped user's picks (no bodyweight squat for a
+        // full-gym lifter) — they only rescue starved muscles.
+        val full = Equipment.entries.toSet()
+        val ids = ProgramGenerator.generate(GenerationParams(4), full, emptySet(), emptySet(), seed = 9L)
+            .flatMap { it.exercises }.map { it.libId }
+        assertTrue("a fully-equipped plan should never use a fallback movement",
+            ids.none { ExerciseLibrary.byId(it)?.fallbackOnly == true })
+    }
+
+    @Test
+    fun defaultFourDaySplitTrainsRearDelts() {
+        // Regression: the generated default 4-day Upper/Lower used to allocate ZERO rear-delt volume.
+        val rearDeltSets = ProgramGenerator.generate(GenerationParams(4), emptySet(), emptySet(), emptySet(), seed = 5L)
+            .flatMap { it.exercises }
+            .filter { ExerciseLibrary.byId(it.libId)?.muscle == MuscleGroup.REAR_DELTS }
+            .sumOf { it.sets }
+        assertTrue("default 4-day should train rear delts", rearDeltSets > 0)
+    }
+
+    @Test
+    fun lowDayCountFullBodyCoversArmsAndCore() {
+        // Regression: 1- and 2-day full-body plans used to give biceps/triceps/core zero weekly volume.
+        listOf(1, 2).forEach { d ->
+            val byMuscle = ProgramGenerator.generate(GenerationParams(d), emptySet(), emptySet(), emptySet(), seed = 2L)
+                .flatMap { it.exercises }
+                .groupBy { ExerciseLibrary.byId(it.libId)?.muscle }
+                .mapValues { (_, exs) -> exs.sumOf { it.sets } }
+            listOf(MuscleGroup.BICEPS, MuscleGroup.TRICEPS, MuscleGroup.CORE).forEach { m ->
+                assertTrue("$d-day full body should train $m", (byMuscle[m] ?: 0) > 0)
+            }
+        }
+    }
+
+    @Test
+    fun pinnedExerciseNotForcedWhenItStressesAFlaggedArea() {
+        // Phase 3 safety: a pin must not hard-place a movement that stresses a flagged problem area
+        // when a safer alternative exists. db-overhead-press stresses SHOULDERS; lateral raises don't.
+        fun appearances(flagShoulders: Boolean): Int = (0 until 20).count { s ->
+            ProgramGenerator.generate(
+                GenerationParams(
+                    3, pinned = setOf("db-overhead-press"),
+                    problemAreas = if (flagShoulders) setOf(ProblemArea.SHOULDERS) else emptySet()
+                ),
+                emptySet(), emptySet(), emptySet(), seed = s.toLong()
+            ).flatMap { it.exercises }.any { it.libId == "db-overhead-press" }
+        }
+        val withoutFlag = appearances(false)
+        val withFlag = appearances(flagShoulders = true)
+        assertTrue("pin should be honored when not contraindicated ($withoutFlag/20)", withoutFlag >= 18)
+        assertTrue("flagging shoulders should stop the pin being forced ($withFlag vs $withoutFlag)",
+            withFlag < withoutFlag)
+    }
+
+    @Test
+    fun beginnerDeloadLightensEvenLowVolumeMuscles() {
+        // Regression: deload floored at MIN_SETS, so a beginner's already-light accessory muscles
+        // (e.g. calves, one PUMP slot) didn't drop at all. They should now.
+        fun calfSets(deload: Boolean) = ProgramGenerator.generate(
+            GenerationParams(3, experience = "beginner", deload = deload),
+            emptySet(), emptySet(), emptySet(), seed = 8L
+        ).flatMap { it.exercises }
+            .filter { ExerciseLibrary.byId(it.libId)?.muscle == MuscleGroup.CALVES }
+            .sumOf { it.sets }
+        assertTrue("beginner deload should reduce light accessory volume", calfSets(true) < calfSets(false))
     }
 }

@@ -181,12 +181,12 @@ object Trophies {
             unlock = UnlockRule.WorkoutsCompletedAtLeast(10)
         ),
         Trophy(
-            id = "all_4_days",
-            name = "Full Week",
-            description = "Trained all 4 days at least once",
+            id = "workouts_25",
+            name = "Locked In",
+            description = "Completed 25 full workouts",
             category = TrophyCategory.CONSISTENCY,
-            icon = TrophyIcon.FOUR,
-            unlock = UnlockRule.DistinctDaysTrainedAtLeast(4)
+            icon = TrophyIcon.DOOR,
+            unlock = UnlockRule.WorkoutsCompletedAtLeast(25)
         ),
 
         // ─── Strength ─────────────────────────────────────────────────────────────
@@ -214,29 +214,34 @@ object Trophies {
             icon = TrophyIcon.CROWN,
             unlock = UnlockRule.TotalPRsAtLeast(25)
         ),
+        // Universal strength milestones — equipment-agnostic so every setup can earn them
+        // (replaced the old DB-weight "clubs" that needed a specific bench/dumbbell).
         Trophy(
-            id = "bench_25",
-            name = "25lb Bench Club",
-            description = "Bench pressed 25lb DBs for any reps",
+            id = "precision_10",
+            name = "Dialed In",
+            description = "Hit every target set at target reps in 10 exercises",
             category = TrophyCategory.STRENGTH,
-            icon = TrophyIcon.DUMBBELL,
-            unlock = UnlockRule.MaxBenchAtLeast(25.0)
+            icon = TrophyIcon.CHECK,
+            unlock = UnlockRule.FullTargetHitsAtLeast(10),
+            tier = TrophyTier.MEDIUM
         ),
         Trophy(
-            id = "bench_30",
-            name = "30lb Bench Club",
-            description = "Bench pressed 30lb DBs for any reps",
+            id = "reps_50",
+            name = "Stamina",
+            description = "Hit 50+ reps in a single exercise",
             category = TrophyCategory.STRENGTH,
-            icon = TrophyIcon.DUMBBELL,
-            unlock = UnlockRule.MaxBenchAtLeast(30.0)
+            icon = TrophyIcon.REPEAT,
+            unlock = UnlockRule.MaxSingleExerciseRepsAtLeast(50),
+            tier = TrophyTier.EASY
         ),
         Trophy(
-            id = "squat_30",
-            name = "30lb Goblet",
-            description = "Goblet squatted 30lb for any reps",
+            id = "pr_50",
+            name = "Record Machine",
+            description = "Set 50 personal records",
             category = TrophyCategory.STRENGTH,
-            icon = TrophyIcon.DUMBBELL,
-            unlock = UnlockRule.MaxSquatAtLeast(30.0)
+            icon = TrophyIcon.CROWN,
+            unlock = UnlockRule.TotalPRsAtLeast(50),
+            tier = TrophyTier.HARD
         ),
         Trophy(
             id = "volume_3000",

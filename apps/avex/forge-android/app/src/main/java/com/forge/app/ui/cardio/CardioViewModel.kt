@@ -9,7 +9,6 @@ import com.forge.app.domain.cardio.CardioEffort
 import com.forge.app.domain.cardio.CardioRestReason
 import com.forge.app.domain.cardio.CardioType
 import com.forge.app.ui.cardio.state.CardioUiState
-import com.forge.app.ui.cardio.state.PaceTrendPoint
 import java.time.DayOfWeek
 import java.time.Instant
 import java.time.LocalDate
@@ -53,29 +52,19 @@ class CardioViewModel @Inject constructor(
     private val dbFlow = combine(
         cardioRepo.observeRecent(limit = 20),
         cardioRepo.observeMinutesSince(weekStartMs),
-        cardioRepo.observeSince(weekStartMs),
-        cardioRepo.observeLifetimeDistanceKm(),
-        cardioRepo.observeRunEntries()
-    ) { recent, weekMin, weekEntries, lifetimeKm, runEntries ->
-        Triple(recent, weekMin to weekEntries, lifetimeKm to runEntries)
+        cardioRepo.observeSince(weekStartMs)
+    ) { recent, weekMin, weekEntries ->
+        Triple(recent, weekMin, weekEntries)
     }
 
-    val state: StateFlow<CardioUiState> = combine(dbFlow, transient) { (recent, weekPair, analyticsPair), tr ->
-        val (weekMin, weekEntries) = weekPair
-        val (lifetimeKm, runEntries) = analyticsPair
+    val state: StateFlow<CardioUiState> = combine(dbFlow, transient) { (recent, weekMin, weekEntries), tr ->
         CardioUiState(
             isLoading = false,
             weekMinutes = weekMin ?: 0,
-            weekEntryCount = weekEntries.count { it.type != CardioType.REST.code },
             weekDailyMinutes = buildDailyMinutes(weekEntries),
             entries = recent,
             sheetOpen = tr.sheetOpen,
-            pendingDeleteId = tr.pendingDeleteId,
-            selectedTypeFilter = tr.selectedTypeFilter,
-            lifetimeDistanceKm = lifetimeKm ?: 0.0,
-            paceTrend = runEntries.takeLast(20).map { entry ->
-                PaceTrendPoint(dateMs = entry.date, paceMinPerKm = entry.durationMin.toDouble() / (entry.distanceKm ?: 1.0))
-            }
+            pendingDeleteId = tr.pendingDeleteId
         )
     }.stateIn(
         scope = viewModelScope,
@@ -129,8 +118,7 @@ class CardioViewModel @Inject constructor(
 
     private data class TransientState(
         val sheetOpen: Boolean = false,
-        val pendingDeleteId: Long? = null,
-        val selectedTypeFilter: String? = null
+        val pendingDeleteId: Long? = null
     )
 
     companion object {

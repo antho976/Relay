@@ -448,8 +448,10 @@ class StatsRepository @Inject constructor(
         val zone = ZoneId.systemDefault()
         val now = YearMonth.now(zone)
         val thisMonthStart = now.atDay(1).atStartOfDay(zone).toInstant().toEpochMilli()
+        val nextMonthStart = now.plusMonths(1).atDay(1).atStartOfDay(zone).toInstant().toEpochMilli()
         val lastMonthStart = now.minusMonths(1).atDay(1).atStartOfDay(zone).toInstant().toEpochMilli()
-        val thisM = sessionDao.aggregateInRange(thisMonthStart, thisMonthStart + 32L * 24 * 3600 * 1000)
+        // Exact month boundary (was thisMonthStart + 32 days, which always bled 1-2 days into next month).
+        val thisM = sessionDao.aggregateInRange(thisMonthStart, nextMonthStart)
         val lastM = sessionDao.aggregateInRange(lastMonthStart, thisMonthStart)
         if (lastM.sessionCount == 0 && thisM.sessionCount == 0) return null
         return PeriodComparison(

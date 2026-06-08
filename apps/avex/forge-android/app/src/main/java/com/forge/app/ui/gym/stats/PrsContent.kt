@@ -22,6 +22,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import com.forge.app.ui.theme.emphasized
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
@@ -80,7 +81,7 @@ fun PrsContent(
                         Text(
                             "${state.monthlyCount} PR${if (state.monthlyCount != 1) "s" else ""}",
                             style = MaterialTheme.typography.headlineMedium,
-                            color = MaterialTheme.colorScheme.onSurface,
+                            color = emphasized(MaterialTheme.colorScheme.onSurface),
                             fontWeight = FontWeight.Black
                         )
                         if (state.monthlyTarget > 0) {

@@ -8,6 +8,7 @@ import com.forge.app.data.repo.CardioRepository
 import com.forge.app.data.repo.CustomizationRepository
 import com.forge.app.data.repo.StatsRepository
 import com.forge.app.data.repo.TrophyRepository
+import com.forge.app.data.repo.WorkoutRepository
 import com.forge.app.ui.overview.state.OnThisDayMemory
 import com.forge.app.ui.overview.state.OverviewRecentItem
 import com.forge.app.ui.overview.state.OverviewUiState
@@ -31,7 +32,8 @@ class OverviewViewModel @Inject constructor(
     private val cardioRepo: CardioRepository,
     private val settingsRepo: SettingsRepository,
     private val trophyRepo: TrophyRepository,
-    private val customizationRepo: CustomizationRepository
+    private val customizationRepo: CustomizationRepository,
+    private val workoutRepo: WorkoutRepository
 ) : ViewModel() {
 
     private val _onThisDayMemory = MutableStateFlow<OnThisDayMemory?>(null)
@@ -79,6 +81,8 @@ class OverviewViewModel @Inject constructor(
     }.combine(customizationRepo.observeAllDayNames()) { s, names ->
         val customName = names.firstOrNull { it.dayKey == s.nextUpDayKey }?.customName
         s.copy(customDayName = customName)
+    }.combine(workoutRepo.observeActiveSession()) { s, active ->
+        s.copy(activeSessionDayKey = active?.dayKey)
     }.flowOn(Dispatchers.Default).stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(stopTimeoutMillis = 5_000),

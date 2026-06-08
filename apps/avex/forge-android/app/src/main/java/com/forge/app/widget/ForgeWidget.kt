@@ -49,7 +49,9 @@ class ForgeWidget : GlanceAppWidget() {
         val nextDayKey = when {
             keys.isEmpty() -> null
             lastDayKey == null -> keys.first()
-            else -> keys[(keys.indexOf(lastDayKey) + 1) % keys.size]
+            // A stale last-day key (day-count changed since) isn't in the current split — start over
+            // at the first day rather than letting indexOf(-1) resolve to it.
+            else -> keys.indexOf(lastDayKey).let { idx -> if (idx < 0) keys.first() else keys[(idx + 1) % keys.size] }
         }
         val nextDayPlan = nextDayKey?.let { key -> Program.days.firstOrNull { it.key == key } }
 

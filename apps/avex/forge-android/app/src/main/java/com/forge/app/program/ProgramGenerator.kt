@@ -6,8 +6,6 @@ import kotlin.random.Random
 data class GenerationParams(
     val daysPerWeek: Int,
     val emphasis: String = "balanced",
-    /** Dedicated standalone cardio days appended to the week (Phase 6 days mode). */
-    val cardioDays: Int = 0,
     /** Onboarding goal (`USER_GOAL`) — reshapes rep ranges via [GoalProfiles]. */
     val goal: String = "build_muscle",
     /** Training experience — scales volume + filters movement difficulty via [GoalProfiles]. */
@@ -46,7 +44,6 @@ object ProgramGenerator {
 
     private const val LIKE_BOOST = 3.0
     private const val RECENT_PENALTY = 0.25
-    private const val CARDIO_ACCENT = "#3FA7B5"
     /** How hard a heavy slot favours compounds / a pump slot favours isolation. */
     private const val ROLE_MATCH = 4.0
     private const val ROLE_MISMATCH = 0.3
@@ -74,7 +71,11 @@ object ProgramGenerator {
         // Granular priority muscles + the coarse emphasis preset both feed extra volume.
         val focus = VolumeModel.emphasisFocus(params.emphasis) + params.priorityMuscles
         val volumeFactor = GoalProfiles.volumeFactor(params.experience) * (if (params.deload) DELOAD_FACTOR else 1.0)
-        val setsByDay = VolumeModel.allocate(template, focus, volumeFactor)
+        // A deload lowers the per-slot floor to 1 so already-light slots actually drop (otherwise a
+        // beginner's 2-set accessories would floor at 2 and the deload would be a no-op for them).
+        val setsByDay = VolumeModel.allocate(
+            template, focus, volumeFactor, minSets = if (params.deload) 1 else VolumeModel.MIN_SETS
+        )
         val maxDifficulty = GoalProfiles.maxDifficulty(params.experience)
         // Tracks picks across the WHOLE week so a muscle trained on two days gets different movements.
         val usedInWeek = HashSet<String>()
@@ -82,17 +83,26 @@ object ProgramGenerator {
             val usedInDay = HashSet<String>()
             val usedPatterns = HashSet<MovementPattern>()
             val exercises = day.targets.mapIndexedNotNull { si, slot ->
-                val forMuscle = ExerciseLibrary.forMuscle(slot.muscle).filter { def ->
+                val avail = ExerciseLibrary.forMuscle(slot.muscle).filter { def ->
                     def.id !in disliked && isAvailable(def, available)
                 }
+                // Last-resort bodyweight fills only enter the pool when nothing the user actually owns
+                // can train this muscle — so an equipped user never gets a bodyweight squat, but a
+                // bodyweight-only / minimal setup is never starved into an empty day.
+                val forMuscle = avail.filterNot { it.fallbackOnly }.ifEmpty { avail }
                 // Prefer movements not already used today; but if the (equipment-limited) pool is
                 // exhausted, allow a repeat rather than dropping the slot and silently undersizing the
                 // day (e.g. 3 BACK slots with only 2 available back lifts on a dumbbells+bench setup).
                 val base = forMuscle.filterNot { it.id in usedInDay }.ifEmpty { forMuscle }
                 // Experience caps movement difficulty, but never empty the slot — fall back if needed.
                 val candidates = base.filter { it.difficulty.ordinal <= maxDifficulty.ordinal }.ifEmpty { base }
-                // A pinned exercise for this muscle is forced into the slot when it's a valid candidate.
-                val pinned = candidates.firstOrNull { it.id in params.pinned }
+                // A pinned exercise for this muscle is forced into the slot when it's a valid candidate —
+                // unless it stresses a flagged problem area: don't hard-place a movement the user flagged
+                // as harmful, let the weighting (which down-weights it) decide instead.
+                val pinned = candidates.firstOrNull {
+                    it.id in params.pinned &&
+                        ExerciseLibrary.contraindicationsOf(it).none { area -> area in params.problemAreas }
+                }
                 val pick = pinned ?: weightedPick(candidates, rng) { def ->
                     val likeW = if (def.id in liked) LIKE_BOOST else 1.0
                     val recentW = if (def.id in recent) RECENT_PENALTY else 1.0
@@ -112,11 +122,7 @@ object ProgramGenerator {
             }
             GeneratedDay(day.key, day.name, day.word, day.accentHex, day.key, exercises)
         }
-        // Dedicated cardio days (no lift slots) appended after the lift days (Phase 6 days mode).
-        val cardioDays = (0 until params.cardioDays).map { i ->
-            GeneratedDay("cardio-$i", "Cardio", "CARDIO", CARDIO_ACCENT, "cardio", emptyList())
-        }
-        return liftDays + cardioDays
+        return liftDays
     }
 
     /** Available if no equipment is configured (empty = all) or every required item is on hand. */

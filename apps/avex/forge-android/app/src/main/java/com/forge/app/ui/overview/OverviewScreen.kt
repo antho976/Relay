@@ -29,6 +29,7 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import com.forge.app.ui.theme.emphasized
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -180,15 +181,37 @@ fun OverviewScreen(
                 }
             }
 
+            // ── Resume reminder: an unfinished workout is waiting ────────────
+            state.activeSessionDayKey?.let { activeKey ->
+                Spacer(Modifier.height(16.dp))
+                val activeName = Program.days.firstOrNull { it.key == activeKey }?.defaultName ?: "Workout"
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(accent.copy(alpha = 0.12f))
+                        .clickable { viewModel.onSessionStarting(); onStartSession(activeKey) }
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column {
+                        Text("IN PROGRESS", style = MaterialTheme.typography.labelSmall, color = accent, fontSize = 10.sp)
+                        Text("$activeName · tap to resume", style = MaterialTheme.typography.bodyMedium, color = onBg)
+                    }
+                    Text("→", style = MaterialTheme.typography.bodyLarge, color = accent)
+                }
+            }
+
             Spacer(Modifier.height(20.dp))
 
             // ── Today's workout ──────────────────────────────────────────────
-            Text("TODAY", style = MaterialTheme.typography.labelSmall, fontSize = 13.sp, color = muted)
+            Text("TODAY", style = MaterialTheme.typography.labelSmall, fontSize = 13.sp, color = emphasized(muted))
             Spacer(Modifier.height(2.dp))
             Text(
                 state.customDayName ?: nextDay?.defaultName ?: "Ready",
                 style = MaterialTheme.typography.displayLarge,
-                color = onBg,
+                color = emphasized(onBg),
                 modifier = if (nextDay != null) Modifier.clickable { showDayEdit = true } else Modifier
             )
             if (nextDay != null) {
@@ -202,24 +225,32 @@ fun OverviewScreen(
 
             Spacer(Modifier.height(20.dp))
 
-            // ── Start session + skip warmup ──────────────────────────────────
+            // ── Start / resume session + skip warmup ─────────────────────────
+            val resumeKey = state.activeSessionDayKey
+            val ctaDayKey = resumeKey ?: state.nextUpDayKey
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Button(
-                    onClick = { val d = state.nextUpDayKey; viewModel.onSessionStarting(); onStartSession(d) },
+                    onClick = { viewModel.onSessionStarting(); onStartSession(ctaDayKey) },
                     shape = RoundedCornerShape(50),
                     colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
                     contentPadding = PaddingValues(horizontal = 32.dp, vertical = 18.dp)
                 ) {
-                    Text("Start session →", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        if (resumeKey != null) "Resume session →" else "Start session →",
+                        style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold
+                    )
                 }
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(50))
-                        .border(0.5.dp, muted.copy(alpha = 0.4f), RoundedCornerShape(50))
-                        .clickable { val d = state.nextUpDayKey; viewModel.onSessionStarting(); onStartSessionSkipWarmup(d) }
-                        .padding(horizontal = 18.dp, vertical = 12.dp)
-                ) {
-                    Text("skip warmup", style = MaterialTheme.typography.bodySmall, color = muted)
+                // Skipping the warmup only applies to a fresh start, not a resume.
+                if (resumeKey == null) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .border(0.5.dp, muted.copy(alpha = 0.4f), RoundedCornerShape(50))
+                            .clickable { val d = state.nextUpDayKey; viewModel.onSessionStarting(); onStartSessionSkipWarmup(d) }
+                            .padding(horizontal = 18.dp, vertical = 12.dp)
+                    ) {
+                        Text("skip warmup", style = MaterialTheme.typography.bodySmall, color = muted)
+                    }
                 }
             }
 
@@ -230,7 +261,7 @@ fun OverviewScreen(
             // ── This week ────────────────────────────────────────────────────
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically) {
-                Text("THIS WEEK", style = MaterialTheme.typography.labelMedium, color = muted)
+                Text("THIS WEEK", style = MaterialTheme.typography.labelMedium, color = emphasized(muted))
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("${state.workoutsThisWeek} of 6 target", style = MaterialTheme.typography.labelSmall, color = muted)
                     Text("·", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.5f))
@@ -269,7 +300,7 @@ fun OverviewScreen(
             // ── Recent ───────────────────────────────────────────────────────
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically) {
-                Text("RECENT", style = MaterialTheme.typography.labelMedium, color = muted)
+                Text("RECENT", style = MaterialTheme.typography.labelMedium, color = emphasized(muted))
                 Text("view all →", style = MaterialTheme.typography.labelSmall,
                     color = muted, fontSize = 10.sp,
                     modifier = Modifier.clickable { showHistory = true }.padding(vertical = 2.dp))

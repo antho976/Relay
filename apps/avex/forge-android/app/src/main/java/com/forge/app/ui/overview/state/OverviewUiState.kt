@@ -52,8 +52,12 @@ data class OverviewUiState(
     /** Combined gym + cardio, sorted newest first, capped at 2. */
     val recentItems: List<OverviewRecentItem> = emptyList(),
     val trophiesUnlocked: Int = 0,
-    val cardioDistanceKm: Double = 0.0
+    val cardioDistanceKm: Double = 0.0,
+    /** Day key of an in-progress (unfinished) workout, if any — drives the resume banner + CTA. */
+    val activeSessionDayKey: String? = null
 ) {
+    val hasActiveSession: Boolean get() = activeSessionDayKey != null
+
     val sessionsSinceLastDeload: Int
         get() = (totalFinishedSessions - lastDeloadAtSessionCount).coerceAtLeast(0)
 

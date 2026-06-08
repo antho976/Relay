@@ -146,9 +146,12 @@ internal fun LastSessionStrip(
     // Count the volume up to its new total when a set lands, instead of snapping.
     val animatedVolume by animateIntAsState(targetValue = currentVolumeLb.toInt(), label = "volume")
 
-    // Tick once a second so the elapsed time advances live.
+    // Tick once a second so the elapsed time advances live — but only when a session has
+    // actually started. Without the guard the loop recomposes the strip every second even
+    // when elapsed is pinned at 0:00 (no session start).
     var nowMs by remember { mutableStateOf(System.currentTimeMillis()) }
     LaunchedEffect(sessionStartedAtMs) {
+        if (sessionStartedAtMs == null) return@LaunchedEffect
         while (true) {
             nowMs = System.currentTimeMillis()
             kotlinx.coroutines.delay(1000)

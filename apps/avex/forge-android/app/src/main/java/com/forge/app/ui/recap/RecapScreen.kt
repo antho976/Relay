@@ -20,6 +20,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import com.forge.app.ui.theme.emphasized
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -132,7 +133,7 @@ private fun RecapCard(title: String, emoji: String, content: @Composable () -> U
 private fun BigStat(value: String, label: String) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
         Text(value, style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.onSurface)
+            fontWeight = FontWeight.Black, color = emphasized(MaterialTheme.colorScheme.onSurface))
         Text(label, style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant)
     }

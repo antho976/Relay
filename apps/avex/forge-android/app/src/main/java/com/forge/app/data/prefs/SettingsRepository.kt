@@ -127,6 +127,12 @@ class SettingsRepository @Inject constructor(
     suspend fun setAccentColorHex(hex: String) =
         context.forgePreferences.edit { it[PreferenceKeys.ACCENT_COLOR_HEX] = hex }
 
+    /** Accent emphasis intensity for important text: "off" | "subtle" | "medium" | "strong". */
+    val accentEmphasis: Flow<String> = context.forgePreferences.data
+        .map { it[PreferenceKeys.ACCENT_EMPHASIS] ?: "off" }
+    suspend fun setAccentEmphasis(level: String) =
+        context.forgePreferences.edit { it[PreferenceKeys.ACCENT_EMPHASIS] = level }
+
     val fontChoice: Flow<String> = context.forgePreferences.data
         .map { it[PreferenceKeys.FONT_CHOICE] ?: "default" }
 
@@ -240,16 +246,11 @@ class SettingsRepository @Inject constructor(
     suspend fun setRotationCounter(n: Int) =
         context.forgePreferences.edit { it[PreferenceKeys.ROTATION_COUNTER] = n }
 
-    // ─── Cardio layer (program-unlock Phase 6) ────────────────────────────────
+    // ─── Cardio weekly-minutes goal (cardio tab — NOT a program day) ──────────
     val cardioWeeklyTargetMin: Flow<Int> = context.forgePreferences.data
         .map { it[PreferenceKeys.CARDIO_WEEKLY_TARGET_MIN] ?: 0 }
     suspend fun setCardioWeeklyTargetMin(min: Int) =
         context.forgePreferences.edit { it[PreferenceKeys.CARDIO_WEEKLY_TARGET_MIN] = min.coerceAtLeast(0) }
-
-    val cardioDaysPerWeek: Flow<Int> = context.forgePreferences.data
-        .map { it[PreferenceKeys.CARDIO_DAYS_PER_WEEK] ?: 0 }
-    suspend fun setCardioDaysPerWeek(n: Int) =
-        context.forgePreferences.edit { it[PreferenceKeys.CARDIO_DAYS_PER_WEEK] = n.coerceAtLeast(0) }
 
     // ─── Plan tomorrow (#147) ─────────────────────────────────────────────────
 

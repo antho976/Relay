@@ -1,7 +1,6 @@
 package com.forge.app.ui.nav
 
 object Routes {
-    const val WELCOME = "welcome"
     const val OVERVIEW = "overview"
     const val GYM_TRAIN = "gym/train"
     const val GYM_STATS = "gym/stats"
@@ -13,7 +12,6 @@ object Routes {
     const val SESSION_HISTORY = "gym/session-history"
     const val NOTES_SEARCH = "gym/notes-search"
     const val RECAP = "recap"
-    const val ONBOARDING = "onboarding"
     const val PROGRAM_EDITOR = "program-editor/{dayKey}"
 
     fun programEditor(dayKey: String) = "program-editor/$dayKey"

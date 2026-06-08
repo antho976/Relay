@@ -48,13 +48,11 @@ internal fun buildPrEntries(
     rows: List<com.forge.app.data.db.projections.RecentPrRow>,
     allSets: List<com.forge.app.data.db.projections.SetWithExerciseAndSession>
 ): List<PrEntry> {
-    // Group sets by sessionStartedAt + exerciseId so we can look up the PR set per row.
-    // (LoggedExercise row uniquely identifies session+exercise; we approximate via
-    // session date which is good enough for display purposes here.)
+    // Match each PR row to its exact owning LoggedExercise via loggedExerciseId, so an
+    // exercise logged twice in one session resolves to the right set (was matched on
+    // session date + exercise id, which picked whichever instance weighed more).
     return rows.map { row ->
-        val candidateSets = allSets.filter {
-            it.exerciseId == row.exerciseId && it.sessionStartedAt == row.sessionStartedAt
-        }
+        val candidateSets = allSets.filter { it.loggedExerciseId == row.loggedExerciseId }
         val prSet = candidateSets.maxByOrNull { it.weightLb ?: 0.0 }
         val name = row.swappedName
             ?: Program.exercise(row.exerciseId)?.name

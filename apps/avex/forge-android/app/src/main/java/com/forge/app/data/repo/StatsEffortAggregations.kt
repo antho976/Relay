@@ -165,9 +165,15 @@ internal fun buildInsights(
     val recentByExercise = allSets.filter { it.weightLb != null && it.sessionStartedAt >= threeMonthsAgo }
         .groupBy { it.exerciseId }
     val mostImproved = recentByExercise.entries.mapNotNull { (exId, sets) ->
-        val sorted = sets.sortedBy { it.sessionStartedAt }
-        val first = sorted.take(sorted.size / 2).maxOfOrNull { it.weightLb!! } ?: return@mapNotNull null
-        val last = sorted.drop(sorted.size / 2).maxOfOrNull { it.weightLb!! } ?: return@mapNotNull null
+        // Reduce to one max-weight value per session (oldest→newest), then split at the midpoint.
+        // Splitting raw set rows weighted the halves by how many sets each session had, not by time.
+        val perSession = sets.groupBy { it.sessionStartedAt }
+            .toSortedMap()
+            .map { (_, ss) -> ss.maxOf { it.weightLb!! } }
+        if (perSession.size < 2) return@mapNotNull null
+        val mid = perSession.size / 2
+        val first = perSession.take(mid).maxOrNull() ?: return@mapNotNull null
+        val last = perSession.drop(mid).maxOrNull() ?: return@mapNotNull null
         if (first <= 0) return@mapNotNull null
         val pct = ((last - first) / first * 100).toInt()
         val name = Program.exercise(exId)?.name ?: return@mapNotNull null

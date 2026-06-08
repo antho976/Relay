@@ -9,16 +9,18 @@ package com.forge.app.program
  * prototype uses a mix of ranges and per-side notations. PR detection (Phase 6+)
  * parses this when needed.
  */
-/** Equipment required to perform an exercise (#44). */
+/**
+ * Equipment required to perform an exercise (#44). Only implements the library actually has movements
+ * for — barbell/kettlebell/resistance-band were removed because no [ExerciseLibrary] entry used them,
+ * so they rendered as selectable chips that generated a broken (empty) day. Re-add alongside real
+ * exercises if that gear is ever supported.
+ */
 enum class Equipment(val display: String) {
     DUMBBELLS("Dumbbells"),
-    BARBELL("Barbell"),
     CABLE("Cable machine"),
     PULL_UP_BAR("Pull-up bar"),
     BENCH("Bench"),
     BODYWEIGHT_ONLY("Bodyweight only"),
-    RESISTANCE_BAND("Resistance bands"),
-    KETTLEBELL("Kettlebell"),
     MACHINE("Machine")
 }
 

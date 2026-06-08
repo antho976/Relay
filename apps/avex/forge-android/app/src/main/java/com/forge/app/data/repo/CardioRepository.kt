@@ -20,12 +20,6 @@ class CardioRepository @Inject constructor(
     /** Total cardio distance (km) since [sinceEpochMs], excluding REST entries. */
     fun observeDistanceKmSince(sinceEpochMs: Long): Flow<Double?> = cardioDao.observeDistanceKmSince(sinceEpochMs)
 
-    /** Cumulative km across all cardio entries (#79). */
-    fun observeLifetimeDistanceKm(): Flow<Double?> = cardioDao.observeLifetimeDistanceKm()
-
-    /** All run entries with non-zero distance — for pace trend (#78). */
-    fun observeRunEntries(): Flow<List<CardioEntry>> = cardioDao.observeRunEntries()
-
     suspend fun add(entry: CardioEntry): Long = cardioDao.insert(entry)
 
     suspend fun update(entry: CardioEntry) = cardioDao.update(entry)

@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import com.forge.app.ui.theme.emphasized
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.HorizontalDivider
@@ -59,7 +60,7 @@ internal fun HeroSection(state: TrophiesUiState, nextLocked: TrophyDisplay?, onB
     ) {
         Text("${state.totalCount} IN ALL · ${state.unlockedCount} EARNED", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
         Spacer(Modifier.height(8.dp))
-        Text("${numberWord(state.unlockedCount)} of ${numberWord(state.totalCount)}.", style = MaterialTheme.typography.displayLarge, color = onBg)
+        Text("${numberWord(state.unlockedCount)} of ${numberWord(state.totalCount)}.", style = MaterialTheme.typography.displayLarge, color = emphasized(onBg))
         Spacer(Modifier.height(14.dp))
         Box(modifier = Modifier.fillMaxWidth().height(3.dp).clip(RoundedCornerShape(50)).background(outline.copy(alpha = 0.2f))) {
             Box(modifier = Modifier.fillMaxWidth(animFrac).fillMaxHeight().clip(RoundedCornerShape(50)).background(accent))

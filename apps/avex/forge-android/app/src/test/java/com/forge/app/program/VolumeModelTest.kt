@@ -63,6 +63,22 @@ class VolumeModelTest {
     }
 
     @Test
+    fun emphasisStaysBoundedByTheWeeklyCap() {
+        // Regression: emphasis headroom used to be slots.size × bonus, letting a prioritised muscle on a
+        // high-frequency split blow well past its junk-volume cap (measured 26 back sets vs a 20 cap).
+        // It must now stay within a small bounded headroom above the cap.
+        val sixDay = SplitTemplates.forDays(6)
+        MuscleGroup.entries.forEach { muscle ->
+            val cap = VolumeModel.weeklyCap[muscle] ?: return@forEach
+            val focused = weeklySets(sixDay, muscle, setOf(muscle))
+            assertTrue(
+                "$muscle emphasis ($focused) should stay within cap ($cap) + small headroom",
+                focused <= cap + 2
+            )
+        }
+    }
+
+    @Test
     fun perSessionVolumeStaysReasonable() {
         // A "standard" day should be ~12–24 sets, not 30 (the clamp-everything-to-max failure mode).
         VolumeModel.allocate(SplitTemplates.forDays(3)).forEach { day ->

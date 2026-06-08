@@ -47,7 +47,6 @@ import com.forge.app.ui.recap.RecapScreen
 import com.forge.app.ui.settings.SettingsScreen
 import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.trophies.TrophiesScreen
-import com.forge.app.ui.welcome.WelcomeScreen
 
 @Composable
 fun ForgeNavHost() {
@@ -101,11 +100,6 @@ fun ForgeNavHost() {
                 slideOutHorizontally(ForgeMotion.exitTween(dur)) { slide(it) } + fadeOut(ForgeMotion.exitTween(dur))
         }
     ) {
-        composable(Routes.WELCOME) {
-            WelcomeScreen(onFinished = {
-                nav.navigate(Routes.OVERVIEW) { popUpTo(Routes.WELCOME) { inclusive = true } }
-            })
-        }
         composable(Routes.OVERVIEW) {
             OverviewScreen(
                 onStartSession = { dayKey -> if (dayKey.startsWith("cardio")) nav.navigate(Routes.CARDIO) else nav.navigate(Routes.gymDay(dayKey)) },

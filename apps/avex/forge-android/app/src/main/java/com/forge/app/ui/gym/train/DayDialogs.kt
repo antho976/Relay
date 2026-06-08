@@ -3,6 +3,7 @@ package com.forge.app.ui.gym.train
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -19,13 +20,42 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 
 @Composable
-internal fun DiscardDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
+internal fun LeaveSessionDialog(
+    onResumeLater: () -> Unit,
+    onDiscard: () -> Unit,
+    onKeepGoing: () -> Unit
+) {
     AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Discard workout?") },
-        text = { Text("You'll lose the sets you've logged this session.") },
-        confirmButton = { Button(onClick = onConfirm) { Text("Discard") } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Keep going") } }
+        onDismissRequest = onKeepGoing,
+        title = { Text("Leave this workout?") },
+        text = { Text("Your logged sets are saved. Resume this workout later from its day, or discard what you've logged.") },
+        confirmButton = { Button(onClick = onResumeLater) { Text("Resume later") } },
+        dismissButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(onClick = onDiscard) { Text("Discard") }
+                TextButton(onClick = onKeepGoing) { Text("Keep going") }
+            }
+        }
+    )
+}
+
+/**
+ * Shown when this day is opened while a DIFFERENT day's workout is still in progress (only one
+ * session is active at a time). Resume the other one, or discard it and start this day.
+ */
+@Composable
+internal fun CrossDaySessionDialog(
+    otherDayName: String,
+    thisDayName: String,
+    onDiscardAndStart: () -> Unit,
+    onGoBack: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onGoBack,
+        title = { Text("$otherDayName in progress") },
+        text = { Text("You have an unfinished $otherDayName workout. Go back to resume it, or discard it and start $thisDayName instead.") },
+        confirmButton = { Button(onClick = onGoBack) { Text("Resume $otherDayName") } },
+        dismissButton = { TextButton(onClick = onDiscardAndStart) { Text("Discard & start $thisDayName") } }
     )
 }
 

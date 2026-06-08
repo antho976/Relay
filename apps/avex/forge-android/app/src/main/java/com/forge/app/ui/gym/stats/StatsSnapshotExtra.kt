@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import com.forge.app.ui.theme.emphasized
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -71,7 +72,7 @@ private fun MomentumCell(
         Text(label, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 0.5.sp)
         Spacer(Modifier.height(2.dp))
         Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(valueText, style = MaterialTheme.typography.headlineMedium, color = onBg)
+            Text(valueText, style = MaterialTheme.typography.headlineMedium, color = emphasized(onBg))
             deltaText?.let {
                 Text(it, style = MaterialTheme.typography.labelSmall, color = deltaColor, fontSize = 10.sp, modifier = Modifier.padding(bottom = 4.dp))
             }
@@ -104,7 +105,7 @@ internal fun HighlightCards(streakWeeks: Int, overloadPct: Double?, onBg: Color,
                 Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     if (overloadPct != null) {
                         val s = (if (overloadPct >= 0) "+" else "") + "%.1f".format(overloadPct)
-                        Text(s, style = MaterialTheme.typography.headlineMedium, color = if (overloadPct >= 0) onBg else error)
+                        Text(s, style = MaterialTheme.typography.headlineMedium, color = if (overloadPct >= 0) emphasized(onBg) else error)
                         Text("%/MO", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, modifier = Modifier.padding(bottom = 4.dp))
                     } else {
                         Text("—", style = MaterialTheme.typography.headlineMedium, color = muted)

@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import com.forge.app.ui.theme.emphasized
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -52,7 +53,7 @@ internal fun StatsHeroSection(
         Text(
             "${numberWord(weekSessions)} sessions logged.",
             style = MaterialTheme.typography.displayLarge,
-            color = onBg
+            color = emphasized(onBg)
         )
         Spacer(Modifier.height(4.dp))
         val subtitleParts = buildList {

@@ -5,10 +5,14 @@ import androidx.room.Entity
 import androidx.room.PrimaryKey
 
 /**
- * Persisted program customizations — overlays applied on top of the static program (#90, #91, #92).
- * One row per exercise per day. The exercise can be:
- *   - from the static program (exerciseId matches a plan id like "ua1")
+ * Persisted program customizations — overlays applied on top of the active program (#90, #91, #92).
+ * One row per exercise per day, keyed by (day_key, exercise_id). The exercise can be:
+ *   - from the generated/static program (exerciseId is the ExerciseLibrary id, e.g. "db-bench-press")
  *   - added by the user (exerciseId is "custom_<uuid>", customName is non-null)
+ *
+ * These overlays are NOT tied to a program generation: a wholesale regenerate/reroll clears the
+ * static overrides (see ProgramRepository.reconcileCustomizations) so a stale override can't re-bind
+ * to a freshly generated exercise; user-added "custom_" rows survive while their day still exists.
  *
  * If [removed] is true, the exercise is hidden from the day.
  * [repRangeOverride] replaces the plan's reps string (e.g. "6-8" instead of "8-10").

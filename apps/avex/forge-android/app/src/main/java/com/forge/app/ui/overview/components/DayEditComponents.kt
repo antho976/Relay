@@ -35,6 +35,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.data.db.entities.ProgramCustomization
 import com.forge.app.program.ExercisePlan
+import com.forge.app.program.MuscleGroup
 
 @Composable
 internal fun NameSection(
@@ -165,5 +166,54 @@ internal fun AddWarmupRow(onAdd: (String) -> Unit, muted: Color, outline: Color,
         Text("+", style = MaterialTheme.typography.bodyLarge,
             color = if (text.isNotBlank()) onBg else muted.copy(alpha = 0.3f),
             modifier = Modifier.clickable { if (text.isNotBlank()) { onAdd(text); text = "" } })
+    }
+}
+
+/**
+ * Add a custom exercise to the current day. Name field + a tap-to-cycle muscle chip (kept compact
+ * instead of a full picker), then "+" appends it to the editable plan (#91). The added exercise
+ * then renders in the list above via the effective plan, with the usual sets/reps/remove controls.
+ */
+@Composable
+internal fun AddExerciseRow(onAdd: (String, MuscleGroup) -> Unit, muted: Color, outline: Color, onBg: Color) {
+    var text by remember { mutableStateOf("") }
+    var muscleIdx by remember { mutableStateOf(0) }
+    val muscles = remember { MuscleGroup.entries }
+    val muscle = muscles[muscleIdx]
+    val submit = { if (text.isNotBlank()) { onAdd(text.trim(), muscle); text = "" } }
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        BasicTextField(
+            value = text,
+            onValueChange = { text = it },
+            singleLine = true,
+            textStyle = MaterialTheme.typography.bodySmall.copy(color = onBg),
+            cursorBrush = SolidColor(onBg),
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+            keyboardActions = KeyboardActions(onDone = { submit() }),
+            modifier = Modifier.weight(1f)
+                .border(BorderStroke(0.5.dp, outline.copy(alpha = 0.3f)), RoundedCornerShape(4.dp))
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+            decorationBox = { inner ->
+                if (text.isEmpty()) Text("Add exercise…", style = MaterialTheme.typography.bodySmall, color = muted.copy(alpha = 0.35f))
+                inner()
+            }
+        )
+        Text(
+            muscle.displayName,
+            style = MaterialTheme.typography.labelSmall,
+            color = muted,
+            fontSize = 10.sp,
+            modifier = Modifier
+                .border(BorderStroke(0.5.dp, outline.copy(alpha = 0.3f)), RoundedCornerShape(4.dp))
+                .clickable { muscleIdx = (muscleIdx + 1) % muscles.size }
+                .padding(horizontal = 8.dp, vertical = 8.dp)
+        )
+        Text("+", style = MaterialTheme.typography.bodyLarge,
+            color = if (text.isNotBlank()) onBg else muted.copy(alpha = 0.3f),
+            modifier = Modifier.clickable { submit() })
     }
 }

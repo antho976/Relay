@@ -19,6 +19,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import com.forge.app.ui.theme.emphasized
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -65,7 +66,7 @@ internal fun CardioHero(
             Text(
                 if (weekMinutes > 0) "$weekMinutes" else "—",
                 style = MaterialTheme.typography.displayLarge,
-                color = onBg
+                color = emphasized(onBg)
             )
             Text(
                 " minutes.",

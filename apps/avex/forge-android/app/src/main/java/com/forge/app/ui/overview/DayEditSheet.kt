@@ -34,6 +34,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.data.db.entities.WarmupRoutineItem
 import com.forge.app.program.Program
+import com.forge.app.ui.overview.components.AddExerciseRow
 import com.forge.app.ui.overview.components.AddWarmupRow
 import com.forge.app.ui.overview.components.ExerciseEditRow
 import com.forge.app.ui.overview.components.NameSection
@@ -195,6 +196,13 @@ fun DayEditSheet(
                 HorizontalDivider(
                     modifier = Modifier.padding(horizontal = 24.dp),
                     color = outline.copy(alpha = 0.12f)
+                )
+            }
+
+            item("ex-add") {
+                AddExerciseRow(
+                    onAdd = { name, muscle -> vm.addCustomExercise(name, muscle) },
+                    muted = muted, outline = outline, onBg = onBg
                 )
             }
 

@@ -18,6 +18,8 @@ data class SetWithExerciseAndSession(
     @ColumnInfo(name = "reps") val reps: Int,
     @ColumnInfo(name = "exercise_id") val exerciseId: String,
     @ColumnInfo(name = "started_at") val sessionStartedAt: Long,
+    /** Stable id of the owning LoggedExercise — lets PR display match the exact set (not just session+exercise). */
+    @ColumnInfo(name = "logged_exercise_id") val loggedExerciseId: Long,
     @ColumnInfo(name = "rpe") val rpe: Double? = null
 )
 

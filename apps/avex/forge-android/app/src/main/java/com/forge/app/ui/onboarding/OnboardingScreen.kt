@@ -8,6 +8,8 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import com.forge.app.ui.theme.ForgeMotion
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -53,17 +55,16 @@ import javax.inject.Inject
 class OnboardingViewModel @Inject constructor(
     private val settingsRepo: SettingsRepository,
     private val bodyweightRepo: BodyweightRepository,
-    private val sampleDataSeeder: com.forge.app.data.repo.SampleDataSeeder,
     private val programRepository: com.forge.app.data.repo.ProgramRepository
 ) : ViewModel() {
 
     /** Pure, side-effect-free week for the preview step — the same [seed] is persisted on finish. */
     fun buildPreview(
         daysPerWeek: Int, equipment: Set<String>, goal: String, experience: String,
-        problemAreas: Set<String>, cardioDays: Int, seed: Long
+        problemAreas: Set<String>, seed: Long
     ): List<GeneratedDay> = ProgramGenerator.generate(
         GenerationParams(
-            daysPerWeek = daysPerWeek, goal = goal, experience = experience, cardioDays = cardioDays,
+            daysPerWeek = daysPerWeek, goal = goal, experience = experience,
             problemAreas = problemAreas.mapNotNull { ProblemArea.fromCode(it) }.toSet()
         ),
         equipment.mapNotNull { runCatching { Equipment.valueOf(it) }.getOrNull() }.toSet(),
@@ -75,19 +76,19 @@ class OnboardingViewModel @Inject constructor(
         useKg: Boolean,
         goal: String,
         bodyweightLb: Double?,
-        withSampleData: Boolean = false,
         daysPerWeek: Int = 4,
         equipment: Set<String> = emptySet(),
         cadence: String = "never",
         everyN: Int = 4,
         experience: String = "intermediate",
         problemAreas: Set<String> = emptySet(),
-        cardioDays: Int = 0,
         seed: Long = System.nanoTime(),
-        generate: Boolean = true
+        generate: Boolean = true,
+        accentEmphasis: String = "off"
     ) {
         viewModelScope.launch {
             bodyweightLb?.let { bodyweightRepo.log(it) }
+            settingsRepo.setAccentEmphasis(accentEmphasis)
             if (generate) {
                 settingsRepo.setDaysPerWeek(daysPerWeek)
                 settingsRepo.setAvailableEquipment(equipment)
@@ -95,19 +96,17 @@ class OnboardingViewModel @Inject constructor(
                 if (cadence == "every_n") settingsRepo.setRotationEveryN(everyN)
                 settingsRepo.setProgramExperience(experience)
                 settingsRepo.setUserGoal(goal)
-                settingsRepo.setCardioDaysPerWeek(cardioDays)
                 problemAreas.forEach { settingsRepo.toggleProblemArea(it, true) }
                 // Persist exactly the week shown in the preview (same seed + inputs).
                 programRepository.generate(
                     GenerationParams(
-                        daysPerWeek = daysPerWeek, goal = goal, experience = experience, cardioDays = cardioDays,
+                        daysPerWeek = daysPerWeek, goal = goal, experience = experience,
                         problemAreas = problemAreas.mapNotNull { ProblemArea.fromCode(it) }.toSet()
                     ),
                     equipment.mapNotNull { runCatching { Equipment.valueOf(it) }.getOrNull() }.toSet(),
                     emptySet(), emptySet(), seed = seed
                 )
             }
-            if (withSampleData) sampleDataSeeder.seed()
             // Set ONBOARDING_DONE last — it flips the UI from onboarding to home, so the freshly
             // generated program is already live when the home screen first composes.
             settingsRepo.completeOnboarding(name, useKg, goal, bodyweightLb)
@@ -115,33 +114,33 @@ class OnboardingViewModel @Inject constructor(
     }
 }
 
-/** Total onboarding steps (0-indexed); the last is the live preview. */
-private const val STEP_COUNT = 11
-private const val LAST_STEP = STEP_COUNT - 1
+/** Onboarding pages (0-indexed); the last is the live preview. Related steps are grouped per page. */
+private const val PAGE_COUNT = 6
+private const val LAST_PAGE = PAGE_COUNT - 1
 
 @Composable
 fun OnboardingScreen(
     onFinished: () -> Unit,
     viewModel: OnboardingViewModel = hiltViewModel()
 ) {
-    var step by remember { mutableIntStateOf(0) }
+    var page by remember { mutableIntStateOf(0) }
     var name by remember { mutableStateOf("") }
     var useKg by remember { mutableStateOf(false) }
-    var goal by remember { mutableStateOf("get_stronger") }
-    var experience by remember { mutableStateOf("intermediate") }
+    // Program-shaping choices start UNSELECTED — the user actively picks them; nothing is pre-highlighted.
+    var goal by remember { mutableStateOf("") }
+    var experience by remember { mutableStateOf("") }
     var bodyweightInput by remember { mutableStateOf("") }
-    var loadSampleData by remember { mutableStateOf(false) }
-    var daysPerWeek by remember { mutableIntStateOf(4) }
+    var daysPerWeek by remember { mutableIntStateOf(0) }
     var equipment by remember { mutableStateOf(emptySet<String>()) }
     var problemAreas by remember { mutableStateOf(emptySet<String>()) }
-    var cadence by remember { mutableStateOf("never") }
+    var cadence by remember { mutableStateOf("") }
     var everyN by remember { mutableIntStateOf(4) }
-    var cardioDays by remember { mutableIntStateOf(0) }
+    var accentEmphasis by remember { mutableStateOf("off") }
     var previewSeed by remember { mutableLongStateOf(Random.nextLong()) }
 
-    // Pure preview — recomputed whenever an input or the re-roll seed changes.
-    val previewDays = remember(previewSeed, daysPerWeek, equipment, goal, experience, problemAreas, cardioDays) {
-        viewModel.buildPreview(daysPerWeek, equipment, goal, experience, problemAreas, cardioDays, previewSeed)
+    // Pure preview — recomputed whenever an input or the re-roll seed changes (shown on the last page).
+    val previewDays = remember(previewSeed, daysPerWeek, equipment, goal, experience, problemAreas) {
+        viewModel.buildPreview(daysPerWeek, equipment, goal, experience, problemAreas, previewSeed)
     }
 
     Box(
@@ -151,15 +150,15 @@ fun OnboardingScreen(
             .padding(horizontal = 24.dp, vertical = 48.dp)
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
-            // Step indicator
+            // Page indicator
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                repeat(STEP_COUNT) { i ->
+                repeat(PAGE_COUNT) { i ->
                     Box(
                         Modifier
                             .size(8.dp)
                             .clip(CircleShape)
                             .background(
-                                if (i == step) MaterialTheme.colorScheme.primary
+                                if (i == page) MaterialTheme.colorScheme.primary
                                 else MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
                             )
                     )
@@ -167,72 +166,97 @@ fun OnboardingScreen(
             }
             Spacer(Modifier.height(24.dp))
 
-            // Step content (flexible; the preview step scrolls internally)
+            // Page content — each page groups related steps in a scrolling column.
             AnimatedContent(
-                targetState = step,
+                targetState = page,
                 modifier = Modifier.weight(1f),
                 transitionSpec = {
                     val dir = if (targetState > initialState) 1 else -1
                     (slideInHorizontally(ForgeMotion.enterTween()) { it * dir } + fadeIn(ForgeMotion.enterTween())) togetherWith
                         (slideOutHorizontally(ForgeMotion.exitTween()) { -it * dir } + fadeOut(ForgeMotion.exitTween()))
                 },
-                label = "onboarding_step"
-            ) { s ->
-                when (s) {
-                    0 -> StepName(name = name, onNameChange = { name = it })
-                    1 -> StepUnits(useKg = useKg, onToggle = { useKg = it })
-                    2 -> StepGoal(selected = goal, onSelect = { goal = it })
-                    3 -> StepExperience(selected = experience, onSelect = { experience = it })
-                    4 -> StepBodyweight(
-                        input = bodyweightInput, useKg = useKg,
-                        onInputChange = { bodyweightInput = it },
-                        sampleData = loadSampleData, onSampleDataToggle = { loadSampleData = it }
-                    )
-                    5 -> StepDays(days = daysPerWeek, onChange = { daysPerWeek = it })
-                    6 -> StepEquipment(
-                        selected = equipment,
-                        onToggle = { code -> equipment = if (code in equipment) equipment - code else equipment + code },
-                        onSetAll = { equipment = it }
-                    )
-                    7 -> StepProblemAreas(
-                        selected = problemAreas,
-                        onToggle = { code -> problemAreas = if (code in problemAreas) problemAreas - code else problemAreas + code }
-                    )
-                    8 -> StepCadence(cadence = cadence, everyN = everyN, onSet = { c, n -> cadence = c; everyN = n })
-                    9 -> StepCardio(days = cardioDays, onSet = { cardioDays = it })
-                    10 -> StepPreview(days = previewDays, onRegenerate = { previewSeed = Random.nextLong() })
+                label = "onboarding_page"
+            ) { p ->
+                // The preview page scrolls itself — render it directly. Wrapping it in another
+                // verticalScroll would nest two same-axis scrollables and crash Compose (the inner one
+                // gets an infinite-height measure). Every other page needs the scroll wrapper.
+                if (p == LAST_PAGE) {
+                    StepPreview(days = previewDays, onRegenerate = { previewSeed = Random.nextLong() })
+                } else {
+                    Column(
+                        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(28.dp)
+                    ) {
+                        when (p) {
+                            0 -> {
+                                StepName(name = name, onNameChange = { name = it })
+                                StepBodyweight(input = bodyweightInput, useKg = useKg, onInputChange = { bodyweightInput = it })
+                                StepUnits(useKg = useKg, onToggle = { useKg = it })
+                            }
+                            1 -> {
+                                StepGoal(selected = goal, onSelect = { goal = it })
+                                StepExperience(selected = experience, onSelect = { experience = it })
+                            }
+                            2 -> {
+                                StepDays(days = daysPerWeek, onChange = { daysPerWeek = it })
+                                StepEquipment(
+                                    selected = equipment,
+                                    onToggle = { code -> equipment = if (code in equipment) equipment - code else equipment + code },
+                                    onSetAll = { equipment = it }
+                                )
+                            }
+                            3 -> {
+                                StepProblemAreas(
+                                    selected = problemAreas,
+                                    onToggle = { code -> problemAreas = if (code in problemAreas) problemAreas - code else problemAreas + code }
+                                )
+                                StepCadence(cadence = cadence, everyN = everyN, onSet = { c, n -> cadence = c; everyN = n })
+                            }
+                            4 -> StepEmphasis(selected = accentEmphasis, onSelect = { accentEmphasis = it })
+                        }
+                    }
                 }
             }
 
-            // Navigation
+            // Gate "Next" on the pages whose choices the generator needs: a typed bodyweight must be a
+            // positive number; goal + experience must be picked; days + equipment must be chosen (an
+            // empty equipment set otherwise means "full gym" to the generator).
+            val canAdvance = when (page) {
+                0 -> bodyweightInput.isBlank() || (bodyweightInput.toDoubleOrNull()?.let { it > 0 } == true)
+                1 -> goal.isNotEmpty() && experience.isNotEmpty()
+                2 -> daysPerWeek in 1..7 && equipment.isNotEmpty()
+                else -> true
+            }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                if (step > 0) {
-                    TextButton(onClick = { step-- }) { Text("Back") }
+                if (page > 0) {
+                    TextButton(onClick = { page-- }) { Text("Back") }
                 } else {
                     TextButton(onClick = {
-                        viewModel.complete("", false, goal, null, generate = false)
+                        viewModel.complete("", false, "", null, generate = false)
                         onFinished()
-                    }) { Text("Skip") }
+                    }) { Text("Skip onboarding") }
                 }
                 Button(
+                    enabled = canAdvance,
                     onClick = {
-                        if (step < LAST_STEP) {
-                            step++
+                        if (page < LAST_PAGE) {
+                            page++
                         } else {
                             val bwLb = bodyweightInput.toDoubleOrNull()?.let { raw -> if (useKg) raw * 2.20462 else raw }
                             viewModel.complete(
-                                name, useKg, goal, bwLb, loadSampleData,
-                                daysPerWeek, equipment, cadence, everyN, experience, problemAreas, cardioDays, previewSeed
+                                name.trim(), useKg, goal, bwLb,
+                                daysPerWeek, equipment, cadence.ifEmpty { "never" }, everyN, experience, problemAreas,
+                                previewSeed, accentEmphasis = accentEmphasis
                             )
                             onFinished()
                         }
                     }
                 ) {
-                    Text(if (step < LAST_STEP) "Next" else "Let's go")
+                    Text(if (page < LAST_PAGE) "Next" else "Let's go")
                 }
             }
         }

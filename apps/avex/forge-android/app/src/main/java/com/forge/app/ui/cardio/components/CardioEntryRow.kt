@@ -141,7 +141,9 @@ private fun buildDetail(entry: CardioEntry, type: CardioType): String {
     if (type.isRest) return CardioRestReason.fromCode(entry.restReason)?.displayName ?: "Rest day"
     val parts = buildList {
         if (entry.durationMin > 0) add("${entry.durationMin} min")
-        entry.distanceKm?.let { add("${"%.1f".format(it)} km") }
+        // Pin to Locale.US so the '.' separator matches what the log form parses (it only
+        // accepts '.'); a comma-decimal device locale would otherwise render "5,0 km".
+        entry.distanceKm?.let { add("${String.format(java.util.Locale.US, "%.1f", it)} km") }
     }
     return parts.joinToString(" · ")
 }

@@ -11,6 +11,12 @@ import com.forge.app.program.ExercisePlan
 /** How the current session compares to the previous session on the same exercise. */
 enum class VsLastStatus { BEATING, MATCHING, UNDER }
 
+/**
+ * Set when this day is opened while a *different* day's workout is still in progress. The app
+ * keeps only one active session, so we prompt rather than silently resume the wrong day's sets.
+ */
+data class CrossDaySessionInfo(val dayKey: String, val dayName: String)
+
 /** Held in state until the user confirms or cancels the suspicious weight (#117). */
 data class WeightJumpWarning(
     val exerciseId: String,
@@ -41,6 +47,8 @@ data class DayUiState(
     val swapPickerForExerciseId: String? = null,
     val summary: SessionSummary? = null,
     val showDiscardConfirm: Boolean = false,
+    /** Non-null when opening this day found another day's workout still in progress (resume-later guard). */
+    val crossDaySession: CrossDaySessionInfo? = null,
     val isFinished: Boolean = false,
     /** Set ID that can be undone within the ~5s window after logging (#46). */
     val undoableSetId: Long? = null,

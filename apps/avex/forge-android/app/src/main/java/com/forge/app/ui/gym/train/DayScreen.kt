@@ -136,9 +136,19 @@ fun DayScreen(
     }
 
     if (state.showDiscardConfirm) {
-        DiscardDialog(
-            onConfirm = { viewModel.onEvent(DayUiEvent.ConfirmDiscard) },
-            onDismiss = { viewModel.onEvent(DayUiEvent.DismissDiscardConfirm) }
+        LeaveSessionDialog(
+            onResumeLater = { viewModel.onEvent(DayUiEvent.LeaveAndResume) },
+            onDiscard = { viewModel.onEvent(DayUiEvent.ConfirmDiscard) },
+            onKeepGoing = { viewModel.onEvent(DayUiEvent.DismissDiscardConfirm) }
+        )
+    }
+
+    state.crossDaySession?.let { cross ->
+        CrossDaySessionDialog(
+            otherDayName = cross.dayName,
+            thisDayName = state.displayName,
+            onDiscardAndStart = { viewModel.onEvent(DayUiEvent.CrossDayDiscardAndStart) },
+            onGoBack = { viewModel.onEvent(DayUiEvent.CrossDayGoBack) }
         )
     }
 

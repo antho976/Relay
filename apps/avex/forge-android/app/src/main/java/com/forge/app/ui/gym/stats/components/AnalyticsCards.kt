@@ -15,6 +15,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import com.forge.app.ui.theme.emphasized
+import com.forge.app.ui.theme.emphasizedWeight
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -99,7 +101,8 @@ fun PrDayOfWeekCard(counts: List<Int>, modifier: Modifier = Modifier) {
                             )
                     )
                     Text(
-                        DOW_LABELS[i],
+                        // getOrNull guards against a caller passing a list longer than 7.
+                        DOW_LABELS.getOrNull(i) ?: "",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -175,8 +178,8 @@ internal fun StatCard(
         Text(
             title,
             style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontWeight = FontWeight.SemiBold
+            color = emphasized(MaterialTheme.colorScheme.onSurfaceVariant),
+            fontWeight = emphasizedWeight(FontWeight.SemiBold)
         )
         content()
     }

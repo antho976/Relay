@@ -31,7 +31,13 @@ data class ExerciseDef(
     /** Why you'd pick this — the rationale shown in the swap picker. */
     val why: String? = null,
     /** Situational guidance ("WHEN") shown in the swap picker. */
-    val whenToUse: String? = null
+    val whenToUse: String? = null,
+    /**
+     * Last-resort bodyweight fills the generator uses ONLY when no equipped movement covers the
+     * muscle (e.g. a bodyweight row on a bodyweight-only setup). Kept out of equipped users' picks so
+     * a full-gym lifter never gets handed a bodyweight squat, but guarantees no split is ever starved.
+     */
+    val fallbackOnly: Boolean = false
 )
 
 object ExerciseLibrary {
@@ -379,7 +385,83 @@ object ExerciseLibrary {
             listOf(ISO, BW), Difficulty.BEGINNER, 3, "12-15", "Lower slowly, don't arch",
             muscleTarget = "Lower abs",
             why = "Lie on the floor, raise straight legs to vertical, lower slowly without touching the ground.",
-            whenToUse = "No pull-up bar available.")
+            whenToUse = "No pull-up bar available."),
+
+        // ── Bodyweight fallbacks ─────────────────────────────────────────────────
+        // Every muscle that otherwise needs equipment gets a bodyweight option here, so a
+        // bodyweight-only (or minimal-equipment) setup can never produce an empty/starved day.
+        // fallbackOnly = true keeps these out of an equipped user's picks — they only enter the
+        // pool when nothing the user actually owns can fill the muscle.
+        ExerciseDef("bw-inverted-row", "Inverted Row", MuscleGroup.BACK,
+            listOf(Equipment.BODYWEIGHT_ONLY), ExerciseUnit.BODYWEIGHT,
+            listOf(COMP, BW), Difficulty.INTERMEDIATE, 4, "AMRAP", "Under a sturdy table, body straight",
+            muscleTarget = "Whole back + biceps",
+            why = "Lie under a sturdy table (or low bar), grip the edge, pull your chest up keeping the body straight. The best equipment-free horizontal pull.",
+            whenToUse = "Bodyweight only — your main back builder when you have no bar or machine.",
+            fallbackOnly = true),
+        ExerciseDef("bw-superman", "Superman", MuscleGroup.BACK,
+            listOf(Equipment.BODYWEIGHT_ONLY), ExerciseUnit.BODYWEIGHT,
+            listOf(ISO, BW), Difficulty.BEGINNER, 3, "12-15", "Lift chest + legs off the floor",
+            muscleTarget = "Lower/mid back + erectors",
+            why = "Lie face-down, lift your chest and legs off the floor and squeeze. Hits the back chain with zero equipment.",
+            whenToUse = "Bodyweight back work alongside inverted rows.",
+            fallbackOnly = true),
+        ExerciseDef("bw-pike-push-up", "Pike Push-Up", MuscleGroup.SHOULDERS,
+            listOf(Equipment.BODYWEIGHT_ONLY), ExerciseUnit.BODYWEIGHT,
+            listOf(COMP, BW), Difficulty.INTERMEDIATE, 3, "AMRAP", "Hips high, press head toward floor",
+            muscleTarget = "Front + side delts",
+            why = "Hips up in an inverted-V, press your head toward the floor — a bodyweight overhead press for the shoulders.",
+            whenToUse = "Bodyweight only — your pressing shoulder builder.",
+            fallbackOnly = true),
+        ExerciseDef("bw-prone-reverse-fly", "Prone Reverse Fly", MuscleGroup.REAR_DELTS,
+            listOf(Equipment.BODYWEIGHT_ONLY), ExerciseUnit.BODYWEIGHT,
+            listOf(ISO, BW), Difficulty.BEGINNER, 3, "15-20", "Face-down, raise arms like wings",
+            muscleTarget = "Rear delts + upper back",
+            why = "Lie face-down, raise straight arms out to the sides like wings and squeeze. Bodyweight rear-delt and posture work.",
+            whenToUse = "Bodyweight only, or as posture work anywhere.",
+            fallbackOnly = true),
+        ExerciseDef("bw-doorframe-curl", "Doorframe Curl", MuscleGroup.BICEPS,
+            listOf(Equipment.BODYWEIGHT_ONLY), ExerciseUnit.BODYWEIGHT,
+            listOf(ISO, BW), Difficulty.INTERMEDIATE, 3, "10-15", "Lean back, curl your bodyweight up",
+            muscleTarget = "Biceps",
+            why = "Grip a sturdy doorframe edge (or towel around a post), lean back and curl your bodyweight up. The only real equipment-free biceps move.",
+            whenToUse = "Bodyweight only — when you have no dumbbells or bar.",
+            fallbackOnly = true),
+        ExerciseDef("bw-squat", "Bodyweight Squat", MuscleGroup.QUADS,
+            listOf(Equipment.BODYWEIGHT_ONLY), ExerciseUnit.BODYWEIGHT,
+            listOf(COMP, BW), Difficulty.BEGINNER, 4, "15-20", "Full depth, controlled",
+            muscleTarget = "Quads + glutes",
+            why = "The foundation lower-body movement. Sit back to full depth and drive up. Add a pause or slow tempo to make it harder.",
+            whenToUse = "Bodyweight only — your main squat pattern.",
+            fallbackOnly = true),
+        ExerciseDef("bw-reverse-lunge", "Bodyweight Reverse Lunge", MuscleGroup.QUADS,
+            listOf(Equipment.BODYWEIGHT_ONLY), ExerciseUnit.BODYWEIGHT,
+            listOf(COMP, BW), Difficulty.BEGINNER, 3, "12/leg", "Step back, knee toward floor",
+            muscleTarget = "Quads + glutes, one leg",
+            why = "Step backward into a lunge — knee-friendly unilateral leg work with no equipment.",
+            whenToUse = "Bodyweight only, or to add single-leg work.",
+            fallbackOnly = true),
+        ExerciseDef("bw-good-morning", "Bodyweight Good Morning", MuscleGroup.HAMSTRINGS,
+            listOf(Equipment.BODYWEIGHT_ONLY), ExerciseUnit.BODYWEIGHT,
+            listOf(COMP, BW), Difficulty.BEGINNER, 3, "15-20", "Hands behind head, hinge at the hips",
+            muscleTarget = "Hamstrings + glutes + lower back",
+            why = "Hands behind your head, soft knees, hinge forward at the hips and feel the hamstrings stretch, then stand tall. A bodyweight posterior-chain hinge.",
+            whenToUse = "Bodyweight only — your hamstring hinge.",
+            fallbackOnly = true),
+        ExerciseDef("bw-sliding-leg-curl", "Sliding Leg Curl", MuscleGroup.HAMSTRINGS,
+            listOf(Equipment.BODYWEIGHT_ONLY), ExerciseUnit.BODYWEIGHT,
+            listOf(ISO, BW), Difficulty.INTERMEDIATE, 3, "10-15", "Heels on a towel, slide out and curl back",
+            muscleTarget = "Hamstrings",
+            why = "Bridge up with your heels on a towel/socks on a smooth floor, slide your feet out, then curl them back in. Bodyweight hamstring isolation.",
+            whenToUse = "Bodyweight only, or to finish hamstrings.",
+            fallbackOnly = true),
+        ExerciseDef("bw-single-leg-glute-bridge", "Single-Leg Glute Bridge", MuscleGroup.GLUTES,
+            listOf(Equipment.BODYWEIGHT_ONLY), ExerciseUnit.BODYWEIGHT,
+            listOf(ISO, BW), Difficulty.BEGINNER, 3, "12-15/leg", "One foot down, drive hips up",
+            muscleTarget = "Glutes + hamstrings, one side",
+            why = "Lie on your back, one foot planted, drive your hips up on a single leg. Loads the glute hard with just bodyweight.",
+            whenToUse = "Bodyweight only — your glute builder.",
+            fallbackOnly = true)
     )
 
     private val byId: Map<String, ExerciseDef> = all.associateBy { it.id }
@@ -428,7 +510,14 @@ object ExerciseLibrary {
         "hanging-knee-raise" to MovementPattern.CORE,
         "plank" to MovementPattern.CORE,
         "cable-crunch" to MovementPattern.CORE,
-        "lying-leg-raise" to MovementPattern.CORE
+        "lying-leg-raise" to MovementPattern.CORE,
+        // Bodyweight fallbacks
+        "bw-inverted-row" to MovementPattern.HORIZONTAL_PULL,
+        "bw-pike-push-up" to MovementPattern.VERTICAL_PUSH,
+        "bw-squat" to MovementPattern.SQUAT,
+        "bw-reverse-lunge" to MovementPattern.LUNGE,
+        "bw-good-morning" to MovementPattern.HINGE,
+        "bw-single-leg-glute-bridge" to MovementPattern.HINGE
     )
 
     fun patternOf(def: ExerciseDef): MovementPattern =
@@ -458,7 +547,12 @@ object ExerciseLibrary {
         // Wrist-loading (bodyweight on hands)
         "push-up" to setOf(ProblemArea.WRISTS),
         "diamond-push-up" to setOf(ProblemArea.WRISTS),
-        "plank" to setOf(ProblemArea.WRISTS)
+        "plank" to setOf(ProblemArea.WRISTS),
+        // Bodyweight fallbacks
+        "bw-pike-push-up" to setOf(ProblemArea.SHOULDERS, ProblemArea.WRISTS),
+        "bw-squat" to setOf(ProblemArea.KNEES),
+        "bw-reverse-lunge" to setOf(ProblemArea.KNEES),
+        "bw-good-morning" to setOf(ProblemArea.LOWER_BACK)
     )
 
     fun contraindicationsOf(def: ExerciseDef): Set<ProblemArea> =
