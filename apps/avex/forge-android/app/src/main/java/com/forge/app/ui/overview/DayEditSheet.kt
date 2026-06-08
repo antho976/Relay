@@ -51,6 +51,7 @@ fun DayEditSheet(
     val selectedDayKey by vm.selectedDayKey.collectAsStateWithLifecycle()
     val customName by vm.customName.collectAsStateWithLifecycle()
     val exerciseCustomizations by vm.exerciseCustomizations.collectAsStateWithLifecycle()
+    val editablePlan by vm.editablePlan.collectAsStateWithLifecycle()
     val warmupItems by vm.warmupItems.collectAsStateWithLifecycle()
 
     val onBg = MaterialTheme.colorScheme.onBackground
@@ -178,22 +179,23 @@ fun DayEditSheet(
                 }
             }
 
-            selectedDay?.exercises?.let { basePlans ->
-                items(basePlans, key = { it.id }) { plan ->
-                    val c = customByExId[plan.id]
-                    ExerciseEditRow(
-                        plan = plan,
-                        customization = c,
-                        onSetsChange = { vm.setSetsOverride(plan.id, it) },
-                        onRepsChange = { vm.setRepsOverride(plan.id, it) },
-                        onToggleRemoved = { vm.toggleExerciseRemoved(plan.id, c?.removed ?: false) },
-                        onBg = onBg, muted = muted, outline = outline
-                    )
-                    HorizontalDivider(
-                        modifier = Modifier.padding(horizontal = 24.dp),
-                        color = outline.copy(alpha = 0.12f)
-                    )
-                }
+            // Render the effective editable plan: static + custom-added exercises, in order,
+            // including removed ones (shown with a restore toggle).
+            items(editablePlan, key = { it.plan.id }) { editable ->
+                val plan = editable.plan
+                val c = customByExId[plan.id]
+                ExerciseEditRow(
+                    plan = plan,
+                    customization = c,
+                    onSetsChange = { vm.setSetsOverride(plan.id, it) },
+                    onRepsChange = { vm.setRepsOverride(plan.id, it) },
+                    onToggleRemoved = { vm.toggleExerciseRemoved(plan.id, editable.removed) },
+                    onBg = onBg, muted = muted, outline = outline
+                )
+                HorizontalDivider(
+                    modifier = Modifier.padding(horizontal = 24.dp),
+                    color = outline.copy(alpha = 0.12f)
+                )
             }
 
             // ── Warmup ────────────────────────────────────────────────────────

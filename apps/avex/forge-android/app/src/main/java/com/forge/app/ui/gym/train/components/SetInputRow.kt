@@ -43,6 +43,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.data.db.entities.LoggedSet
 import com.forge.app.domain.units.formatWeight
+import com.forge.app.domain.units.parseToLb
+import com.forge.app.domain.units.weightInputValue
 import com.forge.app.ui.theme.LocalForgeSettings
 
 // Match SetRow column widths so the input row aligns with logged-set rows.
@@ -54,12 +56,10 @@ private val DELTA_COL_W = 72.dp
 // entry (e.g. a pasted "45x10") so it splits into both fields at once.
 private val WEIGHT_REPS_REGEX = Regex("""^([0-9]*\.?[0-9]+)\s*[xX]\s*([0-9]+)$""")
 
-/** Which value the in-app keypad is currently editing. */
-private enum class Field { WEIGHT, REPS }
-
 /**
  * Input row for the next set. When [nextSetNumber] is provided the layout
  * matches the set-table columns and the LOG SET button is rendered full-width below.
+ * Weight/reps use the system keyboard (tap a field); type "BW" in weight for bodyweight.
  */
 @Composable
 fun SetInputRow(
@@ -79,10 +79,6 @@ fun SetInputRow(
 ) {
     var weight by rememberSaveable(prefillWeight) { mutableStateOf(prefillWeight.orEmpty()) }
     var reps by rememberSaveable { mutableStateOf("") }
-    // Weight is usually prefilled from last session, so start the keypad aimed at reps.
-    var activeField by remember(prefillWeight) {
-        mutableStateOf(if (prefillWeight.isNullOrBlank()) Field.WEIGHT else Field.REPS)
-    }
     val useKg = LocalForgeSettings.current.useKg
     val repsFocus = remember { FocusRequester() }
     var showUnitDialog by remember { mutableStateOf(false) }
@@ -117,40 +113,20 @@ fun SetInputRow(
         else weight = new
     }
 
-    // Single log path used by the keypad's ✓ key.
+    // Single log path used by the LOG SET button and the reps field's "done" action.
     fun submitSet() {
         val r = reps.toIntOrNull() ?: return
         onSubmit(weight.trim(), r)
         reps = ""
-        // Weight persists for straight sets; aim the keypad at reps for the next one.
-        activeField = Field.REPS
-    }
-
-    // ── In-app keypad edits, applied to whichever field is active ──────────────
-    fun keypadDigit(c: Char) {
-        when (activeField) {
-            Field.WEIGHT -> weight = if (weight == "BW") c.toString() else weight + c
-            Field.REPS -> reps += c
-        }
-    }
-    fun keypadDecimal() {
-        if (activeField == Field.WEIGHT && weight != "BW" && !weight.contains('.')) {
-            weight = if (weight.isEmpty()) "0." else "$weight."
-        }
-    }
-    fun keypadBackspace() {
-        when (activeField) {
-            Field.WEIGHT -> weight = if (weight == "BW") "" else weight.dropLast(1)
-            Field.REPS -> reps = reps.dropLast(1)
-        }
     }
 
     val canSubmit = remember(weight, reps) {
         weight.isNotBlank() && reps.toIntOrNull()?.let { it > 0 } == true
     }
 
-    val prRepsHint = remember(weight, priorSets) {
-        val weightLb = weight.trim().toDoubleOrNull() ?: return@remember null
+    val prRepsHint = remember(weight, priorSets, useKg) {
+        // The field holds a value in the display unit; convert to lb for the PR comparison.
+        val weightLb = parseToLb(weight, useKg) ?: return@remember null
         repsNeededForPr(priorSets, weightLb)
     }
 
@@ -192,10 +168,12 @@ fun SetInputRow(
                             modifier = Modifier.clickable { showUnitDialog = true }
                         )
                         Spacer(Modifier.height(2.dp))
-                        KeypadValue(
+                        UnderlineNumberField(
                             value = weight,
-                            active = activeField == Field.WEIGHT,
-                            onClick = { activeField = Field.WEIGHT },
+                            onValueChange = ::onWeightChange,
+                            placeholder = "0",
+                            keyboardType = KeyboardType.Text,
+                            imeAction = ImeAction.Next,
                             supportingText = prRepsHint?.let { "$it for PR" }
                         )
                     }
@@ -205,10 +183,14 @@ fun SetInputRow(
                         Column {
                             Text("REPS", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
                             Spacer(Modifier.height(2.dp))
-                            KeypadValue(
+                            UnderlineNumberField(
                                 value = reps,
-                                active = activeField == Field.REPS,
-                                onClick = { activeField = Field.REPS }
+                                onValueChange = { new -> if (new.all { it.isDigit() }) reps = new },
+                                placeholder = "0",
+                                keyboardType = KeyboardType.Number,
+                                imeAction = ImeAction.Done,
+                                focusRequester = repsFocus,
+                                keyboardActions = KeyboardActions(onDone = { submitSet() })
                             )
                         }
                     }
@@ -229,7 +211,9 @@ fun SetInputRow(
                                 fontSize = 9.sp,
                                 textAlign = TextAlign.End,
                                 modifier = Modifier.clickable {
-                                    weight = prior.weightLb?.let { formatWeight(it, useKg) } ?: prior.weightText
+                                    // Autofill the bare display-unit number (no " kg"/" lb" suffix),
+                                    // so it parses on submit instead of logging a weightless set.
+                                    weight = prior.weightLb?.let { weightInputValue(it, useKg) } ?: prior.weightText
                                     reps = prior.reps.toString()
                                 }
                             )
@@ -273,17 +257,22 @@ fun SetInputRow(
                     Text(advanceLabel, style = MaterialTheme.typography.labelLarge)
                 }
             } else {
-                // In-app keypad replaces the system keyboard. Its ✓ key logs the set.
-                NumericKeypad(
-                    onDigit = { keypadDigit(it) },
-                    onDecimal = { keypadDecimal() },
-                    onBackspace = { keypadBackspace() },
-                    onNext = { activeField = Field.REPS },
-                    onBodyweight = { weight = "BW"; activeField = Field.REPS },
-                    onSubmit = { submitSet() },
-                    submitEnabled = canSubmit,
-                    submitLabel = "LOG SET $nextSetNumber  ✓"
-                )
+                // Tap the weight/reps fields to use the system keyboard; this logs the set.
+                Button(
+                    onClick = { submitSet() },
+                    enabled = canSubmit,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = ctaShape,
+                    contentPadding = PaddingValues(vertical = 16.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color.White,
+                        contentColor = Color.Black,
+                        disabledContainerColor = Color.White.copy(alpha = 0.3f),
+                        disabledContentColor = Color.Black.copy(alpha = 0.5f)
+                    )
+                ) {
+                    Text("LOG SET $nextSetNumber", style = MaterialTheme.typography.labelLarge)
+                }
             }
         }
     } else {
@@ -379,45 +368,6 @@ private fun UnderlineNumberField(
         HorizontalDivider(modifier = Modifier.padding(top = 2.dp), thickness = 1.dp, color = outline.copy(alpha = 0.5f))
         if (supportingText != null) {
             Text(supportingText, style = MaterialTheme.typography.labelSmall, color = accent, modifier = Modifier.padding(top = 2.dp))
-        }
-    }
-}
-
-/**
- * Tappable value display for the keypad-driven input. Shows the current value (or a
- * dimmed "0"), an accent underline when it's the active field, and the optional PR hint.
- * No system IME — edits arrive via [NumericKeypad].
- */
-@Composable
-private fun KeypadValue(
-    value: String,
-    active: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-    supportingText: String? = null
-) {
-    val onBg = MaterialTheme.colorScheme.onBackground
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val accent = MaterialTheme.colorScheme.primary
-    val outline = MaterialTheme.colorScheme.outline
-    Column(modifier = modifier.clickable { onClick() }) {
-        Text(
-            value.ifEmpty { "0" },
-            style = MaterialTheme.typography.headlineMedium,
-            color = if (value.isEmpty()) muted.copy(alpha = 0.4f) else onBg
-        )
-        HorizontalDivider(
-            modifier = Modifier.padding(top = 2.dp),
-            thickness = if (active) 2.dp else 1.dp,
-            color = if (active) accent else outline.copy(alpha = 0.5f)
-        )
-        if (supportingText != null) {
-            Text(
-                supportingText,
-                style = MaterialTheme.typography.labelSmall,
-                color = accent,
-                modifier = Modifier.padding(top = 2.dp)
-            )
         }
     }
 }

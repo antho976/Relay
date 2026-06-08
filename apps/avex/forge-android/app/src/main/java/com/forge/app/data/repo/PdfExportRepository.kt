@@ -33,7 +33,8 @@ class PdfExportRepository @Inject constructor(
     private val timeFmt = DateTimeFormatter.ofPattern("h:mm a")
 
     suspend fun exportLastSessionPdf(): File? {
-        val lastSession = sessionDao.allFinished().lastOrNull() ?: return null
+        // Most recently finished by finish time — don't rely on the allFinished() list order.
+        val lastSession = sessionDao.allFinished().maxByOrNull { it.finishedAt ?: it.startedAt } ?: return null
         return exportSessionPdf(lastSession.id)
     }
 
@@ -74,6 +75,7 @@ class PdfExportRepository @Inject constructor(
         y += 20f
 
         // Exercise sections
+        var drawnExercises = 0
         for (ex in exercises) {
             if (y > 780f) break // safety: don't overflow page
             val sets = loggedSetDao.forLoggedExercise(ex.id)
@@ -85,6 +87,16 @@ class PdfExportRepository @Inject constructor(
                 y += 13f
             }
             y += 6f
+            drawnExercises++
+        }
+        // A single A4 page can't hold every exercise of a long session — say so rather than
+        // silently dropping the overflow.
+        val omitted = exercises.size - drawnExercises
+        if (omitted > 0) {
+            canvas.drawText(
+                "… $omitted more exercise${if (omitted == 1) "" else "s"} not shown (one-page limit)",
+                margin, minOf(y, 806f), mutedPaint
+            )
         }
 
         // Footer

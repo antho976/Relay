@@ -33,15 +33,18 @@ class SampleDataSeeder @Inject constructor(
         val today = LocalDate.now(zone)
         val rng = Random(42)
 
-        // 8 weeks × 4 days = 32 sessions, spaced Mon-Thu each week
-        val dayRotation = listOf(Program.UPPER_A, Program.LOWER_A, Program.UPPER_B, Program.LOWER_B)
+        // 8 weeks of training, Mon/Tue/Thu/Fri each week, rotating through the days the
+        // *active* program actually has. Must not assume the 4-day split: a 1/2/3/5/6/7-day
+        // program has different day keys and would crash the old `first { it.key == ... }` lookup.
+        val programDays = Program.days
+        if (programDays.isEmpty()) return
         var sessionIndex = 0
 
         for (weekOffset in 7 downTo 0) {
             val weekStart = today.minusWeeks(weekOffset.toLong())
             // train Mon, Tue, Thu, Fri each week
             val trainingDays = listOf(0L, 1L, 3L, 4L)
-            for ((dayOffset, dayKey) in trainingDays.zip(dayRotation)) {
+            for (dayOffset in trainingDays) {
                 val trainingDate = weekStart.plusDays(dayOffset)
                 if (trainingDate.isAfter(today)) continue
 
@@ -49,7 +52,8 @@ class SampleDataSeeder @Inject constructor(
                 val durationMs = (55 + rng.nextInt(20)) * 60_000L
                 val finishedMs = startMs + durationMs
 
-                val day = Program.days.first { it.key == dayKey }
+                val day = programDays[sessionIndex % programDays.size]
+                val dayKey = day.key
                 var totalVol = 0.0
                 var prCount = 0
 

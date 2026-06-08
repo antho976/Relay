@@ -58,6 +58,8 @@ object ProgramGenerator {
     private const val CONTRA_PENALTY = 0.08
     /** Volume multiplier for a deload week (Phase 4 periodization). */
     private const val DELOAD_FACTOR = 0.55
+    /** Down-weight a movement already used *earlier this week* so multi-day splits vary across days. */
+    private const val WEEK_REPEAT_PENALTY = 0.15
 
     fun generate(
         params: GenerationParams,
@@ -74,6 +76,8 @@ object ProgramGenerator {
         val volumeFactor = GoalProfiles.volumeFactor(params.experience) * (if (params.deload) DELOAD_FACTOR else 1.0)
         val setsByDay = VolumeModel.allocate(template, focus, volumeFactor)
         val maxDifficulty = GoalProfiles.maxDifficulty(params.experience)
+        // Tracks picks across the WHOLE week so a muscle trained on two days gets different movements.
+        val usedInWeek = HashSet<String>()
         val liftDays = template.mapIndexed { di, day ->
             val usedInDay = HashSet<String>()
             val usedPatterns = HashSet<MovementPattern>()
@@ -88,14 +92,16 @@ object ProgramGenerator {
                 val pick = pinned ?: weightedPick(candidates, rng) { def ->
                     val likeW = if (def.id in liked) LIKE_BOOST else 1.0
                     val recentW = if (def.id in recent) RECENT_PENALTY else 1.0
+                    val weekW = if (def.id in usedInWeek) WEEK_REPEAT_PENALTY else 1.0
                     val pattern = ExerciseLibrary.patternOf(def)
                     val patternW = if (pattern != MovementPattern.ISOLATION && pattern in usedPatterns)
                         PATTERN_REPEAT_PENALTY else 1.0
                     val contraW = if (ExerciseLibrary.contraindicationsOf(def).any { it in params.problemAreas })
                         CONTRA_PENALTY else 1.0
-                    likeW * recentW * roleFactor(def, slot.scheme) * patternW * contraW
+                    likeW * recentW * weekW * roleFactor(def, slot.scheme) * patternW * contraW
                 } ?: return@mapIndexedNotNull null
                 usedInDay += pick.id
+                usedInWeek += pick.id
                 ExerciseLibrary.patternOf(pick).takeIf { it != MovementPattern.ISOLATION }
                     ?.let { usedPatterns += it }
                 GeneratedExercise(pick.id, setsByDay[di][si], repsFor(pick, slot.scheme, params.goal))

@@ -43,8 +43,27 @@ val MIGRATION_13_14 = object : Migration(13, 14) {
     }
 }
 
+/**
+ * v14 → v15: enforce one bodyweight entry per day. De-duplicates any pre-existing same-day rows
+ * (keeping the most recently inserted), then adds the unique index so REPLACE actually upserts by
+ * date instead of appending a new row.
+ */
+val MIGRATION_14_15 = object : Migration(14, 15) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "DELETE FROM `bodyweight_entry` WHERE `id` NOT IN " +
+                "(SELECT MAX(`id`) FROM `bodyweight_entry` GROUP BY `date_key`)"
+        )
+        db.execSQL(
+            "CREATE UNIQUE INDEX IF NOT EXISTS `index_bodyweight_entry_date_key` " +
+                "ON `bodyweight_entry` (`date_key`)"
+        )
+    }
+}
+
 /** All migrations, in order. Register every new one here. */
 val ALL_MIGRATIONS: Array<Migration> = arrayOf(
     MIGRATION_12_13,
-    MIGRATION_13_14
+    MIGRATION_13_14,
+    MIGRATION_14_15
 )

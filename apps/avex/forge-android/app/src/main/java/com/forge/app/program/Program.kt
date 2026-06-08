@@ -22,6 +22,20 @@ enum class Equipment(val display: String) {
     MACHINE("Machine")
 }
 
+/**
+ * One-tap equipment presets (label → Equipment code set) shared by onboarding + Settings. The
+ * **MWM-989 home gym** = dumbbells + bench + the machine's cable (high/low pulley) + machine
+ * stations (leg developer, press arm) — which unlocks nearly the whole library.
+ */
+val equipmentPresets: List<Pair<String, Set<String>>> = listOf(
+    "MWM-989 home gym" to setOf(
+        Equipment.DUMBBELLS.name, Equipment.BENCH.name, Equipment.CABLE.name, Equipment.MACHINE.name
+    ),
+    "Dumbbells + bench" to setOf(Equipment.DUMBBELLS.name, Equipment.BENCH.name),
+    "Full gym" to Equipment.entries.map { it.name }.toSet(),
+    "Bodyweight only" to setOf(Equipment.BODYWEIGHT_ONLY.name)
+)
+
 /** Equipment/movement tag for an exercise (#37). */
 enum class ExerciseTag(val display: String) {
     COMPOUND("Compound"),

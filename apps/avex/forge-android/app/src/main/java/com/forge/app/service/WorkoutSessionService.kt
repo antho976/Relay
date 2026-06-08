@@ -77,8 +77,12 @@ class WorkoutSessionService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         // Show placeholder notification immediately — required before any async work
         val placeholder = buildSessionNotification("Workout", "Starting…")
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            startForeground(NOTIF_SESSION, placeholder, ServiceInfo.FOREGROUND_SERVICE_TYPE_HEALTH)
+        // The typed startForeground is only required on API 34+, where the "specialUse"
+        // FGS type is defined. "specialUse" needs no runtime permission, unlike "health"
+        // (which threw SecurityException on Android 14+ because we hold no health permission).
+        // On older APIs the 2-arg form is correct.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(NOTIF_SESSION, placeholder, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         } else {
             startForeground(NOTIF_SESSION, placeholder)
         }

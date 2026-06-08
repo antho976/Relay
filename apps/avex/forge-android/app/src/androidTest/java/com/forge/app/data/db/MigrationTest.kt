@@ -47,4 +47,28 @@ class MigrationTest {
         )
         cursor.use { assertEquals("program tables should exist after 13→14", 2, it.count) }
     }
+
+    @Test
+    fun migrate14To15_dedupesAndAddsBodyweightDateIndex() {
+        // Seed two bodyweight rows for the SAME day at v14 (no unique constraint yet).
+        helper.createDatabase(dbName, 14).apply {
+            execSQL(
+                "INSERT INTO bodyweight_entry (id, date_key, weight_lb, recorded_at) " +
+                    "VALUES (1, '2026-01-01', 180.0, 1000), (2, '2026-01-01', 181.0, 2000)"
+            )
+            close()
+        }
+        val db = helper.runMigrationsAndValidate(dbName, 15, true, MIGRATION_14_15)
+
+        // The unique index exists, and only the most recent same-day row survived.
+        db.query(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name='index_bodyweight_entry_date_key'"
+        ).use { assertEquals("unique date_key index should exist after 14→15", 1, it.count) }
+
+        db.query("SELECT id FROM bodyweight_entry WHERE date_key = '2026-01-01'").use {
+            assertEquals("only one row should remain for the day", 1, it.count)
+            it.moveToFirst()
+            assertEquals("the most recently inserted row should survive", 2L, it.getLong(0))
+        }
+    }
 }

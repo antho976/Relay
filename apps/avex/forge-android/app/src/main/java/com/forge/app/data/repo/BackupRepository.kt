@@ -18,6 +18,7 @@ import java.time.format.DateTimeFormatter
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 
 /**
@@ -41,7 +42,9 @@ class BackupRepository @Inject constructor(
     /** Export this week's data as JSON for AI analysis (#5). Returns the file path. */
     suspend fun exportWeeklyJson(): File {
         val weekStartMs = System.currentTimeMillis() - 7L * 24 * 3600 * 1000
-        val sessions = sessionDao.finishedInRange(weekStartMs, System.currentTimeMillis())
+        // Window on finish time so a session that started before the boundary but finished this
+        // week is still included in the export.
+        val sessions = sessionDao.finishedByFinishTimeInRange(weekStartMs, System.currentTimeMillis())
         val cardioEntries = cardioDao.since(weekStartMs)
 
         val root = JSONObject().apply {
@@ -111,6 +114,17 @@ class BackupRepository @Inject constructor(
             put("backupVersion", 1)
             put("exportedAt", dateFmt.format(Instant.now().atZone(zone)))
             put("appVersion", "tier6")
+
+            // User-facing preferences (the JSON export documents 'settings'). The whole-DB
+            // VACUUM backup remains the authoritative restore source.
+            put("settings", JSONObject().apply {
+                put("useKg", settingsRepo.useKg.first())
+                put("userGoal", settingsRepo.userGoal.first())
+                put("userName", settingsRepo.userName.first())
+                put("daysPerWeek", settingsRepo.daysPerWeek.first())
+                put("cardioDaysPerWeek", settingsRepo.cardioDaysPerWeek.first())
+                put("firstDayMonday", settingsRepo.firstDayMonday.first())
+            })
 
             val sessArr = JSONArray()
             allSessions.forEach { s ->
@@ -216,7 +230,12 @@ class BackupRepository @Inject constructor(
         val temp = File(context.cacheDir, "forge_snapshot_${System.currentTimeMillis()}.db")
         if (temp.exists()) temp.delete()
         val safePath = temp.absolutePath.replace("'", "''")
-        db.openHelper.writableDatabase.execSQL("VACUUM INTO '$safePath'")
+        try {
+            db.openHelper.writableDatabase.execSQL("VACUUM INTO '$safePath'")
+        } catch (t: Throwable) {
+            temp.delete() // don't leave a half-written snapshot in cache if VACUUM fails
+            throw t
+        }
         return temp
     }
 
@@ -248,13 +267,18 @@ class BackupRepository @Inject constructor(
         } ?: return@withContext false
 
         if (!isForgeDatabase(temp)) { temp.delete(); return@withContext false }
+        // Reject a backup newer than this build's schema: Room has no downgrade path and would
+        // crash on open — after the live DB was already replaced (unrecoverable). Older versions
+        // migrate forward normally, so only a strictly-newer user_version is rejected.
+        val currentVersion = db.openHelper.readableDatabase.version
+        if (databaseUserVersion(temp) > currentVersion) { temp.delete(); return@withContext false }
 
-        db.close()
-        val live = context.getDatabasePath("forge.db")
-        temp.copyTo(live, overwrite = true)
-        // The restored file is authoritative; drop stale WAL/-shm so they can't override it.
-        File(live.path + "-wal").delete()
-        File(live.path + "-shm").delete()
+        // Don't close Room and swap the file here — that races with any flow still reading the DB
+        // until the process is killed. Stage the file instead; ForgeApp.applyPendingRestore swaps
+        // it in at next boot, before Room opens. The caller restarts the app on success.
+        val pending = File(context.filesDir, "pending_restore.db")
+        if (pending.exists()) pending.delete()
+        temp.copyTo(pending, overwrite = true)
         temp.delete()
         return@withContext true
     }
@@ -269,6 +293,13 @@ class BackupRepository @Inject constructor(
             ).use { c -> c.moveToFirst() && c.getInt(0) > 0 }
         }
     }.getOrDefault(false)
+
+    /** The SQLite user_version (Room schema version) of a candidate DB file; MAX if unreadable (→ rejected). */
+    private fun databaseUserVersion(file: File): Int = runCatching {
+        android.database.sqlite.SQLiteDatabase.openDatabase(
+            file.path, null, android.database.sqlite.SQLiteDatabase.OPEN_READONLY
+        ).use { it.version }
+    }.getOrDefault(Int.MAX_VALUE)
 
     /**
      * Zip the crash logs (ForgeApp writes them to filesDir/crashes) into [uri].

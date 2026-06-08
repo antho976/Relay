@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.forge.app.data.db.entities.WarmupRoutineItem
 import com.forge.app.data.repo.CustomizationRepository
+import com.forge.app.data.repo.EditableExercise
 import com.forge.app.data.repo.ProgramCustomizationRepository
 import com.forge.app.data.repo.WarmupRepository
 import com.forge.app.program.MuscleGroup
@@ -14,6 +15,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -40,6 +42,14 @@ class DayEditViewModel @Inject constructor(
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     val exerciseCustomizations = _selectedDayKey
         .flatMapLatest { key -> programCustomRepo.observeForDay(key) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** The full editable plan for the selected day (static + custom + removed), re-derived on any change. */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    val editablePlan: StateFlow<List<EditableExercise>> = _selectedDayKey
+        .flatMapLatest { key ->
+            programCustomRepo.observeForDay(key).map { programCustomRepo.editablePlanForDay(key) }
+        }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)

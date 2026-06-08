@@ -205,7 +205,7 @@ fun OverviewScreen(
             // ── Start session + skip warmup ──────────────────────────────────
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Button(
-                    onClick = { onStartSession(state.nextUpDayKey) },
+                    onClick = { val d = state.nextUpDayKey; viewModel.onSessionStarting(); onStartSession(d) },
                     shape = RoundedCornerShape(50),
                     colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
                     contentPadding = PaddingValues(horizontal = 32.dp, vertical = 18.dp)
@@ -216,7 +216,7 @@ fun OverviewScreen(
                     modifier = Modifier
                         .clip(RoundedCornerShape(50))
                         .border(0.5.dp, muted.copy(alpha = 0.4f), RoundedCornerShape(50))
-                        .clickable { onStartSessionSkipWarmup(state.nextUpDayKey) }
+                        .clickable { val d = state.nextUpDayKey; viewModel.onSessionStarting(); onStartSessionSkipWarmup(d) }
                         .padding(horizontal = 18.dp, vertical = 12.dp)
                 ) {
                     Text("skip warmup", style = MaterialTheme.typography.bodySmall, color = muted)

@@ -29,12 +29,32 @@ class ForgeApp : Application(), Configuration.Provider {
 
     override fun onCreate() {
         super.onCreate()
+        applyPendingRestore()
         installCrashLogger()
         if (isDebuggable()) installStrictMode()
         WorkoutSessionService.createChannels(this)
         WeeklyRecapWorker.schedule(this)
         // Seed-if-empty + load the DB-backed active program into the Program facade (program-unlock Phase 1).
         CoroutineScope(Dispatchers.IO).launch { programRepository.ensureLoaded() }
+    }
+
+    /**
+     * If a restore staged a database file (see BackupRepository.restoreFromUri), swap it in NOW —
+     * before Room is ever opened. Doing the swap at boot avoids closing/replacing the DB while
+     * flows are still reading it (the old restore path raced with active observers until exit).
+     */
+    private fun applyPendingRestore() {
+        val pending = File(filesDir, "pending_restore.db")
+        if (!pending.exists()) return
+        runCatching {
+            val live = getDatabasePath("forge.db")
+            live.parentFile?.mkdirs()
+            pending.copyTo(live, overwrite = true)
+            // The restored file is authoritative; drop stale WAL/-shm so they can't override it.
+            File(live.path + "-wal").delete()
+            File(live.path + "-shm").delete()
+        }
+        pending.delete()
     }
 
     /**

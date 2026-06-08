@@ -193,6 +193,18 @@ class ProgramGeneratorTest {
     }
 
     @Test
+    fun multiDaySplitVariesMovementsAcrossDays() {
+        // A muscle trained on two days (e.g. 4-day Upper/Lower) should mostly get DIFFERENT movements
+        // across the week, not the same lift twice.
+        listOf(11L, 22L, 33L).forEach { seed ->
+            val ids = ProgramGenerator.generate(GenerationParams(4), emptySet(), emptySet(), emptySet(), seed = seed)
+                .flatMap { it.exercises }.map { it.libId }
+            val distinctRatio = ids.toSet().size.toDouble() / ids.size
+            assertTrue("too many repeated movements across the week ($distinctRatio @ seed $seed)", distinctRatio >= 0.75)
+        }
+    }
+
+    @Test
     fun cardioDaysAppendedAfterLiftDays() {
         val days = ProgramGenerator.generate(
             GenerationParams(3, cardioDays = 2), emptySet(), emptySet(), emptySet(), seed = 1L

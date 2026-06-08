@@ -8,10 +8,11 @@ import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
-import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import javax.inject.Inject
@@ -21,7 +22,7 @@ data class NotesSearchUiState(
     val results: List<LoggedExerciseDao.NoteSearchResult> = emptyList()
 )
 
-@OptIn(FlowPreview::class)
+@OptIn(FlowPreview::class, kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 @HiltViewModel
 class NotesSearchViewModel @Inject constructor(
     private val loggedExerciseDao: LoggedExerciseDao
@@ -29,15 +30,19 @@ class NotesSearchViewModel @Inject constructor(
 
     private val _query = MutableStateFlow("")
 
-    val state: StateFlow<NotesSearchUiState> = _query
-        .debounce(300)
-        .flatMapLatest { q ->
-            flow {
-                emit(if (q.isBlank()) emptyList() else loggedExerciseDao.searchNotes(q))
+    // The field's text comes from _query directly (instant — every keystroke), while results are
+    // the debounced DB search. Driving the TextField from the debounced flow made it lag/stutter.
+    val state: StateFlow<NotesSearchUiState> = combine(
+        _query,
+        _query
+            .debounce(300)
+            .flatMapLatest { q ->
+                flow { emit(if (q.isBlank()) emptyList() else loggedExerciseDao.searchNotes(q)) }
             }
-        }
-        .map { results -> NotesSearchUiState(query = _query.value, results = results) }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), NotesSearchUiState())
+            .onStart { emit(emptyList()) }
+    ) { query, results ->
+        NotesSearchUiState(query = query, results = results)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), NotesSearchUiState())
 
     fun setQuery(q: String) = _query.update { q }
 }

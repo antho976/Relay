@@ -92,6 +92,13 @@ interface SessionDao {
     @Query("SELECT * FROM session WHERE finished_at IS NOT NULL AND started_at >= :fromMs AND started_at < :toMs ORDER BY started_at ASC")
     suspend fun finishedInRange(fromMs: Long, toMs: Long): List<Session>
 
+    /**
+     * Sessions whose *finish* time falls in [fromMs, toMs) — used by the weekly AI export so a
+     * session that started before the window boundary but finished inside it is still included.
+     */
+    @Query("SELECT * FROM session WHERE finished_at IS NOT NULL AND finished_at >= :fromMs AND finished_at < :toMs ORDER BY started_at ASC")
+    suspend fun finishedByFinishTimeInRange(fromMs: Long, toMs: Long): List<Session>
+
     /** Reactive version of [finishedInRange] — emits on any session change. */
     @Query("SELECT * FROM session WHERE finished_at IS NOT NULL AND started_at >= :fromMs AND started_at < :toMs ORDER BY started_at ASC")
     fun observeFinishedInRange(fromMs: Long, toMs: Long): Flow<List<Session>>

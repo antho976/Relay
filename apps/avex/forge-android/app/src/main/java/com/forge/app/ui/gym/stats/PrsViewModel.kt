@@ -29,6 +29,7 @@ data class PrsUiState(
 )
 
 data class PrDisplayRow(
+    val loggedExerciseId: Long,
     val exerciseId: String,
     val exerciseName: String,
     val muscle: MuscleGroup?,
@@ -72,6 +73,7 @@ class PrsViewModel @Inject constructor(
             val plan = Program.exercise(row.exerciseId)
             val name = row.swappedName ?: plan?.name ?: row.exerciseId
             PrDisplayRow(
+                loggedExerciseId = row.loggedExerciseId,
                 exerciseId = row.exerciseId,
                 exerciseName = name,
                 muscle = plan?.muscle,

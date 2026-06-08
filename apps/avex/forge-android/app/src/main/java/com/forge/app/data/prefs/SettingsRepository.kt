@@ -327,9 +327,28 @@ class SettingsRepository @Inject constructor(
         }
     }
 
-    /** Clears all user preferences (not session/trophy data). */
+    /** Clears all user preferences (not session/trophy data). Used by factory reset. */
     suspend fun resetAll() {
         context.forgePreferences.edit { it.clear() }
+    }
+
+    /**
+     * Restores user-facing preferences to defaults but PRESERVES identity/onboarding state, so
+     * "reset app settings" doesn't kick the user back through onboarding or wipe their name/goal.
+     * Use [resetAll] for a full factory wipe.
+     */
+    suspend fun resetSettingsOnly() {
+        context.forgePreferences.edit { prefs ->
+            val onboarding = prefs[PreferenceKeys.ONBOARDING_DONE]
+            val welcomed = prefs[PreferenceKeys.WELCOMED]
+            val name = prefs[PreferenceKeys.USER_NAME]
+            val goal = prefs[PreferenceKeys.USER_GOAL]
+            prefs.clear()
+            onboarding?.let { prefs[PreferenceKeys.ONBOARDING_DONE] = it }
+            welcomed?.let { prefs[PreferenceKeys.WELCOMED] = it }
+            name?.let { prefs[PreferenceKeys.USER_NAME] = it }
+            goal?.let { prefs[PreferenceKeys.USER_GOAL] = it }
+        }
     }
 
     /** Returns true if the current wall-clock time falls within the user's quiet hours window (#122). */

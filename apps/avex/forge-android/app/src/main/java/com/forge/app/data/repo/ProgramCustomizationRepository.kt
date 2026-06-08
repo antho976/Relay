@@ -10,6 +10,16 @@ import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 
+/** orderOverride sentinel meaning "no explicit position" (the ProgramCustomization default). */
+private const val UNSET_ORDER = 999
+
+/** One exercise in a day's editable plan — includes removed items (the training view filters them). */
+data class EditableExercise(
+    val plan: ExercisePlan,
+    val removed: Boolean,
+    val isCustom: Boolean
+)
+
 /**
  * Manages user-defined program customizations (#90, #91, #92).
  * The static [Program] is the source of truth; overrides from this repo are applied on top.
@@ -21,27 +31,36 @@ class ProgramCustomizationRepository @Inject constructor(
     fun observeForDay(dayKey: String): Flow<List<ProgramCustomization>> =
         dao.observeForDay(dayKey)
 
-    /** Returns the effective exercise list for a day, applying all customizations. */
-    suspend fun effectivePlanForDay(dayKey: String): List<ExercisePlan> {
+    /**
+     * Full editable exercise list for a day (static + custom-added), INCLUDING removed items
+     * (flagged). The training view uses [effectivePlanForDay], which drops removed items; editors
+     * use this so a removed exercise can still be shown and restored.
+     */
+    suspend fun editablePlanForDay(dayKey: String): List<EditableExercise> {
         val day = Program.days.firstOrNull { it.key == dayKey } ?: return emptyList()
         val customizations = dao.forDay(dayKey)
         val customByExId = customizations.associateBy { it.exerciseId }
 
-        val staticExercises: List<ExercisePlan> = day.exercises.mapNotNull { plan ->
+        // orderOverride defaults to the UNSET_ORDER sentinel ("no explicit position"); treat it as
+        // unset so editing an exercise's reps/sets doesn't shove it to the bottom of the day.
+        fun orderOf(exerciseId: String, fallback: Int): Int =
+            customByExId[exerciseId]?.orderOverride?.takeIf { it != UNSET_ORDER } ?: fallback
+
+        val staticExercises = day.exercises.mapIndexed { i, plan ->
             val c = customByExId[plan.id]
-            if (c?.removed == true) return@mapNotNull null
-            if (c == null) plan
-            else plan.copy(
+            val merged = if (c == null) plan else plan.copy(
                 reps = c.repRangeOverride ?: plan.reps,
                 sets = if (c.setsOverride > 0) c.setsOverride else plan.sets
             )
+            orderOf(plan.id, i * 10) to EditableExercise(merged, removed = c?.removed == true, isCustom = false)
         }
 
-        // Added exercises (exerciseId starts with "custom_")
-        val addedExercises: List<ExercisePlan> = customizations
-            .filter { it.exerciseId.startsWith("custom_") && !it.removed }
-            .map { c ->
-                ExercisePlan(
+        // Added exercises (exerciseId starts with "custom_") — no natural slot, so they sort after
+        // the static ones in insert order. Each gets a distinct fallback, not a shared 999.
+        val addedExercises = customizations
+            .filter { it.exerciseId.startsWith("custom_") }
+            .mapIndexed { j, c ->
+                val plan = ExercisePlan(
                     id = c.exerciseId,
                     name = c.customName ?: "Custom",
                     sets = if (c.setsOverride > 0) c.setsOverride else 3,
@@ -52,19 +71,15 @@ class ProgramCustomizationRepository @Inject constructor(
                     difficulty = com.forge.app.program.Difficulty.INTERMEDIATE,
                     note = ""
                 )
+                orderOf(c.exerciseId, 1000 + j) to EditableExercise(plan, removed = c.removed, isCustom = true)
             }
 
-        // Merge and sort by orderOverride
-        val allWithOrder = (staticExercises.mapIndexed { i, plan ->
-            val order = customByExId[plan.id]?.orderOverride ?: (i * 10)
-            order to plan
-        } + addedExercises.map { plan ->
-            val order = customByExId[plan.id]?.orderOverride ?: 999
-            order to plan
-        }).sortedBy { it.first }
-
-        return allWithOrder.map { it.second }
+        return (staticExercises + addedExercises).sortedBy { it.first }.map { it.second }
     }
+
+    /** Returns the effective exercise list for a day, applying all customizations (removed dropped). */
+    suspend fun effectivePlanForDay(dayKey: String): List<ExercisePlan> =
+        editablePlanForDay(dayKey).filterNot { it.removed }.map { it.plan }
 
     /** Override rep range for an exercise (#90). */
     suspend fun setRepRange(dayKey: String, exerciseId: String, repRange: String) {

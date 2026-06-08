@@ -10,7 +10,10 @@ All notable changes to **Forge** are recorded here.
 ---
 
 ## What's new (user-facing)
-
+### 0.5
+- animations polish
+- onboarding
+- Intelligent plan making v1
 ### 0.4.5.1
 - Smoother animations throughout the app.
 - Faster, snappier active-workout screen (only the exercise you touch refreshes, not the whole list).

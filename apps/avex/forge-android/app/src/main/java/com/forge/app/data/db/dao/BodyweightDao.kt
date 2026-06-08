@@ -16,7 +16,7 @@ interface BodyweightDao {
     @Query("SELECT * FROM bodyweight_entry ORDER BY date_key DESC LIMIT :limit")
     fun observeRecent(limit: Int = 90): Flow<List<BodyweightEntry>>
 
-    @Query("SELECT * FROM bodyweight_entry ORDER BY date_key DESC LIMIT 1")
+    @Query("SELECT * FROM bodyweight_entry ORDER BY date_key DESC, recorded_at DESC LIMIT 1")
     suspend fun latest(): BodyweightEntry?
 
     @Query("DELETE FROM bodyweight_entry WHERE id = :id")

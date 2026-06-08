@@ -26,9 +26,11 @@ class CustomizationRepository @Inject constructor(
 
     suspend fun setSwap(exerciseId: String, swappedName: String, swappedUnit: String) {
         val existing = customizationDao.get(exerciseId)
+        // copy() so untouched fields survive (restTimerOverrideSeconds AND pinnedNote — the old
+        // positional rebuild dropped the pinned note).
         customizationDao.upsert(
-            ExerciseCustomization(exerciseId, swappedName, swappedUnit,
-                restTimerOverrideSeconds = existing?.restTimerOverrideSeconds)
+            existing?.copy(swappedName = swappedName, swappedUnit = swappedUnit)
+                ?: ExerciseCustomization(exerciseId, swappedName, swappedUnit)
         )
     }
 

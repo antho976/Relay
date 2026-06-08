@@ -41,7 +41,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.forge.app.domain.units.parseToLb
+import com.forge.app.domain.units.toStoredWeightText
 import com.forge.app.ui.gym.train.components.ExerciseCard
 import com.forge.app.ui.gym.train.components.ExerciseChartSheet
 import com.forge.app.ui.gym.train.components.UpNextBubble
@@ -167,14 +167,11 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
                                 onAdvance = { if (exNextId != null) shownExerciseId = exNextId else onEvent(DayUiEvent.FinishWorkout) },
                                 onToggle = { },
                                 onLogSet = { weight, reps ->
-                                    val storedWeight = if (useKg) {
-                                        val lb = parseToLb(weight, useKg = true)
-                                        if (lb != null) "%.1f".format(lb).trimEnd('0').trimEnd('.') else weight
-                                    } else weight
-                                    onEvent(DayUiEvent.LogSet(id, storedWeight, reps))
+                                    onEvent(DayUiEvent.LogSet(id, toStoredWeightText(weight, useKg), reps))
                                 },
                                 onDeleteSet = { setId -> onEvent(DayUiEvent.DeleteSet(setId)) },
-                                onEditSet = { setId, w, r -> onEvent(DayUiEvent.EditSet(setId, w, r)) },
+                                // Same unit conversion as logging — editing in kg stores the lb value.
+                                onEditSet = { setId, w, r -> onEvent(DayUiEvent.EditSet(setId, toStoredWeightText(w, useKg), r)) },
                                 onLogSameAsLast = { setId -> onEvent(DayUiEvent.LogSameAsLast(id, setId)) },
                                 onRate = { rating -> onEvent(DayUiEvent.RateExercise(id, rating)) },
                                 onNoteChange = { note -> onEvent(DayUiEvent.UpdateNote(id, note)) },

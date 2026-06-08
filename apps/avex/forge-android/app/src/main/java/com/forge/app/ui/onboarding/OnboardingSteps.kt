@@ -47,12 +47,8 @@ private val EXPERIENCE_OPTIONS = listOf(
     "advanced" to "Advanced"
 )
 
-/** Equipment presets — quick-fill the set instead of toggling nine chips. */
-private val EQUIPMENT_PRESETS: List<Pair<String, Set<String>>> = listOf(
-    "Full gym" to Equipment.entries.map { it.name }.toSet(),
-    "Dumbbells + bench" to setOf(Equipment.DUMBBELLS.name, Equipment.BENCH.name),
-    "Bodyweight only" to setOf(Equipment.BODYWEIGHT_ONLY.name)
-)
+/** Equipment presets — quick-fill the set instead of toggling nine chips (shared with Settings). */
+private val EQUIPMENT_PRESETS: List<Pair<String, Set<String>>> = com.forge.app.program.equipmentPresets
 
 @Composable
 private fun Headline(text: String) {
@@ -95,7 +91,8 @@ internal fun StepUnits(useKg: Boolean, onToggle: (Boolean) -> Unit) {
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(if (useKg) "Kilograms (kg)" else "Pounds (lb)",
-                style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
+                style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurface)
             Switch(checked = useKg, onCheckedChange = onToggle)
         }
     }
@@ -144,7 +141,8 @@ internal fun StepBodyweight(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text("Load 8 weeks of sample data",
-                    style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+                    style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurface)
                 Text("Fills the app with realistic fake sessions for a trial run",
                     style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
@@ -202,6 +200,18 @@ internal fun StepCadence(cadence: String, everyN: Int, onSet: (String, Int) -> U
             listOf(4, 8, 12).forEach { n ->
                 OnboardingChip("Every $n", cadence == "every_n" && everyN == n) { onSet("every_n", n) }
             }
+        }
+    }
+}
+
+@Composable
+internal fun StepCardio(days: Int, onSet: (Int) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        Headline("Add cardio days?")
+        Caption("Dedicated cardio days (run · walk · treadmill) added to your week. Skip it for lifting only — you can also set a weekly cardio goal later in Settings.")
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            OnboardingChip("None", days == 0) { onSet(0) }
+            listOf(1, 2, 3).forEach { n -> OnboardingChip(if (n == 1) "1 day" else "$n days", days == n) { onSet(n) } }
         }
     }
 }

@@ -204,6 +204,17 @@ internal fun EquipmentPage(state: SettingsUiState, vm: SettingsViewModel, modifi
             modifier = Modifier.padding(horizontal = 24.dp)
         )
         Spacer(Modifier.height(12.dp))
+        // Quick presets — one-tap fill (e.g. the MWM-989 = dumbbells + bench + cable + machine).
+        FlowRow(
+            modifier = Modifier.padding(horizontal = 24.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            com.forge.app.program.equipmentPresets.forEach { (label, set) ->
+                PillChip(label, state.availableEquipment == set) { vm.setAvailableEquipment(set) }
+            }
+        }
+        Spacer(Modifier.height(12.dp))
         FlowRow(
             modifier = Modifier.padding(horizontal = 24.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),

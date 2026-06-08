@@ -42,8 +42,9 @@ import com.forge.app.data.db.entities.SessionBreak
 import com.forge.app.data.db.entities.VacationPeriod
 
 /**
- * Schema is v14 (v14 added the data-driven program tables program_day/program_slot;
- * v13 added an index on LoggedExercise.exercise_id; v12 added LoggedSet.rpe; v11 added per-set annotations).
+ * Schema is v15 (v15 added a unique index on bodyweight_entry.date_key; v14 added the data-driven
+ * program tables program_day/program_slot; v13 added an index on LoggedExercise.exercise_id;
+ * v12 added LoggedSet.rpe; v11 added per-set annotations).
  *
  * The schema is now LOCKED from v12 onward: every change needs a real Migration in
  * [com.forge.app.data.db.Migrations] (registered in ALL_MIGRATIONS), a bumped version here,
@@ -73,7 +74,7 @@ import com.forge.app.data.db.entities.VacationPeriod
         ProgramDay::class,
         ProgramSlot::class
     ],
-    version = 14,
+    version = 15,
     exportSchema = true
 )
 @TypeConverters(Converters::class)

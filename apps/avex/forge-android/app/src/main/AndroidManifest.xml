@@ -6,8 +6,8 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Foreground service (required API 28+) -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <!-- Foreground service type: health (required API 34+) -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_HEALTH" />
+    <!-- Foreground service type: specialUse — keeps the rest timer alive during a workout (required API 34+) -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <!-- Timer vibration -->
     <uses-permission android:name="android.permission.VIBRATE" />
 
@@ -36,8 +36,18 @@
 
         <service
             android:name=".service.WorkoutSessionService"
-            android:foregroundServiceType="health"
-            android:exported="false" />
+            android:foregroundServiceType="specialUse"
+            android:exported="false">
+            <!--
+              "specialUse": this FGS only keeps the process alive so the rest-timer alert fires
+              reliably during an active workout. It is not a health/sensor service; the "health"
+              type additionally requires a runtime health permission we do not hold, which throws
+              SecurityException on Android 14+.
+            -->
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps the rest timer reliable during an active workout session" />
+        </service>
 
         <!-- Disable default WorkManager auto-init so we can use HiltWorkerFactory (#31). -->
         <provider

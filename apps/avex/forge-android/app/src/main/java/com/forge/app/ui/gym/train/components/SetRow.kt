@@ -46,6 +46,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.data.db.entities.LoggedSet
 import com.forge.app.domain.units.formatWeight
+import com.forge.app.domain.units.formatWeightDelta
+import com.forge.app.domain.units.weightInputValue
 import com.forge.app.ui.theme.ForgeLastGreen
 import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.theme.ForgePrGold
@@ -75,9 +77,13 @@ fun SetRow(
 ) {
     val useKg = LocalForgeSettings.current.useKg
     val displayWeight = set.weightLb?.let { formatWeight(it, useKg) } ?: set.weightText
+    // Seed the edit field in the DISPLAY unit (what the row shows), so editing in kg edits the kg
+    // value — the conversion back to stored lb happens on submit (DayContent.onEditSet), exactly
+    // like the log path. Re-seeds if the unit flips or the underlying set changes.
+    val editSeed = set.weightLb?.let { weightInputValue(it, useKg) } ?: set.weightText
     var isEditing by remember(set.id) { mutableStateOf(false) }
-    var editWeight by remember { mutableStateOf(set.weightText) }
-    var editReps by remember { mutableStateOf(set.reps.toString()) }
+    var editWeight by remember(set.id, useKg, set.weightText) { mutableStateOf(editSeed) }
+    var editReps by remember(set.id, set.reps) { mutableStateOf(set.reps.toString()) }
     var showRpePicker by remember { mutableStateOf(false) }
 
     // The visible "set logged" beat: rise + fade + a scale that lands with a spring so the
@@ -93,18 +99,22 @@ fun SetRow(
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val outline = MaterialTheme.colorScheme.outline
 
-    val wLb = set.weightLb ?: 0.0
-    val pLb = priorSet?.weightLb ?: 0.0
-    val wDiff = wLb - pLb
+    // Weight delta vs the prior set, shown in the user's display unit (not hard-coded lb) and not
+    // truncated to a whole number. Only meaningful when BOTH sets carry a weight — a bodyweight set
+    // has null weightLb, which must not be treated as 0 lb; then we fall back to the rep delta.
+    val curLb = set.weightLb
+    val priorLb = priorSet?.weightLb
+    val wDiff = if (curLb != null && priorLb != null) curLb - priorLb else null
     val rDiff = if (priorSet != null) set.reps - priorSet.reps else 0
     val deltaLabel = if (priorSet != null) when {
-        wDiff >= 0.5 -> "+${wDiff.toInt()} lb"
-        wDiff <= -0.5 -> "${wDiff.toInt()} lb"
+        wDiff != null && wDiff >= 0.5 -> "+${formatWeightDelta(wDiff, useKg)}"
+        wDiff != null && wDiff <= -0.5 -> formatWeightDelta(wDiff, useKg)
         rDiff > 0 -> "+$rDiff rep"
         rDiff < 0 -> "$rDiff rep"
         else -> null
     } else null
-    val deltaPositive = wDiff >= 0.5 || (wDiff > -0.5 && rDiff > 0)
+    val deltaPositive = (wDiff != null && wDiff >= 0.5) ||
+        ((wDiff == null || kotlin.math.abs(wDiff) < 0.5) && rDiff > 0)
     val deltaColor = if (deltaPositive) ForgeLastGreen else muted.copy(alpha = 0.7f)
 
     if (isEditing) {
@@ -142,7 +152,7 @@ fun SetRow(
                 Icon(Icons.Default.Check, contentDescription = "Confirm", tint = if (canConfirm) accent else muted.copy(0.4f))
             }
             IconButton(
-                onClick = { editWeight = set.weightText; editReps = set.reps.toString(); isEditing = false },
+                onClick = { editWeight = editSeed; editReps = set.reps.toString(); isEditing = false },
                 modifier = Modifier.size(36.dp)
             ) {
                 Icon(Icons.Default.Close, contentDescription = "Cancel", tint = muted)

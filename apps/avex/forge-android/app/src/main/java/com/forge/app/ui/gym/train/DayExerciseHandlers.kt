@@ -32,7 +32,9 @@ internal fun DayViewModel.handleExerciseEvent(event: DayUiEvent) {
             if (event.reps <= 0) return@launch
             val exerciseUi = _state.value.exercises
                 .firstOrNull { ex -> ex.loggedSets.any { it.id == event.setId } } ?: return@launch
-            val plan = dayPlan.exercises.firstOrNull { it.id == exerciseUi.plan.id } ?: return@launch
+            // Resolve the plan from the rendered exercise (works for custom/cross-day exercises,
+            // which aren't in the static dayPlan.exercises).
+            val plan = exerciseUi.plan
             val set = exerciseUi.loggedSets.firstOrNull { it.id == event.setId } ?: return@launch
             val lb = WeightParser.parse(event.weightText, plan.unit)
             workoutRepo.updateSet(set.copy(weightText = event.weightText, weightLb = lb, reps = event.reps))
@@ -198,8 +200,10 @@ internal fun DayViewModel.logSet(exerciseId: String, weightText: String, reps: I
     if (reps <= 0) return
     viewModelScope.launch {
         val sessionId = _state.value.sessionId ?: return@launch
-        val plan = dayPlan.exercises.firstOrNull { it.id == exerciseId } ?: return@launch
         val currentUi = _state.value.exercises.firstOrNull { it.plan.id == exerciseId } ?: return@launch
+        // Plan comes from the rendered exercise, so custom/cross-day exercises log correctly
+        // (the static dayPlan.exercises doesn't contain them).
+        val plan = currentUi.plan
 
         val newWeightLb = WeightParser.parse(weightText, plan.unit)
         // Ignore dummy display rows (loggedExerciseId == -1) so placeholder data never
@@ -225,7 +229,7 @@ internal fun DayViewModel.logSet(exerciseId: String, weightText: String, reps: I
             ?: workoutRepo.addExerciseToSession(
                 sessionId = sessionId,
                 exerciseId = exerciseId,
-                orderIndex = dayPlan.exercises.indexOfFirst { it.id == exerciseId },
+                orderIndex = _state.value.exercises.indexOfFirst { it.plan.id == exerciseId },
                 swappedName = currentUi.sessionSwapName ?: currentUi.persistentSwapName,
                 swappedUnit = currentUi.sessionSwapUnit ?: currentUi.persistentSwapUnit
             )

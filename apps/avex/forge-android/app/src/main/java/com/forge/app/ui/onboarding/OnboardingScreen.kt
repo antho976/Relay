@@ -60,10 +60,10 @@ class OnboardingViewModel @Inject constructor(
     /** Pure, side-effect-free week for the preview step — the same [seed] is persisted on finish. */
     fun buildPreview(
         daysPerWeek: Int, equipment: Set<String>, goal: String, experience: String,
-        problemAreas: Set<String>, seed: Long
+        problemAreas: Set<String>, cardioDays: Int, seed: Long
     ): List<GeneratedDay> = ProgramGenerator.generate(
         GenerationParams(
-            daysPerWeek = daysPerWeek, goal = goal, experience = experience,
+            daysPerWeek = daysPerWeek, goal = goal, experience = experience, cardioDays = cardioDays,
             problemAreas = problemAreas.mapNotNull { ProblemArea.fromCode(it) }.toSet()
         ),
         equipment.mapNotNull { runCatching { Equipment.valueOf(it) }.getOrNull() }.toSet(),
@@ -82,6 +82,7 @@ class OnboardingViewModel @Inject constructor(
         everyN: Int = 4,
         experience: String = "intermediate",
         problemAreas: Set<String> = emptySet(),
+        cardioDays: Int = 0,
         seed: Long = System.nanoTime(),
         generate: Boolean = true
     ) {
@@ -94,11 +95,12 @@ class OnboardingViewModel @Inject constructor(
                 if (cadence == "every_n") settingsRepo.setRotationEveryN(everyN)
                 settingsRepo.setProgramExperience(experience)
                 settingsRepo.setUserGoal(goal)
+                settingsRepo.setCardioDaysPerWeek(cardioDays)
                 problemAreas.forEach { settingsRepo.toggleProblemArea(it, true) }
                 // Persist exactly the week shown in the preview (same seed + inputs).
                 programRepository.generate(
                     GenerationParams(
-                        daysPerWeek = daysPerWeek, goal = goal, experience = experience,
+                        daysPerWeek = daysPerWeek, goal = goal, experience = experience, cardioDays = cardioDays,
                         problemAreas = problemAreas.mapNotNull { ProblemArea.fromCode(it) }.toSet()
                     ),
                     equipment.mapNotNull { runCatching { Equipment.valueOf(it) }.getOrNull() }.toSet(),
@@ -114,7 +116,7 @@ class OnboardingViewModel @Inject constructor(
 }
 
 /** Total onboarding steps (0-indexed); the last is the live preview. */
-private const val STEP_COUNT = 10
+private const val STEP_COUNT = 11
 private const val LAST_STEP = STEP_COUNT - 1
 
 @Composable
@@ -134,11 +136,12 @@ fun OnboardingScreen(
     var problemAreas by remember { mutableStateOf(emptySet<String>()) }
     var cadence by remember { mutableStateOf("never") }
     var everyN by remember { mutableIntStateOf(4) }
+    var cardioDays by remember { mutableIntStateOf(0) }
     var previewSeed by remember { mutableLongStateOf(Random.nextLong()) }
 
     // Pure preview — recomputed whenever an input or the re-roll seed changes.
-    val previewDays = remember(previewSeed, daysPerWeek, equipment, goal, experience, problemAreas) {
-        viewModel.buildPreview(daysPerWeek, equipment, goal, experience, problemAreas, previewSeed)
+    val previewDays = remember(previewSeed, daysPerWeek, equipment, goal, experience, problemAreas, cardioDays) {
+        viewModel.buildPreview(daysPerWeek, equipment, goal, experience, problemAreas, cardioDays, previewSeed)
     }
 
     Box(
@@ -196,7 +199,8 @@ fun OnboardingScreen(
                         onToggle = { code -> problemAreas = if (code in problemAreas) problemAreas - code else problemAreas + code }
                     )
                     8 -> StepCadence(cadence = cadence, everyN = everyN, onSet = { c, n -> cadence = c; everyN = n })
-                    9 -> StepPreview(days = previewDays, onRegenerate = { previewSeed = Random.nextLong() })
+                    9 -> StepCardio(days = cardioDays, onSet = { cardioDays = it })
+                    10 -> StepPreview(days = previewDays, onRegenerate = { previewSeed = Random.nextLong() })
                 }
             }
 
@@ -222,7 +226,7 @@ fun OnboardingScreen(
                             val bwLb = bodyweightInput.toDoubleOrNull()?.let { raw -> if (useKg) raw * 2.20462 else raw }
                             viewModel.complete(
                                 name, useKg, goal, bwLb, loadSampleData,
-                                daysPerWeek, equipment, cadence, everyN, experience, problemAreas, previewSeed
+                                daysPerWeek, equipment, cadence, everyN, experience, problemAreas, cardioDays, previewSeed
                             )
                             onFinished()
                         }

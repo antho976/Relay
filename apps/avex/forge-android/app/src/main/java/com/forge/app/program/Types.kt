@@ -19,8 +19,8 @@ enum class MuscleGroup(val code: String, val displayName: String) {
     CORE("core", "Core");
 
     companion object {
-        fun fromCode(code: String): MuscleGroup =
-            entries.first { it.code == code }
+        fun fromCode(code: String): MuscleGroup? =
+            entries.firstOrNull { it.code == code }
     }
 }
 
@@ -36,8 +36,8 @@ enum class ExerciseUnit(val code: String, val display: String) {
     BODYWEIGHT("bw", "BW");
 
     companion object {
-        fun fromCode(code: String): ExerciseUnit =
-            entries.first { it.code == code }
+        fun fromCode(code: String): ExerciseUnit? =
+            entries.firstOrNull { it.code == code }
     }
 }
 
@@ -47,8 +47,8 @@ enum class Difficulty(val code: String, val displayName: String) {
     ADVANCED("advanced", "Advanced");
 
     companion object {
-        fun fromCode(code: String): Difficulty =
-            entries.first { it.code == code }
+        fun fromCode(code: String): Difficulty? =
+            entries.firstOrNull { it.code == code }
     }
 }
 

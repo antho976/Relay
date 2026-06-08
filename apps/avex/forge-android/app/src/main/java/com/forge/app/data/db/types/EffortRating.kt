@@ -16,7 +16,8 @@ enum class EffortRating(val code: String, val displayName: String) {
     BRUTAL("brutal", "Brutal");
 
     companion object {
-        fun fromCode(code: String): EffortRating =
-            entries.first { it.code == code }
+        /** Null for an unrecognized/legacy code so a Room read never crashes. */
+        fun fromCode(code: String): EffortRating? =
+            entries.firstOrNull { it.code == code }
     }
 }

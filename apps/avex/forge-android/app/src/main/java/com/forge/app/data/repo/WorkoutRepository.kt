@@ -172,6 +172,12 @@ class WorkoutRepository @Inject constructor(
         loggedExerciseDao.update(ex.copy(note = note))
     }
 
+    /** Apply a session swap to a logged exercise, preserving every other column (superset group, etc.). */
+    suspend fun setSessionSwap(loggedExerciseId: Long, swappedName: String?, swappedUnit: String?) {
+        val ex = loggedExerciseDao.get(loggedExerciseId) ?: return
+        loggedExerciseDao.update(ex.copy(swappedName = swappedName, swappedUnit = swappedUnit))
+    }
+
     suspend fun lastLoggedExerciseBefore(exerciseId: String, excludeSessionId: Long): LoggedExercise? =
         loggedExerciseDao.lastLoggedBefore(exerciseId, excludeSessionId)
 

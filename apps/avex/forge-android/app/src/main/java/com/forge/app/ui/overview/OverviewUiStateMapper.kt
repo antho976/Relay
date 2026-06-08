@@ -107,7 +107,10 @@ internal fun buildOverviewUiState(
         pendingMilestone = computePendingMilestone(stats, shown),
         onThisDayMemory = memory,
         plannedNextDay = plannedDay,
-        nextUpDayKey = stats.nextUpDayKey,
+        // A user-chosen "Train X today" overrides the rotation default until it's consumed when a
+        // session starts. Ignore a stale key that isn't part of the current program.
+        nextUpDayKey = plannedDay.takeIf { it.isNotBlank() && Program.dayKeys.contains(it) }
+            ?: stats.nextUpDayKey,
         weekDaysTrained = stats.weekDaysTrained,
         cardioWeekDays = cardioWeekDays,
         recentItems = recentItems,

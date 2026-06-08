@@ -156,7 +156,7 @@ fun PrsContent(
                 )
             }
         } else {
-            items(state.filtered, key = { "${it.exerciseId}_${it.sessionDate}" }) { row ->
+            items(state.filtered, key = { it.loggedExerciseId }) { row ->
                 PrRow(row)
                 HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.15f))
             }

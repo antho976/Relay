@@ -28,6 +28,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -36,11 +37,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
+import com.forge.app.data.repo.EditableExercise
 import com.forge.app.data.repo.ProgramCustomizationRepository
 import com.forge.app.program.MuscleGroup
 import com.forge.app.program.Program
@@ -83,20 +86,20 @@ class ProgramEditorViewModel @Inject constructor(
             flow {
                 val day = Program.days.firstOrNull { it.key == dayKey }
                     ?: return@flow emit(ProgramEditorState())
-                val effective = runCatching { repo.effectivePlanForDay(dayKey) }
-                    .getOrDefault(day.exercises)
+                val editable = runCatching { repo.editablePlanForDay(dayKey) }
+                    .getOrDefault(day.exercises.map { EditableExercise(it, removed = false, isCustom = false) })
                 emit(ProgramEditorState(
                     dayKey = dayKey,
                     dayName = day.defaultName,
-                    exercises = effective.map { plan ->
+                    exercises = editable.map { e ->
                         ProgramExerciseItem(
-                            id = plan.id,
-                            name = plan.name,
-                            reps = plan.reps,
-                            sets = plan.sets,
-                            muscle = plan.muscle.displayName,
-                            isCustom = plan.id.startsWith("custom_"),
-                            removed = false
+                            id = e.plan.id,
+                            name = e.plan.name,
+                            reps = e.plan.reps,
+                            sets = e.plan.sets,
+                            muscle = e.plan.muscle.displayName,
+                            isCustom = e.isCustom,
+                            removed = e.removed
                         )
                     }
                 ))
@@ -118,6 +121,10 @@ class ProgramEditorViewModel @Inject constructor(
         repo.removeExercise(_dayKey.value, exerciseId)
     }
 
+    fun restoreExercise(exerciseId: String) = viewModelScope.launch {
+        repo.restoreExercise(_dayKey.value, exerciseId)
+    }
+
     fun addCustom(name: String, muscle: MuscleGroup) = viewModelScope.launch {
         repo.addCustomExercise(_dayKey.value, name, muscle)
     }
@@ -134,8 +141,8 @@ fun ProgramEditorScreen(
 ) {
     val state by viewModel.state.collectAsState()
 
-    // Set the day key once
-    remember(dayKey) { viewModel.setDay(dayKey); Unit }
+    // Set the day key when it changes — as an effect, not a state mutation during composition.
+    LaunchedEffect(dayKey) { viewModel.setDay(dayKey) }
 
     var showAddDialog by remember { mutableStateOf(false) }
     var editRepsFor by remember { mutableStateOf<ProgramExerciseItem?>(null) }
@@ -175,6 +182,7 @@ fun ProgramEditorScreen(
                     item = ex,
                     onEditReps = { editRepsFor = ex },
                     onRemove = { viewModel.removeExercise(ex.id) },
+                    onRestore = { viewModel.restoreExercise(ex.id) },
                     modifier = forgeItemMotion()
                 )
             }
@@ -211,6 +219,7 @@ private fun ExerciseEditorRow(
     item: ProgramExerciseItem,
     onEditReps: () -> Unit,
     onRemove: () -> Unit,
+    onRestore: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Row(
@@ -221,15 +230,26 @@ private fun ExerciseEditorRow(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
+        val alpha = if (item.removed) 0.4f else 1f
         Column(modifier = Modifier.weight(1f)) {
-            Text(item.name, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
-            Text("${item.muscle} · ${item.sets} sets · ${item.reps}",
+            Text(
+                item.name,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = alpha),
+                textDecoration = if (item.removed) TextDecoration.LineThrough else null
+            )
+            Text("${item.muscle} · ${item.sets} sets · ${item.reps}" + if (item.removed) " · removed" else "",
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = alpha))
         }
-        TextButton(onClick = onEditReps) { Text("Edit") }
-        IconButton(onClick = onRemove) {
-            Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f))
+        if (item.removed) {
+            TextButton(onClick = onRestore) { Text("Restore") }
+        } else {
+            TextButton(onClick = onEditReps) { Text("Edit") }
+            IconButton(onClick = onRemove) {
+                Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f))
+            }
         }
     }
 }

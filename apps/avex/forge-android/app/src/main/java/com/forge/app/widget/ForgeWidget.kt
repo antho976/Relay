@@ -17,10 +17,13 @@ import androidx.glance.text.FontWeight
 import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
 import androidx.glance.unit.ColorProvider
-import androidx.room.Room
-import com.forge.app.data.db.ForgeDatabase
+import com.forge.app.data.db.dao.SessionDao
+import com.forge.app.data.repo.ProgramRepository
 import com.forge.app.program.Program
-import kotlinx.coroutines.runBlocking
+import dagger.hilt.EntryPoint
+import dagger.hilt.InstallIn
+import dagger.hilt.android.EntryPointAccessors
+import dagger.hilt.components.SingletonComponent
 
 /**
  * Home screen widget showing next planned workout day + main exercises (#146).
@@ -29,16 +32,26 @@ import kotlinx.coroutines.runBlocking
 class ForgeWidget : GlanceAppWidget() {
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
-        // Read next session info from DB (widgets don't participate in Hilt injection)
-        val db = Room.databaseBuilder(context, ForgeDatabase::class.java, "forge.db")
-            .fallbackToDestructiveMigration(dropAllTables = true).build()
-        val nextDayKey = runBlocking { db.sessionDao().allFinished().lastOrNull()?.dayKey }
-        val nextDayPlan = nextDayKey?.let { k ->
-            val rotation = listOf(Program.UPPER_A, Program.LOWER_A, Program.UPPER_B, Program.LOWER_B)
-            val idx = rotation.indexOf(k)
-            if (idx < 0) null
-            else Program.days.firstOrNull { it.key == rotation[(idx + 1) % rotation.size] }
-        } ?: Program.days.firstOrNull()
+        // Reuse the Hilt singleton DB + program facade via an EntryPoint instead of opening a
+        // second Room instance. This removes the destructive-migration data wipe and the leaked
+        // connection the old standalone builder caused, and keeps the widget on the same
+        // migration policy as the app. ensureLoaded() seeds-if-empty and populates Program.
+        val entryPoint = EntryPointAccessors.fromApplication(
+            context.applicationContext, WidgetEntryPoint::class.java
+        )
+        entryPoint.programRepository().ensureLoaded()
+
+        // Next day = the day after the most recently finished session, cycling through the
+        // *active* program's days (mirrors StatsRepository.nextUpDayKey — no hard-coded 4-day rotation).
+        val lastDayKey = entryPoint.sessionDao().allFinished()
+            .maxByOrNull { it.finishedAt ?: it.startedAt }?.dayKey
+        val keys = Program.dayKeys
+        val nextDayKey = when {
+            keys.isEmpty() -> null
+            lastDayKey == null -> keys.first()
+            else -> keys[(keys.indexOf(lastDayKey) + 1) % keys.size]
+        }
+        val nextDayPlan = nextDayKey?.let { key -> Program.days.firstOrNull { it.key == key } }
 
         provideContent {
             GlanceTheme {
@@ -83,4 +96,15 @@ class ForgeWidget : GlanceAppWidget() {
 
 class ForgeWidgetReceiver : GlanceAppWidgetReceiver() {
     override val glanceAppWidget: GlanceAppWidget = ForgeWidget()
+}
+
+/**
+ * Lets the widget (which isn't a Hilt-injected component) reach the app's singleton DB + program
+ * repository, so it shares the one migration-aware [ForgeDatabase] instance the app owns.
+ */
+@EntryPoint
+@InstallIn(SingletonComponent::class)
+interface WidgetEntryPoint {
+    fun sessionDao(): SessionDao
+    fun programRepository(): ProgramRepository
 }

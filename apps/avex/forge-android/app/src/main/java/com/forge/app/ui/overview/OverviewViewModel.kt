@@ -103,6 +103,11 @@ class OverviewViewModel @Inject constructor(
         settingsRepo.setPlannedNextDay(dayKey)
     }
 
+    /** Consume the "Train X today" override once a session is started, so it reverts to rotation. */
+    fun onSessionStarting() = viewModelScope.launch {
+        if (state.value.plannedNextDay.isNotBlank()) settingsRepo.setPlannedNextDay("")
+    }
+
     private val _selectedItem = MutableStateFlow<OverviewRecentItem?>(null)
     val selectedItem: StateFlow<OverviewRecentItem?> = _selectedItem
 

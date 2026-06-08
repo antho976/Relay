@@ -1,6 +1,7 @@
 package com.forge.app.ui.gym.train
 
 import android.content.Intent
+import com.forge.app.program.Program
 import com.forge.app.service.SessionNotifState
 import com.forge.app.service.WorkoutSessionService
 import kotlinx.coroutines.flow.update
@@ -15,8 +16,19 @@ internal suspend fun DayViewModel.refreshExercises() {
     val byExerciseId = loggedExercises.associateBy { it.exerciseId }
     val previousExpandedById = _state.value.exercises.associate { it.plan.id to it.isExpanded }
     val previousBonusById = _state.value.exercises.associate { it.plan.id to it.bonusSets }
+    val previousOrderById = _state.value.exercises.mapIndexed { i, e -> e.plan.id to i }.toMap()
+
     val effectivePlans = programCustomRepo.effectivePlanForDay(dayKey)
-    val exercises = effectivePlans.mapIndexed { index, plan ->
+    val effectiveIds = effectivePlans.mapTo(mutableSetOf()) { it.id }
+    // Logged exercises added mid-session that aren't part of the day's plan (e.g. a lift picked
+    // from another day) — render them too, resolved from the library, so they don't silently
+    // vanish on refresh (leaving an invisible orphan row).
+    val extraPlans = loggedExercises
+        .filterNot { it.exerciseId in effectiveIds }
+        .mapNotNull { Program.exercise(it.exerciseId) }
+    val allPlans = effectivePlans + extraPlans
+
+    val built = allPlans.mapIndexed { index, plan ->
         buildExerciseUi(
             plan = plan,
             logged = byExerciseId[plan.id],
@@ -25,6 +37,14 @@ internal suspend fun DayViewModel.refreshExercises() {
             bonusSets = previousBonusById[plan.id] ?: 0
         )
     }
+    // Preserve any manual reordering (MoveExercise) made this session: items keep their prior
+    // relative position; brand-new items fall to the end in plan order.
+    val exercises = built.sortedWith(
+        compareBy(
+            { previousOrderById[it.plan.id] ?: Int.MAX_VALUE },
+            { allPlans.indexOfFirst { p -> p.id == it.plan.id } }
+        )
+    )
     val annotated = annotateNextExerciseDeltas(exercises)
     _state.update { it.copy(isLoading = false, exercises = annotated) }
 }
@@ -70,7 +90,9 @@ internal suspend fun DayViewModel.ensureLoggedExercise(exerciseId: String): Long
         ?: workoutRepo.addExerciseToSession(
             sessionId = sessionId,
             exerciseId = exerciseId,
-            orderIndex = dayPlan.exercises.indexOfFirst { it.id == exerciseId },
+            // Order index from the rendered list, not the static day plan (which is -1 for
+            // custom/cross-day exercises that aren't in dayPlan.exercises).
+            orderIndex = _state.value.exercises.indexOfFirst { it.plan.id == exerciseId },
             swappedName = currentUi.sessionSwapName ?: currentUi.persistentSwapName,
             swappedUnit = currentUi.sessionSwapUnit ?: currentUi.persistentSwapUnit
         )
