@@ -75,6 +75,8 @@ fun SetInputRow(
     isBodyweight: Boolean = false,
     /** Recommended reps from the plan (e.g. 12 from "8-12") — pre-filled into the reps field. */
     targetReps: Int? = null,
+    /** Greyed hint shown in the empty reps field — the recommended rep even for AMRAP (e.g. 12). */
+    repsPlaceholder: Int? = null,
     onAdvance: () -> Unit = {},
     onSubmit: (weightText: String, reps: Int) -> Unit,
     onAddSet: (() -> Unit)? = null,
@@ -207,7 +209,7 @@ fun SetInputRow(
                             UnderlineNumberField(
                                 value = reps,
                                 onValueChange = { new -> if (new.all { it.isDigit() }) reps = new },
-                                placeholder = "0",
+                                placeholder = repsPlaceholder?.toString() ?: "0",
                                 keyboardType = KeyboardType.Number,
                                 imeAction = ImeAction.Done,
                                 focusRequester = repsFocus,

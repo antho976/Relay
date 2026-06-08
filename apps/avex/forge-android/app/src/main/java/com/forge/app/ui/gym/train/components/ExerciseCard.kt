@@ -35,11 +35,23 @@ import com.forge.app.domain.timer.RestTimerState
 import com.forge.app.program.ExerciseUnit
 import com.forge.app.ui.gym.train.state.ExerciseUiState
 
-/** Recommended reps from a plan rep string ("8-12" → 12, "15" → 15); null for AMRAP/timed/per-leg. */
+/** Reps to PRE-FILL the field with — numeric targets only ("8-12" → 12, "15" → 15); null otherwise. */
 private val TARGET_REPS_REGEX = Regex("""^(\d+)(?:-(\d+))?$""")
 private fun targetRepsOf(reps: String): Int? {
     val m = TARGET_REPS_REGEX.matchEntire(reps.trim()) ?: return null
     return m.groupValues[2].ifEmpty { m.groupValues[1] }.toIntOrNull()
+}
+
+/**
+ * A rep number to SHOW as the field's greyed hint even when it starts empty: numeric → its top
+ * ("8-12" → 12), per-leg → the count ("10/leg" → 10), AMRAP → a sensible 12 to aim for. Timed
+ * holds (e.g. "30-60s") have no rep count, so no hint.
+ */
+private fun recommendedRepsOf(reps: String): Int? {
+    val t = reps.trim()
+    if (t.equals("AMRAP", ignoreCase = true)) return 12
+    if (t.contains('s')) return null
+    return Regex("""\d+""").findAll(t).map { it.value.toInt() }.lastOrNull()
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -273,6 +285,7 @@ fun ExerciseCard(
                         advanceLabel = advanceLabel,
                         isBodyweight = isBodyweight,
                         targetReps = targetRepsOf(state.plan.reps),
+                        repsPlaceholder = recommendedRepsOf(state.plan.reps),
                         onAdvance = onAdvance,
                         onSubmit = onLogSet,
                         onAddSet = onAddSet,

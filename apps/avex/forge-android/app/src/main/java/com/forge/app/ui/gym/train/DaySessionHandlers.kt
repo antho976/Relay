@@ -213,6 +213,9 @@ private fun DayViewModel.crossDayGoBack() {
 /** Start a new session for this day (or resume this day's existing one) and hydrate the screen. */
 internal suspend fun DayViewModel.beginSessionForThisDay() {
     val sessionId = workoutRepo.startOrResumeSession(dayKey)
+    // Resuming a session that already has logged work — you're mid-workout, so skip the warmup gate
+    // (the in-memory warmup state was lost when the screen was recreated).
+    val resuming = !workoutRepo.isNewSession(sessionId)
     val nameOverride = customizationRepo.getDayName(dayKey)
     val resolvedName = nameOverride?.customName ?: dayPlan.defaultName
     val disabledUntilMs = settingsRepo.warmupDisabledUntilMs.firstOrNull() ?: 0L
@@ -222,12 +225,11 @@ internal suspend fun DayViewModel.beginSessionForThisDay() {
             sessionId = sessionId,
             sessionStartedAt = clock.nowMs(),
             displayName = resolvedName,
-            isWarmupComplete = it.isWarmupComplete || skipWarmup || warmupAutoSkipped
+            isWarmupComplete = it.isWarmupComplete || skipWarmup || warmupAutoSkipped || resuming
         )
     }
     refreshExercises()
     startSessionService(resolvedName)
-    workoutRepo.isNewSession(sessionId)
 }
 
 private fun computeAvgRestSeconds(sets: List<LoggedSet>): Int? {
