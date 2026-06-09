@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Exported JSON/CSV/PDF live in filesDir root (BackupRepository / PdfExportRepository). -->
+    <files-path name="forge_exports" path="." />
+</paths>

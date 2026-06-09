@@ -32,6 +32,7 @@ data class SettingsUiState(
     val quietHoursEnd: Int = 7,
     val privacyMode: Boolean = false,
     val availableEquipment: Set<String> = emptySet(),
+    val plateWeightLb: Double = 15.0,
     val accentColorHex: String = "",
     val accentEmphasis: String = "off",
     val timezone: String = java.util.TimeZone.getDefault().id,
@@ -98,6 +99,8 @@ class SettingsViewModel @Inject constructor(
         s.copy(privacyMode = v)
     }.combine(settingsRepo.availableEquipment) { s, equip ->
         s.copy(availableEquipment = equip)
+    }.combine(settingsRepo.plateWeightLb) { s, v ->
+        s.copy(plateWeightLb = v)
     }.combine(settingsRepo.accentColorHex) { s, v ->
         s.copy(accentColorHex = v)
     }.combine(settingsRepo.accentEmphasis) { s, v ->
@@ -167,6 +170,7 @@ class SettingsViewModel @Inject constructor(
     fun loadSampleData() = viewModelScope.launch { sampleDataSeeder.seed() }
     fun setPrivacyMode(v: Boolean) = viewModelScope.launch { settingsRepo.setPrivacyMode(v) }
     fun setAvailableEquipment(codes: Set<String>) = viewModelScope.launch { settingsRepo.setAvailableEquipment(codes) }
+    fun setPlateWeightLb(lb: Double) = viewModelScope.launch { settingsRepo.setPlateWeightLb(lb) }
     fun setDaysPerWeek(n: Int) = viewModelScope.launch { settingsRepo.setDaysPerWeek(n) }
     /** Weekly cardio-minutes goal for the cardio tab (no effect on the lifting plan). */
     fun setCardioWeeklyTargetMin(min: Int) = viewModelScope.launch { settingsRepo.setCardioWeeklyTargetMin(min) }

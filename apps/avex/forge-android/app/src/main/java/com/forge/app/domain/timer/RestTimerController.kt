@@ -70,6 +70,9 @@ class RestTimerController(
 
     fun resume() {
         val current = _state.value ?: return
+        // The rest is already over — "Resume" means get back to working out, so dismiss the timer
+        // instead of trying to resume a 0-second countdown (which was a no-op).
+        if (current.secondsRemaining <= 0) { stop(); return }
         if (!current.isPaused) return
         endAtMs = clock.nowMs() + current.secondsRemaining * 1000L
         _state.update { it?.copy(isPaused = false) }

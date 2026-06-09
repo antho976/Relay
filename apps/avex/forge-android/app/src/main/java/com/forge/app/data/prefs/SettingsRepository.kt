@@ -252,6 +252,13 @@ class SettingsRepository @Inject constructor(
     suspend fun setCardioWeeklyTargetMin(min: Int) =
         context.forgePreferences.edit { it[PreferenceKeys.CARDIO_WEEKLY_TARGET_MIN] = min.coerceAtLeast(0) }
 
+    // ─── Plate weight (machine/cable plate-loaded exercises) ──────────────────
+    /** Weight of one plate in lb. Plate-loaded exercises are entered/shown as a plate count. */
+    val plateWeightLb: Flow<Double> = context.forgePreferences.data
+        .map { it[PreferenceKeys.PLATE_WEIGHT_LB] ?: 15.0 }
+    suspend fun setPlateWeightLb(lb: Double) =
+        context.forgePreferences.edit { it[PreferenceKeys.PLATE_WEIGHT_LB] = lb.coerceIn(1.0, 200.0) }
+
     // ─── Plan tomorrow (#147) ─────────────────────────────────────────────────
 
     val plannedNextDay: Flow<String> = context.forgePreferences.data

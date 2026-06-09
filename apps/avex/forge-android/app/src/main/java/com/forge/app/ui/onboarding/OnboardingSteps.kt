@@ -203,6 +203,19 @@ internal fun StepEquipment(selected: Set<String>, onToggle: (String) -> Unit, on
 }
 
 @Composable
+internal fun StepPlateWeight(plateWeightLb: Double, onSet: (Double) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        Headline("Weight per plate")
+        Caption("Machine/cable exercises are entered as a plate count. This is what one plate weighs — the MWM-989 is 15 lb. Leave it at 15 if you're not sure.")
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf(5.0, 10.0, 15.0, 20.0, 25.0, 45.0).forEach { w ->
+                OnboardingChip("${w.toInt()} lb", plateWeightLb == w) { onSet(w) }
+            }
+        }
+    }
+}
+
+@Composable
 internal fun StepProblemAreas(selected: Set<String>, onToggle: (String) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Headline("Any problem areas?")

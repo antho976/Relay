@@ -205,8 +205,11 @@ fun OverviewScreen(
 
             Spacer(Modifier.height(20.dp))
 
-            // ── Today's workout ──────────────────────────────────────────────
-            Text("TODAY", style = MaterialTheme.typography.labelSmall, fontSize = 13.sp, color = emphasized(muted))
+            // ── Next workout ─────────────────────────────────────────────────
+            // If you've already trained today, the next session is tomorrow — say so.
+            val trainedToday = todayDow in state.weekDaysTrained
+            Text(if (trainedToday) "TOMORROW" else "TODAY",
+                style = MaterialTheme.typography.labelSmall, fontSize = 13.sp, color = emphasized(muted))
             Spacer(Modifier.height(2.dp))
             Text(
                 state.customDayName ?: nextDay?.defaultName ?: "Ready",

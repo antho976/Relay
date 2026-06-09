@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
+import androidx.datastore.preferences.core.doublePreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -134,4 +135,7 @@ object PreferenceKeys {
     // ─── Cardio layer (program-unlock Phase 6) ────────────────────────────────
     /** Weekly cardio goal in minutes. 0 = no goal. */
     val CARDIO_WEEKLY_TARGET_MIN = intPreferencesKey("cardio_weekly_target_min")
+
+    /** Weight of one plate (in lb) for plate-loaded machine/cable exercises. Default 15 (MWM-989). */
+    val PLATE_WEIGHT_LB = doublePreferencesKey("plate_weight_lb")
 }

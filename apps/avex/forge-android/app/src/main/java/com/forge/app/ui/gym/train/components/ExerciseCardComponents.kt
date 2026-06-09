@@ -54,6 +54,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.data.db.types.EffortRating
 import com.forge.app.domain.timer.RestTimerState
+import com.forge.app.program.ExerciseUnit
 import com.forge.app.ui.gym.stats.components.Sparkline
 import com.forge.app.ui.gym.train.state.ExerciseSessionPoint
 import com.forge.app.ui.gym.train.state.ExerciseUiState
@@ -62,12 +63,18 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
-/** A YouTube search for how to perform [exerciseName] — no per-exercise link curation needed. */
-internal fun youTubeSearchIntent(exerciseName: String): Intent =
-    Intent(
+/**
+ * A YouTube search for how to perform [exerciseName] — no per-exercise link curation needed.
+ * [machine] biases the query toward cable/machine tutorials (the MWM-989 plate stations) so a
+ * "Tricep Pushdown" or "Seated Bench Press" lands on machine demos, not barbell ones.
+ */
+internal fun youTubeSearchIntent(exerciseName: String, machine: Boolean = false): Intent {
+    val query = if (machine) "$exerciseName cable machine exercise how to" else "$exerciseName exercise how to"
+    return Intent(
         Intent.ACTION_VIEW,
-        Uri.parse("https://www.youtube.com/results?search_query=" + Uri.encode("$exerciseName exercise how to"))
+        Uri.parse("https://www.youtube.com/results?search_query=" + Uri.encode(query))
     ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+}
 
 @Composable
 internal fun CollapsedRow(
@@ -127,22 +134,27 @@ internal fun CollapsedRow(
                 )
             }
         }
-        // Eye → opens a YouTube demo search for this exercise.
-        Icon(
-            Icons.Outlined.Visibility,
-            contentDescription = "Watch a demo",
-            tint = muted.copy(alpha = 0.55f),
-            modifier = Modifier
-                .padding(start = 8.dp, top = 4.dp)
-                .size(18.dp)
-                .clickable { runCatching { context.startActivity(youTubeSearchIntent(state.effectiveName)) } }
-        )
-        Text(
-            "⇌",
-            style = MaterialTheme.typography.bodyLarge,
-            color = muted.copy(alpha = 0.55f),
-            modifier = Modifier.padding(start = 10.dp, top = 4.dp).clickable { onOpenSwapPicker() }
-        )
+        // Trailing actions — eye (YouTube demo) + swap, both 18dp icons so they line up.
+        Row(
+            modifier = Modifier.padding(start = 8.dp, top = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            val machine = state.plan.unit == ExerciseUnit.PLATES
+            Icon(
+                Icons.Outlined.Visibility,
+                contentDescription = "Watch a demo",
+                tint = muted.copy(alpha = 0.55f),
+                modifier = Modifier.size(18.dp)
+                    .clickable { runCatching { context.startActivity(youTubeSearchIntent(state.effectiveName, machine)) } }
+            )
+            Icon(
+                Icons.Outlined.SwapHoriz,
+                contentDescription = "Swap",
+                tint = muted.copy(alpha = 0.55f),
+                modifier = Modifier.size(18.dp).clickable { onOpenSwapPicker() }
+            )
+        }
     }
 }
 
@@ -362,7 +374,7 @@ internal fun ExerciseCardFooter(
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
         ActionChip(icon = Icons.Outlined.Description, label = "NOTE") { showNote = !showNote }
         ActionChip(icon = Icons.Outlined.Visibility, label = "VIDEO") {
-            runCatching { context.startActivity(youTubeSearchIntent(state.effectiveName)) }
+            runCatching { context.startActivity(youTubeSearchIntent(state.effectiveName, state.plan.unit == ExerciseUnit.PLATES)) }
         }
         ActionChip(icon = Icons.Outlined.SwapHoriz, label = "SWAP") { onOpenSwapPicker() }
         ActionChip(icon = Icons.Outlined.SkipNext, label = if (state.skipped) "UN-SKIP" else "SKIP") { onToggleSkipped() }

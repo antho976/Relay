@@ -213,6 +213,7 @@ internal fun TilesPage(state: SettingsUiState, vm: SettingsViewModel, modifier: 
 @Composable
 internal fun EquipmentPage(state: SettingsUiState, vm: SettingsViewModel, modifier: Modifier = Modifier) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val onBg = MaterialTheme.colorScheme.onBackground
     Column(modifier.fillMaxSize()) {
         Spacer(Modifier.height(16.dp))
         Text(
@@ -259,6 +260,28 @@ internal fun EquipmentPage(state: SettingsUiState, vm: SettingsViewModel, modifi
         Spacer(Modifier.height(10.dp))
         FlowRow(modifier = Modifier.padding(horizontal = 24.dp)) {
             PillChip("Regenerate for this equipment", selected = false) { vm.generateProgram(state.daysPerWeek) }
+        }
+        Spacer(Modifier.height(24.dp))
+
+        // ── Plate weight ────────────────────────────────────────────────────────
+        Text("Weight per plate", style = MaterialTheme.typography.titleSmall, color = onBg,
+            modifier = Modifier.padding(horizontal = 24.dp))
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "Machine/cable exercises are entered and shown as a plate count. This is what one plate weighs " +
+                "(the MWM-989 is 15 lb), used for PRs and volume.",
+            style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic,
+            modifier = Modifier.padding(horizontal = 24.dp)
+        )
+        Spacer(Modifier.height(12.dp))
+        FlowRow(
+            modifier = Modifier.padding(horizontal = 24.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            listOf(5.0, 10.0, 15.0, 20.0, 25.0, 45.0).forEach { w ->
+                PillChip("${w.toInt()} lb", state.plateWeightLb == w) { vm.setPlateWeightLb(w) }
+            }
         }
         Spacer(Modifier.height(16.dp))
         SectionDivider()

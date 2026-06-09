@@ -119,6 +119,8 @@ class MainActivity : ComponentActivity() {
                     s.copy(accentColorHex = v)
                 }.combine(settingsRepo.accentEmphasis) { s, v ->
                     s.copy(accentEmphasis = v)
+                }.combine(settingsRepo.plateWeightLb) { s, v ->
+                    s.copy(plateWeightLb = v)
                 }
             }
             val uiSettings by uiSettingsFlow.collectAsState(initial = ForgeUiSettings())

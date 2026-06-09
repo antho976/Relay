@@ -9,28 +9,28 @@ import com.forge.app.program.ExerciseUnit
  * verbatim regardless, and treat null as 0 lb for volume purposes.
  *
  * Recognised forms:
- *  - "45", "45.5"               → 45.0, 45.5         (plain lb)
+ *  - "45", "45.5"               → 45.0, 45.5         (plain lb; or a plate COUNT if unit = PLATES)
  *  - "BW", "bw", "" (empty)     → null                (bodyweight)
- *  - "2 plates", "1 plate", "3p"→ N * PLATE_LB        (MWM-989, 15 lb / plate)
- *  - "30 lb", "30lb"            → 30.0                (lb suffix tolerated)
+ *  - "2 plates", "1 plate", "3p"→ N * plateLb         (explicit plate count)
+ *  - "30 lb", "30lb"            → 30.0                (lb suffix forces lb even on plate exercises)
  *
- * The [unit] hint biases interpretation: if the exercise's default unit is PLATES,
- * a bare number is interpreted as a *plate count*, not lb. So "2" with [unit] = PLATES
- * returns 30.0; "2" with [unit] = DUMBBELL returns 2.0.
+ * The [unit] hint biases bare numbers: on a PLATES exercise the field shows "PLATES", so a bare
+ * "2" is a *plate count* → 2 * [plateLb]; on any other unit "2" is 2 lb. [plateLb] is the user's
+ * configured weight-per-plate (default [PLATE_LB]).
  */
 object WeightParser {
 
     const val PLATE_LB: Double = 15.0
 
-    fun parse(input: String, unit: ExerciseUnit): Double? {
+    fun parse(input: String, unit: ExerciseUnit, plateLb: Double = PLATE_LB): Double? {
         val text = input.trim().lowercase()
         if (text.isEmpty() || text == "bw") return null
 
-        // "N plate" / "N plates" / "Np" — explicit plate notation overrides unit hint
+        // "N plate" / "N plates" / "Np" — explicit plate notation
         val plateMatch = Regex("""^([0-9]*\.?[0-9]+)\s*(plates?|p)$""").matchEntire(text)
         if (plateMatch != null) {
             val plates = plateMatch.groupValues[1].toDoubleOrNull() ?: return null
-            return plates * PLATE_LB
+            return plates * plateLb
         }
 
         // "N lb" / "Nlb" — always lb regardless of unit hint
@@ -39,10 +39,9 @@ object WeightParser {
             return lbMatch.groupValues[1].toDoubleOrNull()
         }
 
-        // Bare number — always literal pounds. The weight field is labelled "· LB", so
-        // typing "12" means 12 lb regardless of the exercise's default unit. Plate counts
-        // must be entered explicitly as "N plates" (handled above). Reject negatives (which
-        // would otherwise produce negative volume and false PRs).
-        return text.toDoubleOrNull()?.takeIf { it >= 0.0 }
+        // Bare number. On a PLATES exercise it's a plate count (field is labelled "PLATES");
+        // otherwise it's literal pounds. Reject negatives (which would corrupt volume / PRs).
+        val n = text.toDoubleOrNull()?.takeIf { it >= 0.0 } ?: return null
+        return if (unit == ExerciseUnit.PLATES) n * plateLb else n
     }
 }

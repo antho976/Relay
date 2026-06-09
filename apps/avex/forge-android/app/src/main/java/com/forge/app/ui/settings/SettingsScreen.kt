@@ -301,13 +301,30 @@ fun SettingsScreen(
         )
     }
 
+    // When an export finishes, open the system share sheet so it can be saved as a real file
+    // (Save to Files / Downloads / Drive…) instead of being stranded in app storage.
     exportPath?.let { path ->
-        AlertDialog(
-            onDismissRequest = viewModel::clearExportPath,
-            title = { Text("Export saved") },
-            text = { Text("File saved to app storage:\n${path.substringAfterLast("/")}") },
-            confirmButton = { TextButton(onClick = viewModel::clearExportPath) { Text("OK") } }
-        )
+        LaunchedEffect(path) {
+            val file = java.io.File(path)
+            runCatching {
+                val uri = androidx.core.content.FileProvider.getUriForFile(
+                    context, "${context.packageName}.fileprovider", file
+                )
+                val mime = when (file.extension.lowercase()) {
+                    "json" -> "application/json"
+                    "csv" -> "text/csv"
+                    "pdf" -> "application/pdf"
+                    else -> "*/*"
+                }
+                val send = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                    type = mime
+                    putExtra(android.content.Intent.EXTRA_STREAM, uri)
+                    addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                context.startActivity(android.content.Intent.createChooser(send, "Save or share export"))
+            }
+            viewModel.clearExportPath()
+        }
     }
 
     confirmReset?.let { target ->

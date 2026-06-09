@@ -5,6 +5,7 @@ import com.forge.app.domain.parser.WeightParser
 import com.forge.app.ui.gym.train.state.DayUiEvent
 import com.forge.app.ui.gym.train.state.WeightJumpWarning
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -36,7 +37,7 @@ internal fun DayViewModel.handleExerciseEvent(event: DayUiEvent) {
             // which aren't in the static dayPlan.exercises).
             val plan = exerciseUi.plan
             val set = exerciseUi.loggedSets.firstOrNull { it.id == event.setId } ?: return@launch
-            val lb = WeightParser.parse(event.weightText, plan.unit)
+            val lb = WeightParser.parse(event.weightText, plan.unit, settingsRepo.plateWeightLb.first())
             workoutRepo.updateSet(set.copy(weightText = event.weightText, weightLb = lb, reps = event.reps))
             refreshExercise(exerciseUi.plan.id)
         }
@@ -205,7 +206,7 @@ internal fun DayViewModel.logSet(exerciseId: String, weightText: String, reps: I
         // (the static dayPlan.exercises doesn't contain them).
         val plan = currentUi.plan
 
-        val newWeightLb = WeightParser.parse(weightText, plan.unit)
+        val newWeightLb = WeightParser.parse(weightText, plan.unit, settingsRepo.plateWeightLb.first())
         // Ignore dummy display rows (loggedExerciseId == -1) so placeholder data never
         // triggers the jump warning.
         val lastWeightLb = currentUi.priorSets
@@ -224,6 +225,9 @@ internal fun DayViewModel.logSet(exerciseId: String, weightText: String, reps: I
         // Start the rest timer before the DB write so the bubble + countdown appear the
         // instant you tap — not after the insert and per-exercise rebuild round-trip.
         restTimer.start(computeTimerDuration(plan, currentUi.difficulty, currentUi.restTimerOverrideSeconds))
+        // Push the started timer into UI state synchronously so it's visible before refreshExercise
+        // re-renders — don't wait for the collector coroutine to forward the first emission.
+        _state.update { it.copy(restTimer = restTimer.state.value) }
 
         val leId = currentUi.loggedExerciseId
             ?: workoutRepo.addExerciseToSession(

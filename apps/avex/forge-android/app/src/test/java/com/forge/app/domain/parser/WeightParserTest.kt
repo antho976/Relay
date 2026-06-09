@@ -35,9 +35,13 @@ class WeightParserTest {
     }
 
     @Test
-    fun bareNumberIsLiteralPoundsEvenWhenUnitIsPlates() {
-        // Documents actual behavior: bare numbers are always lb; plate counts need "N plates".
-        assertEquals(2.0, WeightParser.parse("2", ExerciseUnit.PLATES)!!, 0.0)
+    fun bareNumberIsAPlateCountWhenUnitIsPlates() {
+        // On a plate-loaded exercise the field is labelled PLATES, so a bare "2" = 2 plates.
+        assertEquals(30.0, WeightParser.parse("2", ExerciseUnit.PLATES)!!, 0.0)
+        // A custom plate weight scales the count.
+        assertEquals(20.0, WeightParser.parse("2", ExerciseUnit.PLATES, plateLb = 10.0)!!, 0.0)
+        // An explicit lb suffix still forces pounds even on a plate exercise.
+        assertEquals(35.0, WeightParser.parse("35 lb", ExerciseUnit.PLATES)!!, 0.0)
     }
 
     @Test

@@ -58,12 +58,17 @@ private val REPS_COL_W = 48.dp
 private val RPE_COL_W = 44.dp
 private val DELTA_COL_W = 72.dp
 
+/** Plate count display: whole counts drop the decimal ("3"), halves keep one ("2.5"). */
+private fun formatPlateCount(plates: Double): String =
+    if (plates % 1.0 == 0.0) plates.toInt().toString() else "%.1f".format(plates)
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun SetRow(
     set: LoggedSet,
     setIndex: Int = 1,
     isPr: Boolean,
+    isPlates: Boolean = false,
     priorSet: LoggedSet? = null,
     onDelete: () -> Unit,
     onEdit: (weightText: String, reps: Int) -> Unit,
@@ -76,11 +81,16 @@ fun SetRow(
     modifier: Modifier = Modifier
 ) {
     val useKg = LocalForgeSettings.current.useKg
-    val displayWeight = set.weightLb?.let { formatWeight(it, useKg) } ?: set.weightText
-    // Seed the edit field in the DISPLAY unit (what the row shows), so editing in kg edits the kg
-    // value — the conversion back to stored lb happens on submit (DayContent.onEditSet), exactly
-    // like the log path. Re-seeds if the unit flips or the underlying set changes.
-    val editSeed = set.weightLb?.let { weightInputValue(it, useKg) } ?: set.weightText
+    val plateLb = LocalForgeSettings.current.plateWeightLb
+    // Plate exercises read as a plate count + the lb equivalent (e.g. "3 plates (45 lb)"); the edit
+    // field seeds with the plate count. Free weights show/seed the weight in the display unit.
+    val displayWeight = set.weightLb?.let { lb ->
+        if (isPlates) "${formatPlateCount(lb / plateLb)} plates (${formatWeight(lb, useKg)})"
+        else formatWeight(lb, useKg)
+    } ?: set.weightText
+    val editSeed = set.weightLb?.let { lb ->
+        if (isPlates) formatPlateCount(lb / plateLb) else weightInputValue(lb, useKg)
+    } ?: set.weightText
     var isEditing by remember(set.id) { mutableStateOf(false) }
     var editWeight by remember(set.id, useKg, set.weightText) { mutableStateOf(editSeed) }
     var editReps by remember(set.id, set.reps) { mutableStateOf(set.reps.toString()) }

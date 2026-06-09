@@ -43,9 +43,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.domain.units.toStoredWeightText
+import com.forge.app.program.ExerciseUnit
 import com.forge.app.ui.gym.train.components.CollapsedRow
 import com.forge.app.ui.gym.train.components.ExerciseCard
 import com.forge.app.ui.gym.train.components.ExerciseChartSheet
+import com.forge.app.ui.gym.train.components.InlineRestTimer
 import com.forge.app.ui.gym.train.components.UpNextBubble
 import com.forge.app.ui.gym.train.components.WarmupGate
 import com.forge.app.ui.gym.train.state.DayUiEvent
@@ -163,17 +165,22 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
                                 state = ex.copy(isExpanded = true),
                                 isNow = exIsNow,
                                 totalExercises = state.exercises.size,
-                                restTimerState = if (exIsNow) state.restTimer else null,
                                 sessionStartedAtMs = state.sessionStartedAt,
                                 advanceLabel = if (exNextId != null) "MOVE TO NEXT →" else "FINISH WORKOUT →",
                                 onAdvance = { if (exNextId != null) shownExerciseId = exNextId else onEvent(DayUiEvent.FinishWorkout) },
                                 onToggle = { },
                                 onLogSet = { weight, reps ->
-                                    onEvent(DayUiEvent.LogSet(id, toStoredWeightText(weight, useKg), reps))
+                                    // Plate exercises enter a plate COUNT (not a display-unit weight),
+                                    // so skip the kg→lb conversion — WeightParser turns the count into lb.
+                                    val stored = if (ex.plan.unit == ExerciseUnit.PLATES) weight else toStoredWeightText(weight, useKg)
+                                    onEvent(DayUiEvent.LogSet(id, stored, reps))
                                 },
                                 onDeleteSet = { setId -> onEvent(DayUiEvent.DeleteSet(setId)) },
-                                // Same unit conversion as logging — editing in kg stores the lb value.
-                                onEditSet = { setId, w, r -> onEvent(DayUiEvent.EditSet(setId, toStoredWeightText(w, useKg), r)) },
+                                // Same unit handling as logging — plate counts pass through, free weights convert.
+                                onEditSet = { setId, w, r ->
+                                    val stored = if (ex.plan.unit == ExerciseUnit.PLATES) w else toStoredWeightText(w, useKg)
+                                    onEvent(DayUiEvent.EditSet(setId, stored, r))
+                                },
                                 onLogSameAsLast = { setId -> onEvent(DayUiEvent.LogSameAsLast(id, setId)) },
                                 onRate = { rating -> onEvent(DayUiEvent.RateExercise(id, rating)) },
                                 onNoteChange = { note -> onEvent(DayUiEvent.UpdateNote(id, note)) },
@@ -204,6 +211,20 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
                                 onOpenChart = { chartForExerciseId = id }
                             )
                         }
+                    }
+                }
+
+                // Live rest timer — rendered here (off state.restTimer directly), NOT inside the
+                // exercise card's AnimatedContent, so it appears the instant a set is logged.
+                val restTimer = state.restTimer
+                if (restTimer != null) {
+                    item(key = "rest-timer") {
+                        Spacer(Modifier.height(8.dp))
+                        InlineRestTimer(
+                            timer = restTimer,
+                            onTap = { restTimerSetterForId = shownExercise.plan.id },
+                            onSkip = { onEvent(DayUiEvent.RestTimerSkip) }
+                        )
                     }
                 }
 

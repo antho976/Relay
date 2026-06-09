@@ -84,11 +84,13 @@ class OnboardingViewModel @Inject constructor(
         problemAreas: Set<String> = emptySet(),
         seed: Long = System.nanoTime(),
         generate: Boolean = true,
-        accentEmphasis: String = "off"
+        accentEmphasis: String = "off",
+        plateWeightLb: Double = 15.0
     ) {
         viewModelScope.launch {
             bodyweightLb?.let { bodyweightRepo.log(it) }
             settingsRepo.setAccentEmphasis(accentEmphasis)
+            settingsRepo.setPlateWeightLb(plateWeightLb)
             if (generate) {
                 settingsRepo.setDaysPerWeek(daysPerWeek)
                 settingsRepo.setAvailableEquipment(equipment)
@@ -132,6 +134,7 @@ fun OnboardingScreen(
     var bodyweightInput by remember { mutableStateOf("") }
     var daysPerWeek by remember { mutableIntStateOf(0) }
     var equipment by remember { mutableStateOf(emptySet<String>()) }
+    var plateWeightLb by remember { mutableStateOf(15.0) }
     var problemAreas by remember { mutableStateOf(emptySet<String>()) }
     var cadence by remember { mutableStateOf("") }
     var everyN by remember { mutableIntStateOf(4) }
@@ -204,6 +207,7 @@ fun OnboardingScreen(
                                     onToggle = { code -> equipment = if (code in equipment) equipment - code else equipment + code },
                                     onSetAll = { equipment = it }
                                 )
+                                StepPlateWeight(plateWeightLb = plateWeightLb, onSet = { plateWeightLb = it })
                             }
                             3 -> {
                                 StepProblemAreas(
@@ -250,7 +254,7 @@ fun OnboardingScreen(
                             viewModel.complete(
                                 name.trim(), useKg, goal, bwLb,
                                 daysPerWeek, equipment, cadence.ifEmpty { "never" }, everyN, experience, problemAreas,
-                                previewSeed, accentEmphasis = accentEmphasis
+                                previewSeed, accentEmphasis = accentEmphasis, plateWeightLb = plateWeightLb
                             )
                             onFinished()
                         }

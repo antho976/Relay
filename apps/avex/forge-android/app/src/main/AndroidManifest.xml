@@ -49,6 +49,17 @@
                 android:value="Keeps the rest timer reliable during an active workout session" />
         </service>
 
+        <!-- Shares exported files (JSON/CSV/PDF) out of app storage via the system share sheet. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+
         <!-- Disable default WorkManager auto-init so we can use HiltWorkerFactory (#31). -->
         <provider
             android:name="androidx.startup.InitializationProvider"

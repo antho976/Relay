@@ -73,6 +73,8 @@ fun SetInputRow(
     advanceLabel: String = "",
     /** Bodyweight exercise (push-ups, planks…) — no weight field; logs reps only as "BW". */
     isBodyweight: Boolean = false,
+    /** Plate-loaded machine/cable exercise — the weight field is a plate COUNT, labelled "PLATES". */
+    isPlates: Boolean = false,
     /** Recommended reps from the plan (e.g. 12 from "8-12") — pre-filled into the reps field. */
     targetReps: Int? = null,
     /** Greyed hint shown in the empty reps field — the recommended rep even for AMRAP (e.g. 12). */
@@ -182,12 +184,14 @@ fun SetInputRow(
                         }
                     } else {
                         Column(modifier = Modifier.weight(1f)) {
+                            // Plate exercises show "PLATES" (the value is a plate count); free weights
+                            // show "WEIGHT · LB/KG" and tapping the label offers a unit switch.
                             Text(
-                                "WEIGHT${if (useKg) " · KG" else " · LB"}",
+                                if (isPlates) "PLATES" else "WEIGHT${if (useKg) " · KG" else " · LB"}",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = muted,
                                 fontSize = 9.sp,
-                                modifier = Modifier.clickable { showUnitDialog = true }
+                                modifier = if (isPlates) Modifier else Modifier.clickable { showUnitDialog = true }
                             )
                             Spacer(Modifier.height(2.dp))
                             UnderlineNumberField(
@@ -196,7 +200,7 @@ fun SetInputRow(
                                 placeholder = "0",
                                 keyboardType = KeyboardType.Text,
                                 imeAction = ImeAction.Next,
-                                supportingText = prRepsHint?.let { "$it for PR" }
+                                supportingText = if (isPlates) null else prRepsHint?.let { "$it for PR" }
                             )
                         }
                     }

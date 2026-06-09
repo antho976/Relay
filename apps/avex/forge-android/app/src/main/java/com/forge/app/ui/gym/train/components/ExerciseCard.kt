@@ -124,6 +124,7 @@ fun ExerciseCard(
                 Spacer(Modifier.height(8.dp))
 
                 val isBodyweight = state.plan.unit == ExerciseUnit.BODYWEIGHT
+                val isPlates = state.plan.unit == ExerciseUnit.PLATES
 
                 // Exercise counter
                 if (totalExercises > 0) {
@@ -233,7 +234,10 @@ fun ExerciseCard(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text("SET", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, modifier = Modifier.width(36.dp))
-                    Text(if (isBodyweight) "BODYWEIGHT" else "WEIGHT · LB", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, modifier = Modifier.weight(1f))
+                    Text(
+                        when { isBodyweight -> "BODYWEIGHT"; isPlates -> "PLATES"; else -> "WEIGHT · LB" },
+                        style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, modifier = Modifier.weight(1f)
+                    )
                     Text("REPS", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, modifier = Modifier.width(48.dp))
                     Text("RPE", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, modifier = Modifier.width(44.dp), textAlign = TextAlign.Center)
                     Text("LAST", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, modifier = Modifier.width(72.dp), textAlign = TextAlign.End)
@@ -247,6 +251,7 @@ fun ExerciseCard(
                             set = set,
                             setIndex = i + 1,
                             isPr = set.id in state.prSetIds,
+                            isPlates = isPlates,
                             priorSet = state.priorSets.getOrNull(i),
                             onDelete = { onDeleteSet(set.id) },
                             onEdit = { w, r -> onEditSet(set.id, w, r) },
@@ -263,17 +268,14 @@ fun ExerciseCard(
                     HorizontalDivider(color = outline.copy(alpha = 0.12f))
                 }
 
-                // Inline rest timer row
-                restTimerState?.let { timer ->
-                    Spacer(Modifier.height(8.dp))
-                    InlineRestTimer(timer = timer, onTap = onOpenRestTimerSetter, onSkip = onSkipRest)
-                    Spacer(Modifier.height(8.dp))
-                }
+                // The live rest timer is rendered by DayContent (off state.restTimer directly) so it
+                // updates the instant a set is logged — rendering it here, inside AnimatedContent,
+                // lagged it a full set behind.
 
                 // Input row for the next set
                 if (!state.skipped) {
                     val targetsMet = state.loggedSets.size >= state.targetSets
-                    Spacer(Modifier.height(if (restTimerState == null) 8.dp else 0.dp))
+                    Spacer(Modifier.height(8.dp))
                     SetInputRow(
                         prefillWeight = state.prefillWeight,
                         suggestedWeight = state.suggestedWeight,
@@ -284,6 +286,7 @@ fun ExerciseCard(
                         targetsMet = targetsMet,
                         advanceLabel = advanceLabel,
                         isBodyweight = isBodyweight,
+                        isPlates = isPlates,
                         targetReps = targetRepsOf(state.plan.reps),
                         repsPlaceholder = recommendedRepsOf(state.plan.reps),
                         onAdvance = onAdvance,
