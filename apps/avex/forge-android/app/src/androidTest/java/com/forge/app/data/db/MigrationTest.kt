@@ -71,4 +71,19 @@ class MigrationTest {
             assertEquals("the most recently inserted row should survive", 2L, it.getLong(0))
         }
     }
+
+    @Test
+    fun migrate15To16_addsAdaptationEngineTables() {
+        helper.createDatabase(dbName, 15).close()
+        val db = helper.runMigrationsAndValidate(dbName, 16, true, MIGRATION_15_16)
+
+        db.query(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('rest_event','advice_event')"
+        ).use { assertEquals("adaptation tables should exist after 15→16", 2, it.count) }
+
+        db.query(
+            "SELECT name FROM sqlite_master WHERE type='index' " +
+                "AND name IN ('index_rest_event_session_id','index_rest_event_exercise_id','index_advice_event_advice_id')"
+        ).use { assertEquals("adaptation indices should exist after 15→16", 3, it.count) }
+    }
 }

@@ -55,26 +55,7 @@ class StatsAggregationsTest {
         assertEquals(121.0, lifts[0].currentE1rm, 0.01)
     }
 
-    // ── #37: deload heuristic — newer 3 sessions < 80% of older 3 ──
-    @Test
-    fun deloadInsightFiresWhenVolumeDropsOverRecentSessions() {
-        val now = 1_000_000_000L
-        val day = 24L * 3600 * 1000
-        val sets = mutableListOf<SetWithExerciseAndSession>()
-        // older 3 sessions: 100x10 = 1000 vol each
-        for (i in 0 until 3) sets += set(100.0, 10, now - (6 - i) * day)
-        // newer 3 sessions: 40x10 = 400 vol each → > 20% drop
-        for (i in 0 until 3) sets += set(40.0, 10, now - (3 - i) * day)
-        val insights = buildInsights(sets, emptyList(), emptyList(), now)
-        assertTrue(insights.any { it.title == "Consider a deload" })
-    }
-
-    @Test
-    fun deloadInsightAbsentWhenVolumeSteady() {
-        val now = 1_000_000_000L
-        val day = 24L * 3600 * 1000
-        val sets = (0 until 6).map { set(100.0, 10, now - (6 - it) * day) }
-        val insights = buildInsights(sets, emptyList(), emptyList(), now)
-        assertFalse(insights.any { it.title == "Consider a deload" })
-    }
+    // The old volume-drop deload insight (#80) and its tests were retired with buildInsights:
+    // the adaptation engine's DeloadAdvisor supersedes it (see DeloadAdvisorTest), and the
+    // remaining insight rules moved to InsightEngine (see InsightEngineTest).
 }

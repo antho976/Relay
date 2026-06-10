@@ -311,7 +311,8 @@ fun SetInputRow(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     val hint = buildString {
-                        append("Try: $suggestedWeight lb")
+                        // PLATES suggestions are already self-describing ("3 plates").
+                        append(if (isPlates) "Try: $suggestedWeight" else "Try: $suggestedWeight lb")
                         if (!suggestionReason.isNullOrBlank()) append(" · $suggestionReason")
                     }
                     Text(hint, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary.copy(alpha = 0.75f), modifier = Modifier.weight(1f))

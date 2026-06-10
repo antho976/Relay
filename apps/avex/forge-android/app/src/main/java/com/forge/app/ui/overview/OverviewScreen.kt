@@ -296,6 +296,42 @@ fun OverviewScreen(
                 )
             }
 
+            // ── Coach (adaptation engine: actionable advice only) ────────────
+            if (state.coach.isNotEmpty()) {
+                Spacer(Modifier.height(20.dp))
+                HorizontalDivider(color = outline.copy(alpha = 0.3f))
+                Spacer(Modifier.height(16.dp))
+                Text("COACH", style = MaterialTheme.typography.labelMedium, color = emphasized(muted))
+                Spacer(Modifier.height(10.dp))
+                state.coach.forEach { item ->
+                    Column(Modifier.fillMaxWidth().padding(bottom = 14.dp)) {
+                        Text(item.title, style = MaterialTheme.typography.bodyMedium, color = onBg)
+                        Spacer(Modifier.height(2.dp))
+                        Text(item.body, style = MaterialTheme.typography.bodySmall, color = muted)
+                        Spacer(Modifier.height(6.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                            if (item.applyLabel != null) {
+                                Text(
+                                    "${item.applyLabel} →",
+                                    style = MaterialTheme.typography.labelSmall, color = accent,
+                                    modifier = Modifier
+                                        .clickable { viewModel.applyCoach(item) }
+                                        .padding(vertical = 2.dp)
+                                )
+                            }
+                            Text(
+                                "dismiss",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = muted.copy(alpha = 0.7f),
+                                modifier = Modifier
+                                    .clickable { viewModel.dismissCoach(item) }
+                                    .padding(vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
             Spacer(Modifier.height(20.dp))
             HorizontalDivider(color = outline.copy(alpha = 0.3f))
             Spacer(Modifier.height(16.dp))

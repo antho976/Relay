@@ -152,7 +152,9 @@ fun RestTimerControlsDialog(
     onReset: () -> Unit,
     onSkip: () -> Unit,
     onAddSeconds: (Int) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    /** How this duration was derived (adaptation engine) — every prescription is explainable. */
+    reason: String? = null
 ) {
     Dialog(onDismissRequest = onDismiss) {
         val onBg = MaterialTheme.colorScheme.onBackground
@@ -191,6 +193,15 @@ fun RestTimerControlsDialog(
                     color = muted,
                     fontStyle = FontStyle.Italic,
                     modifier = Modifier.padding(start = 4.dp, bottom = 6.dp)
+                )
+            }
+
+            if (reason != null) {
+                Text(
+                    reason,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = muted.copy(alpha = 0.7f),
+                    fontStyle = FontStyle.Italic
                 )
             }
 

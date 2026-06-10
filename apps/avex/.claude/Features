@@ -1,5 +1,5 @@
 # Forge — Built Features Inventory
-Last updated: 2026-06-08
+Last updated: 2026-06-09
 
 > **Legend:** Items below are marked with their current UI status.
 > - ✅ **Visible** — currently reachable in the running app.
@@ -15,6 +15,11 @@ Last updated: 2026-06-08
 These were verified by codegraph + grep: the file is on disk and compiles, but no Composable in the current screen graph calls into it. Code is safe to delete or to re-wire later.
 
 ### Orphaned Stats components (`ui/gym/stats/components/`)
+> **Partially stale as of 2026-06-09 audit:** the 5-tab Stats revamp (`StatsTabs.kt`) re-wired
+> most of these — `VolumeDeloadCard`, `DayTypeBestVsAvgCard`, `StrengthRadarCard`,
+> `PrClusteringCard`, `TimeToPrCard`, `EffortOverTimeCard`, `PrDayOfWeekCard`,
+> `StrengthOverlayCard` are all invoked again. Verify before deleting anything below.
+
 Every file below is self-referencing only — `StatsContent.kt` no longer invokes them after the editorial Stats redesign:
 - `CalendarCard.kt` — monthly calendar grid (#54)
 - `FrequencyHeatmap.kt` — 12-week heatmap with day-of-week labels (#17a/b)
@@ -30,10 +35,16 @@ Every file below is self-referencing only — `StatsContent.kt` no longer invoke
 - `AnalyticsCardsExtra.kt` — `VolumeDeloadCard` (#126), `DayTypeBestVsAvgCard` (#132)
 
 ### Orphaned Overview components (`ui/overview/components/`)
-- `DeloadBanner.kt` — deload nudge after 24 sessions (banner not called from OverviewScreen)
-- `OnThisDayCard.kt` — "1 month ago" memory card (#106)
-- `StreakCard.kt` — standalone streak card (#15) — streak number IS shown inline in `StatsTile`, but the dedicated card with milestone styling is not
-- `TrainingAlertBanner.kt` — comeback banner (#57), 3-days-straight warning (#58)
+> **Stale as of 2026-06-09 audit:** the four banner/card *files* below no longer exist on disk
+> (`ui/overview/components/` holds only NavTile / OverviewTiles / DayEditComponents /
+> OverviewComponents). What survives is the **state logic** in `OverviewUiState`
+> (`needsDeload` w/ fixed 24-session counter, `showComebackBanner`, `showConsecutiveWarning`,
+> `onThisDayMemory`) — computed but rendered nowhere. Plan: superseded by the adaptation
+> engine's Overview coach feed (engine Phase 4), at which point the dead flags get deleted.
+- ~~`DeloadBanner.kt`~~ — file deleted; deload nudge logic lives in `OverviewUiState.needsDeload`
+- ~~`OnThisDayCard.kt`~~ — file deleted; `onThisDayMemory` still computed (#106)
+- ~~`StreakCard.kt`~~ — file deleted; streak number shown inline in `StatsTile`
+- ~~`TrainingAlertBanner.kt`~~ — file deleted; comeback (#57) / 3-days-straight (#58) flags still computed
 
 ### Orphaned screens / sheets
 - `ui/bodyweight/BodyweightSheet.kt` + `BodyweightViewModel.kt` (#76, #77) — no "Log bodyweight" button on Overview anymore
@@ -239,6 +250,138 @@ All 4 days fully specified with:
 > **Superseded by the program-unlock (un-hardlock) work:** the program is now data-driven + auto-generated from `ExerciseLibrary` (a single equipment-tagged pool of 52 movements with per-exercise coaching rationale). The old `Swaps` catalog was merged into the library, so the **swap picker and the generator now draw from the same pool**, filtered by available equipment + dislikes.
 >
 > **"Professional plans" engine (all 6 phases complete):** the generator is goal-aware (rep ranges), experience-aware (volume scale + difficulty cap), frequency-aware (weekly volume via `VolumeModel`), role/pattern-aware (heavy slots → bilateral compounds, no duplicate movement patterns), and safety-aware (problem-area avoidance). Tunable from **Settings → Program**: days/week, goal, experience, priority muscles, problem areas, cadence, deload week, + a **live per-muscle weekly-volume readout**; per-exercise ♥/✕/📌 (like/dislike/pin) on the Exercise-likes page; single-day re-roll from the day-card long-press menu. Onboarding (10 steps) collects all inputs and shows a **live sample-week preview** before finishing. Rest-timer durations + day-card "~min" estimates come from `SessionEstimate`. See `.claude/program-unlock-plan.md`.
+
+---
+
+## Adaptation Engine (advisory, `domain/adapt/`)
+
+Pure, unit-testable advisory layer mirroring `TrophyEvaluator`: `AdaptationRepository.snapshot()`
+builds an immutable `AdaptationSnapshot` from existing DAOs; advisors are pure functions of it,
+emitting `Recommendation`s (stable id + human-readable reason + confidence). **Proposes only —
+applying always goes through an existing user-confirmed write path.** Confidence-gated: below
+per-signal data thresholds (`AdaptThresholds`, all tunables in one place) an advisor stays silent.
+Untracked sessions (#110) are excluded from every signal at snapshot build.
+
+**Phase 1 — shipped (2026-06-09):**
+- `ProgressionAdvisor.suggestNextLoad` — double progression for the day-screen suggestion chip:
+  weight rises only when every top-weight set hit the range top at acceptable effort; per-set RPE
+  outranks the coarse exercise rating; BRUTAL/RPE ≥ 9.5 backs off. **Unit-aware**: dumbbells move
+  in 2.5 lb steps (intensity-scaled), PLATES move in whole plates with plate-count input text
+  ("4 plates") — fixing the old chip emitting raw lb on plate exercises, which the weight field
+  parsed as a plate count (~15× too heavy). The UP NEXT delta pill now reads the advisor's lb
+  delta (`suggestedDeltaLb`) instead of re-parsing the suggestion string.
+- `ProgressionAdvisor.evaluate` — plateau ladder over the whole program (stall = bouts since last
+  e1RM improvement, so a recent PR resets it): 4 stalled → micro-load (low effort) or ~10% reset
+  (high effort); 6 → rep-range shift; 8 → variation swap (equipment/dislike-filtered candidates).
+  No UI surface yet — consumed by the Overview coach feed in engine Phase 4.
+- `E1rm` (Epley), `SnapshotAssembler` (pure grouping), new DAO fan-out queries
+  (`allForFinishedSessions` on LoggedExercise/LoggedSet — query-only, no schema change).
+- Tests: `domain/adapt/` — 39 tests covering cold start, happy path, conflicting signals
+  (top-of-range + brutal, RPE vs rating, PR-resets-stall), unit awareness, determinism.
+
+**Phase 2 — shipped (2026-06-09):**
+- **DB v15→v16** (`MIGRATION_15_16`, schema 16.json exported, MigrationTest case added):
+  `rest_event` (realized rest per set: planned vs actual seconds, ended_by next_set/expired/
+  skipped, +seconds added; FK→session CASCADE) and `advice_event` (shown/applied/dismissed per
+  recommendation id — written from the coach feed in Phase 4, table ships now so one migration
+  covers both).
+- **Realized-rest capture**: logging a set stamps the close of the previous rest interval and
+  opens a new one (`OpenRestEvent` in DayViewModel, written via WorkoutRepository); timer Skip
+  marks the interval deliberately cut, +time taps accumulate; intervals left open at session
+  end are dropped. Zero DB reads added to the set-logging hot path.
+- **`RestAdvisor`** (pure, `domain/adapt/`): manual per-exercise override always wins → canonical
+  `SessionEstimate.restSeconds` base (+30s after BRUTAL, rule moved here) → per-role personal
+  correction = median(realized ÷ base) per compound/isolation bucket, clamped ±40%, applied only
+  after ≥8 qualified samples (15s–600s sanity bounds), snapped to 15s grid. Compared against the
+  *base* (not tuned planned) so the factor converges instead of oscillating. `DayViewModel` loads
+  tuning once per screen; per-set timer math stays pure/synchronous.
+- **Explainability**: every prescription carries a reason ("compound base 3:00 · −25% to match
+  your usual rest · +30s after a brutal set") — shown as a muted line in the rest-timer dialog
+  (`restTimerReason` on DayUiState).
+- `SessionEstimate.isCompound` made public — single source for the compound/isolation split.
+- Tests: 13 RestAdvisor tests (override precedence, cold start, confidence gate, clamp, grid
+  snap, sample qualification, bucket independence, median outlier resistance, determinism).
+- *Deliberate deviation from the architecture report*: no completedAt-delta backfill — derived
+  gaps conflate set duration + breaks and lack a planned baseline, and real capture reaches the
+  8-sample gate within a session or two. Cold start = canonical defaults, never a guess.
+
+**Phase 3 — shipped (2026-06-10):**
+- **`DeloadAdvisor`** (pure): transparent additive fatigue score over a 14-day window — effort
+  inflation (+2: ≥50% HARD/BRUTAL bouts at flat-or-down volume), intra-session rep drop-off (+1),
+  e1RM regression on ≥2 lifts (+2), low mood in ≥3 of last 5 check-ins (+2), cardio restReason
+  sick (+2) / sore (+1), no deload in 8+ weeks (+1), ≥3 plateaued lifts (+1, reuses System 1).
+  Fires at score ≥5 (HIGH at ≥7); the reason lists the firing drivers verbatim. Gates: ≥8 sessions
+  + a full window of history; a deload in the last 10 days mutes it. Replaces the fixed
+  24-session counter logically — the dead `OverviewUiState.needsDeload`/`DELOAD_THRESHOLD`/
+  `lastDeloadAtSessionCount` plumbing is deleted in Phase 4 with the coach-feed rewiring.
+- **`ReadinessAdvisor`** (pure): bounded ±5% daily scale from recent mood (≤48h old), session
+  spacing (5+ days → comeback caution; 2–4 → fresh), unusually heavy yesterday (>1.25× median),
+  cardio sore/sick ≤48h. Gates: ≥3 sessions + ≥3 recent moods; net zero → silent. Wired into the
+  day screen: `AdaptationRepository.readinessScale()` (light query, no history fan-out) loads at
+  session open and feeds the suggestion chip on NORMAL-intensity days — an explicit LIGHT/HARD
+  pick still outranks it (user intent wins). Replaces the hardcoded intensity-only scaling as the
+  default; chip reasons carry the readiness note ("eased 4% — readiness low").
+- **`RecommendationArbiter`** (pure): muted-id drop (advice_event cooldowns, fed in Phase 4) →
+  deload suppresses all weight *increases* (back-offs/resets survive; structural advice survives)
+  → per-exercise structural collapse (higher confidence wins, tie → rep shift as less disruptive)
+  → deterministic ranking (deload → readiness → progression → rest → ordering → insight, then
+  confidence, then id).
+- Snapshot extended with moods + cardio (90-day window at fetch); MoodDao gains a suspend
+  `since()` query. No schema change.
+- Tests: +27 (DeloadAdvisor 8, ReadinessAdvisor 8, Arbiter 8, chip-readiness 3) — engine total 79,
+  each system covering cold start / happy path / conflicting signals / determinism.
+
+**Phase 4 — shipped (2026-06-10):**
+- **`InsightEngine`** (pure, 10 gated rules): ports best-time-of-day (#40, now gated at 30 sets),
+  most-improved (#41, gate raised to 4 sessions), and weekly muscle dominance from the legacy
+  `buildInsights` (now deleted from StatsEffortAggregations — the volume-drop deload rule #80 was
+  retired outright, superseded by DeloadAdvisor). New rules: push/pull + quad/ham set ratios
+  (28-day, muscle-group based), most-skipped exercise, repeated-session-swaps ("make it
+  permanent?"), recovery-signals-building (DeloadAdvisor's fatigue score at 3–4, *yields* to the
+  real deload call at ≥5), mood×volume link, and session-estimate calibration ("Upper A actually
+  runs ~90 min, estimated ~55"). Stats Snapshot tab renders engine output via the same InsightFlag
+  rows (`StatsRepository` maps `adaptationRepo.insights()`).
+- **Overview COACH feed**: hairline-editorial section under THIS WEEK showing up to 3 *actionable*
+  arbitrated recommendations (deload → one-tap "Generate deload week" via
+  `AdaptationRepository.applyDeloadWeek()`, mirroring Settings' buildParams; plateau
+  swap/rep-shift/reset items shown with reasons + candidate names). Insights deliberately
+  excluded — observations stay on Stats.
+- **`advice_event` writes live**: dismiss/apply logged per recommendation id;
+  dismissed-or-applied ids are muted for 14 days (`mutedIds()` feeds the arbiter) — no re-nagging.
+- **Dead flags deleted**: `OverviewUiState.needsDeload`/`DELOAD_THRESHOLD`/
+  `sessionsSinceLastDeload`/`showComebackBanner`/`showConsecutiveWarning`/`daysSinceLastSession`
+  + `lastDeloadAtSessionCount` pref (flow, setter, key) + `OverviewViewModel.onMarkDeloaded`.
+  The 24-session deload counter is fully retired.
+- **Personalized day-card "~min"**: `DayListItem.estimatedMinutes` computed from the user's
+  realized rest pace (`RestAdvisor.estimateMinutes` via a `restFor` hook on
+  `SessionEstimate.estimateMinutes`); cards fall back to the canonical estimate until tuning
+  has data. Program-viewer cards keep the canonical estimate.
+- Snapshot gains `zoneId` (hour-of-day rules stay deterministic). Tests: +13 InsightEngine
+  (cold start, per-rule gates, the recovery-vs-deload conflict case, determinism) — engine total
+  92; the two legacy volume-drop insight tests were removed with their rule.
+
+**Phase 5 — shipped (2026-06-10). The engine is complete: all six systems live.**
+- **`OrderingAdvisor`** (pure, deterministic greedy with stable tie-breaks): rearranges the day so
+  no two consecutive exercises share a primary muscle. Hard constraints — compounds keep the
+  early block, superset groups are never split, priority muscles get the freshest eligible slot
+  in their block. Silent unless the day has ≥1 same-muscle back-to-back pairing AND the reorder
+  strictly reduces them (a reorder that wouldn't help is noise). HIGH confidence when ≥2 pairings
+  fixed.
+- **Day-screen "SUGGESTED ORDER" banner**: computed once at session open (fresh sessions only —
+  no sets logged, nothing skipped, ≥3 exercises), shown under the session hero until the first
+  set is logged. Shows the proposed sequence + reason; **Apply** reorders the in-memory list via
+  the same mechanism as manual reordering (program untouched, re-suggests next session);
+  **dismiss** logs an advice_event and mutes this day's suggestion for the 14-day cooldown.
+- Tests: +10 (silence on no-problem/unfixable days, spacing fixes, compound-block and
+  superset hard constraints, priority freshness, the superset-blocks-the-only-fix conflict case,
+  determinism). **Engine total: 102 of the app's 183 unit tests.**
+
+> **Adaptation engine summary** — six pure systems over one snapshot
+> (`domain/adapt/`, mirroring TrophyEvaluator): 1 Progression+plateau (chip + plateau ladder),
+> 2 Adaptive rest (realized-rest capture + tuned timer + personalized "~min"), 3 Ordering
+> (pre-session banner), 4 Insights (Stats rows), 5 Adaptive deload (coach feed, one-tap apply),
+> 6 Readiness (chip autoregulation) — all arbitrated, confidence-gated, explainable, and
+> advisory-only (every write goes through a user-confirmed path).
 
 ---
 

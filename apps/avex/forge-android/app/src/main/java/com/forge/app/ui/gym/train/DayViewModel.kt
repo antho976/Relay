@@ -40,6 +40,7 @@ class DayViewModel @Inject constructor(
     internal val goalRepo: GoalRepository,
     internal val settingsRepo: com.forge.app.data.prefs.SettingsRepository,
     internal val warmupRepo: com.forge.app.data.repo.WarmupRepository,
+    internal val adaptationRepo: com.forge.app.data.repo.AdaptationRepository,
     internal val clock: Clock,
     @ApplicationContext internal val appContext: Context,
     internal val bridge: WorkoutSessionBridge,
@@ -52,6 +53,16 @@ class DayViewModel @Inject constructor(
     internal val skipWarmup: Boolean = savedStateHandle.get<Boolean>(Routes.ARG_SKIP_WARMUP) ?: false
 
     internal val restTimer = RestTimerController(viewModelScope, clock)
+
+    /** Personal rest-correction factors (engine System 2). Neutral until the init load lands. */
+    internal var restTuning: com.forge.app.domain.adapt.RestTuning =
+        com.forge.app.domain.adapt.RestTuning.NEUTRAL
+
+    /** Today's readiness scale (engine System 6). Null = neutral / below the data gates. */
+    internal var readiness: com.forge.app.domain.adapt.Recommendation.ReadinessScale? = null
+
+    /** The rest interval being measured right now: opened on set log, closed by the next set. */
+    internal var openRestEvent: OpenRestEvent? = null
 
     internal val _state = MutableStateFlow(
         DayUiState(dayPlan = dayPlan, displayName = dayPlan.defaultName)
@@ -96,6 +107,22 @@ class DayViewModel @Inject constructor(
                     _state.update { it.copy(customWarmupItems = custom) }
                 }
             }
+        }
+        // Learn the user's realized-rest factors once per screen — the per-set timer math
+        // then stays pure and synchronous (no DB on the set-logging hot path).
+        viewModelScope.launch {
+            restTuning = com.forge.app.domain.adapt.RestAdvisor.tuning(
+                com.forge.app.domain.adapt.RestAdvisor.samples(workoutRepo.recentRestEvents()) {
+                    Program.exercise(it)
+                }
+            )
+        }
+        // Today's readiness (engine System 6) — folded into weight suggestions on NORMAL
+        // days; an explicit intensity pick outranks it. Refresh the cards once it lands so
+        // already-built chips pick it up.
+        viewModelScope.launch {
+            readiness = adaptationRepo.readinessScale()
+            if (readiness != null && _state.value.exercises.isNotEmpty()) refreshExercises()
         }
         // Equipment + dislikes drive the swap picker's candidate pool (program-unlock Phase 4).
         viewModelScope.launch {
@@ -149,7 +176,9 @@ class DayViewModel @Inject constructor(
             is DayUiEvent.CrossDayGoBack,
             is DayUiEvent.UndoLastSet, is DayUiEvent.SetSessionType,
             is DayUiEvent.SetUntracked, is DayUiEvent.SetIntensity,
-            is DayUiEvent.ConfirmPreSessionPicker -> handleSessionEvent(event)
+            is DayUiEvent.ConfirmPreSessionPicker,
+            is DayUiEvent.ApplyOrderingSuggestion,
+            is DayUiEvent.DismissOrderingSuggestion -> handleSessionEvent(event)
         }
     }
 }

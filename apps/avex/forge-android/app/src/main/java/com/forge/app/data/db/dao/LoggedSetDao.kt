@@ -141,6 +141,19 @@ interface LoggedSetDao {
     """)
     suspend fun allForSession(sessionId: Long): List<LoggedSet>
 
+    /**
+     * Every set across finished, tracked sessions — pairs with
+     * [LoggedExerciseDao.allForFinishedSessions] for the adaptation-engine snapshot.
+     */
+    @Query("""
+        SELECT ls.* FROM logged_set ls
+        INNER JOIN logged_exercise le ON ls.logged_exercise_id = le.id
+        INNER JOIN session s ON le.session_id = s.id
+        WHERE s.finished_at IS NOT NULL AND s.is_untracked = 0
+        ORDER BY ls.completed_at ASC
+    """)
+    suspend fun allForFinishedSessions(): List<LoggedSet>
+
     /** Peak single-session total volume — feeds the "Volume King" / "Volume Beast" trophies. */
     @Query("""
         SELECT MAX(session_total) FROM (

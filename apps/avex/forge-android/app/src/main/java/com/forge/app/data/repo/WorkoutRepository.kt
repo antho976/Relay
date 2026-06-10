@@ -4,11 +4,13 @@ import com.forge.app.core.time.Clock
 import com.forge.app.data.db.dao.LoggedExerciseDao
 import com.forge.app.data.db.dao.LoggedSetDao
 import com.forge.app.data.db.dao.MoodDao
+import com.forge.app.data.db.dao.RestEventDao
 import com.forge.app.data.db.dao.SessionBreakDao
 import com.forge.app.data.db.dao.SessionDao
 import com.forge.app.data.db.entities.LoggedExercise
 import com.forge.app.data.db.entities.LoggedSet
 import com.forge.app.data.db.entities.MoodEntry
+import com.forge.app.data.db.entities.RestEvent
 import com.forge.app.data.db.entities.Session
 import com.forge.app.data.db.entities.SessionBreak
 import com.forge.app.data.db.types.EffortRating
@@ -35,6 +37,7 @@ class WorkoutRepository @Inject constructor(
     private val loggedSetDao: LoggedSetDao,
     private val moodDao: MoodDao,
     private val sessionBreakDao: SessionBreakDao,
+    private val restEventDao: RestEventDao,
     private val clock: Clock,
     private val settingsRepo: SettingsRepository,
     private val programRepository: ProgramRepository
@@ -230,6 +233,32 @@ class WorkoutRepository @Inject constructor(
 
     suspend fun logBreak(sessionId: Long, type: String) =
         sessionBreakDao.insert(SessionBreak(sessionId = sessionId, type = type, loggedAt = clock.nowMs()))
+
+    // ─── Realized rest (adaptation engine System 2) ───────────────────────────
+
+    suspend fun logRestEvent(
+        sessionId: Long,
+        exerciseId: String,
+        setIndex: Int,
+        plannedSeconds: Int,
+        realizedSeconds: Int,
+        endedBy: String,
+        secondsAdded: Int
+    ) = restEventDao.insert(
+        RestEvent(
+            sessionId = sessionId,
+            exerciseId = exerciseId,
+            setIndex = setIndex,
+            plannedSeconds = plannedSeconds,
+            realizedSeconds = realizedSeconds,
+            endedBy = endedBy,
+            secondsAdded = secondsAdded,
+            loggedAt = clock.nowMs()
+        )
+    )
+
+    /** Recent realized-rest history — RestAdvisor's tuning input. */
+    suspend fun recentRestEvents(limit: Int = 200): List<RestEvent> = restEventDao.recent(limit)
 
     // ─── Mood ──────────────────────────────────────────────────────────────────
 

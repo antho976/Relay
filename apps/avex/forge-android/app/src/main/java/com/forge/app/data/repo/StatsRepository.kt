@@ -74,6 +74,7 @@ class StatsRepository @Inject constructor(
     private val loggedSetDao: LoggedSetDao,
     private val restDayDao: RestDayDao,
     private val bodyweightRepo: BodyweightRepository,
+    private val adaptationRepo: AdaptationRepository,
     private val clock: Clock
 ) {
 
@@ -316,7 +317,9 @@ class StatsRepository @Inject constructor(
             )
             val dayTypeRows = dayTypeRowsD.await()
             val dayTypeBreakdown = buildDayTypeBreakdown(dayTypeRows)
-            val insights = buildInsights(allSets, volumeSets, dayTypeRows, clock.nowMs())
+            // Insights come from the adaptation engine (System 4) — buildInsights' rules
+            // moved there with snapshot-wide gating; the UI keeps rendering InsightFlag rows.
+            val insights = adaptationRepo.insights().map { InsightFlag(it.icon, it.title, it.body) }
             val e1lifts = buildE1rmLifts(allSets)
             GymStats(
                 totals = totals,

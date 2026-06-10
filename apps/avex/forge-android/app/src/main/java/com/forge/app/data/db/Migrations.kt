@@ -61,9 +61,45 @@ val MIGRATION_14_15 = object : Migration(14, 15) {
     }
 }
 
+/**
+ * v15 → v16: adaptation-engine tables. `rest_event` records realized rest between sets
+ * (planned vs actual, how the rest ended) — RestAdvisor's tuning signal. `advice_event`
+ * logs shown/applied/dismissed per recommendation id for cooldowns + feedback. New empty
+ * tables — additive, no existing data touched.
+ */
+val MIGRATION_15_16 = object : Migration(15, 16) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `rest_event` (" +
+                "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "`session_id` INTEGER NOT NULL, " +
+                "`exercise_id` TEXT NOT NULL, " +
+                "`set_index` INTEGER NOT NULL, " +
+                "`planned_seconds` INTEGER NOT NULL, " +
+                "`realized_seconds` INTEGER NOT NULL, " +
+                "`ended_by` TEXT NOT NULL, " +
+                "`seconds_added` INTEGER NOT NULL, " +
+                "`logged_at` INTEGER NOT NULL, " +
+                "FOREIGN KEY(`session_id`) REFERENCES `session`(`id`) " +
+                "ON UPDATE NO ACTION ON DELETE CASCADE )"
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_rest_event_session_id` ON `rest_event` (`session_id`)")
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_rest_event_exercise_id` ON `rest_event` (`exercise_id`)")
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `advice_event` (" +
+                "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "`advice_id` TEXT NOT NULL, " +
+                "`action` TEXT NOT NULL, " +
+                "`logged_at` INTEGER NOT NULL)"
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_advice_event_advice_id` ON `advice_event` (`advice_id`)")
+    }
+}
+
 /** All migrations, in order. Register every new one here. */
 val ALL_MIGRATIONS: Array<Migration> = arrayOf(
     MIGRATION_12_13,
     MIGRATION_13_14,
-    MIGRATION_14_15
+    MIGRATION_14_15,
+    MIGRATION_15_16
 )

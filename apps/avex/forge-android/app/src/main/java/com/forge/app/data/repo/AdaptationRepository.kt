@@ -1,0 +1,167 @@
+package com.forge.app.data.repo
+
+import com.forge.app.core.time.Clock
+import com.forge.app.data.db.dao.AdviceEventDao
+import com.forge.app.data.db.dao.CardioDao
+import com.forge.app.data.db.dao.LoggedExerciseDao
+import com.forge.app.data.db.dao.LoggedSetDao
+import com.forge.app.data.db.dao.MoodDao
+import com.forge.app.data.db.dao.SessionDao
+import com.forge.app.data.db.entities.AdviceEvent
+import com.forge.app.data.prefs.SettingsRepository
+import com.forge.app.domain.adapt.AdaptationSnapshot
+import com.forge.app.domain.adapt.DeloadAdvisor
+import com.forge.app.domain.adapt.InsightEngine
+import com.forge.app.domain.adapt.PrefsSnap
+import com.forge.app.domain.adapt.ProgressionAdvisor
+import com.forge.app.domain.adapt.ReadinessAdvisor
+import com.forge.app.domain.adapt.Recommendation
+import com.forge.app.domain.adapt.RecommendationArbiter
+import com.forge.app.domain.adapt.SnapshotAssembler
+import com.forge.app.program.Equipment
+import com.forge.app.program.ExerciseLibrary
+import com.forge.app.program.GenerationParams
+import com.forge.app.program.MuscleGroup
+import com.forge.app.program.ProblemArea
+import com.forge.app.program.Program
+import kotlinx.coroutines.flow.first
+import javax.inject.Inject
+import javax.inject.Singleton
+
+/**
+ * The adaptation engine's only impure piece: fetches history + prefs and delegates the
+ * grouping to the pure [SnapshotAssembler] (mirrors how [TrophyRepository.snapshot] feeds
+ * [com.forge.app.domain.trophy.TrophyEvaluator]).
+ *
+ * Call [snapshot] from surface-level entry points (Overview open, session finish) — never
+ * from the per-set logging hot path; the fan-out reads the whole history.
+ */
+@Singleton
+class AdaptationRepository @Inject constructor(
+    private val sessionDao: SessionDao,
+    private val loggedExerciseDao: LoggedExerciseDao,
+    private val loggedSetDao: LoggedSetDao,
+    private val moodDao: MoodDao,
+    private val cardioDao: CardioDao,
+    private val adviceEventDao: AdviceEventDao,
+    private val programRepository: ProgramRepository,
+    private val settingsRepository: SettingsRepository,
+    private val clock: Clock
+) {
+
+    /** Moods/cardio older than this can't influence any current signal — skip loading them. */
+    private val signalWindowMs = 90L * 24 * 60 * 60 * 1000
+
+    /** Dismissing or applying advice mutes that id for this long — no re-nagging. */
+    private val adviceCooldownMs = 14L * 24 * 60 * 60 * 1000
+
+    suspend fun snapshot(): AdaptationSnapshot {
+        // The DAO queries already exclude unfinished + untracked; the session list must too.
+        val sessions = sessionDao.allFinished().filter { !it.isUntracked }
+        val loggedExercises = loggedExerciseDao.allForFinishedSessions()
+        val loggedSets = loggedSetDao.allForFinishedSessions()
+
+        val equipment = settingsRepository.availableEquipment.first()
+            .mapNotNull { runCatching { Equipment.valueOf(it) }.getOrNull() }.toSet()
+        val disliked = settingsRepository.dislikedExercises.first()
+        val prefs = PrefsSnap(
+            plateLb = settingsRepository.plateWeightLb.first(),
+            likedIds = settingsRepository.likedExercises.first(),
+            dislikedIds = disliked,
+            pinnedIds = settingsRepository.pinnedExercises.first()
+        )
+
+        val now = clock.nowMs()
+        return SnapshotAssembler.assemble(
+            nowMs = now,
+            program = Program.days,
+            swapCandidateIds = { plan ->
+                ExerciseLibrary.swapCandidates(plan.muscle, equipment, disliked)
+                    .map { it.id }
+                    .filter { it != plan.id }
+            },
+            sessions = sessions,
+            loggedExercises = loggedExercises,
+            loggedSets = loggedSets,
+            prefs = prefs,
+            moods = moodDao.since(now - signalWindowMs),
+            cardio = cardioDao.since(now - signalWindowMs),
+            zoneId = java.time.ZoneId.systemDefault()
+        )
+    }
+
+    /**
+     * Today's readiness scale (System 6), or null below the data gates / at net zero.
+     * Deliberately lighter than [snapshot] — three small queries, no whole-history set
+     * fan-out — so the day screen can load it at session open.
+     */
+    suspend fun readinessScale(): Recommendation.ReadinessScale? {
+        val now = clock.nowMs()
+        return ReadinessAdvisor.evaluate(
+            sessions = sessionDao.allFinished().filter { !it.isUntracked },
+            moods = moodDao.since(now - signalWindowMs),
+            cardio = cardioDao.since(now - signalWindowMs),
+            nowMs = now
+        )
+    }
+
+    /**
+     * The Overview coach feed: actionable, arbitrated recommendations (deload + plateau
+     * ladder). Insights are deliberately excluded — observations live on Stats.
+     */
+    suspend fun coachRecommendations(): List<Recommendation> {
+        val s = snapshot()
+        val recs = ProgressionAdvisor.evaluate(s) + listOfNotNull(DeloadAdvisor.evaluate(s))
+        return RecommendationArbiter.arbitrate(recs, mutedAdviceIds())
+    }
+
+    /** Engine observations for the Stats insights section (replaces the legacy buildInsights). */
+    suspend fun insights(): List<Recommendation.Insight> = InsightEngine.evaluate(snapshot())
+
+    // ─── Advice feedback (cooldowns + future calibration) ─────────────────────
+
+    suspend fun logAdviceApplied(adviceId: String) = logAdvice(adviceId, "applied")
+    suspend fun logAdviceDismissed(adviceId: String) = logAdvice(adviceId, "dismissed")
+
+    private suspend fun logAdvice(adviceId: String, action: String) {
+        adviceEventDao.insert(AdviceEvent(adviceId = adviceId, action = action, loggedAt = clock.nowMs()))
+    }
+
+    /** Applied OR dismissed inside the cooldown window → the engine shuts up about it. */
+    suspend fun mutedAdviceIds(): Set<String> {
+        val cutoff = clock.nowMs() - adviceCooldownMs
+        return adviceEventDao.recent()
+            .filter { it.loggedAt >= cutoff && (it.action == "dismissed" || it.action == "applied") }
+            .mapTo(mutableSetOf()) { it.adviceId }
+    }
+
+    // ─── Apply paths (always user-initiated; the engine never writes silently) ─
+
+    /**
+     * One-tap apply for [Recommendation.DeloadSuggestion]: regenerate the current split at
+     * deload volume — the same operation as Settings → "Generate deload week". The params
+     * mirror SettingsViewModel.buildParams; keep the two in sync.
+     */
+    suspend fun applyDeloadWeek() {
+        val params = GenerationParams(
+            daysPerWeek = settingsRepository.daysPerWeek.first(),
+            emphasis = settingsRepository.programEmphasis.first(),
+            goal = settingsRepository.userGoal.first().ifBlank { "build_muscle" },
+            experience = settingsRepository.programExperience.first(),
+            problemAreas = settingsRepository.problemAreas.first()
+                .mapNotNull { ProblemArea.fromCode(it) }.toSet(),
+            priorityMuscles = settingsRepository.priorityMuscles.first()
+                .mapNotNull { runCatching { MuscleGroup.fromCode(it) }.getOrNull() }.toSet(),
+            pinned = settingsRepository.pinnedExercises.first(),
+            deload = true
+        )
+        programRepository.generate(
+            params,
+            settingsRepository.availableEquipment.first()
+                .mapNotNull { runCatching { Equipment.valueOf(it) }.getOrNull() }.toSet(),
+            settingsRepository.likedExercises.first(),
+            settingsRepository.dislikedExercises.first()
+        )
+        logAdviceApplied("deload.suggest")
+    }
+}

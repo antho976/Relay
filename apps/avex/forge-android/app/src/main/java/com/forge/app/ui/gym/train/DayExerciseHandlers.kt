@@ -222,12 +222,25 @@ internal fun DayViewModel.logSet(exerciseId: String, weightText: String, reps: I
             return@launch
         }
 
+        // This set ends the previous rest interval (#82) — stamp the moment now, but write the
+        // event only after the timer is already on screen so the insert never delays the bubble.
+        val restEndedAtMs = clock.nowMs()
+
         // Start the rest timer before the DB write so the bubble + countdown appear the
         // instant you tap — not after the insert and per-exercise rebuild round-trip.
-        restTimer.start(computeTimerDuration(plan, currentUi.difficulty, currentUi.restTimerOverrideSeconds))
+        val rest = computeRestPrescription(plan, currentUi.difficulty, currentUi.restTimerOverrideSeconds)
+        restTimer.start(rest.seconds)
         // Push the started timer into UI state synchronously so it's visible before refreshExercise
         // re-renders — don't wait for the collector coroutine to forward the first emission.
-        _state.update { it.copy(restTimer = restTimer.state.value) }
+        _state.update { it.copy(restTimer = restTimer.state.value, restTimerReason = rest.reason) }
+
+        closeOpenRestEvent(sessionId, restEndedAtMs)
+        openRestEvent = OpenRestEvent(
+            exerciseId = exerciseId,
+            setIndex = currentUi.loggedSets.size,
+            plannedSeconds = rest.seconds,
+            startedAtMs = restEndedAtMs
+        )
 
         val leId = currentUi.loggedExerciseId
             ?: workoutRepo.addExerciseToSession(

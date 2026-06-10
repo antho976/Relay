@@ -137,6 +137,19 @@ interface LoggedExerciseDao {
         @androidx.room.ColumnInfo(name = "session_date") val sessionDate: Long
     )
 
+    /**
+     * Every logged exercise across finished, tracked sessions — the adaptation engine's
+     * snapshot fan-out (one query instead of per-exercise loops). Untracked sessions are
+     * excluded here so they never feed a suggestion (#110).
+     */
+    @Query("""
+        SELECT le.* FROM logged_exercise le
+        INNER JOIN session s ON le.session_id = s.id
+        WHERE s.finished_at IS NOT NULL AND s.is_untracked = 0
+        ORDER BY s.started_at ASC, le.order_index ASC
+    """)
+    suspend fun allForFinishedSessions(): List<LoggedExercise>
+
     /** Set superset group for an exercise (#38). */
     @Query("UPDATE logged_exercise SET superset_group = :group WHERE id = :id")
     suspend fun setSupersetGroup(id: Long, group: String?)

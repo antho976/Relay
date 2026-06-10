@@ -26,7 +26,6 @@ internal const val MILESTONE_FIRST_MONTH = "first_full_month"
 internal fun buildOverviewUiState(
     stats: StatsRepository.WeeklyStats,
     recentCardio: List<CardioEntry>,
-    lastDeload: Int,
     shown: Set<String>,
     memory: OnThisDayMemory?,
     plannedDay: String,
@@ -105,9 +104,7 @@ internal fun buildOverviewUiState(
         cardioMinutesThisWeek = stats.cardioMinutes,
         cardioWeeklyTargetMin = cardioTargetMin,
         totalFinishedSessions = stats.totalFinishedSessions,
-        lastDeloadAtSessionCount = lastDeload,
         streakDays = stats.streakDays,
-        daysSinceLastSession = stats.daysSinceLastSession,
         pendingMilestone = computePendingMilestone(stats, shown),
         onThisDayMemory = memory,
         plannedNextDay = plannedDay,

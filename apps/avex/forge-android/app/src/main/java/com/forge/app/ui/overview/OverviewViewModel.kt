@@ -9,6 +9,9 @@ import com.forge.app.data.repo.CustomizationRepository
 import com.forge.app.data.repo.StatsRepository
 import com.forge.app.data.repo.TrophyRepository
 import com.forge.app.data.repo.WorkoutRepository
+import com.forge.app.domain.adapt.Recommendation
+import com.forge.app.program.ExerciseLibrary
+import com.forge.app.ui.overview.state.CoachItem
 import com.forge.app.ui.overview.state.OnThisDayMemory
 import com.forge.app.ui.overview.state.OverviewRecentItem
 import com.forge.app.ui.overview.state.OverviewUiState
@@ -33,17 +36,18 @@ class OverviewViewModel @Inject constructor(
     private val settingsRepo: SettingsRepository,
     private val trophyRepo: TrophyRepository,
     private val customizationRepo: CustomizationRepository,
-    private val workoutRepo: WorkoutRepository
+    private val workoutRepo: WorkoutRepository,
+    private val adaptationRepo: com.forge.app.data.repo.AdaptationRepository
 ) : ViewModel() {
 
     private val _onThisDayMemory = MutableStateFlow<OnThisDayMemory?>(null)
+    private val _coach = MutableStateFlow<List<CoachItem>>(emptyList())
 
     private val weekStartMs = System.currentTimeMillis() - 7L * 24 * 60 * 60 * 1000
 
     val state: StateFlow<OverviewUiState> = combine(
         statsRepo.observeWeeklyStats(),
         cardioRepo.observeRecent(7),
-        settingsRepo.lastDeloadAtSessionCount,
         settingsRepo.shownMilestones,
         _onThisDayMemory,
         settingsRepo.plannedNextDay,
@@ -55,21 +59,19 @@ class OverviewViewModel @Inject constructor(
         val stats = args[0] as StatsRepository.WeeklyStats
         @Suppress("UNCHECKED_CAST")
         val recentCardio = args[1] as List<com.forge.app.data.db.entities.CardioEntry>
-        val lastDeload = args[2] as Int
         @Suppress("UNCHECKED_CAST")
-        val shown = args[3] as Set<String>
-        val memory = args[4] as OnThisDayMemory?
-        val plannedDay = args[5] as String
-        val unlockedIds = args[6] as List<*>
-        val distanceKm = (args[7] as Double?) ?: 0.0
+        val shown = args[2] as Set<String>
+        val memory = args[3] as OnThisDayMemory?
+        val plannedDay = args[4] as String
+        val unlockedIds = args[5] as List<*>
+        val distanceKm = (args[6] as Double?) ?: 0.0
         @Suppress("UNCHECKED_CAST")
-        val dayVolStats = args[8] as Map<String, SessionDao.DayVolumeStats>
-        val cardioTarget = args[9] as Int
+        val dayVolStats = args[7] as Map<String, SessionDao.DayVolumeStats>
+        val cardioTarget = args[8] as Int
 
         buildOverviewUiState(
             stats = stats,
             recentCardio = recentCardio,
-            lastDeload = lastDeload,
             shown = shown,
             memory = memory,
             plannedDay = plannedDay,
@@ -83,6 +85,8 @@ class OverviewViewModel @Inject constructor(
         s.copy(customDayName = customName)
     }.combine(workoutRepo.observeActiveSession()) { s, active ->
         s.copy(activeSessionDayKey = active?.dayKey)
+    }.combine(_coach) { s, coach ->
+        s.copy(coach = coach)
     }.flowOn(Dispatchers.Default).stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(stopTimeoutMillis = 5_000),
@@ -91,12 +95,49 @@ class OverviewViewModel @Inject constructor(
 
     init {
         viewModelScope.launch { _onThisDayMemory.value = statsRepo.findOnThisDayMemory() }
+        viewModelScope.launch { reloadCoach() }
     }
 
-    fun onMarkDeloaded() {
-        viewModelScope.launch {
-            settingsRepo.setLastDeloadAtSessionCount(state.value.totalFinishedSessions)
+    // ─── Coach feed (adaptation engine) ───────────────────────────────────────
+
+    private suspend fun reloadCoach() {
+        _coach.value = adaptationRepo.coachRecommendations()
+            .mapNotNull { it.toCoachItem() }
+            .take(3)
+    }
+
+    /** One-tap apply. Only the deload suggestion has one today; the rest apply in-session. */
+    fun applyCoach(item: CoachItem) = viewModelScope.launch {
+        if (item.id == "deload.suggest") adaptationRepo.applyDeloadWeek()
+        reloadCoach()
+    }
+
+    /** Dismissal is logged (advice_event) — the engine mutes this id for its cooldown. */
+    fun dismissCoach(item: CoachItem) = viewModelScope.launch {
+        adaptationRepo.logAdviceDismissed(item.id)
+        reloadCoach()
+    }
+
+    private fun Recommendation.toCoachItem(): CoachItem? = when (this) {
+        is Recommendation.DeloadSuggestion -> CoachItem(
+            id = id, title = "Time for a deload week", body = reason,
+            applyLabel = "Generate deload week"
+        )
+        is Recommendation.VariationSwap -> {
+            val names = candidateIds.mapNotNull { ExerciseLibrary.byId(it)?.name }
+            CoachItem(
+                id = id, title = "Plateau: swap $exerciseName?",
+                body = reason + if (names.isNotEmpty()) " Try: ${names.joinToString(", ")}." else ""
+            )
         }
+        is Recommendation.RepRangeShift -> CoachItem(
+            id = id, title = "Shift $exerciseName to $toReps reps", body = reason
+        )
+        is Recommendation.WeightChange -> CoachItem(
+            id = id, title = "Adjust $exerciseName to $inputText", body = reason
+        )
+        // Readiness scales feed the in-session chip; insights live on Stats.
+        else -> null
     }
 
     fun onMilestoneShown(milestoneId: String) {

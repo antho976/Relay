@@ -16,5 +16,10 @@ data class DayListItem(
     val isNextUp: Boolean = false,
     val exerciseCount: Int = 0,
     /** User-set accent hex override (#65). Null = use plan.accentHex. */
-    val customAccentHex: String? = null
+    val customAccentHex: String? = null,
+    /**
+     * "~min" estimate tuned to the user's realized rest pace (engine System 2).
+     * Null = tuning not loaded yet; cards fall back to the canonical SessionEstimate.
+     */
+    val estimatedMinutes: Int? = null
 )

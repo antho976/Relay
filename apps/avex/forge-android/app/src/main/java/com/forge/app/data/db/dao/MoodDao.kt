@@ -20,4 +20,8 @@ interface MoodDao {
 
     @Query("SELECT * FROM mood_entry")
     fun observeAll(): Flow<List<MoodEntry>>
+
+    /** Entries since [sinceMs], newest first — adaptation-engine recovery/readiness input. */
+    @Query("SELECT * FROM mood_entry WHERE recorded_at >= :sinceMs ORDER BY recorded_at DESC")
+    suspend fun since(sinceMs: Long): List<MoodEntry>
 }

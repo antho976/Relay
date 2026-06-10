@@ -161,7 +161,8 @@ fun DayScreen(
             onReset = { viewModel.onEvent(DayUiEvent.RestTimerReset) },
             onSkip = { viewModel.onEvent(DayUiEvent.RestTimerSkip) },
             onAddSeconds = { s -> viewModel.onEvent(DayUiEvent.RestTimerAddSeconds(s)) },
-            onDismiss = { viewModel.onEvent(DayUiEvent.RestTimerClose) }
+            onDismiss = { viewModel.onEvent(DayUiEvent.RestTimerClose) },
+            reason = state.restTimerReason
         )
     }
 

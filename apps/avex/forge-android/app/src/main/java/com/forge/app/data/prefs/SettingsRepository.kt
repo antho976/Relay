@@ -10,23 +10,15 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Small typed wrapper over the app's DataStore. Phase 4 only uses [lastDeloadAtSessionCount];
- * future phases (welcome flow, rest-timer default duration, notification toggle, etc.)
- * add Flow + setter pairs alongside.
+ * Small typed wrapper over the app's DataStore. Each setting is a Flow + setter pair.
+ * (The old lastDeloadAtSessionCount counter was retired by the adaptation engine's
+ * DeloadAdvisor — deload timing now comes from real fatigue signals, and the last deload
+ * is read from Session rows, not a pref.)
  */
 @Singleton
 class SettingsRepository @Inject constructor(
     @ApplicationContext private val context: Context
 ) {
-    val lastDeloadAtSessionCount: Flow<Int> = context.forgePreferences.data
-        .map { prefs -> prefs[PreferenceKeys.LAST_DELOAD_AT_SESSION_COUNT] ?: 0 }
-
-    suspend fun setLastDeloadAtSessionCount(count: Int) {
-        context.forgePreferences.edit { prefs ->
-            prefs[PreferenceKeys.LAST_DELOAD_AT_SESSION_COUNT] = count
-        }
-    }
-
     val shownMilestones: Flow<Set<String>> = context.forgePreferences.data
         .map { prefs -> prefs[PreferenceKeys.SHOWN_MILESTONES] ?: emptySet() }
 

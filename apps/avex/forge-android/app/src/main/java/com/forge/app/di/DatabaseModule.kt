@@ -56,4 +56,6 @@ object DatabaseModule {
     @Provides fun provideProgramCustomizationDao(db: ForgeDatabase): com.forge.app.data.db.dao.ProgramCustomizationDao = db.programCustomizationDao()
     @Provides fun provideWarmupRoutineDao(db: ForgeDatabase): com.forge.app.data.db.dao.WarmupRoutineDao = db.warmupRoutineDao()
     @Provides fun provideProgramDao(db: ForgeDatabase): com.forge.app.data.db.dao.ProgramDao = db.programDao()
+    @Provides fun provideRestEventDao(db: ForgeDatabase): com.forge.app.data.db.dao.RestEventDao = db.restEventDao()
+    @Provides fun provideAdviceEventDao(db: ForgeDatabase): com.forge.app.data.db.dao.AdviceEventDao = db.adviceEventDao()
 }

@@ -19,23 +19,34 @@ object SessionEstimate {
     private const val ISOLATION_REST = 90
     private const val HEAVY_REST_BONUS = 30
 
+    /**
+     * Compound vs isolation classification: generated plans carry tags; legacy/tagless
+     * plans fall back to a muscle-size heuristic. Public so the adaptation engine's rest
+     * tuning buckets by the same definition this estimate uses.
+     */
+    fun isCompound(plan: ExercisePlan): Boolean =
+        if (plan.tags.isNotEmpty()) ExerciseTag.COMPOUND in plan.tags
+        else plan.muscle in BIG_MUSCLES
+
     /** Recommended rest between sets (seconds): longer for compounds, +30s when the reps are heavy (≤8). */
     fun restSeconds(plan: ExercisePlan): Int {
-        // Generated plans carry tags; legacy/tagless plans fall back to a muscle-size heuristic.
-        val compound = if (plan.tags.isNotEmpty()) ExerciseTag.COMPOUND in plan.tags
-                       else plan.muscle in BIG_MUSCLES
-        val base = if (compound) COMPOUND_REST else ISOLATION_REST
+        val base = if (isCompound(plan)) COMPOUND_REST else ISOLATION_REST
         // Heaviness = the LOW end of the range (the heaviest set you'd do). Using the max rep
         // meant strength ranges like "6-10" were never flagged heavy.
         val heavy = minReps(plan.reps)?.let { if (it <= 8) HEAVY_REST_BONUS else 0 } ?: 0
         return base + heavy
     }
 
-    /** Rough whole-session time in minutes (work + between-set rest + a warmup allowance), rounded to 5. */
-    fun estimateMinutes(plan: DayPlan): Int {
+    /**
+     * Rough whole-session time in minutes (work + between-set rest + a warmup allowance),
+     * rounded to 5. [restFor] defaults to the canonical [restSeconds]; the adaptation
+     * engine passes a personally-tuned variant so the day-card "~min" matches the user's
+     * actual pace once enough realized-rest data exists.
+     */
+    fun estimateMinutes(plan: DayPlan, restFor: (ExercisePlan) -> Int = ::restSeconds): Int {
         if (plan.exercises.isEmpty()) return 0
         val workSeconds = plan.exercises.sumOf { ex ->
-            ex.sets * WORK_SECONDS_PER_SET + (ex.sets - 1).coerceAtLeast(0) * restSeconds(ex)
+            ex.sets * WORK_SECONDS_PER_SET + (ex.sets - 1).coerceAtLeast(0) * restFor(ex)
         }
         val minutes = ((workSeconds + WARMUP_SECONDS) / 60.0).roundToInt()
         return ((minutes + 2) / 5) * 5 // nearest 5

@@ -130,7 +130,9 @@ private fun NextUpCard(
                     Text(
                         buildString {
                             append("${item.plan.subtitle} · ${item.exerciseCount} exercises")
-                            val mins = com.forge.app.program.SessionEstimate.estimateMinutes(item.plan)
+                            // Tuned to the user's realized rest pace once the engine has data.
+                            val mins = item.estimatedMinutes
+                                ?: com.forge.app.program.SessionEstimate.estimateMinutes(item.plan)
                             if (mins > 0) append(" · ~$mins min")
                         },
                         style = MaterialTheme.typography.bodyMedium,

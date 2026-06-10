@@ -29,15 +29,24 @@ data class OverviewRecentItem(
     val distanceKm: Double? = null,
 )
 
+/**
+ * One actionable adaptation-engine recommendation on the Overview coach feed.
+ * [applyLabel] non-null = a one-tap apply exists (e.g. "Generate deload week").
+ */
+data class CoachItem(
+    val id: String,
+    val title: String,
+    val body: String,
+    val applyLabel: String? = null
+)
+
 data class OverviewUiState(
     val workoutsThisWeek: Int = 0,
     val volumeThisWeekLb: Double = 0.0,
     val cardioMinutesThisWeek: Int = 0,
     val cardioWeeklyTargetMin: Int = 0,
     val totalFinishedSessions: Int = 0,
-    val lastDeloadAtSessionCount: Int = 0,
     val streakDays: Int = 0,
-    val daysSinceLastSession: Int? = null,
     val pendingMilestone: MilestoneEvent? = null,
     val onThisDayMemory: OnThisDayMemory? = null,
     val plannedNextDay: String = "",
@@ -54,25 +63,12 @@ data class OverviewUiState(
     val trophiesUnlocked: Int = 0,
     val cardioDistanceKm: Double = 0.0,
     /** Day key of an in-progress (unfinished) workout, if any — drives the resume banner + CTA. */
-    val activeSessionDayKey: String? = null
+    val activeSessionDayKey: String? = null,
+    /**
+     * Actionable adaptation-engine recommendations (deload, plateau ladder), arbitrated and
+     * capped. Replaces the old fixed-counter deload / comeback / 3-days-straight flags.
+     */
+    val coach: List<CoachItem> = emptyList()
 ) {
     val hasActiveSession: Boolean get() = activeSessionDayKey != null
-
-    val sessionsSinceLastDeload: Int
-        get() = (totalFinishedSessions - lastDeloadAtSessionCount).coerceAtLeast(0)
-
-    val needsDeload: Boolean
-        get() = sessionsSinceLastDeload >= DELOAD_THRESHOLD
-
-    /** Show comeback banner when user hasn't trained in 5+ days (#57). */
-    val showComebackBanner: Boolean
-        get() = (daysSinceLastSession ?: 0) >= 5
-
-    /** Show rest warning when training 3+ consecutive days (#58). */
-    val showConsecutiveWarning: Boolean
-        get() = streakDays >= 3
-
-    companion object {
-        const val DELOAD_THRESHOLD: Int = 24
-    }
 }

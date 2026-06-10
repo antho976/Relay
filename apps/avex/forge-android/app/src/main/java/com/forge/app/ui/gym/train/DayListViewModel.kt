@@ -26,6 +26,21 @@ class DayListViewModel @Inject constructor(
     private val programRepository: com.forge.app.data.repo.ProgramRepository
 ) : ViewModel() {
 
+    /** Personal rest pace (engine System 2) — folds into the day cards' "~min" estimate. */
+    private val restTuning = kotlinx.coroutines.flow.MutableStateFlow(
+        com.forge.app.domain.adapt.RestTuning.NEUTRAL
+    )
+
+    init {
+        viewModelScope.launch {
+            restTuning.value = com.forge.app.domain.adapt.RestAdvisor.tuning(
+                com.forge.app.domain.adapt.RestAdvisor.samples(workoutRepo.recentRestEvents()) {
+                    Program.exercise(it)
+                }
+            )
+        }
+    }
+
     val state: StateFlow<DayListUiState> = combine(
         customizationRepo.observeAllDayNames(),
         workoutRepo.observeActiveSession(),
@@ -70,6 +85,10 @@ class DayListViewModel @Inject constructor(
             },
             activeSession = activeSession
         )
+    }.combine(restTuning) { s, tuning ->
+        s.copy(days = s.days.map { item ->
+            item.copy(estimatedMinutes = com.forge.app.domain.adapt.RestAdvisor.estimateMinutes(item.plan, tuning))
+        })
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(stopTimeoutMillis = 5_000),

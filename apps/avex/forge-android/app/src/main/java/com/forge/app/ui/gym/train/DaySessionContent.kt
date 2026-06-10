@@ -126,6 +126,44 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
                 SessionHero(state = state, onBack = { onEvent(DayUiEvent.RequestBack) }, onFinish = { onEvent(DayUiEvent.FinishWorkout) })
             }
 
+            // ── Suggested order (engine System 3) — pre-work only ────────────
+            val ordering = state.orderingSuggestion
+            if (ordering != null && state.exercises.all { it.loggedSets.isEmpty() }) {
+                item(key = "ordering-suggestion") {
+                    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+                    val accent = MaterialTheme.colorScheme.primary
+                    val nameById = state.exercises.associate { it.plan.id to it.effectiveName }
+                    Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 10.dp)) {
+                        Text("SUGGESTED ORDER", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            ordering.orderedExerciseIds.mapNotNull { nameById[it] }.joinToString("  →  "),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onBackground
+                        )
+                        Spacer(Modifier.height(2.dp))
+                        Text(ordering.reason, style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.8f))
+                        Spacer(Modifier.height(6.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                            Text(
+                                "Apply →",
+                                style = MaterialTheme.typography.labelSmall, color = accent,
+                                modifier = Modifier.clickable { onEvent(DayUiEvent.ApplyOrderingSuggestion) }.padding(vertical = 2.dp)
+                            )
+                            Text(
+                                "dismiss",
+                                style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.7f),
+                                modifier = Modifier.clickable { onEvent(DayUiEvent.DismissOrderingSuggestion) }.padding(vertical = 2.dp)
+                            )
+                        }
+                    }
+                    HorizontalDivider(
+                        modifier = Modifier.padding(horizontal = 24.dp),
+                        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
+                    )
+                }
+            }
+
             if (shownExercise != null) {
                 val idx = state.exercises.indexOf(shownExercise)
                 val upcoming = state.exercises

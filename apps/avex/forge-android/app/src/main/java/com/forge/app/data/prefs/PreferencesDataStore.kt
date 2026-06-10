@@ -20,7 +20,6 @@ val Context.forgePreferences: DataStore<Preferences> by preferencesDataStore(nam
 
 /** Centralised keys so misspellings are caught at compile time. */
 object PreferenceKeys {
-    val LAST_DELOAD_AT_SESSION_COUNT = intPreferencesKey("last_deload_at_session_count")
     val WELCOMED = androidx.datastore.preferences.core.booleanPreferencesKey("welcomed")
     /** IDs of one-shot milestone toasts already shown to the user (#56). */
     val SHOWN_MILESTONES = stringSetPreferencesKey("shown_milestones")

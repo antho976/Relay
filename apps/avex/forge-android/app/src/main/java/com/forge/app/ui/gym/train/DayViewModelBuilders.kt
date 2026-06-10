@@ -3,12 +3,17 @@ package com.forge.app.ui.gym.train
 import com.forge.app.data.db.entities.LoggedExercise
 import com.forge.app.data.db.entities.LoggedSet
 import com.forge.app.data.db.types.EffortRating
+import com.forge.app.domain.adapt.IntensityIntent
+import com.forge.app.domain.adapt.ProgressionAdvisor
+import com.forge.app.domain.adapt.RestAdvisor
+import com.forge.app.domain.adapt.RestPrescription
 import com.forge.app.domain.pr.PrDetector
 import com.forge.app.program.ExercisePlan
 import com.forge.app.program.MuscleGroup
 import com.forge.app.ui.gym.train.state.ExerciseSessionPoint
 import com.forge.app.ui.gym.train.state.ExerciseUiState
 import com.forge.app.ui.gym.train.state.VsLastStatus
+import kotlinx.coroutines.flow.first
 import java.util.concurrent.TimeUnit
 
 /**
@@ -41,7 +46,19 @@ internal suspend fun DayViewModel.buildExerciseUi(
         workoutRepo.updateExercise(logged.copy(wasPr = wasPr))
     }
 
-    val (suggestedWeight, suggestionReason) = computeWeightSuggestion(plan, prevLE, prevSets)
+    // Double-progression suggestion (#12/#13) — pure rules in the adaptation engine; the
+    // VM only assembles inputs. inputText is unit-correct (plate count on PLATES exercises).
+    val suggestion = ProgressionAdvisor.suggestNextLoad(
+        exerciseId = plan.id,
+        exerciseName = plan.name,
+        prevSets = prevSets,
+        prevEffort = prevLE?.difficulty,
+        repsText = plan.reps,
+        unit = plan.unit,
+        plateLb = settingsRepo.plateWeightLb.first(),
+        intensity = IntensityIntent.fromCode(_state.value.sessionIntensity),
+        readiness = readiness
+    )
 
     val pbSet = allHistory.filter { it.weightLb != null }.maxByOrNull { it.weightLb!! }
     val allTimePbLb = pbSet?.weightLb
@@ -82,8 +99,8 @@ internal suspend fun DayViewModel.buildExerciseUi(
         }
     } else prior
 
-    val displaySuggested = suggestedWeight ?: if (DUMMY_TRAINING_DATA) "45" else null
-    val displayReason = suggestionReason
+    val displaySuggested = suggestion?.inputText ?: if (DUMMY_TRAINING_DATA) "45" else null
+    val displayReason = suggestion?.reason
         ?: if (DUMMY_TRAINING_DATA && displaySuggested != null) "matches set 1" else null
 
     val displayHistory = if (DUMMY_TRAINING_DATA && sessionHistory.isEmpty()) {
@@ -118,6 +135,7 @@ internal suspend fun DayViewModel.buildExerciseUi(
         persistentSwapUnit = persistent?.swappedUnit,
         suggestedWeight = displaySuggested,
         suggestionReason = displayReason,
+        suggestedDeltaLb = suggestion?.deltaLb,
         priorSets = displayPrior,
         allTimePbText = allTimePbText,
         allTimePbLb = allTimePbLb,
@@ -132,18 +150,14 @@ internal suspend fun DayViewModel.buildExerciseUi(
 }
 
 /**
- * Second-pass annotation: for each exercise, compute the suggested weight delta for the
- * *next* exercise (used by the "UP NEXT  +5 ↑" pill). Pure function — no DB access.
+ * Second-pass annotation: surface each exercise's suggested weight delta on the *previous*
+ * card (the "UP NEXT  +5 ↑" pill). Reads the lb delta the advisor computed — the old
+ * version re-derived it from the suggestion *string*, which broke on PLATES exercises
+ * (a plate-count text compared against pounds).
  */
 internal fun annotateNextExerciseDeltas(exercises: List<ExerciseUiState>): List<ExerciseUiState> =
     exercises.mapIndexed { idx, ex ->
-        val next = exercises.getOrNull(idx + 1) ?: return@mapIndexed ex
-        val nextSuggestedLb = next.suggestedWeight?.toDoubleOrNull() ?: return@mapIndexed ex
-        val nextPrevMaxLb = next.priorSets
-            .filter { it.loggedExerciseId != next.loggedExerciseId }
-            .mapNotNull { it.weightLb }
-            .maxOrNull() ?: return@mapIndexed ex
-        val delta = nextSuggestedLb - nextPrevMaxLb
+        val delta = exercises.getOrNull(idx + 1)?.suggestedDeltaLb ?: return@mapIndexed ex
         if (kotlin.math.abs(delta) < 0.5) return@mapIndexed ex
         val sign = if (delta > 0) "+" else "−"
         val abs = kotlin.math.abs(delta)
@@ -151,48 +165,16 @@ internal fun annotateNextExerciseDeltas(exercises: List<ExerciseUiState>): List<
         ex.copy(nextSuggestedWeightDelta = deltaStr)
     }
 
-internal fun DayViewModel.computeWeightSuggestion(
-    plan: ExercisePlan,
-    prevLE: LoggedExercise?,
-    prevSets: List<LoggedSet>
-): Pair<String?, String?> {
-    if (prevLE == null || prevSets.isEmpty()) return null to null
-    val prevMaxWeight = prevSets.mapNotNull { it.weightLb }.maxOrNull() ?: return null to null
-    val prevMaxReps = prevSets.maxOf { it.reps }
-    val planMaxReps = parseMaxReps(plan.reps)
-    val hitTopOfRange = planMaxReps != null && prevMaxReps >= planMaxReps
-    val difficulty = prevLE.difficulty
-
-    val (adjustmentLb, reason) = when {
-        hitTopOfRange && (difficulty == null || difficulty == EffortRating.EASY ||
-            difficulty == EffortRating.JUST_RIGHT) -> 2.5 to "hit top of range"
-        difficulty == EffortRating.BRUTAL -> -2.5 to "last rated brutal"
-        else -> return null to null
-    }
-
-    val intensityMultiplier = when (_state.value.sessionIntensity) {
-        "light" -> 0.9
-        "hard"  -> 1.05
-        else    -> 1.0
-    }
-    val suggested = ((prevMaxWeight + adjustmentLb) * intensityMultiplier)
-        .let { w -> (w / 2.5).toInt() * 2.5 }
-    if (suggested <= 0.0) return null to null
-    val adjustedReason = if (intensityMultiplier != 1.0) "$reason · intensity adjusted" else reason
-    val suggestedStr = if (suggested % 1.0 == 0.0) "${suggested.toInt()}" else "$suggested"
-    return suggestedStr to adjustedReason
-}
-
-internal fun DayViewModel.computeTimerDuration(
+/**
+ * Rest duration + explanation for the timer started after a set. Delegates to the
+ * adaptation engine's RestAdvisor: manual override → canonical SessionEstimate base
+ * (+30s after brutal) → personal tuning from realized rest behavior ([DayViewModel.restTuning]).
+ */
+internal fun DayViewModel.computeRestPrescription(
     plan: ExercisePlan,
     effortRating: EffortRating?,
     overrideSeconds: Int? = null
-): Int {
-    if (overrideSeconds != null) return overrideSeconds
-    // Movement-type + rep-weight aware rest (Phase 4); a brutal set buys 30s more.
-    return com.forge.app.program.SessionEstimate.restSeconds(plan) +
-        if (effortRating == EffortRating.BRUTAL) 30 else 0
-}
+): RestPrescription = RestAdvisor.restSeconds(plan, effortRating, overrideSeconds, restTuning)
 
 internal fun computePrFlags(
     prior: List<LoggedSet>,
@@ -216,6 +198,3 @@ internal fun computePrFlags(
     }
     return prIds to prIds.isNotEmpty()
 }
-
-internal fun parseMaxReps(repsText: String): Int? =
-    repsText.split(Regex("[^0-9]+")).mapNotNull { it.toIntOrNull() }.maxOrNull()

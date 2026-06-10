@@ -119,4 +119,8 @@ sealed interface DayUiEvent {
 
     // Quick break logging (#139)
     data class LogBreak(val type: String) : DayUiEvent
+
+    // Fatigue-aware ordering suggestion (adaptation engine System 3)
+    data object ApplyOrderingSuggestion : DayUiEvent
+    data object DismissOrderingSuggestion : DayUiEvent
 }

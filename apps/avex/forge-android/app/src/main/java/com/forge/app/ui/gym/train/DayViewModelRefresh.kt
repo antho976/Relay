@@ -4,6 +4,7 @@ import android.content.Intent
 import com.forge.app.program.Program
 import com.forge.app.service.SessionNotifState
 import com.forge.app.service.WorkoutSessionService
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 
 // Exercise-state refresh/derivation, set lookups, and session-service lifecycle —
@@ -100,6 +101,29 @@ internal suspend fun DayViewModel.ensureLoggedExercise(exerciseId: String): Long
 
 internal fun DayViewModel.findSet(setId: Long) =
     _state.value.exercises.flatMap { it.loggedSets }.firstOrNull { it.id == setId }
+
+/**
+ * Pre-session ordering proposal (engine System 3). Computed once after the first exercise
+ * build — only for a fresh session (no sets, nothing skipped) and only when this day's
+ * suggestion isn't inside its dismissal cooldown.
+ */
+internal suspend fun DayViewModel.computeOrderingSuggestion() {
+    val exercises = _state.value.exercises
+    if (exercises.size < 3 || exercises.any { it.loggedSets.isNotEmpty() || it.skipped }) return
+    val items = exercises.map { ex ->
+        com.forge.app.domain.adapt.OrderingAdvisor.OrderingItem(
+            exerciseId = ex.plan.id,
+            muscle = ex.plan.muscle,
+            isCompound = com.forge.app.program.SessionEstimate.isCompound(ex.plan),
+            supersetGroup = ex.supersetGroup
+        )
+    }
+    val priority = settingsRepo.priorityMuscles.first()
+        .mapNotNull { com.forge.app.program.MuscleGroup.fromCode(it) }.toSet()
+    val suggestion = com.forge.app.domain.adapt.OrderingAdvisor.suggestOrder(dayKey, items, priority)
+        ?.takeIf { it.id !in adaptationRepo.mutedAdviceIds() }
+    if (suggestion != null) _state.update { it.copy(orderingSuggestion = suggestion) }
+}
 
 internal fun DayViewModel.startSessionService(dayName: String) {
     bridge.startSession(SessionNotifState(dayName, clock.nowMs()))

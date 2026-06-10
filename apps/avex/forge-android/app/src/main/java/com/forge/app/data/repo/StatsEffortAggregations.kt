@@ -5,7 +5,6 @@ import com.forge.app.data.db.entities.Session
 import com.forge.app.program.Program
 import com.forge.app.ui.gym.stats.state.ExerciseFrequency
 import com.forge.app.ui.gym.stats.state.HeatmapCell
-import com.forge.app.ui.gym.stats.state.InsightFlag
 import com.forge.app.ui.gym.stats.state.RpeBucket
 import com.forge.app.ui.gym.stats.state.WeekActivityRow
 import com.forge.app.ui.gym.stats.state.WeeklyEffortCounts
@@ -13,9 +12,8 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 
-// Pure effort / consistency / activity / insight aggregation helpers extracted from
-// StatsRepository. No DAO or DI dependencies — buildInsights takes the current time as
-// a parameter rather than reaching for a clock.
+// Pure effort / consistency / activity aggregation helpers extracted from
+// StatsRepository. No DAO or DI dependencies.
 
 internal const val HEATMAP_DAYS = 49
 internal const val HEATMAP_WINDOW_MS: Long = HEATMAP_DAYS.toLong() * 24 * 60 * 60 * 1000
@@ -139,76 +137,9 @@ internal fun buildExerciseFrequency(
     }.sortedByDescending { it.sessionCount }.take(10)
 }
 
-internal fun buildInsights(
-    allSets: List<com.forge.app.data.db.projections.SetWithExerciseAndSession>,
-    weekSets: List<com.forge.app.data.db.projections.SetWithExerciseId>,
-    dayTypeRows: List<com.forge.app.data.db.dao.SessionDao.DayTypeStats>,
-    nowMs: Long
-): List<InsightFlag> {
-    val insights = mutableListOf<InsightFlag>()
-    // Best time-of-day (#41)
-    val zone = ZoneId.systemDefault()
-    val prsByHour = allSets.filter { it.weightLb != null }
-        .groupBy { Instant.ofEpochMilli(it.sessionStartedAt).atZone(zone).hour }
-    val bestHour = prsByHour.maxByOrNull { it.value.size }?.key
-    if (bestHour != null) {
-        val label = when {
-            bestHour < 10 -> "morning"
-            bestHour < 13 -> "late morning"
-            bestHour < 17 -> "afternoon"
-            else -> "evening"
-        }
-        insights.add(InsightFlag("⏰", "Best time to train", "You log the most sets in the $label (${bestHour}:00)."))
-    }
-    // Most improved exercise (#41): biggest % gain in max weight over last 3 months
-    val threeMonthsAgo = nowMs - 90L * 24 * 3600 * 1000
-    val recentByExercise = allSets.filter { it.weightLb != null && it.sessionStartedAt >= threeMonthsAgo }
-        .groupBy { it.exerciseId }
-    val mostImproved = recentByExercise.entries.mapNotNull { (exId, sets) ->
-        // Reduce to one max-weight value per session (oldest→newest), then split at the midpoint.
-        // Splitting raw set rows weighted the halves by how many sets each session had, not by time.
-        val perSession = sets.groupBy { it.sessionStartedAt }
-            .toSortedMap()
-            .map { (_, ss) -> ss.maxOf { it.weightLb!! } }
-        if (perSession.size < 2) return@mapNotNull null
-        val mid = perSession.size / 2
-        val first = perSession.take(mid).maxOrNull() ?: return@mapNotNull null
-        val last = perSession.drop(mid).maxOrNull() ?: return@mapNotNull null
-        if (first <= 0) return@mapNotNull null
-        val pct = ((last - first) / first * 100).toInt()
-        val name = Program.exercise(exId)?.name ?: return@mapNotNull null
-        Triple(name, pct, last)
-    }.maxByOrNull { it.second }
-    if (mostImproved != null && mostImproved.second > 5) {
-        insights.add(InsightFlag("📈", "Most improved", "${mostImproved.first} is up ~${mostImproved.second}% in 3 months."))
-    }
-    // Muscle balance: flag if one muscle group dominates weekly volume
-    val weekVolumeByMuscle = weekSets.groupBy { Program.exercise(it.exerciseId)?.muscle?.displayName ?: "Other" }
-        .mapValues { (_, sets) -> sets.sumOf { (it.weightLb ?: 0.0) * it.reps } }
-    val totalWeekVol = weekVolumeByMuscle.values.sum()
-    if (totalWeekVol > 0) {
-        val dominant = weekVolumeByMuscle.maxByOrNull { it.value }
-        if (dominant != null && dominant.value / totalWeekVol > 0.5) {
-            insights.add(InsightFlag("⚖️", "Muscle balance", "${dominant.key} is over 50% of your weekly volume. Consider balancing."))
-        }
-    }
-    // Volume drop deload suggestion (#80): compare the older 3 vs the newer 3 of the most recent
-    // 6 *sessions*. (Was comparing raw set-timestamps without .distinct(), so a single full workout
-    // collapsed the window and the banner fired almost always.)
-    val volBySession = allSets
-        .filter { it.weightLb != null }
-        .groupBy { it.sessionStartedAt }
-        .mapValues { (_, ss) -> ss.sumOf { (it.weightLb ?: 0.0) * it.reps } }
-    val recent6 = volBySession.toSortedMap().entries.toList().takeLast(6)
-    if (recent6.size == 6) {
-        val firstHalfVol = recent6.take(3).sumOf { it.value }
-        val secondHalfVol = recent6.drop(3).sumOf { it.value }
-        if (firstHalfVol > 0 && secondHalfVol < firstHalfVol * 0.8) {
-            insights.add(InsightFlag("💤", "Consider a deload", "Volume has dropped 20%+ recently. You might benefit from a recovery week."))
-        }
-    }
-    return insights
-}
+// buildInsights moved to the adaptation engine (InsightEngine, System 4): the time-of-day,
+// most-improved, and muscle-dominance rules live there with snapshot-wide gating, and the
+// old volume-drop deload rule (#80) was superseded by DeloadAdvisor's multi-signal score.
 
 internal fun buildWeekActivity(
     sessions: List<Session>,

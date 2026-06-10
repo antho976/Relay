@@ -52,8 +52,25 @@ internal fun DayViewModel.handleSessionEvent(event: DayUiEvent) {
             }
         }
         is DayUiEvent.ConfirmPreSessionPicker -> _state.update { it.copy(showPreSessionPicker = false) }
+        is DayUiEvent.ApplyOrderingSuggestion -> applyOrderingSuggestion()
+        is DayUiEvent.DismissOrderingSuggestion -> {
+            val suggestion = _state.value.orderingSuggestion
+            _state.update { it.copy(orderingSuggestion = null) }
+            // Logged so the engine mutes this day's suggestion for its cooldown window.
+            if (suggestion != null) viewModelScope.launch { adaptationRepo.logAdviceDismissed(suggestion.id) }
+        }
         else -> {}
     }
+}
+
+/** Apply the engine's suggested order via the same in-memory mechanism as manual reordering. */
+private fun DayViewModel.applyOrderingSuggestion() {
+    val suggestion = _state.value.orderingSuggestion ?: return
+    val byId = _state.value.exercises.associateBy { it.plan.id }
+    val suggested = suggestion.orderedExerciseIds.toSet()
+    val reordered = suggestion.orderedExerciseIds.mapNotNull { byId[it] } +
+        _state.value.exercises.filter { it.plan.id !in suggested }
+    _state.update { it.copy(exercises = annotateNextExerciseDeltas(reordered), orderingSuggestion = null) }
 }
 
 private fun DayViewModel.finishWorkout() {
@@ -65,6 +82,8 @@ private fun DayViewModel.finishWorkout() {
         val prCount = _state.value.exercises.count { it.wasPr }
 
         workoutRepo.finishSession(sessionId, totalVolumeLb, prCount, allSets.size)
+        // An interval left open didn't lead to another set — drop it, don't write it.
+        openRestEvent = null
         restTimer.stop()
         stopSessionService()
 
@@ -137,6 +156,7 @@ private fun DayViewModel.saveAndExit() {
             prCount = _state.value.exercises.count { it.wasPr },
             setCount = allSets.size
         )
+        openRestEvent = null
         restTimer.stop()
         stopSessionService()
         trophyRepo.evaluateAndUnlockNew()
@@ -176,6 +196,7 @@ private fun DayViewModel.discardAndExit() {
     viewModelScope.launch {
         val sessionId = _state.value.sessionId ?: return@launch
         workoutRepo.discardSession(sessionId)
+        openRestEvent = null
         restTimer.stop()
         stopSessionService()
         _state.update { it.copy(showDiscardConfirm = false) }
@@ -229,6 +250,7 @@ internal suspend fun DayViewModel.beginSessionForThisDay() {
         )
     }
     refreshExercises()
+    computeOrderingSuggestion()
     startSessionService(resolvedName)
 }
 

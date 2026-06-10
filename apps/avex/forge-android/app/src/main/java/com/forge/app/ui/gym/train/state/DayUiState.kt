@@ -44,6 +44,14 @@ data class DayUiState(
     val isWarmupComplete: Boolean = false,
     val restTimer: RestTimerState? = null,
     val showTimerControls: Boolean = false,
+    /** How the running rest duration was derived (engine System 2) — shown in the timer dialog. */
+    val restTimerReason: String? = null,
+    /**
+     * Pre-session fatigue-aware reorder proposal (engine System 3). Non-null only before
+     * any set is logged; cleared on apply/dismiss. Applying reorders the in-memory list
+     * via the same mechanism as manual reordering — the program itself is never touched.
+     */
+    val orderingSuggestion: com.forge.app.domain.adapt.Recommendation.SessionOrder? = null,
     val swapPickerForExerciseId: String? = null,
     val summary: SessionSummary? = null,
     val showDiscardConfirm: Boolean = false,
@@ -142,6 +150,8 @@ data class ExerciseUiState(
      */
     val suggestedWeight: String? = null,
     val suggestionReason: String? = null,
+    /** Suggested change vs last session's top weight, in lb — drives the UP NEXT delta pill. */
+    val suggestedDeltaLb: Double? = null,
     /** Historical sets from prior sessions — used to compute the live PR hint in SetInputRow (#100). */
     val priorSets: List<LoggedSet> = emptyList(),
     /** All-time personal best formatted as "X lb × Y" — shown in the card header (#101). */
