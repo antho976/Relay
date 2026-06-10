@@ -1,13 +1,12 @@
 package com.forge.app.data.repo
 
 import com.forge.app.program.Program
-import com.forge.app.ui.gym.stats.state.DayTypeBreakdown
 import com.forge.app.ui.gym.stats.state.DayTypeVolumeStats
 import com.forge.app.ui.gym.stats.state.MuscleSetCount
 import com.forge.app.ui.gym.stats.state.MuscleVolume
 import com.forge.app.ui.gym.stats.state.RepRangeDist
 import com.forge.app.ui.gym.stats.state.VolumeDeloadPoint
-import com.forge.app.ui.gym.stats.state.VolumePoint
+import com.forge.app.ui.gym.stats.state.WeeklyTonnage
 
 // Pure volume / muscle / day-type aggregation helpers extracted from StatsRepository.
 // No DAO or DI dependencies — they fold already-loaded projections into UI state.
@@ -39,24 +38,6 @@ internal fun buildWeeklySetsByMuscle(
         .sortedByDescending { it.sets }
 }
 
-internal fun buildExerciseVolumeHistory(
-    allSets: List<com.forge.app.data.db.projections.SetWithExerciseAndSession>
-): Map<String, List<VolumePoint>> {
-    return allSets
-        .filter { it.weightLb != null }
-        .groupBy { it.exerciseId }
-        .mapValues { (_, sets) ->
-            sets.groupBy { it.sessionStartedAt }
-                .map { (sessionDate, sessionSets) ->
-                    VolumePoint(
-                        sessionDate = sessionDate,
-                        totalVolumeLb = sessionSets.sumOf { (it.weightLb ?: 0.0) * it.reps }
-                    )
-                }
-                .sortedBy { it.sessionDate }
-        }
-}
-
 internal fun buildVolumeDeloadTrend(
     rows: List<com.forge.app.data.db.dao.SessionDao.SessionVolumeDeloadRow>
 ): List<VolumeDeloadPoint> {
@@ -69,6 +50,33 @@ internal fun buildVolumeDeloadTrend(
                 dayKey = row.dayKey,
                 totalVolumeLb = row.totalVolumeLb ?: 0.0,
                 isDeload = row.deloadMarkedHere
+            )
+        }
+}
+
+/**
+ * Weekly tonnage: per-session volume points bucketed into ISO weeks, oldest → newest.
+ * A week reads as deload when any session in it was deload-marked.
+ */
+internal fun buildWeeklyTonnage(
+    points: List<VolumeDeloadPoint>,
+    zone: java.time.ZoneId = java.time.ZoneId.systemDefault(),
+    maxWeeks: Int = 12
+): List<WeeklyTonnage> {
+    if (points.isEmpty()) return emptyList()
+    return points
+        .groupBy { p ->
+            val d = java.time.Instant.ofEpochMilli(p.sessionDate).atZone(zone).toLocalDate()
+            d.minusDays(d.dayOfWeek.value.toLong() - 1)
+        }
+        .entries
+        .sortedBy { it.key }
+        .takeLast(maxWeeks)
+        .map { (weekStart, ps) ->
+            WeeklyTonnage(
+                weekLabel = weekStart.toString().substring(5), // "MM-dd"
+                volumeLb = ps.sumOf { it.totalVolumeLb },
+                isDeload = ps.any { it.isDeload }
             )
         }
 }
@@ -104,16 +112,3 @@ internal fun buildDayTypeBestVsAvg(
     }.sortedBy { it.dayKey }
 }
 
-internal fun buildDayTypeBreakdown(rows: List<com.forge.app.data.db.dao.SessionDao.DayTypeStats>): List<DayTypeBreakdown> {
-    return rows.mapNotNull { row ->
-        val dayName = Program.days.firstOrNull { it.key == row.dayKey }?.defaultName ?: return@mapNotNull null
-        DayTypeBreakdown(
-            dayKey = row.dayKey,
-            dayName = dayName,
-            avgDurationMin = (row.avgDurationMin ?: 0.0).toInt(),
-            prRate = row.prRate ?: 0.0,
-            skipRate = 0.0, // would need logged exercise skip data — approximate as 0 for now
-            sessionCount = row.sessionCount
-        )
-    }.sortedBy { it.dayKey }
-}

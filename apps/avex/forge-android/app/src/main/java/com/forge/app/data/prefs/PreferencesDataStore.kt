@@ -35,9 +35,6 @@ object PreferenceKeys {
     // ─── Custom warmup (#120) — per-day key, e.g. "warmup_upper-a" ───────────
     fun warmupKey(dayKey: String) = stringPreferencesKey("warmup_$dayKey")
 
-    // ─── Encouragement messages (#67) ────────────────────────────────────────
-    val SHOW_ENCOURAGEMENT = booleanPreferencesKey("show_encouragement")
-
     // ─── Compact set logging (#35c) ───────────────────────────────────────────
     val COMPACT_SET_LOGGING = booleanPreferencesKey("compact_set_logging")
 

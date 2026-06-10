@@ -18,13 +18,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.ui.gym.stats.components.ExerciseFrequencySection
 import com.forge.app.ui.gym.stats.components.LifetimeStat
-import com.forge.app.ui.gym.stats.components.VolumeBarsSection
 import com.forge.app.ui.gym.stats.components.formatVolume
 import com.forge.app.ui.gym.stats.components.numberWord
 import com.forge.app.ui.gym.stats.components.weekCommentary
 import com.forge.app.ui.gym.stats.state.ExerciseFrequency
 import com.forge.app.ui.gym.stats.state.LifetimeMetrics
-import com.forge.app.ui.gym.stats.state.MuscleVolume
 
 @Composable
 internal fun StatsHeroSection(
@@ -86,36 +84,8 @@ internal fun StatsHeroSection(
     }
 }
 
-@Composable
-internal fun StatsVolumeSection(
-    rows: List<MuscleVolume>,
-    muted: Color,
-    accent: Color,
-    outline: Color,
-    onBg: Color
-) {
-    Column(modifier = Modifier.padding(horizontal = 24.dp)) {
-        Text(
-            "Where the weight went",
-            style = MaterialTheme.typography.headlineSmall,
-            color = onBg,
-            fontStyle = FontStyle.Italic
-        )
-        Spacer(Modifier.height(4.dp))
-        val totalLb = rows.sumOf { it.volumeLb }
-        Text(
-            "${formatVolume(totalLb)} lb this week, by muscle group.",
-            style = MaterialTheme.typography.bodySmall,
-            color = muted,
-            fontStyle = FontStyle.Italic
-        )
-        Spacer(Modifier.height(16.dp))
-        VolumeBarsSection(rows = rows, muted = muted, accent = accent)
-        Spacer(Modifier.height(20.dp))
-        HorizontalDivider(color = outline.copy(alpha = 0.25f))
-        Spacer(Modifier.height(20.dp))
-    }
-}
+// StatsVolumeSection ("Where the weight went") merged into MuscleTargetSection in the
+// Stats revamp — the lb totals now annotate the actual-vs-plan rows.
 
 @Composable
 internal fun StatsFreqSection(

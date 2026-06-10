@@ -3,11 +3,16 @@ package com.forge.app.domain.adapt
 import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.data.db.entities.MoodEntry
 import com.forge.app.data.db.entities.Session
+import com.forge.app.data.db.entities.VacationPeriod
+import com.forge.app.domain.vacation.VacationCalendar
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneOffset
 
 /** System 6 of the adaptation engine. "Now" pinned to day 30. */
 class ReadinessAdvisorTest {
@@ -99,6 +104,43 @@ class ReadinessAdvisorTest {
         assertNotNull(r)
         assertEquals(1, r!!.percent)
         assertTrue(!r.reason.contains("strong"))
+    }
+
+    // ── Vacation-aware spacing (#135) ──────────────────────────────────────────
+
+    private fun date(ms: Long) = LocalDate.ofInstant(Instant.ofEpochMilli(ms), ZoneOffset.UTC)
+
+    @Test
+    fun comebackCautionFiresWithoutVacation() {
+        val r = ReadinessAdvisor.evaluate(sessions(6), threeFineMoods(), emptyList(), now, ZoneOffset.UTC)
+        assertNotNull(r)
+        assertEquals(-3, r!!.percent) // fine mood (0) + 6-day comeback (−3)
+        assertTrue(r.reason.contains("ease in"))
+    }
+
+    @Test
+    fun vacationGapSuppressesComebackCaution() {
+        // Last session 6 days ago, but the whole gap is a logged holiday → no "ease in".
+        val lastDate = date(now - 6 * day)
+        val today = date(now)
+        val onVac = VacationCalendar.onVacation(
+            listOf(VacationPeriod(startDate = lastDate.plusDays(1).toString(), endDate = today.toString()))
+        )
+        val r = ReadinessAdvisor.evaluate(sessions(6), threeFineMoods(), emptyList(), now, ZoneOffset.UTC, onVac)
+        assertNull(r) // fine mood (0) + no comeback → net zero → silent
+    }
+
+    @Test
+    fun onlyNonVacationDaysCountTowardTimeOff() {
+        // 6-day gap, but 4 of the days were holiday → effective 2 days off → "fresh" bonus, not comeback.
+        val today = date(now)
+        val onVac = VacationCalendar.onVacation(
+            listOf(VacationPeriod(startDate = date(now - 5 * day).toString(), endDate = date(now - 2 * day).toString()))
+        )
+        val r = ReadinessAdvisor.evaluate(sessions(6), threeFineMoods(), emptyList(), now, ZoneOffset.UTC, onVac)
+        assertNotNull(r)
+        assertEquals(1, r!!.percent) // fine (0) + fresh-after-2 (+1)
+        assertTrue(r.reason.contains("fresh"))
     }
 
     // ── Determinism ────────────────────────────────────────────────────────────

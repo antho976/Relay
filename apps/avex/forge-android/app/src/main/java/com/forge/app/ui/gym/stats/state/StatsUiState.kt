@@ -1,9 +1,6 @@
 package com.forge.app.ui.gym.stats.state
 
-import com.forge.app.program.ExercisePlan
 import com.forge.app.program.MuscleGroup
-import java.time.LocalDate
-import java.time.YearMonth
 
 /** One day row in the "What I did this week" editorial section. */
 data class WeekActivityRow(
@@ -21,14 +18,10 @@ data class WeekActivityRow(
 
 data class StatsUiState(
     val isLoading: Boolean = true,
-    val totals: Totals = Totals(),
-    val heatmap: List<HeatmapCell> = emptyList(),
     val volumeByMuscle: List<MuscleVolume> = emptyList(),
-    val strengthCurve: StrengthCurve? = null,
     val recentPrs: List<PrEntry> = emptyList(),
     val hallOfFame: List<PrRecord> = emptyList(),
     val exerciseHistory: Map<String, List<HistoryPoint>> = emptyMap(),
-    val monthCalendar: MonthCalendarData? = null,
     /** Sessions per exercise in past 8 weeks (#73). */
     val exerciseFrequency: List<ExerciseFrequency> = emptyList(),
     /** Avg days between PRs per exercise — only exercises with 2+ PRs (#74). */
@@ -37,28 +30,16 @@ data class StatsUiState(
     val effortDistribution: List<WeeklyEffortCounts> = emptyList(),
     /** PR count by day of week (Mon–Sun, index 0=Mon) (#85). */
     val prsByDayOfWeek: List<Int> = List(7) { 0 },
-    /** Sessions with volume + deload marker for the trend chart (#126). */
-    val volumeDeloadTrend: List<VolumeDeloadPoint> = emptyList(),
     /** Best vs average volume per day type (#132). */
     val dayTypeBestVsAvg: List<DayTypeVolumeStats> = emptyList(),
     /** This week vs last week comparison (#34). */
     val weekComparison: PeriodComparison? = null,
-    /** This month vs last month comparison (#130). */
-    val monthComparison: PeriodComparison? = null,
-    /** Year-over-year peak weight per exercise for exercises with 12+ months of data (#131). */
-    val exerciseYoY: List<ExerciseYoY> = emptyList(),
-    /** Volume per session per exercise for the volume-over-time chart (#72). */
-    val exerciseVolumeHistory: Map<String, List<VolumePoint>> = emptyMap(),
-    /** Max weight per compound exercise for the radar chart (#124): exerciseId → max lb. */
-    val compoundMaxes: Map<String, Double> = emptyMap(),
-    /** PR session timestamps for clustering scatter (#128). */
+    /** PR session timestamps (#128) — feeds PR recency. */
     val prSessionTimestamps: List<Long> = emptyList(),
     /** Mood over time for effort chart (#95). */
     val moodOverTime: List<com.forge.app.data.db.dao.SessionDao.MoodOverTime> = emptyList(),
     /** Behavioral insight flags (#41, #80). */
     val insights: List<InsightFlag> = emptyList(),
-    /** Per-day-type breakdown (#134). */
-    val dayTypeBreakdown: List<DayTypeBreakdown> = emptyList(),
     /** Lifetime session metrics (#40). */
     val lifetimeMetrics: LifetimeMetrics? = null,
     /** Mon–Sun rows for "What I did this week" editorial section. Always 7 entries. */
@@ -76,8 +57,8 @@ data class StatsUiState(
     /** Count of sets at each RPE value + overall average (Phase 3). */
     val rpeDistribution: List<RpeBucket> = emptyList(),
     val avgRpe: Double? = null,
-    /** Bodyweight (lb) over time, oldest → newest (Phase 4). */
-    val bodyweightTrend: List<Double> = emptyList(),
+    /** Dated bodyweight points, oldest → newest — feeds the Body tab's time-axis trend. */
+    val bodyweightPoints: List<BodyweightPoint> = emptyList(),
     /** Consecutive recent weeks meeting the session target (Snapshot). */
     val consistencyStreakWeeks: Int = 0,
     /** Avg estimated-1RM growth per month across lifts, as a percent (Snapshot). */
@@ -85,8 +66,82 @@ data class StatsUiState(
     /** Average RPE per session, oldest → newest (Trends RPE line). */
     val avgRpePerSession: List<Double> = emptyList(),
     /** Session count per ISO week for the last ~12 weeks, oldest → newest (Trends consistency). */
-    val weeklySessionCounts: List<Int> = emptyList()
+    val weeklySessionCounts: List<Int> = emptyList(),
+    /** Weekly avg e1RM across tracked lifts — the concrete "progressive overload" series (Snapshot). */
+    val overload: OverloadSummary? = null,
+    /** Days since the most recent PR, overall + per lift (Strength). */
+    val prRecency: PrRecency? = null,
+    /** Movement-pattern radar: recent best vs all-time best e1RM per pattern (Strength). */
+    val patternRadar: List<PatternAxis> = emptyList(),
+    // Engine read — loaded once per Stats open via AdaptationRepository.engineStatsRead().
+    /** Fatigue pulse (System 5). Null until the engine read lands or while data gates fail. */
+    val readinessPulse: ReadinessPulse? = null,
+    /** Plateau ladder flags (System 1) keyed to lifts on the Strength tab. */
+    val plateauFlags: List<PlateauFlagUi> = emptyList(),
+    /** Always-on push/pull + quad/ham balance bars (System 4 counting). */
+    val balanceRatios: List<BalanceRatioUi> = emptyList(),
+    /** Planned weekly sets per muscle from the active program (VolumeTargets). */
+    val plannedSetsByMuscle: Map<MuscleGroup, Int> = emptyMap(),
+    /** Tonnage per ISO week, deload weeks marked (Volume trend). */
+    val weeklyTonnage: List<WeeklyTonnage> = emptyList(),
+    /** Sessions per day of week + best training hour (Trends "When you train"). */
+    val trainingTimes: TrainingTimes? = null,
+    /** Median session length per ISO week (Trends duration trend). */
+    val weeklyDurations: List<WeeklyDuration> = emptyList()
 )
+
+/** One ISO week's total tonnage for the Volume trend bars. */
+data class WeeklyTonnage(
+    val weekLabel: String,
+    val volumeLb: Double,
+    val isDeload: Boolean
+)
+
+/** Sessions per day of week (Mon..Sun) + the sets-weighted best training hour. */
+data class TrainingTimes(
+    val sessionsByDayOfWeek: List<Int>,
+    /** e.g. "evening (18:00)" — null until enough sets accrue. */
+    val bestHourLabel: String?
+)
+
+/** Median session length for one ISO week. */
+data class WeeklyDuration(
+    val weekLabel: String,
+    val medianMin: Int
+)
+
+/** One dated bodyweight entry for the Body trend line. */
+data class BodyweightPoint(
+    val recordedAt: Long,
+    val weightLb: Double
+)
+
+/** Weekly average of per-lift best e1RM across the tracked lifts, oldest → newest. */
+data class OverloadSummary(
+    /** Last week-with-data's average e1RM. */
+    val current: Double,
+    /** Avg e1RM per ISO week that had data, oldest → newest (≤ 12 weeks). */
+    val weekly: List<Double>
+) {
+    val prevWeek: Double? get() = if (weekly.size >= 2) weekly[weekly.size - 2] else null
+    val deltaVsPrevWeek: Double? get() = prevWeek?.let { current - it }
+}
+
+/** Days since the last PR — overall and per exercise. */
+data class PrRecency(
+    val daysSinceLast: Int,
+    val byExercise: Map<String, Int>
+)
+
+/** One axis of the movement-pattern radar: recent-window best vs all-time best e1RM. */
+data class PatternAxis(
+    val label: String,
+    val currentE1rm: Double,
+    val peakE1rm: Double
+) {
+    /** Current shape vs your own peak — the only honest cross-pattern comparison. */
+    val fraction: Double get() = if (peakE1rm > 0) (currentE1rm / peakE1rm).coerceIn(0.0, 1.0) else 0.0
+}
 
 /** Working-set count for one muscle group in the current week (Phase 2). */
 data class MuscleSetCount(val muscle: MuscleGroup, val sets: Int) {
@@ -125,28 +180,10 @@ data class RepMaxEntry(val reps: Int, val weightLb: Double)
 /** Rep-max table for a single exercise. */
 data class RepMaxSet(val exerciseName: String, val entries: List<RepMaxEntry>)
 
-data class Totals(
-    val workouts: Int = 0,
-    val exercisesLogged: Int = 0,
-    val prs: Int = 0
-)
-
-/** One day cell in the frequency heatmap. [count] = number of exercises logged that day. */
-data class HeatmapCell(
-    val date: LocalDate,
-    val count: Int
-)
-
 /** Per-muscle weekly volume, sorted descending by volume in the repository. */
 data class MuscleVolume(
     val muscle: MuscleGroup,
     val volumeLb: Double
-)
-
-/** Up to ~10 most recent (max-weight-per-session) data points for a single exercise. */
-data class StrengthCurve(
-    val plan: ExercisePlan,
-    val points: List<Double>
 )
 
 data class PrEntry(
@@ -174,21 +211,6 @@ data class PrRecord(
 data class HistoryPoint(
     val sessionDate: Long,
     val maxWeightLb: Double
-)
-
-/** Mini summary for a single day in the monthly calendar (#54). */
-data class SessionDaySummary(
-    val dayName: String,
-    val totalVolumeLb: Double,
-    val prCount: Int
-)
-
-/** Monthly training calendar: one entry per day of month that had a session (#54). */
-data class MonthCalendarData(
-    val yearMonth: YearMonth,
-    val sessionDays: Map<Int, SessionDaySummary>,
-    /** Day-of-month → rest day type for days marked as intentional rest (#114 #115). */
-    val restDays: Map<Int, String> = emptyMap()
 )
 
 /** How many sessions in past 8 weeks included a given exercise (#73). */
@@ -254,37 +276,11 @@ data class PeriodComparison(
     val prsDelta: Int get() = current.prs - previous.prs
 }
 
-/** Year-over-year peak weight for one exercise (#131). */
-data class ExerciseYoY(
-    val exerciseId: String,
-    val exerciseName: String,
-    val thisYearMaxLb: Double,
-    val lastYearMaxLb: Double
-) {
-    val delta: Double get() = thisYearMaxLb - lastYearMaxLb
-}
-
-/** One data point for the volume-over-time chart (#72). */
-data class VolumePoint(
-    val sessionDate: Long,
-    val totalVolumeLb: Double
-)
-
 /** Behavioral insight flag — shown in the Stats/Overview screen (#41, #80). */
 data class InsightFlag(
     val emoji: String,
     val title: String,
     val body: String
-)
-
-/** Per-day-type breakdown row (#134). */
-data class DayTypeBreakdown(
-    val dayKey: String,
-    val dayName: String,
-    val avgDurationMin: Int,
-    val prRate: Double,
-    val skipRate: Double,
-    val sessionCount: Int
 )
 
 /** Session efficiency / lifetime metrics row (#40). */

@@ -5,13 +5,10 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -22,10 +19,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.forge.app.ui.gym.stats.state.MuscleVolume
 import com.forge.app.ui.gym.stats.state.TimeToPrEntry
 
 // ─── Time to Next PR (#74) ────────────────────────────────────────────────────
@@ -112,53 +107,8 @@ fun PrDayOfWeekCard(counts: List<Int>, modifier: Modifier = Modifier) {
     }
 }
 
-// ─── Volume Distribution Donut (#125) ─────────────────────────────────────────
-
-private val MUSCLE_COLORS = listOf(
-    Color(0xFF2196F3), Color(0xFF4CAF50), Color(0xFFFF9800),
-    Color(0xFFF44336), Color(0xFF9C27B0), Color(0xFF00BCD4),
-    Color(0xFFFFEB3B), Color(0xFF795548), Color(0xFF607D8B),
-    Color(0xFFE91E63), Color(0xFF009688)
-)
-
-@Composable
-fun VolumeDonutCard(rows: List<MuscleVolume>, modifier: Modifier = Modifier) {
-    if (rows.isEmpty()) return
-    val total = rows.sumOf { it.volumeLb }.coerceAtLeast(1.0)
-    StatCard(title = "VOLUME BREAKDOWN · lb", modifier = modifier) {
-        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            rows.forEachIndexed { i, mv ->
-                val pct = (mv.volumeLb / total * 100).toInt()
-                val color = MUSCLE_COLORS[i % MUSCLE_COLORS.size]
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Box(Modifier.size(10.dp).background(color, CircleShape))
-                    Text(
-                        mv.muscle.displayName,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.weight(1f),
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Box(
-                        modifier = Modifier
-                            .width((pct * 0.8f).dp.coerceAtLeast(4.dp))
-                            .height(6.dp)
-                            .clip(RoundedCornerShape(3.dp))
-                            .background(color)
-                    )
-                    Text(
-                        "$pct%",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-        }
-    }
-}
+// VolumeDonutCard (#125) was retired in the Stats revamp — MuscleTargetSection's
+// actual-vs-plan bars carry the same breakdown in the editorial language.
 
 // ─── Shared card shell ────────────────────────────────────────────────────────
 

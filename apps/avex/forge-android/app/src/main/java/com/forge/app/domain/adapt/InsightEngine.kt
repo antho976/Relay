@@ -20,6 +20,24 @@ import kotlin.math.roundToInt
  * Every rule is confidence-gated by [AdaptThresholds] — on sparse data a rule says nothing.
  * Pure + deterministic: time and zone come from the snapshot.
  */
+/**
+ * Always-on structural ratio counts (push/pull, quad/ham) over the insight window.
+ * Shared by [InsightEngine.ratioInsight] (which gates on sample size + healthy band)
+ * and the Stats balance bars (which render the raw counts unconditionally).
+ */
+data class RatioCounts(
+    val key: String,
+    val labelA: String,
+    val labelB: String,
+    val setsA: Int,
+    val setsB: Int,
+    val healthyLow: Double,
+    val healthyHigh: Double
+) {
+    val ratio: Double? get() = if (setsA > 0 && setsB > 0) setsA.toDouble() / setsB else null
+    val balanced: Boolean? get() = ratio?.let { it in healthyLow..healthyHigh }
+}
+
 object InsightEngine {
 
     private const val DAY_MS = 24L * 60 * 60 * 1000
@@ -29,12 +47,13 @@ object InsightEngine {
 
     fun evaluate(s: AdaptationSnapshot, t: AdaptThresholds = AdaptThresholds()): List<Recommendation.Insight> {
         val slots = s.program.flatMap { it.slots }.associateBy { it.exerciseId }
+        val ratios = balanceRatios(s, t)
         return listOfNotNull(
             bestTimeOfDay(s, t),
             mostImproved(s, slots, t),
             muscleDominance(s, slots, t),
-            ratioInsight(s, slots, t, "pushpull", "Push/pull balance", PUSH, PULL, t.insightPushPullLow, t.insightPushPullHigh, "push", "pull"),
-            ratioInsight(s, slots, t, "quadham", "Quad/ham balance", setOf(MuscleGroup.QUADS), setOf(MuscleGroup.HAMSTRINGS), t.insightQuadHamLow, t.insightQuadHamHigh, "quad", "hamstring"),
+            ratioInsight(ratios.first { it.key == "pushpull" }, t, "Push/pull balance"),
+            ratioInsight(ratios.first { it.key == "quadham" }, t, "Quad/ham balance"),
             mostSkipped(s, slots, t),
             repeatedSessionSwaps(s, slots, t),
             recoverySignalsBuilding(s, t),
@@ -43,7 +62,27 @@ object InsightEngine {
         )
     }
 
+    /** The two structural ratios as raw counts — ungated, for the Stats balance bars. */
+    fun balanceRatios(s: AdaptationSnapshot, t: AdaptThresholds = AdaptThresholds()): List<RatioCounts> {
+        val slots = s.program.flatMap { it.slots }.associateBy { it.exerciseId }
+        return listOf(
+            ratioCounts(s, slots, t, "pushpull", "push", "pull", PUSH, PULL, t.insightPushPullLow, t.insightPushPullHigh),
+            ratioCounts(
+                s, slots, t, "quadham", "quad", "ham",
+                setOf(MuscleGroup.QUADS), setOf(MuscleGroup.HAMSTRINGS), t.insightQuadHamLow, t.insightQuadHamHigh
+            )
+        )
+    }
+
     // ── Ported: best time-of-day (#40) ─────────────────────────────────────────
+
+    /** Hour-of-day → editorial word. Shared with the Stats "When you train" card. */
+    fun timeOfDayLabel(hour: Int): String = when {
+        hour < 10 -> "morning"
+        hour < 13 -> "late morning"
+        hour < 17 -> "afternoon"
+        else -> "evening"
+    }
 
     private fun bestTimeOfDay(s: AdaptationSnapshot, t: AdaptThresholds): Recommendation.Insight? {
         val bouts = s.exerciseHistory.values.flatten()
@@ -52,13 +91,7 @@ object InsightEngine {
         val byHour = bouts.groupBy { Instant.ofEpochMilli(it.sessionStartedAt).atZone(s.zoneId).hour }
             .mapValues { (_, b) -> b.sumOf { it.sets.size } }
         val best = byHour.maxByOrNull { it.value } ?: return null
-        val label = when {
-            best.key < 10 -> "morning"
-            best.key < 13 -> "late morning"
-            best.key < 17 -> "afternoon"
-            else -> "evening"
-        }
-        return insight("timeofday", "Best time to train", "You log the most sets in the $label (${best.key}:00).", "⏰")
+        return insight("timeofday", "Best time to train", "You log the most sets in the ${timeOfDayLabel(best.key)} (${best.key}:00).", "⏰")
     }
 
     // ── Ported: most improved (#41) ────────────────────────────────────────────
@@ -114,19 +147,18 @@ object InsightEngine {
 
     // ── Structural ratios: push/pull, quad/ham ─────────────────────────────────
 
-    private fun ratioInsight(
+    private fun ratioCounts(
         s: AdaptationSnapshot,
         slots: Map<String, ProgramSlotSnap>,
         t: AdaptThresholds,
         key: String,
-        title: String,
+        labelA: String,
+        labelB: String,
         sideA: Set<MuscleGroup>,
         sideB: Set<MuscleGroup>,
         low: Double,
-        high: Double,
-        labelA: String,
-        labelB: String
-    ): Recommendation.Insight? {
+        high: Double
+    ): RatioCounts {
         val since = s.nowMs - t.insightRatioWindowDays * DAY_MS
         var a = 0
         var b = 0
@@ -139,13 +171,16 @@ object InsightEngine {
                 else -> {}
             }
         }
-        if (a < t.insightRatioMinSetsPerSide || b < t.insightRatioMinSetsPerSide) return null
-        val ratio = a.toDouble() / b
-        if (ratio in low..high) return null
-        val skew = if (ratio > high) labelA else labelB
+        return RatioCounts(key, labelA, labelB, a, b, low, high)
+    }
+
+    private fun ratioInsight(rc: RatioCounts, t: AdaptThresholds, title: String): Recommendation.Insight? {
+        if (rc.setsA < t.insightRatioMinSetsPerSide || rc.setsB < t.insightRatioMinSetsPerSide) return null
+        if (rc.balanced != false) return null
+        val skew = if (rc.setsA.toDouble() / rc.setsB > rc.healthyHigh) rc.labelA else rc.labelB
         return insight(
-            key, title,
-            "Last ${t.insightRatioWindowDays} days: $a $labelA sets vs $b $labelB — leaning $skew-heavy.", "⚖️"
+            rc.key, title,
+            "Last ${t.insightRatioWindowDays} days: ${rc.setsA} ${rc.labelA} sets vs ${rc.setsB} ${rc.labelB} — leaning $skew-heavy.", "⚖️"
         )
     }
 

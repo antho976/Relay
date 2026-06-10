@@ -23,6 +23,8 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.ui.gym.stats.components.Sparkline
+import com.forge.app.ui.gym.stats.components.rememberDrawProgress
+import com.forge.app.ui.gym.stats.components.staggeredProgress
 import com.forge.app.ui.gym.stats.state.RpeBucket
 import com.forge.app.ui.theme.ForgeLastGreen
 
@@ -111,17 +113,22 @@ internal fun ConsistencyHeatmapCard(weeklyCounts: List<Int>, target: Int, onBg: 
     val firstHalf = weeklyCounts.take(weeklyCounts.size / 2).ifEmpty { listOf(0) }.average()
     val secondHalf = weeklyCounts.takeLast(weeklyCounts.size / 2).ifEmpty { listOf(0) }.average()
     val progressing = secondHalf >= firstHalf
+    val reveal = rememberDrawProgress(weeklyCounts.sum())
     Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
         Text("How you train", style = MaterialTheme.typography.headlineSmall, color = onBg, fontStyle = FontStyle.Italic)
         Spacer(Modifier.height(4.dp))
         Text("CONSISTENCY · ${weeklyCounts.size} WEEKS · ${"%.1f".format(avgPerWk)} sess/wk", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
         Spacer(Modifier.height(12.dp))
         Row(Modifier.fillMaxWidth().height(64.dp), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.Bottom) {
-            weeklyCounts.forEach { count ->
+            weeklyCounts.forEachIndexed { wi, count ->
+                // Filled columns fade in left-to-right with a stagger; empty cells sit still.
+                val tile = staggeredProgress(reveal, wi, weeklyCounts.size)
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     for (i in maxBlocks downTo 1) {
                         val filled = i <= count
-                        val color = if (filled) (if (count >= target) ForgeLastGreen else accent) else grey
+                        val color =
+                            if (filled) (if (count >= target) ForgeLastGreen else accent).copy(alpha = 0.25f + 0.75f * tile)
+                            else grey
                         Box(Modifier.fillMaxWidth().height(9.dp).background(color, RoundedCornerShape(2.dp)))
                     }
                 }

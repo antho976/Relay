@@ -18,7 +18,6 @@ import javax.inject.Inject
 data class SettingsUiState(
     val amoledMode: Boolean = false,
     val useKg: Boolean = false,
-    val showEncouragement: Boolean = true,
     val compactSetLogging: Boolean = false,
     val noteTemplates: Set<String> = setOf("form felt: ", "energy: ", "pain/discomfort: ", "focus cue: "),
     val hiddenOverviewTiles: Set<String> = emptySet(),
@@ -60,8 +59,20 @@ class SettingsViewModel @Inject constructor(
     private val backupRepo: com.forge.app.data.repo.BackupRepository,
     private val sampleDataSeeder: com.forge.app.data.repo.SampleDataSeeder,
     private val pdfExport: com.forge.app.data.repo.PdfExportRepository,
-    private val programRepository: com.forge.app.data.repo.ProgramRepository
+    private val programRepository: com.forge.app.data.repo.ProgramRepository,
+    private val vacationRepo: com.forge.app.data.repo.VacationRepository
 ) : ViewModel() {
+
+    // ─── Holiday / vacation (#135) ────────────────────────────────────────────
+    val vacations: StateFlow<List<com.forge.app.data.db.entities.VacationPeriod>> =
+        vacationRepo.observeAll()
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    fun addVacation(startDate: String, endDate: String, label: String) =
+        viewModelScope.launch { vacationRepo.add(startDate, endDate, label) }
+
+    fun deleteVacation(period: com.forge.app.data.db.entities.VacationPeriod) =
+        viewModelScope.launch { vacationRepo.delete(period) }
 
     val state: StateFlow<SettingsUiState> = combine(
         settingsRepo.amoledMode,
@@ -89,8 +100,6 @@ class SettingsViewModel @Inject constructor(
         s.copy(noteTemplates = templates)
     }.combine(settingsRepo.hiddenOverviewTiles) { s, hidden ->
         s.copy(hiddenOverviewTiles = hidden)
-    }.combine(settingsRepo.showEncouragement) { s, v ->
-        s.copy(showEncouragement = v)
     }.combine(settingsRepo.compactSetLogging) { s, v ->
         s.copy(compactSetLogging = v)
     }.combine(settingsRepo.overviewTileOrder) { s, order ->
@@ -155,7 +164,6 @@ class SettingsViewModel @Inject constructor(
     fun setQuietHoursEnd(v: Int) = viewModelScope.launch { settingsRepo.setQuietHoursEnd(v) }
 
     fun setTileHidden(id: String, hidden: Boolean) = viewModelScope.launch { settingsRepo.setTileHidden(id, hidden) }
-    fun setShowEncouragement(v: Boolean) = viewModelScope.launch { settingsRepo.setShowEncouragement(v) }
     fun setCompactSetLogging(v: Boolean) = viewModelScope.launch { settingsRepo.setCompactSetLogging(v) }
     fun setCustomWarmup(dayKey: String, items: List<String>) =
         viewModelScope.launch { settingsRepo.setCustomWarmup(dayKey, items) }

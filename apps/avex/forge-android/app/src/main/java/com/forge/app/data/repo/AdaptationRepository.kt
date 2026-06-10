@@ -9,11 +9,13 @@ import com.forge.app.data.db.dao.MoodDao
 import com.forge.app.data.db.dao.SessionDao
 import com.forge.app.data.db.entities.AdviceEvent
 import com.forge.app.data.prefs.SettingsRepository
+import com.forge.app.domain.adapt.AdaptThresholds
 import com.forge.app.domain.adapt.AdaptationSnapshot
 import com.forge.app.domain.adapt.DeloadAdvisor
 import com.forge.app.domain.adapt.InsightEngine
 import com.forge.app.domain.adapt.PrefsSnap
 import com.forge.app.domain.adapt.ProgressionAdvisor
+import com.forge.app.domain.adapt.RatioCounts
 import com.forge.app.domain.adapt.ReadinessAdvisor
 import com.forge.app.domain.adapt.Recommendation
 import com.forge.app.domain.adapt.RecommendationArbiter
@@ -44,6 +46,7 @@ class AdaptationRepository @Inject constructor(
     private val moodDao: MoodDao,
     private val cardioDao: CardioDao,
     private val adviceEventDao: AdviceEventDao,
+    private val vacationDao: com.forge.app.data.db.dao.VacationDao,
     private val programRepository: ProgramRepository,
     private val settingsRepository: SettingsRepository,
     private val clock: Clock
@@ -101,7 +104,9 @@ class AdaptationRepository @Inject constructor(
             sessions = sessionDao.allFinished().filter { !it.isUntracked },
             moods = moodDao.since(now - signalWindowMs),
             cardio = cardioDao.since(now - signalWindowMs),
-            nowMs = now
+            nowMs = now,
+            zoneId = java.time.ZoneId.systemDefault(),
+            onVacation = com.forge.app.domain.vacation.VacationCalendar.onVacation(vacationDao.all())
         )
     }
 
@@ -117,6 +122,30 @@ class AdaptationRepository @Inject constructor(
 
     /** Engine observations for the Stats insights section (replaces the legacy buildInsights). */
     suspend fun insights(): List<Recommendation.Insight> = InsightEngine.evaluate(snapshot())
+
+    /**
+     * Everything the Stats page reads from the engine, off ONE snapshot fan-out: the
+     * fatigue pulse (System 5), the plateau ladder (System 1), and the always-on balance
+     * ratios (System 4's counting, ungated). Call once per Stats open — surface-level
+     * entry point, never the per-set hot path.
+     */
+    data class EngineStatsRead(
+        val fatigue: DeloadAdvisor.FatigueAssessment?,
+        val deloadScoreThreshold: Int,
+        val plateaus: List<Recommendation>,
+        val ratios: List<RatioCounts>
+    )
+
+    suspend fun engineStatsRead(): EngineStatsRead {
+        val s = snapshot()
+        val t = AdaptThresholds()
+        return EngineStatsRead(
+            fatigue = DeloadAdvisor.fatigue(s, t),
+            deloadScoreThreshold = t.deloadScoreThreshold,
+            plateaus = ProgressionAdvisor.evaluate(s, t),
+            ratios = InsightEngine.balanceRatios(s, t)
+        )
+    }
 
     // ─── Advice feedback (cooldowns + future calibration) ─────────────────────
 

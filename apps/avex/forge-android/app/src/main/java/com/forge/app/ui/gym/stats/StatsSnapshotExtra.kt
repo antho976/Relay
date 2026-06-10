@@ -1,14 +1,19 @@
 package com.forge.app.ui.gym.stats
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import com.forge.app.ui.theme.emphasized
 import androidx.compose.material3.Text
@@ -19,9 +24,16 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.forge.app.ui.gym.stats.components.CountUpText
+import com.forge.app.ui.gym.stats.components.Sparkline
 import com.forge.app.ui.gym.stats.components.formatVolume
+import com.forge.app.ui.gym.stats.components.rememberDrawProgress
+import com.forge.app.ui.gym.stats.state.OverloadSummary
 import com.forge.app.ui.gym.stats.state.PeriodStats
+import com.forge.app.ui.gym.stats.state.PulseBand
+import com.forge.app.ui.gym.stats.state.ReadinessPulse
 import com.forge.app.ui.theme.ForgeLastGreen
+import com.forge.app.ui.theme.ForgeWarning
 
 /** "MOMENTUM · VS LAST WEEK" — a 2×2 grid of this-week values with deltas vs last week. */
 @Composable
@@ -78,6 +90,132 @@ private fun MomentumCell(
             }
         }
         Text(wasText, style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.6f), fontSize = 9.sp)
+    }
+}
+
+/**
+ * "Progressive overload, concretely" — the weekly average e1RM across tracked lifts as a
+ * big serif number counting up from last week's value, with the weekly series drawing in.
+ */
+@Composable
+internal fun OverloadCard(overload: OverloadSummary?, monthlyPct: Double?, onBg: Color, muted: Color, accent: Color, outline: Color) {
+    if (overload == null) return
+    val error = MaterialTheme.colorScheme.error
+    Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
+        Text("PROGRESSIVE OVERLOAD", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
+        Spacer(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            CountUpText(
+                value = overload.current,
+                fromValue = overload.prevWeek,
+                style = MaterialTheme.typography.displaySmall,
+                color = emphasized(onBg)
+            )
+            Text("AVG E1RM · LB", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, modifier = Modifier.padding(bottom = 8.dp))
+            overload.deltaVsPrevWeek?.let { d ->
+                Text(
+                    "${if (d >= 0) "↑ +" else "↓ "}${d.toInt()} vs last week · was ${overload.prevWeek!!.toInt()}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (d >= 0) ForgeLastGreen else error,
+                    fontSize = 9.sp,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+            }
+        }
+        if (overload.weekly.size >= 2) {
+            Spacer(Modifier.height(10.dp))
+            Sparkline(
+                values = overload.weekly, lineColor = accent,
+                minValue = overload.weekly.min(), maxValue = overload.weekly.max(),
+                modifier = Modifier.fillMaxWidth().height(48.dp),
+                progress = rememberDrawProgress(overload.weekly.size)
+            )
+        }
+        monthlyPct?.let {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Averaging ${if (it >= 0) "+" else ""}${"%.1f".format(it)}% per month across lifts.",
+                style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic
+            )
+        }
+        Spacer(Modifier.height(20.dp))
+        HorizontalDivider(color = outline.copy(alpha = 0.25f))
+        Spacer(Modifier.height(20.dp))
+    }
+}
+
+/**
+ * "READINESS PULSE" — DeloadAdvisor's fatigue score banded Fresh / Building / Deload soon,
+ * with the engine's drivers verbatim as the why-line. Null pulse = the data gates haven't
+ * opened yet; that still renders as a deliberate (cold-start) state, never a gap.
+ */
+@Composable
+internal fun PulseCard(pulse: ReadinessPulse?, onBg: Color, muted: Color, outline: Color) {
+    val band = pulse?.band ?: PulseBand.FRESH
+    val color = when (band) {
+        PulseBand.FRESH -> ForgeLastGreen
+        PulseBand.BUILDING -> ForgeWarning
+        PulseBand.DELOAD_SOON -> MaterialTheme.colorScheme.error
+    }
+    Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
+        Text("READINESS PULSE", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
+        Spacer(Modifier.height(8.dp))
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Box(Modifier.size(8.dp).background(color, CircleShape))
+            Text(band.label, style = MaterialTheme.typography.headlineMedium, color = onBg)
+            if (pulse != null && pulse.score > 0) {
+                Text("FATIGUE ${pulse.score}", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            when {
+                pulse == null -> "Not enough history to read fatigue yet. The signals accrue as you train."
+                pulse.drivers.isEmpty() -> "No fatigue signals firing. Push."
+                else -> pulse.drivers.joinToString(" · ")
+            },
+            style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic
+        )
+        Spacer(Modifier.height(20.dp))
+        HorizontalDivider(color = outline.copy(alpha = 0.25f))
+        Spacer(Modifier.height(20.dp))
+    }
+}
+
+/** "WEEK VS PLAN" — working sets logged this week against the program's planned total. */
+@Composable
+internal fun WeekVsPlanCard(actualSets: Int, plannedSets: Int, onBg: Color, muted: Color, outline: Color) {
+    if (plannedSets <= 0) return
+    val pct = actualSets * 100 / plannedSets
+    val onPlan = pct in 80..110
+    val color = if (onPlan) ForgeLastGreen else ForgeWarning
+    val word = when {
+        pct < 80 -> if (actualSets == 0) "NOT STARTED" else "BEHIND PLAN"
+        pct > 110 -> "AHEAD OF PLAN"
+        else -> "ON PLAN"
+    }
+    val progress = rememberDrawProgress(actualSets)
+    Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text("WEEK VS PLAN", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
+            Text(word, style = MaterialTheme.typography.labelSmall, color = color, fontSize = 9.sp, letterSpacing = 1.sp)
+        }
+        Spacer(Modifier.height(10.dp))
+        Box(Modifier.fillMaxWidth().height(6.dp).background(outline.copy(alpha = 0.15f), RoundedCornerShape(3.dp))) {
+            val frac = (actualSets.toFloat() / plannedSets).coerceIn(0f, 1f) * progress
+            if (frac > 0f) {
+                Box(Modifier.fillMaxWidth(frac).height(6.dp).background(color, RoundedCornerShape(3.dp)))
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        Text(
+            if (actualSets == 0) "$plannedSets working sets planned. Nothing lifted against them yet."
+            else "$actualSets of $plannedSets planned working sets · $pct%",
+            style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic
+        )
+        Spacer(Modifier.height(20.dp))
+        HorizontalDivider(color = outline.copy(alpha = 0.25f))
+        Spacer(Modifier.height(20.dp))
     }
 }
 

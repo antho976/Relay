@@ -20,95 +20,191 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontStyle
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.program.MuscleGroup
+import com.forge.app.ui.gym.stats.components.formatVolume
+import com.forge.app.ui.gym.stats.components.rememberDrawProgress
+import com.forge.app.ui.gym.stats.components.staggeredProgress
+import com.forge.app.ui.gym.stats.state.BalanceRatioUi
 import com.forge.app.ui.gym.stats.state.MuscleSetCount
-import com.forge.app.ui.gym.stats.state.MuscleVolume
 import com.forge.app.ui.gym.stats.state.RepRangeDist
+import com.forge.app.ui.gym.stats.state.WeeklyTonnage
 import com.forge.app.ui.theme.ForgeLastGreen
 import com.forge.app.ui.theme.ForgeWarning
 
-/** Rough per-muscle volume landmarks (MEV = minimum effective, MAV = max adaptive). */
-private fun mevMav(m: MuscleGroup): Pair<Int, Int> = when (m) {
-    MuscleGroup.CHEST -> 10 to 22
-    MuscleGroup.BACK -> 10 to 20
-    MuscleGroup.QUADS -> 8 to 18
-    MuscleGroup.HAMSTRINGS -> 6 to 16
-    MuscleGroup.GLUTES -> 8 to 16
-    MuscleGroup.SHOULDERS -> 8 to 16
-    MuscleGroup.CALVES -> 8 to 16
-    MuscleGroup.CORE -> 6 to 16
-    else -> 6 to 14 // biceps, triceps, rear delts
-}
-
-/** "Balance check" — flags when one muscle dominates the week's volume. */
+/**
+ * "Where the work goes" — weekly working sets per muscle with the program's planned
+ * target overlaid as a tick. Merges the old lb-bars + MEV/MAV landmark cards into one
+ * actual-vs-plan view; renders the full plan with empty bars at zero data, so the cold
+ * start still looks intentional.
+ */
 @Composable
-internal fun BalanceCheckCard(rows: List<MuscleVolume>, onBg: Color, muted: Color, outline: Color) {
-    if (rows.isEmpty()) return
-    val total = rows.sumOf { it.volumeLb }.coerceAtLeast(1.0)
-    val top = rows.maxByOrNull { it.volumeLb } ?: return
-    val pct = (top.volumeLb / total * 100).toInt()
-    val skewed = pct >= 50 && rows.size >= 2
-    val border = if (skewed) ForgeWarning else ForgeLastGreen
+internal fun MuscleTargetSection(
+    actual: List<MuscleSetCount>,
+    planned: Map<MuscleGroup, Int>,
+    volumeLbByMuscle: Map<MuscleGroup, Double>,
+    onBg: Color,
+    muted: Color,
+    accent: Color,
+    outline: Color
+) {
+    val actualByMuscle = actual.associate { it.muscle to it.sets }
+    val muscles = (planned.keys + actualByMuscle.keys).distinct().sortedWith(
+        compareByDescending<MuscleGroup> { planned[it] ?: 0 }.thenByDescending { actualByMuscle[it] ?: 0 }
+    )
+    if (muscles.isEmpty()) return
+    val anyLogged = actualByMuscle.values.any { it > 0 }
+    val progress = rememberDrawProgress(actualByMuscle.values.sum())
+
     Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth().border(0.5.dp, border.copy(alpha = 0.5f), RoundedCornerShape(10.dp)).padding(14.dp),
-            verticalAlignment = Alignment.Top,
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Box(Modifier.padding(top = 4.dp).height(8.dp).width(8.dp).background(border, RoundedCornerShape(4.dp)))
-            Column {
-                Text("BALANCE CHECK", style = MaterialTheme.typography.labelSmall, color = border, fontSize = 8.sp, letterSpacing = 1.sp)
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    if (skewed) "${top.muscle.displayName} is $pct% of weekly volume. Spread work to other muscle groups to even it out."
-                    else "Volume is reasonably balanced across muscle groups this week.",
-                    style = MaterialTheme.typography.bodySmall, color = onBg
-                )
+        Text("Where the work goes", style = MaterialTheme.typography.headlineSmall, color = onBg, fontStyle = FontStyle.Italic)
+        Spacer(Modifier.height(4.dp))
+        Text(
+            if (anyLogged) "Working sets this week, against the plan." else "Targets set. Nothing lifted against them yet.",
+            style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic
+        )
+        Spacer(Modifier.height(14.dp))
+        muscles.forEachIndexed { i, muscle ->
+            val sets = actualByMuscle[muscle] ?: 0
+            val target = planned[muscle] ?: 0
+            val scaleMax = maxOf(target, sets, 1)
+            val fillColor = when {
+                target > 0 && sets >= target && sets <= target * 3 / 2 -> ForgeLastGreen
+                target > 0 && sets > target * 3 / 2 -> ForgeWarning
+                else -> onBg.copy(alpha = 0.8f)
+            }
+            val rowProgress = staggeredProgress(progress, i, muscles.size)
+            Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(muscle.displayName.uppercase(), style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 0.5.sp)
+                    val lb = volumeLbByMuscle[muscle]?.takeIf { it > 0 }
+                    Text(
+                        buildString {
+                            append(if (target > 0) "$sets / $target sets" else "$sets sets")
+                            lb?.let { append(" · ${formatVolume(it)} lb") }
+                        },
+                        style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp
+                    )
+                }
+                Spacer(Modifier.height(5.dp))
+                Box(Modifier.fillMaxWidth().height(6.dp).background(outline.copy(alpha = 0.15f), RoundedCornerShape(3.dp))) {
+                    val frac = (sets.toFloat() / scaleMax).coerceIn(0f, 1f) * rowProgress
+                    if (frac > 0f) {
+                        Box(Modifier.fillMaxWidth(frac).height(6.dp).background(fillColor, RoundedCornerShape(3.dp)))
+                    }
+                    if (target > 0) {
+                        // The plan tick: a hairline standing slightly proud of the track.
+                        Box(
+                            Modifier.fillMaxWidth((target.toFloat() / scaleMax).coerceIn(0f, 1f)),
+                            contentAlignment = Alignment.CenterEnd
+                        ) {
+                            Box(Modifier.width(2.dp).height(10.dp).background(onBg.copy(alpha = 0.7f), RoundedCornerShape(1.dp)))
+                        }
+                    }
+                }
             }
         }
+        Spacer(Modifier.height(20.dp))
+        HorizontalDivider(color = outline.copy(alpha = 0.25f))
         Spacer(Modifier.height(20.dp))
     }
 }
 
 /**
- * "Are you doing enough?" — weekly sets per muscle against its MEV/MAV range, with a status
- * word (below maintenance / productive / high) and a fill bar.
+ * "Balance" — the engine's always-on structural ratios (push/pull, quad/ham) as
+ * two-sided bars with the healthy verdict. Ports InsightEngine's counting; the gated
+ * insight only speaks when out of band, these bars speak always.
  */
 @Composable
-internal fun VolumeLandmarkCard(items: List<MuscleSetCount>, onBg: Color, muted: Color, accent: Color, outline: Color) {
+internal fun BalanceRatiosSection(ratios: List<BalanceRatioUi>, onBg: Color, muted: Color, accent: Color, outline: Color) {
+    if (ratios.isEmpty()) return
     Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
-        Text("Are you doing enough?", style = MaterialTheme.typography.headlineSmall, color = onBg, fontStyle = FontStyle.Italic)
+        Text("Balance", style = MaterialTheme.typography.headlineSmall, color = onBg, fontStyle = FontStyle.Italic)
         Spacer(Modifier.height(4.dp))
-        Text("10–20 sets / muscle / week is the productive range.", style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic)
+        Text("Working sets per side, last 28 days.", style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic)
         Spacer(Modifier.height(14.dp))
-        items.forEach { m ->
-            val (mev, mav) = mevMav(m.muscle)
-            val statusColor: Color
+        ratios.forEach { r ->
             val statusWord: String
+            val statusColor: Color
             when {
-                m.sets < mev -> { statusColor = ForgeWarning; statusWord = "BELOW MAINTENANCE" }
-                m.sets > mav -> { statusColor = ForgeWarning; statusWord = "HIGH VOLUME" }
-                else -> { statusColor = ForgeLastGreen; statusWord = "PRODUCTIVE" }
+                r.total == 0 -> { statusWord = "NO SETS YET"; statusColor = muted }
+                r.balanced == true -> { statusWord = "BALANCED"; statusColor = ForgeLastGreen }
+                r.balanced == false -> {
+                    val heavy = if (r.setsA.toDouble() / r.setsB > r.healthyHigh) r.labelA else r.labelB
+                    statusWord = "${heavy.uppercase()}-HEAVY"; statusColor = ForgeWarning
+                }
+                else -> { statusWord = "ONE-SIDED"; statusColor = ForgeWarning }
             }
-            Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(m.muscle.displayName, style = MaterialTheme.typography.bodyMedium, color = onBg)
-                    Text("${m.sets} SETS", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
+            Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Text(r.title, style = MaterialTheme.typography.bodyMedium, color = onBg)
+                    Text(statusWord, style = MaterialTheme.typography.labelSmall, color = statusColor, fontSize = 8.sp, letterSpacing = 1.sp)
                 }
-                Spacer(Modifier.height(5.dp))
-                Box(Modifier.fillMaxWidth().height(8.dp).background(outline.copy(alpha = 0.15f), RoundedCornerShape(4.dp))) {
-                    val frac = (m.sets.toFloat() / mav).coerceIn(0f, 1f)
-                    Box(Modifier.fillMaxWidth(frac).height(8.dp).background(statusColor, RoundedCornerShape(4.dp)))
+                Spacer(Modifier.height(6.dp))
+                if (r.total > 0) {
+                    Row(Modifier.fillMaxWidth().height(6.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                        if (r.setsA > 0) Box(
+                            Modifier.weight(r.setsA.toFloat()).height(6.dp)
+                                .background(onBg.copy(alpha = 0.8f), RoundedCornerShape(3.dp))
+                        )
+                        if (r.setsB > 0) Box(
+                            Modifier.weight(r.setsB.toFloat()).height(6.dp)
+                                .background(muted.copy(alpha = 0.45f), RoundedCornerShape(3.dp))
+                        )
+                    }
+                } else {
+                    Box(Modifier.fillMaxWidth().height(6.dp).background(outline.copy(alpha = 0.12f), RoundedCornerShape(3.dp)))
                 }
-                Spacer(Modifier.height(3.dp))
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(statusWord, style = MaterialTheme.typography.labelSmall, color = statusColor, fontSize = 8.sp, letterSpacing = 0.5.sp)
-                    Text("MEV $mev · MAV $mav", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 8.sp)
-                }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "${r.setsA} ${r.labelA} · ${r.setsB} ${r.labelB}",
+                    style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp
+                )
             }
+        }
+        Spacer(Modifier.height(20.dp))
+        HorizontalDivider(color = outline.copy(alpha = 0.25f))
+        Spacer(Modifier.height(20.dp))
+    }
+}
+
+/** "The work, week by week" — tonnage bars growing in with a stagger; deload weeks ring hollow. */
+@Composable
+internal fun TonnageTrendCard(weeks: List<WeeklyTonnage>, onBg: Color, muted: Color, accent: Color, outline: Color) {
+    if (weeks.size < 2) return
+    val maxV = weeks.maxOf { it.volumeLb }.coerceAtLeast(1.0)
+    val progress = rememberDrawProgress(weeks.size)
+    Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
+        Text("The work, week by week", style = MaterialTheme.typography.headlineSmall, color = onBg, fontStyle = FontStyle.Italic)
+        Spacer(Modifier.height(4.dp))
+        Text("Total tonnage per week. Deload weeks ring hollow.", style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic)
+        Spacer(Modifier.height(14.dp))
+        Row(Modifier.fillMaxWidth().height(96.dp), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.Bottom) {
+            weeks.forEachIndexed { i, w ->
+                val tile = staggeredProgress(progress, i, weeks.size)
+                val frac = (w.volumeLb / maxV).toFloat() * tile
+                val isLast = i == weeks.lastIndex
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .height((4 + 88 * frac).dp)
+                        .then(
+                            if (w.isDeload)
+                                Modifier.border(1.dp, muted.copy(alpha = 0.6f), RoundedCornerShape(topStart = 3.dp, topEnd = 3.dp))
+                            else
+                                Modifier.background(
+                                    if (isLast) accent else onBg.copy(alpha = 0.75f),
+                                    RoundedCornerShape(topStart = 3.dp, topEnd = 3.dp)
+                                )
+                        )
+                )
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("${weeks.size} WKS AGO", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 8.sp)
+            Text("THIS WEEK · ${formatVolume(weeks.last().volumeLb)} LB", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 8.sp)
         }
         Spacer(Modifier.height(20.dp))
         HorizontalDivider(color = outline.copy(alpha = 0.25f))

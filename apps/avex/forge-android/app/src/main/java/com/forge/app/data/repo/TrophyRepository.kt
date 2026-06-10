@@ -33,6 +33,7 @@ class TrophyRepository @Inject constructor(
     private val loggedExerciseDao: LoggedExerciseDao,
     private val loggedSetDao: LoggedSetDao,
     private val nearMissDao: TrophyNearMissDao,
+    private val vacationDao: com.forge.app.data.db.dao.VacationDao,
     private val clock: Clock
 ) {
     fun observeAll(): Flow<List<UnlockedTrophy>> = unlockedDao.observeAll()
@@ -53,6 +54,7 @@ class TrophyRepository @Inject constructor(
     suspend fun snapshot(): TrophyStatsSnapshot {
         val allSessions = sessionDao.allFinished()
         val zone = ZoneId.systemDefault()
+        val onVacation = com.forge.app.domain.vacation.VacationCalendar.onVacation(vacationDao.all())
         return TrophyStatsSnapshot(
             totalLoggedExercises = loggedExerciseDao.totalLogged(),
             totalPrs = loggedExerciseDao.prCount(),
@@ -64,7 +66,7 @@ class TrophyRepository @Inject constructor(
             maxBenchLb = loggedSetDao.maxWeightAcrossExercises(TrophyExercises.BENCH_EXERCISE_IDS) ?: 0.0,
             maxSquatLb = loggedSetDao.maxWeightAcrossExercises(TrophyExercises.SQUAT_EXERCISE_IDS) ?: 0.0,
             maxSessionVolumeLb = loggedSetDao.maxSessionVolume() ?: 0.0,
-            maxStreakEver = computeMaxStreak(allSessions, zone),
+            maxStreakEver = computeMaxStreak(allSessions, zone, onVacation),
             earlyBirdSessions = countSessionsBefore(allSessions, zone, hour = 7),
             nightOwlSessions = countSessionsAfter(allSessions, zone, hour = 21),
             sundaysTrainedCount = countSundays(allSessions, zone),
@@ -115,7 +117,7 @@ class TrophyRepository @Inject constructor(
 
     // ─── Snapshot helpers ─────────────────────────────────────────────────────
 
-    private fun computeMaxStreak(sessions: List<Session>, zone: ZoneId): Int {
+    private fun computeMaxStreak(sessions: List<Session>, zone: ZoneId, onVacation: (LocalDate) -> Boolean): Int {
         if (sessions.isEmpty()) return 0
         val days = sessions.mapTo(sortedSetOf()) {
             Instant.ofEpochMilli(it.startedAt).atZone(zone).toLocalDate()
@@ -124,11 +126,22 @@ class TrophyRepository @Inject constructor(
         var streak = 1
         var prev = days.first()
         for (day in days.drop(1)) {
-            streak = if (ChronoUnit.DAYS.between(prev, day) == 1L) streak + 1 else 1
+            // A holiday between two sessions doesn't break the streak: bridge if every day
+            // strictly between is a vacation day (a 1-day gap has none, so it bridges trivially).
+            streak = if (allDaysBetweenAreVacation(prev, day, onVacation)) streak + 1 else 1
             if (streak > maxStreak) maxStreak = streak
             prev = day
         }
         return maxStreak
+    }
+
+    private fun allDaysBetweenAreVacation(prev: LocalDate, next: LocalDate, onVacation: (LocalDate) -> Boolean): Boolean {
+        var d = prev.plusDays(1)
+        while (d.isBefore(next)) {
+            if (!onVacation(d)) return false
+            d = d.plusDays(1)
+        }
+        return true
     }
 
     private fun countSessionsBefore(sessions: List<Session>, zone: ZoneId, hour: Int): Int =

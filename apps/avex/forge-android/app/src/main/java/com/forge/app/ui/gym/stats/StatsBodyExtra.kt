@@ -23,44 +23,67 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.forge.app.ui.gym.stats.components.CountUpText
 import com.forge.app.ui.gym.stats.components.Sparkline
+import com.forge.app.ui.gym.stats.components.rememberDrawProgress
+import com.forge.app.ui.gym.stats.state.BodyweightPoint
 import com.forge.app.ui.gym.stats.state.E1rmLift
 import com.forge.app.ui.gym.stats.state.PrRecord
 import com.forge.app.ui.theme.ForgeLastGreen
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlin.math.roundToInt
 
-/** Bodyweight trend: current value, change since first logged, and a sparkline. */
+/** Bodyweight trend on a real time axis: current value counting up, dated sparkline, delta. */
 @Composable
-internal fun BodyweightCard(trend: List<Double>, onBg: Color, muted: Color, accent: Color, outline: Color) {
+internal fun BodyweightCard(points: List<BodyweightPoint>, onBg: Color, muted: Color, accent: Color, outline: Color) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
         Text("BODYWEIGHT · lb", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
         Spacer(Modifier.height(8.dp))
-        if (trend.isEmpty()) {
-            Text("No bodyweight logged yet.", style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic)
+        if (points.isEmpty()) {
+            Text(
+                "No bodyweight on file. Log it after a session — relative strength unlocks with it.",
+                style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic
+            )
         } else {
-            val current = trend.last()
-            val delta = if (trend.size >= 2) current - trend.first() else 0.0
+            val current = points.last().weightLb
+            val prev = points.getOrNull(points.size - 2)?.weightLb
+            val delta = if (points.size >= 2) current - points.first().weightLb else 0.0
             Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("${current.toInt()}", style = MaterialTheme.typography.displaySmall, color = onBg)
+                CountUpText(
+                    value = current,
+                    fromValue = prev,
+                    style = MaterialTheme.typography.displaySmall,
+                    color = onBg
+                )
                 Text("lb", style = MaterialTheme.typography.bodyMedium, color = muted, modifier = Modifier.padding(bottom = 6.dp))
                 if (kotlin.math.abs(delta) >= 0.5) {
                     // Show one decimal for sub-1 lb changes instead of truncating to "0".
                     val mag = kotlin.math.abs(delta)
                     val magStr = if (mag % 1.0 == 0.0) "${mag.toInt()}" else "%.1f".format(mag)
                     val sign = if (delta > 0) "+" else "-"
-                    Text("$sign$magStr", style = MaterialTheme.typography.labelMedium,
-                        color = muted, modifier = Modifier.padding(bottom = 6.dp))
+                    Text("$sign$magStr since first log", style = MaterialTheme.typography.labelSmall,
+                        color = muted, fontSize = 10.sp, modifier = Modifier.padding(bottom = 6.dp))
                 }
             }
-            if (trend.size >= 2) {
+            if (points.size >= 2) {
+                val values = points.map { it.weightLb }
                 Spacer(Modifier.height(8.dp))
                 Sparkline(
-                    values = trend,
+                    values = values,
                     lineColor = accent,
-                    minValue = trend.min(),
-                    maxValue = trend.max(),
-                    modifier = Modifier.fillMaxWidth().height(56.dp)
+                    minValue = values.min(),
+                    maxValue = values.max(),
+                    modifier = Modifier.fillMaxWidth().height(56.dp),
+                    progress = rememberDrawProgress(points.size)
                 )
+                Spacer(Modifier.height(4.dp))
+                val fmt = SimpleDateFormat("MMM d", Locale.getDefault())
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text(fmt.format(Date(points.first().recordedAt)).uppercase(), style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 8.sp)
+                    Text(fmt.format(Date(points.last().recordedAt)).uppercase(), style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 8.sp)
+                }
             }
         }
         Spacer(Modifier.height(20.dp))

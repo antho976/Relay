@@ -1,48 +1,25 @@
 package com.forge.app.data.repo
 
+import com.forge.app.program.MuscleGroup
 import com.forge.app.program.Program
 import com.forge.app.ui.gym.stats.state.E1rmLift
-import com.forge.app.ui.gym.stats.state.ExerciseYoY
 import com.forge.app.ui.gym.stats.state.HistoryPoint
+import com.forge.app.ui.gym.stats.state.OverloadSummary
+import com.forge.app.ui.gym.stats.state.PatternAxis
 import com.forge.app.ui.gym.stats.state.PrEntry
+import com.forge.app.ui.gym.stats.state.PrRecency
 import com.forge.app.ui.gym.stats.state.PrRecord
 import com.forge.app.ui.gym.stats.state.RepMaxEntry
 import com.forge.app.ui.gym.stats.state.RepMaxSet
-import com.forge.app.ui.gym.stats.state.StrengthCurve
 import com.forge.app.ui.gym.stats.state.TimeToPrEntry
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
+import java.time.temporal.ChronoUnit
 
 // Pure strength / PR / e1RM aggregation helpers extracted from StatsRepository.
 // These operate on already-loaded set projections — no DAO or DI dependencies — so
 // they live as top-level functions the repository orchestrator calls.
-
-private const val STRENGTH_CURVE_MAX_POINTS = 10
-
-/**
- * Compound lifts shown on the radar chart (#124). These are library ids — logged sets store
- * library ids (program-unlock), and StrengthRadarCard looks them up by the same ids. (Was the old
- * slot ids ua1/la1/…, so the map never matched and the radar always rendered empty.)
- */
-private val RADAR_EXERCISE_IDS = listOf(
-    "db-bench-press", "mwm-seated-bench-press", "goblet-squat",
-    "mwm-wide-lat-pulldown", "incline-db-bench-press", "db-bulgarian-split-squat"
-)
-
-internal fun buildStrengthCurveFor(
-    exerciseId: String,
-    allSets: List<com.forge.app.data.db.projections.SetWithExerciseAndSession>
-): StrengthCurve? {
-    val plan = Program.exercise(exerciseId) ?: return null
-    val maxPerSession = allSets
-        .filter { it.exerciseId == exerciseId && it.weightLb != null }
-        .groupBy { it.sessionStartedAt }
-        .map { (_, sessionSets) -> sessionSets.maxOf { it.weightLb!! } }
-        .takeLast(STRENGTH_CURVE_MAX_POINTS)
-    if (maxPerSession.isEmpty()) return null
-    return StrengthCurve(plan = plan, points = maxPerSession)
-}
 
 internal fun buildPrEntries(
     rows: List<com.forge.app.data.db.projections.RecentPrRow>,
@@ -165,43 +142,93 @@ internal fun buildRepMaxes(
 internal fun computeProgressiveOverload(lifts: List<E1rmLift>): Double? =
     lifts.mapNotNull { it.monthlyPct }.takeIf { it.isNotEmpty() }?.average()
 
-internal fun buildCompoundMaxes(
-    allSets: List<com.forge.app.data.db.projections.SetWithExerciseAndSession>
-): Map<String, Double> {
-    return allSets
-        .filter { it.weightLb != null && it.exerciseId in RADAR_EXERCISE_IDS }
-        .groupBy { it.exerciseId }
-        .mapValues { (_, sets) -> sets.maxOf { it.weightLb!! } }
+/**
+ * The concrete "progressive overload" series: per ISO week, the average of each tracked
+ * lift's best e1RM that week (lifts not trained that week simply don't contribute — a
+ * known composition wobble on split weeks, acceptable for a personal trend line).
+ * Restricted to the lifts [buildE1rmLifts] tracks so one stray accessory can't move it.
+ */
+internal fun buildOverloadSummary(
+    allSets: List<com.forge.app.data.db.projections.SetWithExerciseAndSession>,
+    lifts: List<E1rmLift>,
+    zone: ZoneId = ZoneId.systemDefault(),
+    maxWeeks: Int = 12
+): OverloadSummary? {
+    val ids = lifts.map { it.exerciseId }.toSet()
+    if (ids.isEmpty()) return null
+    val bestPerWeekPerLift = HashMap<LocalDate, HashMap<String, Double>>()
+    allSets.forEach { s ->
+        if (s.exerciseId !in ids) return@forEach
+        val w = s.weightLb ?: return@forEach
+        if (w <= 0) return@forEach
+        val d = Instant.ofEpochMilli(s.sessionStartedAt).atZone(zone).toLocalDate()
+        val week = d.minusDays(d.dayOfWeek.value.toLong() - 1)
+        bestPerWeekPerLift.getOrPut(week) { HashMap() }.merge(s.exerciseId, e1rm(w, s.reps), ::maxOf)
+    }
+    if (bestPerWeekPerLift.isEmpty()) return null
+    val weekly = bestPerWeekPerLift.entries
+        .sortedBy { it.key }
+        .takeLast(maxWeeks)
+        .map { (_, perLift) -> perLift.values.average() }
+    return OverloadSummary(current = weekly.last(), weekly = weekly)
 }
 
-internal fun buildExerciseYoY(
-    allSets: List<com.forge.app.data.db.projections.SetWithExerciseAndSession>
-): List<ExerciseYoY> {
-    val zone = ZoneId.systemDefault()
-    val now = LocalDate.now(zone)
-    val thisYearStart = now.withDayOfYear(1).atStartOfDay(zone).toInstant().toEpochMilli()
-    val todayStart = now.atStartOfDay(zone).toInstant().toEpochMilli()
-    val lastYearStart = now.minusYears(1).withDayOfYear(1).atStartOfDay(zone).toInstant().toEpochMilli()
-    // Compare like periods: last year only up to the same elapsed point in the year, so a partial
-    // year-to-date isn't measured against a full prior year (which biased the delta negative early on).
-    val lastYearEnd = lastYearStart + (todayStart - thisYearStart)
+/** Days since the last PR, overall + per exercise — the Strength tab's drought numbers. */
+internal fun buildPrRecency(
+    rows: List<com.forge.app.data.db.dao.LoggedExerciseDao.ExercisePrDate>,
+    nowMs: Long,
+    zone: ZoneId = ZoneId.systemDefault()
+): PrRecency? {
+    if (rows.isEmpty()) return null
+    val today = Instant.ofEpochMilli(nowMs).atZone(zone).toLocalDate()
+    fun daysSince(ms: Long): Int =
+        ChronoUnit.DAYS.between(Instant.ofEpochMilli(ms).atZone(zone).toLocalDate(), today)
+            .toInt().coerceAtLeast(0)
+    val byExercise = rows.groupBy { it.exerciseId }
+        .mapValues { (_, rs) -> daysSince(rs.maxOf { it.sessionDate }) }
+    return PrRecency(daysSinceLast = byExercise.values.min(), byExercise = byExercise)
+}
 
-    return allSets
-        .filter { it.weightLb != null }
-        .groupBy { it.exerciseId }
-        .mapNotNull { (exerciseId, sets) ->
-            val plan = Program.exercise(exerciseId) ?: return@mapNotNull null
-            val thisYearMax = sets.filter { it.sessionStartedAt >= thisYearStart }.maxOfOrNull { it.weightLb!! }
-            val lastYearMax = sets.filter { it.sessionStartedAt in lastYearStart until lastYearEnd }.maxOfOrNull { it.weightLb!! }
-            if (thisYearMax == null || lastYearMax == null) return@mapNotNull null
-            ExerciseYoY(
-                exerciseId = exerciseId,
-                exerciseName = plan.name,
-                thisYearMaxLb = thisYearMax,
-                lastYearMaxLb = lastYearMax
-            )
-        }
-        .sortedByDescending { it.delta }
+/** Movement-pattern buckets for the radar — derived from muscle groups, not exercise ids. */
+private val PATTERN_BUCKETS: List<Pair<String, Set<MuscleGroup>>> = listOf(
+    "PUSH" to setOf(MuscleGroup.CHEST, MuscleGroup.SHOULDERS, MuscleGroup.TRICEPS),
+    "PULL" to setOf(MuscleGroup.BACK, MuscleGroup.REAR_DELTS, MuscleGroup.BICEPS),
+    "QUADS" to setOf(MuscleGroup.QUADS),
+    "POSTERIOR" to setOf(MuscleGroup.HAMSTRINGS, MuscleGroup.GLUTES),
+    "CORE" to setOf(MuscleGroup.CORE),
+    "CALVES" to setOf(MuscleGroup.CALVES)
+)
+
+/**
+ * Movement-pattern radar (replaces the hardcoded compound-id radar, which broke whenever
+ * the generated program didn't contain those exact exercises): per pattern, best e1RM in
+ * the recent window vs the all-time best. Absolute lb isn't comparable across patterns;
+ * current-vs-your-own-peak is. Returns empty below 3 axes — a 2-point radar is a line.
+ */
+internal fun buildPatternRadar(
+    allSets: List<com.forge.app.data.db.projections.SetWithExerciseAndSession>,
+    nowMs: Long,
+    windowDays: Int = 42,
+    muscleOf: (String) -> MuscleGroup? = { Program.exercise(it)?.muscle }
+): List<PatternAxis> {
+    val since = nowMs - windowDays * 24L * 60 * 60 * 1000
+    val peak = HashMap<String, Double>()
+    val current = HashMap<String, Double>()
+    allSets.forEach { s ->
+        val w = s.weightLb ?: return@forEach
+        if (w <= 0) return@forEach
+        val muscle = muscleOf(s.exerciseId) ?: return@forEach
+        val bucket = PATTERN_BUCKETS.firstOrNull { muscle in it.second }?.first ?: return@forEach
+        val e = e1rm(w, s.reps)
+        peak.merge(bucket, e, ::maxOf)
+        if (s.sessionStartedAt >= since) current.merge(bucket, e, ::maxOf)
+    }
+    val axes = PATTERN_BUCKETS.mapNotNull { (label, _) ->
+        val p = peak[label] ?: return@mapNotNull null
+        if (p <= 0) return@mapNotNull null
+        PatternAxis(label = label, currentE1rm = current[label] ?: 0.0, peakE1rm = p)
+    }
+    return if (axes.size >= 3) axes else emptyList()
 }
 
 internal fun buildTimeToPr(

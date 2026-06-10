@@ -4,6 +4,10 @@ import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.data.db.entities.MoodEntry
 import com.forge.app.data.db.entities.Session
 import com.forge.app.domain.mood.Mood
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.ZoneOffset
 
 /**
  * System 6 of the adaptation engine: daily readiness autoregulation. A small, bounded
@@ -34,6 +38,9 @@ object ReadinessAdvisor {
         moods: List<MoodEntry>,
         cardio: List<CardioEntry>,
         nowMs: Long,
+        zoneId: ZoneId = ZoneOffset.UTC,
+        /** Holiday/vacation predicate (#135): such days don't count as "time off". */
+        onVacation: (LocalDate) -> Boolean = { false },
         t: AdaptThresholds = AdaptThresholds()
     ): Recommendation.ReadinessScale? {
         val finished = sessions.filter { it.finishedAt != null && !it.isUntracked }.sortedBy { it.startedAt }
@@ -55,9 +62,17 @@ object ReadinessAdvisor {
             else -> {}
         }
 
-        // Recovery spacing.
+        // Recovery spacing — vacation days don't count toward "time off", so coming back
+        // from a planned holiday doesn't trigger the comeback caution (#135).
         val lastSession = finished.maxBy { it.startedAt }
-        val daysSince = ((nowMs - lastSession.startedAt) / DAY_MS).toInt()
+        val lastDate = Instant.ofEpochMilli(lastSession.startedAt).atZone(zoneId).toLocalDate()
+        val today = Instant.ofEpochMilli(nowMs).atZone(zoneId).toLocalDate()
+        var daysSince = 0
+        var gapDay = lastDate.plusDays(1)
+        while (!gapDay.isAfter(today)) {
+            if (!onVacation(gapDay)) daysSince++
+            gapDay = gapDay.plusDays(1)
+        }
         when {
             daysSince >= 5 -> { percent -= 3; parts += "first session back after $daysSince days — ease in" }
             daysSince in 2..4 -> { percent += 1; parts += "fresh after $daysSince rest days" }

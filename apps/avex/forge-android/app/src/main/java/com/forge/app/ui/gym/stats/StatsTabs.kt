@@ -13,7 +13,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyListScope
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
@@ -27,19 +27,9 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.forge.app.program.Program
 import com.forge.app.ui.gym.stats.components.DayTypeBestVsAvgCard
-import com.forge.app.ui.gym.stats.components.EffortOverTimeCard
-import com.forge.app.ui.gym.stats.components.HallOfFameRow
-import com.forge.app.ui.gym.stats.components.PrClusteringCard
-import com.forge.app.ui.gym.stats.components.PrDayOfWeekCard
-import com.forge.app.ui.gym.stats.components.PrEntryRow
+import com.forge.app.ui.gym.stats.components.EntranceItem
 import com.forge.app.ui.gym.stats.components.RhythmRow
-import com.forge.app.ui.gym.stats.components.StrengthOverlayCard
-import com.forge.app.ui.gym.stats.components.StrengthRadarCard
-import com.forge.app.ui.gym.stats.components.TimeToPrCard
-import com.forge.app.ui.gym.stats.components.VolumeDeloadCard
-import com.forge.app.ui.gym.stats.components.VolumeDonutCard
 import com.forge.app.ui.gym.stats.components.WeekDayRow
 import com.forge.app.ui.gym.stats.components.emptyWeekActivity
 import com.forge.app.ui.gym.stats.state.PeriodStats
@@ -99,7 +89,7 @@ fun StatsTabBar(selected: StatsTab, onSelect: (StatsTab) -> Unit) {
     HorizontalDivider(color = outline.copy(alpha = 0.2f))
 }
 
-private fun LazyListScope.sectionTitle(key: String, title: String, c: StatsColors) {
+internal fun LazyListScope.sectionTitle(key: String, title: String, c: StatsColors) {
     item(key) {
         Text(
             title,
@@ -113,7 +103,7 @@ private fun LazyListScope.sectionTitle(key: String, title: String, c: StatsColor
 }
 
 /** Wrap a card-style analytics composable with the screen's horizontal padding. */
-private fun LazyListScope.cardItem(key: String, content: @Composable () -> Unit) {
+internal fun LazyListScope.cardItem(key: String, content: @Composable () -> Unit) {
     item(key) {
         Box(Modifier.padding(horizontal = 24.dp, vertical = 8.dp)) { content() }
     }
@@ -132,145 +122,127 @@ internal fun LazyListScope.snapshotTab(
     c: StatsColors
 ) {
     item("hero") {
-        StatsHeroSection(
-            weekNum = weekNum, weekLabel = weekLabel, weekSessions = weekSessions,
-            weekCurrentVolumeLb = weekCurrent?.volumeLb, weekCurrentPrs = weekCurrent?.prs ?: 0,
-            cardioMin = state.thisWeekCardioMin, onBg = c.onBg, muted = c.muted
-        )
+        EntranceItem(0) {
+            StatsHeroSection(
+                weekNum = weekNum, weekLabel = weekLabel, weekSessions = weekSessions,
+                weekCurrentVolumeLb = weekCurrent?.volumeLb, weekCurrentPrs = weekCurrent?.prs ?: 0,
+                cardioMin = state.thisWeekCardioMin, onBg = c.onBg, muted = c.muted
+            )
+        }
     }
-    item("momentum") { MomentumGrid(weekCurrent, weekPrev, c.onBg, c.muted, c.outline) }
-    item("highlights") { HighlightCards(state.consistencyStreakWeeks, state.progressiveOverloadPct, c.onBg, c.muted, c.outline) }
+    item("momentum") { EntranceItem(1) { MomentumGrid(weekCurrent, weekPrev, c.onBg, c.muted, c.outline) } }
+    item("highlights") { EntranceItem(2) { HighlightCards(state.consistencyStreakWeeks, state.progressiveOverloadPct, c.onBg, c.muted, c.outline) } }
+    item("overload") { EntranceItem(3) { OverloadCard(state.overload, state.progressiveOverloadPct, c.onBg, c.muted, c.accent, c.outline) } }
+    item("pulse") { EntranceItem(4) { PulseCard(state.readinessPulse, c.onBg, c.muted, c.outline) } }
+    item("week-plan") {
+        EntranceItem(5) {
+            WeekVsPlanCard(
+                actualSets = state.weeklySetsByMuscle.sumOf { it.sets },
+                plannedSets = state.plannedSetsByMuscle.values.sum(),
+                onBg = c.onBg, muted = c.muted, outline = c.outline
+            )
+        }
+    }
     item("rhythm") {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
-            Text("RHYTHM", style = MaterialTheme.typography.labelSmall, color = c.muted, fontSize = 9.sp)
-            Spacer(Modifier.height(8.dp))
-            RhythmRow(weekActivity = state.weekActivity, today = today, onBg = c.onBg, muted = c.muted, outline = c.outline)
-            Spacer(Modifier.height(20.dp))
-            HorizontalDivider(color = c.outline.copy(alpha = 0.25f))
-            Spacer(Modifier.height(20.dp))
+        EntranceItem(6) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
+                Text("RHYTHM", style = MaterialTheme.typography.labelSmall, color = c.muted, fontSize = 9.sp)
+                Spacer(Modifier.height(8.dp))
+                RhythmRow(weekActivity = state.weekActivity, today = today, onBg = c.onBg, muted = c.muted, outline = c.outline)
+                Spacer(Modifier.height(20.dp))
+                HorizontalDivider(color = c.outline.copy(alpha = 0.25f))
+                Spacer(Modifier.height(20.dp))
+            }
         }
     }
     sectionTitle("week-title", "What I did this week", c)
-    items(state.weekActivity.ifEmpty { emptyWeekActivity() }, key = { "day-${it.dayOfWeek}" }) { row ->
-        WeekDayRow(row = row, today = today, onBg = c.onBg, muted = c.muted, accent = c.accent,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 5.dp))
+    itemsIndexed(state.weekActivity.ifEmpty { emptyWeekActivity() }, key = { _, row -> "day-${row.dayOfWeek}" }) { rowIdx, row ->
+        EntranceItem(rowIdx.coerceAtMost(8)) {
+            WeekDayRow(row = row, today = today, onBg = c.onBg, muted = c.muted, accent = c.accent,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 5.dp))
+        }
     }
-    item("lifetime") { StatsLifetimeSection(lm = state.lifetimeMetrics, onBg = c.onBg, muted = c.muted, outline = c.outline) }
-    if (state.insights.isNotEmpty()) {
+    item("lifetime") { EntranceItem(0) { StatsLifetimeSection(lm = state.lifetimeMetrics, onBg = c.onBg, muted = c.muted, outline = c.outline) } }
+    // The estimate-calibration and mood×volume observations render on Trends instead,
+    // under the cards that visualize those signals.
+    val snapshotInsights = state.insights.filterNot { it.title == INSIGHT_ESTIMATE_TITLE || it.title == INSIGHT_MOOD_TITLE }
+    if (snapshotInsights.isNotEmpty()) {
         sectionTitle("insights-title", "Insights", c)
-        items(state.insights, key = { "insight-${it.title}" }) { flag ->
-            Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 6.dp)) {
-                Text(flag.title, style = MaterialTheme.typography.labelSmall, color = c.muted, fontSize = 10.sp)
-                Spacer(Modifier.height(2.dp))
-                Text(flag.body, style = MaterialTheme.typography.bodySmall, color = c.onBg.copy(alpha = 0.8f))
+        itemsIndexed(snapshotInsights, key = { _, flag -> "insight-${flag.title}" }) { rowIdx, flag ->
+            EntranceItem(rowIdx.coerceAtMost(8)) {
+                Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 6.dp)) {
+                    Text(flag.title, style = MaterialTheme.typography.labelSmall, color = c.muted, fontSize = 10.sp)
+                    Spacer(Modifier.height(2.dp))
+                    Text(flag.body, style = MaterialTheme.typography.bodySmall, color = c.onBg.copy(alpha = 0.8f))
+                }
             }
         }
         item("insights-bottom") { Spacer(Modifier.height(8.dp)) }
     }
 }
 
-// ─── Strength ───────────────────────────────────────────────────────────────
-
-internal fun LazyListScope.strengthTab(state: StatsUiState, c: StatsColors) {
-    state.e1rmLifts.firstOrNull()?.let { top ->
-        item("e1rm-chart") { E1rmChartCard(top, c.onBg, c.muted, c.accent, c.outline) }
-    }
-    if (state.e1rmLifts.isNotEmpty()) {
-        item("big-lifts") { E1rmCard(state.e1rmLifts, c.onBg, c.muted, c.accent, c.outline) }
-    }
-    state.repMaxes?.let { rm ->
-        if (rm.entries.isNotEmpty()) item("repmax") { RepMaxCard(rm, c.onBg, c.muted, c.outline) }
-    }
-    if (state.compoundMaxes.isNotEmpty()) {
-        cardItem("radar") { StrengthRadarCard(state.compoundMaxes) }
-    }
-    val withHistory = state.exerciseHistory.entries.filter { it.value.size >= 2 }.sortedByDescending { it.value.size }
-    if (withHistory.size >= 2) {
-        val a = withHistory[0]; val b = withHistory[1]
-        cardItem("overlay") {
-            StrengthOverlayCard(
-                history1 = (Program.exercise(a.key)?.name ?: a.key) to a.value,
-                history2 = (Program.exercise(b.key)?.name ?: b.key) to b.value
-            )
-        }
-    }
-    if (state.recentPrs.isNotEmpty()) {
-        sectionTitle("pr-title", "Records broken", c)
-        items(state.recentPrs, key = { "pr-${it.date}-${it.exerciseName}" }) { pr ->
-            PrEntryRow(pr = pr, muted = c.muted, onBg = c.onBg, accent = c.accent,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 5.dp))
-        }
-    }
-    sectionTitle("hof-title", "All-time bests", c)
-    if (state.hallOfFame.isEmpty()) {
-        item("hof-empty") {
-            Text("No records yet. Finish a session to set your first PR.",
-                style = MaterialTheme.typography.bodySmall, color = c.muted, fontStyle = FontStyle.Italic,
-                modifier = Modifier.padding(horizontal = 24.dp))
-        }
-    } else {
-        items(state.hallOfFame.take(10), key = { "hof-${it.exerciseId}" }) { record ->
-            HallOfFameRow(record = record, muted = c.muted, onBg = c.onBg, accent = c.accent,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 5.dp))
-        }
-    }
-    if (state.timeToPr.isNotEmpty()) {
-        cardItem("time-to-pr") { TimeToPrCard(state.timeToPr) }
-    }
-}
+// ─── Strength: see StatsStrengthTab.kt · Trends: see StatsTrendsTab.kt ─────────
 
 // ─── Volume ─────────────────────────────────────────────────────────────────
 
 internal fun LazyListScope.volumeTab(state: StatsUiState, c: StatsColors) {
-    if (state.volumeByMuscle.isNotEmpty()) {
-        item("vol-bars") { StatsVolumeSection(rows = state.volumeByMuscle, muted = c.muted, accent = c.accent, outline = c.outline, onBg = c.onBg) }
-        cardItem("vol-donut") { VolumeDonutCard(state.volumeByMuscle) }
-        item("balance") { BalanceCheckCard(state.volumeByMuscle, c.onBg, c.muted, c.outline) }
+    var idx = 0
+    val volumeLbByMuscle = state.volumeByMuscle.associate { it.muscle to it.volumeLb }
+    val hasTargets = state.plannedSetsByMuscle.isNotEmpty() || state.weeklySetsByMuscle.isNotEmpty()
+    if (hasTargets) {
+        // Renders the full plan even at zero data — the cold start shows targets, not a gap.
+        val i = idx++
+        item("muscle-target") {
+            EntranceItem(i) {
+                MuscleTargetSection(
+                    actual = state.weeklySetsByMuscle, planned = state.plannedSetsByMuscle,
+                    volumeLbByMuscle = volumeLbByMuscle,
+                    onBg = c.onBg, muted = c.muted, accent = c.accent, outline = c.outline
+                )
+            }
+        }
     }
-    if (state.weeklySetsByMuscle.isNotEmpty()) {
-        item("vol-landmark") { VolumeLandmarkCard(state.weeklySetsByMuscle, c.onBg, c.muted, c.accent, c.outline) }
+    if (state.balanceRatios.isNotEmpty()) {
+        val i = idx++
+        item("balance-ratios") { EntranceItem(i) { BalanceRatiosSection(state.balanceRatios, c.onBg, c.muted, c.accent, c.outline) } }
+    }
+    if (state.weeklyTonnage.size >= 2) {
+        val i = idx++
+        item("tonnage") { EntranceItem(i) { TonnageTrendCard(state.weeklyTonnage, c.onBg, c.muted, c.accent, c.outline) } }
     }
     state.repRangeDist?.let { rr ->
-        if (rr.total > 0) item("rep-range") { RepRangeCard(rr, c.onBg, c.muted, c.accent, c.outline) }
-    }
-    if (state.volumeDeloadTrend.isNotEmpty()) {
-        cardItem("vol-deload") { VolumeDeloadCard(state.volumeDeloadTrend) }
+        if (rr.total > 0) {
+            val i = idx++
+            item("rep-range") { EntranceItem(i) { RepRangeCard(rr, c.onBg, c.muted, c.accent, c.outline) } }
+        }
     }
     if (state.dayTypeBestVsAvg.isNotEmpty()) {
         cardItem("daytype") { DayTypeBestVsAvgCard(state.dayTypeBestVsAvg) }
     }
     if (state.exerciseFrequency.isNotEmpty()) {
-        item("freq") { StatsFreqSection(rows = state.exerciseFrequency, muted = c.muted, accent = c.accent, outline = c.outline, onBg = c.onBg) }
+        val i = idx++
+        item("freq") { EntranceItem(i) { StatsFreqSection(rows = state.exerciseFrequency, muted = c.muted, accent = c.accent, outline = c.outline, onBg = c.onBg) } }
     }
-    if (state.volumeByMuscle.isEmpty() && state.exerciseFrequency.isEmpty()) {
+    if (!hasTargets && state.exerciseFrequency.isEmpty()) {
         item("vol-empty") {
-            Text("No volume logged yet — finish a few sessions to see your muscle breakdown.",
+            Text("No plan and no volume yet. Generate a program or log a session.",
                 style = MaterialTheme.typography.bodySmall, color = c.muted, fontStyle = FontStyle.Italic,
                 modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp))
         }
     }
 }
 
-// ─── Trends ─────────────────────────────────────────────────────────────────
+// ─── Body ───────────────────────────────────────────────────────────────────
 
 internal fun LazyListScope.bodyTab(state: StatsUiState, c: StatsColors) {
-    item("bodyweight") { BodyweightCard(state.bodyweightTrend, c.onBg, c.muted, c.accent, c.outline) }
-    item("standards") { StrengthStandardsCard(state.e1rmLifts, state.bodyweightTrend.lastOrNull(), c.onBg, c.muted, c.accent, c.outline) }
-}
-
-internal fun LazyListScope.trendsTab(state: StatsUiState, c: StatsColors) {
-    var any = false
-    if (state.weeklySessionCounts.isNotEmpty()) { any = true; item("consistency") { ConsistencyHeatmapCard(state.weeklySessionCounts, 3, c.onBg, c.muted, c.accent, c.outline) } }
-    if (state.avgRpePerSession.size >= 2) { any = true; item("rpe-trend") { RpeTrendCard(state.avgRpePerSession, state.avgRpe, c.onBg, c.muted, c.accent, c.outline) } }
-    if (state.rpeDistribution.isNotEmpty()) { any = true; item("rpe-dist") { RpeCard(state.rpeDistribution, state.avgRpe, c.onBg, c.muted, c.accent, c.outline) } }
-    if (state.prsByDayOfWeek.any { it > 0 }) { any = true; cardItem("pr-dow") { PrDayOfWeekCard(state.prsByDayOfWeek) } }
-    if (state.prSessionTimestamps.size >= 3) { any = true; cardItem("pr-cluster") { PrClusteringCard(state.prSessionTimestamps) } }
-    if (state.moodOverTime.size >= 3) { any = true; cardItem("mood") { EffortOverTimeCard(state.moodOverTime) } }
-    if (!any) {
-        item("trends-empty") {
-            Text("Patterns show up here once you've trained for a few weeks.",
-                style = MaterialTheme.typography.bodySmall, color = c.muted, fontStyle = FontStyle.Italic,
-                modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp))
+    item("bodyweight") { EntranceItem(0) { BodyweightCard(state.bodyweightPoints, c.onBg, c.muted, c.accent, c.outline) } }
+    item("standards") {
+        EntranceItem(1) {
+            StrengthStandardsCard(
+                state.e1rmLifts, state.bodyweightPoints.lastOrNull()?.weightLb,
+                c.onBg, c.muted, c.accent, c.outline
+            )
         }
     }
 }
+

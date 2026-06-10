@@ -11,7 +11,6 @@ data class ForgeUiSettings(
     val amoledMode: Boolean = false,
     val useKg: Boolean = false,
     val hiddenOverviewTiles: Set<String> = emptySet(),
-    val showEncouragement: Boolean = true,
     val compactSetLogging: Boolean = false,
     val overviewTileOrder: List<String> = listOf("gym", "cardio", "trophies"),
     val dateFormat: String = "MMM d, yyyy",

@@ -48,11 +48,11 @@ enum class SettingsPage(val title: String) {
     Format("Units & format"),
     Session("Session"),
     Notifications("Notifications"),
-    Tiles("Overview tiles"),
     Equipment("Equipment"),
     Privacy("Privacy"),
     Program("Program"),
-    ExercisePrefs("Exercise likes")
+    ExercisePrefs("Exercise likes"),
+    Vacation("Holiday / Vacation")
 }
 
 internal data class SettingsRow(val label: String, val tags: String, val page: SettingsPage)
@@ -60,9 +60,8 @@ internal data class SettingsRow(val label: String, val tags: String, val page: S
 internal val ALL_ROWS = listOf(
     SettingsRow("Appearance", "amoled dark theme accent compact logging display", SettingsPage.Appearance),
     SettingsRow("Units & format", "kg lb weight date time week timezone locale", SettingsPage.Format),
-    SettingsRow("Session", "encouragement haptic feedback vibration", SettingsPage.Session),
+    SettingsRow("Session", "haptic feedback vibration notes templates", SettingsPage.Session),
     SettingsRow("Notifications", "quiet hours notify suppress", SettingsPage.Notifications),
-    SettingsRow("Overview tiles", "tiles order visible hidden gym cardio trophies streak deload", SettingsPage.Tiles),
     SettingsRow("Equipment", "equipment available barbell dumbbell cable machine", SettingsPage.Equipment),
     SettingsRow("Privacy", "privacy mode blur screenshot", SettingsPage.Privacy),
     SettingsRow("Program", "program generate auto split days routine rotate trainings workouts", SettingsPage.Program),
@@ -80,13 +79,10 @@ internal val ALL_ITEMS = listOf(
     SettingsItem("Time format", "time 12h 24h clock hour", SettingsPage.Format),
     SettingsItem("First day of week", "week start monday sunday", SettingsPage.Format),
     SettingsItem("Timezone", "timezone locale region", SettingsPage.Format),
-    SettingsItem("Show encouragement", "encouragement motivation messages", SettingsPage.Session),
     SettingsItem("Haptic feedback", "haptic vibration strength", SettingsPage.Session),
     SettingsItem("Note templates", "notes templates prompts form energy pain focus", SettingsPage.Session),
     SettingsItem("Quiet hours", "quiet hours suppress notifications silent", SettingsPage.Notifications),
     SettingsItem("Notifications", "notifications enable disable notify", SettingsPage.Notifications),
-    SettingsItem("Tile order", "tile order drag reorder overview arrange", SettingsPage.Tiles),
-    SettingsItem("Tile visibility", "hide show visible tiles gym cardio trophies streak deload", SettingsPage.Tiles),
     SettingsItem("Available equipment", "equipment barbell dumbbell cable machine body weight", SettingsPage.Equipment),
     SettingsItem("Privacy mode", "privacy mode blur screenshot screen", SettingsPage.Privacy),
 )
@@ -260,11 +256,11 @@ fun SettingsScreen(
             SettingsPage.Format -> FormatPage(state, viewModel, Modifier.padding(inner))
             SettingsPage.Session -> SessionPage(state, viewModel, Modifier.padding(inner))
             SettingsPage.Notifications -> NotificationsPage(state, viewModel, Modifier.padding(inner))
-            SettingsPage.Tiles -> TilesPage(state, viewModel, Modifier.padding(inner))
             SettingsPage.Equipment -> EquipmentPage(state, viewModel, Modifier.padding(inner))
             SettingsPage.Privacy -> PrivacyPage(state, viewModel, Modifier.padding(inner))
             SettingsPage.Program -> ProgramPage(state, viewModel, Modifier.padding(inner))
             SettingsPage.ExercisePrefs -> ExercisePrefsPage(state, viewModel, Modifier.padding(inner))
+            SettingsPage.Vacation -> VacationPage(viewModel, Modifier.padding(inner))
         }
     }
 

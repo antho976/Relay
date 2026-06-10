@@ -24,8 +24,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.ui.gym.stats.state.ExerciseFrequency
-import com.forge.app.ui.gym.stats.state.MuscleVolume
-import com.forge.app.ui.gym.stats.state.PrEntry
 import com.forge.app.ui.gym.stats.state.PrRecord
 import com.forge.app.ui.gym.stats.state.WeekActivityRow
 import java.text.SimpleDateFormat
@@ -43,11 +41,14 @@ internal fun RhythmRow(
 ) {
     val dayLetters = listOf("M", "T", "W", "T", "F", "S", "S")
     val todayDow = today.dayOfWeek.value - 1
+    // Tiles fill Mon→Sun with a stagger, once, on first appearance.
+    val reveal = rememberDrawProgress(weekActivity.count { it.sessionName != null || it.cardioType != null })
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         (0..6).forEach { i ->
             val row = weekActivity.getOrNull(i)
             val hasActivity = row?.sessionName != null || row?.cardioType != null
             val isToday = i == todayDow
+            val tile = staggeredProgress(reveal, i, 7)
             Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(if (isToday) "NOW" else dayLetters[i], style = MaterialTheme.typography.labelSmall,
@@ -55,7 +56,8 @@ internal fun RhythmRow(
                 Box(
                     modifier = Modifier.fillMaxWidth().aspectRatio(1f).background(
                         color = when {
-                            hasActivity -> onBg.copy(alpha = 0.85f)
+                            // Filled tiles fade in staggered; empty tiles sit at their final alpha.
+                            hasActivity -> onBg.copy(alpha = 0.85f * tile.coerceAtLeast(0.15f))
                             isToday -> outline.copy(alpha = 0.2f)
                             else -> outline.copy(alpha = 0.12f)
                         },
@@ -121,47 +123,8 @@ internal fun WeekDayRow(
     }
 }
 
-@Composable
-internal fun VolumeBarsSection(rows: List<MuscleVolume>, muted: Color, accent: Color, modifier: Modifier = Modifier) {
-    val maxVol = rows.maxOfOrNull { it.volumeLb }?.coerceAtLeast(1.0) ?: 1.0
-    val annotations = when (rows.size) {
-        0 -> emptyList()
-        1 -> listOf("biggest week")
-        2 -> listOf("biggest week", "")
-        else -> listOf("biggest week") + List(rows.size - 2) { "" } + listOf("falling behind")
-    }
-    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        rows.forEachIndexed { i, row ->
-            val fraction = (row.volumeLb / maxVol).toFloat().coerceIn(0.04f, 1f)
-            val annotation = annotations.getOrElse(i) { "" }
-            Column {
-                Row(Modifier.fillMaxWidth(), Arrangement.SpaceBetween, Alignment.CenterVertically) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(row.muscle.displayName.uppercase(), style = MaterialTheme.typography.labelSmall, color = muted)
-                        if (annotation.isNotBlank()) {
-                            Text(annotation, style = MaterialTheme.typography.labelSmall,
-                                color = muted.copy(alpha = 0.5f), fontStyle = FontStyle.Italic)
-                        }
-                    }
-                    Text("${formatVolume(row.volumeLb)} lb", style = MaterialTheme.typography.labelSmall, color = muted)
-                }
-                Spacer(Modifier.height(4.dp))
-                Box(Modifier.fillMaxWidth(fraction).height(2.dp)
-                    .background(if (i == 0) accent.copy(alpha = 0.75f) else muted.copy(alpha = 0.35f), RoundedCornerShape(1.dp)))
-            }
-        }
-    }
-}
-
-@Composable
-internal fun PrEntryRow(pr: PrEntry, muted: Color, onBg: Color, accent: Color, modifier: Modifier = Modifier) {
-    val dateText = remember(pr.date) { SimpleDateFormat("MMM d", Locale.getDefault()).format(Date(pr.date)).uppercase() }
-    Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
-        Text(dateText, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, modifier = Modifier.width(52.dp))
-        Text(pr.exerciseName, style = MaterialTheme.typography.bodyMedium, color = onBg, modifier = Modifier.weight(1f))
-        Text("${pr.weightText} × ${pr.reps}", style = MaterialTheme.typography.labelSmall, color = accent, fontWeight = FontWeight.SemiBold)
-    }
-}
+// VolumeBarsSection + PrEntryRow were retired in the Stats revamp: the lb bars merged
+// into MuscleTargetSection (actual-vs-plan), and PR rows became PrTimelineRow.
 
 @Composable
 internal fun HallOfFameRow(record: PrRecord, muted: Color, onBg: Color, accent: Color, modifier: Modifier = Modifier) {

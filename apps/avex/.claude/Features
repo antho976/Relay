@@ -14,25 +14,15 @@ Last updated: 2026-06-09
 
 These were verified by codegraph + grep: the file is on disk and compiles, but no Composable in the current screen graph calls into it. Code is safe to delete or to re-wire later.
 
-### Orphaned Stats components (`ui/gym/stats/components/`)
-> **Partially stale as of 2026-06-09 audit:** the 5-tab Stats revamp (`StatsTabs.kt`) re-wired
-> most of these — `VolumeDeloadCard`, `DayTypeBestVsAvgCard`, `StrengthRadarCard`,
-> `PrClusteringCard`, `TimeToPrCard`, `EffortOverTimeCard`, `PrDayOfWeekCard`,
-> `StrengthOverlayCard` are all invoked again. Verify before deleting anything below.
-
-Every file below is self-referencing only — `StatsContent.kt` no longer invokes them after the editorial Stats redesign:
-- `CalendarCard.kt` — monthly calendar grid (#54)
-- `FrequencyHeatmap.kt` — 12-week heatmap with day-of-week labels (#17a/b)
-- `EffortDistributionCard.kt` — 8-week stacked bar of effort ratings (#75)
-- `InsightsCard.kt` — boxed insights card (#40/#41) — note: insights ARE shown on Stats, but as inline text rows, not via this card
-- `HallOfFameSection.kt` — boxed hall-of-fame section (#14) — note: hall-of-fame IS shown on Stats, but as inline rows, not via this section
-- `ExerciseHistorySheet.kt` — exercise history sparkline sheet (#27)
-- `SessionCompareSheet.kt` — two-session side-by-side (#129)
-- `PrTimelineStory.kt` — scrollable PR timeline (#93)
-- `AdvancedCharts.kt` — `ExerciseVolumeChart` (#72), `StrengthOverlayCard` (#94), `EffortOverTimeCard` (#95)
-- `AdvancedChartsExtra.kt` — `StrengthRadarCard` (#124), `PrClusteringCard` (#128)
-- `AnalyticsCards.kt` — `ExerciseFrequencyCard` (#73), `TimeToPrCard` (#74), `PrDayOfWeekCard` (#85), `VolumeDonutCard` (#125)
-- `AnalyticsCardsExtra.kt` — `VolumeDeloadCard` (#126), `DayTypeBestVsAvgCard` (#132)
+### Orphaned Stats components — RESOLVED by the Stats engine revamp (2026-06-10)
+> The list of orphaned component *files* that used to live here was stale — those files
+> (`CalendarCard.kt`, `FrequencyHeatmap.kt`, `EffortDistributionCard.kt`, `InsightsCard.kt`,
+> `HallOfFameSection.kt`, `ExerciseHistorySheet.kt`, `SessionCompareSheet.kt`,
+> `PrTimelineStory.kt`) had already been deleted from disk. What was actually orphaned were
+> **state fields** computed in StatsRepository with no renderer. The 2026-06-10 revamp
+> resolved every one:
+- **Revived against existing computations:** effort distribution #75 (`EffortDistributionCard` in `StatsTrendsExtra.kt`), PR timeline #93 (`StatsPrTimeline.kt` over `recentPrs`), strength radar #124 (re-keyed by movement pattern — `PatternRadarCard` over `buildPatternRadar`, no more hardcoded exercise ids).
+- **Deleted (state field + builder + renderer where one existed):** `totals`, `heatmap` #17, `strengthCurve`, `monthCalendar` #54 (+ `observeMonthCalendar`, Stats rest-day marking — `RestDayRepository` is now logic-only, no UI caller), `monthComparison` #130, `exerciseYoY` #131, `exerciseVolumeHistory` #72, `dayTypeBreakdown` #134, `compoundMaxes`, `volumeDeloadTrend` #126 (superseded by weekly `TonnageTrendCard`), `VolumeDonutCard` #125, `PrClusteringCard` #128 (duplicated #85), `BalanceCheckCard`, `VolumeLandmarkCard` (both merged into `MuscleTargetSection`), `PrEntryRow`, `VolumeBarsSection`/`StatsVolumeSection`.
 
 ### Orphaned Overview components (`ui/overview/components/`)
 > **Stale as of 2026-06-09 audit:** the four banner/card *files* below no longer exist on disk
@@ -120,27 +110,15 @@ These are in `ForgeNavHost.kt` but nothing in the visible UI navigates to them:
 
 Accessed via the Stats tab inside the Gym screen (alongside Train + PRs).
 
-**✅ Currently visible (editorial Stats redesign — `StatsContent.kt`):**
-- Hero: WK number · date range · this-week stats (sessions / volume / cardio min)
-- "RHYTHM" — week activity strip
-- "What I did this week" — per-day breakdown rows
-- "vs last week" — sessions / volume / PRs / sets deltas
-- "BY MUSCLE · lb" — `StatsVolumeSection` horizontal bars
-- "STRENGTH" — strength curve (`StatsStrengthSection`)
-- "Records broken" — recent PRs as inline rows
-- "All-time bests" — top 8 hall-of-fame entries as inline rows
-- "Exercise frequency" — `StatsFreqSection`
-- "Lifetime metrics" — `StatsLifetimeSection`
-- "Insights" — inline text rows (when behavioral flags trigger)
-
-**🔒 Built but not invoked by current Stats screen — see audit section above:**
-- Frequency heatmap (#17a/b), calendar (#54), effort distribution stacked bar (#75)
-- Volume donut (#125), volume deload trend (#126), day-type best vs avg (#132)
-- Strength radar (#124), PR clustering (#128), strength comparison overlay (#94), effort over time (#95), exercise volume chart (#72)
-- Time-to-next-PR (#74), PR by day of week (#85)
-- "View monthly & yearly recap →" link to `RecapScreen` (#32, #33)
-- Two-session compare sheet (#129), PR timeline story (#93), exercise history sheet (#27)
-- Year-over-year card (#131)
+**✅ Currently visible (Stats engine revamp, 2026-06-10 — Stats is the adaptation engine's presentation layer):**
+- **Snapshot:** hero (sessions/volume/PRs/cardio) · momentum 2×2 vs last week · streak + %/mo highlight cells · **Progressive overload made concrete** (`OverloadCard`: avg-e1RM big serif number counting up from last week, weekly sparkline) · **Readiness pulse** (`PulseCard`: DeloadAdvisor fatigue score banded Fresh/Building/Deload soon, drivers verbatim) · **Week vs plan** (`WeekVsPlanCard`: logged sets vs `VolumeTargets.plannedWeeklySetsByMuscle`) · rhythm strip (staggered tile fill) · per-day rows · lifetime · insights
+- **Strength:** `E1rmChartCard` hero (count-up + draw-in + projection) · lift ledger (`E1rmCard`: e1RM, trend arrow + %/mo, sparkline, days-since-PR, PLATEAU/STALL chips) · "Where you're stuck" (`PlateauSection` — ProgressionAdvisor ladder verbatim) · drought header + PR timeline (`StatsPrTimeline.kt`, revives #93) · movement-pattern radar (`PatternRadarCard` — recent best vs all-time best e1RM per pattern) · rep-max bars · overlay #94 · all-time bests · time-between-PRs #74 · ghost-ledger cold start
+- **Volume:** `MuscleTargetSection` (sets vs plan per muscle with target ticks; renders the full plan at zero data) · `BalanceRatiosSection` (always-on push/pull + quad/ham from `InsightEngine.balanceRatios`) · `TonnageTrendCard` (weekly tonnage, deload weeks hollow) · rep-range mix · best-vs-avg #132 · frequency
+- **Body:** dated bodyweight trend (`BodyweightPoint` w/ time axis + count-up) · strength standards ×BW bands #77
+- **Trends:** consistency grid (staggered fill) · "When you train" (sessions by weekday + best hour, shares `InsightEngine.timeOfDayLabel`) · effort distribution stacked bars (revives #75) · session-duration trend + estimate-calibration insight · RPE trend + distribution · PRs by weekday #85 · mood line + mood×volume insight
+- **Engine plumbing:** one `AdaptationRepository.engineStatsRead()` per Stats open (fatigue + plateau ladder + ratios off a single snapshot fan-out, TrophiesViewModel pattern); all other metrics precomputed in `StatsRepository` flows — nothing on the per-set hot path
+- **Motion kit** (`StatsMotion.kt`): `statsEntrance` staggered fade+slide, `CountUpText` from the "was X" value, `rememberDrawProgress`/`staggeredProgress` draw-ins; all via `ForgeMotion`, so system reduced-motion collapses everything; one-shot, no loops; pager crossfade by page offset
+- Sample seeder (#148) now also seeds RPE, effort ratings, weekly bodyweight, and post-session moods so every section has demo data
 
 ---
 
@@ -382,6 +360,18 @@ Untracked sessions (#110) are excluded from every signal at snapshot build.
 > (pre-session banner), 4 Insights (Stats rows), 5 Adaptive deload (coach feed, one-tap apply),
 > 6 Readiness (chip autoregulation) — all arbitrated, confidence-gated, explainable, and
 > advisory-only (every write goes through a user-confirmed path).
+
+---
+
+## Settings & UX tweaks (2026-06-10)
+
+- **Timezone picker** labels are now "City (offset)" — e.g. "New York (EST −5)" — instead of bare codes (`SettingsSubPages.TIMEZONE_OPTIONS`).
+- **Encouragement-messages toggle removed.** It was wired to nothing (no renderer/message bank ever read the flag); deleted across SettingsSubPages/ViewModel/Repository/PreferencesDataStore/ForgeUiSettings/MainActivity + search entries.
+- **Overview-tiles settings page removed** (`SettingsPage.Tiles` + `TilesPage`). The order/visibility prefs it controlled were already dead — `OverviewScreen` hardcodes its tiles and never read `overviewTileOrder`/`hiddenOverviewTiles`. The repo prefs remain (harmless/orphaned).
+- **Privacy mode** verified working (`MainActivity` sets `FLAG_SECURE`): blanks the recent-apps preview + blocks screenshots/recording (it doesn't blur in-app content). Toggle copy corrected to match.
+- **Program page split into a sub-menu** (`SettingsProgramPage.kt`): one long scroll → a menu of focused sub-pages (Split & schedule · Goal & experience · Emphasis & priorities · Auto-refresh & cardio), each showing its current value; Generate stays on the menu root. Local nested nav (mirrors the Exercise-likes drill-down), outer Settings nav untouched.
+- **Exercise likes reworked to body-part-first** (`ExercisePrefsPage`): a muscle-group list (with ♥/✕ counts) → tap → that muscle's movements with ♥/✕. **Pin (📌) removed from the UI**; the pin *backend* (togglePin / pinnedExercises / GenerationParams.pinned / generator force-pin) is left dormant per decision — UI-only removal.
+- **Holiday / Vacation now opens** (#135). Was a dead stub (empty onClick, no screen). New `VacationPage` (list + add via Material3 date pickers + delete) → `VacationRepository` → `VacationDao`; the MainList row + a `SettingsPage.Vacation` destination wire it up. **Vacation days are bridged everywhere via one pure tested helper `VacationCalendar`**: the home-screen `computeStreak` (tip-skip + gap-bridge), the trophy max-streak (`TrophyRepository.computeMaxStreak` — bridges if every day between two sessions is vacation), the Stats consistency-week streak (`computeConsistencyStreak` — a fully-vacation week doesn't break it), and the adaptation engine's readiness (`ReadinessAdvisor` — only non-vacation days count toward the comeback caution, so returning from a planned holiday doesn't trigger "ease in"). All no-vacation paths are backward-identical. Tests: `VacationCalendarTest` (5) + 3 new `ReadinessAdvisorTest` cases.
 
 ---
 

@@ -1,161 +1,115 @@
 package com.forge.app.ui.gym.stats.components
 
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.forge.app.program.Program
-import java.time.Instant
-import java.time.ZoneId
+import androidx.compose.ui.unit.sp
+import com.forge.app.ui.gym.stats.state.PatternAxis
 import kotlin.math.cos
 import kotlin.math.min
 import kotlin.math.sin
 
-// Library ids for the strength radar's key compounds (program-unlock: logged sets now use library ids).
-private val RADAR_IDS = listOf(
-    "db-bench-press", "mwm-seated-bench-press", "goblet-squat",
-    "mwm-wide-lat-pulldown", "incline-db-bench-press", "db-bulgarian-split-squat"
-)
-
+/**
+ * "Your shape" — movement-pattern radar. Each axis is the pattern's recent best e1RM as a
+ * fraction of its all-time best, so the polygon reads as current shape vs your own peak
+ * (replaces the old hardcoded-exercise-id radar, which broke on regenerated programs).
+ * Editorial: self-padded hairline section, no boxed card. Invoke via a plain item.
+ */
 @Composable
-fun StrengthRadarCard(compoundMaxes: Map<String, Double>, modifier: Modifier = Modifier) {
-    if (compoundMaxes.isEmpty()) return
-    val values = RADAR_IDS.map { id -> compoundMaxes[id] ?: 0.0 }
-    if (values.all { it == 0.0 }) return
-    val labels = RADAR_IDS.map { Program.exercise(it)?.name?.take(8) ?: it }
-    val maxVal = values.max().coerceAtLeast(1.0)
-    val primaryColor = MaterialTheme.colorScheme.primary
-    val surfaceVar = MaterialTheme.colorScheme.surfaceVariant
-    val outlineColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+fun PatternRadarCard(axes: List<PatternAxis>, modifier: Modifier = Modifier) {
+    if (axes.size < 3) return
+    val onBg = MaterialTheme.colorScheme.onBackground
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val accent = MaterialTheme.colorScheme.primary
+    val outline = MaterialTheme.colorScheme.outline
+    val progress = rememberDrawProgress(axes.size)
 
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .background(surfaceVar, RoundedCornerShape(12.dp))
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text("STRENGTH RADAR · lb",
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontWeight = FontWeight.SemiBold)
-        Canvas(modifier = Modifier.size(200.dp)) {
-            val cx = size.width / 2
-            val cy = size.height / 2
-            val r = min(cx, cy) * 0.8f
-            val n = values.size
-            val angleStep = (2 * Math.PI / n).toFloat()
-            listOf(0.25f, 0.5f, 0.75f, 1f).forEach { fraction ->
-                val gridPath = Path()
-                for (i in 0 until n) {
+    Column(modifier = modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
+        Text("Your shape", style = MaterialTheme.typography.headlineSmall, color = onBg, fontStyle = FontStyle.Italic)
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "Each pattern's recent best vs your all-time peak.",
+            style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic
+        )
+        Spacer(Modifier.height(12.dp))
+        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+            Canvas(modifier = Modifier.size(190.dp)) {
+                val cx = size.width / 2
+                val cy = size.height / 2
+                val r = min(cx, cy) * 0.85f
+                val n = axes.size
+                val angleStep = (2 * Math.PI / n).toFloat()
+                listOf(0.25f, 0.5f, 0.75f, 1f).forEach { fraction ->
+                    val gridPath = Path()
+                    for (i in 0 until n) {
+                        val angle = (i * angleStep - Math.PI / 2).toFloat()
+                        val x = cx + cos(angle) * r * fraction
+                        val y = cy + sin(angle) * r * fraction
+                        if (i == 0) gridPath.moveTo(x, y) else gridPath.lineTo(x, y)
+                    }
+                    gridPath.close()
+                    drawPath(gridPath, color = outline.copy(alpha = 0.25f), style = Stroke(1.dp.toPx()))
+                }
+                // Draw-in: the polygon grows out from the center once on appear.
+                val dataPath = Path()
+                axes.forEachIndexed { i, axis ->
                     val angle = (i * angleStep - Math.PI / 2).toFloat()
-                    val x = cx + cos(angle) * r * fraction
-                    val y = cy + sin(angle) * r * fraction
-                    if (i == 0) gridPath.moveTo(x, y) else gridPath.lineTo(x, y)
+                    val vr = (axis.fraction * r * progress).toFloat()
+                    val x = cx + cos(angle) * vr
+                    val y = cy + sin(angle) * vr
+                    if (i == 0) dataPath.moveTo(x, y) else dataPath.lineTo(x, y)
                 }
-                gridPath.close()
-                drawPath(gridPath, color = outlineColor, style = Stroke(1.dp.toPx()))
-            }
-            val dataPath = Path()
-            values.forEachIndexed { i, v ->
-                val angle = (i * angleStep - Math.PI / 2).toFloat()
-                val vr = (v / maxVal * r).toFloat()
-                val x = cx + cos(angle) * vr
-                val y = cy + sin(angle) * vr
-                if (i == 0) dataPath.moveTo(x, y) else dataPath.lineTo(x, y)
-            }
-            dataPath.close()
-            drawPath(dataPath, color = primaryColor.copy(alpha = 0.25f))
-            drawPath(dataPath, color = primaryColor, style = Stroke(2.dp.toPx()))
-            values.forEachIndexed { i, v ->
-                val angle = (i * angleStep - Math.PI / 2).toFloat()
-                val vr = (v / maxVal * r).toFloat()
-                drawCircle(primaryColor, radius = 2.5.dp.toPx(), center = Offset(cx + cos(angle) * vr, cy + sin(angle) * vr))
-            }
-        }
-        labels.forEachIndexed { i, label ->
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(label, style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text("${values[i].toInt()} lb", style = MaterialTheme.typography.labelSmall,
-                    color = if (values[i] == values.max()) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontWeight = if (values[i] == values.max()) FontWeight.SemiBold else FontWeight.Normal)
-            }
-        }
-    }
-}
-
-@Composable
-fun PrClusteringCard(prTimestamps: List<Long>, modifier: Modifier = Modifier) {
-    if (prTimestamps.size < 3) return
-    val zone = ZoneId.systemDefault()
-    val DOW_LABELS = listOf("M", "T", "W", "T", "F", "S", "S")
-    val dowCounts = IntArray(7)
-    prTimestamps.forEach { ms ->
-        val dow = Instant.ofEpochMilli(ms).atZone(zone).dayOfWeek.value - 1
-        dowCounts[dow]++
-    }
-    val maxCount = dowCounts.max().coerceAtLeast(1)
-    val primary = MaterialTheme.colorScheme.primary
-
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp))
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        Text("PR CLUSTERING · ${prTimestamps.size} total PRs",
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontWeight = FontWeight.SemiBold)
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            verticalAlignment = Alignment.Bottom
-        ) {
-            dowCounts.forEachIndexed { i, count ->
-                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("$count", style = MaterialTheme.typography.labelSmall,
-                        color = if (count == maxCount) primary else MaterialTheme.colorScheme.onSurfaceVariant)
-                    Box(
-                        modifier = Modifier
-                            .size(32.dp, (40f * count / maxCount).dp.coerceAtLeast(4.dp))
-                            .clip(RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp))
-                            .background(primary.copy(alpha = 0.3f + 0.7f * count / maxCount))
-                    )
-                    Text(DOW_LABELS[i], style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                dataPath.close()
+                drawPath(dataPath, color = accent.copy(alpha = 0.18f))
+                drawPath(dataPath, color = accent, style = Stroke(2.dp.toPx()))
+                axes.forEachIndexed { i, axis ->
+                    val angle = (i * angleStep - Math.PI / 2).toFloat()
+                    val vr = (axis.fraction * r * progress).toFloat()
+                    drawCircle(accent, radius = 2.5.dp.toPx(), center = Offset(cx + cos(angle) * vr, cy + sin(angle) * vr))
                 }
             }
         }
-        Text("PRs cluster on ${DOW_LABELS[dowCounts.indexOfMax()]} days",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.height(12.dp))
+        axes.forEach { axis ->
+            val pct = (axis.fraction * 100).toInt()
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(axis.label, style = MaterialTheme.typography.labelSmall, color = muted, letterSpacing = 1.sp)
+                Text(
+                    "${axis.currentE1rm.toInt()} / ${axis.peakE1rm.toInt()} lb · $pct%",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (pct >= 100) accent else onBg.copy(alpha = 0.75f),
+                    fontWeight = if (pct >= 100) FontWeight.SemiBold else FontWeight.Normal
+                )
+            }
+        }
+        Spacer(Modifier.height(20.dp))
+        HorizontalDivider(color = outline.copy(alpha = 0.25f))
+        Spacer(Modifier.height(20.dp))
     }
 }
 
-private fun IntArray.indexOfMax(): Int {
-    var maxI = 0
-    for (i in indices) if (this[i] > this[maxI]) maxI = i
-    return maxI
-}
+// PrClusteringCard (#128) was retired in the Stats revamp — it duplicated
+// PrDayOfWeekCard's PRs-by-weekday view almost exactly.

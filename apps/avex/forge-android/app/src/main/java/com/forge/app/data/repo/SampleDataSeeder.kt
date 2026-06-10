@@ -1,12 +1,18 @@
 package com.forge.app.data.repo
 
 import com.forge.app.core.time.Clock
+import com.forge.app.data.db.dao.BodyweightDao
 import com.forge.app.data.db.dao.LoggedExerciseDao
 import com.forge.app.data.db.dao.LoggedSetDao
+import com.forge.app.data.db.dao.MoodDao
 import com.forge.app.data.db.dao.SessionDao
+import com.forge.app.data.db.entities.BodyweightEntry
 import com.forge.app.data.db.entities.LoggedExercise
 import com.forge.app.data.db.entities.LoggedSet
+import com.forge.app.data.db.entities.MoodEntry
 import com.forge.app.data.db.entities.Session
+import com.forge.app.data.db.types.EffortRating
+import com.forge.app.domain.mood.Mood
 import com.forge.app.program.Program
 import java.time.LocalDate
 import java.time.ZoneId
@@ -17,7 +23,8 @@ import kotlin.random.Random
 
 /**
  * Populates the database with realistic fake training data for demo / testing runs (#148).
- * Simulates 8 weeks of the 4-day split with gradual progressive overload.
+ * Simulates 8 weeks of the 4-day split with gradual progressive overload — including RPE,
+ * effort ratings, moods, and a weekly bodyweight, so every Stats section has data to show.
  * Only runs when the DB is empty (totalSessions == 0).
  */
 @Singleton
@@ -25,6 +32,8 @@ class SampleDataSeeder @Inject constructor(
     private val sessionDao: SessionDao,
     private val loggedExerciseDao: LoggedExerciseDao,
     private val loggedSetDao: LoggedSetDao,
+    private val bodyweightDao: BodyweightDao,
+    private val moodDao: MoodDao,
     private val clock: Clock
 ) {
 
@@ -87,11 +96,22 @@ class SampleDataSeeder @Inject constructor(
                         (prevMax == null || workingWeight > prevMax)
                     if (isPr) { maxByExercise[plan.id] = workingWeight; prCount++ }
 
+                    // Effort ratings skew harder as the weeks accumulate — gives the effort
+                    // distribution and fatigue signals something honest to chew on.
+                    val effortRoll = rng.nextInt(10) + (7 - weekOffset) / 3
+                    val effort = when {
+                        effortRoll <= 2 -> EffortRating.EASY
+                        effortRoll <= 6 -> EffortRating.JUST_RIGHT
+                        effortRoll <= 8 -> EffortRating.HARD
+                        else -> EffortRating.BRUTAL
+                    }
+
                     val loggedExId = loggedExerciseDao.insert(LoggedExercise(
                         sessionId = sessionId,
                         exerciseId = plan.id,
                         orderIndex = exIdx,
-                        wasPr = isPr
+                        wasPr = isPr,
+                        difficulty = effort
                     ))
 
                     repeat(plan.sets) { setIdx ->
@@ -101,13 +121,16 @@ class SampleDataSeeder @Inject constructor(
                         // within [startMs, finishedMs] (was index*3min, which could overshoot the finish).
                         val completedAt = startMs + durationMs * (setCounter + 1) / (totalSetsInSession + 1)
                         setCounter++
+                        // RPE on roughly half the sets, clustered 6.5–9.5.
+                        val rpe = if (rng.nextBoolean()) (13 + rng.nextInt(7)) / 2.0 else null
                         loggedSetDao.insert(LoggedSet(
                             loggedExerciseId = loggedExId,
                             setIndex = setIdx,
                             weightText = weightLb?.let { "${it.toInt()}" } ?: "BW",
                             weightLb = weightLb,
                             reps = setReps,
-                            completedAt = completedAt
+                            completedAt = completedAt,
+                            rpe = rpe
                         ))
                         totalVol += (weightLb ?: 0.0) * setReps
                     }
@@ -119,7 +142,27 @@ class SampleDataSeeder @Inject constructor(
                     prCount = prCount,
                     setCount = day.exercises.sumOf { it.sets }
                 ))
+
+                // Post-workout mood, loosely tracking how hard the sessions roll.
+                val mood = when (rng.nextInt(6)) {
+                    0 -> Mood.DRAINED; 1 -> Mood.OFF; 2 -> Mood.FINE; 3, 4 -> Mood.GOOD; else -> Mood.STRONG
+                }
+                moodDao.insert(MoodEntry(
+                    sessionId = sessionId, dayKey = dayKey,
+                    mood = mood.code, recordedAt = finishedMs + 60_000
+                ))
                 sessionIndex++
+            }
+
+            // One bodyweight log per seeded week, drifting up ~0.4 lb/week.
+            val bwDate = weekStart.plusDays(2)
+            if (!bwDate.isAfter(today)) {
+                val bwMs = bwDate.atTime(8, 0).atZone(zone).toInstant().toEpochMilli()
+                bodyweightDao.upsert(BodyweightEntry(
+                    dateKey = bwDate.toString(),
+                    weightLb = 178.0 + (7 - weekOffset) * 0.4 + rng.nextDouble(-0.6, 0.6),
+                    recordedAt = bwMs
+                ))
             }
         }
     }

@@ -109,8 +109,6 @@ class MainActivity : ComponentActivity() {
                     )
                 }.combine(settingsRepo.hiddenOverviewTiles) { s, hidden ->
                     s.copy(hiddenOverviewTiles = hidden)
-                }.combine(settingsRepo.showEncouragement) { s, v ->
-                    s.copy(showEncouragement = v)
                 }.combine(settingsRepo.compactSetLogging) { s, v ->
                     s.copy(compactSetLogging = v)
                 }.combine(settingsRepo.overviewTileOrder) { s, order ->

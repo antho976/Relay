@@ -2,11 +2,13 @@ package com.forge.app.data.repo
 
 import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.data.db.entities.Session
+import com.forge.app.domain.adapt.InsightEngine
 import com.forge.app.program.Program
 import com.forge.app.ui.gym.stats.state.ExerciseFrequency
-import com.forge.app.ui.gym.stats.state.HeatmapCell
 import com.forge.app.ui.gym.stats.state.RpeBucket
+import com.forge.app.ui.gym.stats.state.TrainingTimes
 import com.forge.app.ui.gym.stats.state.WeekActivityRow
+import com.forge.app.ui.gym.stats.state.WeeklyDuration
 import com.forge.app.ui.gym.stats.state.WeeklyEffortCounts
 import java.time.Instant
 import java.time.LocalDate
@@ -15,24 +17,8 @@ import java.time.ZoneId
 // Pure effort / consistency / activity aggregation helpers extracted from
 // StatsRepository. No DAO or DI dependencies.
 
-internal const val HEATMAP_DAYS = 49
-internal const val HEATMAP_WINDOW_MS: Long = HEATMAP_DAYS.toLong() * 24 * 60 * 60 * 1000
-
 /** Weekly session count that counts toward the consistency streak. */
 private const val CONSISTENCY_TARGET = 3
-
-internal fun buildHeatmap(timestamps: List<Long>): List<HeatmapCell> {
-    val zone = ZoneId.systemDefault()
-    val today = LocalDate.now(zone)
-    val countsByDate: Map<LocalDate, Int> = timestamps
-        .groupingBy { Instant.ofEpochMilli(it).atZone(zone).toLocalDate() }
-        .eachCount()
-    // Order oldest → newest so the UI can lay it out as 7 rows × 7 cols
-    return (HEATMAP_DAYS - 1 downTo 0).map { offset ->
-        val date = today.minusDays(offset.toLong())
-        HeatmapCell(date = date, count = countsByDate[date] ?: 0)
-    }
-}
 
 /** Count of sets logged at each RPE value (only sets where RPE was recorded). */
 internal fun buildRpeDistribution(
@@ -97,7 +83,8 @@ internal fun buildWeeklySessionCounts(
 
 /** Consecutive recent weeks (incl. an in-progress current week) hitting the session target. */
 internal fun computeConsistencyStreak(
-    allSets: List<com.forge.app.data.db.projections.SetWithExerciseAndSession>
+    allSets: List<com.forge.app.data.db.projections.SetWithExerciseAndSession>,
+    onVacation: (LocalDate) -> Boolean = { false }
 ): Int {
     if (allSets.isEmpty()) return 0
     val zone = ZoneId.systemDefault()
@@ -116,6 +103,8 @@ internal fun computeConsistencyStreak(
         when {
             count >= CONSISTENCY_TARGET -> streak++
             i == 0 -> {} // current week may still be in progress — don't break the streak
+            // A holiday week (every day on vacation) doesn't break the streak (#135).
+            (0..6).all { onVacation(w.plusDays(it.toLong())) } -> {}
             else -> return streak
         }
     }
@@ -140,6 +129,54 @@ internal fun buildExerciseFrequency(
 // buildInsights moved to the adaptation engine (InsightEngine, System 4): the time-of-day,
 // most-improved, and muscle-dominance rules live there with snapshot-wide gating, and the
 // old volume-drop deload rule (#80) was superseded by DeloadAdvisor's multi-signal score.
+
+/**
+ * "When you train": sessions per day of week + the sets-weighted best hour. The hour
+ * label reuses InsightEngine's wording so the card and the insight can never disagree.
+ */
+internal fun buildTrainingTimes(
+    allSets: List<com.forge.app.data.db.projections.SetWithExerciseAndSession>,
+    zone: ZoneId = ZoneId.systemDefault(),
+    minSetsForHour: Int = 30
+): TrainingTimes? {
+    if (allSets.isEmpty()) return null
+    val dow = IntArray(7)
+    allSets.map { it.sessionStartedAt }.distinct().forEach { ms ->
+        dow[Instant.ofEpochMilli(ms).atZone(zone).dayOfWeek.value - 1]++
+    }
+    val bestHourLabel = if (allSets.size >= minSetsForHour) {
+        allSets.groupingBy { Instant.ofEpochMilli(it.sessionStartedAt).atZone(zone).hour }
+            .eachCount()
+            .maxByOrNull { it.value }
+            ?.let { (hour, _) -> "${InsightEngine.timeOfDayLabel(hour)} ($hour:00)" }
+    } else null
+    return TrainingTimes(sessionsByDayOfWeek = dow.toList(), bestHourLabel = bestHourLabel)
+}
+
+/** Median session length per ISO week (sane 10–240 min only), oldest → newest. */
+internal fun buildWeeklyDurations(
+    sessions: List<Session>,
+    zone: ZoneId = ZoneId.systemDefault(),
+    maxWeeks: Int = 12
+): List<WeeklyDuration> {
+    val byWeek = sessions
+        .mapNotNull { s ->
+            val fin = s.finishedAt ?: return@mapNotNull null
+            val min = ((fin - s.startedAt) / 60_000).toInt().takeIf { it in 10..240 } ?: return@mapNotNull null
+            val d = Instant.ofEpochMilli(s.startedAt).atZone(zone).toLocalDate()
+            d.minusDays(d.dayOfWeek.value.toLong() - 1) to min
+        }
+        .groupBy({ it.first }, { it.second })
+    return byWeek.entries
+        .sortedBy { it.key }
+        .takeLast(maxWeeks)
+        .map { (weekStart, mins) ->
+            WeeklyDuration(
+                weekLabel = weekStart.toString().substring(5),
+                medianMin = mins.sorted()[mins.size / 2]
+            )
+        }
+}
 
 internal fun buildWeekActivity(
     sessions: List<Session>,

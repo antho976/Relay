@@ -39,7 +39,7 @@ internal fun MainList(
                 }
             }
             item("vacation") {
-                SettingsNavRow("Holiday / Vacation", "Streak & deload counter pause") { }
+                SettingsNavRow("Holiday / Vacation", "Pause your streak during a holiday") { onOpenPage(SettingsPage.Vacation) }
                 SectionDivider()
             }
             item("data") {
@@ -106,11 +106,12 @@ internal fun rowSubtitle(page: SettingsPage, s: SettingsUiState): String = when 
     SettingsPage.Notifications -> if (s.quietHoursEnabled)
         "Quiet ${s.quietHoursStart.toString().padStart(2, '0')}:00–${s.quietHoursEnd.toString().padStart(2, '0')}:00"
     else "Off"
-    SettingsPage.Tiles -> "${s.overviewTileOrder.count { it !in s.hiddenOverviewTiles }} of ${s.overviewTileOrder.size} visible"
     SettingsPage.Equipment -> if (s.availableEquipment.isEmpty()) "All equipment" else "${s.availableEquipment.size} selected"
-    SettingsPage.Privacy -> if (s.privacyMode) "Screen blur on" else "Screen blur off"
+    SettingsPage.Privacy -> if (s.privacyMode) "Screenshots blocked" else "Off"
     SettingsPage.Program -> "${s.daysPerWeek} days/week · auto-generate"
     SettingsPage.ExercisePrefs -> "${s.liked.size} liked · ${s.disliked.size} disliked"
+    // Reached via a dedicated MainList row, not the search/nav grid — subtitle unused.
+    SettingsPage.Vacation -> "Pause your streak during a holiday"
 }
 
 internal fun dateShort(f: String) = when (f) {

@@ -4,38 +4,34 @@ import com.forge.app.core.time.Clock
 import com.forge.app.data.db.dao.CardioDao
 import com.forge.app.data.db.dao.LoggedExerciseDao
 import com.forge.app.data.db.dao.LoggedSetDao
-import com.forge.app.data.db.dao.RestDayDao
 import com.forge.app.data.db.dao.SessionDao
-import com.forge.app.data.repo.BodyweightRepository
 import com.forge.app.program.Program
 import com.forge.app.data.db.entities.Session
 import com.forge.app.ui.gym.stats.state.DayTypeVolumeStats
 import com.forge.app.ui.gym.stats.state.WeekActivityRow
 import com.forge.app.ui.gym.stats.state.ExerciseFrequency
-import com.forge.app.ui.gym.stats.state.ExerciseYoY
-import com.forge.app.ui.gym.stats.state.HeatmapCell
 import com.forge.app.ui.gym.stats.state.PeriodComparison
 import com.forge.app.ui.gym.stats.state.PeriodStats
 import com.forge.app.ui.gym.stats.state.HistoryPoint
+import com.forge.app.ui.gym.stats.state.BodyweightPoint
 import com.forge.app.ui.gym.stats.state.E1rmLift
 import com.forge.app.ui.gym.stats.state.RepMaxSet
 import com.forge.app.ui.gym.stats.state.MuscleSetCount
 import com.forge.app.ui.gym.stats.state.RepRangeDist
 import com.forge.app.ui.gym.stats.state.RpeBucket
-import com.forge.app.ui.gym.stats.state.DayTypeBreakdown
 import com.forge.app.ui.gym.stats.state.InsightFlag
 import com.forge.app.ui.gym.stats.state.LifetimeMetrics
-import com.forge.app.ui.gym.stats.state.VolumePoint
-import com.forge.app.ui.gym.stats.state.MonthCalendarData
 import com.forge.app.ui.gym.stats.state.MuscleVolume
+import com.forge.app.ui.gym.stats.state.OverloadSummary
+import com.forge.app.ui.gym.stats.state.PatternAxis
 import com.forge.app.ui.gym.stats.state.PrEntry
+import com.forge.app.ui.gym.stats.state.PrRecency
 import com.forge.app.ui.gym.stats.state.PrRecord
-import com.forge.app.ui.gym.stats.state.SessionDaySummary
-import com.forge.app.ui.gym.stats.state.StrengthCurve
 import com.forge.app.ui.gym.stats.state.TimeToPrEntry
-import com.forge.app.ui.gym.stats.state.Totals
-import com.forge.app.ui.gym.stats.state.VolumeDeloadPoint
+import com.forge.app.ui.gym.stats.state.TrainingTimes
+import com.forge.app.ui.gym.stats.state.WeeklyDuration
 import com.forge.app.ui.gym.stats.state.WeeklyEffortCounts
+import com.forge.app.ui.gym.stats.state.WeeklyTonnage
 import com.forge.app.ui.overview.state.OnThisDayMemory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -45,10 +41,8 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
-import kotlinx.coroutines.flow.map
 import java.time.Instant
 import java.time.LocalDate
-import java.time.YearMonth
 import java.time.ZoneId
 import java.time.temporal.ChronoUnit
 import javax.inject.Inject
@@ -72,7 +66,7 @@ class StatsRepository @Inject constructor(
     private val cardioDao: CardioDao,
     private val loggedExerciseDao: LoggedExerciseDao,
     private val loggedSetDao: LoggedSetDao,
-    private val restDayDao: RestDayDao,
+    private val vacationDao: com.forge.app.data.db.dao.VacationDao,
     private val bodyweightRepo: BodyweightRepository,
     private val adaptationRepo: AdaptationRepository,
     private val clock: Clock
@@ -120,42 +114,54 @@ class StatsRepository @Inject constructor(
             val lastFinished = recentSessions.filter { it.finishedAt != null }.maxByOrNull { it.finishedAt!! }
             val nextUpDayKey = if (lastFinished == null) (Program.dayKeys.firstOrNull() ?: Program.UPPER_A)
                 else { val idx = Program.dayKeys.indexOf(lastFinished.dayKey); Program.dayKeys[(idx + 1) % Program.dayKeys.size] }
+            // streakDays is finalized below, once the vacation ranges are known (#135).
             WeeklyStats(
                 workouts = workouts,
                 volumeLb = volume ?: 0.0,
                 cardioMinutes = cardio ?: 0,
                 totalFinishedSessions = totalFinished,
-                streakDays = computeStreak(finishedAts),
+                streakDays = 0,
                 daysSinceLastSession = computeDaysSinceLast(finishedAts),
                 weekDaysTrained = weekDaysTrained,
                 nextUpDayKey = nextUpDayKey,
                 recentGymSessions = recentSessions.filter { it.finishedAt != null }.take(5)
-            )
+            ) to finishedAts
         }
-        return baseFlow.combine(sessionDao.observeFirstFinishedSessionStartedAt()) { stats, firstMs ->
-            stats.copy(firstFinishedSessionMs = firstMs)
-        }.flowOn(Dispatchers.Default)
+        return baseFlow
+            .combine(sessionDao.observeFirstFinishedSessionStartedAt()) { (stats, ats), firstMs ->
+                stats.copy(firstFinishedSessionMs = firstMs) to ats
+            }
+            .combine(vacationDao.observeAll()) { (stats, ats), periods ->
+                // Vacation days bridge the streak — a planned holiday doesn't reset it (#135).
+                stats.copy(streakDays = computeStreak(ats, com.forge.app.domain.vacation.VacationCalendar.onVacation(periods)))
+            }
+            .flowOn(Dispatchers.Default)
     }
 
-    private fun computeStreak(finishedAts: List<Long>): Int {
+    private fun computeStreak(finishedAts: List<Long>, onVacation: (LocalDate) -> Boolean): Int {
         if (finishedAts.isEmpty()) return 0
         val zone = ZoneId.systemDefault()
         val today = LocalDate.now(zone)
         val trainingDays = finishedAts.mapTo(mutableSetOf()) {
             Instant.ofEpochMilli(it).atZone(zone).toLocalDate()
         }
-        val startDay = when {
-            trainingDays.contains(today) -> today
-            trainingDays.contains(today.minusDays(1)) -> today.minusDays(1)
+        // Skip vacation days at the tip so being on holiday *today* doesn't zero an active streak.
+        var tip = today
+        while (onVacation(tip) && !trainingDays.contains(tip)) tip = tip.minusDays(1)
+        val anchor = when {
+            trainingDays.contains(tip) -> tip
+            trainingDays.contains(tip.minusDays(1)) -> tip.minusDays(1) // one rest-day grace
             else -> return 0
         }
         var streak = 0
-        var day = startDay
-        while (trainingDays.contains(day)) {
-            streak++
-            day = day.minusDays(1)
+        var day = anchor
+        while (true) {
+            when {
+                trainingDays.contains(day) -> { streak++; day = day.minusDays(1) }
+                onVacation(day) -> day = day.minusDays(1) // bridge: no break, no increment
+                else -> return streak
+            }
         }
-        return streak
     }
 
     private fun computeDaysSinceLast(finishedAts: List<Long>): Int? {
@@ -205,30 +211,19 @@ class StatsRepository @Inject constructor(
     // ─── Gym stats subtab ──────────────────────────────────────────────────────
 
     data class GymStats(
-        val totals: Totals,
-        val heatmap: List<HeatmapCell>,
         val volumeByMuscle: List<MuscleVolume>,
-        val strengthCurve: StrengthCurve?,
         val recentPrs: List<PrEntry>,
         val hallOfFame: List<PrRecord>,
         val exerciseHistory: Map<String, List<HistoryPoint>>,
-        /** Volume (lb) per session per exercise — for #72 volume over time chart. */
-        val exerciseVolumeHistory: Map<String, List<VolumePoint>> = emptyMap(),
-        /** Max weight per exercise for the radar chart (#124): exerciseId → max lb. */
-        val compoundMaxes: Map<String, Double> = emptyMap(),
-        /** PR session timestamps for clustering scatter (#128). */
+        /** PR session timestamps (#128) — feeds PR recency. */
         val prSessionTimestamps: List<Long> = emptyList(),
         val exerciseFrequency: List<ExerciseFrequency> = emptyList(),
         val timeToPr: List<TimeToPrEntry> = emptyList(),
         val effortDistribution: List<WeeklyEffortCounts> = emptyList(),
         val prsByDayOfWeek: List<Int> = List(7) { 0 },
-        val volumeDeloadTrend: List<VolumeDeloadPoint> = emptyList(),
         val dayTypeBestVsAvg: List<DayTypeVolumeStats> = emptyList(),
         val weekComparison: PeriodComparison? = null,
-        val monthComparison: PeriodComparison? = null,
-        val exerciseYoY: List<ExerciseYoY> = emptyList(),
         val insights: List<InsightFlag> = emptyList(),
-        val dayTypeBreakdown: List<DayTypeBreakdown> = emptyList(),
         val lifetimeMetrics: LifetimeMetrics? = null,
         val moodOverTime: List<com.forge.app.data.db.dao.SessionDao.MoodOverTime> = emptyList(),
         /** Raw sessions this ISO week — used internally to build [weekActivity]. */
@@ -241,20 +236,33 @@ class StatsRepository @Inject constructor(
         val repRangeDist: RepRangeDist? = null,
         val rpeDistribution: List<RpeBucket> = emptyList(),
         val avgRpe: Double? = null,
-        val bodyweightTrend: List<Double> = emptyList(),
+        /** Dated bodyweight points, oldest → newest. */
+        val bodyweightPoints: List<BodyweightPoint> = emptyList(),
         val consistencyStreakWeeks: Int = 0,
         val progressiveOverloadPct: Double? = null,
         val avgRpePerSession: List<Double> = emptyList(),
-        val weeklySessionCounts: List<Int> = emptyList()
+        val weeklySessionCounts: List<Int> = emptyList(),
+        /** Weekly avg e1RM across tracked lifts (concrete progressive overload). */
+        val overload: OverloadSummary? = null,
+        /** Days since last PR, overall + per lift. */
+        val prRecency: PrRecency? = null,
+        /** Movement-pattern radar axes (recent best vs all-time best e1RM). */
+        val patternRadar: List<PatternAxis> = emptyList(),
+        /** Planned weekly sets per muscle from the active program. */
+        val plannedSetsByMuscle: Map<com.forge.app.program.MuscleGroup, Int> = emptyMap(),
+        /** Tonnage per ISO week, deload weeks marked. */
+        val weeklyTonnage: List<WeeklyTonnage> = emptyList(),
+        /** Sessions per day of week + best training hour. */
+        val trainingTimes: TrainingTimes? = null,
+        /** Median session length per ISO week. */
+        val weeklyDurations: List<WeeklyDuration> = emptyList()
     )
 
     /**
      * Single observable feeding the Gym → Stats subtab. Aggregates several DAO flows
-     * into the snapshot the UI consumes. Heatmap window and curve exercise are fixed
-     * here; ideally configurable later via settings.
+     * into the snapshot the UI consumes.
      */
     fun observeGymStats(): Flow<GymStats> {
-        val heatmapStartMs = clock.nowMs() - HEATMAP_WINDOW_MS
         val volumeStartMs = clock.nowMs() - WEEK_MS
         val zone = ZoneId.systemDefault()
         val isoWeekStart = run {
@@ -264,25 +272,15 @@ class StatsRepository @Inject constructor(
         val weekStartMs = isoWeekStart.atStartOfDay(zone).toInstant().toEpochMilli()
         val weekEndMs = isoWeekStart.plusWeeks(1).atStartOfDay(zone).toInstant().toEpochMilli()
 
-        val totalsFlow: Flow<Totals> = combine(
-            sessionDao.observeFinishedCount(),
-            loggedExerciseDao.observeTotalLogged(),
-            loggedExerciseDao.observePrCount()
-        ) { workouts, exercises, prs ->
-            Totals(workouts = workouts, exercisesLogged = exercises, prs = prs)
-        }
-
         val eightWeeksMs = clock.nowMs() - 8L * 7 * 24 * 60 * 60 * 1000
 
         val moodFlow = sessionDao.observeMoodOverTime()
 
         return combine(
-            totalsFlow,
-            loggedExerciseDao.observeHeatmapTimestamps(heatmapStartMs),
             loggedSetDao.observeSetsSinceWithExerciseId(volumeStartMs),
             loggedSetDao.observeAllFinishedSetsWithSession(),
             loggedExerciseDao.observeRecentPrs()
-        ) { totals, heatmapRows, volumeSets, allSets, prRows ->
+        ) { volumeSets, allSets, prRows ->
           coroutineScope {
             // The independent aggregate queries below ran one-by-one, so their latencies
             // stacked. Fire them concurrently and await — cuts the Stats-tab open time.
@@ -294,9 +292,9 @@ class StatsRepository @Inject constructor(
             val dayStatsD = async { sessionDao.avgMaxVolumeByDayKey() }
             val latestBwLbD = async { bodyweightRepo.latestWeightLb() }
             val weekCompD = async { buildWeekComparison() }
-            val monthCompD = async { buildMonthComparison() }
             val lifetimeAggD = async { sessionDao.lifetimeAggregate() }
-            val dayTypeRowsD = async { sessionDao.perDayTypeStats() }
+            val finishedSessionsD = async { sessionDao.allFinished() }
+            val vacationD = async { vacationDao.all() }
 
             val freqRows = freqRowsD.await()
             val prDates = prDatesD.await()
@@ -306,8 +304,6 @@ class StatsRepository @Inject constructor(
             val dayStats = dayStatsD.await()
             val latestBwLb = latestBwLbD.await()
             val weekComp = weekCompD.await()
-            val monthComp = monthCompD.await()
-            val yoy = buildExerciseYoY(allSets)
             val lifetimeAgg = lifetimeAggD.await()
             val lifetimeMetrics = LifetimeMetrics(
                 lifetimeVolumeLb = lifetimeAgg.totalVolume ?: 0.0,
@@ -315,29 +311,26 @@ class StatsRepository @Inject constructor(
                 avgSessionVolumeLb = if (lifetimeAgg.sessionCount > 0) (lifetimeAgg.totalVolume ?: 0.0) / lifetimeAgg.sessionCount else 0.0,
                 avgSetCount = lifetimeAgg.avgSets ?: 0.0
             )
-            val dayTypeRows = dayTypeRowsD.await()
-            val dayTypeBreakdown = buildDayTypeBreakdown(dayTypeRows)
             // Insights come from the adaptation engine (System 4) — buildInsights' rules
             // moved there with snapshot-wide gating; the UI keeps rendering InsightFlag rows.
             val insights = adaptationRepo.insights().map { InsightFlag(it.icon, it.title, it.body) }
             val e1lifts = buildE1rmLifts(allSets)
+            val deloadTrend = buildVolumeDeloadTrend(deloadRows)
             GymStats(
-                totals = totals,
-                heatmap = buildHeatmap(heatmapRows.map { it.startedAt }),
                 volumeByMuscle = buildVolumeByMuscle(volumeSets),
-                strengthCurve = buildStrengthCurveFor(STRENGTH_CURVE_EXERCISE_ID, allSets),
                 recentPrs = buildPrEntries(prRows, allSets),
                 hallOfFame = buildHallOfFame(allSets, latestBwLb),
                 exerciseHistory = buildExerciseHistory(allSets),
-                exerciseVolumeHistory = buildExerciseVolumeHistory(allSets),
-                compoundMaxes = buildCompoundMaxes(allSets),
                 e1rmLifts = e1lifts,
                 repMaxes = buildRepMaxes(allSets),
                 weeklySetsByMuscle = buildWeeklySetsByMuscle(volumeSets),
                 repRangeDist = buildRepRangeDist(allSets),
                 rpeDistribution = buildRpeDistribution(allSets),
                 avgRpe = allSets.mapNotNull { it.rpe }.takeIf { it.isNotEmpty() }?.average(),
-                consistencyStreakWeeks = computeConsistencyStreak(allSets),
+                consistencyStreakWeeks = computeConsistencyStreak(
+                    allSets,
+                    com.forge.app.domain.vacation.VacationCalendar.onVacation(vacationD.await())
+                ),
                 progressiveOverloadPct = computeProgressiveOverload(e1lifts),
                 avgRpePerSession = buildAvgRpePerSession(allSets),
                 weeklySessionCounts = buildWeeklySessionCounts(allSets),
@@ -346,14 +339,17 @@ class StatsRepository @Inject constructor(
                 timeToPr = buildTimeToPr(prDates),
                 effortDistribution = buildEffortDistribution(effortRows),
                 prsByDayOfWeek = buildPrsByDayOfWeek(prTimes),
-                volumeDeloadTrend = buildVolumeDeloadTrend(deloadRows),
+                weeklyTonnage = buildWeeklyTonnage(deloadTrend),
+                trainingTimes = buildTrainingTimes(allSets),
+                weeklyDurations = buildWeeklyDurations(finishedSessionsD.await().filter { !it.isUntracked }),
                 dayTypeBestVsAvg = buildDayTypeBestVsAvg(dayStats),
                 weekComparison = weekComp,
-                monthComparison = monthComp,
-                exerciseYoY = yoy,
                 insights = insights,
-                dayTypeBreakdown = dayTypeBreakdown,
-                lifetimeMetrics = lifetimeMetrics
+                lifetimeMetrics = lifetimeMetrics,
+                overload = buildOverloadSummary(allSets, e1lifts),
+                prRecency = buildPrRecency(prDates, clock.nowMs()),
+                patternRadar = buildPatternRadar(allSets, clock.nowMs()),
+                plannedSetsByMuscle = com.forge.app.program.VolumeTargets.plannedWeeklySetsByMuscle(Program.days)
             )
           }
         }.combine(moodFlow) { stats, moods ->
@@ -368,39 +364,8 @@ class StatsRepository @Inject constructor(
             )
         }.combine(bodyweightRepo.observeRecent(90)) { stats, bw ->
             // observeRecent is newest-first; reverse to chronological for the trend chart.
-            stats.copy(bodyweightTrend = bw.reversed().map { it.weightLb })
+            stats.copy(bodyweightPoints = bw.reversed().map { BodyweightPoint(it.recordedAt, it.weightLb) })
         }.flowOn(Dispatchers.Default)
-    }
-
-    /** Monthly calendar: reactive stream of sessions + rest days in the current calendar month (#54 #114 #115). */
-    fun observeMonthCalendar(): Flow<MonthCalendarData> {
-        val zone = ZoneId.systemDefault()
-        val month = YearMonth.now(zone)
-        val fromMs = month.atDay(1).atStartOfDay(zone).toInstant().toEpochMilli()
-        val toMs = month.plusMonths(1).atDay(1).atStartOfDay(zone).toInstant().toEpochMilli()
-        return sessionDao.observeFinishedInRange(fromMs, toMs)
-            .combine(restDayDao.observeAll()) { sessions, restEntries ->
-                val monthPrefix = month.toString() // "yyyy-MM"
-                MonthCalendarData(
-                    yearMonth = month,
-                    sessionDays = sessions.associate { session ->
-                        val day = Instant.ofEpochMilli(session.startedAt).atZone(zone).dayOfMonth
-                        val dayName = Program.days.firstOrNull { it.key == session.dayKey }?.defaultName
-                            ?: session.dayKey
-                        day to SessionDaySummary(
-                            dayName = dayName,
-                            totalVolumeLb = session.totalVolumeLb ?: 0.0,
-                            prCount = session.prCount
-                        )
-                    },
-                    restDays = restEntries
-                        .filter { it.dateKey.startsWith(monthPrefix) }
-                        .associate { entry ->
-                            entry.dateKey.substringAfterLast("-").toIntOrNull()?.let { it to entry.type } ?: (0 to "")
-                        }
-                        .filter { it.key > 0 }
-                )
-            }
     }
 
     /**
@@ -447,26 +412,7 @@ class StatsRepository @Inject constructor(
         )
     }
 
-    private suspend fun buildMonthComparison(): PeriodComparison? {
-        val zone = ZoneId.systemDefault()
-        val now = YearMonth.now(zone)
-        val thisMonthStart = now.atDay(1).atStartOfDay(zone).toInstant().toEpochMilli()
-        val nextMonthStart = now.plusMonths(1).atDay(1).atStartOfDay(zone).toInstant().toEpochMilli()
-        val lastMonthStart = now.minusMonths(1).atDay(1).atStartOfDay(zone).toInstant().toEpochMilli()
-        // Exact month boundary (was thisMonthStart + 32 days, which always bled 1-2 days into next month).
-        val thisM = sessionDao.aggregateInRange(thisMonthStart, nextMonthStart)
-        val lastM = sessionDao.aggregateInRange(lastMonthStart, thisMonthStart)
-        if (lastM.sessionCount == 0 && thisM.sessionCount == 0) return null
-        return PeriodComparison(
-            label = "MONTH",
-            current = PeriodStats(thisM.sessionCount, thisM.totalVolume ?: 0.0, thisM.totalPrs, thisM.totalSets),
-            previous = PeriodStats(lastM.sessionCount, lastM.totalVolume ?: 0.0, lastM.totalPrs, lastM.totalSets)
-        )
-    }
-
     companion object {
         private const val WEEK_MS: Long = 7L * 24 * 60 * 60 * 1000
-        /** DB Bench Press — Antho's main upper-body lift, shown as the default curve. */
-        private const val STRENGTH_CURVE_EXERCISE_ID = "ua1"
     }
 }

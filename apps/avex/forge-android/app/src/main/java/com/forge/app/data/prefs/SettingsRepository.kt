@@ -68,13 +68,6 @@ class SettingsRepository @Inject constructor(
             else prefs[PreferenceKeys.warmupKey(dayKey)] = items.joinToString("\n")
         }
 
-    // ─── Encouragement messages (#67) ────────────────────────────────────────
-
-    val showEncouragement: Flow<Boolean> = context.forgePreferences.data
-        .map { it[PreferenceKeys.SHOW_ENCOURAGEMENT] ?: true }
-    suspend fun setShowEncouragement(v: Boolean) =
-        context.forgePreferences.edit { it[PreferenceKeys.SHOW_ENCOURAGEMENT] = v }
-
     // ─── Compact set logging (#35c) ───────────────────────────────────────────
 
     val compactSetLogging: Flow<Boolean> = context.forgePreferences.data

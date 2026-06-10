@@ -12,7 +12,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
+import kotlin.math.abs
 import kotlinx.coroutines.launch
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -73,7 +75,15 @@ fun StatsContent(
         )
         HorizontalPager(state = pagerState, modifier = Modifier.weight(1f)) { page ->
             LazyColumn(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .fillMaxSize()
+                    // Mild fade tied to page offset so settling between tabs reads as a
+                    // crossfade while the pager keeps its physics. Pure offset math — no
+                    // running animation, so reduced motion needs no special case.
+                    .graphicsLayer {
+                        val offset = (pagerState.currentPage - page) + pagerState.currentPageOffsetFraction
+                        alpha = 1f - abs(offset).coerceIn(0f, 1f) * 0.35f
+                    },
                 contentPadding = PaddingValues(bottom = 56.dp)
             ) {
                 when (tabs[page]) {
