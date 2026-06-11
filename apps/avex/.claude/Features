@@ -511,7 +511,23 @@ rotation all inherit it) enriches its params from the coach record via pure
   (a later "ok" on the same movement outranks an earlier failure).
 Recomputed from the same rows on every call → idempotent, never compounds; empty history =
 exactly the un-coached generator. Tests: 7 CoachGenBias + 3 VolumeModel bias + 2 generator
-(avoid steering, bias flow-through). **App total: 281 unit tests.**
+(avoid steering, bias flow-through).
+
+**Flat vs incline bench fix (2026-06-10, Antho's correction):** his bench is a straight FLAT
+bench (its bar is benching-only; barbell isn't modeled) — NOT adjustable, and the old single
+`BENCH` equipment let incline movements (Incline DB Bench, Chest-Supported DB Row, DB Incline
+Curl) into his MWM-989 plans. New `Equipment.INCLINE_BENCH` ("Incline bench"; BENCH renamed
+"Flat bench"); those 3 movements retagged; the MWM-989 preset deliberately excludes it (Full gym
+includes it automatically). Generation AND swap picker both filter by it. Regression test:
+`mwmPresetNeverProducesInclineBenchMovements` (plans across 3–6 days × 10 seeds + swap
+candidates for every muscle).
+
+**Three more removed per Antho (2026-06-10):** Face Pull + Seated Low Row claimed MWM-989
+stations his machine can't perform (speculative pro-audit additions — DELETED outright, same
+philosophy as the old barbell removal); DB Hip Thrust is impossible against his rack bench —
+also deleted. Library = 57 movements. Consequences accepted: rear delts back to 1 MWM option
+(Rear Delt DB Fly), glutes pool = lunge/bridge/kickback/outer-kick. **App total: 282 unit
+tests.**
 
 ---
 

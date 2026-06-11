@@ -1,4 +1,4 @@
-package com.forge.app.domain.coach
+﻿package com.forge.app.domain.coach
 
 import com.forge.app.data.db.entities.CoachDecision
 import com.forge.app.program.MuscleGroup
@@ -65,11 +65,11 @@ class CoachGenBiasTest {
     fun provenSwapsArePreferred_failedOnesAvoided() {
         val bias = CoachGenBias.from(
             listOf(
-                decision("swap", "db-row", outcome = "ok", payload = "mwm-seated-row"),
+                decision("swap", "db-row", outcome = "ok", payload = "mwm-standing-bicep-curl"),
                 decision("swap", "db-curl", outcome = "failed", payload = "db-concentration-curl")
             )
         )
-        assertEquals(setOf("mwm-seated-row"), bias.prefer)
+        assertEquals(setOf("mwm-standing-bicep-curl"), bias.prefer)
         assertEquals(setOf("db-concentration-curl"), bias.avoid)
     }
 
@@ -78,11 +78,11 @@ class CoachGenBiasTest {
         // The same replacement failed once, then proved itself — prefer wins.
         val bias = CoachGenBias.from(
             listOf(
-                decision("swap", "db-row", status = "reverted", outcome = "failed", payload = "mwm-seated-row"),
-                decision("swap", "db-row", outcome = "ok", payload = "mwm-seated-row")
+                decision("swap", "db-row", status = "reverted", outcome = "failed", payload = "mwm-standing-bicep-curl"),
+                decision("swap", "db-row", outcome = "ok", payload = "mwm-standing-bicep-curl")
             )
         )
-        assertEquals(setOf("mwm-seated-row"), bias.prefer)
+        assertEquals(setOf("mwm-standing-bicep-curl"), bias.prefer)
         assertTrue(bias.avoid.isEmpty())
     }
 
@@ -90,7 +90,7 @@ class CoachGenBiasTest {
     fun fromIsDeterministic() {
         val rows = listOf(
             decision("volume_up", "db-bench-press"),
-            decision("swap", "db-row", outcome = "ok", payload = "mwm-seated-row")
+            decision("swap", "db-row", outcome = "ok", payload = "mwm-standing-bicep-curl")
         )
         assertEquals(CoachGenBias.from(rows), CoachGenBias.from(rows))
     }

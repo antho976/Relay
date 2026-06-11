@@ -26,7 +26,7 @@ data class ShadowDecision(
     /** Exercise library id, or "week" for week-level calls. */
     val targetKey: String,
     val targetName: String,
-    /** Short imperative line for the Brief row ("Rotate DB Row to Seated Low Row"). */
+    /** Short imperative line for the Brief row ("Rotate DB Row → Wide Lat Pulldown"). */
     val summary: String,
     val reason: String,
     /** Day the target slot lives on — rep/sets overrides are per (day, exercise). */

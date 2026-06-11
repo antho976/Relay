@@ -19,15 +19,20 @@ enum class Equipment(val display: String) {
     DUMBBELLS("Dumbbells"),
     CABLE("Cable machine"),
     PULL_UP_BAR("Pull-up bar"),
-    BENCH("Bench"),
+    /** A FLAT bench. Movements that need an adjustable back rest require [INCLINE_BENCH]. */
+    BENCH("Flat bench"),
+    /** Adjustable/incline bench — NOT part of the MWM-989 preset (that bench is flat-only). */
+    INCLINE_BENCH("Incline bench"),
     BODYWEIGHT_ONLY("Bodyweight only"),
     MACHINE("Machine")
 }
 
 /**
  * One-tap equipment presets (label → Equipment code set) shared by onboarding + Settings. The
- * **MWM-989 home gym** = dumbbells + bench + the machine's cable (high/low pulley) + machine
- * stations (leg developer, press arm) — which unlocks nearly the whole library.
+ * **MWM-989 home gym** = dumbbells + a FLAT bench (the bench-press bench; its bar is benching-only
+ * and barbell movements aren't modeled) + the machine's cable (high/low pulley) + machine stations
+ * (leg developer, press arm). Deliberately NO [Equipment.INCLINE_BENCH] — incline movements must
+ * never reach this preset's plans.
  */
 val equipmentPresets: List<Pair<String, Set<String>>> = listOf(
     "MWM-989 home gym" to setOf(

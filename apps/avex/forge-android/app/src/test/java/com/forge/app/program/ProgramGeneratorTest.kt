@@ -25,6 +25,29 @@ class ProgramGeneratorTest {
     }
 
     @Test
+    fun mwmPresetNeverProducesInclineBenchMovements() {
+        // Regression: the MWM-989 bench is FLAT — incline movements (incline press, incline curl,
+        // chest-supported row) used to leak in because BENCH covered them. Never again: not in
+        // generated plans, not in swap candidates.
+        (3..6).forEach { d ->
+            (0 until 10).forEach { s ->
+                val needsIncline = ProgramGenerator.generate(
+                    GenerationParams(d), mwm, emptySet(), emptySet(), seed = s.toLong()
+                ).flatMap { it.exercises }.filter { ex ->
+                    Equipment.INCLINE_BENCH in ExerciseLibrary.byId(ex.libId)!!.equipment
+                }
+                assertTrue("$d-day seed $s contains incline movements: ${needsIncline.map { it.libId }}",
+                    needsIncline.isEmpty())
+            }
+        }
+        MuscleGroup.entries.forEach { m ->
+            val candidates = ExerciseLibrary.swapCandidates(m, mwm, emptySet())
+            assertTrue("swap picker offers incline movements for $m",
+                candidates.none { Equipment.INCLINE_BENCH in it.equipment })
+        }
+    }
+
+    @Test
     fun noSingleMuscleDominatesADay() {
         // A day must never stack 4+ exercises of the same muscle (3 is the pull day's back, by design).
         (1..7).forEach { d ->
@@ -81,13 +104,13 @@ class ProgramGeneratorTest {
     @Test
     fun coachAvoidedMovementsArePickedLessOften() {
         // A movement the coach tried that failed (CoachGenBias.avoid) is softly steered around.
-        fun benchLeads(avoid: Set<String>): Int = (0 until 80).count { s ->
+        fun benchAppears(avoid: Set<String>): Int = (0 until 80).count { s ->
             ProgramGenerator.generate(
                 GenerationParams(3, avoid = avoid), mwm, emptySet(), emptySet(), seed = s.toLong()
-            ).first { it.key == "push" }.exercises.any { it.libId == "incline-db-bench-press" }
+            ).first { it.key == "push" }.exercises.any { it.libId == "db-bench-press" }
         }
-        val avoided = benchLeads(setOf("incline-db-bench-press"))
-        val normal = benchLeads(emptySet())
+        val avoided = benchAppears(setOf("db-bench-press"))
+        val normal = benchAppears(emptySet())
         assertTrue("avoided movement should appear less ($avoided vs $normal)", avoided < normal)
     }
 

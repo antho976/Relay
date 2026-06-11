@@ -69,7 +69,7 @@ object ExerciseLibrary {
             why = "The classic chest builder. Hits the whole muscle and lets you load it heavy as you grow.",
             whenToUse = "Default pick. If you can press dumbbells without shoulder pain, use this."),
         ExerciseDef("incline-db-bench-press", "Incline DB Bench Press", MuscleGroup.CHEST,
-            listOf(Equipment.DUMBBELLS, Equipment.BENCH), ExerciseUnit.DUMBBELL,
+            listOf(Equipment.DUMBBELLS, Equipment.INCLINE_BENCH), ExerciseUnit.DUMBBELL,
             listOf(COMP, FW), Difficulty.BEGINNER, 3, "8-10", "Fills tee neckline",
             muscleTarget = "Upper chest (the part near your collarbone)",
             why = "Builds the top of your chest, which is what fills out a t-shirt at the neckline.",
@@ -108,17 +108,14 @@ object ExerciseLibrary {
             why = "Fixes left/right imbalance. Place a knee on the bench, other foot on floor, row the DB to your hip.",
             whenToUse = "You notice one side does more work than the other. Or as a finisher."),
         ExerciseDef("chest-supported-db-row", "Chest-Supported DB Row", MuscleGroup.BACK,
-            listOf(Equipment.DUMBBELLS, Equipment.BENCH), ExerciseUnit.DUMBBELL,
+            listOf(Equipment.DUMBBELLS, Equipment.INCLINE_BENCH), ExerciseUnit.DUMBBELL,
             listOf(COMP, FW), Difficulty.BEGINNER, 3, "10-12", "Lie chest-down on an incline bench",
             muscleTarget = "Mid-back, both sides, no lower-back strain",
             why = "Lying chest-down on an incline bench stops you swinging — all the work goes to your back, none to momentum or your lower back.",
             whenToUse = "You want rows without loading the lower back, or you keep heaving single-arm rows."),
-        ExerciseDef("mwm-seated-row", "Seated Low Row", MuscleGroup.BACK,
-            listOf(Equipment.CABLE), ExerciseUnit.PLATES,
-            listOf(COMP, MC), Difficulty.BEGINNER, 3, "10-12", "Low pulley, pull to your stomach",
-            muscleTarget = "Mid-back thickness + lats",
-            why = "MWM-989 low pulley. Sit tall, pull the handle to your stomach and squeeze the shoulder blades together — rowing with constant tension.",
-            whenToUse = "Your machine row. Pairs with the lat pulldown: pulldown for width, row for thickness."),
+        // (Seated Low Row and Face Pull were removed 2026-06-10: they claimed MWM-989 stations
+        //  Antho's machine can't actually perform — same philosophy as the barbell removal, only
+        //  model movements the real gear supports.)
         ExerciseDef("pull-up", "Pull-Up", MuscleGroup.BACK,
             listOf(Equipment.PULL_UP_BAR), ExerciseUnit.BODYWEIGHT,
             listOf(COMP, BW), Difficulty.ADVANCED, 3, "AMRAP", "Full hang to chin over the bar",
@@ -194,12 +191,6 @@ object ExerciseLibrary {
             muscleTarget = "Back of shoulders",
             why = "Bend over at the waist, raise dumbbells out to the sides like wings. Builds the rear shoulder and fixes posture.",
             whenToUse = "Default rear-delt and posture work."),
-        ExerciseDef("mwm-face-pull", "Face Pull", MuscleGroup.REAR_DELTS,
-            listOf(Equipment.CABLE), ExerciseUnit.PLATES,
-            listOf(ISO, MC), Difficulty.BEGINNER, 3, "12-15", "Pull to your face, elbows high",
-            muscleTarget = "Rear delts + rotator cuff + upper back",
-            why = "MWM-989 high pulley. Pull the handle toward your face with elbows high — rear delts plus the small stabilizers that keep shoulders healthy under heavy pressing.",
-            whenToUse = "The best long-term shoulder-health move in the library. Rotate with rear-delt flys."),
 
         // ── Biceps ──────────────────────────────────────────────────────────────────
         ExerciseDef("db-hammer-curl", "DB Hammer Curl", MuscleGroup.BICEPS,
@@ -215,7 +206,7 @@ object ExerciseLibrary {
             why = "The bread-and-butter bicep builder. Palms up, curl both DBs without swinging your elbows forward.",
             whenToUse = "Straightforward bicep work when you don't want to think about it."),
         ExerciseDef("db-incline-curl", "DB Incline Curl", MuscleGroup.BICEPS,
-            listOf(Equipment.DUMBBELLS, Equipment.BENCH), ExerciseUnit.DUMBBELL,
+            listOf(Equipment.DUMBBELLS, Equipment.INCLINE_BENCH), ExerciseUnit.DUMBBELL,
             listOf(ISO, FW), Difficulty.BEGINNER, 3, "10-12", "Stretched bicep = growth",
             muscleTarget = "Long head of bicep (the peak)",
             why = "The stretched position at the bottom is what builds the bicep \"peak\" you see when flexing.",
@@ -358,12 +349,8 @@ object ExerciseLibrary {
             muscleTarget = "Glutes + quads, moving",
             why = "The walking pattern recruits glutes more than stationary leg exercises.",
             whenToUse = "Default pick. Easy to learn, hits glutes well."),
-        ExerciseDef("db-hip-thrust", "DB Hip Thrust", MuscleGroup.GLUTES,
-            listOf(Equipment.DUMBBELLS, Equipment.BENCH), ExerciseUnit.DUMBBELL,
-            listOf(COMP, FW), Difficulty.BEGINNER, 3, "10-12", "Upper back on bench, DB on hips",
-            muscleTarget = "Glutes (max load, isolated)",
-            why = "Back against the bench, DB on hips, drive hips up. Lets you load glutes heavier than any other exercise.",
-            whenToUse = "Lower back issues — this is back-friendly. Or to grow glutes specifically."),
+        // (DB Hip Thrust removed 2026-06-10: Antho's flat bench is a bench-press bench — the rack
+        //  makes bracing your upper back against it for thrusts impossible.)
         ExerciseDef("db-glute-bridge", "DB Glute Bridge", MuscleGroup.GLUTES,
             listOf(Equipment.DUMBBELLS), ExerciseUnit.DUMBBELL,
             listOf(ISO, FW), Difficulty.BEGINNER, 3, "12-15", "On the floor, DB on hips",
@@ -551,7 +538,6 @@ object ExerciseLibrary {
         "chin-up" to MovementPattern.VERTICAL_PULL,
         "db-row" to MovementPattern.HORIZONTAL_PULL,
         "chest-supported-db-row" to MovementPattern.HORIZONTAL_PULL,
-        "mwm-seated-row" to MovementPattern.HORIZONTAL_PULL,
         // Legs
         "goblet-squat" to MovementPattern.SQUAT,
         "db-squat" to MovementPattern.SQUAT,
@@ -562,8 +548,8 @@ object ExerciseLibrary {
         "db-romanian-deadlift" to MovementPattern.HINGE,
         "db-stiff-leg-deadlift" to MovementPattern.HINGE,
         "db-single-leg-rdl" to MovementPattern.HINGE,
-        // Hip thrust / glute bridge are deliberately NOT classed HINGE: no spinal load, different
-        // length-tension — RDL + hip thrust in one day is good programming, not a duplicate.
+        // Glute bridges are deliberately NOT classed HINGE: no spinal load, different
+        // length-tension — RDL + bridge in one day is good programming, not a duplicate.
         // Core
         "hanging-knee-raise" to MovementPattern.CORE,
         "plank" to MovementPattern.CORE,
@@ -606,7 +592,6 @@ object ExerciseLibrary {
         "db-stiff-leg-deadlift" to setOf(ProblemArea.LOWER_BACK),
         "db-single-leg-rdl" to setOf(ProblemArea.LOWER_BACK),
         "db-row" to setOf(ProblemArea.LOWER_BACK),
-        "mwm-seated-row" to setOf(ProblemArea.LOWER_BACK),
         // Wrist-loading (bodyweight on hands)
         "push-up" to setOf(ProblemArea.WRISTS),
         "diamond-push-up" to setOf(ProblemArea.WRISTS),
