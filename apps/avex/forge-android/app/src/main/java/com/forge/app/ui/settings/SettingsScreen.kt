@@ -99,6 +99,7 @@ enum class ResetTarget(val label: String, val message: String) {
 @Composable
 fun SettingsScreen(
     onBack: () -> Unit,
+    onOpenCoachBrief: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -258,7 +259,7 @@ fun SettingsScreen(
             SettingsPage.Notifications -> NotificationsPage(state, viewModel, Modifier.padding(inner))
             SettingsPage.Equipment -> EquipmentPage(state, viewModel, Modifier.padding(inner))
             SettingsPage.Privacy -> PrivacyPage(state, viewModel, Modifier.padding(inner))
-            SettingsPage.Program -> ProgramPage(state, viewModel, Modifier.padding(inner))
+            SettingsPage.Program -> ProgramPage(state, viewModel, Modifier.padding(inner), onOpenCoachBrief)
             SettingsPage.ExercisePrefs -> ExercisePrefsPage(state, viewModel, Modifier.padding(inner))
             SettingsPage.Vacation -> VacationPage(viewModel, Modifier.padding(inner))
         }

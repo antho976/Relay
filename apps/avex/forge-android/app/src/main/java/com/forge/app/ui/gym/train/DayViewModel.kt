@@ -58,6 +58,10 @@ class DayViewModel @Inject constructor(
     internal var restTuning: com.forge.app.domain.adapt.RestTuning =
         com.forge.app.domain.adapt.RestTuning.NEUTRAL
 
+    /** Per-exercise step calibration (auto-coach Phase 2). Neutral until the init load lands. */
+    internal var stepCalibration: com.forge.app.domain.coach.StepCalibration =
+        com.forge.app.domain.coach.StepCalibration.NEUTRAL
+
     /** Today's readiness scale (engine System 6). Null = neutral / below the data gates. */
     internal var readiness: com.forge.app.domain.adapt.Recommendation.ReadinessScale? = null
 
@@ -115,6 +119,13 @@ class DayViewModel @Inject constructor(
                 com.forge.app.domain.adapt.RestAdvisor.samples(workoutRepo.recentRestEvents()) {
                     Program.exercise(it)
                 }
+            )
+        }
+        // Learn the user's suggestion-outcome calibration once per screen (auto-coach Phase 2) —
+        // same pattern as restTuning: gated/neutral below samples, no DB on the hot path.
+        viewModelScope.launch {
+            stepCalibration = com.forge.app.domain.coach.SuggestionCalibrator.calibrate(
+                workoutRepo.recentSuggestionOutcomes()
             )
         }
         // Today's readiness (engine System 6) — folded into weight suggestions on NORMAL

@@ -128,4 +128,16 @@ class ProgramCustomizationRepository @Inject constructor(
 
     /** Reset all customizations for a day. */
     suspend fun resetDay(dayKey: String) = dao.clearDay(dayKey)
+
+    // ─── Coach apply/undo support (auto-coach Phase 3) ────────────────────────
+
+    /** The raw override row for one slot, if any — the coach reads before-state from here. */
+    suspend fun overrideFor(dayKey: String, exerciseId: String): ProgramCustomization? =
+        dao.forDay(dayKey).firstOrNull { it.exerciseId == exerciseId }
+
+    /** Coach undo: drop a rep-range override (back to the plan's default). */
+    suspend fun clearRepRange(dayKey: String, exerciseId: String) {
+        val existing = overrideFor(dayKey, exerciseId) ?: return
+        dao.upsert(existing.copy(repRangeOverride = null))
+    }
 }

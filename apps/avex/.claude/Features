@@ -228,6 +228,8 @@ All 4 days fully specified with:
 > **Superseded by the program-unlock (un-hardlock) work:** the program is now data-driven + auto-generated from `ExerciseLibrary` (a single equipment-tagged pool of 52 movements with per-exercise coaching rationale). The old `Swaps` catalog was merged into the library, so the **swap picker and the generator now draw from the same pool**, filtered by available equipment + dislikes.
 >
 > **"Professional plans" engine (all 6 phases complete):** the generator is goal-aware (rep ranges), experience-aware (volume scale + difficulty cap), frequency-aware (weekly volume via `VolumeModel`), role/pattern-aware (heavy slots → bilateral compounds, no duplicate movement patterns), and safety-aware (problem-area avoidance). Tunable from **Settings → Program**: days/week, goal, experience, priority muscles, problem areas, cadence, deload week, + a **live per-muscle weekly-volume readout**; per-exercise ♥/✕/📌 (like/dislike/pin) on the Exercise-likes page; single-day re-roll from the day-card long-press menu. Onboarding (10 steps) collects all inputs and shows a **live sample-week preview** before finishing. Rest-timer durations + day-card "~min" estimates come from `SessionEstimate`. See `.claude/program-unlock-plan.md`.
+>
+> **Pro-level plan audit (2026-06-10), tuned around the MWM-989 preset:** library grew to 59 movements — added DB Fly (was zero chest isolation anywhere), Seated Low Row / Close-Grip Pulldown / Straight-Arm Pulldown / DB Pullover (MWM back pool was only 3 movements for 3 pull slots → identical pull days forever), Face Pull (rear delts had a single option), DB Squat (second bilateral squat). New `ExerciseDef.pickBias` weight keeps niche accessories (adductor cross, front raises, pullover) from headlining slots and boosts lateral raises (1.5, stated priority); push-up / diamond push-up / single-leg calf raise became `fallbackOnly` (equipped users never see them). Generator: STRENGTH slots hard-prefer compounds (isolation can't lead when a compound exists) and down-weight AMRAP/timed movements; hip thrust/glute bridge unclassed from HINGE (RDL + hip thrust same day is good programming); front raises classed VERTICAL_PUSH (no more OHP + front raise or double-front-raise days). Templates: 4-day split now mirrors the seed's identity — push-lean Upper A / pull-lean Upper B (chest AND back open STR on both) + quad-lean Lower A / ham-lean Lower B; 2-day full-body got a hinge-led B variant (glutes/rear delts/calves had ZERO weekly volume before); 3-day leg day gained a second hamstring slot (was 4 sets/wk vs quads 7); glute slots run HYP so hip thrust isn't down-weighted; 7-day arms day leads with the triceps press (a STRENGTH curl slot prescribed 4-6 heavy curls under get_stronger). 5 new regression tests incl. full-coverage + no-muscle-dominates-a-day guards on the MWM preset.
 
 ---
 
@@ -360,6 +362,156 @@ Untracked sessions (#110) are excluded from every signal at snapshot build.
 > (pre-session banner), 4 Insights (Stats rows), 5 Adaptive deload (coach feed, one-tap apply),
 > 6 Readiness (chip autoregulation) — all arbitrated, confidence-gated, explainable, and
 > advisory-only (every write goes through a user-confirmed path).
+
+---
+
+## Auto-Coach — "the app does all the thinking" (✅ all 5 phases shipped 2026-06-10)
+
+> Roadmap + the 13 hardening decisions live in `.claude/auto-coach-plan.md`. DB v16→19.
+> **Status:** built + JVM-tested (269 app unit tests, ~50 of them coach); **pending on-device
+> review + `connectedAndroidTest` for migrations 16→17→18→19.** Everything data-driven starts
+> empty by design — shadow validation, calibration samples, and trust streaks all need real
+> training weeks, so for the first month the honest output is mostly "the plan is working, no
+> changes" (which is correctness, not breakage).
+>
+> **The loop the five phases form:** generate a pro-grade plan → per-set weight chip (calibrated
+> to how you respond, capped at your dumbbells) → a **Weekly Coach Pass** each new week →
+> proposes changes with plain-English reasons → apply via safe, **undoable** existing user write
+> paths → a **watcher** judges whether each change landed → reverts what didn't → and, per change
+> *type*, **earns** the right to auto-apply. Pure systems live in `domain/coach/`
+> (`AutoCoachPlanner` · `WeeklyReview` · `SuggestionCalibrator` · `OutcomeWatcher` ·
+> `TrustLedger`), impure orchestration in `data/repo/CoachRepository`. Invariants held everywhere:
+> never rebuilds the program (targeted overlay/swap writes only), never touches a slot you've
+> customized, and fails loud (a crashed pass is an ERROR status, never a silent HOLD).
+
+**Phase 0 — DB load ceiling, shipped (2026-06-10; JVM-tested, device check pending):**
+- New `MAX_DB_WEIGHT_LB` pref (`SettingsRepository.maxDbWeightLb`, null = no ceiling) + a
+  "Heaviest dumbbell" chip row (No limit / 15–100 lb) on Settings → Equipment.
+- **Generation half:** `GenerationParams.dbMaxLb`; when the ceiling is light
+  (< `ProgramGenerator.LIGHT_DB_LB` = 50) and the pool has a plate-stack compound, STRENGTH-slot
+  DUMBBELL picks are down-weighted ×0.3 — heavy progression lives on the MWM stack. Threaded
+  through `SettingsViewModel.buildParams` + `ProgramRepository.currentParams` (so re-rolls and
+  auto-rotation honor it).
+- **Progression half:** `ProgressionAdvisor.suggestNextLoad(dbMaxLb)` caps DUMBBELL progress
+  targets at the ceiling; at the ceiling it anchors the weight and suggests rep progression
+  ("at your heaviest dumbbell — add reps past the range instead"). The plateau ladder's
+  micro-load rung gets the same cap via `PrefsSnap.maxDbLb`. Ceiling is trusted only while
+  history doesn't contradict it (a heavier logged set = stale setting → no cap). Back-offs and
+  PLATES movements are untouched; the zero-delta "add reps" chip is skipped by the UP NEXT pill
+  (existing |delta| < 0.5 guard).
+- Tests: 5 ProgressionAdvisor ceiling cases + a statistical generator stack-bias test.
+
+**Phase 1 — Week Brief + shadow-mode planner, shipped (2026-06-10; JVM-tested, device check +
+migration test on emulator pending):**
+- **Pure planner** `domain/coach/AutoCoachPlanner` — the Weekly Coach Pass, shadow-only:
+  deload supersedes all (single decision); else plateau-ladder items mapped to shadow decisions
+  (swap > rep-shift > weight-nudge), capped at 1/week for beginners (2 otherwise); explained
+  HOLDs for cold start (<4 sessions), ≥14-day training gaps, and everything-progressing weeks.
+  Volume ±1 deliberately deferred to Phase 3 (no outcome watcher yet).
+- **Pure assembler** `domain/coach/WeeklyReview` — last week vs prior (sessions/target, volume
+  ±%, computed PRs via PrDetector's beats-all-history rule, tracked/stalled lifts, fatigue band
+  mirroring the Stats pulse) + a focus line keyed to the week's shape.
+- **DB v16→17** (`MIGRATION_16_17`, schema 17.json exported, MigrationTest case added —
+  run on emulator pending): `coach_pass` (PK = ISO week id → idempotent triggers; status
+  shadow/hold/error — ERROR ≠ HOLD everywhere) + `coach_decision` (the pass's shadow items).
+- **`CoachRepository`** — `ensureWeeklyPass()` (week-id no-op if exists; vacation → recorded
+  HOLD via VacationCalendar; any exception → recorded ERROR pass, fail-loud) + `brief()`.
+- **UI**: `Routes.COACH_BRIEF` → `CoachBriefScreen` (editorial Week Brief: WEEK label +
+  "shadow mode" disclaimer · "Last week." stat rows · WHAT I'D CHANGE (decisions / explained
+  hold / error in error color) · FOCUS). Deviation from the plan doc: RECAP route was NOT
+  repurposed — RecapScreen has real monthly/yearly content; the Brief got its own modal route.
+- **Entry points (reworked 2026-06-10):** the brief lives permanently in **Settings → Program →
+  Coach** ("View this week's brief"). On Overview, a dismissible **"NEW BRIEF" banner** (top of
+  the scroll, above the resume reminder) appears only when this week's pass hasn't been seen yet
+  — tap opens the brief, × dismisses; both call `CoachRepository.markSeen` (pref
+  `lastSeenCoachWeekId`). Opening the brief from anywhere marks it seen. Replaced the original
+  always-present inline "week brief →" note row.
+- Tests: 7 planner + 6 review JVM tests (engine-style: cold start, happy path, conflict,
+  determinism).
+
+**Phase 2 — Outcome calibration, shipped (2026-06-10; JVM-tested, device + migration test on
+emulator pending):**
+- **Capture** (the time-sensitive half): new `suggestion_outcome` table (DB v17→18,
+  `MIGRATION_17_18`, schema 18.json, MigrationTest case) — one row per exercise per session,
+  written on the FIRST set logged while a suggestion chip was showing: suggested lb vs taken lb,
+  reps achieved, the rep range at the time. Write-only on the log path (rest_event pattern);
+  `ExerciseUiState.suggestedTargetLb` carries the chip's raw target to the capture point.
+- **Pure calibrator** `domain/coach/SuggestionCalibrator` — RestAdvisor discipline: per-exercise
+  gate 8 samples, unit-bucket ("db"/"plates") fallback gate 16, exactly neutral below both;
+  output is a bounded enum. FASTER = ≥half the samples overrode upward AND those heavier picks
+  hit the range floor ≥60%; CONSOLIDATE = taken-as-is suggestions failed the floor ≥50%.
+- **Chip behaviors** (`suggestNextLoad` gains `fastStep`/`consolidate` primitives — domain/adapt
+  stays below domain/coach): FASTER doubles the DB step (reason: "calibrated to you (bigger
+  steps)"), CONSOLIDATE holds the weight ("recent jumps haven't stuck — consolidate this weight
+  first"); back-offs and the DB ceiling are unaffected (ceiling still caps a fast step).
+  `DayViewModel` loads calibration once per screen, same as restTuning. RPE-gate calibration
+  deliberately deferred (needs richer outcome semantics).
+- Tests: 9 calibrator + 4 advisor JVM tests.
+
+**Phase 3 — Propose mode + apply path + outcome watcher, shipped (2026-06-10; JVM-tested,
+device + emulator migration tests pending):**
+- **DB v18→19**: `coach_decision` gains the lifecycle — `day_key` + `payload` (apply args),
+  `applied_at` + `undo_data` (per-change delta undo, hardening 6), `outcome`
+  (pending/ok/failed — the watcher's verdict, hardening 5). Statuses now
+  proposed → applied | skipped; applied → reverted.
+- **Planner upgrades** (`AutoCoachPlanner.evaluate(s, CoachPassInputs)`): coach-locked slots
+  (any user customization → untouchable, hardening 9); swap proposals carry a concrete
+  replacement ("Rotate DB Row → Seated Low Row", payload = lib id from the slot's pre-filtered
+  candidates); **volume ±1** — +1 set to ONE muscle only when all its tracked lifts progress,
+  fatigue is Fresh, last week hit the session target, the muscle isn't inside an outcome window,
+  and net coach drift stays within ±2 sets (hardening 11); −1 set from an exercise skipped ≥3 of
+  its last 4 bouts. Priorities: deload ⊃ all → reverts → swap → rep-shift → volume; beginner cap
+  1/week. Weight nudges dropped from the Brief (the chip + coach feed deliver them live).
+- **`OutcomeWatcher`** (pure): judges applied changes — swap/rep-shift failed if the exercise
+  got skipped ≥2× since apply; volume_up failed if fatigue crossed into deload territory;
+  conservative types pass when the 14-day window closes. Failed → revert proposal in the next
+  Brief; user undo records failed directly. Outcomes feed Phase 4's per-type trust math.
+- **`CoachRepository` apply path** — every write is an existing user path (hardening 8):
+  swap → `CustomizationRepository.setSwap`; rep-shift/volume → `ProgramCustomizationRepository`
+  rep/sets overrides; deload → existing `applyDeloadWeek` (the one non-undoable apply); revert →
+  per-change undo of the original. `applyDecision`/`skipDecision`/`undoDecision`/`applyAll`;
+  before-state recorded at apply; coach-locked scan = all customizations minus coach-touched
+  targets (a coach swap must not self-lock).
+- **Brief UI**: proposed rows get Apply→/skip, applied rows show "applied ✓ · undo" (undo hidden
+  when not mechanically undoable), reverted/skipped rows muted; "Apply all (N) →" when >1 open;
+  disclaimer flips to "Proposals — nothing changes until you apply it."
+- Tests: planner 13 (locks, volume gates, drift cap, outcome-window lock, revert priority) +
+  watcher 6. Suite green.
+
+**Phase 4 — Autopilot (earned auto-apply), shipped (2026-06-10; JVM-tested, device pending).
+🎯 ALL 5 auto-coach phases are now built.**
+- **`TrustLedger`** (pure): per-type accepted streak walking newest→oldest — applied extends,
+  skip/revert breaks, a failed watcher outcome resets to zero (demotion). Tiered by blast radius
+  (hardening 2+3): rep-shifts/removed-sets earn at 3 consecutive accepts, swaps/added-sets at 4;
+  **deload and revert never auto-apply**. Undecided proposals count neither way.
+- **`COACH_MODE` pref** ("suggest" default | "auto"): in auto, `ensureWeeklyPass` auto-applies
+  fresh decisions whose type earned trust (judged on history EXCLUDING the new week); everything
+  else still proposes. No-auto-on-error holds by construction (errored passes have no decisions).
+- **Settings → Program → Coach page**: Suggest / "Earn auto-apply" chips (honest copy: a type
+  must be accepted 3–4 weeks running, one bad outcome demotes, deloads always ask), per-type
+  earned-trust readout ("2/4 accepted" → "auto ✓"), and **Coach history** — every pass incl.
+  holds, with per-decision status and undo for applied changes.
+- The Overview "NEW BRIEF" banner (see Phase 1 entry points) summarizes the pass outcome
+  ("N proposal(s)" / "N change(s) applied" / "holding steady" / "couldn't run") via
+  `CoachRepository.summaryFor`.
+- Tests: 9 TrustLedger.
+
+**Refresh ties into coach data (2026-06-10, post-Phase-4):** regeneration used to silently
+discard the coach's applied changes (the overlay reconcile clears them — correct for stale
+bindings, but it forgot months of learning on every re-roll). Now every generate/re-roll path
+(`ProgramRepository.generate` + `rerollDay`, so Settings generate, deload, manual + auto
+rotation all inherit it) enriches its params from the coach record via pure
+`domain/coach/CoachGenBias`:
+- **volumeBias** — net still-APPLIED volume_up/volume_down per muscle (reverted/skipped drop
+  out), clamped ±2 (the drift cap) → `GenerationParams.volumeBias` →
+  `VolumeModel.allocate(bias)`: each +1 lands on the muscle's smallest slot, each −1 off its
+  largest, BEFORE the weekly cap (junk-volume guard still wins).
+- **prefer** — swap replacements the watcher judged "ok" → unioned into `liked` (boosted).
+- **avoid** — failed swap replacements → `GenerationParams.avoid`, soft ×0.2 selection penalty
+  (a later "ok" on the same movement outranks an earlier failure).
+Recomputed from the same rows on every call → idempotent, never compounds; empty history =
+exactly the un-coached generator. Tests: 7 CoachGenBias + 3 VolumeModel bias + 2 generator
+(avoid steering, bias flow-through). **App total: 281 unit tests.**
 
 ---
 

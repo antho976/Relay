@@ -37,7 +37,15 @@ data class ExerciseDef(
      * muscle (e.g. a bodyweight row on a bodyweight-only setup). Kept out of equipped users' picks so
      * a full-gym lifter never gets handed a bodyweight squat, but guarantees no split is ever starved.
      */
-    val fallbackOnly: Boolean = false
+    val fallbackOnly: Boolean = false,
+    /**
+     * Relative selection weight in generation (1.0 = normal). Below 1 marks niche accessories
+     * (adductor work, front raises, bodyweight stand-ins an equipped user wouldn't headline a slot
+     * with) — still full swap-picker citizens, just picked less often than the muscle's
+     * bread-and-butter movements. Above 1 marks a signature staple (lateral raises — the user's
+     * stated priority) that should anchor its slot most weeks.
+     */
+    val pickBias: Double = 1.0
 )
 
 object ExerciseLibrary {
@@ -72,12 +80,19 @@ object ExerciseLibrary {
             muscleTarget = "Whole chest, fixed path",
             why = "The MWM-989 seated chest press. The machine guides the path so you can push hard without worrying about balancing the weight.",
             whenToUse = "Your main machine chest press."),
+        ExerciseDef("db-fly", "DB Fly", MuscleGroup.CHEST,
+            listOf(Equipment.DUMBBELLS, Equipment.BENCH), ExerciseUnit.DUMBBELL,
+            listOf(ISO, FW), Difficulty.BEGINNER, 3, "12-15", "Slight elbow bend, stretch then squeeze",
+            muscleTarget = "Chest only (stretch + squeeze, no triceps)",
+            why = "The only move that isolates the chest with a loaded stretch. Pairs perfectly after any press because tired triceps can't steal the work.",
+            whenToUse = "Second chest movement after a press, or when your triceps are fried."),
         ExerciseDef("push-up", "Push-Up", MuscleGroup.CHEST,
             listOf(Equipment.BODYWEIGHT_ONLY), ExerciseUnit.BODYWEIGHT,
             listOf(COMP, BW), Difficulty.BEGINNER, 3, "AMRAP", "Feet elevated to make it harder",
             muscleTarget = "Whole chest + shoulders + triceps",
             why = "No equipment needed. Feet on a bench makes it harder than regular push-ups.",
-            whenToUse = "Equipment is in use, or as a warm-up before pressing."),
+            whenToUse = "Equipment is in use, or as a warm-up before pressing.",
+            fallbackOnly = true),
 
         // ── Back ─────────────────────────────────────────────────────────────────
         ExerciseDef("mwm-wide-lat-pulldown", "Wide Lat Pulldown", MuscleGroup.BACK,
@@ -98,6 +113,12 @@ object ExerciseLibrary {
             muscleTarget = "Mid-back, both sides, no lower-back strain",
             why = "Lying chest-down on an incline bench stops you swinging — all the work goes to your back, none to momentum or your lower back.",
             whenToUse = "You want rows without loading the lower back, or you keep heaving single-arm rows."),
+        ExerciseDef("mwm-seated-row", "Seated Low Row", MuscleGroup.BACK,
+            listOf(Equipment.CABLE), ExerciseUnit.PLATES,
+            listOf(COMP, MC), Difficulty.BEGINNER, 3, "10-12", "Low pulley, pull to your stomach",
+            muscleTarget = "Mid-back thickness + lats",
+            why = "MWM-989 low pulley. Sit tall, pull the handle to your stomach and squeeze the shoulder blades together — rowing with constant tension.",
+            whenToUse = "Your machine row. Pairs with the lat pulldown: pulldown for width, row for thickness."),
         ExerciseDef("pull-up", "Pull-Up", MuscleGroup.BACK,
             listOf(Equipment.PULL_UP_BAR), ExerciseUnit.BODYWEIGHT,
             listOf(COMP, BW), Difficulty.ADVANCED, 3, "AMRAP", "Full hang to chin over the bar",
@@ -110,6 +131,26 @@ object ExerciseLibrary {
             muscleTarget = "Whole back + biceps (more bicep)",
             why = "Underhand grip lets the biceps assist, so most people get more reps than on pull-ups. Builds back and arms together.",
             whenToUse = "You can't quite get full pull-ups yet, or you want more bicep involvement."),
+        ExerciseDef("mwm-close-grip-pulldown", "Close-Grip Lat Pulldown", MuscleGroup.BACK,
+            listOf(Equipment.MACHINE), ExerciseUnit.PLATES,
+            listOf(COMP, MC), Difficulty.BEGINNER, 3, "10-12", "Elbows tight, pull to upper chest",
+            muscleTarget = "Lower lats + biceps assist",
+            why = "Narrow grip on the MWM-989 lat bar shifts the work to the lower lats and usually lets you pull more weight than the wide grip.",
+            whenToUse = "Second pulldown variation — alternate with the wide grip across the week."),
+        ExerciseDef("mwm-straight-arm-pulldown", "Straight-Arm Pulldown", MuscleGroup.BACK,
+            listOf(Equipment.CABLE), ExerciseUnit.PLATES,
+            listOf(ISO, MC), Difficulty.BEGINNER, 3, "12-15", "Arms straight, sweep the bar to your thighs",
+            muscleTarget = "Lats only (no biceps)",
+            why = "MWM-989 high pulley. Arms locked straight, sweep the bar down to your thighs — pure lat work with zero biceps, so the back does everything.",
+            whenToUse = "Lat finisher, or when your biceps give out before your back does.",
+            pickBias = 0.7),
+        ExerciseDef("db-pullover", "DB Pullover", MuscleGroup.BACK,
+            listOf(Equipment.DUMBBELLS, Equipment.BENCH), ExerciseUnit.DUMBBELL,
+            listOf(ISO, FW), Difficulty.INTERMEDIATE, 3, "10-12", "Lower the DB behind your head, big stretch",
+            muscleTarget = "Lats + chest (deep stretch)",
+            why = "Lying across the bench, lower one DB behind your head and pull it back over. Old-school size builder with a huge lat stretch.",
+            whenToUse = "Variety pick when rows and pulldowns feel stale.",
+            pickBias = 0.6),
 
         // ── Shoulders ──────────────────────────────────────────────────────────────
         ExerciseDef("db-lateral-raise", "DB Lateral Raise", MuscleGroup.SHOULDERS,
@@ -117,7 +158,8 @@ object ExerciseLibrary {
             listOf(ISO, FW), Difficulty.BEGINNER, 4, "12-15", "Priority — slow eccentric",
             muscleTarget = "Side delts (the cap on top of your shoulder that makes shoulders look WIDE)",
             why = "The single best exercise for shoulder width. Big visual lever for looking built in a tee.",
-            whenToUse = "Default pick. The shoulder exercise you should never skip."),
+            whenToUse = "Default pick. The shoulder exercise you should never skip.",
+            pickBias = 1.5),
         ExerciseDef("mwm-upright-row", "Upright Row", MuscleGroup.SHOULDERS,
             listOf(Equipment.CABLE), ExerciseUnit.PLATES,
             listOf(COMP, MC), Difficulty.INTERMEDIATE, 3, "10-12", "Pull the bar up to your collarbone",
@@ -135,13 +177,15 @@ object ExerciseLibrary {
             listOf(ISO, FW), Difficulty.BEGINNER, 3, "12-15", "Front delt, controlled",
             muscleTarget = "Front delts",
             why = "Targets the front of the shoulder directly — raise the DBs straight out in front to shoulder height, controlled.",
-            whenToUse = "Front delts lag, or for variety alongside laterals."),
+            whenToUse = "Front delts lag, or for variety alongside laterals.",
+            pickBias = 0.35),
         ExerciseDef("mwm-front-delt-raise", "Front Delt Raise", MuscleGroup.SHOULDERS,
             listOf(Equipment.CABLE), ExerciseUnit.PLATES,
             listOf(ISO, MC), Difficulty.BEGINNER, 3, "12-15", "Raise the handle to shoulder height",
             muscleTarget = "Front delts",
             why = "MWM-989 low pulley. Raise the handle straight out in front to shoulder height — targets the front of the shoulder with constant tension.",
-            whenToUse = "Front delts lag, or for variety alongside laterals."),
+            whenToUse = "Front delts lag, or for variety alongside laterals.",
+            pickBias = 0.35),
 
         // ── Rear delts ─────────────────────────────────────────────────────────────
         ExerciseDef("db-rear-delt-fly", "Rear Delt DB Fly", MuscleGroup.REAR_DELTS,
@@ -150,6 +194,12 @@ object ExerciseLibrary {
             muscleTarget = "Back of shoulders",
             why = "Bend over at the waist, raise dumbbells out to the sides like wings. Builds the rear shoulder and fixes posture.",
             whenToUse = "Default rear-delt and posture work."),
+        ExerciseDef("mwm-face-pull", "Face Pull", MuscleGroup.REAR_DELTS,
+            listOf(Equipment.CABLE), ExerciseUnit.PLATES,
+            listOf(ISO, MC), Difficulty.BEGINNER, 3, "12-15", "Pull to your face, elbows high",
+            muscleTarget = "Rear delts + rotator cuff + upper back",
+            why = "MWM-989 high pulley. Pull the handle toward your face with elbows high — rear delts plus the small stabilizers that keep shoulders healthy under heavy pressing.",
+            whenToUse = "The best long-term shoulder-health move in the library. Rotate with rear-delt flys."),
 
         // ── Biceps ──────────────────────────────────────────────────────────────────
         ExerciseDef("db-hammer-curl", "DB Hammer Curl", MuscleGroup.BICEPS,
@@ -181,7 +231,8 @@ object ExerciseLibrary {
             listOf(ISO, FW), Difficulty.BEGINNER, 3, "12-15", "Elbow braced on inner thigh",
             muscleTarget = "Bicep peak, one arm at a time",
             why = "Sit on the bench, elbow braced on inner thigh, curl one arm. Classic bodybuilder finisher.",
-            whenToUse = "End-of-workout finisher, or to fix arm size imbalance."),
+            whenToUse = "End-of-workout finisher, or to fix arm size imbalance.",
+            pickBias = 0.7),
         ExerciseDef("mwm-standing-bicep-curl", "Standing Bicep Curl", MuscleGroup.BICEPS,
             listOf(Equipment.CABLE), ExerciseUnit.PLATES,
             listOf(ISO, MC), Difficulty.BEGINNER, 3, "10-12", "Constant tension",
@@ -219,13 +270,15 @@ object ExerciseLibrary {
             listOf(COMP, BW), Difficulty.BEGINNER, 3, "AMRAP", "Hands on the bench behind you",
             muscleTarget = "Triceps (bodyweight)",
             why = "Hands on the bench behind you, slide your hips down and press back up. Loads the triceps with just your bodyweight.",
-            whenToUse = "No DBs free, or as a tricep finisher."),
+            whenToUse = "No DBs free, or as a tricep finisher.",
+            pickBias = 0.6),
         ExerciseDef("diamond-push-up", "Diamond Push-Up", MuscleGroup.TRICEPS,
             listOf(Equipment.BODYWEIGHT_ONLY), ExerciseUnit.BODYWEIGHT,
             listOf(COMP, BW), Difficulty.INTERMEDIATE, 3, "AMRAP", "Hands in a diamond shape",
             muscleTarget = "Triceps + inner chest",
             why = "Push-up with hands close together in a diamond shape. No equipment needed.",
-            whenToUse = "Tricep finisher, or no equipment available."),
+            whenToUse = "Tricep finisher, or no equipment available.",
+            fallbackOnly = true),
 
         // ── Quads ─────────────────────────────────────────────────────────────────
         ExerciseDef("goblet-squat", "Goblet Squat", MuscleGroup.QUADS,
@@ -234,6 +287,12 @@ object ExerciseLibrary {
             muscleTarget = "Quads (front of thigh) + glutes",
             why = "Easiest squat variation to learn. Holding the weight in front forces a good upright posture.",
             whenToUse = "Default pick until you have heavier DBs."),
+        ExerciseDef("db-squat", "DB Squat", MuscleGroup.QUADS,
+            listOf(Equipment.DUMBBELLS), ExerciseUnit.DUMBBELL,
+            listOf(COMP, FW), Difficulty.BEGINNER, 4, "8-12", "DBs at your sides, sit deep",
+            muscleTarget = "Quads + glutes, heavier than goblet",
+            why = "A dumbbell in each hand doubles the load a goblet squat allows — the natural progression once one DB stops being heavy enough.",
+            whenToUse = "When goblet squats outgrow your heaviest single dumbbell."),
         ExerciseDef("db-bulgarian-split-squat", "DB Bulgarian Split Squat", MuscleGroup.QUADS,
             listOf(Equipment.DUMBBELLS, Equipment.BENCH), ExerciseUnit.DUMBBELL,
             listOf(COMP, FW), Difficulty.ADVANCED, 4, "8-10/leg", "Brutal but it works",
@@ -263,7 +322,8 @@ object ExerciseLibrary {
             listOf(ISO, MC), Difficulty.BEGINNER, 3, "12-15", "Squeeze the legs together",
             muscleTarget = "Inner thigh (adductors)",
             why = "MWM-989 hip station. Squeeze the legs together against resistance — trains the inner-thigh adductors most leg work misses.",
-            whenToUse = "Round out leg day with inner-thigh work."),
+            whenToUse = "Round out leg day with inner-thigh work.",
+            pickBias = 0.35),
 
         // ── Hamstrings ──────────────────────────────────────────────────────────────
         ExerciseDef("db-romanian-deadlift", "DB Romanian Deadlift", MuscleGroup.HAMSTRINGS,
@@ -309,7 +369,8 @@ object ExerciseLibrary {
             listOf(ISO, FW), Difficulty.BEGINNER, 3, "12-15", "On the floor, DB on hips",
             muscleTarget = "Glutes + hamstrings",
             why = "Lie on floor, DB on hips, drive hips up. Easy on the back, hits glutes and hamstrings together.",
-            whenToUse = "Low back is sore. Or as a finisher."),
+            whenToUse = "Low back is sore. Or as a finisher.",
+            pickBias = 0.7),
         ExerciseDef("mwm-leg-kickback", "Leg Kickback", MuscleGroup.GLUTES,
             listOf(Equipment.MACHINE), ExerciseUnit.PLATES,
             listOf(ISO, MC), Difficulty.BEGINNER, 3, "12-15", "Kick one leg straight back",
@@ -321,7 +382,8 @@ object ExerciseLibrary {
             listOf(ISO, MC), Difficulty.BEGINNER, 3, "12-15", "Push the leg out to the side",
             muscleTarget = "Glutes + hip abductors (side of the hip)",
             why = "MWM-989 hip station. Push the leg out to the side against resistance — hits the glute medius on the side of the hip.",
-            whenToUse = "Hip/glute shaping alongside kickbacks."),
+            whenToUse = "Hip/glute shaping alongside kickbacks.",
+            pickBias = 0.5),
 
         // ── Calves ────────────────────────────────────────────────────────────────
         ExerciseDef("standing-calf-raise", "Standing Calf Raise", MuscleGroup.CALVES,
@@ -341,7 +403,8 @@ object ExerciseLibrary {
             listOf(ISO, BW), Difficulty.BEGINNER, 3, "15-20", "Bodyweight, one leg at a time",
             muscleTarget = "One calf at a time",
             why = "No equipment needed. Bodyweight is plenty for calves.",
-            whenToUse = "No equipment, or to fix imbalance between calves."),
+            whenToUse = "No equipment, or to fix imbalance between calves.",
+            fallbackOnly = true),
 
         // ── Core ──────────────────────────────────────────────────────────────────
         ExerciseDef("hanging-knee-raise", "Hanging Knee Raise", MuscleGroup.CORE,
@@ -355,7 +418,8 @@ object ExerciseLibrary {
             listOf(ISO, BW), Difficulty.BEGINNER, 3, "30-60s", "Brace hard, flat back",
             muscleTarget = "Whole core, isometric",
             why = "Builds the bracing strength that protects your back during squats and deadlifts.",
-            whenToUse = "No pull-up bar, or as a warm-up to other core work."),
+            whenToUse = "No pull-up bar, or as a warm-up to other core work.",
+            pickBias = 0.7),
         ExerciseDef("mwm-high-pulley-crunch", "High Pulley Ab Crunch", MuscleGroup.CORE,
             listOf(Equipment.CABLE), ExerciseUnit.PLATES,
             listOf(ISO, MC), Difficulty.BEGINNER, 3, "10-15", "Kneel and crunch down",
@@ -373,7 +437,8 @@ object ExerciseLibrary {
             listOf(ISO, BW), Difficulty.BEGINNER, 3, "12-15", "Lower slowly, don't arch",
             muscleTarget = "Lower abs",
             why = "Lie on the floor, raise straight legs to vertical, lower slowly without touching the ground.",
-            whenToUse = "No pull-up bar available."),
+            whenToUse = "No pull-up bar available.",
+            pickBias = 0.7),
 
         // ── Bodyweight fallbacks ─────────────────────────────────────────────────
         // Every muscle that otherwise needs equipment gets a bodyweight option here, so a
@@ -463,7 +528,7 @@ object ExerciseLibrary {
     /**
      * Movement pattern per exercise (program-unlock Phase 4). Only the compound / core movements are
      * listed; everything else is single-joint accessory work → [MovementPattern.ISOLATION] by default.
-     * Kept as one compact map rather than a field on all 52 entries — single source, easy to tweak.
+     * Kept as one compact map rather than a field on every entry — single source, easy to tweak.
      */
     private val patterns: Map<String, MovementPattern> = mapOf(
         // Pressing
@@ -475,14 +540,21 @@ object ExerciseLibrary {
         "diamond-push-up" to MovementPattern.HORIZONTAL_PUSH,
         "db-overhead-press" to MovementPattern.VERTICAL_PUSH,
         "bench-dip" to MovementPattern.VERTICAL_PUSH,
+        // Front raises are anterior-delt flexion — same prime mover as a vertical press. Classing
+        // them VERTICAL_PUSH stops a day stacking OHP + front raise, or two front-raise variants.
+        "db-front-raise" to MovementPattern.VERTICAL_PUSH,
+        "mwm-front-delt-raise" to MovementPattern.VERTICAL_PUSH,
         // Pulling
         "mwm-wide-lat-pulldown" to MovementPattern.VERTICAL_PULL,
+        "mwm-close-grip-pulldown" to MovementPattern.VERTICAL_PULL,
         "pull-up" to MovementPattern.VERTICAL_PULL,
         "chin-up" to MovementPattern.VERTICAL_PULL,
         "db-row" to MovementPattern.HORIZONTAL_PULL,
         "chest-supported-db-row" to MovementPattern.HORIZONTAL_PULL,
+        "mwm-seated-row" to MovementPattern.HORIZONTAL_PULL,
         // Legs
         "goblet-squat" to MovementPattern.SQUAT,
+        "db-squat" to MovementPattern.SQUAT,
         "db-bulgarian-split-squat" to MovementPattern.LUNGE,
         "db-reverse-lunge" to MovementPattern.LUNGE,
         "db-step-up" to MovementPattern.LUNGE,
@@ -490,8 +562,8 @@ object ExerciseLibrary {
         "db-romanian-deadlift" to MovementPattern.HINGE,
         "db-stiff-leg-deadlift" to MovementPattern.HINGE,
         "db-single-leg-rdl" to MovementPattern.HINGE,
-        "db-hip-thrust" to MovementPattern.HINGE,
-        "db-glute-bridge" to MovementPattern.HINGE,
+        // Hip thrust / glute bridge are deliberately NOT classed HINGE: no spinal load, different
+        // length-tension — RDL + hip thrust in one day is good programming, not a duplicate.
         // Core
         "hanging-knee-raise" to MovementPattern.CORE,
         "plank" to MovementPattern.CORE,
@@ -502,8 +574,7 @@ object ExerciseLibrary {
         "bw-pike-push-up" to MovementPattern.VERTICAL_PUSH,
         "bw-squat" to MovementPattern.SQUAT,
         "bw-reverse-lunge" to MovementPattern.LUNGE,
-        "bw-good-morning" to MovementPattern.HINGE,
-        "bw-single-leg-glute-bridge" to MovementPattern.HINGE
+        "bw-good-morning" to MovementPattern.HINGE
     )
 
     fun patternOf(def: ExerciseDef): MovementPattern =
@@ -516,13 +587,16 @@ object ExerciseLibrary {
     private val contraindications: Map<String, Set<ProblemArea>> = mapOf(
         // Knee-loading
         "goblet-squat" to setOf(ProblemArea.KNEES),
+        "db-squat" to setOf(ProblemArea.KNEES),
         "db-bulgarian-split-squat" to setOf(ProblemArea.KNEES),
         "db-reverse-lunge" to setOf(ProblemArea.KNEES),
         "db-step-up" to setOf(ProblemArea.KNEES),
         "db-walking-lunge" to setOf(ProblemArea.KNEES),
         "leg-extension" to setOf(ProblemArea.KNEES),
-        // Shoulder-stressing (overhead / dips / front delt / upright row)
+        // Shoulder-stressing (overhead / dips / front delt / upright row / loaded stretch)
         "db-overhead-press" to setOf(ProblemArea.SHOULDERS),
+        "db-fly" to setOf(ProblemArea.SHOULDERS),
+        "db-pullover" to setOf(ProblemArea.SHOULDERS),
         "db-front-raise" to setOf(ProblemArea.SHOULDERS),
         "mwm-front-delt-raise" to setOf(ProblemArea.SHOULDERS),
         "mwm-upright-row" to setOf(ProblemArea.SHOULDERS),
@@ -532,6 +606,7 @@ object ExerciseLibrary {
         "db-stiff-leg-deadlift" to setOf(ProblemArea.LOWER_BACK),
         "db-single-leg-rdl" to setOf(ProblemArea.LOWER_BACK),
         "db-row" to setOf(ProblemArea.LOWER_BACK),
+        "mwm-seated-row" to setOf(ProblemArea.LOWER_BACK),
         // Wrist-loading (bodyweight on hands)
         "push-up" to setOf(ProblemArea.WRISTS),
         "diamond-push-up" to setOf(ProblemArea.WRISTS),

@@ -35,12 +35,16 @@ class ProgressionAdvisorTest {
         reps: String = "8-10",
         unit: ExerciseUnit = ExerciseUnit.DUMBBELL,
         intensity: IntensityIntent = IntensityIntent.NORMAL,
-        readiness: Recommendation.ReadinessScale? = null
+        readiness: Recommendation.ReadinessScale? = null,
+        dbMaxLb: Double? = null,
+        fastStep: Boolean = false,
+        consolidate: Boolean = false
     ) = ProgressionAdvisor.suggestNextLoad(
         exerciseId = "ua1", exerciseName = "DB Bench Press",
         prevSets = sets, prevEffort = effort,
         repsText = reps, unit = unit, plateLb = 15.0,
-        intensity = intensity, readiness = readiness
+        intensity = intensity, readiness = readiness, dbMaxLb = dbMaxLb,
+        fastStep = fastStep, consolidate = consolidate
     )
 
     private fun lowReadiness(percent: Int = -4) =
@@ -353,5 +357,72 @@ class ProgressionAdvisorTest {
     fun plateau_evaluateIsDeterministic() {
         val snap = snapshot(stalledBouts(6))
         assertEquals(ProgressionAdvisor.evaluate(snap), ProgressionAdvisor.evaluate(snap))
+    }
+
+    // ── Dumbbell ceiling (auto-coach Phase 0) ──────────────────────────────────
+
+    @Test
+    fun dbCeiling_atHeaviestDumbbell_anchorsWeightAndSuggestsReps() {
+        val s = suggest(listOf(set(25.0, 10)), EffortRating.JUST_RIGHT, dbMaxLb = 25.0)
+        assertNotNull(s)
+        assertEquals(25.0, s!!.targetWeightLb, 0.0001)
+        assertEquals(0.0, s.deltaLb, 0.0001)
+        assertTrue("reason should pivot to reps: ${s.reason}", "reps" in s.reason)
+    }
+
+    @Test
+    fun dbCeiling_belowCeiling_progressesNormally() {
+        val s = suggest(listOf(set(20.0, 10)), EffortRating.JUST_RIGHT, dbMaxLb = 25.0)
+        assertEquals(22.5, s!!.targetWeightLb, 0.0001)
+        assertEquals("hit top of range", s.reason)
+    }
+
+    @Test
+    fun dbCeiling_staleSetting_historyHeavier_isNotCapped() {
+        // A logged set above the ceiling means the setting is stale — trust the data.
+        val s = suggest(listOf(set(30.0, 10)), EffortRating.JUST_RIGHT, dbMaxLb = 25.0)
+        assertEquals(32.5, s!!.targetWeightLb, 0.0001)
+    }
+
+    @Test
+    fun dbCeiling_backOffIsUnaffected() {
+        val s = suggest(listOf(set(25.0, 10)), EffortRating.BRUTAL, dbMaxLb = 25.0)
+        assertEquals(22.5, s!!.targetWeightLb, 0.0001)
+    }
+
+    @Test
+    fun dbCeiling_platesAreUnaffected() {
+        val s = suggest(listOf(set(45.0, 10)), EffortRating.JUST_RIGHT, unit = ExerciseUnit.PLATES, dbMaxLb = 25.0)
+        assertEquals(60.0, s!!.targetWeightLb, 0.0001)
+    }
+
+    // ── Step calibration (auto-coach Phase 2) ──────────────────────────────────
+
+    @Test
+    fun fastStep_doublesTheDumbbellIncrement() {
+        val s = suggest(listOf(set(45.0, 10)), EffortRating.JUST_RIGHT, fastStep = true)
+        assertEquals(50.0, s!!.targetWeightLb, 0.0001)
+        assertTrue("reason should mention calibration: ${s.reason}", "calibrated" in s.reason)
+    }
+
+    @Test
+    fun consolidate_holdsTheWeightInsteadOfProgressing() {
+        val s = suggest(listOf(set(45.0, 10)), EffortRating.JUST_RIGHT, consolidate = true)
+        assertEquals(45.0, s!!.targetWeightLb, 0.0001)
+        assertEquals(0.0, s.deltaLb, 0.0001)
+        assertTrue("reason should explain the hold: ${s.reason}", "consolidate" in s.reason)
+    }
+
+    @Test
+    fun consolidate_doesNotAffectBackOffs() {
+        val s = suggest(listOf(set(45.0, 10)), EffortRating.BRUTAL, consolidate = true)
+        assertEquals(42.5, s!!.targetWeightLb, 0.0001)
+    }
+
+    @Test
+    fun fastStep_stillRespectsTheDbCeiling() {
+        // 45 + 5 (fast step) = 50, but the heaviest DB is 47.5 → capped.
+        val s = suggest(listOf(set(45.0, 10)), EffortRating.JUST_RIGHT, fastStep = true, dbMaxLb = 47.5)
+        assertEquals(47.5, s!!.targetWeightLb, 0.0001)
     }
 }

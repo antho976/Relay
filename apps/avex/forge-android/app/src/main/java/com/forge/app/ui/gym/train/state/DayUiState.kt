@@ -152,6 +152,8 @@ data class ExerciseUiState(
     val suggestionReason: String? = null,
     /** Suggested change vs last session's top weight, in lb — drives the UP NEXT delta pill. */
     val suggestedDeltaLb: Double? = null,
+    /** Suggested target in raw lb — outcome capture compares it against the first logged set. */
+    val suggestedTargetLb: Double? = null,
     /** Historical sets from prior sessions — used to compute the live PR hint in SetInputRow (#100). */
     val priorSets: List<LoggedSet> = emptyList(),
     /** All-time personal best formatted as "X lb × Y" — shown in the card header (#101). */

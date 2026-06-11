@@ -243,6 +243,29 @@ internal fun EquipmentPage(state: SettingsUiState, vm: SettingsViewModel, modifi
                 PillChip("${w.toInt()} lb", state.plateWeightLb == w) { vm.setPlateWeightLb(w) }
             }
         }
+        Spacer(Modifier.height(24.dp))
+
+        // ── Heaviest dumbbell (auto-coach Phase 0) ──────────────────────────────
+        Text("Heaviest dumbbell", style = MaterialTheme.typography.titleSmall, color = onBg,
+            modifier = Modifier.padding(horizontal = 24.dp))
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "If your dumbbells max out (adjustable sets), heavy lifts in generated programs lean on " +
+                "the plate stack instead, and weight suggestions switch to rep progression at the ceiling.",
+            style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic,
+            modifier = Modifier.padding(horizontal = 24.dp)
+        )
+        Spacer(Modifier.height(12.dp))
+        FlowRow(
+            modifier = Modifier.padding(horizontal = 24.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            PillChip("No limit", state.maxDbWeightLb == null) { vm.setMaxDbWeightLb(null) }
+            listOf(15.0, 20.0, 25.0, 30.0, 40.0, 50.0, 75.0, 100.0).forEach { w ->
+                PillChip("${w.toInt()} lb", state.maxDbWeightLb == w) { vm.setMaxDbWeightLb(w) }
+            }
+        }
         Spacer(Modifier.height(16.dp))
         SectionDivider()
     }

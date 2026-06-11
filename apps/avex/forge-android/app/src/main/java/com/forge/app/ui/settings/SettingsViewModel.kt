@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.data.repo.ResetRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -32,6 +33,8 @@ data class SettingsUiState(
     val privacyMode: Boolean = false,
     val availableEquipment: Set<String> = emptySet(),
     val plateWeightLb: Double = 15.0,
+    /** Heaviest dumbbell owned (lb); null = no ceiling (auto-coach Phase 0). */
+    val maxDbWeightLb: Double? = null,
     val accentColorHex: String = "",
     val accentEmphasis: String = "off",
     val timezone: String = java.util.TimeZone.getDefault().id,
@@ -48,6 +51,8 @@ data class SettingsUiState(
     val pinnedExercises: Set<String> = emptySet(),
     /** Coarse one-tap volume emphasis: "balanced" | "upper" | "legs" | "arms-shoulders". */
     val programEmphasis: String = "balanced",
+    /** Coach mode (auto-coach Phase 4): "suggest" | "auto" (earned auto-apply). */
+    val coachMode: String = "suggest",
     /** Current program's weekly sets per muscle (display name → sets), busiest first (Phase 6). */
     val weeklyVolume: List<Pair<String, Int>> = emptyList()
 )
@@ -60,8 +65,34 @@ class SettingsViewModel @Inject constructor(
     private val sampleDataSeeder: com.forge.app.data.repo.SampleDataSeeder,
     private val pdfExport: com.forge.app.data.repo.PdfExportRepository,
     private val programRepository: com.forge.app.data.repo.ProgramRepository,
-    private val vacationRepo: com.forge.app.data.repo.VacationRepository
+    private val vacationRepo: com.forge.app.data.repo.VacationRepository,
+    private val coachRepo: com.forge.app.data.repo.CoachRepository
 ) : ViewModel() {
+
+    // ─── Coach (auto-coach Phase 4) ───────────────────────────────────────────
+
+    private val _coachTrust = MutableStateFlow<List<com.forge.app.domain.coach.TypeTrust>>(emptyList())
+    val coachTrust: StateFlow<List<com.forge.app.domain.coach.TypeTrust>> = _coachTrust.asStateFlow()
+
+    private val _coachHistory =
+        MutableStateFlow<List<com.forge.app.data.repo.CoachRepository.CoachHistoryEntry>>(emptyList())
+    val coachHistory: StateFlow<List<com.forge.app.data.repo.CoachRepository.CoachHistoryEntry>> =
+        _coachHistory.asStateFlow()
+
+    /** Load the Coach page data (called when the section opens — not part of the big combine). */
+    fun loadCoachData() = viewModelScope.launch {
+        runCatching {
+            _coachTrust.value = coachRepo.trust()
+            _coachHistory.value = coachRepo.history()
+        }
+    }
+
+    fun setCoachMode(mode: String) = viewModelScope.launch { settingsRepo.setCoachMode(mode) }
+
+    fun undoCoachDecision(id: Long) = viewModelScope.launch {
+        runCatching { coachRepo.undoDecision(id) }
+        loadCoachData()
+    }
 
     // ─── Holiday / vacation (#135) ────────────────────────────────────────────
     val vacations: StateFlow<List<com.forge.app.data.db.entities.VacationPeriod>> =
@@ -110,6 +141,10 @@ class SettingsViewModel @Inject constructor(
         s.copy(availableEquipment = equip)
     }.combine(settingsRepo.plateWeightLb) { s, v ->
         s.copy(plateWeightLb = v)
+    }.combine(settingsRepo.maxDbWeightLb) { s, v ->
+        s.copy(maxDbWeightLb = v)
+    }.combine(settingsRepo.coachMode) { s, v ->
+        s.copy(coachMode = v)
     }.combine(settingsRepo.accentColorHex) { s, v ->
         s.copy(accentColorHex = v)
     }.combine(settingsRepo.accentEmphasis) { s, v ->
@@ -192,7 +227,8 @@ class SettingsViewModel @Inject constructor(
             .mapNotNull { com.forge.app.program.ProblemArea.fromCode(it) }.toSet(),
         priorityMuscles = settingsRepo.priorityMuscles.first()
             .mapNotNull { runCatching { com.forge.app.program.MuscleGroup.fromCode(it) }.getOrNull() }.toSet(),
-        pinned = settingsRepo.pinnedExercises.first()
+        pinned = settingsRepo.pinnedExercises.first(),
+        dbMaxLb = settingsRepo.maxDbWeightLb.first()
     )
     private suspend fun currentEquipment(): Set<com.forge.app.program.Equipment> =
         settingsRepo.availableEquipment.first()
@@ -222,6 +258,7 @@ class SettingsViewModel @Inject constructor(
     // Goal/experience/problem-areas/priority/pins are staged config — applied when the user taps
     // Generate or Re-roll (avoids reshuffling the whole plan on every chip tap).
     fun setUserGoal(goal: String) = viewModelScope.launch { settingsRepo.setUserGoal(goal) }
+    fun setMaxDbWeightLb(lb: Double?) = viewModelScope.launch { settingsRepo.setMaxDbWeightLb(lb) }
     fun setExperience(level: String) = viewModelScope.launch { settingsRepo.setProgramExperience(level) }
     fun setProgramEmphasis(v: String) = viewModelScope.launch { settingsRepo.setProgramEmphasis(v) }
     fun toggleProblemArea(code: String) = viewModelScope.launch {

@@ -17,6 +17,10 @@ interface ExerciseCustomizationDao {
 
     @Query("SELECT * FROM exercise_customization WHERE exercise_id = :exerciseId")
     suspend fun get(exerciseId: String): ExerciseCustomization?
+
+    /** All rows — the coach-lock scan (auto-coach Phase 3, hardening decision 9). */
+    @Query("SELECT * FROM exercise_customization")
+    suspend fun all(): List<ExerciseCustomization>
     // (Removed setRestTimerOverride: a plain UPDATE that no-ops when no row exists yet, and was
     //  unused — CustomizationRepository.setRestTimerOverride does a correct get-then-upsert.)
 }

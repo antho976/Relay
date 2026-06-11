@@ -244,6 +244,35 @@ class SettingsRepository @Inject constructor(
     suspend fun setPlateWeightLb(lb: Double) =
         context.forgePreferences.edit { it[PreferenceKeys.PLATE_WEIGHT_LB] = lb.coerceIn(1.0, 200.0) }
 
+    /**
+     * Heaviest dumbbell the user owns, in lb (adjustable sets max out). Null = no ceiling set.
+     * Drives the generator's heavy-slot stack bias and caps the progression chip's DB targets
+     * (auto-coach Phase 0).
+     */
+    val maxDbWeightLb: Flow<Double?> = context.forgePreferences.data
+        .map { prefs -> prefs[PreferenceKeys.MAX_DB_WEIGHT_LB]?.takeIf { it > 0.0 } }
+    suspend fun setMaxDbWeightLb(lb: Double?) =
+        context.forgePreferences.edit {
+            if (lb == null || lb <= 0.0) it.remove(PreferenceKeys.MAX_DB_WEIGHT_LB)
+            else it[PreferenceKeys.MAX_DB_WEIGHT_LB] = lb.coerceIn(5.0, 200.0)
+        }
+
+    /**
+     * Coach mode (auto-coach Phase 4): "suggest" = every change waits for a tap in the Week
+     * Brief; "auto" = the coach may auto-apply an adjustment TYPE once it has earned trust
+     * (TrustLedger) — never a blanket switch.
+     */
+    val coachMode: Flow<String> = context.forgePreferences.data
+        .map { it[PreferenceKeys.COACH_MODE] ?: "suggest" }
+    suspend fun setCoachMode(mode: String) =
+        context.forgePreferences.edit { it[PreferenceKeys.COACH_MODE] = mode }
+
+    /** ISO week id of the last Week Brief the user opened/dismissed — gates the Overview banner. */
+    val lastSeenCoachWeekId: Flow<String> = context.forgePreferences.data
+        .map { it[PreferenceKeys.LAST_SEEN_COACH_WEEK_ID] ?: "" }
+    suspend fun setLastSeenCoachWeekId(weekId: String) =
+        context.forgePreferences.edit { it[PreferenceKeys.LAST_SEEN_COACH_WEEK_ID] = weekId }
+
     // ─── Plan tomorrow (#147) ─────────────────────────────────────────────────
 
     val plannedNextDay: Flow<String> = context.forgePreferences.data

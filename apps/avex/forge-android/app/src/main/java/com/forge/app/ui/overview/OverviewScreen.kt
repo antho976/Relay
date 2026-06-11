@@ -23,6 +23,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -72,9 +73,11 @@ fun OverviewScreen(
     onGoToStats: () -> Unit = {},
     onGoToNutrition: () -> Unit = {},
     onGoToSettings: () -> Unit = {},
+    onOpenCoachBrief: () -> Unit = {},
     viewModel: OverviewViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val coachBanner by viewModel.coachBanner.collectAsStateWithLifecycle()
     val selectedItem by viewModel.selectedItem.collectAsStateWithLifecycle()
     val summaryLines by viewModel.sessionExerciseLines.collectAsStateWithLifecycle()
     var showDayEdit by remember { mutableStateOf(false) }
@@ -177,6 +180,35 @@ fun OverviewScreen(
                         Icons.Default.Settings, contentDescription = "Settings",
                         tint = muted.copy(alpha = 0.7f),
                         modifier = Modifier.size(16.dp).clickable { onGoToSettings() }
+                    )
+                }
+            }
+
+            // ── Coach: a new Week Brief is ready (dismissible; lives in Settings too) ──
+            coachBanner?.let { banner ->
+                Spacer(Modifier.height(16.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(accent.copy(alpha = 0.12f))
+                        .clickable { viewModel.dismissCoachBanner(); onOpenCoachBrief() }
+                        .padding(start = 14.dp, end = 8.dp, top = 12.dp, bottom = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("NEW BRIEF", style = MaterialTheme.typography.labelSmall, color = accent, fontSize = 10.sp)
+                        Text(banner.text, style = MaterialTheme.typography.bodyMedium, color = onBg)
+                    }
+                    Text("→", style = MaterialTheme.typography.bodyLarge, color = accent)
+                    Icon(
+                        Icons.Default.Close, contentDescription = "Dismiss",
+                        tint = muted.copy(alpha = 0.7f),
+                        modifier = Modifier
+                            .padding(start = 8.dp)
+                            .size(16.dp)
+                            .clickable { viewModel.dismissCoachBanner() }
                     )
                 }
             }

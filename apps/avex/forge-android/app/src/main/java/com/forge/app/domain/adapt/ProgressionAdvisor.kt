@@ -76,6 +76,12 @@ object ProgressionAdvisor {
         plateLb: Double,
         intensity: IntensityIntent = IntensityIntent.NORMAL,
         readiness: Recommendation.ReadinessScale? = null,
+        /** Heaviest dumbbell owned (lb) — DB progress targets are capped here; null = no ceiling. */
+        dbMaxLb: Double? = null,
+        /** Calibrated: this user beats DB suggestions and succeeds — double the step (Phase 2). */
+        fastStep: Boolean = false,
+        /** Calibrated: taken jumps keep failing — hold the weight instead of progressing (Phase 2). */
+        consolidate: Boolean = false,
         t: AdaptThresholds = AdaptThresholds()
     ): Recommendation.WeightChange? {
         if (unit == ExerciseUnit.BODYWEIGHT) return null
@@ -122,8 +128,15 @@ object ProgressionAdvisor {
 
         return when {
             backOff -> backOffSuggestion(exerciseId, exerciseName, prevMax, unit, plateLb, scale, scaleNote, backOffReason, t)
+            // Calibration says recent taken jumps failed — earn this weight before the next one.
+            hitTopOnAllTopSets && okToProgress && consolidate ->
+                weightChange(
+                    exerciseId, exerciseName, prevMax, prevMax,
+                    inputText = if (unit == ExerciseUnit.PLATES) inputTextFor(prevMax, unit, plateLb) else trim(prevMax),
+                    reason = "calibrated to you — recent jumps haven't stuck, consolidate this weight first"
+                )
             hitTopOnAllTopSets && okToProgress ->
-                progressSuggestion(exerciseId, exerciseName, prevMax, unit, plateLb, scale, scaleNote, t)
+                progressSuggestion(exerciseId, exerciseName, prevMax, unit, plateLb, scale, scaleNote, dbMaxLb, fastStep, t)
             else -> null
         }
     }
@@ -136,16 +149,41 @@ object ProgressionAdvisor {
         plateLb: Double,
         scale: Double,
         scaleNote: String?,
+        dbMaxLb: Double?,
+        fastStep: Boolean,
         t: AdaptThresholds
     ): Recommendation.WeightChange? = when (unit) {
         ExerciseUnit.DUMBBELL -> {
-            val target = floorToGrid((prevMax + t.dumbbellStepLb) * scale, t.dumbbellStepLb)
-            if (target <= 0.0) null
-            else weightChange(
-                exerciseId, exerciseName, prevMax, target,
-                inputText = trim(target),
-                reason = withNote("hit top of range", scaleNote)
-            )
+            val step = if (fastStep) t.dumbbellStepLb * 2 else t.dumbbellStepLb
+            val target = floorToGrid((prevMax + step) * scale, t.dumbbellStepLb)
+            // Only trust the ceiling when history doesn't contradict it — a heavier logged set
+            // means the setting is stale, and progress shouldn't be capped on bad data.
+            val ceiling = dbMaxLb?.takeIf { prevMax <= it }
+            when {
+                target <= 0.0 -> null
+                ceiling != null && target > ceiling -> {
+                    val capped = floorToGrid(ceiling, t.dumbbellStepLb)
+                    if (capped > prevMax) weightChange(
+                        exerciseId, exerciseName, prevMax, capped,
+                        inputText = trim(capped),
+                        reason = withNote("hit top of range — capped at your heaviest dumbbell", scaleNote)
+                    ) else weightChange(
+                        // The user owns nothing heavier: anchor the weight, progress reps instead.
+                        exerciseId, exerciseName, prevMax, prevMax,
+                        inputText = trim(prevMax),
+                        reason = "at your heaviest dumbbell — add reps past the range instead"
+                    )
+                }
+                else -> weightChange(
+                    exerciseId, exerciseName, prevMax, target,
+                    inputText = trim(target),
+                    reason = withNote(
+                        if (fastStep) "hit top of range · calibrated to you (bigger steps)"
+                        else "hit top of range",
+                        scaleNote
+                    )
+                )
+            }
         }
         ExerciseUnit.PLATES ->
             // A whole plate is too big a step up on a deliberately light / low-readiness day.
@@ -220,7 +258,7 @@ object ProgressionAdvisor {
                 if (stall < t.plateauMinBouts) continue
 
                 val confidence = if (stall >= t.highConfidenceStall) Confidence.HIGH else Confidence.MEDIUM
-                out += plateauSuggestion(slot, bouts, stall, confidence, s.prefs.plateLb, t)
+                out += plateauSuggestion(slot, bouts, stall, confidence, s.prefs.plateLb, s.prefs.maxDbLb, t)
             }
         }
         return out
@@ -232,6 +270,7 @@ object ProgressionAdvisor {
         stall: Int,
         confidence: Confidence,
         plateLb: Double,
+        maxDbLb: Double?,
         t: AdaptThresholds
     ): Recommendation {
         val prevMax = bouts.last().sets
@@ -278,11 +317,21 @@ object ProgressionAdvisor {
                 confidence = confidence
             )
         } else {
-            val target = when (slot.unit) {
+            val raw = when (slot.unit) {
                 ExerciseUnit.PLATES -> prevMax + plateLb
                 else -> floorToGrid(prevMax + t.dumbbellStepLb, t.dumbbellStepLb)
             }
-            weightChange(
+            // A DB target can't exceed the heaviest dumbbell the user owns (ceiling trusted only
+            // while history doesn't contradict it). At the ceiling, anchor the weight and push
+            // reps instead — the next ladder rung shifts the rep range anyway.
+            val ceiling = maxDbLb?.takeIf { slot.unit != ExerciseUnit.PLATES && prevMax <= it }
+            val target = if (ceiling != null) minOf(raw, floorToGrid(ceiling, t.dumbbellStepLb)) else raw
+            if (target <= prevMax) weightChange(
+                slot.exerciseId, slot.name, prevMax, prevMax,
+                inputText = inputTextFor(prevMax, slot.unit, plateLb),
+                reason = "${slot.name} hasn't gained in $stall sessions and you're at your heaviest dumbbell — add reps",
+                confidence = confidence
+            ) else weightChange(
                 slot.exerciseId, slot.name, prevMax, target,
                 inputText = inputTextFor(target, slot.unit, plateLb),
                 reason = "${slot.name} hasn't gained in $stall sessions but effort has stayed low — push a small increase",

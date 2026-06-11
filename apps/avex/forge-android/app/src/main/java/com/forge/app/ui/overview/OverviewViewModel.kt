@@ -37,11 +37,16 @@ class OverviewViewModel @Inject constructor(
     private val trophyRepo: TrophyRepository,
     private val customizationRepo: CustomizationRepository,
     private val workoutRepo: WorkoutRepository,
-    private val adaptationRepo: com.forge.app.data.repo.AdaptationRepository
+    private val adaptationRepo: com.forge.app.data.repo.AdaptationRepository,
+    private val coachRepo: com.forge.app.data.repo.CoachRepository
 ) : ViewModel() {
 
     private val _onThisDayMemory = MutableStateFlow<OnThisDayMemory?>(null)
     private val _coach = MutableStateFlow<List<CoachItem>>(emptyList())
+
+    /** "New report ready" banner (auto-coach) — null when this week's brief has been seen. */
+    private val _coachBanner = MutableStateFlow<com.forge.app.data.repo.CoachBanner?>(null)
+    val coachBanner: StateFlow<com.forge.app.data.repo.CoachBanner?> = _coachBanner
 
     private val weekStartMs = System.currentTimeMillis() - 7L * 24 * 60 * 60 * 1000
 
@@ -96,6 +101,20 @@ class OverviewViewModel @Inject constructor(
     init {
         viewModelScope.launch { _onThisDayMemory.value = statsRepo.findOnThisDayMemory() }
         viewModelScope.launch { reloadCoach() }
+        // First open of a new week triggers the Weekly Coach Pass (idempotent by week id) and
+        // surfaces the banner only if this week's brief hasn't been seen. The repo stamps errors
+        // as their own pass status; this guard only protects Overview.
+        viewModelScope.launch {
+            runCatching { coachRepo.pendingBanner() }
+                .onSuccess { _coachBanner.value = it }
+        }
+    }
+
+    /** Dismiss the "new report" banner without opening the brief — still marks it seen. */
+    fun dismissCoachBanner() {
+        val weekId = _coachBanner.value?.weekId ?: return
+        _coachBanner.value = null
+        viewModelScope.launch { runCatching { coachRepo.markSeen(weekId) } }
     }
 
     // ─── Coach feed (adaptation engine) ───────────────────────────────────────

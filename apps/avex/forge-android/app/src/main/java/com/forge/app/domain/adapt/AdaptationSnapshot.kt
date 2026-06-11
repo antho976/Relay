@@ -78,5 +78,7 @@ data class PrefsSnap(
     val plateLb: Double = 15.0,
     val likedIds: Set<String> = emptySet(),
     val dislikedIds: Set<String> = emptySet(),
-    val pinnedIds: Set<String> = emptySet()
+    val pinnedIds: Set<String> = emptySet(),
+    /** Heaviest dumbbell owned (lb); null = no ceiling (auto-coach Phase 0). */
+    val maxDbLb: Double? = null
 )

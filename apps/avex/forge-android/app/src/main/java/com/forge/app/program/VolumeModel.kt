@@ -50,18 +50,24 @@ object VolumeModel {
     }
 
     /**
-     * Allocate sets to every slot: scheme base (+1 for [focus] muscles, ×[volumeFactor] for experience),
-     * then trim any muscle whose weekly total exceeds [weeklyCap]. Returns sets per day per slot.
+     * Allocate sets to every slot: scheme base (+1 for [focus] muscles, ×[volumeFactor] for experience,
+     * ±[bias] learned by the coach), then trim any muscle whose weekly total exceeds [weeklyCap].
+     * Returns sets per day per slot.
      *
      * [minSets] is the per-slot floor — normally [MIN_SETS], but a deload week passes a lower floor so
      * already-light slots (e.g. a beginner's 2-set accessories) can actually drop instead of flooring
      * at the same value they'd have in a normal week.
+     *
+     * [bias] is the coach's net applied volume adjustment per muscle (CoachGenBias): each +1 lands on
+     * the muscle's currently-smallest slot, each −1 comes off its largest — spread, not stacked —
+     * applied BEFORE the weekly cap so the junk-volume guard still has the last word.
      */
     fun allocate(
         days: List<DayArchetype>,
         focus: Set<MuscleGroup> = emptySet(),
         volumeFactor: Double = 1.0,
-        minSets: Int = MIN_SETS
+        minSets: Int = MIN_SETS,
+        bias: Map<MuscleGroup, Int> = emptyMap()
     ): List<List<Int>> {
         val result: List<IntArray> = days.map { day ->
             IntArray(day.targets.size) { si ->
@@ -70,11 +76,26 @@ object VolumeModel {
                 (withEmphasis * volumeFactor).roundToInt().coerceIn(minSets, MAX_SETS)
             }
         }
-        // Per-muscle weekly cap: shave the largest slots down until under the ceiling.
         val positions = HashMap<MuscleGroup, MutableList<Pair<Int, Int>>>()
         days.forEachIndexed { di, day ->
             day.targets.forEachIndexed { si, slot -> positions.getOrPut(slot.muscle) { mutableListOf() }.add(di to si) }
         }
+        // Coach-learned volume bias: fold the net applied ±sets into the baseline.
+        bias.forEach { (muscle, delta) ->
+            val slots = positions[muscle] ?: return@forEach
+            repeat(kotlin.math.abs(delta)) {
+                if (delta > 0) {
+                    val smallest = slots.filter { (di, si) -> result[di][si] < MAX_SETS }
+                        .minByOrNull { (di, si) -> result[di][si] } ?: return@repeat
+                    result[smallest.first][smallest.second] += 1
+                } else {
+                    val biggest = slots.filter { (di, si) -> result[di][si] > minSets }
+                        .maxByOrNull { (di, si) -> result[di][si] } ?: return@repeat
+                    result[biggest.first][biggest.second] -= 1
+                }
+            }
+        }
+        // Per-muscle weekly cap: shave the largest slots down until under the ceiling.
         positions.forEach { (muscle, slots) ->
             // Focused muscles get a little headroom above the cap so the emphasis isn't immediately
             // trimmed away — but bounded (not slots.size × bonus, which on a high-frequency split let a

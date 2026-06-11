@@ -12,6 +12,7 @@ object Routes {
     const val SESSION_HISTORY = "gym/session-history"
     const val NOTES_SEARCH = "gym/notes-search"
     const val RECAP = "recap"
+    const val COACH_BRIEF = "coach-brief"
     const val PROGRAM_EDITOR = "program-editor/{dayKey}"
     const val PROGRAM_VIEWER = "program-viewer"
 

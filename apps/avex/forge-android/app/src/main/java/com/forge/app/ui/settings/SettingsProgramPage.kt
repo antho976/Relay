@@ -20,6 +20,8 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -40,11 +42,17 @@ private enum class ProgramSection(val title: String) {
     Split("Split & schedule"),
     Goal("Goal & experience"),
     Emphasis("Emphasis & priorities"),
-    Maintenance("Auto-refresh & cardio")
+    Maintenance("Auto-refresh & cardio"),
+    Coach("Coach")
 }
 
 @Composable
-internal fun ProgramPage(state: SettingsUiState, vm: SettingsViewModel, modifier: Modifier = Modifier) {
+internal fun ProgramPage(
+    state: SettingsUiState,
+    vm: SettingsViewModel,
+    modifier: Modifier = Modifier,
+    onOpenCoachBrief: () -> Unit = {}
+) {
     var section by remember { mutableStateOf<ProgramSection?>(null) }
     BackHandler(enabled = section != null) { section = null }
 
@@ -61,6 +69,9 @@ internal fun ProgramPage(state: SettingsUiState, vm: SettingsViewModel, modifier
         }
         ProgramSection.Maintenance -> ProgramSectionScaffold(ProgramSection.Maintenance, modifier, onBack = { section = null }) {
             MaintenanceSection(state, vm)
+        }
+        ProgramSection.Coach -> ProgramSectionScaffold(ProgramSection.Coach, modifier, onBack = { section = null }) {
+            CoachSection(state, vm, onOpenCoachBrief)
         }
     }
 }
@@ -81,7 +92,8 @@ private fun ProgramMenu(
         ProgramSection.Emphasis to "${emphasisLabel(state.programEmphasis)}" +
             if (priorityCount > 0) " · $priorityCount priority" else "",
         ProgramSection.Maintenance to (if (state.rotationCadence == "never") "Auto-refresh off" else "Every ${state.rotationEveryN}") +
-            (if (state.cardioWeeklyTargetMin > 0) " · cardio ${state.cardioWeeklyTargetMin}m" else "")
+            (if (state.cardioWeeklyTargetMin > 0) " · cardio ${state.cardioWeeklyTargetMin}m" else ""),
+        ProgramSection.Coach to if (state.coachMode == "auto") "Earning auto-apply" else "Suggest mode"
     )
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         Spacer(Modifier.height(8.dp))
@@ -185,6 +197,100 @@ private fun MaintenanceSection(state: SettingsUiState, vm: SettingsViewModel) {
             PillChip("Off", state.cardioWeeklyTargetMin == 0) { vm.setCardioWeeklyTargetMin(0) }
             listOf(60, 120, 150, 200).forEach { m ->
                 PillChip("$m min", state.cardioWeeklyTargetMin == m) { vm.setCardioWeeklyTargetMin(m) }
+            }
+        }
+    }
+    SectionDivider()
+}
+
+@Composable
+private fun CoachSection(state: SettingsUiState, vm: SettingsViewModel, onOpenCoachBrief: () -> Unit) {
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val onBg = MaterialTheme.colorScheme.onBackground
+    val trust by vm.coachTrust.collectAsState()
+    val history by vm.coachHistory.collectAsState()
+    LaunchedEffect(Unit) { vm.loadCoachData() }
+
+    ProgramBlock("Week brief", "Your coach's read on the week — last week's numbers, any proposed changes, and a focus.") {
+        ChipFlow { PillChip("View this week's brief", selected = false) { onOpenCoachBrief() } }
+    }
+
+    ProgramBlock(
+        "Coach mode",
+        "Suggest: every weekly change waits for your tap in the Week Brief. Earn auto-apply: a change " +
+            "type may apply itself ONLY after you've accepted it ${com.forge.app.domain.coach.TrustLedger.CONSERVATIVE_STREAK}–" +
+            "${com.forge.app.domain.coach.TrustLedger.AGGRESSIVE_STREAK} weeks in a row — and one bad " +
+            "outcome demotes it back. Deloads always ask."
+    ) {
+        ChipFlow {
+            PillChip("Suggest", state.coachMode != "auto") { vm.setCoachMode("suggest") }
+            PillChip("Earn auto-apply", state.coachMode == "auto") { vm.setCoachMode("auto") }
+        }
+    }
+
+    ProgramBlock("Earned trust", "What the coach has earned so far, per change type.") {
+        Column(Modifier.padding(horizontal = 24.dp)) {
+            if (trust.all { it.streak == 0 }) {
+                Text(
+                    "No accepted proposals yet — trust builds as you apply weekly suggestions.",
+                    style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic
+                )
+            }
+            trust.forEach { t ->
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(t.label, style = MaterialTheme.typography.bodySmall, color = onBg)
+                    Text(
+                        if (t.earned) "auto ✓" else "${t.streak}/${t.required} accepted",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (t.earned) MaterialTheme.colorScheme.primary else muted
+                    )
+                }
+            }
+        }
+    }
+
+    ProgramBlock("Coach history", "Every weekly pass, including holds — applied changes can be undone here.") {
+        Column(Modifier.padding(horizontal = 24.dp)) {
+            if (history.isEmpty()) {
+                Text("No passes yet.", style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic)
+            }
+            history.forEach { entry ->
+                Text(
+                    "${entry.pass.weekId.uppercase()} · ${entry.pass.status.uppercase()}",
+                    style = MaterialTheme.typography.labelSmall, color = onBg,
+                    modifier = Modifier.padding(top = 10.dp)
+                )
+                if (entry.decisions.isEmpty()) {
+                    entry.pass.holdReason?.let {
+                        Text(it, style = MaterialTheme.typography.bodySmall, color = muted)
+                    }
+                }
+                entry.decisions.forEach { d ->
+                    Row(
+                        Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            "${d.summary} · ${d.status}",
+                            style = MaterialTheme.typography.bodySmall, color = muted,
+                            modifier = Modifier.weight(1f)
+                        )
+                        if (d.status == "applied" && d.undoData != null) {
+                            Text(
+                                "undo",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier
+                                    .clickable { vm.undoCoachDecision(d.id) }
+                                    .padding(start = 12.dp, top = 2.dp, bottom = 2.dp)
+                            )
+                        }
+                    }
+                }
             }
         }
     }

@@ -71,7 +71,8 @@ class AdaptationRepository @Inject constructor(
             plateLb = settingsRepository.plateWeightLb.first(),
             likedIds = settingsRepository.likedExercises.first(),
             dislikedIds = disliked,
-            pinnedIds = settingsRepository.pinnedExercises.first()
+            pinnedIds = settingsRepository.pinnedExercises.first(),
+            maxDbLb = settingsRepository.maxDbWeightLb.first()
         )
 
         val now = clock.nowMs()

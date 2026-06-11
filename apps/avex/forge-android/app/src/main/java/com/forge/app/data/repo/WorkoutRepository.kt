@@ -7,12 +7,14 @@ import com.forge.app.data.db.dao.MoodDao
 import com.forge.app.data.db.dao.RestEventDao
 import com.forge.app.data.db.dao.SessionBreakDao
 import com.forge.app.data.db.dao.SessionDao
+import com.forge.app.data.db.dao.SuggestionOutcomeDao
 import com.forge.app.data.db.entities.LoggedExercise
 import com.forge.app.data.db.entities.LoggedSet
 import com.forge.app.data.db.entities.MoodEntry
 import com.forge.app.data.db.entities.RestEvent
 import com.forge.app.data.db.entities.Session
 import com.forge.app.data.db.entities.SessionBreak
+import com.forge.app.data.db.entities.SuggestionOutcome
 import com.forge.app.data.db.types.EffortRating
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.program.Equipment
@@ -38,6 +40,7 @@ class WorkoutRepository @Inject constructor(
     private val moodDao: MoodDao,
     private val sessionBreakDao: SessionBreakDao,
     private val restEventDao: RestEventDao,
+    private val suggestionOutcomeDao: SuggestionOutcomeDao,
     private val clock: Clock,
     private val settingsRepo: SettingsRepository,
     private val programRepository: ProgramRepository
@@ -259,6 +262,27 @@ class WorkoutRepository @Inject constructor(
 
     /** Recent realized-rest history — RestAdvisor's tuning input. */
     suspend fun recentRestEvents(limit: Int = 200): List<RestEvent> = restEventDao.recent(limit)
+
+    // ─── Suggestion outcomes (auto-coach Phase 2 calibration) ─────────────────
+
+    /** First set logged while a weight suggestion was showing: record suggestion vs reality. */
+    suspend fun recordSuggestionOutcome(
+        exerciseId: String,
+        unitCode: String,
+        suggestedLb: Double,
+        takenLb: Double,
+        reps: Int,
+        rangeText: String
+    ) = suggestionOutcomeDao.insert(
+        SuggestionOutcome(
+            exerciseId = exerciseId, unit = unitCode, suggestedLb = suggestedLb,
+            takenLb = takenLb, reps = reps, rangeText = rangeText, loggedAt = clock.nowMs()
+        )
+    )
+
+    /** Recent suggestion outcomes — SuggestionCalibrator's input. */
+    suspend fun recentSuggestionOutcomes(limit: Int = 500): List<SuggestionOutcome> =
+        suggestionOutcomeDao.recent(limit)
 
     // ─── Mood ──────────────────────────────────────────────────────────────────
 

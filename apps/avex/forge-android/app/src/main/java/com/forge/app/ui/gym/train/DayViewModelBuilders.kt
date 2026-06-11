@@ -48,6 +48,7 @@ internal suspend fun DayViewModel.buildExerciseUi(
 
     // Double-progression suggestion (#12/#13) — pure rules in the adaptation engine; the
     // VM only assembles inputs. inputText is unit-correct (plate count on PLATES exercises).
+    val stepMode = stepCalibration.modeFor(plan.id, plan.unit.code)
     val suggestion = ProgressionAdvisor.suggestNextLoad(
         exerciseId = plan.id,
         exerciseName = plan.name,
@@ -57,7 +58,11 @@ internal suspend fun DayViewModel.buildExerciseUi(
         unit = plan.unit,
         plateLb = settingsRepo.plateWeightLb.first(),
         intensity = IntensityIntent.fromCode(_state.value.sessionIntensity),
-        readiness = readiness
+        readiness = readiness,
+        dbMaxLb = settingsRepo.maxDbWeightLb.first(),
+        // Doubling the step only makes sense on the DB grid; PLATES move whole plates anyway.
+        fastStep = stepMode == com.forge.app.domain.coach.StepMode.FASTER && plan.unit == com.forge.app.program.ExerciseUnit.DUMBBELL,
+        consolidate = stepMode == com.forge.app.domain.coach.StepMode.CONSOLIDATE
     )
 
     val pbSet = allHistory.filter { it.weightLb != null }.maxByOrNull { it.weightLb!! }
@@ -136,6 +141,7 @@ internal suspend fun DayViewModel.buildExerciseUi(
         suggestedWeight = displaySuggested,
         suggestionReason = displayReason,
         suggestedDeltaLb = suggestion?.deltaLb,
+        suggestedTargetLb = suggestion?.targetWeightLb,
         priorSets = displayPrior,
         allTimePbText = allTimePbText,
         allTimePbLb = allTimePbLb,

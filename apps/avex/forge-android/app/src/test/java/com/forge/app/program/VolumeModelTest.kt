@@ -78,6 +78,46 @@ class VolumeModelTest {
         }
     }
 
+    // ── Coach-learned volume bias (refresh ties into coach data) ──────────────
+
+    private fun weeklySetsBiased(days: List<DayArchetype>, muscle: MuscleGroup, bias: Map<MuscleGroup, Int>): Int {
+        val sets = VolumeModel.allocate(days, bias = bias)
+        var total = 0
+        days.forEachIndexed { di, day ->
+            day.targets.forEachIndexed { si, slot -> if (slot.muscle == muscle) total += sets[di][si] }
+        }
+        return total
+    }
+
+    @Test
+    fun positiveBiasAddsExactlyThatManySets() {
+        val days = SplitTemplates.forDays(4)
+        val base = weeklySetsBiased(days, MuscleGroup.CHEST, emptyMap())
+        assertEquals(base + 2, weeklySetsBiased(days, MuscleGroup.CHEST, mapOf(MuscleGroup.CHEST to 2)))
+    }
+
+    @Test
+    fun negativeBiasRemovesSets_andLeavesOtherMusclesAlone() {
+        val days = SplitTemplates.forDays(4)
+        val bias = mapOf(MuscleGroup.CHEST to -1)
+        assertEquals(
+            weeklySetsBiased(days, MuscleGroup.CHEST, emptyMap()) - 1,
+            weeklySetsBiased(days, MuscleGroup.CHEST, bias)
+        )
+        assertEquals(
+            weeklySetsBiased(days, MuscleGroup.BACK, emptyMap()),
+            weeklySetsBiased(days, MuscleGroup.BACK, bias)
+        )
+    }
+
+    @Test
+    fun biasNeverBreachesTheWeeklyCap() {
+        // On the 6-day split back already sits at its cap — bias can't push it past.
+        val days = SplitTemplates.forDays(6)
+        val cap = VolumeModel.weeklyCap[MuscleGroup.BACK]!!
+        assertTrue(weeklySetsBiased(days, MuscleGroup.BACK, mapOf(MuscleGroup.BACK to 2)) <= cap)
+    }
+
     @Test
     fun perSessionVolumeStaysReasonable() {
         // A "standard" day should be ~12–24 sets, not 30 (the clamp-everything-to-max failure mode).

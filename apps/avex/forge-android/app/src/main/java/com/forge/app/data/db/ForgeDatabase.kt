@@ -20,6 +20,8 @@ import com.forge.app.data.db.dao.ProgramCustomizationDao
 import com.forge.app.data.db.dao.ProgramDao
 import com.forge.app.data.db.dao.RestEventDao
 import com.forge.app.data.db.dao.AdviceEventDao
+import com.forge.app.data.db.dao.CoachDao
+import com.forge.app.data.db.dao.SuggestionOutcomeDao
 import com.forge.app.data.db.dao.WarmupRoutineDao
 import com.forge.app.data.db.dao.SessionBreakDao
 import com.forge.app.data.db.dao.VacationDao
@@ -42,14 +44,19 @@ import com.forge.app.data.db.entities.ProgramDay
 import com.forge.app.data.db.entities.ProgramSlot
 import com.forge.app.data.db.entities.RestEvent
 import com.forge.app.data.db.entities.AdviceEvent
+import com.forge.app.data.db.entities.CoachPass
+import com.forge.app.data.db.entities.CoachDecision
+import com.forge.app.data.db.entities.SuggestionOutcome
 import com.forge.app.data.db.entities.SessionBreak
 import com.forge.app.data.db.entities.VacationPeriod
 
 /**
- * Schema is v16 (v16 added the adaptation-engine tables rest_event/advice_event; v15 added a
- * unique index on bodyweight_entry.date_key; v14 added the data-driven program tables
- * program_day/program_slot; v13 added an index on LoggedExercise.exercise_id; v12 added
- * LoggedSet.rpe; v11 added per-set annotations).
+ * Schema is v19 (v19 added the coach_decision propose/apply lifecycle columns; v18 added
+ * suggestion_outcome for coach step calibration; v17 added the
+ * auto-coach tables coach_pass/coach_decision; v16 added the adaptation-engine tables
+ * rest_event/advice_event; v15 added a unique index on bodyweight_entry.date_key; v14 added
+ * the data-driven program tables program_day/program_slot; v13 added an index on
+ * LoggedExercise.exercise_id; v12 added LoggedSet.rpe; v11 added per-set annotations).
  *
  * The schema is now LOCKED from v12 onward: every change needs a real Migration in
  * [com.forge.app.data.db.Migrations] (registered in ALL_MIGRATIONS), a bumped version here,
@@ -79,9 +86,12 @@ import com.forge.app.data.db.entities.VacationPeriod
         ProgramDay::class,
         ProgramSlot::class,
         RestEvent::class,
-        AdviceEvent::class
+        AdviceEvent::class,
+        CoachPass::class,
+        CoachDecision::class,
+        SuggestionOutcome::class
     ],
-    version = 16,
+    version = 19,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -106,4 +116,6 @@ abstract class ForgeDatabase : RoomDatabase() {
     abstract fun programDao(): ProgramDao
     abstract fun restEventDao(): RestEventDao
     abstract fun adviceEventDao(): AdviceEventDao
+    abstract fun coachDao(): CoachDao
+    abstract fun suggestionOutcomeDao(): SuggestionOutcomeDao
 }

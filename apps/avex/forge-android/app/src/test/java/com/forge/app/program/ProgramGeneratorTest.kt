@@ -7,6 +7,119 @@ import org.junit.Test
 /** JVM unit tests for the pure generator engine (program-unlock Phase 2). */
 class ProgramGeneratorTest {
 
+    /** The MWM-989 home-gym preset (dumbbells + bench + cable + machine stations). */
+    private val mwm = setOf(Equipment.DUMBBELLS, Equipment.BENCH, Equipment.CABLE, Equipment.MACHINE)
+
+    @Test
+    fun mwmPresetCoversEveryMuscleEveryWeek() {
+        // The MWM-989 preset must train ALL muscle groups weekly on every standard split — no
+        // starved slots, no missing muscle.
+        (3..6).forEach { d ->
+            listOf(1L, 2L, 3L).forEach { seed ->
+                val muscles = ProgramGenerator.generate(GenerationParams(d), mwm, emptySet(), emptySet(), seed = seed)
+                    .flatMap { it.exercises }.mapNotNull { ExerciseLibrary.byId(it.libId)?.muscle }.toSet()
+                assertEquals("$d-day MWM plan (seed $seed) should cover every muscle",
+                    MuscleGroup.entries.toSet(), muscles)
+            }
+        }
+    }
+
+    @Test
+    fun noSingleMuscleDominatesADay() {
+        // A day must never stack 4+ exercises of the same muscle (3 is the pull day's back, by design).
+        (1..7).forEach { d ->
+            ProgramGenerator.generate(GenerationParams(d), mwm, emptySet(), emptySet(), seed = 17L)
+                .forEach { day ->
+                    val worst = day.exercises
+                        .groupingBy { ExerciseLibrary.byId(it.libId)?.muscle }.eachCount()
+                        .maxByOrNull { it.value }
+                    assertTrue("${day.key} ($d-day) has ${worst?.value}× ${worst?.key}",
+                        (worst?.value ?: 0) <= 3)
+                }
+        }
+    }
+
+    @Test
+    fun twoDayPlanCoversGlutesRearDeltsAndCalves() {
+        // Regression: both full-body days used the same template, so a 2-day plan trained glutes,
+        // rear delts and calves ZERO times a week. Full Body B now carries them.
+        val muscles = ProgramGenerator.generate(GenerationParams(2), mwm, emptySet(), emptySet(), seed = 6L)
+            .flatMap { it.exercises }.mapNotNull { ExerciseLibrary.byId(it.libId)?.muscle }.toSet()
+        listOf(MuscleGroup.GLUTES, MuscleGroup.REAR_DELTS, MuscleGroup.CALVES).forEach { m ->
+            assertTrue("2-day plan should train $m", m in muscles)
+        }
+    }
+
+    @Test
+    fun equippedHeavySlotsRarelyLeadWithBodyweightAmrap() {
+        // An equipped user's heavy chest slot should be a loadable press, not AMRAP push-ups —
+        // pickBias + the non-loadable STRENGTH penalty keep them out. Statistical over many seeds.
+        val n = 80
+        val amrapLeads = (0 until n).count { s ->
+            val lead = ProgramGenerator.generate(GenerationParams(3), mwm, emptySet(), emptySet(), seed = s.toLong())
+                .first { it.key == "push" }.exercises.first()
+            ExerciseLibrary.byId(lead.libId)!!.defaultReps == "AMRAP"
+        }
+        assertTrue("push day led with AMRAP $amrapLeads/$n times", amrapLeads <= n / 10)
+    }
+
+    @Test
+    fun lightDumbbellCeilingSteersHeavySlotsToTheStack() {
+        // With light DBs (25 lb max), the heavy chest slot should land on a plate-stack movement
+        // (machine press) far more often than without a ceiling — the only real overload path.
+        fun stackLeads(dbMaxLb: Double?): Int = (0 until 80).count { s ->
+            val lead = ProgramGenerator.generate(
+                GenerationParams(3, dbMaxLb = dbMaxLb), mwm, emptySet(), emptySet(), seed = s.toLong()
+            ).first { it.key == "push" }.exercises.first()
+            ExerciseLibrary.byId(lead.libId)!!.unit == ExerciseUnit.PLATES
+        }
+        val light = stackLeads(25.0)
+        val none = stackLeads(null)
+        assertTrue("light-DB plans should lead with the stack more often ($light vs $none)", light > none)
+    }
+
+    @Test
+    fun coachAvoidedMovementsArePickedLessOften() {
+        // A movement the coach tried that failed (CoachGenBias.avoid) is softly steered around.
+        fun benchLeads(avoid: Set<String>): Int = (0 until 80).count { s ->
+            ProgramGenerator.generate(
+                GenerationParams(3, avoid = avoid), mwm, emptySet(), emptySet(), seed = s.toLong()
+            ).first { it.key == "push" }.exercises.any { it.libId == "incline-db-bench-press" }
+        }
+        val avoided = benchLeads(setOf("incline-db-bench-press"))
+        val normal = benchLeads(emptySet())
+        assertTrue("avoided movement should appear less ($avoided vs $normal)", avoided < normal)
+    }
+
+    @Test
+    fun volumeBiasFlowsThroughToGeneratedSets() {
+        fun chestSets(bias: Map<MuscleGroup, Int>) = ProgramGenerator.generate(
+            GenerationParams(3, volumeBias = bias), mwm, emptySet(), emptySet(), seed = 4L
+        ).flatMap { it.exercises }
+            .filter { ExerciseLibrary.byId(it.libId)?.muscle == MuscleGroup.CHEST }
+            .sumOf { it.sets }
+        assertEquals(chestSets(emptyMap()) + 1, chestSets(mapOf(MuscleGroup.CHEST to 1)))
+    }
+
+    @Test
+    fun nicheAccessoriesArePickedLessOftenThanDefaults() {
+        // pickBias: the inner-thigh adductor cross (0.35) must headline quad slots clearly less
+        // often than the leg extension (1.0). Statistical over many seeds.
+        var innerThigh = 0
+        var legExtension = 0
+        repeat(100) { s ->
+            ProgramGenerator.generate(GenerationParams(3), mwm, emptySet(), emptySet(), seed = s.toLong())
+                .flatMap { it.exercises }.forEach {
+                    when (it.libId) {
+                        "mwm-inner-thigh" -> innerThigh++
+                        "leg-extension" -> legExtension++
+                    }
+                }
+        }
+        assertTrue("inner thigh ($innerThigh) should appear less than leg extension ($legExtension)",
+            innerThigh < legExtension)
+    }
+
     @Test
     fun dayCountDrivesStructure() {
         assertEquals(3, ProgramGenerator.generate(GenerationParams(3), emptySet(), emptySet(), emptySet(), seed = 1L).size)
@@ -57,11 +170,11 @@ class ProgramGeneratorTest {
     }
 
     @Test
-    fun liftDaysHaveFiveToSixExercises() {
-        // Phase 4 tuning: each session should be a "standard" 5-6 movements (with full equipment).
+    fun liftDaysHaveFiveToSevenExercises() {
+        // Phase 4 tuning: each session should be a "standard" 5-7 movements (with full equipment).
         val days = ProgramGenerator.generate(GenerationParams(3), emptySet(), emptySet(), emptySet(), seed = 11L)
         days.forEach { d ->
-            assertTrue("${d.key} has ${d.exercises.size} exercises", d.exercises.size in 5..6)
+            assertTrue("${d.key} has ${d.exercises.size} exercises", d.exercises.size in 5..7)
         }
     }
 

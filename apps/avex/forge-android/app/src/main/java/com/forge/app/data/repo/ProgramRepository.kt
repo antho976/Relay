@@ -40,6 +40,7 @@ class ProgramRepository @Inject constructor(
     private val dao: ProgramDao,
     private val customizationDao: ProgramCustomizationDao,
     private val sessionDao: SessionDao,
+    private val coachDao: com.forge.app.data.db.dao.CoachDao,
     private val settings: SettingsRepository,
     @ApplicationContext private val context: Context
 ) {
@@ -53,6 +54,16 @@ class ProgramRepository @Inject constructor(
         loadIntoFacade()
     }
 
+    /**
+     * What every (re)generation learns from the coach's record (auto-coach): applied volume
+     * changes become baseline bias, proven swap replacements are boosted like likes, failed ones
+     * softly avoided. Re-derived from the same rows on every call — idempotent, never compounds.
+     * Empty history → exactly the un-coached behavior.
+     */
+    private suspend fun coachBias(): com.forge.app.domain.coach.GenBias =
+        runCatching { com.forge.app.domain.coach.CoachGenBias.from(coachDao.allDecisions()) }
+            .getOrDefault(com.forge.app.domain.coach.GenBias.NEUTRAL)
+
     /** Generate a fresh program from [params] + equipment/like/dislike, persist it, and load it (Phase 2). */
     suspend fun generate(
         params: GenerationParams,
@@ -62,7 +73,13 @@ class ProgramRepository @Inject constructor(
         recent: Set<String> = emptySet(),
         seed: Long = System.nanoTime()
     ) {
-        val generated = ProgramGenerator.generate(params, available, liked, disliked, recent, seed)
+        // The regenerate is about to clear the customization overlay (reconcile below) — fold the
+        // coach's learned adjustments into the new BASELINE so they survive the refresh.
+        val bias = coachBias()
+        val generated = ProgramGenerator.generate(
+            params.copy(volumeBias = bias.volumeBias, avoid = params.avoid + bias.avoid),
+            available, liked + bias.prefer, disliked, recent, seed
+        )
         val days = ArrayList<ProgramDay>()
         val slots = ArrayList<ProgramSlot>()
         generated.forEachIndexed { i, gd ->
@@ -102,7 +119,8 @@ class ProgramRepository @Inject constructor(
         problemAreas = settings.problemAreas.first().mapNotNull { ProblemArea.fromCode(it) }.toSet(),
         priorityMuscles = settings.priorityMuscles.first()
             .mapNotNull { runCatching { MuscleGroup.fromCode(it) }.getOrNull() }.toSet(),
-        pinned = settings.pinnedExercises.first()
+        pinned = settings.pinnedExercises.first(),
+        dbMaxLb = settings.maxDbWeightLb.first()
     )
 
     private suspend fun currentEquipment(): Set<Equipment> = settings.availableEquipment.first()
@@ -126,9 +144,11 @@ class ProgramRepository @Inject constructor(
         // Anti-repeat against the WHOLE current week, not just this day, so a single-day re-roll
         // doesn't hand back a movement another (unchanged) day already uses.
         val recent = Program.days.flatMap { it.exercises }.map { it.id }.toSet()
+        val bias = coachBias()
         val fresh = ProgramGenerator.generate(
-            currentParams(), currentEquipment(),
-            settings.likedExercises.first(), settings.dislikedExercises.first(),
+            currentParams().let { it.copy(volumeBias = bias.volumeBias, avoid = it.avoid + bias.avoid) },
+            currentEquipment(),
+            settings.likedExercises.first() + bias.prefer, settings.dislikedExercises.first(),
             recent, System.nanoTime()
         )
         val day = fresh.firstOrNull { it.key == dayKey } ?: return

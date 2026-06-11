@@ -86,4 +86,42 @@ class MigrationTest {
                 "AND name IN ('index_rest_event_session_id','index_rest_event_exercise_id','index_advice_event_advice_id')"
         ).use { assertEquals("adaptation indices should exist after 15→16", 3, it.count) }
     }
+
+    @Test
+    fun migrate17To18_addsSuggestionOutcomeTable() {
+        helper.createDatabase(dbName, 17).close()
+        val db = helper.runMigrationsAndValidate(dbName, 18, true, MIGRATION_17_18)
+
+        db.query(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name = 'suggestion_outcome'"
+        ).use { assertEquals("suggestion_outcome should exist after 17→18", 1, it.count) }
+    }
+
+    @Test
+    fun migrate18To19_addsDecisionLifecycleColumns() {
+        helper.createDatabase(dbName, 18).close()
+        val db = helper.runMigrationsAndValidate(dbName, 19, true, MIGRATION_18_19)
+
+        db.query("PRAGMA table_info(`coach_decision`)").use { cursor ->
+            val cols = mutableSetOf<String>()
+            while (cursor.moveToNext()) cols += cursor.getString(cursor.getColumnIndexOrThrow("name"))
+            listOf("day_key", "payload", "applied_at", "outcome", "undo_data").forEach {
+                assertEquals("column $it should exist after 18→19", true, it in cols)
+            }
+        }
+    }
+
+    @Test
+    fun migrate16To17_addsCoachTables() {
+        helper.createDatabase(dbName, 16).close()
+        val db = helper.runMigrationsAndValidate(dbName, 17, true, MIGRATION_16_17)
+
+        db.query(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('coach_pass','coach_decision')"
+        ).use { assertEquals("coach tables should exist after 16→17", 2, it.count) }
+
+        db.query(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name = 'index_coach_decision_week_id'"
+        ).use { assertEquals("coach decision index should exist after 16→17", 1, it.count) }
+    }
 }

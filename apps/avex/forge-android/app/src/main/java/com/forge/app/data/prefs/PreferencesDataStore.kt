@@ -134,4 +134,13 @@ object PreferenceKeys {
 
     /** Weight of one plate (in lb) for plate-loaded machine/cable exercises. Default 15 (MWM-989). */
     val PLATE_WEIGHT_LB = doublePreferencesKey("plate_weight_lb")
+
+    /** Heaviest dumbbell owned (lb). Absent/0 = no ceiling (auto-coach Phase 0). */
+    val MAX_DB_WEIGHT_LB = doublePreferencesKey("max_db_weight_lb")
+
+    /** Coach mode (auto-coach Phase 4): "suggest" (default) | "auto" (earned auto-apply). */
+    val COACH_MODE = stringPreferencesKey("coach_mode")
+
+    /** ISO week id of the most recent Week Brief the user has seen — drives the "new report" banner. */
+    val LAST_SEEN_COACH_WEEK_ID = stringPreferencesKey("last_seen_coach_week_id")
 }

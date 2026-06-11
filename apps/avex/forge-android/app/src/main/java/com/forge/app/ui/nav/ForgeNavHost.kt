@@ -37,6 +37,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.forge.app.ui.cardio.CardioScreen
+import com.forge.app.ui.coach.CoachBriefScreen
 import com.forge.app.ui.gym.history.SessionHistoryScreen
 import com.forge.app.ui.gym.notes.NotesSearchScreen
 import com.forge.app.ui.gym.train.DayListScreen
@@ -62,7 +63,7 @@ fun ForgeNavHost() {
     val dur = ForgeMotion.DurationEmphasized
     val slide: (Int) -> Int = { it / 6 }       // horizontal distance — modest, not full width
     val rise: (Int) -> Int = { it / 4 }        // vertical distance for modal mode screens
-    val modalRoutes = setOf(Routes.GYM_DAY, Routes.RECAP, Routes.PROGRAM_EDITOR)
+    val modalRoutes = setOf(Routes.GYM_DAY, Routes.RECAP, Routes.PROGRAM_EDITOR, Routes.COACH_BRIEF)
     // One-shot fade so the first screen eases in on cold launch instead of snapping on.
     var appeared by remember { mutableStateOf(false) }
     val rootAlpha by animateFloatAsState(
@@ -110,7 +111,8 @@ fun ForgeNavHost() {
                 onGoToTrophies = { nav.navigate(Routes.TROPHIES) },
                 onGoToStats = { nav.navigate(Routes.GYM_STATS) },
                 onGoToNutrition = { nav.navigate(Routes.NUTRITION) },
-                onGoToSettings = { nav.navigate(Routes.SETTINGS) }
+                onGoToSettings = { nav.navigate(Routes.SETTINGS) },
+                onOpenCoachBrief = { nav.navigate(Routes.COACH_BRIEF) }
             )
         }
         composable(Routes.GYM_TRAIN) {
@@ -170,10 +172,16 @@ fun ForgeNavHost() {
             TrophiesScreen(onBack = { nav.popBackStack() })
         }
         composable(Routes.SETTINGS) {
-            SettingsScreen(onBack = { nav.popBackStack() })
+            SettingsScreen(
+                onBack = { nav.popBackStack() },
+                onOpenCoachBrief = { nav.navigate(Routes.COACH_BRIEF) }
+            )
         }
         composable(Routes.RECAP) {
             RecapScreen(onBack = { nav.popBackStack() })
+        }
+        composable(Routes.COACH_BRIEF) {
+            CoachBriefScreen(onBack = { nav.popBackStack() })
         }
         composable(
             route = Routes.PROGRAM_EDITOR,

@@ -96,10 +96,81 @@ val MIGRATION_15_16 = object : Migration(15, 16) {
     }
 }
 
+/**
+ * v16 → v17: auto-coach tables (Phase 1, shadow mode). `coach_pass` is one row per Weekly
+ * Coach Pass keyed by ISO week id (idempotent triggers); `coach_decision` holds the pass's
+ * shadow adjustments. New empty tables — additive, no existing data touched.
+ */
+val MIGRATION_16_17 = object : Migration(16, 17) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `coach_pass` (" +
+                "`week_id` TEXT NOT NULL, " +
+                "`ran_at` INTEGER NOT NULL, " +
+                "`status` TEXT NOT NULL, " +
+                "`hold_reason` TEXT, " +
+                "PRIMARY KEY(`week_id`))"
+        )
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `coach_decision` (" +
+                "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "`week_id` TEXT NOT NULL, " +
+                "`type` TEXT NOT NULL, " +
+                "`target_key` TEXT NOT NULL, " +
+                "`target_name` TEXT NOT NULL, " +
+                "`summary` TEXT NOT NULL, " +
+                "`reason` TEXT NOT NULL, " +
+                "`status` TEXT NOT NULL)"
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_coach_decision_week_id` ON `coach_decision` (`week_id`)")
+    }
+}
+
+/**
+ * v17 → v18: `suggestion_outcome` (auto-coach Phase 2) — what the weight chip suggested vs
+ * what the user lifted and how the set went, the calibrator's signal. New empty table —
+ * additive, no existing data touched.
+ */
+val MIGRATION_17_18 = object : Migration(17, 18) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `suggestion_outcome` (" +
+                "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "`exercise_id` TEXT NOT NULL, " +
+                "`unit` TEXT NOT NULL, " +
+                "`suggested_lb` REAL NOT NULL, " +
+                "`taken_lb` REAL NOT NULL, " +
+                "`reps` INTEGER NOT NULL, " +
+                "`range_text` TEXT NOT NULL, " +
+                "`logged_at` INTEGER NOT NULL)"
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_suggestion_outcome_exercise_id` ON `suggestion_outcome` (`exercise_id`)")
+    }
+}
+
+/**
+ * v18 → v19: coach_decision gains the propose/apply lifecycle (auto-coach Phase 3) —
+ * day_key + payload (apply arguments), applied_at + undo_data (per-change delta undo),
+ * outcome (the watcher's verdict). Additive ALTERs with defaults; existing shadow rows keep
+ * their meaning.
+ */
+val MIGRATION_18_19 = object : Migration(18, 19) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `coach_decision` ADD COLUMN `day_key` TEXT NOT NULL DEFAULT ''")
+        db.execSQL("ALTER TABLE `coach_decision` ADD COLUMN `payload` TEXT")
+        db.execSQL("ALTER TABLE `coach_decision` ADD COLUMN `applied_at` INTEGER")
+        db.execSQL("ALTER TABLE `coach_decision` ADD COLUMN `outcome` TEXT NOT NULL DEFAULT 'pending'")
+        db.execSQL("ALTER TABLE `coach_decision` ADD COLUMN `undo_data` TEXT")
+    }
+}
+
 /** All migrations, in order. Register every new one here. */
 val ALL_MIGRATIONS: Array<Migration> = arrayOf(
     MIGRATION_12_13,
     MIGRATION_13_14,
     MIGRATION_14_15,
-    MIGRATION_15_16
+    MIGRATION_15_16,
+    MIGRATION_16_17,
+    MIGRATION_17_18,
+    MIGRATION_18_19
 )

@@ -258,6 +258,20 @@ internal fun DayViewModel.logSet(exerciseId: String, weightText: String, reps: I
             weightLb = newWeightLb,
             reps = reps
         )
+
+        // First set of this exercise while a suggestion chip was showing → record suggestion vs
+        // reality for the coach's step calibration (auto-coach Phase 2). Write-only, no reads.
+        val suggestedLb = currentUi.suggestedTargetLb
+        if (currentUi.loggedSets.isEmpty() && newWeightLb != null && suggestedLb != null) {
+            workoutRepo.recordSuggestionOutcome(
+                exerciseId = exerciseId,
+                unitCode = plan.unit.code,
+                suggestedLb = suggestedLb,
+                takenLb = newWeightLb,
+                reps = reps,
+                rangeText = plan.reps
+            )
+        }
         refreshExercise(exerciseId)
 
         val updatedEx = _state.value.exercises.firstOrNull { it.plan.id == exerciseId }
