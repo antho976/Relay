@@ -4,6 +4,9 @@ import android.content.Intent
 import com.forge.app.program.Program
 import com.forge.app.service.SessionNotifState
 import com.forge.app.service.WorkoutSessionService
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 
@@ -29,14 +32,24 @@ internal suspend fun DayViewModel.refreshExercises() {
         .mapNotNull { Program.exercise(it.exerciseId) }
     val allPlans = effectivePlans + extraPlans
 
-    val built = allPlans.mapIndexed { index, plan ->
-        buildExerciseUi(
-            plan = plan,
-            logged = byExerciseId[plan.id],
-            expandedDefault = (index == 0),
-            expandedOverride = previousExpandedById[plan.id],
-            bonusSets = previousBonusById[plan.id] ?: 0
-        )
+    // Each card's build is independent DB reads — fan them out concurrently instead of
+    // deriving the day one exercise at a time (the dominant cost of opening the screen).
+    val plateLb = settingsRepo.plateWeightLb.first()
+    val dbMaxLb = settingsRepo.maxDbWeightLb.first()
+    val built = coroutineScope {
+        allPlans.mapIndexed { index, plan ->
+            async {
+                buildExerciseUi(
+                    plan = plan,
+                    logged = byExerciseId[plan.id],
+                    expandedDefault = (index == 0),
+                    expandedOverride = previousExpandedById[plan.id],
+                    plateLb = plateLb,
+                    dbMaxLb = dbMaxLb,
+                    bonusSets = previousBonusById[plan.id] ?: 0
+                )
+            }
+        }.awaitAll()
     }
     // Preserve any manual reordering (MoveExercise) made this session: items keep their prior
     // relative position; brand-new items fall to the end in plan order.
@@ -69,6 +82,8 @@ internal suspend fun DayViewModel.refreshExercise(exerciseId: String) {
         logged = logged,
         expandedDefault = idx == 0,
         expandedOverride = existing.isExpanded,
+        plateLb = settingsRepo.plateWeightLb.first(),
+        dbMaxLb = settingsRepo.maxDbWeightLb.first(),
         bonusSets = existing.bonusSets
     )
     val newList = current.toMutableList().also { it[idx] = rebuilt }

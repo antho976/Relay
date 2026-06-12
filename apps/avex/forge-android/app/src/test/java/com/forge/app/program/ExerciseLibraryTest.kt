@@ -31,10 +31,12 @@ class ExerciseLibraryTest {
     }
 
     @Test
-    fun swapCandidates_emptyEquipmentMeansAll() {
-        val all = ExerciseLibrary.forMuscle(MuscleGroup.CHEST)
+    fun swapCandidates_emptyEquipmentMeansAllEquippable() {
+        // Empty equipment = no equipment filtering, but owner-only (plate-count) station movements
+        // are still excluded from ordinary pools — general users get the generic lb equivalents.
+        val equippable = ExerciseLibrary.forMuscle(MuscleGroup.CHEST).filter { !it.curatedOnly }
         val candidates = ExerciseLibrary.swapCandidates(MuscleGroup.CHEST, emptySet(), emptySet())
-        assertTrue("empty equipment = no filtering", candidates.size == all.size)
+        assertTrue("empty equipment = all equippable (curated excluded)", candidates.size == equippable.size)
     }
 
     @Test

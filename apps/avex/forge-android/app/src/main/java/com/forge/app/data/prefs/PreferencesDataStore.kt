@@ -81,6 +81,12 @@ object PreferenceKeys {
     // ─── Equipment context (#44) ──────────────────────────────────────────────
     /** Set of Equipment code strings the user has available. Empty = all equipment assumed available. */
     val AVAILABLE_EQUIPMENT = stringSetPreferencesKey("available_equipment")
+    /**
+     * Curated/frozen exercise-pool ids (a preset such as the Developer's preset). Absent = no
+     * curation (ordinary equipment filtering). When present, generation, swaps and the like/dislike
+     * screen all draw only from these ids.
+     */
+    val FROZEN_EXERCISE_IDS = stringSetPreferencesKey("frozen_exercise_ids")
 
     // ─── Plan tomorrow (#147) ─────────────────────────────────────────────────
     /** Day key the user intends to train next (e.g. "upper-a"). Empty = not set. */
@@ -100,6 +106,8 @@ object PreferenceKeys {
     val ONBOARDING_DONE = booleanPreferencesKey("onboarding_done")
     /** User's initial goal: "build_muscle" | "lose_weight" | "get_stronger" | "general_fitness" */
     val USER_GOAL = stringPreferencesKey("user_goal")
+    /** User's sex for bodyweight-relative strength standards: "male" | "female" | "" (unspecified). */
+    val USER_SEX = stringPreferencesKey("user_sex")
 
     // ─── Program generation (program-unlock) ──────────────────────────────────
     /** Training days/week the program targets — drives the split template (3-day ≠ 7-day). */

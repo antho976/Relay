@@ -46,7 +46,18 @@ data class ExerciseDef(
      * stated priority) that should anchor its slot most weeks.
      */
     val pickBias: Double = 1.0
-)
+) {
+    /**
+     * Owner-only movement — the plate-count ([ExerciseUnit.PLATES]) station exercises, which are
+     * specific to Antho's MWM-989 machine (you enter a plate count, not a stack weight). General
+     * selectorized machines and cables are entered in lb ([ExerciseUnit.WEIGHT]) instead, so this
+     * captures exactly the `mwm-*` stations plus the leg developer's extension/curl. A curated
+     * movement appears ONLY inside a curated/frozen preset (the Developer's preset), never in an
+     * ordinary equipment-filtered pool — general users get the generically-named lb equivalents.
+     * See [ExerciseLibrary.availablePool] and [com.forge.app.program.equipmentPresets].
+     */
+    val curatedOnly: Boolean get() = unit == ExerciseUnit.PLATES
+}
 
 object ExerciseLibrary {
 
@@ -501,7 +512,300 @@ object ExerciseLibrary {
             muscleTarget = "Glutes + hamstrings, one side",
             why = "Lie on your back, one foot planted, drive your hips up on a single leg. Loads the glute hard with just bodyweight.",
             whenToUse = "Bodyweight only — your glute builder.",
-            fallbackOnly = true)
+            fallbackOnly = true),
+
+        // ═══ Generalized library (2026-06-11) — for users beyond the owner's MWM-989 home gym ═══
+        // Barbell / Smith / trap-bar / EZ-bar / kettlebell / band movements + generic (non-MWM)
+        // machine & cable work. All read in lb (ExerciseUnit.WEIGHT, not plate-count), so none are
+        // curatedOnly — they fill ordinary equipment-filtered pools that the owner's frozen preset
+        // never draws from.
+
+        // ── Chest (generalized) ──
+        ExerciseDef("barbell-bench-press", "Barbell Bench Press", MuscleGroup.CHEST,
+            listOf(Equipment.BARBELL, Equipment.BENCH), ExerciseUnit.WEIGHT,
+            listOf(COMP, FW), Difficulty.INTERMEDIATE, 3, "5-8", "Shoulder blades pinched, bar to mid-chest",
+            muscleTarget = "Whole chest — the heaviest pressing option",
+            why = "The most loadable chest builder. A barbell lets you add weight in small jumps for years.",
+            whenToUse = "Default heavy chest lift if you have a barbell and a rack or bench with uprights."),
+        ExerciseDef("incline-barbell-bench", "Incline Barbell Bench", MuscleGroup.CHEST,
+            listOf(Equipment.BARBELL, Equipment.INCLINE_BENCH), ExerciseUnit.WEIGHT,
+            listOf(COMP, FW), Difficulty.INTERMEDIATE, 3, "6-10", "Bench at ~30°, bar to upper chest",
+            muscleTarget = "Upper chest",
+            why = "Loads the upper chest heavier than dumbbells — fills out the top of the chest.",
+            whenToUse = "Upper chest lags and you want to push real weight."),
+        ExerciseDef("machine-chest-press", "Machine Chest Press", MuscleGroup.CHEST,
+            listOf(Equipment.MACHINE), ExerciseUnit.WEIGHT,
+            listOf(COMP, MC), Difficulty.BEGINNER, 3, "8-12", "Handles at mid-chest height",
+            muscleTarget = "Whole chest, fixed path",
+            why = "The machine guides the path so you can push hard without balancing the load — push to failure safely.",
+            whenToUse = "Your main machine chest press at a commercial gym."),
+        ExerciseDef("pec-deck", "Pec Deck", MuscleGroup.CHEST,
+            listOf(Equipment.MACHINE), ExerciseUnit.WEIGHT,
+            listOf(ISO, MC), Difficulty.BEGINNER, 3, "12-15", "Squeeze the pads together, slow return",
+            muscleTarget = "Chest only (squeeze)",
+            why = "Isolates the chest with constant tension and no triceps — a clean finisher after pressing.",
+            whenToUse = "Second chest movement after a press."),
+        ExerciseDef("cable-fly", "Cable Fly", MuscleGroup.CHEST,
+            listOf(Equipment.CABLE), ExerciseUnit.WEIGHT,
+            listOf(ISO, MC), Difficulty.BEGINNER, 3, "12-15", "Slight elbow bend, hug it out then in",
+            muscleTarget = "Chest only (stretch + squeeze)",
+            why = "Cables keep tension on the chest through the whole range — stretch at the bottom, squeeze at the top.",
+            whenToUse = "Chest isolation when you have a cable stack."),
+        ExerciseDef("smith-bench-press", "Smith Bench Press", MuscleGroup.CHEST,
+            listOf(Equipment.SMITH_MACHINE, Equipment.BENCH), ExerciseUnit.WEIGHT,
+            listOf(COMP, MC), Difficulty.BEGINNER, 3, "6-10", "Fixed bar path, control the descent",
+            muscleTarget = "Whole chest, guided bar",
+            why = "The fixed bar path lets you press heavy without a spotter — a safe way to overload the chest.",
+            whenToUse = "Heavy pressing when training alone."),
+
+        // ── Back (generalized) ──
+        ExerciseDef("barbell-row", "Barbell Row", MuscleGroup.BACK,
+            listOf(Equipment.BARBELL), ExerciseUnit.WEIGHT,
+            listOf(COMP, FW), Difficulty.INTERMEDIATE, 4, "6-10", "Hinge ~45°, pull the bar to your lower ribs",
+            muscleTarget = "Whole back — thickness",
+            why = "The heaviest horizontal pull. Builds back thickness and grip, and loads easily over time.",
+            whenToUse = "Default heavy back builder if you have a barbell."),
+        ExerciseDef("lat-pulldown", "Lat Pulldown", MuscleGroup.BACK,
+            listOf(Equipment.MACHINE), ExerciseUnit.WEIGHT,
+            listOf(COMP, MC), Difficulty.BEGINNER, 4, "8-12", "Wide grip, pull to the upper chest",
+            muscleTarget = "Lats — back width",
+            why = "Builds the V-taper and is easier to learn than pull-ups. Set any weight to hit any rep range.",
+            whenToUse = "Your main machine back-width exercise."),
+        ExerciseDef("seated-cable-row", "Seated Cable Row", MuscleGroup.BACK,
+            listOf(Equipment.CABLE), ExerciseUnit.WEIGHT,
+            listOf(COMP, MC), Difficulty.BEGINNER, 3, "10-12", "Chest tall, pull to your stomach, squeeze",
+            muscleTarget = "Mid-back thickness",
+            why = "Constant cable tension builds the middle back with a strong squeeze and no lower-back strain.",
+            whenToUse = "Horizontal pull when you have a cable row station."),
+
+        // ── Shoulders (generalized) ──
+        ExerciseDef("barbell-overhead-press", "Barbell Overhead Press", MuscleGroup.SHOULDERS,
+            listOf(Equipment.BARBELL), ExerciseUnit.WEIGHT,
+            listOf(COMP, FW), Difficulty.INTERMEDIATE, 3, "5-8", "Brace hard, press overhead, ribs down",
+            muscleTarget = "Front + side delts, strength",
+            why = "The strongest pressing movement for the shoulders — builds size and overhead strength.",
+            whenToUse = "Heavy shoulder day lead if you have a barbell."),
+        ExerciseDef("machine-shoulder-press", "Machine Shoulder Press", MuscleGroup.SHOULDERS,
+            listOf(Equipment.MACHINE), ExerciseUnit.WEIGHT,
+            listOf(COMP, MC), Difficulty.BEGINNER, 3, "8-12", "Press to nearly locked, control down",
+            muscleTarget = "Front + side delts",
+            why = "Guided overhead press — push the shoulders hard without balancing dumbbells.",
+            whenToUse = "Machine alternative to the overhead press."),
+        ExerciseDef("cable-lateral-raise", "Cable Lateral Raise", MuscleGroup.SHOULDERS,
+            listOf(Equipment.CABLE), ExerciseUnit.WEIGHT,
+            listOf(ISO, MC), Difficulty.BEGINNER, 3, "12-15", "Cable behind you, raise to shoulder height",
+            muscleTarget = "Side delts — width, constant tension",
+            why = "A cable keeps tension on the side delt at the bottom where dumbbells go light — often grows width faster.",
+            whenToUse = "Side-delt work when you have a low cable.",
+            pickBias = 1.2),
+        ExerciseDef("smith-shoulder-press", "Smith Shoulder Press", MuscleGroup.SHOULDERS,
+            listOf(Equipment.SMITH_MACHINE), ExerciseUnit.WEIGHT,
+            listOf(COMP, MC), Difficulty.BEGINNER, 3, "6-10", "Seated, fixed path overhead",
+            muscleTarget = "Front + side delts, guided",
+            why = "The fixed path lets you overload the press safely with no balancing.",
+            whenToUse = "Heavy overhead pressing when training alone.",
+            pickBias = 0.7),
+        ExerciseDef("kb-press", "KB Overhead Press", MuscleGroup.SHOULDERS,
+            listOf(Equipment.KETTLEBELL), ExerciseUnit.WEIGHT,
+            listOf(COMP, FW), Difficulty.INTERMEDIATE, 3, "6-10", "Bell in the rack position, press overhead",
+            muscleTarget = "Front + side delts",
+            why = "The kettlebell's offset weight makes the shoulder and core work harder to stabilize each press.",
+            whenToUse = "Overhead pressing with a kettlebell.",
+            pickBias = 0.8),
+        ExerciseDef("band-lateral-raise", "Band Lateral Raise", MuscleGroup.SHOULDERS,
+            listOf(Equipment.RESISTANCE_BAND), ExerciseUnit.BODYWEIGHT,
+            listOf(ISO, BW), Difficulty.BEGINNER, 3, "15-20", "Stand on the band, raise to shoulder height",
+            muscleTarget = "Side delts",
+            why = "Stand on a band and raise out to the sides — resistance rises at the top where the side delt works hardest.",
+            whenToUse = "Side-delt work when all you have is a band.",
+            fallbackOnly = true),
+
+        // ── Rear delts (generalized) ──
+        ExerciseDef("face-pull", "Face Pull", MuscleGroup.REAR_DELTS,
+            listOf(Equipment.CABLE), ExerciseUnit.WEIGHT,
+            listOf(ISO, MC), Difficulty.BEGINNER, 3, "15-20", "Rope to your forehead, elbows high",
+            muscleTarget = "Rear delts + upper back, posture",
+            why = "The best rear-delt and posture exercise — pulls the shoulders back and balances all that pressing.",
+            whenToUse = "Default rear-delt work when you have a cable.",
+            pickBias = 1.2),
+        ExerciseDef("reverse-pec-deck", "Reverse Pec Deck", MuscleGroup.REAR_DELTS,
+            listOf(Equipment.MACHINE), ExerciseUnit.WEIGHT,
+            listOf(ISO, MC), Difficulty.BEGINNER, 3, "12-15", "Arms out like wings, squeeze the rear delts",
+            muscleTarget = "Rear delts",
+            why = "Isolates the rear delts with a guided path — easy to feel and progress.",
+            whenToUse = "Rear-delt isolation at a commercial gym."),
+        ExerciseDef("band-pull-apart", "Band Pull-Apart", MuscleGroup.REAR_DELTS,
+            listOf(Equipment.RESISTANCE_BAND), ExerciseUnit.BODYWEIGHT,
+            listOf(ISO, BW), Difficulty.BEGINNER, 3, "15-20", "Arms straight, pull the band apart to your chest",
+            muscleTarget = "Rear delts + upper back",
+            why = "Hold a band at arm's length and pull it apart. Endless rear-delt and posture volume with minimal gear.",
+            whenToUse = "Rear-delt and posture work when all you have is a band."),
+
+        // ── Biceps (generalized) ──
+        ExerciseDef("barbell-curl", "Barbell Curl", MuscleGroup.BICEPS,
+            listOf(Equipment.BARBELL), ExerciseUnit.WEIGHT,
+            listOf(ISO, FW), Difficulty.BEGINNER, 3, "8-12", "Elbows pinned, no swinging",
+            muscleTarget = "Whole bicep — heaviest curl",
+            why = "Lets you load both arms heavier than dumbbells — the classic mass builder for the biceps.",
+            whenToUse = "Default heavy curl if you have a barbell."),
+        ExerciseDef("ez-bar-curl", "EZ-Bar Curl", MuscleGroup.BICEPS,
+            listOf(Equipment.EZ_BAR), ExerciseUnit.WEIGHT,
+            listOf(ISO, FW), Difficulty.BEGINNER, 3, "8-12", "Angled grip, elbows still",
+            muscleTarget = "Whole bicep, wrist-friendly",
+            why = "The angled bar is easier on the wrists than a straight bar while still loading heavy.",
+            whenToUse = "Heavy curls when a straight bar bothers your wrists."),
+        ExerciseDef("cable-curl", "Cable Curl", MuscleGroup.BICEPS,
+            listOf(Equipment.CABLE), ExerciseUnit.WEIGHT,
+            listOf(ISO, MC), Difficulty.BEGINNER, 3, "10-15", "Constant tension top to bottom",
+            muscleTarget = "Whole bicep, constant tension",
+            why = "A cable keeps the bicep loaded the whole rep — great pump and easy to progress.",
+            whenToUse = "Bicep work when you have a low cable."),
+        ExerciseDef("preacher-curl", "Preacher Curl", MuscleGroup.BICEPS,
+            listOf(Equipment.MACHINE), ExerciseUnit.WEIGHT,
+            listOf(ISO, MC), Difficulty.BEGINNER, 3, "10-12", "Arms braced on the pad, full range",
+            muscleTarget = "Lower bicep, strict",
+            why = "Bracing your arms on the pad removes all swing — pure bicep, with a strong stretch at the bottom.",
+            whenToUse = "When you catch yourself swinging on standing curls."),
+
+        // ── Triceps (generalized) ──
+        ExerciseDef("close-grip-bench-press", "Close-Grip Bench Press", MuscleGroup.TRICEPS,
+            listOf(Equipment.BARBELL, Equipment.BENCH), ExerciseUnit.WEIGHT,
+            listOf(COMP, FW), Difficulty.INTERMEDIATE, 3, "6-10", "Hands shoulder-width, elbows tucked",
+            muscleTarget = "Triceps + chest",
+            why = "The heaviest triceps movement — a barbell press with a close grip that overloads the triceps.",
+            whenToUse = "When you want to load triceps heavy alongside some chest."),
+        ExerciseDef("cable-tricep-pushdown", "Cable Tricep Pushdown", MuscleGroup.TRICEPS,
+            listOf(Equipment.CABLE), ExerciseUnit.WEIGHT,
+            listOf(ISO, MC), Difficulty.BEGINNER, 3, "10-15", "Elbows pinned, push to lockout",
+            muscleTarget = "Triceps (outer head)",
+            why = "The go-to triceps isolation — constant cable tension, easy to progress, easy on the elbows.",
+            whenToUse = "Default triceps work when you have a cable."),
+        ExerciseDef("ez-bar-skullcrusher", "EZ-Bar Skullcrusher", MuscleGroup.TRICEPS,
+            listOf(Equipment.EZ_BAR, Equipment.BENCH), ExerciseUnit.WEIGHT,
+            listOf(ISO, FW), Difficulty.INTERMEDIATE, 3, "8-12", "Lower the bar to your forehead, elbows still",
+            muscleTarget = "Whole triceps — mass",
+            why = "Hits all three triceps heads under a loaded stretch — a top mass builder for the arms.",
+            whenToUse = "Heavier triceps work after pressing."),
+        ExerciseDef("dip-machine", "Triceps Dip (machine)", MuscleGroup.TRICEPS,
+            listOf(Equipment.MACHINE), ExerciseUnit.WEIGHT,
+            listOf(COMP, MC), Difficulty.BEGINNER, 3, "8-12", "Press down to lockout, control up",
+            muscleTarget = "Triceps + lower chest",
+            why = "A guided dip — loads the triceps like a press without needing to support your full bodyweight.",
+            whenToUse = "Machine triceps press at a commercial gym."),
+
+        // ── Quads (generalized) ──
+        ExerciseDef("back-squat", "Back Squat", MuscleGroup.QUADS,
+            listOf(Equipment.BARBELL, Equipment.SQUAT_RACK), ExerciseUnit.WEIGHT,
+            listOf(COMP, FW), Difficulty.INTERMEDIATE, 4, "5-8", "Brace, sit between your hips, drive up",
+            muscleTarget = "Quads + glutes — the king of leg lifts",
+            why = "The most loadable lower-body movement. Builds the whole lower body and progresses for years.",
+            whenToUse = "Default heavy leg lift if you have a barbell and rack.",
+            pickBias = 1.3),
+        ExerciseDef("front-squat", "Front Squat", MuscleGroup.QUADS,
+            listOf(Equipment.BARBELL, Equipment.SQUAT_RACK), ExerciseUnit.WEIGHT,
+            listOf(COMP, FW), Difficulty.ADVANCED, 3, "6-10", "Bar on the front delts, elbows high, stay upright",
+            muscleTarget = "Quads (more than back squat)",
+            why = "The bar in front forces an upright torso, shifting the work onto the quads and sparing the lower back.",
+            whenToUse = "Quad emphasis, or when back squats bother your lower back.",
+            pickBias = 0.8),
+        ExerciseDef("leg-press", "Leg Press", MuscleGroup.QUADS,
+            listOf(Equipment.MACHINE), ExerciseUnit.WEIGHT,
+            listOf(COMP, MC), Difficulty.BEGINNER, 3, "10-15", "Feet mid-platform, knees track over toes",
+            muscleTarget = "Quads + glutes, no balance needed",
+            why = "Loads the legs heavy with zero balance or spinal load — great for pushing close to failure safely.",
+            whenToUse = "Your main machine leg builder.",
+            pickBias = 1.1),
+        ExerciseDef("hack-squat", "Hack Squat", MuscleGroup.QUADS,
+            listOf(Equipment.MACHINE), ExerciseUnit.WEIGHT,
+            listOf(COMP, MC), Difficulty.INTERMEDIATE, 3, "8-12", "Back on the pad, deep but controlled",
+            muscleTarget = "Quads (sweep)",
+            why = "A guided squat that hammers the quads — especially the outer sweep — without balancing a bar.",
+            whenToUse = "Quad-focused machine squat."),
+        ExerciseDef("smith-squat", "Smith Squat", MuscleGroup.QUADS,
+            listOf(Equipment.SMITH_MACHINE), ExerciseUnit.WEIGHT,
+            listOf(COMP, MC), Difficulty.BEGINNER, 3, "8-12", "Feet slightly forward, fixed path",
+            muscleTarget = "Quads + glutes, guided",
+            why = "The fixed path lets you squat heavy and chase the quads with no balance demand.",
+            whenToUse = "Squatting heavy when training alone.",
+            pickBias = 0.8),
+        ExerciseDef("kb-goblet-squat", "KB Goblet Squat", MuscleGroup.QUADS,
+            listOf(Equipment.KETTLEBELL), ExerciseUnit.WEIGHT,
+            listOf(COMP, FW), Difficulty.BEGINNER, 3, "10-15", "Hold the bell at your chest, sit deep",
+            muscleTarget = "Quads + glutes",
+            why = "A kettlebell at your chest keeps you upright and is the easiest squat to learn.",
+            whenToUse = "Squat pattern when a kettlebell is what you've got."),
+        ExerciseDef("pause-squat", "Pause Squat", MuscleGroup.QUADS,
+            listOf(Equipment.BARBELL, Equipment.SQUAT_RACK), ExerciseUnit.WEIGHT,
+            listOf(COMP, FW), Difficulty.ADVANCED, 3, "3-6", "2-second pause at the bottom, then drive",
+            muscleTarget = "Quads — strength out of the hole",
+            why = "Pausing at the bottom kills the bounce and builds strength and control where squats are hardest.",
+            whenToUse = "Strength block, or to fix a weak bottom position.",
+            pickBias = 0.5),
+        ExerciseDef("trap-bar-deadlift", "Trap-Bar Deadlift", MuscleGroup.QUADS,
+            listOf(Equipment.TRAP_BAR), ExerciseUnit.WEIGHT,
+            listOf(COMP, FW), Difficulty.BEGINNER, 3, "5-8", "Stand inside the bar, push the floor away",
+            muscleTarget = "Quads + glutes + back, beginner-friendly",
+            why = "Standing inside the bar keeps you more upright than a barbell deadlift — easier on the back, great for the legs.",
+            whenToUse = "A safer heavy pull than the conventional deadlift if you have a trap bar.",
+            pickBias = 0.9),
+
+        // ── Hamstrings (generalized) ──
+        ExerciseDef("barbell-rdl", "Barbell RDL", MuscleGroup.HAMSTRINGS,
+            listOf(Equipment.BARBELL), ExerciseUnit.WEIGHT,
+            listOf(COMP, FW), Difficulty.INTERMEDIATE, 4, "6-10", "Push hips back, soft knees, flat back",
+            muscleTarget = "Hamstrings + glutes — heaviest hinge",
+            why = "The most loadable hamstring builder. Push the hips back and feel the stretch, then stand tall.",
+            whenToUse = "Default heavy posterior-chain lift if you have a barbell.",
+            pickBias = 1.1),
+        ExerciseDef("conventional-deadlift", "Conventional Deadlift", MuscleGroup.HAMSTRINGS,
+            listOf(Equipment.BARBELL), ExerciseUnit.WEIGHT,
+            listOf(COMP, FW), Difficulty.ADVANCED, 3, "3-6", "Brace, push the floor away, lock out tall",
+            muscleTarget = "Whole posterior chain — hamstrings, glutes, back",
+            why = "The heaviest pull there is — builds the entire backside of the body and raw strength.",
+            whenToUse = "Heavy strength work when you have a barbell and know the hinge.",
+            pickBias = 0.9),
+        ExerciseDef("lying-leg-curl", "Lying Leg Curl", MuscleGroup.HAMSTRINGS,
+            listOf(Equipment.MACHINE), ExerciseUnit.WEIGHT,
+            listOf(ISO, MC), Difficulty.BEGINNER, 3, "10-15", "Curl your heels to your glutes, slow return",
+            muscleTarget = "Hamstrings only",
+            why = "Pure hamstring isolation with no spinal load — the only move that trains the knee-bending function.",
+            whenToUse = "Hamstring isolation, or when your lower back is tired."),
+
+        // ── Glutes (generalized) ──
+        ExerciseDef("barbell-hip-thrust", "Barbell Hip Thrust", MuscleGroup.GLUTES,
+            listOf(Equipment.BARBELL, Equipment.BENCH), ExerciseUnit.WEIGHT,
+            listOf(COMP, FW), Difficulty.INTERMEDIATE, 4, "8-12", "Upper back on the bench, drive hips to lockout",
+            muscleTarget = "Glutes — heaviest glute builder",
+            why = "The most loadable glute exercise — back on a bench, bar over the hips, squeeze hard at the top.",
+            whenToUse = "Default heavy glute work with a barbell and bench."),
+        ExerciseDef("cable-glute-kickback", "Cable Glute Kickback", MuscleGroup.GLUTES,
+            listOf(Equipment.CABLE), ExerciseUnit.WEIGHT,
+            listOf(ISO, MC), Difficulty.BEGINNER, 3, "12-15", "Cuff on the ankle, kick straight back, squeeze",
+            muscleTarget = "Glutes (isolation)",
+            why = "Isolates one glute at a time with constant cable tension — great for shaping and mind-muscle work.",
+            whenToUse = "Glute isolation when you have a low cable."),
+        ExerciseDef("kb-swing", "KB Swing", MuscleGroup.GLUTES,
+            listOf(Equipment.KETTLEBELL), ExerciseUnit.WEIGHT,
+            listOf(COMP, FW), Difficulty.INTERMEDIATE, 3, "12-15", "Hinge and snap the hips — it's not a squat",
+            muscleTarget = "Glutes + hamstrings, explosive",
+            why = "An explosive hip hinge that builds the glutes and conditioning at once — power comes from snapping the hips.",
+            whenToUse = "Glute and conditioning work with a kettlebell."),
+
+        // ── Calves (generalized) ──
+        ExerciseDef("calf-raise-machine", "Calf Raise (machine)", MuscleGroup.CALVES,
+            listOf(Equipment.MACHINE), ExerciseUnit.WEIGHT,
+            listOf(ISO, MC), Difficulty.BEGINNER, 4, "12-15", "Full stretch at the bottom, pause at the top",
+            muscleTarget = "Calves",
+            why = "Loads the calves heavier than a dumbbell can, with a big stretch — calves need both load and range.",
+            whenToUse = "Calf work at a gym with a calf machine."),
+
+        // ── Core (generalized) ──
+        ExerciseDef("cable-crunch", "Cable Crunch", MuscleGroup.CORE,
+            listOf(Equipment.CABLE), ExerciseUnit.WEIGHT,
+            listOf(ISO, MC), Difficulty.BEGINNER, 3, "12-15", "Kneel, rope by your head, crunch down",
+            muscleTarget = "Upper abs, loadable",
+            why = "Kneel at a high cable and crunch down — lets you ADD WEIGHT to ab work for real progression.",
+            whenToUse = "When you want weighted ab work with actual overload.")
     )
 
     private val byId: Map<String, ExerciseDef> = all.associateBy { it.id }
@@ -560,7 +864,33 @@ object ExerciseLibrary {
         "bw-pike-push-up" to MovementPattern.VERTICAL_PUSH,
         "bw-squat" to MovementPattern.SQUAT,
         "bw-reverse-lunge" to MovementPattern.LUNGE,
-        "bw-good-morning" to MovementPattern.HINGE
+        "bw-good-morning" to MovementPattern.HINGE,
+        // Generalized library (2026-06-11)
+        "barbell-bench-press" to MovementPattern.HORIZONTAL_PUSH,
+        "incline-barbell-bench" to MovementPattern.HORIZONTAL_PUSH,
+        "machine-chest-press" to MovementPattern.HORIZONTAL_PUSH,
+        "smith-bench-press" to MovementPattern.HORIZONTAL_PUSH,
+        "close-grip-bench-press" to MovementPattern.HORIZONTAL_PUSH,
+        "barbell-overhead-press" to MovementPattern.VERTICAL_PUSH,
+        "machine-shoulder-press" to MovementPattern.VERTICAL_PUSH,
+        "smith-shoulder-press" to MovementPattern.VERTICAL_PUSH,
+        "kb-press" to MovementPattern.VERTICAL_PUSH,
+        "dip-machine" to MovementPattern.VERTICAL_PUSH,
+        "lat-pulldown" to MovementPattern.VERTICAL_PULL,
+        "barbell-row" to MovementPattern.HORIZONTAL_PULL,
+        "seated-cable-row" to MovementPattern.HORIZONTAL_PULL,
+        "back-squat" to MovementPattern.SQUAT,
+        "front-squat" to MovementPattern.SQUAT,
+        "pause-squat" to MovementPattern.SQUAT,
+        "leg-press" to MovementPattern.SQUAT,
+        "hack-squat" to MovementPattern.SQUAT,
+        "smith-squat" to MovementPattern.SQUAT,
+        "kb-goblet-squat" to MovementPattern.SQUAT,
+        "barbell-rdl" to MovementPattern.HINGE,
+        "conventional-deadlift" to MovementPattern.HINGE,
+        "trap-bar-deadlift" to MovementPattern.HINGE,
+        "kb-swing" to MovementPattern.HINGE,
+        "cable-crunch" to MovementPattern.CORE
     )
 
     fun patternOf(def: ExerciseDef): MovementPattern =
@@ -600,7 +930,27 @@ object ExerciseLibrary {
         "bw-pike-push-up" to setOf(ProblemArea.SHOULDERS, ProblemArea.WRISTS),
         "bw-squat" to setOf(ProblemArea.KNEES),
         "bw-reverse-lunge" to setOf(ProblemArea.KNEES),
-        "bw-good-morning" to setOf(ProblemArea.LOWER_BACK)
+        "bw-good-morning" to setOf(ProblemArea.LOWER_BACK),
+        // Generalized library (2026-06-11)
+        "back-squat" to setOf(ProblemArea.KNEES, ProblemArea.LOWER_BACK),
+        "front-squat" to setOf(ProblemArea.KNEES),
+        "pause-squat" to setOf(ProblemArea.KNEES, ProblemArea.LOWER_BACK),
+        "leg-press" to setOf(ProblemArea.KNEES),
+        "hack-squat" to setOf(ProblemArea.KNEES),
+        "smith-squat" to setOf(ProblemArea.KNEES),
+        "kb-goblet-squat" to setOf(ProblemArea.KNEES),
+        "barbell-overhead-press" to setOf(ProblemArea.SHOULDERS),
+        "machine-shoulder-press" to setOf(ProblemArea.SHOULDERS),
+        "smith-shoulder-press" to setOf(ProblemArea.SHOULDERS),
+        "kb-press" to setOf(ProblemArea.SHOULDERS),
+        "pec-deck" to setOf(ProblemArea.SHOULDERS),
+        "cable-fly" to setOf(ProblemArea.SHOULDERS),
+        "dip-machine" to setOf(ProblemArea.SHOULDERS),
+        "barbell-row" to setOf(ProblemArea.LOWER_BACK),
+        "barbell-rdl" to setOf(ProblemArea.LOWER_BACK),
+        "conventional-deadlift" to setOf(ProblemArea.LOWER_BACK),
+        "trap-bar-deadlift" to setOf(ProblemArea.LOWER_BACK),
+        "kb-swing" to setOf(ProblemArea.LOWER_BACK)
     )
 
     fun contraindicationsOf(def: ExerciseDef): Set<ProblemArea> =
@@ -611,14 +961,65 @@ object ExerciseLibrary {
         available.isEmpty() || def.equipment.all { it == Equipment.BODYWEIGHT_ONLY || it in available }
 
     /**
-     * Swap candidates for [muscle], drawn from the single pool the generator uses: excludes
-     * [disliked] exercises and anything that needs equipment not in [available] (empty = all).
+     * The exercise universe available to the user — the SINGLE source the generator, swap picker and
+     * the like/dislike screen all draw from. When [frozenIds] is non-null (a curated preset such as
+     * the Developer's preset) the pool is exactly those ids — locked, and immune to any movement
+     * added to the library later. Otherwise it's everything [available] equipment can perform.
+     */
+    fun availablePool(available: Set<Equipment>, frozenIds: Set<String>?): List<ExerciseDef> =
+        if (frozenIds != null) all.filter { it.id in frozenIds }
+        else all.filter { !it.curatedOnly && isAvailable(it, available) }
+
+    /**
+     * Swap candidates for [muscle], drawn from the same pool the generator uses ([availablePool]):
+     * excludes [disliked] exercises, honours a curated [frozenIds] preset, and otherwise filters to
+     * what [available] equipment can perform.
      */
     fun swapCandidates(
         muscle: MuscleGroup,
         available: Set<Equipment>,
-        disliked: Set<String>
-    ): List<ExerciseDef> = forMuscle(muscle).filter { it.id !in disliked && isAvailable(it, available) }
+        disliked: Set<String>,
+        frozenIds: Set<String>? = null
+    ): List<ExerciseDef> =
+        availablePool(available, frozenIds).filter { it.muscle == muscle && it.id !in disliked }
+
+    /**
+     * Antho's MWM-989 home gym, FROZEN (snapshot 2026-06-11): every library id his
+     * {dumbbells, flat bench, cable, machine} setup could perform at that time — deliberately NO
+     * incline-bench or pull-up-bar movements (his bench is flat; the bar isn't part of this preset).
+     * Hardcoded, NOT computed from [isAvailable], so movements added later during the equipment
+     * generalization can never leak into the curated "Developer's preset". See
+     * [com.forge.app.program.equipmentPresets].
+     */
+    val DEVELOPER_FROZEN_IDS: Set<String> = setOf(
+        // Chest
+        "db-bench-press", "mwm-seated-bench-press", "db-fly", "push-up",
+        // Back
+        "mwm-wide-lat-pulldown", "db-row", "mwm-close-grip-pulldown", "mwm-straight-arm-pulldown", "db-pullover",
+        // Shoulders
+        "db-lateral-raise", "mwm-upright-row", "db-overhead-press", "db-front-raise", "mwm-front-delt-raise",
+        // Rear delts
+        "db-rear-delt-fly",
+        // Biceps
+        "db-hammer-curl", "db-curl", "mwm-seated-bicep-curl", "db-concentration-curl", "mwm-standing-bicep-curl",
+        // Triceps
+        "db-overhead-tricep-ext", "db-skull-crusher", "mwm-tricep-pushdown", "close-grip-db-press",
+        "bench-dip", "diamond-push-up",
+        // Quads
+        "goblet-squat", "db-squat", "db-bulgarian-split-squat", "db-reverse-lunge", "db-step-up",
+        "leg-extension", "mwm-inner-thigh",
+        // Hamstrings
+        "db-romanian-deadlift", "db-stiff-leg-deadlift", "leg-curl", "db-single-leg-rdl",
+        // Glutes
+        "db-walking-lunge", "db-glute-bridge", "mwm-leg-kickback", "mwm-outer-leg-kick",
+        // Calves
+        "standing-calf-raise", "seated-calf-raise", "single-leg-calf-raise",
+        // Core
+        "plank", "mwm-high-pulley-crunch", "mwm-oblique-side-bend", "lying-leg-raise",
+        // Bodyweight fallbacks (no equipment needed — already part of this preset's swap pool today)
+        "bw-inverted-row", "bw-superman", "bw-pike-push-up", "bw-prone-reverse-fly", "bw-doorframe-curl",
+        "bw-squat", "bw-reverse-lunge", "bw-good-morning", "bw-sliding-leg-curl", "bw-single-leg-glute-bridge"
+    )
 }
 
 /** Build a placed [ExercisePlan] from a library entry, using its default sets/reps. */

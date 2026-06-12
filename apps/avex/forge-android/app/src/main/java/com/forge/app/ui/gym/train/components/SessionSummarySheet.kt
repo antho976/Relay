@@ -33,6 +33,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.domain.mood.Mood
 import com.forge.app.ui.common.ConfettiOverlay
+import com.forge.app.ui.theme.ForgeLastGreen
 import com.forge.app.ui.gym.train.state.SessionSummary
 import com.forge.app.ui.gym.train.state.UnlockedTrophyHighlight
 
@@ -51,7 +52,12 @@ fun SessionSummarySheet(
     var selectedMood by remember { mutableStateOf<Mood?>(null) }
     var selectedTags by remember { mutableStateOf<Set<String>>(emptySet()) }
     var journal by remember { mutableStateOf("") }
-    var showTrophyConfetti by remember { mutableStateOf(summary.unlockedTrophies.isNotEmpty()) }
+    // Finishing is an event: confetti for a trophy, a best-ever session, OR a clean sweep of the
+    // duel (every set beat last time).
+    val cleanSweep = summary.ghostComparable > 0 && summary.ghostBeats == summary.ghostComparable
+    var showTrophyConfetti by remember {
+        mutableStateOf(summary.unlockedTrophies.isNotEmpty() || summary.isBestSession || cleanSweep)
+    }
 
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
@@ -143,6 +149,32 @@ fun SessionSummarySheet(
                         summary.vsLastSetsDelta?.let { delta ->
                             val sign = if (delta >= 0) "+" else ""
                             FlatStat(value = "$sign$delta sets", label = "vs LAST", onBg = onBg, muted = muted)
+                        }
+                    }
+                }
+
+                // "Beat the ghost" duel result — the session-long contest vs last time.
+                if (summary.ghostComparable > 0) {
+                    val beats = summary.ghostBeats
+                    val total = summary.ghostComparable
+                    val won = beats * 2 >= total
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(0.5.dp, (if (won) ForgeLastGreen else outline).copy(alpha = if (won) 0.6f else 0.3f), RoundedCornerShape(4.dp))
+                            .padding(horizontal = 14.dp, vertical = 10.dp)
+                    ) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(if (cleanSweep) "⚡" else if (won) "↑" else "·", color = if (won) ForgeLastGreen else muted, style = MaterialTheme.typography.titleSmall)
+                            Text(
+                                when {
+                                    cleanSweep -> "Clean sweep — you beat last session on every set"
+                                    won -> "Beat last session on $beats of $total sets"
+                                    else -> "$beats of $total sets beat last session"
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (won) onBg else muted
+                            )
                         }
                     }
                 }

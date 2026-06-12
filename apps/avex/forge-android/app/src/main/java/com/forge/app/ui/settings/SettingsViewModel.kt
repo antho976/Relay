@@ -32,6 +32,8 @@ data class SettingsUiState(
     val quietHoursEnd: Int = 7,
     val privacyMode: Boolean = false,
     val availableEquipment: Set<String> = emptySet(),
+    /** Curated/frozen exercise pool (Developer's preset); null = ordinary equipment filtering. */
+    val frozenExerciseIds: Set<String>? = null,
     val plateWeightLb: Double = 15.0,
     /** Heaviest dumbbell owned (lb); null = no ceiling (auto-coach Phase 0). */
     val maxDbWeightLb: Double? = null,
@@ -45,6 +47,8 @@ data class SettingsUiState(
     val rotationEveryN: Int = 4,
     val cardioWeeklyTargetMin: Int = 0,
     val userGoal: String = "build_muscle",
+    /** User's sex ("male" | "female" | "") — selects the bodyweight-relative strength bands. */
+    val userSex: String = "",
     val experience: String = "intermediate",
     val problemAreas: Set<String> = emptySet(),
     val priorityMuscles: Set<String> = emptySet(),
@@ -66,7 +70,8 @@ class SettingsViewModel @Inject constructor(
     private val pdfExport: com.forge.app.data.repo.PdfExportRepository,
     private val programRepository: com.forge.app.data.repo.ProgramRepository,
     private val vacationRepo: com.forge.app.data.repo.VacationRepository,
-    private val coachRepo: com.forge.app.data.repo.CoachRepository
+    private val coachRepo: com.forge.app.data.repo.CoachRepository,
+    private val programChangeGuard: com.forge.app.ui.common.ProgramChangeGuard
 ) : ViewModel() {
 
     // ─── Coach (auto-coach Phase 4) ───────────────────────────────────────────
@@ -139,6 +144,8 @@ class SettingsViewModel @Inject constructor(
         s.copy(privacyMode = v)
     }.combine(settingsRepo.availableEquipment) { s, equip ->
         s.copy(availableEquipment = equip)
+    }.combine(settingsRepo.frozenExerciseIds) { s, v ->
+        s.copy(frozenExerciseIds = v)
     }.combine(settingsRepo.plateWeightLb) { s, v ->
         s.copy(plateWeightLb = v)
     }.combine(settingsRepo.maxDbWeightLb) { s, v ->
@@ -165,6 +172,8 @@ class SettingsViewModel @Inject constructor(
         s.copy(cardioWeeklyTargetMin = v)
     }.combine(settingsRepo.userGoal) { s, v ->
         s.copy(userGoal = v.ifBlank { "build_muscle" })
+    }.combine(settingsRepo.userSex) { s, v ->
+        s.copy(userSex = v)
     }.combine(settingsRepo.programExperience) { s, v ->
         s.copy(experience = v)
     }.combine(settingsRepo.problemAreas) { s, v ->
@@ -212,7 +221,16 @@ class SettingsViewModel @Inject constructor(
     fun factoryReset() = viewModelScope.launch { resetRepo.factoryReset() }
     fun loadSampleData() = viewModelScope.launch { sampleDataSeeder.seed() }
     fun setPrivacyMode(v: Boolean) = viewModelScope.launch { settingsRepo.setPrivacyMode(v) }
-    fun setAvailableEquipment(codes: Set<String>) = viewModelScope.launch { settingsRepo.setAvailableEquipment(codes) }
+    fun setAvailableEquipment(codes: Set<String>) = viewModelScope.launch {
+        settingsRepo.setAvailableEquipment(codes)
+        // Hand-editing the equipment set leaves any curated preset — drop the freeze.
+        settingsRepo.setFrozenExerciseIds(null)
+    }
+    /** One-tap preset: fills the equipment set AND applies/clears its curated freeze together. */
+    fun selectEquipmentPreset(preset: com.forge.app.program.EquipmentPreset) = viewModelScope.launch {
+        settingsRepo.setAvailableEquipment(preset.equipment)
+        settingsRepo.setFrozenExerciseIds(preset.frozenIds)
+    }
     fun setPlateWeightLb(lb: Double) = viewModelScope.launch { settingsRepo.setPlateWeightLb(lb) }
     fun setDaysPerWeek(n: Int) = viewModelScope.launch { settingsRepo.setDaysPerWeek(n) }
     /** Weekly cardio-minutes goal for the cardio tab (no effect on the lifting plan). */
@@ -228,7 +246,8 @@ class SettingsViewModel @Inject constructor(
         priorityMuscles = settingsRepo.priorityMuscles.first()
             .mapNotNull { runCatching { com.forge.app.program.MuscleGroup.fromCode(it) }.getOrNull() }.toSet(),
         pinned = settingsRepo.pinnedExercises.first(),
-        dbMaxLb = settingsRepo.maxDbWeightLb.first()
+        dbMaxLb = settingsRepo.maxDbWeightLb.first(),
+        frozenIds = settingsRepo.frozenExerciseIds.first()
     )
     private suspend fun currentEquipment(): Set<com.forge.app.program.Equipment> =
         settingsRepo.availableEquipment.first()
@@ -258,6 +277,7 @@ class SettingsViewModel @Inject constructor(
     // Goal/experience/problem-areas/priority/pins are staged config — applied when the user taps
     // Generate or Re-roll (avoids reshuffling the whole plan on every chip tap).
     fun setUserGoal(goal: String) = viewModelScope.launch { settingsRepo.setUserGoal(goal) }
+    fun setUserSex(sex: String) = viewModelScope.launch { settingsRepo.setUserSex(sex) }
     fun setMaxDbWeightLb(lb: Double?) = viewModelScope.launch { settingsRepo.setMaxDbWeightLb(lb) }
     fun setExperience(level: String) = viewModelScope.launch { settingsRepo.setProgramExperience(level) }
     fun setProgramEmphasis(v: String) = viewModelScope.launch { settingsRepo.setProgramEmphasis(v) }
@@ -271,24 +291,32 @@ class SettingsViewModel @Inject constructor(
         settingsRepo.togglePinned(libId, libId !in settingsRepo.pinnedExercises.first())
     }
 
-    /** Generate a fresh program from the chosen day-count + current equipment/likes/dislikes (Phase 2). */
+    /**
+     * Generate a fresh program from the chosen day-count + current equipment/likes/dislikes (Phase 2).
+     * Guarded: regenerating discards any in-progress workout, so confirm before doing it (the whole
+     * change — including the day-count write — only commits past the guard).
+     */
     fun generateProgram(days: Int) = viewModelScope.launch {
-        settingsRepo.setDaysPerWeek(days)
-        programRepository.generate(
-            buildParams(days),
-            currentEquipment(), settingsRepo.likedExercises.first(), settingsRepo.dislikedExercises.first()
-        )
-        _statusMessage.value = "New $days-day program generated. Open Gym to see it."
+        programChangeGuard.run {
+            settingsRepo.setDaysPerWeek(days)
+            programRepository.generate(
+                buildParams(days),
+                currentEquipment(), settingsRepo.likedExercises.first(), settingsRepo.dislikedExercises.first()
+            )
+            _statusMessage.value = "New $days-day program generated. Open Gym to see it."
+        }
     }
 
     /** Regenerate the current split at reduced volume for a recovery week (Phase 4 periodization). */
     fun generateDeloadWeek() = viewModelScope.launch {
-        val days = settingsRepo.daysPerWeek.first()
-        programRepository.generate(
-            buildParams(days).copy(deload = true),
-            currentEquipment(), settingsRepo.likedExercises.first(), settingsRepo.dislikedExercises.first()
-        )
-        _statusMessage.value = "Deload week generated — lighter volume. Open Gym to see it."
+        programChangeGuard.run {
+            val days = settingsRepo.daysPerWeek.first()
+            programRepository.generate(
+                buildParams(days).copy(deload = true),
+                currentEquipment(), settingsRepo.likedExercises.first(), settingsRepo.dislikedExercises.first()
+            )
+            _statusMessage.value = "Deload week generated — lighter volume. Open Gym to see it."
+        }
     }
     fun setAccentColorHex(hex: String) = viewModelScope.launch { settingsRepo.setAccentColorHex(hex) }
     fun setAccentEmphasis(level: String) = viewModelScope.launch { settingsRepo.setAccentEmphasis(level) }

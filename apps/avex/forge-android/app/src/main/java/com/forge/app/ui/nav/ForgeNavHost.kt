@@ -38,12 +38,14 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.forge.app.ui.cardio.CardioScreen
 import com.forge.app.ui.coach.CoachBriefScreen
+import com.forge.app.ui.common.ProgramChangeGuardHost
 import com.forge.app.ui.gym.history.SessionHistoryScreen
 import com.forge.app.ui.gym.notes.NotesSearchScreen
 import com.forge.app.ui.gym.train.DayListScreen
 import com.forge.app.ui.gym.train.ProgramViewerScreen
 import com.forge.app.ui.gym.train.DayScreen
 import com.forge.app.ui.overview.OverviewScreen
+import com.forge.app.ui.profile.ProfileScreen
 import com.forge.app.ui.programeditor.ProgramEditorScreen
 import com.forge.app.ui.recap.RecapScreen
 import com.forge.app.ui.settings.SettingsScreen
@@ -63,7 +65,7 @@ fun ForgeNavHost() {
     val dur = ForgeMotion.DurationEmphasized
     val slide: (Int) -> Int = { it / 6 }       // horizontal distance — modest, not full width
     val rise: (Int) -> Int = { it / 4 }        // vertical distance for modal mode screens
-    val modalRoutes = setOf(Routes.GYM_DAY, Routes.RECAP, Routes.PROGRAM_EDITOR, Routes.COACH_BRIEF)
+    val modalRoutes = setOf(Routes.GYM_DAY, Routes.RECAP, Routes.PROGRAM_EDITOR, Routes.COACH_BRIEF, Routes.PROFILE)
     // One-shot fade so the first screen eases in on cold launch instead of snapping on.
     var appeared by remember { mutableStateOf(false) }
     val rootAlpha by animateFloatAsState(
@@ -112,7 +114,8 @@ fun ForgeNavHost() {
                 onGoToStats = { nav.navigate(Routes.GYM_STATS) },
                 onGoToNutrition = { nav.navigate(Routes.NUTRITION) },
                 onGoToSettings = { nav.navigate(Routes.SETTINGS) },
-                onOpenCoachBrief = { nav.navigate(Routes.COACH_BRIEF) }
+                onOpenCoachBrief = { nav.navigate(Routes.COACH_BRIEF) },
+                onOpenProfile = { nav.navigate(Routes.PROFILE) }
             )
         }
         composable(Routes.GYM_TRAIN) {
@@ -183,6 +186,13 @@ fun ForgeNavHost() {
         composable(Routes.COACH_BRIEF) {
             CoachBriefScreen(onBack = { nav.popBackStack() })
         }
+        composable(Routes.PROFILE) {
+            ProfileScreen(
+                onBack = { nav.popBackStack() },
+                onOpenTrophies = { nav.navigate(Routes.TROPHIES) },
+                onOpenRecaps = { nav.navigate(Routes.RECAP) }
+            )
+        }
         composable(
             route = Routes.PROGRAM_EDITOR,
             arguments = listOf(navArgument("dayKey") { type = NavType.StringType })
@@ -193,6 +203,10 @@ fun ForgeNavHost() {
             )
         }
     }
+
+    // App-wide guard: intercepts any program change that would discard an in-progress workout,
+    // surfacing an inline "discard & continue" confirm over whatever screen triggered it.
+    ProgramChangeGuardHost()
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

@@ -396,6 +396,16 @@ class ProgressionAdvisorTest {
         assertEquals(60.0, s!!.targetWeightLb, 0.0001)
     }
 
+    @Test
+    fun barbellWeight_ignoresTheDumbbellCeiling() {
+        // The heaviest-dumbbell ceiling is for dumbbells only — a WEIGHT (barbell/machine) lift
+        // keeps progressing past it instead of anchoring.
+        val s = suggest(listOf(set(25.0, 10)), EffortRating.JUST_RIGHT, unit = ExerciseUnit.WEIGHT, dbMaxLb = 25.0)
+        assertNotNull(s)
+        assertEquals(27.5, s!!.targetWeightLb, 0.0001)
+        assertEquals("hit top of range", s.reason)
+    }
+
     // ── Step calibration (auto-coach Phase 2) ──────────────────────────────────
 
     @Test

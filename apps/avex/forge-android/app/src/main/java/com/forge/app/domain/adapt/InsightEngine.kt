@@ -258,7 +258,12 @@ object InsightEngine {
         val worst = s.program.mapNotNull { day ->
             val durations = s.sessions
                 .filter { it.dayKey == day.dayKey && it.finishedAt != null }
-                .mapNotNull { sess -> ((sess.finishedAt!! - sess.startedAt) / 60_000).toInt().takeIf { it in 10..240 } }
+                // Active time when stamped (real training minutes), else wall-clock for old rows.
+                .mapNotNull { sess ->
+                    val mins = if (sess.activeSeconds > 0) sess.activeSeconds / 60
+                        else ((sess.finishedAt!! - sess.startedAt) / 60_000).toInt()
+                    mins.takeIf { it in 10..240 }
+                }
                 .takeLast(t.insightEstimateMinSessions + 1)
             if (durations.size < t.insightEstimateMinSessions) return@mapNotNull null
             val actual = durations.sorted()[durations.size / 2]

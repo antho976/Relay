@@ -23,7 +23,8 @@ class DayListViewModel @Inject constructor(
     private val customizationRepo: CustomizationRepository,
     private val sessionDao: SessionDao,
     private val settingsRepo: SettingsRepository,
-    private val programRepository: com.forge.app.data.repo.ProgramRepository
+    private val programRepository: com.forge.app.data.repo.ProgramRepository,
+    private val programChangeGuard: com.forge.app.ui.common.ProgramChangeGuard
 ) : ViewModel() {
 
     /** Personal rest pace (engine System 2) — folds into the day cards' "~min" estimate. */
@@ -99,8 +100,16 @@ class DayListViewModel @Inject constructor(
         viewModelScope.launch { settingsRepo.setDayColor(dayKey, hex) }
     }
 
-    /** Re-roll just this day's exercises, keeping the rest of the week (Phase 6). */
+    /**
+     * Re-roll just this day's exercises, keeping the rest of the week (Phase 6). Re-rolling the day
+     * you're currently training discards that workout, so guard it — but only when the active session
+     * is on THIS day (re-rolling an unrelated day never touches the workout, so it passes through).
+     */
     fun rerollDay(dayKey: String) {
-        viewModelScope.launch { programRepository.rerollDay(dayKey) }
+        viewModelScope.launch {
+            programChangeGuard.run(affectsSession = { it.dayKey == dayKey }) {
+                programRepository.rerollDay(dayKey)
+            }
+        }
     }
 }

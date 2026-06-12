@@ -207,10 +207,9 @@ internal fun DayViewModel.logSet(exerciseId: String, weightText: String, reps: I
         val plan = currentUi.plan
 
         val newWeightLb = WeightParser.parse(weightText, plan.unit, settingsRepo.plateWeightLb.first())
-        // Ignore dummy display rows (loggedExerciseId == -1) so placeholder data never
-        // triggers the jump warning.
-        val lastWeightLb = currentUi.priorSets
-            .filter { it.loggedExerciseId != -1L }
+        // Compare against the all-time max from the frontier (never contains dummy display
+        // rows) so the warning still means "20% above anything you've ever done".
+        val lastWeightLb = currentUi.priorFrontier
             .mapNotNull { it.weightLb }
             .maxOrNull()
         if (!skipJumpCheck && newWeightLb != null && lastWeightLb != null && lastWeightLb > 0 &&

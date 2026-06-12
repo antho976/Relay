@@ -27,17 +27,52 @@ interface LoggedSetDao {
     suspend fun forLoggedExercise(loggedExerciseId: Long): List<LoggedSet>
 
     /**
-     * Every set ever performed for the given static exercise id (across all sessions).
-     * Used for PR detection — feed this into [com.forge.app.domain.pr.PrDetector] to check
-     * whether a proposed (weight, reps) tuple has been beaten before.
+     * Per-rep-count max weight across every prior non-assisted weighted set of an exercise —
+     * the Pareto frontier PR detection compares against. [com.forge.app.domain.pr.PrDetector.isPr]
+     * only ever asks "max prior weight at >= N reps", so this aggregate gives identical answers
+     * to scanning the full set history while staying bounded by distinct rep counts (a few dozen
+     * rows forever, vs every set ever logged). Assisted sets are excluded, matching isPr's filter.
      */
+    @Query("""
+        SELECT s.reps AS reps, MAX(s.weight_lb) AS weight_lb
+        FROM logged_set s
+        INNER JOIN logged_exercise le ON s.logged_exercise_id = le.id
+        WHERE le.exercise_id = :exerciseId
+          AND s.logged_exercise_id != :excludeLoggedExerciseId
+          AND s.weight_lb IS NOT NULL
+          AND s.is_assisted = 0
+        GROUP BY s.reps
+    """)
+    suspend fun repMaxFrontierForExercise(exerciseId: String, excludeLoggedExerciseId: Long): List<RepMaxRow>
+
+    data class RepMaxRow(
+        @androidx.room.ColumnInfo(name = "reps") val reps: Int,
+        @androidx.room.ColumnInfo(name = "weight_lb") val weightLb: Double
+    )
+
+    /**
+     * True when the exercise has ANY prior set (incl. bodyweight/assisted) outside
+     * [excludeLoggedExerciseId] — the "first-ever time" gate for PR flagging, which the
+     * weighted-only frontier can't answer on its own.
+     */
+    @Query("""
+        SELECT EXISTS(
+            SELECT 1 FROM logged_set s
+            INNER JOIN logged_exercise le ON s.logged_exercise_id = le.id
+            WHERE le.exercise_id = :exerciseId AND s.logged_exercise_id != :excludeLoggedExerciseId
+        )
+    """)
+    suspend fun hasHistoryForExercise(exerciseId: String, excludeLoggedExerciseId: Long): Boolean
+
+    /** The single best set ever for an exercise: heaviest weight, most reps at that weight. */
     @Query("""
         SELECT s.* FROM logged_set s
         INNER JOIN logged_exercise le ON s.logged_exercise_id = le.id
-        WHERE le.exercise_id = :exerciseId
-        ORDER BY s.completed_at DESC
+        WHERE le.exercise_id = :exerciseId AND s.weight_lb IS NOT NULL
+        ORDER BY s.weight_lb DESC, s.reps DESC
+        LIMIT 1
     """)
-    suspend fun historyForExercise(exerciseId: String): List<LoggedSet>
+    suspend fun personalBestSet(exerciseId: String): LoggedSet?
 
     /** Max numeric weight ever lifted for the given exercise. Null if all logs are non-numeric (e.g. BW). */
     @Query("""
@@ -166,4 +201,21 @@ interface LoggedSetDao {
         )
     """)
     suspend fun maxSessionVolume(): Double?
+
+    /** The single heaviest set ever logged, with its exercise id — the profile "top lift" signature. */
+    @Query("""
+        SELECT le.exercise_id AS exercise_id, s.weight_lb AS weight_lb
+        FROM logged_set s
+        INNER JOIN logged_exercise le ON s.logged_exercise_id = le.id
+        INNER JOIN session ss ON le.session_id = ss.id
+        WHERE ss.finished_at IS NOT NULL AND s.weight_lb IS NOT NULL
+        ORDER BY s.weight_lb DESC
+        LIMIT 1
+    """)
+    suspend fun topLift(): TopLiftRow?
+
+    data class TopLiftRow(
+        @androidx.room.ColumnInfo(name = "exercise_id") val exerciseId: String,
+        @androidx.room.ColumnInfo(name = "weight_lb") val weightLb: Double
+    )
 }

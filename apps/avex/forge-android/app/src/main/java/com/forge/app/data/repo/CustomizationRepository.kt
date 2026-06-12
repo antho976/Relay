@@ -53,7 +53,20 @@ class CustomizationRepository @Inject constructor(
         }
     }
 
-    suspend fun clearSwap(exerciseId: String) = customizationDao.clear(exerciseId)
+    /**
+     * Revert the swap, preserving the rest-timer override and pinned note that share this row
+     * (#59, #112). A blank `swappedName` already means "no swap" everywhere (see [setRestTimerOverride],
+     * which legitimately creates blank-swap rows), so we only DELETE the row when nothing else is set.
+     * The old unconditional DELETE silently wiped the rest timer and pinned note.
+     */
+    suspend fun clearSwap(exerciseId: String) {
+        val existing = customizationDao.get(exerciseId) ?: return
+        if (existing.restTimerOverrideSeconds == null && existing.pinnedNote.isBlank()) {
+            customizationDao.clear(exerciseId)
+        } else {
+            customizationDao.upsert(existing.copy(swappedName = "", swappedUnit = ""))
+        }
+    }
 
     // ─── Day name overrides ────────────────────────────────────────────────────
 

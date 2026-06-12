@@ -39,6 +39,26 @@ class BackupRepository @Inject constructor(
     private val zone = ZoneId.systemDefault()
     private val dateFmt = DateTimeFormatter.ofPattern("yyyy-MM-dd")
 
+    // ── Active-time helpers (per-sitting timing) ────────────────────────────────
+    /** Real active seconds: the stamped sum of sittings, falling back to wall-clock for old rows. */
+    private fun activeSecondsOf(s: com.forge.app.data.db.entities.Session): Int =
+        if (s.activeSeconds > 0) s.activeSeconds
+        else s.finishedAt?.let { ((it - s.startedAt) / 1000L).toInt().coerceAtLeast(0) } ?: 0
+
+    private fun activeMinutesOf(s: com.forge.app.data.db.entities.Session): Int = activeSecondsOf(s) / 60
+
+    /** Per-sitting breakdown: [{startedAt, durationSec}] so the 13+40 split is preserved in exports. */
+    private suspend fun segmentsJson(sessionId: Long): JSONArray {
+        val arr = JSONArray()
+        db.sessionSegmentDao().forSession(sessionId).forEach { seg ->
+            arr.put(JSONObject().apply {
+                put("startedAt", seg.startedAt)
+                put("durationSec", seg.endedAt?.let { ((it - seg.startedAt) / 1000L).coerceAtLeast(0) } ?: 0)
+            })
+        }
+        return arr
+    }
+
     /** Export this week's data as JSON for AI analysis (#5). Returns the file path. */
     suspend fun exportWeeklyJson(): File {
         val weekStartMs = System.currentTimeMillis() - 7L * 24 * 3600 * 1000
@@ -57,26 +77,31 @@ class BackupRepository @Inject constructor(
                     put("id", s.id)
                     put("dayKey", s.dayKey)
                     put("date", dateFmt.format(Instant.ofEpochMilli(s.startedAt).atZone(zone)))
-                    put("durationMin", s.finishedAt?.let { ((it - s.startedAt) / 60_000).toInt() } ?: 0)
+                    put("activeMin", activeMinutesOf(s))
                     put("totalVolumeLb", s.totalVolumeLb ?: 0)
                     put("prCount", s.prCount)
                     put("setCount", s.setCount)
                     put("intensity", s.intensity)
                     put("tags", s.tags)
+                    put("journal", s.journal)
+                    put("mood", db.moodDao().forSession(s.id)?.mood ?: "")
+                    put("segments", segmentsJson(s.id))
                     val exArr = JSONArray()
                     exercises.forEach { ex ->
                         val sets = loggedSetDao.forLoggedExercise(ex.id)
                         exArr.put(JSONObject().apply {
                             put("exerciseId", ex.exerciseId)
                             put("name", ex.swappedName ?: ex.exerciseId)
-                            put("difficulty", ex.difficulty?.name ?: "")
+                            put("effort", ex.difficulty?.name ?: "")
+                            put("note", ex.note ?: "")
                             put("skipped", ex.skipped)
                             val setArr = JSONArray()
                             sets.forEach { set ->
                                 setArr.put(JSONObject().apply {
                                     put("weightLb", set.weightLb ?: 0)
                                     put("reps", set.reps)
-                                    put("isPr", false)
+                                    put("rpe", set.rpe ?: 0)
+                                    put("difficultyTag", set.difficultyTag ?: "")
                                 })
                             }
                             put("sets", setArr)
@@ -139,6 +164,7 @@ class BackupRepository @Inject constructor(
                     put("dayKey", s.dayKey)
                     put("startedAt", s.startedAt)
                     put("finishedAt", s.finishedAt ?: 0)
+                    put("activeSeconds", activeSecondsOf(s))
                     put("totalVolumeLb", s.totalVolumeLb ?: 0)
                     put("prCount", s.prCount)
                     put("setCount", s.setCount)
@@ -147,6 +173,8 @@ class BackupRepository @Inject constructor(
                     put("isUntracked", s.isUntracked)
                     put("tags", s.tags)
                     put("journal", s.journal)
+                    put("mood", db.moodDao().forSession(s.id)?.mood ?: "")
+                    put("segments", segmentsJson(s.id))
                     val exArr = JSONArray()
                     exercises.forEach { ex ->
                         val sets = loggedSetDao.forLoggedExercise(ex.id)
@@ -163,6 +191,7 @@ class BackupRepository @Inject constructor(
                                     put("weightText", set.weightText)
                                     put("weightLb", set.weightLb ?: 0)
                                     put("reps", set.reps)
+                                    put("rpe", set.rpe ?: 0)
                                     put("completedAt", set.completedAt)
                                     put("difficultyTag", set.difficultyTag ?: "")
                                 })

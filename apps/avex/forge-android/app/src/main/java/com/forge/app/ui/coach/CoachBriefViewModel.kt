@@ -17,7 +17,8 @@ import javax.inject.Inject
  */
 @HiltViewModel
 class CoachBriefViewModel @Inject constructor(
-    private val coachRepo: CoachRepository
+    private val coachRepo: CoachRepository,
+    private val programChangeGuard: com.forge.app.ui.common.ProgramChangeGuard
 ) : ViewModel() {
 
     data class UiState(
@@ -38,13 +39,34 @@ class CoachBriefViewModel @Inject constructor(
         }
     }
 
-    fun apply(decisionId: Long) = act { coachRepo.applyDecision(decisionId) }
+    fun apply(decisionId: Long) {
+        // A deload decision regenerates the program (discarding any in-progress workout); guard it.
+        // Every other type is an overlay edit that leaves the session alone, so apply directly.
+        val isDeload = _state.value.brief?.decisions?.firstOrNull { it.id == decisionId }?.type == "deload"
+        if (isDeload) guardedAct { coachRepo.applyDecision(decisionId) } else act { coachRepo.applyDecision(decisionId) }
+    }
+
     fun skip(decisionId: Long) = act { coachRepo.skipDecision(decisionId) }
     fun undo(decisionId: Long) = act { coachRepo.undoDecision(decisionId) }
-    fun applyAll(weekId: String) = act { coachRepo.applyAll(weekId) }
+
+    fun applyAll(weekId: String) {
+        // Apply-all runs every proposed decision; if a deload is among them the program regenerates
+        // and the active workout is discarded — guard the whole batch in that case.
+        val hasDeload = _state.value.brief?.decisions
+            ?.any { it.status == "proposed" && it.type == "deload" } == true
+        if (hasDeload) guardedAct { coachRepo.applyAll(weekId) } else act { coachRepo.applyAll(weekId) }
+    }
 
     private fun act(block: suspend () -> Unit) = viewModelScope.launch {
         runCatching { block() }
         _state.value = _state.value.copy(brief = runCatching { coachRepo.refreshBrief() }.getOrNull() ?: _state.value.brief)
+    }
+
+    /** Like [act], but routed through the workout-discard guard for program-regenerating changes. */
+    private fun guardedAct(block: suspend () -> Unit) = viewModelScope.launch {
+        programChangeGuard.run {
+            runCatching { block() }
+            _state.value = _state.value.copy(brief = runCatching { coachRepo.refreshBrief() }.getOrNull() ?: _state.value.brief)
+        }
     }
 }

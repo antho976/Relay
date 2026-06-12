@@ -14,6 +14,7 @@ import com.forge.app.data.db.entities.MoodEntry
 import com.forge.app.data.db.entities.RestEvent
 import com.forge.app.data.db.entities.Session
 import com.forge.app.data.db.entities.SessionBreak
+import com.forge.app.data.db.entities.SessionSegment
 import com.forge.app.data.db.entities.SuggestionOutcome
 import com.forge.app.data.db.types.EffortRating
 import com.forge.app.data.prefs.SettingsRepository
@@ -23,6 +24,18 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import javax.inject.Inject
 import javax.inject.Singleton
+
+/**
+ * Result of [WorkoutRepository.startOrResumeSession].
+ *
+ * @param created the row was inserted by this call — no segments or logged work can exist yet.
+ * @param hasLoggedWork the resumed session already has logged exercises (mid-workout resume).
+ */
+data class StartedSession(
+    val session: Session,
+    val created: Boolean,
+    val hasLoggedWork: Boolean
+)
 
 /**
  * The aggregate the day-screen ViewModel talks to. Wraps sessions, logged exercises,
@@ -41,6 +54,7 @@ class WorkoutRepository @Inject constructor(
     private val sessionBreakDao: SessionBreakDao,
     private val restEventDao: RestEventDao,
     private val suggestionOutcomeDao: SuggestionOutcomeDao,
+    private val sessionSegmentDao: com.forge.app.data.db.dao.SessionSegmentDao,
     private val clock: Clock,
     private val settingsRepo: SettingsRepository,
     private val programRepository: ProgramRepository
@@ -54,32 +68,85 @@ class WorkoutRepository @Inject constructor(
     suspend fun activeSession(): Session? = sessionDao.getActiveSession()
 
     /**
-     * Starts a new session, OR returns the id of the currently-active one if there
-     * already is one. App invariant: at most one active session at a time.
+     * Starts a new session, OR resumes the currently-active one if there already
+     * is one. App invariant: at most one active session at a time. Returns the full
+     * row plus created/has-work flags so the caller doesn't re-query what this
+     * method already knows (session-open is the screen's latency-critical path).
      */
-    suspend fun startOrResumeSession(dayKey: String): Long {
-        sessionDao.getActiveSession()?.let { return it.id }
-        return sessionDao.insert(
-            Session(dayKey = dayKey, startedAt = clock.nowMs(), finishedAt = null)
-        )
+    suspend fun startOrResumeSession(dayKey: String): StartedSession {
+        sessionDao.getActiveSession()?.let { active ->
+            return StartedSession(
+                session = active,
+                created = false,
+                hasLoggedWork = loggedExerciseDao.forSession(active.id).isNotEmpty()
+            )
+        }
+        val session = Session(dayKey = dayKey, startedAt = clock.nowMs(), finishedAt = null)
+        val id = sessionDao.insert(session)
+        return StartedSession(session.copy(id = id), created = true, hasLoggedWork = false)
     }
 
     /**
      * Marks a session finished and stamps the denormalised volume + PR count so
-     * later list views don't need to re-join exercises and sets.
+     * later list views don't need to re-join exercises and sets. Closes the open sitting
+     * segment and stamps total ACTIVE seconds (summed across sittings); returns it so the
+     * caller can show the real duration. Falls back to wall-clock when no segments exist.
      */
-    suspend fun finishSession(sessionId: Long, totalVolumeLb: Double, prCount: Int, setCount: Int) {
+    suspend fun finishSession(sessionId: Long, totalVolumeLb: Double, prCount: Int, setCount: Int): Int {
+        val now = clock.nowMs()
+        sessionSegmentDao.closeOpen(sessionId, now)
         val session = sessionDao.get(sessionId) ?: error("Session $sessionId not found")
+        val segMs = closedSegmentMs(sessionId)
+        val activeSeconds = if (segMs > 0) (segMs / 1000L).toInt()
+            else ((now - session.startedAt) / 1000L).toInt().coerceAtLeast(0)
         sessionDao.update(
             session.copy(
-                finishedAt = clock.nowMs(),
+                finishedAt = now,
                 totalVolumeLb = totalVolumeLb,
                 prCount = prCount,
-                setCount = setCount
+                setCount = setCount,
+                activeSeconds = activeSeconds
             )
         )
         maybeRotateProgram()
+        return activeSeconds
     }
+
+    // ─── Session segments (per-sitting active timing) ──────────────────────────
+
+    /** The session row, for callers that need its real start time / fields. */
+    suspend fun session(sessionId: Long): Session? = sessionDao.get(sessionId)
+
+    /** Open a new active sitting for this session. */
+    suspend fun openSessionSegment(sessionId: Long, startedAt: Long) =
+        sessionSegmentDao.insert(SessionSegment(sessionId = sessionId, startedAt = startedAt))
+
+    /** Close every open segment of a session at [endedAt] (explicit leave / finish). */
+    suspend fun closeOpenSegments(sessionId: Long, endedAt: Long) =
+        sessionSegmentDao.closeOpen(sessionId, endedAt)
+
+    /**
+     * Close segments left open by process death (app killed mid-sitting): end each at the last
+     * logged-set activity within it, so the time the app was simply gone isn't counted.
+     */
+    suspend fun closeDanglingSegments(sessionId: Long) {
+        val open = sessionSegmentDao.openForSession(sessionId)
+        if (open.isEmpty()) return
+        val sets = allSetsForSession(sessionId)
+        open.forEach { seg ->
+            val lastActivity = sets.filter { it.completedAt >= seg.startedAt }.maxOfOrNull { it.completedAt }
+            sessionSegmentDao.close(seg.id, lastActivity ?: seg.startedAt)
+        }
+    }
+
+    /** Sum of CLOSED segment durations (ms) — the "prior sittings" active time. */
+    suspend fun closedSegmentMs(sessionId: Long): Long =
+        sessionSegmentDao.forSession(sessionId)
+            .mapNotNull { seg -> seg.endedAt?.let { (it - seg.startedAt).coerceAtLeast(0) } }
+            .sum()
+
+    /** All segments of a session, oldest first — the export breakdown. */
+    suspend fun sessionSegments(sessionId: Long) = sessionSegmentDao.forSession(sessionId)
 
     /** Rotation (program-unlock Phase 3): re-roll the program every N finished sessions, if enabled. */
     private suspend fun maybeRotateProgram() {
@@ -100,14 +167,6 @@ class WorkoutRepository @Inject constructor(
     suspend fun setSessionTags(sessionId: Long, tags: List<String>) {
         val session = sessionDao.get(sessionId) ?: return
         sessionDao.update(session.copy(tags = tags.joinToString(",")))
-    }
-
-    /** True if the session was just created (no sets yet). Used to decide whether to show the pre-session picker. */
-    suspend fun isNewSession(sessionId: Long): Boolean {
-        val s = sessionDao.get(sessionId) ?: return false
-        if (s.finishedAt != null) return false
-        // setCount is only stamped at finish (0 throughout an active session) — check actual work.
-        return loggedExerciseDao.forSession(sessionId).isEmpty()
     }
 
     suspend fun setDifficultyTag(setId: Long, tag: String?) = loggedSetDao.setDifficultyTag(setId, tag)
@@ -213,9 +272,19 @@ class WorkoutRepository @Inject constructor(
 
     suspend fun updateSet(set: LoggedSet) = loggedSetDao.update(set)
 
-    /** All sets for this static exercise across every session. Feeds PR detection. */
-    suspend fun historyForExercise(exerciseId: String): List<LoggedSet> =
-        loggedSetDao.historyForExercise(exerciseId)
+    /**
+     * Bounded all-time-history reads — replace loading every set ever logged for an
+     * exercise on each card build. [excludeLoggedExerciseId] null = exclude nothing.
+     */
+    suspend fun repMaxFrontierForExercise(exerciseId: String, excludeLoggedExerciseId: Long?) =
+        loggedSetDao.repMaxFrontierForExercise(exerciseId, excludeLoggedExerciseId ?: -1L)
+
+    suspend fun hasHistoryForExercise(exerciseId: String, excludeLoggedExerciseId: Long?): Boolean =
+        loggedSetDao.hasHistoryForExercise(exerciseId, excludeLoggedExerciseId ?: -1L)
+
+    /** The single best set ever for an exercise (heaviest, most reps at that weight). */
+    suspend fun personalBestSet(exerciseId: String): LoggedSet? =
+        loggedSetDao.personalBestSet(exerciseId)
 
     /** Per-session aggregates for one exercise (last N finished sessions, newest first). */
     suspend fun sessionAggregatesForExercise(exerciseId: String, limit: Int = 8) =

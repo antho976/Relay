@@ -98,6 +98,20 @@ class MigrationTest {
     }
 
     @Test
+    fun migrate19To20_addsSessionSegmentTableAndActiveSeconds() {
+        helper.createDatabase(dbName, 19).close()
+        val db = helper.runMigrationsAndValidate(dbName, 20, true, MIGRATION_19_20)
+
+        db.query("SELECT name FROM sqlite_master WHERE type='table' AND name = 'session_segment'")
+            .use { assertEquals("session_segment should exist after 19→20", 1, it.count) }
+        db.query("PRAGMA table_info(`session`)").use { cursor ->
+            val cols = mutableSetOf<String>()
+            while (cursor.moveToNext()) cols += cursor.getString(cursor.getColumnIndexOrThrow("name"))
+            assertEquals("session.active_seconds should exist after 19→20", true, "active_seconds" in cols)
+        }
+    }
+
+    @Test
     fun migrate18To19_addsDecisionLifecycleColumns() {
         helper.createDatabase(dbName, 18).close()
         val db = helper.runMigrationsAndValidate(dbName, 19, true, MIGRATION_18_19)

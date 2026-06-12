@@ -170,7 +170,8 @@ fun DayScreen(
         val swapCandidates = com.forge.app.program.ExerciseLibrary.swapCandidates(
             muscle = exerciseUi.plan.muscle,
             available = state.swapAvailableEquipment,
-            disliked = state.swapDislikedIds
+            disliked = state.swapDislikedIds,
+            frozenIds = state.swapFrozenIds
         )
         SwapPickerSheet(
             forExercise = exerciseUi.plan,

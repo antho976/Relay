@@ -55,8 +55,11 @@ class ForgeApp : Application(), Configuration.Provider {
                 live.parentFile?.mkdirs()
                 pending.copyTo(live, overwrite = true)
                 // The restored file is authoritative; drop stale WAL/-shm so they can't override it.
-                File(live.path + "-wal").delete()
-                File(live.path + "-shm").delete()
+                // delete() returns false instead of throwing, so a sidecar that survives the delete
+                // would let SQLite replay stale frames over the restored DB — silent corruption.
+                // Treat a surviving sidecar as a failed swap so the staged file is kept and retried.
+                deleteOrThrow(File(live.path + "-wal"))
+                deleteOrThrow(File(live.path + "-shm"))
             }.isSuccess
             // Only discard the staged file once it's actually in place. If the swap failed (e.g.
             // disk full), keep it so the next boot retries rather than silently losing the backup.
@@ -71,6 +74,11 @@ class ForgeApp : Application(), Configuration.Provider {
             }.isSuccess
             if (swapped) pendingPrefs.delete()
         }
+    }
+
+    /** Delete [f]; throw if it survives so the enclosing runCatching treats the swap as failed. */
+    private fun deleteOrThrow(f: File) {
+        if (f.exists() && !f.delete() && f.exists()) error("Could not delete ${f.name}")
     }
 
     /**

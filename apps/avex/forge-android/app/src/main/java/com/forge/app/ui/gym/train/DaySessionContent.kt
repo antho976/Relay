@@ -47,11 +47,11 @@ import com.forge.app.program.ExerciseUnit
 import com.forge.app.ui.gym.train.components.CollapsedRow
 import com.forge.app.ui.gym.train.components.ExerciseCard
 import com.forge.app.ui.gym.train.components.ExerciseChartSheet
-import com.forge.app.ui.gym.train.components.InlineRestTimer
 import com.forge.app.ui.gym.train.components.UpNextBubble
 import com.forge.app.ui.gym.train.components.WarmupGate
 import com.forge.app.ui.gym.train.state.DayUiEvent
 import com.forge.app.ui.gym.train.state.DayUiState
+import com.forge.app.ui.theme.ForgeLastGreen
 import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.theme.LocalForgeSettings
 import java.text.SimpleDateFormat
@@ -166,9 +166,14 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
 
             if (shownExercise != null) {
                 val idx = state.exercises.indexOf(shownExercise)
-                val upcoming = state.exercises
-                    .withIndex()
-                    .filter { it.index > idx && !it.value.skipped }
+                // "Up next" = every OTHER exercise still needing work (not the shown one, not
+                // skipped, not yet at target). Ordered next-after-current first, then any that sit
+                // earlier in the list — so jumping back to a finished exercise can't orphan an
+                // incomplete one (it lands here, not nowhere). Completed/skipped ones go to DONE.
+                val remaining = state.exercises.withIndex().filter { (_, ex) ->
+                    ex.plan.id != shownExercise.plan.id && !ex.skipped && ex.loggedSets.size < ex.targetSets
+                }
+                val upcoming = (remaining.filter { it.index > idx } + remaining.filter { it.index < idx })
                     .map { it.index to it.value }
                 val nextEx = upcoming.firstOrNull()?.second
 
@@ -203,7 +208,11 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
                                 state = ex.copy(isExpanded = true),
                                 isNow = exIsNow,
                                 totalExercises = state.exercises.size,
-                                sessionStartedAtMs = state.sessionStartedAt,
+                                // The rest timer renders inside the card (right under the set log),
+                                // not far below it — passed off state.restTimer so it appears the
+                                // instant a set is logged (plan.id is unchanged → no re-animation).
+                                restTimerState = state.restTimer,
+                                sessionStartedAtMs = state.elapsedAnchorMs,
                                 advanceLabel = if (exNextId != null) "MOVE TO NEXT →" else "FINISH WORKOUT →",
                                 onAdvance = { if (exNextId != null) shownExerciseId = exNextId else onEvent(DayUiEvent.FinishWorkout) },
                                 onToggle = { },
@@ -249,20 +258,6 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
                                 onOpenChart = { chartForExerciseId = id }
                             )
                         }
-                    }
-                }
-
-                // Live rest timer — rendered here (off state.restTimer directly), NOT inside the
-                // exercise card's AnimatedContent, so it appears the instant a set is logged.
-                val restTimer = state.restTimer
-                if (restTimer != null) {
-                    item(key = "rest-timer") {
-                        Spacer(Modifier.height(8.dp))
-                        InlineRestTimer(
-                            timer = restTimer,
-                            onTap = { restTimerSetterForId = shownExercise.plan.id },
-                            onSkip = { onEvent(DayUiEvent.RestTimerSkip) }
-                        )
                     }
                 }
 
@@ -361,6 +356,30 @@ internal fun SessionHero(state: DayUiState, onBack: () -> Unit, onFinish: () -> 
             Spacer(Modifier.width(8.dp))
             Box(modifier = Modifier.background(Color.White, RoundedCornerShape(50)).clickable { onFinish() }.padding(horizontal = 16.dp, vertical = 7.dp)) {
                 Text("FINISH", style = MaterialTheme.typography.labelSmall, color = Color.Black, maxLines = 1)
+            }
+        }
+        // "Beat the ghost" running scoreboard — the duel vs last session, live as you log.
+        if (state.ghostComparable > 0) {
+            val beats = state.ghostBeats
+            val total = state.ghostComparable
+            val winning = beats * 2 >= total
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    if (winning) "⚡ BEATING LAST SESSION" else "VS LAST SESSION",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (winning) ForgeLastGreen else muted,
+                    fontSize = 9.sp
+                )
+                Text(
+                    "$beats / $total sets",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (winning) ForgeLastGreen else muted,
+                    fontSize = 9.sp
+                )
             }
         }
         HorizontalDivider(color = outline.copy(alpha = 0.2f))

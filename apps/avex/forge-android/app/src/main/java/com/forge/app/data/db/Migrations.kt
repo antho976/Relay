@@ -164,6 +164,29 @@ val MIGRATION_18_19 = object : Migration(18, 19) {
     }
 }
 
+/**
+ * v19 → v20: per-sitting session timing. `session_segment` records each active sitting
+ * (start/end) so a workout trained across "resume later" sittings sums its real ACTIVE time
+ * instead of resetting; `session.active_seconds` denormalizes that sum at finish so every
+ * duration surface reads active time, not wall-clock. Additive (new table + column with
+ * defaults); existing sessions read 0 and fall back to wall-clock.
+ */
+val MIGRATION_19_20 = object : Migration(19, 20) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `session` ADD COLUMN `active_seconds` INTEGER NOT NULL DEFAULT 0")
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `session_segment` (" +
+                "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "`session_id` INTEGER NOT NULL, " +
+                "`started_at` INTEGER NOT NULL, " +
+                "`ended_at` INTEGER, " +
+                "FOREIGN KEY(`session_id`) REFERENCES `session`(`id`) " +
+                "ON UPDATE NO ACTION ON DELETE CASCADE )"
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_session_segment_session_id` ON `session_segment` (`session_id`)")
+    }
+}
+
 /** All migrations, in order. Register every new one here. */
 val ALL_MIGRATIONS: Array<Migration> = arrayOf(
     MIGRATION_12_13,
@@ -172,5 +195,6 @@ val ALL_MIGRATIONS: Array<Migration> = arrayOf(
     MIGRATION_15_16,
     MIGRATION_16_17,
     MIGRATION_17_18,
-    MIGRATION_18_19
+    MIGRATION_18_19,
+    MIGRATION_19_20
 )

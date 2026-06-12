@@ -20,7 +20,8 @@ import javax.inject.Inject
 @HiltViewModel
 class StatsViewModel @Inject constructor(
     statsRepo: StatsRepository,
-    adaptationRepo: AdaptationRepository
+    adaptationRepo: AdaptationRepository,
+    settingsRepo: com.forge.app.data.prefs.SettingsRepository
 ) : ViewModel() {
 
     /**
@@ -36,8 +37,9 @@ class StatsViewModel @Inject constructor(
 
     val state: StateFlow<StatsUiState> = combine(
         statsRepo.observeGymStats(),
-        engineFlow
-    ) { snapshot, engine ->
+        engineFlow,
+        settingsRepo.userSex
+    ) { snapshot, engine, sex ->
         StatsUiState(
             isLoading = false,
             volumeByMuscle = snapshot.volumeByMuscle,
@@ -76,7 +78,8 @@ class StatsViewModel @Inject constructor(
             weeklyDurations = snapshot.weeklyDurations,
             readinessPulse = engine?.fatigue?.let { buildReadinessPulse(it, engine.deloadScoreThreshold) },
             plateauFlags = engine?.plateaus.orEmpty().mapNotNull(::plateauFlagOf),
-            balanceRatios = engine?.ratios.orEmpty().map(::balanceRatioUi)
+            balanceRatios = engine?.ratios.orEmpty().map(::balanceRatioUi),
+            userSex = sex
         )
     }.stateIn(
         scope = viewModelScope,

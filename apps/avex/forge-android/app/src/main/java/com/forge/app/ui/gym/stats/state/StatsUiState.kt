@@ -87,7 +87,9 @@ data class StatsUiState(
     /** Sessions per day of week + best training hour (Trends "When you train"). */
     val trainingTimes: TrainingTimes? = null,
     /** Median session length per ISO week (Trends duration trend). */
-    val weeklyDurations: List<WeeklyDuration> = emptyList()
+    val weeklyDurations: List<WeeklyDuration> = emptyList(),
+    /** User's sex ("male" | "female" | "") — selects the bodyweight-relative strength bands. */
+    val userSex: String = ""
 )
 
 /** One ISO week's total tonnage for the Volume trend bars. */

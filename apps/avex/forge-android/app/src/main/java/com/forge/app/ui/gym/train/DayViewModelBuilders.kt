@@ -13,7 +13,8 @@ import com.forge.app.program.MuscleGroup
 import com.forge.app.ui.gym.train.state.ExerciseSessionPoint
 import com.forge.app.ui.gym.train.state.ExerciseUiState
 import com.forge.app.ui.gym.train.state.VsLastStatus
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import java.util.concurrent.TimeUnit
 
 /**
@@ -28,19 +29,44 @@ internal suspend fun DayViewModel.buildExerciseUi(
     logged: LoggedExercise?,
     expandedDefault: Boolean,
     expandedOverride: Boolean?,
+    plateLb: Double,
+    dbMaxLb: Double?,
     bonusSets: Int = 0
-): ExerciseUiState {
+): ExerciseUiState = coroutineScope {
     val sessionId = _state.value.sessionId ?: error("sessionId required")
-    val sets = logged?.let { workoutRepo.setsFor(it.id) }.orEmpty()
-    val prevLE = workoutRepo.lastLoggedExerciseBefore(plan.id, sessionId)
-    val prevSets = prevLE?.let { workoutRepo.setsFor(it.id) }.orEmpty()
+    // One card needs six independent DB reads — fan them out so a build costs ~2 sequential
+    // round-trips instead of ~7 (this runs per exercise on session open and on every set log).
+    val setsDeferred = async { logged?.let { workoutRepo.setsFor(it.id) }.orEmpty() }
+    val prevDeferred = async {
+        val prevLE = workoutRepo.lastLoggedExerciseBefore(plan.id, sessionId)
+        prevLE to prevLE?.let { workoutRepo.setsFor(it.id) }.orEmpty()
+    }
+    val persistentDeferred = async { customizationRepo.getSwap(plan.id) }
+    // Bounded stand-ins for "every set ever logged" (which grew without limit): the per-rep
+    // max-weight frontier answers PR questions identically, and the PB is a single LIMIT 1 row.
+    val frontierDeferred = async {
+        workoutRepo.repMaxFrontierForExercise(plan.id, logged?.id).map { row ->
+            // Wrapped as synthetic sets so PrDetector / the SetInputRow PR hint consume the
+            // frontier through the same code path as real history (only weightLb/reps are read).
+            LoggedSet(
+                loggedExerciseId = 0L, setIndex = 0, weightText = "",
+                weightLb = row.weightLb, reps = row.reps, completedAt = 0L
+            )
+        }
+    }
+    val hasHistoryDeferred = async { workoutRepo.hasHistoryForExercise(plan.id, logged?.id) }
+    val pbDeferred = async { workoutRepo.personalBestSet(plan.id) }
+    val goalDeferred = async { goalRepo.get(plan.id)?.targetWeightLb }
+    val aggregatesDeferred = async { workoutRepo.sessionAggregatesForExercise(plan.id, limit = 8) }
+
+    val sets = setsDeferred.await()
+    val (prevLE, prevSets) = prevDeferred.await()
     val prevFirstSet = prevSets.firstOrNull()
     val preview = prevFirstSet?.let { "Last: ${it.weightText} × ${it.reps}" }
-    val persistent = customizationRepo.getSwap(plan.id)
+    val persistent = persistentDeferred.await()
 
-    val allHistory = workoutRepo.historyForExercise(plan.id)
-    val prior = allHistory.filter { it.loggedExerciseId != logged?.id }
-    val (prSetIds, wasPr) = computePrFlags(prior, sets)
+    val priorFrontier = frontierDeferred.await()
+    val (prSetIds, wasPr) = computePrFlags(priorFrontier, hasHistoryDeferred.await(), sets)
 
     if (logged != null && logged.wasPr != wasPr) {
         workoutRepo.updateExercise(logged.copy(wasPr = wasPr))
@@ -56,22 +82,19 @@ internal suspend fun DayViewModel.buildExerciseUi(
         prevEffort = prevLE?.difficulty,
         repsText = plan.reps,
         unit = plan.unit,
-        plateLb = settingsRepo.plateWeightLb.first(),
+        plateLb = plateLb,
         intensity = IntensityIntent.fromCode(_state.value.sessionIntensity),
         readiness = readiness,
-        dbMaxLb = settingsRepo.maxDbWeightLb.first(),
+        dbMaxLb = dbMaxLb,
         // Doubling the step only makes sense on the DB grid; PLATES move whole plates anyway.
         fastStep = stepMode == com.forge.app.domain.coach.StepMode.FASTER && plan.unit == com.forge.app.program.ExerciseUnit.DUMBBELL,
         consolidate = stepMode == com.forge.app.domain.coach.StepMode.CONSOLIDATE
     )
 
-    val pbSet = allHistory.filter { it.weightLb != null }.maxByOrNull { it.weightLb!! }
+    val pbSet = pbDeferred.await()
     val allTimePbLb = pbSet?.weightLb
-    val allTimePbText = pbSet?.let { best ->
-        val maxRepsAtWeight = allHistory.filter { it.weightLb == best.weightLb }.maxOf { it.reps }
-        "${best.weightText} × $maxRepsAtWeight"
-    }
-    val goalWeightLb = goalRepo.get(plan.id)?.targetWeightLb
+    val allTimePbText = pbSet?.let { "${it.weightText} × ${it.reps}" }
+    val goalWeightLb = goalDeferred.await()
 
     val currentVolume = sets.sumOf { (it.weightLb ?: 0.0) * it.reps }
     val prevVolume = prevSets.sumOf { (it.weightLb ?: 0.0) * it.reps }
@@ -82,7 +105,7 @@ internal suspend fun DayViewModel.buildExerciseUi(
         else -> VsLastStatus.UNDER
     }
 
-    val sessionHistory = workoutRepo.sessionAggregatesForExercise(plan.id, limit = 8)
+    val sessionHistory = aggregatesDeferred.await()
         .map { agg ->
             ExerciseSessionPoint(
                 sessionStartedAt = agg.sessionStartedAt,
@@ -95,14 +118,14 @@ internal suspend fun DayViewModel.buildExerciseUi(
         }
 
     // ── TEMP dummy fallbacks (gated by DUMMY_TRAINING_DATA) ───────────────────────
-    val displayPrior = if (DUMMY_TRAINING_DATA && prior.isEmpty()) {
+    val displayPrior = if (DUMMY_TRAINING_DATA && prevSets.isEmpty()) {
         List(plan.sets.coerceAtLeast(3)) { i ->
             LoggedSet(
                 id = -(i + 1L), loggedExerciseId = -1L, setIndex = i,
                 weightText = "40", weightLb = 40.0, reps = 10 - i, completedAt = 0L, rpe = 8.0
             )
         }
-    } else prior
+    } else prevSets
 
     val displaySuggested = suggestion?.inputText ?: if (DUMMY_TRAINING_DATA) "45" else null
     val displayReason = suggestion?.reason
@@ -122,7 +145,7 @@ internal suspend fun DayViewModel.buildExerciseUi(
     } else sessionHistory
     // ──────────────────────────────────────────────────────────────────────────────
 
-    return ExerciseUiState(
+    ExerciseUiState(
         plan = plan,
         loggedExerciseId = logged?.id,
         loggedSets = sets,
@@ -143,6 +166,7 @@ internal suspend fun DayViewModel.buildExerciseUi(
         suggestedDeltaLb = suggestion?.deltaLb,
         suggestedTargetLb = suggestion?.targetWeightLb,
         priorSets = displayPrior,
+        priorFrontier = priorFrontier,
         allTimePbText = allTimePbText,
         allTimePbLb = allTimePbLb,
         vsLastStatus = vsLastStatus,
@@ -183,19 +207,24 @@ internal fun DayViewModel.computeRestPrescription(
 ): RestPrescription = RestAdvisor.restSeconds(plan, effortRating, overrideSeconds, restTuning)
 
 internal fun computePrFlags(
-    prior: List<LoggedSet>,
+    priorFrontier: List<LoggedSet>,
+    hasPriorHistory: Boolean,
     currentSets: List<LoggedSet>
 ): Pair<Set<Long>, Boolean> {
     if (currentSets.isEmpty()) return emptySet<Long>() to false
     // No prior history → first-ever time on this exercise; there's no record to beat, so
     // nothing flags gold. (This intentionally diverges from PrDetector.isPr's documented
     // "empty history = PR" rule — that rule is about a single proposed set, whereas here an
-    // entire first session shouldn't paint every set gold.)
-    if (prior.isEmpty()) return emptySet<Long>() to false
+    // entire first session shouldn't paint every set gold.) Checked against ALL prior sets:
+    // a bodyweight/assisted-only history still counts as history even though it contributes
+    // nothing to the weighted frontier.
+    if (!hasPriorHistory) return emptySet<Long>() to false
     // Judge each set against prior sessions AND the earlier sets of THIS session: once a
     // heavier set beats the record, a later lighter set in the same session must not also
     // flag as a PR. Walk sets in performed order, growing the comparison history as we go.
-    val running = prior.toMutableList()
+    // isPr only reads (weightLb, reps, isAssisted), so the frontier substitutes exactly for
+    // the full prior-set list it used to receive.
+    val running = priorFrontier.toMutableList()
     val prIds = mutableSetOf<Long>()
     for (set in currentSets.sortedBy { it.setIndex }) {
         // An assisted set is never itself a PR (and assisted history is excluded inside isPr).

@@ -77,6 +77,20 @@ internal fun FormatPage(state: SettingsUiState, vm: SettingsViewModel, modifier:
             ) { vm.setUseKg(it == "kg") }
             SectionDivider()
         }
+        item("sex") {
+            ChipSection(
+                "Sex",
+                listOf("male" to "Male", "female" to "Female"),
+                state.userSex, vm::setUserSex
+            )
+            Text(
+                "Only scales the bodyweight-relative strength standards on the Stats tab.",
+                style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic,
+                modifier = Modifier.padding(horizontal = 24.dp)
+            )
+            Spacer(Modifier.height(8.dp))
+            SectionDivider()
+        }
         item("date") {
             ChipSection(
                 "Date format",
@@ -184,15 +198,26 @@ internal fun EquipmentPage(state: SettingsUiState, vm: SettingsViewModel, modifi
             modifier = Modifier.padding(horizontal = 24.dp)
         )
         Spacer(Modifier.height(12.dp))
-        // Quick presets — one-tap fill (e.g. the MWM-989 = dumbbells + bench + cable + machine).
+        // Quick presets — one-tap fill. The Developer's preset is curated (a locked exercise pool).
         FlowRow(
             modifier = Modifier.padding(horizontal = 24.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            com.forge.app.program.equipmentPresets.forEach { (label, set) ->
-                PillChip(label, state.availableEquipment == set) { vm.setAvailableEquipment(set) }
+            com.forge.app.program.equipmentPresets.forEach { preset ->
+                val selected = state.availableEquipment == preset.equipment &&
+                    state.frozenExerciseIds == preset.frozenIds
+                PillChip(preset.label, selected) { vm.selectEquipmentPreset(preset) }
             }
+        }
+        if (state.frozenExerciseIds != null) {
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "This is a curated preset — its exercise list is locked and won't change. " +
+                    "Tap any equipment below to switch to a custom set.",
+                style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic,
+                modifier = Modifier.padding(horizontal = 24.dp)
+            )
         }
         Spacer(Modifier.height(12.dp))
         FlowRow(
@@ -228,8 +253,8 @@ internal fun EquipmentPage(state: SettingsUiState, vm: SettingsViewModel, modifi
             modifier = Modifier.padding(horizontal = 24.dp))
         Spacer(Modifier.height(4.dp))
         Text(
-            "Machine/cable exercises are entered and shown as a plate count. This is what one plate weighs " +
-                "(the MWM-989 is 15 lb), used for PRs and volume.",
+            "For machines that load by counting plates (not a numbered stack): exercises are entered and " +
+                "shown as a plate count. This is what one plate weighs, used for PRs and volume.",
             style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic,
             modifier = Modifier.padding(horizontal = 24.dp)
         )
@@ -291,7 +316,19 @@ internal fun ExercisePrefsPage(state: SettingsUiState, vm: SettingsViewModel, mo
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val onBg = MaterialTheme.colorScheme.onBackground
     val outline = MaterialTheme.colorScheme.outline
-    val byMuscle = remember { com.forge.app.program.ExerciseLibrary.all.groupBy { it.muscle } }
+    // Only show exercises the user can actually do — the available pool (curated freeze when a
+    // preset like the Developer's is active, otherwise equipment-filtered). Muscle groups with no
+    // available movement drop out entirely. An empty equipment set means "all" (no filter yet).
+    val available = remember(state.availableEquipment) {
+        state.availableEquipment.mapNotNull {
+            runCatching { com.forge.app.program.Equipment.valueOf(it) }.getOrNull()
+        }.toSet()
+    }
+    val byMuscle = remember(available, state.frozenExerciseIds) {
+        com.forge.app.program.ExerciseLibrary
+            .availablePool(available, state.frozenExerciseIds)
+            .groupBy { it.muscle }
+    }
 
     // Two-level navigation: pick a body part, then like/dislike its movements — so the page
     // isn't one giant scroll of every exercise at once.

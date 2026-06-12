@@ -88,13 +88,15 @@ class ProgramGeneratorTest {
 
     @Test
     fun lightDumbbellCeilingSteersHeavySlotsToTheStack() {
-        // With light DBs (25 lb max), the heavy chest slot should land on a plate-stack movement
-        // (machine press) far more often than without a ceiling — the only real overload path.
+        // With light DBs (25 lb max), the heavy chest slot should land on a loadable non-dumbbell
+        // movement (machine/barbell, WEIGHT or PLATES) far more often than without a ceiling — the
+        // only real overload path.
         fun stackLeads(dbMaxLb: Double?): Int = (0 until 80).count { s ->
             val lead = ProgramGenerator.generate(
                 GenerationParams(3, dbMaxLb = dbMaxLb), mwm, emptySet(), emptySet(), seed = s.toLong()
             ).first { it.key == "push" }.exercises.first()
-            ExerciseLibrary.byId(lead.libId)!!.unit == ExerciseUnit.PLATES
+            val u = ExerciseLibrary.byId(lead.libId)!!.unit
+            u == ExerciseUnit.WEIGHT || u == ExerciseUnit.PLATES
         }
         val light = stackLeads(25.0)
         val none = stackLeads(null)
@@ -127,11 +129,13 @@ class ProgramGeneratorTest {
     @Test
     fun nicheAccessoriesArePickedLessOftenThanDefaults() {
         // pickBias: the inner-thigh adductor cross (0.35) must headline quad slots clearly less
-        // often than the leg extension (1.0). Statistical over many seeds.
+        // often than the leg extension (1.0). Both are plate-count (owner-only) movements, so this
+        // runs inside the curated Developer's preset where they live. Statistical over many seeds.
+        val frozen = ExerciseLibrary.DEVELOPER_FROZEN_IDS
         var innerThigh = 0
         var legExtension = 0
         repeat(100) { s ->
-            ProgramGenerator.generate(GenerationParams(3), mwm, emptySet(), emptySet(), seed = s.toLong())
+            ProgramGenerator.generate(GenerationParams(3, frozenIds = frozen), mwm, emptySet(), emptySet(), seed = s.toLong())
                 .flatMap { it.exercises }.forEach {
                     when (it.libId) {
                         "mwm-inner-thigh" -> innerThigh++

@@ -14,6 +14,15 @@ All notable changes to **Forge** are recorded here.
 - animations polish
 - onboarding
 - Intelligent plan making v1
+- Auto-coach: a weekly brief that reviews your week and proposes plan changes you can apply or undo.
+- Workout fixes: tapping a finished/skipped exercise no longer hides others; the rest timer now sits right under your sets instead of below the controls.
+- Session time is now tracked per sitting — leave and resume a workout and your real active time adds up (13 min + 40 min = 53), instead of the clock restarting.
+- Exports now include your notes, journal, per-set RPE, effort ratings, mood, and the per-sitting time breakdown.
+- New "You" hub (account icon on the home screen): lifetime stats, progress photos, on-this-day memories, trophy points & near-misses, and recaps — all on your phone, no account needed.
+- The "You" hub leveled up into a **rank ladder**: earn XP for every workout, set, PR, lb moved and week you train, and climb 30 ranks across six forge tiers — Ember → Iron → Steel → Tempered → Forged → Damascus. Tap the rank bar to see exactly how XP works. A new **Standing** card estimates where you'd place vs typical lifters on consistency, streak and weekly volume (an offline estimate — nothing leaves your phone), plus a **Signature** card (top lift · most-logged day · usual hour) and a profile photo.
+- "Beat the ghost": every set is now a duel with last session — a live "beating last: N/M sets" scoreboard during the workout, a "beat 45×10" target on the input row, and a duel result + confetti when you finish strong.
+- Bigger finish: confetti now also fires for a best-ever session or a clean sweep of the duel.
+- Streak hook on the home screen — a "🔥 N-day streak — keep it alive" line (forgiving: rest days and vacations never break it).
 ### 0.4.5.1
 - Smoother animations throughout the app.
 - Faster, snappier active-workout screen (only the exercise you touch refreshes, not the whole list).
@@ -48,6 +57,34 @@ All notable changes to **Forge** are recorded here.
 ---
 
 ## Developer history (reconstructed)
+
+### [0.5] — Auto-coach + active-workout fixes (in progress)
+- Auto-coach (5 phases): DB load ceiling, Week Brief + shadow planner, suggestion-outcome
+  calibration, propose/apply/undo + outcome watcher, earned autopilot. Pure systems in
+  `domain/coach/`; DB v16→19.
+- Active-workout fixes: `DaySessionContent` no longer orphans incomplete exercises when a
+  later done/skipped one is opened (UP NEXT now lists all remaining work, not just forward
+  of the shown index); the inline rest timer moved inside `ExerciseCard` (under the set log).
+- **Per-sitting session timing** (DB v19→20): `session_segment` table + `session.active_seconds`.
+  A workout spanning "resume later" sittings sums real ACTIVE time (segments) instead of the
+  clock resetting on each open; `finishSession` stamps the total; exports list the breakdown.
+- Equipment correctness: `Equipment.INCLINE_BENCH` split from flat `BENCH` (MWM preset excludes
+  it); removed Face Pull / Seated Low Row / DB Hip Thrust (not doable on Antho's gear).
+- Richer exports: weekly + full JSON and the session PDF now carry notes, journal, per-set RPE,
+  effort, mood, and the per-sitting time breakdown.
+- Engagement layer: "You" hub (`ui/profile/`, all local) + **beat-the-ghost** (`DayUiState.ghostBeats/
+  ghostComparable` via `beatsPriorSet`; live hero scoreboard, "beat" target, summary duel result,
+  best/clean-sweep confetti) + a forgiving streak hook on Overview. New files only / `ui/gym/train`
+  + `ui/overview` — no overlap with the concurrent equipment/library/onboarding work.
+- **Rank & XP system** (`domain/rank/`, pure): `XpEngine` (earned XP from workouts/sets/PRs/volume/
+  active-weeks/trophy points), `RankLadder` (6 tiers × 5 sub-ranks = 30 ranks, all thresholds in one
+  tunable object), `StandingEngine` (offline "Top X%" estimate vs a documented population model — no
+  server, no accounts). `ProfileRepository` assembles the snapshot + runs the engines (one fan-out,
+  AdaptationRepository pattern) feeding a fully rebuilt `ProfileScreen` (rank track, ledger, standing,
+  signature, mirror-test photos, trophy-case grid with progress rings, on-the-record recaps, "How XP
+  works" sheet, avatar via the Photo Picker). No DB migration — everything derives from finished
+  sessions; avatar is an app-private file. Tests: `RankLadderTest` / `XpEngineTest` /
+  `StandingEngineTest`. **Pending:** on-device check.
 
 ### [0.4.5.1] — Motion & performance polish
 - Added animation system (`Motion.kt`).

@@ -67,6 +67,7 @@ class AdaptationRepository @Inject constructor(
         val equipment = settingsRepository.availableEquipment.first()
             .mapNotNull { runCatching { Equipment.valueOf(it) }.getOrNull() }.toSet()
         val disliked = settingsRepository.dislikedExercises.first()
+        val frozenIds = settingsRepository.frozenExerciseIds.first()
         val prefs = PrefsSnap(
             plateLb = settingsRepository.plateWeightLb.first(),
             likedIds = settingsRepository.likedExercises.first(),
@@ -80,7 +81,7 @@ class AdaptationRepository @Inject constructor(
             nowMs = now,
             program = Program.days,
             swapCandidateIds = { plan ->
-                ExerciseLibrary.swapCandidates(plan.muscle, equipment, disliked)
+                ExerciseLibrary.swapCandidates(plan.muscle, equipment, disliked, frozenIds)
                     .map { it.id }
                     .filter { it != plan.id }
             },
@@ -183,7 +184,11 @@ class AdaptationRepository @Inject constructor(
             priorityMuscles = settingsRepository.priorityMuscles.first()
                 .mapNotNull { runCatching { MuscleGroup.fromCode(it) }.getOrNull() }.toSet(),
             pinned = settingsRepository.pinnedExercises.first(),
-            deload = true
+            // Mirror buildParams: without this a deload generated from the coach card could
+            // prescribe dumbbell movements above the user's heaviest available dumbbell.
+            dbMaxLb = settingsRepository.maxDbWeightLb.first(),
+            deload = true,
+            frozenIds = settingsRepository.frozenExerciseIds.first()
         )
         programRepository.generate(
             params,

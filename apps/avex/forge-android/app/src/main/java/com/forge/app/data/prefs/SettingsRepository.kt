@@ -181,6 +181,19 @@ class SettingsRepository @Inject constructor(
     suspend fun setAvailableEquipment(codes: Set<String>) =
         context.forgePreferences.edit { it[PreferenceKeys.AVAILABLE_EQUIPMENT] = codes }
 
+    /**
+     * Curated/frozen exercise pool (a preset such as the Developer's preset). Null/absent = no
+     * curation (ordinary equipment filtering). Drives generation, the swap picker and the
+     * like/dislike screen so they all show the same locked set.
+     */
+    val frozenExerciseIds: Flow<Set<String>?> = context.forgePreferences.data
+        .map { it[PreferenceKeys.FROZEN_EXERCISE_IDS] }
+    suspend fun setFrozenExerciseIds(ids: Set<String>?) =
+        context.forgePreferences.edit {
+            if (ids == null) it.remove(PreferenceKeys.FROZEN_EXERCISE_IDS)
+            else it[PreferenceKeys.FROZEN_EXERCISE_IDS] = ids
+        }
+
     // ─── Program generation (program-unlock) ──────────────────────────────────
 
     val daysPerWeek: Flow<Int> = context.forgePreferences.data
@@ -304,6 +317,12 @@ class SettingsRepository @Inject constructor(
         .map { it[PreferenceKeys.USER_GOAL] ?: "" }
     suspend fun setUserGoal(goal: String) =
         context.forgePreferences.edit { it[PreferenceKeys.USER_GOAL] = goal }
+
+    /** User's sex for bodyweight-relative strength standards: "male" | "female" | "" (unspecified). */
+    val userSex: Flow<String> = context.forgePreferences.data
+        .map { it[PreferenceKeys.USER_SEX] ?: "" }
+    suspend fun setUserSex(sex: String) =
+        context.forgePreferences.edit { it[PreferenceKeys.USER_SEX] = sex }
 
     /** Training experience drives generation volume + difficulty filter (program-unlock Phase 4 / Phase 2). */
     val programExperience: Flow<String> = context.forgePreferences.data

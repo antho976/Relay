@@ -135,15 +135,25 @@ class DayViewModel @Inject constructor(
             readiness = adaptationRepo.readinessScale()
             if (readiness != null && _state.value.exercises.isNotEmpty()) refreshExercises()
         }
-        // Equipment + dislikes drive the swap picker's candidate pool (program-unlock Phase 4).
+        // Equipment + dislikes + curated freeze drive the swap picker's candidate pool (program-unlock
+        // Phase 4 + frozen-preset). A curated preset (Developer's) locks swaps to its pool too.
         viewModelScope.launch {
             settingsRepo.availableEquipment
                 .combine(settingsRepo.dislikedExercises) { equip, disliked -> equip to disliked }
-                .collect { (equip, disliked) ->
+                .combine(settingsRepo.frozenExerciseIds) { (equip, disliked), frozen ->
+                    Triple(equip, disliked, frozen)
+                }
+                .collect { (equip, disliked, frozen) ->
                     val available = equip.mapNotNull {
                         runCatching { Equipment.valueOf(it) }.getOrNull()
                     }.toSet()
-                    _state.update { it.copy(swapAvailableEquipment = available, swapDislikedIds = disliked) }
+                    _state.update {
+                        it.copy(
+                            swapAvailableEquipment = available,
+                            swapDislikedIds = disliked,
+                            swapFrozenIds = frozen
+                        )
+                    }
                 }
         }
     }

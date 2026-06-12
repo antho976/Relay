@@ -120,7 +120,8 @@ class ProgramRepository @Inject constructor(
         priorityMuscles = settings.priorityMuscles.first()
             .mapNotNull { runCatching { MuscleGroup.fromCode(it) }.getOrNull() }.toSet(),
         pinned = settings.pinnedExercises.first(),
-        dbMaxLb = settings.maxDbWeightLb.first()
+        dbMaxLb = settings.maxDbWeightLb.first(),
+        frozenIds = settings.frozenExerciseIds.first()
     )
 
     private suspend fun currentEquipment(): Set<Equipment> = settings.availableEquipment.first()

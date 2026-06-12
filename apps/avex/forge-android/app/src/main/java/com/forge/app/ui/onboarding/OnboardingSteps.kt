@@ -32,9 +32,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.ui.theme.AccentEmphasis
 import com.forge.app.program.Equipment
+import com.forge.app.program.EquipmentPreset
 import com.forge.app.program.ExerciseLibrary
 import com.forge.app.program.GeneratedDay
 import com.forge.app.program.ProblemArea
+import com.forge.app.program.equipmentPresets
 
 /** Goal options with a one-line explanation of what each one changes (it only reshapes rep ranges). */
 private val GOAL_DETAILS = listOf(
@@ -51,8 +53,11 @@ private val EXPERIENCE_DETAILS = listOf(
     Triple("advanced", "A few years in", "Experienced lifter. A touch more volume.")
 )
 
-/** Equipment presets — quick-fill the set instead of toggling nine chips (shared with Settings). */
-private val EQUIPMENT_PRESETS: List<Pair<String, Set<String>>> = com.forge.app.program.equipmentPresets
+/** Sex — only scales the bodyweight-relative strength standards on the Stats tab. Optional. */
+private val SEX_DETAILS = listOf(
+    Triple("male", "Male", null),
+    Triple("female", "Female", null)
+)
 
 @Composable
 private fun Headline(text: String) {
@@ -158,6 +163,15 @@ internal fun StepExperience(selected: String, onSelect: (String) -> Unit) {
 }
 
 @Composable
+internal fun StepSex(selected: String?, onSelect: (String) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Headline("Sex")
+        Caption("Only used to scale the bodyweight-relative strength standards on the Stats tab. Optional.")
+        SEX_DETAILS.forEach { (key, label, desc) -> SelectableRow(label, selected == key, desc) { onSelect(key) } }
+    }
+}
+
+@Composable
 internal fun StepBodyweight(input: String, useKg: Boolean, onInputChange: (String) -> Unit) {
     val unitLabel = if (useKg) "kg" else "lb"
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
@@ -186,13 +200,19 @@ internal fun StepDays(days: Int, onChange: (Int) -> Unit) {
 }
 
 @Composable
-internal fun StepEquipment(selected: Set<String>, onToggle: (String) -> Unit, onSetAll: (Set<String>) -> Unit) {
+internal fun StepEquipment(
+    selected: Set<String>,
+    frozenIds: Set<String>?,
+    onToggle: (String) -> Unit,
+    onSelectPreset: (EquipmentPreset) -> Unit
+) {
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Headline("Your equipment")
         Caption("Pick a preset, then fine-tune. Generated plans only use what's on.")
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            EQUIPMENT_PRESETS.forEach { (label, set) ->
-                OnboardingChip(label, selected == set) { onSetAll(set) }
+            equipmentPresets.forEach { preset ->
+                val isSel = selected == preset.equipment && frozenIds == preset.frozenIds
+                OnboardingChip(preset.label, isSel) { onSelectPreset(preset) }
             }
         }
         Spacer(Modifier.height(4.dp))
@@ -206,7 +226,7 @@ internal fun StepEquipment(selected: Set<String>, onToggle: (String) -> Unit, on
 internal fun StepPlateWeight(plateWeightLb: Double, onSet: (Double) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Headline("Weight per plate")
-        Caption("Machine/cable exercises are entered as a plate count. This is what one plate weighs — the MWM-989 is 15 lb. Leave it at 15 if you're not sure.")
+        Caption("Only matters if your machine is loaded by counting plates (not a numbered stack). This is what one of those plates weighs. Leave it at 15 if you're not sure — you can change it later.")
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf(5.0, 10.0, 15.0, 20.0, 25.0, 45.0).forEach { w ->
                 OnboardingChip("${w.toInt()} lb", plateWeightLb == w) { onSet(w) }

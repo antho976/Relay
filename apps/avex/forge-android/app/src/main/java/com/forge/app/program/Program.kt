@@ -10,37 +10,69 @@ package com.forge.app.program
  * parses this when needed.
  */
 /**
- * Equipment required to perform an exercise (#44). Only implements the library actually has movements
- * for — barbell/kettlebell/resistance-band were removed because no [ExerciseLibrary] entry used them,
- * so they rendered as selectable chips that generated a broken (empty) day. Re-add alongside real
- * exercises if that gear is ever supported.
+ * Equipment required to perform an exercise (#44). Every value must have at least one
+ * [ExerciseLibrary] movement that uses it — an equipment chip with no exercises generates a broken
+ * (empty) day. The barbell/Smith/trap-bar/EZ-bar/kettlebell/band gear was added (2026-06-11) as part
+ * of generalizing the app beyond the owner's MWM-989 home gym, alongside the movements that use it.
  */
 enum class Equipment(val display: String) {
     DUMBBELLS("Dumbbells"),
+    BARBELL("Barbell"),
+    /** A squat / power rack — needed to unrack barbell squats safely. */
+    SQUAT_RACK("Squat / power rack"),
+    SMITH_MACHINE("Smith machine"),
+    /** Trap / hex bar. */
+    TRAP_BAR("Trap / hex bar"),
+    EZ_BAR("EZ-bar"),
+    KETTLEBELL("Kettlebell"),
+    RESISTANCE_BAND("Resistance bands"),
     CABLE("Cable machine"),
     PULL_UP_BAR("Pull-up bar"),
     /** A FLAT bench. Movements that need an adjustable back rest require [INCLINE_BENCH]. */
     BENCH("Flat bench"),
-    /** Adjustable/incline bench — NOT part of the MWM-989 preset (that bench is flat-only). */
+    /** Adjustable/incline bench — NOT part of the Developer's preset (that bench is flat-only). */
     INCLINE_BENCH("Incline bench"),
     BODYWEIGHT_ONLY("Bodyweight only"),
+    /** Generic selectorized resistance machine (leg press, pulldown, chest press, etc.). */
     MACHINE("Machine")
 }
 
 /**
- * One-tap equipment presets (label → Equipment code set) shared by onboarding + Settings. The
- * **MWM-989 home gym** = dumbbells + a FLAT bench (the bench-press bench; its bar is benching-only
- * and barbell movements aren't modeled) + the machine's cable (high/low pulley) + machine stations
- * (leg developer, press arm). Deliberately NO [Equipment.INCLINE_BENCH] — incline movements must
- * never reach this preset's plans.
+ * A one-tap equipment preset. [equipment] fills the available-equipment set. A non-null [frozenIds]
+ * marks a CURATED preset whose exercise pool is locked to exactly those library ids — generation,
+ * the swap picker and the like/dislike screen all draw only from them, and movements added to the
+ * library later never enter it. Null = ordinary equipment filtering.
  */
-val equipmentPresets: List<Pair<String, Set<String>>> = listOf(
-    "MWM-989 home gym" to setOf(
-        Equipment.DUMBBELLS.name, Equipment.BENCH.name, Equipment.CABLE.name, Equipment.MACHINE.name
+data class EquipmentPreset(
+    val id: String,
+    val label: String,
+    val equipment: Set<String>,
+    val frozenIds: Set<String>? = null
+)
+
+/**
+ * One-tap equipment presets shared by onboarding + Settings. The **Developer's preset** is Antho's
+ * own MWM-989 home gym = dumbbells + a FLAT bench (the bench-press bench; its bar is benching-only
+ * and barbell movements aren't modeled) + the machine's cable (high/low pulley) + machine stations
+ * (leg developer, press arm). It is CURATED: its exercise pool is frozen to
+ * [ExerciseLibrary.DEVELOPER_FROZEN_IDS] (no incline-bench/pull-up-bar movements), so the equipment
+ * generalization can never change what it produces. Every other preset is plain equipment filtering.
+ */
+val equipmentPresets: List<EquipmentPreset> = listOf(
+    EquipmentPreset(
+        "developer", "Developer's preset",
+        setOf(Equipment.DUMBBELLS.name, Equipment.BENCH.name, Equipment.CABLE.name, Equipment.MACHINE.name),
+        frozenIds = ExerciseLibrary.DEVELOPER_FROZEN_IDS
     ),
-    "Dumbbells + bench" to setOf(Equipment.DUMBBELLS.name, Equipment.BENCH.name),
-    "Full gym" to Equipment.entries.map { it.name }.toSet(),
-    "Bodyweight only" to setOf(Equipment.BODYWEIGHT_ONLY.name)
+    EquipmentPreset("commercial", "Commercial gym", Equipment.entries.map { it.name }.toSet()),
+    EquipmentPreset("home-barbell", "Home gym + barbell", setOf(
+        Equipment.DUMBBELLS.name, Equipment.BARBELL.name, Equipment.SQUAT_RACK.name,
+        Equipment.BENCH.name, Equipment.INCLINE_BENCH.name, Equipment.PULL_UP_BAR.name
+    )),
+    EquipmentPreset("db-bench", "Dumbbells + bench",
+        setOf(Equipment.DUMBBELLS.name, Equipment.BENCH.name)),
+    EquipmentPreset("dumbbells", "Dumbbells only", setOf(Equipment.DUMBBELLS.name)),
+    EquipmentPreset("bodyweight", "Bodyweight only", setOf(Equipment.BODYWEIGHT_ONLY.name))
 )
 
 /** Equipment/movement tag for an exercise (#37). */

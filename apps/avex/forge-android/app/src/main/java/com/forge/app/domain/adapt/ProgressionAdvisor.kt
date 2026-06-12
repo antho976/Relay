@@ -153,12 +153,13 @@ object ProgressionAdvisor {
         fastStep: Boolean,
         t: AdaptThresholds
     ): Recommendation.WeightChange? = when (unit) {
-        ExerciseUnit.DUMBBELL -> {
+        ExerciseUnit.DUMBBELL, ExerciseUnit.WEIGHT -> {
             val step = if (fastStep) t.dumbbellStepLb * 2 else t.dumbbellStepLb
             val target = floorToGrid((prevMax + step) * scale, t.dumbbellStepLb)
-            // Only trust the ceiling when history doesn't contradict it — a heavier logged set
+            // The heaviest-dumbbell ceiling applies ONLY to dumbbells (a barbell/machine keeps
+            // loading). Trust it only while history doesn't contradict it — a heavier logged set
             // means the setting is stale, and progress shouldn't be capped on bad data.
-            val ceiling = dbMaxLb?.takeIf { prevMax <= it }
+            val ceiling = dbMaxLb?.takeIf { unit == ExerciseUnit.DUMBBELL && prevMax <= it }
             when {
                 target <= 0.0 -> null
                 ceiling != null && target > ceiling -> {
@@ -203,7 +204,7 @@ object ProgressionAdvisor {
         reason: String,
         t: AdaptThresholds
     ): Recommendation.WeightChange? = when (unit) {
-        ExerciseUnit.DUMBBELL -> {
+        ExerciseUnit.DUMBBELL, ExerciseUnit.WEIGHT -> {
             val target = floorToGrid((prevMax - t.dumbbellStepLb) * scale, t.dumbbellStepLb)
             if (target <= 0.0) null
             else weightChange(
@@ -324,7 +325,7 @@ object ProgressionAdvisor {
             // A DB target can't exceed the heaviest dumbbell the user owns (ceiling trusted only
             // while history doesn't contradict it). At the ceiling, anchor the weight and push
             // reps instead — the next ladder rung shifts the rep range anyway.
-            val ceiling = maxDbLb?.takeIf { slot.unit != ExerciseUnit.PLATES && prevMax <= it }
+            val ceiling = maxDbLb?.takeIf { slot.unit == ExerciseUnit.DUMBBELL && prevMax <= it }
             val target = if (ceiling != null) minOf(raw, floorToGrid(ceiling, t.dumbbellStepLb)) else raw
             if (target <= prevMax) weightChange(
                 slot.exerciseId, slot.name, prevMax, prevMax,

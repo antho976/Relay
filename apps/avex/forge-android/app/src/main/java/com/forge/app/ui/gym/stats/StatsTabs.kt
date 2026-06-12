@@ -239,7 +239,7 @@ internal fun LazyListScope.bodyTab(state: StatsUiState, c: StatsColors) {
     item("standards") {
         EntranceItem(1) {
             StrengthStandardsCard(
-                state.e1rmLifts, state.bodyweightPoints.lastOrNull()?.weightLb,
+                state.e1rmLifts, state.bodyweightPoints.lastOrNull()?.weightLb, state.userSex,
                 c.onBg, c.muted, c.accent, c.outline
             )
         }

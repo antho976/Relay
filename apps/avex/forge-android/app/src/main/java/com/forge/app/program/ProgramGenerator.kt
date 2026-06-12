@@ -30,7 +30,13 @@ data class GenerationParams(
      */
     val volumeBias: Map<MuscleGroup, Int> = emptyMap(),
     /** Movements the coach tried that didn't land — softly down-weighted, never hard-banned. */
-    val avoid: Set<String> = emptySet()
+    val avoid: Set<String> = emptySet(),
+    /**
+     * Curated/frozen exercise pool (a preset such as the Developer's preset). When non-null,
+     * generation draws ONLY from these library ids and ignores [available] equipment filtering —
+     * locking the preset against any movement added to the library later.
+     */
+    val frozenIds: Set<String>? = null
 )
 
 data class GeneratedExercise(val libId: String, val sets: Int, val reps: String)
@@ -106,9 +112,8 @@ object ProgramGenerator {
             val usedInDay = HashSet<String>()
             val usedPatterns = HashSet<MovementPattern>()
             val exercises = day.targets.mapIndexedNotNull { si, slot ->
-                val avail = ExerciseLibrary.forMuscle(slot.muscle).filter { def ->
-                    def.id !in disliked && isAvailable(def, available)
-                }
+                val avail = ExerciseLibrary.availablePool(available, params.frozenIds)
+                    .filter { it.muscle == slot.muscle && it.id !in disliked }
                 // Last-resort bodyweight fills only enter the pool when nothing the user actually owns
                 // can train this muscle — so an equipped user never gets a bodyweight squat, but a
                 // bodyweight-only / minimal setup is never starved into an empty day.
@@ -132,11 +137,15 @@ object ProgramGenerator {
                     candidates.filter { ExerciseTag.COMPOUND in it.tags }.ifEmpty { candidates }
                 else candidates
                 // Light dumbbells can't progressively load a heavy slot — when the user's heaviest
-                // DB is below the threshold and the pool offers a plate-stack compound, steer the
-                // STRENGTH pick toward the stack (the only real overload path; auto-coach Phase 0).
+                // DB is below the threshold and the pool offers a loadable non-dumbbell compound
+                // (barbell / machine / plate stack), steer the STRENGTH pick toward it (the only real
+                // overload path; auto-coach Phase 0, generalized to WEIGHT movements 2026-06-11).
                 val preferStack = slot.scheme == RepScheme.STRENGTH &&
                     (params.dbMaxLb ?: Double.MAX_VALUE) < LIGHT_DB_LB &&
-                    pool.any { it.unit == ExerciseUnit.PLATES && ExerciseTag.COMPOUND in it.tags }
+                    pool.any {
+                        (it.unit == ExerciseUnit.PLATES || it.unit == ExerciseUnit.WEIGHT) &&
+                            ExerciseTag.COMPOUND in it.tags
+                    }
                 val pick = pinned ?: weightedPick(pool, rng) { def ->
                     val likeW = if (def.id in liked) LIKE_BOOST else 1.0
                     val recentW = if (def.id in recent) RECENT_PENALTY else 1.0
@@ -160,10 +169,6 @@ object ProgramGenerator {
         }
         return liftDays
     }
-
-    /** Available if no equipment is configured (empty = all) or every required item is on hand. */
-    private fun isAvailable(def: ExerciseDef, available: Set<Equipment>): Boolean =
-        available.isEmpty() || def.equipment.all { it == Equipment.BODYWEIGHT_ONLY || it in available }
 
     /**
      * Heavy (STRENGTH) slots favour **bilateral** compounds (squat / hinge / press / row) as the lead

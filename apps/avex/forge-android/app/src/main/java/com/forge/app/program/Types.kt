@@ -26,12 +26,18 @@ enum class MuscleGroup(val code: String, val displayName: String) {
 
 /**
  * How the load on an exercise is measured.
- * - DUMBBELL: free weights, displayed in lb.
- * - PLATES: MWM-989 plate stack (15 lb per plate).
- * - BODYWEIGHT: no external load.
+ * - DUMBBELL: dumbbells, entered as total lb; progression is subject to the user's heaviest-dumbbell
+ *   ceiling (adjustable sets max out).
+ * - WEIGHT: any other lb-entered external load that is NOT a dumbbell — barbell / Smith / trap-bar /
+ *   EZ-bar lifts, kettlebells, and selectorized machine/cable stacks read in lb. Entered as total lb
+ *   and NOT capped by the dumbbell ceiling (you keep adding load).
+ * - PLATES: a plate-loaded stack entered as a plate count (× the user's plate weight) — the owner's
+ *   MWM-989 machine stations.
+ * - BODYWEIGHT: no external load (also used for band work, where tension isn't tracked in lb).
  */
 enum class ExerciseUnit(val code: String, val display: String) {
     DUMBBELL("db", "lb"),
+    WEIGHT("wt", "lb"),
     PLATES("plates", "plates"),
     BODYWEIGHT("bw", "BW");
 

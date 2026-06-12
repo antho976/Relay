@@ -24,6 +24,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -74,6 +75,7 @@ fun OverviewScreen(
     onGoToNutrition: () -> Unit = {},
     onGoToSettings: () -> Unit = {},
     onOpenCoachBrief: () -> Unit = {},
+    onOpenProfile: () -> Unit = {},
     viewModel: OverviewViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -176,6 +178,12 @@ fun OverviewScreen(
                             fontSize = 9.sp, color = muted.copy(alpha = 0.8f))
                     }
                     Spacer(Modifier.width(8.dp))
+                    Icon(
+                        Icons.Default.AccountCircle, contentDescription = "You",
+                        tint = muted.copy(alpha = 0.7f),
+                        modifier = Modifier.size(18.dp).clickable { onOpenProfile() }
+                    )
+                    Spacer(Modifier.width(10.dp))
                     Icon(
                         Icons.Default.Settings, contentDescription = "Settings",
                         tint = muted.copy(alpha = 0.7f),
@@ -312,6 +320,16 @@ fun OverviewScreen(
                     WeekDayBox(letter = letter, trained = i in state.weekDaysTrained,
                         isToday = i == todayDow, outlineColor = outline, modifier = Modifier.weight(1f))
                 }
+            }
+            // Streak hook — the chain you don't want to break. Encouraging, not guilt-y
+            // (the underlying streak is vacation-aware + gap-bridged, so rest never punishes you).
+            if (state.streakDays >= 2) {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "🔥 ${state.streakDays}-day streak — keep it alive",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = accent
+                )
             }
 
             Spacer(Modifier.height(16.dp))

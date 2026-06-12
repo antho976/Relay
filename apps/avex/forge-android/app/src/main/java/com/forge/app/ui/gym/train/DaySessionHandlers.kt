@@ -76,12 +76,13 @@ private fun DayViewModel.applyOrderingSuggestion() {
 private fun DayViewModel.finishWorkout() {
     viewModelScope.launch {
         val sessionId = _state.value.sessionId ?: return@launch
-        val startedAt = _state.value.sessionStartedAt ?: clock.nowMs()
         val allSets = _state.value.exercises.flatMap { it.loggedSets }
         val totalVolumeLb = VolumeCalculator.sessionVolumeLb(allSets)
         val prCount = _state.value.exercises.count { it.wasPr }
 
-        workoutRepo.finishSession(sessionId, totalVolumeLb, prCount, allSets.size)
+        // finishSession closes the open sitting and returns total ACTIVE seconds (summed across
+        // sittings) — the real duration, not wall-clock from the first start.
+        val activeSeconds = workoutRepo.finishSession(sessionId, totalVolumeLb, prCount, allSets.size)
         // An interval left open didn't lead to another set — drop it, don't write it.
         openRestEvent = null
         restTimer.stop()
@@ -97,7 +98,7 @@ private fun DayViewModel.finishWorkout() {
             ?.takeIf { prevSession.setCount > 0 }
         val bestPrevVolume = workoutRepo.bestPreviousVolumeForDay(dayKey, sessionId) ?: 0.0
         val isBestSession = prevSession != null && totalVolumeLb > bestPrevVolume
-        val durationMin = ((clock.nowMs() - startedAt) / 60_000).toInt().coerceAtLeast(0)
+        val durationMin = (activeSeconds / 60).coerceAtLeast(0)
 
         val setsPerMin = if (durationMin > 0) allSets.size.toDouble() / durationMin else 0.0
         val volumePerMin = if (durationMin > 0) totalVolumeLb / durationMin else 0.0
@@ -137,7 +138,9 @@ private fun DayViewModel.finishWorkout() {
             volumePerMin = volumePerMin,
             densityScore = densityScore,
             avgRestSeconds = avgRestSeconds,
-            honestyPct = honestyPct
+            honestyPct = honestyPct,
+            ghostBeats = _state.value.ghostBeats,
+            ghostComparable = _state.value.ghostComparable
         )
         _state.update { it.copy(isFinished = true, summary = summary) }
     }
@@ -210,6 +213,9 @@ private fun DayViewModel.discardAndExit() {
  */
 private fun DayViewModel.leaveAndResume() {
     viewModelScope.launch {
+        // Close THIS sitting's segment so its active time is banked; reopening the day starts a
+        // fresh segment and the live readout resumes from the running total.
+        _state.value.sessionId?.let { workoutRepo.closeOpenSegments(it, clock.nowMs()) }
         restTimer.stop()
         stopSessionService()
         _state.update { it.copy(showDiscardConfirm = false) }
@@ -233,18 +239,36 @@ private fun DayViewModel.crossDayGoBack() {
 
 /** Start a new session for this day (or resume this day's existing one) and hydrate the screen. */
 internal suspend fun DayViewModel.beginSessionForThisDay() {
-    val sessionId = workoutRepo.startOrResumeSession(dayKey)
+    val started = workoutRepo.startOrResumeSession(dayKey)
+    val sessionId = started.session.id
     // Resuming a session that already has logged work — you're mid-workout, so skip the warmup gate
     // (the in-memory warmup state was lost when the screen was recreated).
-    val resuming = !workoutRepo.isNewSession(sessionId)
+    val resuming = started.hasLoggedWork
     val nameOverride = customizationRepo.getDayName(dayKey)
     val resolvedName = nameOverride?.customName ?: dayPlan.defaultName
     val disabledUntilMs = settingsRepo.warmupDisabledUntilMs.firstOrNull() ?: 0L
     val warmupAutoSkipped = clock.nowMs() < disabledUntilMs
+
+    // ── Per-sitting active timing ──────────────────────────────────────────────
+    // Close any segment a prior sitting left open (process death), then open THIS sitting's
+    // segment. The live elapsed = prior closed sittings + this one, anchored so (now − anchor)
+    // reads the running total. The date pill still uses the session's REAL first-start.
+    // A just-created session can't have segments yet — skip those queries (screen-open latency).
+    val now = clock.nowMs()
+    val priorActiveMs = if (started.created) {
+        workoutRepo.openSessionSegment(sessionId, now)
+        0L
+    } else {
+        workoutRepo.closeDanglingSegments(sessionId)
+        workoutRepo.openSessionSegment(sessionId, now)
+        workoutRepo.closedSegmentMs(sessionId)
+    }
+
     _state.update {
         it.copy(
             sessionId = sessionId,
-            sessionStartedAt = clock.nowMs(),
+            sessionStartedAt = started.session.startedAt,
+            elapsedAnchorMs = now - priorActiveMs,
             displayName = resolvedName,
             isWarmupComplete = it.isWarmupComplete || skipWarmup || warmupAutoSkipped || resuming
         )

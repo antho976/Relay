@@ -38,7 +38,13 @@ data class DayUiState(
     val displayName: String,
     val isLoading: Boolean = true,
     val sessionId: Long? = null,
+    /** The session's REAL first-start time (for the date pill) — stable across resume sittings. */
     val sessionStartedAt: Long? = null,
+    /**
+     * Anchor for the live ACTIVE-time readout: chosen so (now − anchor) = prior sittings + this
+     * sitting so far. Differs from [sessionStartedAt] once a session spans multiple sittings.
+     */
+    val elapsedAnchorMs: Long? = null,
     val exercises: List<ExerciseUiState> = emptyList(),
     val warmupChecks: List<Boolean> = List(4) { false },
     val isWarmupComplete: Boolean = false,
@@ -87,7 +93,9 @@ data class DayUiState(
     /** Available equipment — filters the swap picker's candidate pool. Empty = all (program-unlock). */
     val swapAvailableEquipment: Set<Equipment> = emptySet(),
     /** Disliked library ids — excluded from the swap picker, same as generation (program-unlock). */
-    val swapDislikedIds: Set<String> = emptySet()
+    val swapDislikedIds: Set<String> = emptySet(),
+    /** Curated/frozen exercise pool (Developer's preset) — locks the swap picker to it; null = none. */
+    val swapFrozenIds: Set<String>? = null
 ) {
     val hasUnsavedWork: Boolean
         get() = exercises.any { it.loggedSets.isNotEmpty() }
@@ -120,6 +128,35 @@ data class DayUiState(
     val remainingSetsCount: Int
         get() = exercises.filter { !it.skipped }
             .sumOf { maxOf(0, it.targetSets - it.loggedSets.size) }
+
+    /** "Beat the ghost": logged sets that surpassed the same-position set from last session. */
+    val ghostBeats: Int
+        get() = exercises.sumOf { ex ->
+            ex.loggedSets.withIndex().count { (i, s) -> beatsPriorSet(s, ex.priorSets.getOrNull(i)) }
+        }
+
+    /** Logged sets that HAVE a last-session counterpart to be judged against (the duel's denominator). */
+    val ghostComparable: Int
+        get() = exercises.sumOf { ex ->
+            ex.loggedSets.indices.count { i -> ex.priorSets.getOrNull(i) != null }
+        }
+}
+
+/**
+ * A logged set "beats" its same-position set from last session when it's heavier, or equally
+ * heavy for more reps, or (when lighter, or bodyweight) moves more total volume. The little
+ * win that makes every set a duel with your past self.
+ */
+internal fun beatsPriorSet(cur: LoggedSet, prior: LoggedSet?): Boolean {
+    if (prior == null) return false
+    val cw = cur.weightLb
+    val pw = prior.weightLb
+    if (cw == null || pw == null) return cur.reps > prior.reps
+    return when {
+        cw > pw -> true
+        cw == pw -> cur.reps > prior.reps
+        else -> cw * cur.reps > pw * prior.reps
+    }
 }
 
 @Immutable
@@ -154,8 +191,17 @@ data class ExerciseUiState(
     val suggestedDeltaLb: Double? = null,
     /** Suggested target in raw lb — outcome capture compares it against the first logged set. */
     val suggestedTargetLb: Double? = null,
-    /** Historical sets from prior sessions — used to compute the live PR hint in SetInputRow (#100). */
+    /**
+     * The PREVIOUS session's sets in performed order — the positional "ghost" comparisons
+     * (same-position duels, per-row ghost values) and "last session" labels read these.
+     */
     val priorSets: List<LoggedSet> = emptyList(),
+    /**
+     * All-time per-rep-count max-weight frontier (synthetic sets: only weightLb/reps are real,
+     * non-assisted) — the bounded stand-in for full history feeding the live PR hint (#100)
+     * and the weight-jump check (#117).
+     */
+    val priorFrontier: List<LoggedSet> = emptyList(),
     /** All-time personal best formatted as "X lb × Y" — shown in the card header (#101). */
     val allTimePbText: String? = null,
     /** Raw all-time best weight in lb — used for goal progress computation (#28). */

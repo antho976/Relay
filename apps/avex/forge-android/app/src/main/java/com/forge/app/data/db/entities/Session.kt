@@ -32,5 +32,12 @@ data class Session(
     /** Free-text journal for the whole session (#111). */
     @ColumnInfo(name = "journal") val journal: String = "",
     /** Intensity intent (#123): "light" | "normal" | "hard" */
-    @ColumnInfo(name = "intensity") val intensity: String = "normal"
+    @ColumnInfo(name = "intensity") val intensity: String = "normal",
+    /**
+     * Total ACTIVE seconds — the sum of the session's sitting segments, stamped at finish.
+     * This is the real time spent training (excludes the away-time between sittings that
+     * wall-clock finishedAt−startedAt would wrongly count). 0 for pre-feature sessions; readers
+     * fall back to wall-clock when it's 0.
+     */
+    @ColumnInfo(name = "active_seconds") val activeSeconds: Int = 0
 )

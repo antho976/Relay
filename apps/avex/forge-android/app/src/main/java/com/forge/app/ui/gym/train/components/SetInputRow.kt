@@ -232,7 +232,8 @@ fun SetInputRow(
                         priorSetForActiveRow?.let { prior ->
                             val priorDisplay = prior.weightLb?.let { formatWeight(it, useKg) } ?: prior.weightText
                             Text(
-                                "try $priorDisplay × ${prior.reps}",
+                                // The ghost to beat — tap to autofill last time's numbers as your floor.
+                                "beat $priorDisplay × ${prior.reps}",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = onBg.copy(alpha = 0.7f),
                                 fontSize = 9.sp,

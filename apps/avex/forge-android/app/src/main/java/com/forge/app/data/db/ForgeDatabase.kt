@@ -22,6 +22,7 @@ import com.forge.app.data.db.dao.RestEventDao
 import com.forge.app.data.db.dao.AdviceEventDao
 import com.forge.app.data.db.dao.CoachDao
 import com.forge.app.data.db.dao.SuggestionOutcomeDao
+import com.forge.app.data.db.dao.SessionSegmentDao
 import com.forge.app.data.db.dao.WarmupRoutineDao
 import com.forge.app.data.db.dao.SessionBreakDao
 import com.forge.app.data.db.dao.VacationDao
@@ -47,11 +48,13 @@ import com.forge.app.data.db.entities.AdviceEvent
 import com.forge.app.data.db.entities.CoachPass
 import com.forge.app.data.db.entities.CoachDecision
 import com.forge.app.data.db.entities.SuggestionOutcome
+import com.forge.app.data.db.entities.SessionSegment
 import com.forge.app.data.db.entities.SessionBreak
 import com.forge.app.data.db.entities.VacationPeriod
 
 /**
- * Schema is v19 (v19 added the coach_decision propose/apply lifecycle columns; v18 added
+ * Schema is v20 (v20 added session_segment + session.active_seconds for per-sitting timing;
+ * v19 added the coach_decision propose/apply lifecycle columns; v18 added
  * suggestion_outcome for coach step calibration; v17 added the
  * auto-coach tables coach_pass/coach_decision; v16 added the adaptation-engine tables
  * rest_event/advice_event; v15 added a unique index on bodyweight_entry.date_key; v14 added
@@ -89,9 +92,10 @@ import com.forge.app.data.db.entities.VacationPeriod
         AdviceEvent::class,
         CoachPass::class,
         CoachDecision::class,
-        SuggestionOutcome::class
+        SuggestionOutcome::class,
+        SessionSegment::class
     ],
-    version = 19,
+    version = 20,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -118,4 +122,5 @@ abstract class ForgeDatabase : RoomDatabase() {
     abstract fun adviceEventDao(): AdviceEventDao
     abstract fun coachDao(): CoachDao
     abstract fun suggestionOutcomeDao(): SuggestionOutcomeDao
+    abstract fun sessionSegmentDao(): SessionSegmentDao
 }

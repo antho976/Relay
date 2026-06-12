@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -61,11 +62,12 @@ class OnboardingViewModel @Inject constructor(
     /** Pure, side-effect-free week for the preview step — the same [seed] is persisted on finish. */
     fun buildPreview(
         daysPerWeek: Int, equipment: Set<String>, goal: String, experience: String,
-        problemAreas: Set<String>, seed: Long
+        problemAreas: Set<String>, frozenIds: Set<String>?, seed: Long
     ): List<GeneratedDay> = ProgramGenerator.generate(
         GenerationParams(
             daysPerWeek = daysPerWeek, goal = goal, experience = experience,
-            problemAreas = problemAreas.mapNotNull { ProblemArea.fromCode(it) }.toSet()
+            problemAreas = problemAreas.mapNotNull { ProblemArea.fromCode(it) }.toSet(),
+            frozenIds = frozenIds
         ),
         equipment.mapNotNull { runCatching { Equipment.valueOf(it) }.getOrNull() }.toSet(),
         emptySet(), emptySet(), seed = seed
@@ -85,15 +87,19 @@ class OnboardingViewModel @Inject constructor(
         seed: Long = System.nanoTime(),
         generate: Boolean = true,
         accentEmphasis: String = "off",
-        plateWeightLb: Double = 15.0
+        plateWeightLb: Double = 15.0,
+        frozenIds: Set<String>? = null,
+        sex: String = ""
     ) {
         viewModelScope.launch {
             bodyweightLb?.let { bodyweightRepo.log(it) }
             settingsRepo.setAccentEmphasis(accentEmphasis)
             settingsRepo.setPlateWeightLb(plateWeightLb)
+            settingsRepo.setUserSex(sex)
             if (generate) {
                 settingsRepo.setDaysPerWeek(daysPerWeek)
                 settingsRepo.setAvailableEquipment(equipment)
+                settingsRepo.setFrozenExerciseIds(frozenIds)
                 settingsRepo.setRotationCadence(cadence)
                 if (cadence == "every_n") settingsRepo.setRotationEveryN(everyN)
                 settingsRepo.setProgramExperience(experience)
@@ -103,7 +109,8 @@ class OnboardingViewModel @Inject constructor(
                 programRepository.generate(
                     GenerationParams(
                         daysPerWeek = daysPerWeek, goal = goal, experience = experience,
-                        problemAreas = problemAreas.mapNotNull { ProblemArea.fromCode(it) }.toSet()
+                        problemAreas = problemAreas.mapNotNull { ProblemArea.fromCode(it) }.toSet(),
+                        frozenIds = frozenIds
                     ),
                     equipment.mapNotNull { runCatching { Equipment.valueOf(it) }.getOrNull() }.toSet(),
                     emptySet(), emptySet(), seed = seed
@@ -132,18 +139,23 @@ fun OnboardingScreen(
     var goal by remember { mutableStateOf("") }
     var experience by remember { mutableStateOf("") }
     var bodyweightInput by remember { mutableStateOf("") }
+    // Sex is optional and drives only the Stats strength standards — null until the user picks.
+    var sex by remember { mutableStateOf<String?>(null) }
     var daysPerWeek by remember { mutableIntStateOf(0) }
     var equipment by remember { mutableStateOf(emptySet<String>()) }
+    // Non-null when a curated preset (e.g. Developer's) is picked — locks the exercise pool.
+    var frozenIds by remember { mutableStateOf<Set<String>?>(null) }
     var plateWeightLb by remember { mutableStateOf(15.0) }
     var problemAreas by remember { mutableStateOf(emptySet<String>()) }
     var cadence by remember { mutableStateOf("") }
     var everyN by remember { mutableIntStateOf(4) }
     var accentEmphasis by remember { mutableStateOf("off") }
     var previewSeed by remember { mutableLongStateOf(Random.nextLong()) }
+    var showSkipConfirm by remember { mutableStateOf(false) }
 
     // Pure preview — recomputed whenever an input or the re-roll seed changes (shown on the last page).
-    val previewDays = remember(previewSeed, daysPerWeek, equipment, goal, experience, problemAreas) {
-        viewModel.buildPreview(daysPerWeek, equipment, goal, experience, problemAreas, previewSeed)
+    val previewDays = remember(previewSeed, daysPerWeek, equipment, frozenIds, goal, experience, problemAreas) {
+        viewModel.buildPreview(daysPerWeek, equipment, goal, experience, problemAreas, frozenIds, previewSeed)
     }
 
     Box(
@@ -194,6 +206,7 @@ fun OnboardingScreen(
                             0 -> {
                                 StepName(name = name, onNameChange = { name = it })
                                 StepBodyweight(input = bodyweightInput, useKg = useKg, onInputChange = { bodyweightInput = it })
+                                StepSex(selected = sex, onSelect = { sex = it })
                                 StepUnits(useKg = useKg, onToggle = { useKg = it })
                             }
                             1 -> {
@@ -204,8 +217,16 @@ fun OnboardingScreen(
                                 StepDays(days = daysPerWeek, onChange = { daysPerWeek = it })
                                 StepEquipment(
                                     selected = equipment,
-                                    onToggle = { code -> equipment = if (code in equipment) equipment - code else equipment + code },
-                                    onSetAll = { equipment = it }
+                                    frozenIds = frozenIds,
+                                    onToggle = { code ->
+                                        equipment = if (code in equipment) equipment - code else equipment + code
+                                        // Hand-editing equipment leaves any curated preset.
+                                        frozenIds = null
+                                    },
+                                    onSelectPreset = { preset ->
+                                        equipment = preset.equipment
+                                        frozenIds = preset.frozenIds
+                                    }
                                 )
                                 StepPlateWeight(plateWeightLb = plateWeightLb, onSet = { plateWeightLb = it })
                             }
@@ -239,10 +260,7 @@ fun OnboardingScreen(
                 if (page > 0) {
                     TextButton(onClick = { page-- }) { Text("Back") }
                 } else {
-                    TextButton(onClick = {
-                        viewModel.complete("", false, "", null, generate = false)
-                        onFinished()
-                    }) { Text("Skip onboarding") }
+                    TextButton(onClick = { showSkipConfirm = true }) { Text("Skip onboarding") }
                 }
                 Button(
                     enabled = canAdvance,
@@ -254,7 +272,8 @@ fun OnboardingScreen(
                             viewModel.complete(
                                 name.trim(), useKg, goal, bwLb,
                                 daysPerWeek, equipment, cadence.ifEmpty { "never" }, everyN, experience, problemAreas,
-                                previewSeed, accentEmphasis = accentEmphasis, plateWeightLb = plateWeightLb
+                                previewSeed, accentEmphasis = accentEmphasis, plateWeightLb = plateWeightLb,
+                                frozenIds = frozenIds, sex = sex ?: ""
                             )
                             onFinished()
                         }
@@ -263,6 +282,36 @@ fun OnboardingScreen(
                     Text(if (page < LAST_PAGE) "Next" else "Let's go")
                 }
             }
+        }
+
+        if (showSkipConfirm) {
+            AlertDialog(
+                onDismissRequest = { showSkipConfirm = false },
+                title = { Text("Skip setup?") },
+                text = {
+                    Text(
+                        "You'll start with a basic bodyweight program and default settings — no plan " +
+                            "tailored to your gym or goals. You can set your equipment and goal, and " +
+                            "generate a personalized program, any time in Settings → Program."
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showSkipConfirm = false
+                        val bwLb = bodyweightInput.toDoubleOrNull()?.let { raw -> if (useKg) raw * 2.20462 else raw }
+                        viewModel.complete(
+                            name.trim(), useKg, "build_muscle", bwLb,
+                            daysPerWeek = 4,
+                            equipment = setOf(Equipment.BODYWEIGHT_ONLY.name),
+                            experience = "intermediate", generate = true, sex = sex ?: ""
+                        )
+                        onFinished()
+                    }) { Text("Skip anyway") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showSkipConfirm = false }) { Text("Keep setting up") }
+                }
+            )
         }
     }
 }

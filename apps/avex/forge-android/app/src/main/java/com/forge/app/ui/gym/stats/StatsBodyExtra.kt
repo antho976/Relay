@@ -94,22 +94,29 @@ internal fun BodyweightCard(points: List<BodyweightPoint>, onBg: Color, muted: C
 
 // Generic ×bodyweight strength bands. Same scale across lifts — a simplification (real
 // standards differ per lift), but honest for DB/machine work where no published tables exist.
-private val TIER_CUTOFFS = listOf(0.4, 0.7, 1.1, 1.5) // entry ratio for Novice / Inter / Adv / Elite
+// Sex-aware: women's bodyweight-relative standards run lower than men's (~0.7×), so an
+// unspecified/male user gets the original bands and a female user gets the scaled-down set.
+private val TIER_CUTOFFS_MALE = listOf(0.4, 0.7, 1.1, 1.5) // entry ratio for Novice / Inter / Adv / Elite
+private val TIER_CUTOFFS_FEMALE = listOf(0.3, 0.5, 0.8, 1.1)
 private val TIER_SHORT = listOf("UNTR", "NOVI", "INTE", "ADVA", "ELIT")
 private val TIER_FULL = listOf("Untrained", "Novice", "Intermediate", "Advanced", "Elite")
 
-private fun tierIndex(ratio: Double): Int {
-    TIER_CUTOFFS.forEachIndexed { i, cut -> if (ratio < cut) return i }
-    return TIER_CUTOFFS.size
+private fun tierCutoffs(sex: String): List<Double> =
+    if (sex == "female") TIER_CUTOFFS_FEMALE else TIER_CUTOFFS_MALE
+
+private fun tierIndex(ratio: Double, sex: String): Int {
+    val cutoffs = tierCutoffs(sex)
+    cutoffs.forEachIndexed { i, cut -> if (ratio < cut) return i }
+    return cutoffs.size
 }
 
 /** "Where you stand" — each lift's e1RM ÷ bodyweight mapped onto an Untrained→Elite scale. */
 @Composable
-internal fun StrengthStandardsCard(lifts: List<E1rmLift>, bodyweightLb: Double?, onBg: Color, muted: Color, accent: Color, outline: Color) {
+internal fun StrengthStandardsCard(lifts: List<E1rmLift>, bodyweightLb: Double?, sex: String, onBg: Color, muted: Color, accent: Color, outline: Color) {
     val grey = muted.copy(alpha = 0.25f)
     val rated = if (bodyweightLb != null && bodyweightLb > 0)
         lifts.filter { it.currentE1rm > 0 }.take(5).map { it to it.currentE1rm / bodyweightLb } else emptyList()
-    val avgIdx = if (rated.isNotEmpty()) rated.map { tierIndex(it.second) }.average().roundToInt().coerceIn(0, 4) else 0
+    val avgIdx = if (rated.isNotEmpty()) rated.map { tierIndex(it.second, sex) }.average().roundToInt().coerceIn(0, 4) else 0
 
     Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -127,7 +134,7 @@ internal fun StrengthStandardsCard(lifts: List<E1rmLift>, bodyweightLb: Double?,
             Text("Log your bodyweight to see where you stand.", style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic)
         } else {
             rated.forEach { (lift, ratio) ->
-                val idx = tierIndex(ratio)
+                val idx = tierIndex(ratio, sex)
                 Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text(lift.exerciseName, style = MaterialTheme.typography.bodyMedium, color = onBg)
@@ -149,15 +156,15 @@ internal fun StrengthStandardsCard(lifts: List<E1rmLift>, bodyweightLb: Double?,
                 }
             }
             // What's next — push the weakest lift toward its next tier
-            val lowest = rated.minByOrNull { tierIndex(it.second) }
+            val lowest = rated.minByOrNull { tierIndex(it.second, sex) }
             if (lowest != null) {
-                val idx = tierIndex(lowest.second)
-                if (idx < TIER_CUTOFFS.size) {
+                val idx = tierIndex(lowest.second, sex)
+                if (idx < tierCutoffs(sex).size) {
                     Spacer(Modifier.height(16.dp))
                     Text("What's next", style = MaterialTheme.typography.headlineSmall, color = onBg, fontStyle = FontStyle.Italic)
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        "Push ${lowest.first.exerciseName} from %.2f× to %.2f× BW to reach ${TIER_FULL[idx + 1]}.".format(lowest.second, TIER_CUTOFFS[idx]),
+                        "Push ${lowest.first.exerciseName} from %.2f× to %.2f× BW to reach ${TIER_FULL[idx + 1]}.".format(lowest.second, tierCutoffs(sex)[idx]),
                         style = MaterialTheme.typography.bodySmall, color = onBg
                     )
                 }

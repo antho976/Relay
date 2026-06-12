@@ -38,7 +38,8 @@ class OverviewViewModel @Inject constructor(
     private val customizationRepo: CustomizationRepository,
     private val workoutRepo: WorkoutRepository,
     private val adaptationRepo: com.forge.app.data.repo.AdaptationRepository,
-    private val coachRepo: com.forge.app.data.repo.CoachRepository
+    private val coachRepo: com.forge.app.data.repo.CoachRepository,
+    private val programChangeGuard: com.forge.app.ui.common.ProgramChangeGuard
 ) : ViewModel() {
 
     private val _onThisDayMemory = MutableStateFlow<OnThisDayMemory?>(null)
@@ -125,10 +126,14 @@ class OverviewViewModel @Inject constructor(
             .take(3)
     }
 
-    /** One-tap apply. Only the deload suggestion has one today; the rest apply in-session. */
+    /**
+     * One-tap apply. Only the deload suggestion has one today; the rest apply in-session.
+     * The deload regenerates the program, which discards any in-progress workout — route it through
+     * the guard so that's confirmed (and reloaded) rather than wiped silently.
+     */
     fun applyCoach(item: CoachItem) = viewModelScope.launch {
-        if (item.id == "deload.suggest") adaptationRepo.applyDeloadWeek()
-        reloadCoach()
+        if (item.id == "deload.suggest") programChangeGuard.run { adaptationRepo.applyDeloadWeek(); reloadCoach() }
+        else reloadCoach()
     }
 
     /** Dismissal is logged (advice_event) — the engine mutes this id for its cooldown. */

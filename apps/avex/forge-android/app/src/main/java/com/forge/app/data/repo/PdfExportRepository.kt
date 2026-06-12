@@ -26,7 +26,8 @@ class PdfExportRepository @Inject constructor(
     @ApplicationContext private val context: Context,
     private val sessionDao: SessionDao,
     private val loggedExerciseDao: LoggedExerciseDao,
-    private val loggedSetDao: LoggedSetDao
+    private val loggedSetDao: LoggedSetDao,
+    private val moodDao: com.forge.app.data.db.dao.MoodDao
 ) {
     private val zone = ZoneId.systemDefault()
     private val dateFmt = DateTimeFormatter.ofPattern("MMMM d, yyyy")
@@ -45,7 +46,12 @@ class PdfExportRepository @Inject constructor(
             ?: session.dayKey
         val dateStr = Instant.ofEpochMilli(session.startedAt).atZone(zone).format(dateFmt)
         val timeStr = Instant.ofEpochMilli(session.startedAt).atZone(zone).format(timeFmt)
-        val durationMin = session.finishedAt?.let { ((it - session.startedAt) / 60_000).toInt() }
+        // Real active time (summed sittings); fall back to wall-clock for pre-feature sessions.
+        val durationMin = when {
+            session.activeSeconds > 0 -> session.activeSeconds / 60
+            else -> session.finishedAt?.let { ((it - session.startedAt) / 60_000).toInt() }
+        }
+        val mood = moodDao.forSession(sessionId)?.mood
 
         val doc = PdfDocument()
         val pageInfo = PdfDocument.PageInfo.Builder(595, 842, 1).create() // A4
@@ -70,6 +76,14 @@ class PdfExportRepository @Inject constructor(
             canvas.drawText("Duration: ${durationMin}m  ·  Volume: ${(session.totalVolumeLb ?: 0.0).toInt()} lb  ·  PRs: ${session.prCount}", margin, y, bodyPaint)
             y += 16f
         }
+        if (!mood.isNullOrBlank() || session.tags.isNotBlank()) {
+            val bits = listOfNotNull(
+                mood?.takeIf { it.isNotBlank() }?.let { "Mood: $it" },
+                session.tags.takeIf { it.isNotBlank() }?.let { "Tags: $it" }
+            )
+            canvas.drawText(bits.joinToString("  ·  "), margin, y, mutedPaint)
+            y += 16f
+        }
 
         canvas.drawLine(margin, y + 4, 595 - margin, y + 4, linePaint)
         y += 20f
@@ -80,10 +94,16 @@ class PdfExportRepository @Inject constructor(
             if (y > 780f) break // safety: don't overflow page
             val sets = loggedSetDao.forLoggedExercise(ex.id)
             val exName = ex.swappedName ?: Program.exercise(ex.exerciseId)?.name ?: ex.exerciseId
-            canvas.drawText(exName, margin, y, headerPaint)
+            val effort = ex.difficulty?.name?.lowercase()?.replace('_', ' ')
+            canvas.drawText(exName + if (effort != null) "  —  felt $effort" else "", margin, y, headerPaint)
             y += 16f
             sets.forEachIndexed { i, set ->
-                canvas.drawText("  Set ${i + 1}: ${set.weightText} × ${set.reps}", margin + 8, y, bodyPaint)
+                val rpe = set.rpe?.let { r -> "  @ RPE " + (if (r % 1.0 == 0.0) "${r.toInt()}" else "%.1f".format(r)) } ?: ""
+                canvas.drawText("  Set ${i + 1}: ${set.weightText} × ${set.reps}$rpe", margin + 8, y, bodyPaint)
+                y += 13f
+            }
+            if (!ex.note.isNullOrBlank()) {
+                canvas.drawText("  note: ${ex.note}", margin + 8, y, mutedPaint)
                 y += 13f
             }
             y += 6f
@@ -97,6 +117,18 @@ class PdfExportRepository @Inject constructor(
                 "… $omitted more exercise${if (omitted == 1) "" else "s"} not shown (one-page limit)",
                 margin, minOf(y, 806f), mutedPaint
             )
+        }
+
+        // Session journal (free-text reflection), if any and there's room.
+        if (session.journal.isNotBlank() && y < 770f) {
+            y += 6f
+            canvas.drawText("Journal", margin, y, headerPaint)
+            y += 16f
+            session.journal.chunked(90).forEach { line ->
+                if (y > 800f) return@forEach
+                canvas.drawText(line, margin, y, bodyPaint)
+                y += 13f
+            }
         }
 
         // Footer

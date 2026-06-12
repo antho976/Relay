@@ -34,7 +34,11 @@ data class SessionSummary(
     /** Average rest between consecutive sets within each exercise, in seconds. Null if < 2 sets (#82). */
     val avgRestSeconds: Int? = null,
     /** Planned sets logged / total planned sets × 100. Null if no planned exercises (#133). */
-    val honestyPct: Int? = null
+    val honestyPct: Int? = null,
+    /** "Beat the ghost": sets that beat last session's same-position set. */
+    val ghostBeats: Int = 0,
+    /** Sets that had a last-session counterpart to be judged against (the duel denominator). */
+    val ghostComparable: Int = 0
 )
 
 data class ExerciseHighlight(

@@ -280,7 +280,8 @@ fun ExerciseCard(
                         prefillWeight = state.prefillWeight,
                         suggestedWeight = state.suggestedWeight,
                         suggestionReason = state.suggestionReason,
-                        priorSets = state.priorSets,
+                        // The PR hint needs the all-time record, not last session — feed the frontier.
+                        priorSets = state.priorFrontier,
                         nextSetNumber = state.loggedSets.size + 1,
                         priorSetForActiveRow = state.priorSets.getOrNull(state.loggedSets.size),
                         targetsMet = targetsMet,
@@ -294,6 +295,14 @@ fun ExerciseCard(
                         onAddSet = onAddSet,
                         onSwitchUnit = onSwitchUnit
                     )
+                }
+
+                // Live rest timer — sits right under the set log (not buried below the footer
+                // controls). Driven off restTimerState (top-level DayUiState.restTimer), so it
+                // appears the instant a set is logged even though it lives inside the card.
+                if (restTimerState != null) {
+                    Spacer(Modifier.height(10.dp))
+                    InlineRestTimer(timer = restTimerState, onTap = onOpenRestTimerSetter, onSkip = onSkipRest)
                 }
 
                 Spacer(Modifier.height(10.dp))
