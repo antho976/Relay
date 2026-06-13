@@ -7,9 +7,11 @@ import com.forge.app.data.db.dao.ProgramCustomizationDao
 import com.forge.app.data.db.dao.VacationDao
 import com.forge.app.data.db.entities.CoachDecision
 import com.forge.app.data.db.entities.CoachPass
+import com.forge.app.data.db.entities.OverlaySource
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.domain.adapt.AdaptationSnapshot
 import com.forge.app.domain.coach.AutoCoachPlanner
+import com.forge.app.domain.coach.CoachGenBias
 import com.forge.app.domain.coach.CoachPassInputs
 import com.forge.app.domain.coach.CoachPassStatus
 import com.forge.app.domain.coach.OutcomeWatcher
@@ -21,6 +23,8 @@ import com.forge.app.domain.vacation.VacationCalendar
 import com.forge.app.program.ExerciseLibrary
 import com.forge.app.program.MuscleGroup
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.time.DayOfWeek
 import java.time.Instant
 import java.time.LocalDate
@@ -73,12 +77,11 @@ class CoachRepository @Inject constructor(
         const val STATUS_SKIPPED = "skipped"
         const val STATUS_HOLD = "hold"
         const val STATUS_ERROR = "error"
+        /** A delta a regenerate has baked into the baseline: still feeds the bias, no longer undoable. */
+        const val STATUS_FOLDED = "folded"
 
         /** undo_data sentinel: there was no prior override/swap — undo removes, not restores. */
         private const val NONE = "∅"
-        /** Drift window for the per-muscle ±2 set cap (hardening 11). */
-        private const val DRIFT_WINDOW_DAYS = 56L
-        private const val DAY_MS = 24L * 60 * 60 * 1000
     }
 
     /** Run this week's pass if it hasn't run yet; return the (existing or fresh) record. */
@@ -118,12 +121,13 @@ class CoachRepository @Inject constructor(
                 "Couldn't evaluate this week (${e.message ?: e.javaClass.simpleName}) — no changes were considered.")
         }
 
-        coachDao.insertPass(pass)
-        if (decisions.isNotEmpty()) {
-            coachDao.insertDecisions(decisions)
-            autoApplyEarnedTypes(weekId)
-        }
-        return pass
+        // Atomic + idempotent (seam fix, finding 14): pass + decisions commit in ONE transaction, so
+        // process death can't leave a permanently empty "proposed" pass; the pass PK uses IGNORE, so a
+        // concurrent caller that lost the race no-ops (no crash, no doubled decisions) and reads the
+        // winner's row below instead.
+        val won = coachDao.insertPassWithDecisions(pass, decisions)
+        if (won && decisions.isNotEmpty()) autoApplyEarnedTypes(weekId)
+        return coachDao.pass(weekId) ?: pass
     }
 
     /**
@@ -156,33 +160,59 @@ class CoachRepository @Inject constructor(
      * so outcome verdicts land on a weekly cadence (the watcher's window math handles the rest).
      */
     private suspend fun assembleInputs(snapshot: AdaptationSnapshot): CoachPassInputs {
-        // 1. Judge previously applied changes (hardening 5).
+        // 1. Judge previously applied changes (hardening 5), then re-derive revert proposals from the
+        // durable outcome column — every still-applied FAILED change owes a revert, even if a prior
+        // pass's proposal was dropped by deload-supersession / the cap / an error (seam fix, finding 4).
         val pending = coachDao.appliedPendingOutcome()
         val verdicts = OutcomeWatcher.evaluate(pending, snapshot)
         verdicts.forEach { coachDao.setOutcome(it.decisionId, it.outcome) }
-        val reverts = OutcomeWatcher.revertProposals(pending, verdicts)
+        val reverts = OutcomeWatcher.revertProposalsFor(coachDao.appliedFailed())
 
-        // 2. Coach-locked slots (hardening 9): any user customization locks its slot — minus
-        // targets the coach itself changed (a coach swap must stay revertable, not self-lock).
-        val coachTouched = coachDao.appliedSince(0L).map { it.targetKey }.toSet()
+        val allDecisions = coachDao.allDecisions()
+
+        // 2. Coach-locked slots (hardening 9): a USER customization locks its slot. Keyed off the
+        // overlay's origin tag, NOT an all-time "coach-touched" subtraction — that hack both stripped
+        // protection from genuine user edits on coach-touched slots and let inert coach residue count
+        // as a user lock (seam findings 5/6). A live coach overlay (source=coach) simply isn't a lock,
+        // so the coach can still revert its own change without self-locking. Targets of pending revert
+        // proposals are also locked so a NEW structural change can't stack on a slot mid-revert (#8).
         val locked = (
-            programCustomizationDao.all().map { it.exerciseId } +
-                exerciseCustomizationDao.all().filter { it.swappedName.isNotBlank() }.map { it.exerciseId }
-            ).toSet() - coachTouched
+            programCustomizationDao.all()
+                .filter {
+                    it.source == OverlaySource.USER &&
+                        (it.setsOverride > 0 || it.repRangeOverride != null || it.removed ||
+                            it.exerciseId.startsWith("custom_"))
+                }
+                .map { it.exerciseId } +
+                exerciseCustomizationDao.all()
+                    .filter { it.source == OverlaySource.USER && it.swappedName.isNotBlank() }
+                    .map { it.exerciseId } +
+                reverts.map { it.targetKey }
+            ).toSet()
 
         // 3. Anti-oscillation (hardening 11): muscles with a volume change still in (or just
-        // failing) its outcome window are locked; net drift per muscle over the window is capped.
+        // failing) its outcome window are locked; net drift per muscle is capped.
         val slotMuscle = snapshot.program.flatMap { it.slots }.associate { it.exerciseId to it.muscle }
         fun muscleOf(d: CoachDecision): MuscleGroup? = slotMuscle[d.targetKey]
         val stillPending = pending.filter { p -> verdicts.none { it.decisionId == p.id } }
         val volumeLocked = (stillPending + pending.filter { p ->
             verdicts.any { it.decisionId == p.id && it.outcome == "failed" }
         }).filter { it.type.startsWith("volume") }.mapNotNull(::muscleOf).toSet()
-        val net = coachDao.appliedSince(clock.nowMs() - DRIFT_WINDOW_DAYS * DAY_MS)
-            .filter { it.type.startsWith("volume") }
-            .mapNotNull { d -> muscleOf(d)?.let { it to if (d.type == "volume_up") 1 else -1 } }
-            .groupBy({ it.first }, { it.second })
-            .mapValues { (_, deltas) -> deltas.sum() }
+        // The drift cap reads the SAME derivation the baseline is folded from (CoachGenBias) — one
+        // source of truth, so the planner can never re-add volume it already donated to the baseline.
+        // (Previously a 56-day/current-slot window that decayed while the baked bias did not — the
+        // ratchet-past-cap bug, seam finding 16.)
+        val net = CoachGenBias.from(allDecisions).volumeBias
+
+        // 4. Structural decline memory (finding 19): a swap/rep_shift whose MOST RECENT decision was
+        // skipped or reverted is "declined" — the planner won't re-propose that identical change, so a
+        // rejected rotation stops reappearing every week. A later applied decision clears the decline.
+        val declined = allDecisions
+            .filter { it.type == "swap" || it.type == "rep_shift" }
+            .filter { it.payload != null }
+            .groupBy { "${it.type}:${it.targetKey}:${it.payload}" }
+            .filterValues { rows -> rows.maxByOrNull { it.id }!!.status in setOf(STATUS_SKIPPED, "reverted") }
+            .keys
 
         return CoachPassInputs(
             experience = settings.programExperience.first(),
@@ -190,16 +220,51 @@ class CoachRepository @Inject constructor(
             lockedExerciseIds = locked,
             volumeLockedMuscles = volumeLocked,
             volumeNetByMuscle = net,
-            revertProposals = reverts
+            revertProposals = reverts,
+            declinedStructural = declined
         )
     }
 
     // ─── Apply / skip / undo (every write is an existing user path) ──────────
 
+    /**
+     * Serializes the lifecycle mutations. The Brief/Settings fire one coroutine per tap with no
+     * in-flight guard, so a double-tap Apply (or Apply+Skip) could otherwise interleave read-then-
+     * write across the suspend DAO calls and corrupt undo_data or orphan a live overlay (seam #12).
+     */
+    private val lifecycleMutex = Mutex()
+
+    /** True if the slot the decision targets now carries the USER's own customization (finding 7). */
+    private suspend fun userOwnsSlot(d: CoachDecision): Boolean = when (d.type) {
+        "swap" -> customizationRepo.getSwap(d.targetKey)
+            ?.let { it.source == OverlaySource.USER && it.swappedName.isNotBlank() } ?: false
+        "rep_shift", "volume_up", "volume_down" -> programCustomizationRepo.overrideFor(d.dayKey, d.targetKey)
+            ?.let { it.source == OverlaySource.USER && (it.setsOverride > 0 || it.repRangeOverride != null || it.removed) }
+            ?: false
+        else -> false
+    }
+
+    /** True if a newer still-active coach decision owns this slot's overlay field (LIFO undo, #9). */
+    private suspend fun newerCoachDecisionOwnsSlot(d: CoachDecision): Boolean {
+        val newer = coachDao.activeOnTargetAfter(d.targetKey, d.id)
+        return when (d.type) {
+            "swap" -> newer.any { it.type == "swap" }
+            "rep_shift" -> newer.any { it.type == "rep_shift" && it.dayKey == d.dayKey }
+            "volume_up", "volume_down" -> newer.any { it.type.startsWith("volume") && it.dayKey == d.dayKey }
+            else -> false
+        }
+    }
+
     /** One-tap apply for a proposed decision; records the before-state for undo. */
-    suspend fun applyDecision(id: Long) {
+    suspend fun applyDecision(id: Long) = lifecycleMutex.withLock { applyDecisionLocked(id) }
+
+    private suspend fun applyDecisionLocked(id: Long) {
         val d = coachDao.decision(id) ?: return
         if (d.status != STATUS_PROPOSED) return
+        // Re-validate against the CURRENT program (locks were computed at pass time): if the user has
+        // customized this slot since the pass ran, applying would silently clobber their edit — skip
+        // it instead (seam fix, finding 7). deload/revert aren't slot-scoped, so they're exempt.
+        if (userOwnsSlot(d)) { coachDao.setStatus(id, STATUS_SKIPPED); return }
         when (d.type) {
             "deload" -> {
                 // The one non-delta apply: the existing deload regeneration (not undoable —
@@ -209,26 +274,30 @@ class CoachRepository @Inject constructor(
             }
             "swap" -> {
                 val def = d.payload?.let { ExerciseLibrary.byId(it) } ?: return
+                // Capture the before-state if the row carries a swap OR a bare unit override — a
+                // unit-only row (blank name, non-blank unit) was previously recorded as "nothing" and
+                // its unit destroyed on undo (seam fix, finding 11). undo splits "name|unit" back, so a
+                // blank name restores the unit-only override cleanly.
                 val prev = customizationRepo.getSwap(d.targetKey)
-                    ?.takeIf { it.swappedName.isNotBlank() }
-                customizationRepo.setSwap(d.targetKey, def.name, def.unit.code)
+                    ?.takeIf { it.swappedName.isNotBlank() || it.swappedUnit.isNotBlank() }
+                customizationRepo.setSwap(d.targetKey, def.name, def.unit.code, source = OverlaySource.COACH)
                 coachDao.markApplied(id, clock.nowMs(), prev?.let { "${it.swappedName}|${it.swappedUnit}" } ?: NONE)
             }
             "rep_shift" -> {
                 val to = d.payload ?: return
                 val prev = programCustomizationRepo.overrideFor(d.dayKey, d.targetKey)?.repRangeOverride
-                programCustomizationRepo.setRepRange(d.dayKey, d.targetKey, to)
+                programCustomizationRepo.setRepRange(d.dayKey, d.targetKey, to, source = OverlaySource.COACH)
                 coachDao.markApplied(id, clock.nowMs(), prev ?: NONE)
             }
             "volume_up", "volume_down" -> {
                 val newSets = d.payload?.toIntOrNull() ?: return
                 val prev = programCustomizationRepo.overrideFor(d.dayKey, d.targetKey)?.setsOverride ?: 0
-                programCustomizationRepo.setSetsOverride(d.dayKey, d.targetKey, newSets)
+                programCustomizationRepo.setSetsOverride(d.dayKey, d.targetKey, newSets, source = OverlaySource.COACH)
                 coachDao.markApplied(id, clock.nowMs(), prev.toString())
             }
             "revert" -> {
                 val originalId = d.payload?.toLongOrNull() ?: return
-                undoDecision(originalId)
+                undoDecisionLocked(originalId)
                 coachDao.markApplied(id, clock.nowMs(), null)
             }
             else -> return
@@ -239,33 +308,54 @@ class CoachRepository @Inject constructor(
     suspend fun applyAll(weekId: String) =
         coachDao.decisionsFor(weekId).filter { it.status == STATUS_PROPOSED }.forEach { applyDecision(it.id) }
 
-    suspend fun skipDecision(id: Long) {
-        val d = coachDao.decision(id) ?: return
+    suspend fun skipDecision(id: Long) = lifecycleMutex.withLock {
+        val d = coachDao.decision(id) ?: return@withLock
         if (d.status == STATUS_PROPOSED) coachDao.setStatus(id, STATUS_SKIPPED)
     }
 
     /**
-     * Single-change undo (hardening 6): restore the recorded before-state through the same
-     * write path, mark reverted + failed (a user undo IS a failed outcome).
+     * Single-change undo (hardening 6): restore the recorded before-state through the same write
+     * path, mark reverted + failed (a user undo IS a failed outcome).
+     *
+     * Compare-and-restore: the overlay is rewritten ONLY while it still holds the coach's own write
+     * (source=coach). If the user has since edited the slot, or a regenerate already cleared/folded
+     * the overlay, a blind restore would destroy the user's edit (finding 10) or write a stale
+     * absolute onto a fresh program (finding 0) — in those cases the decision is just retired (the
+     * baseline/overlay already moved on; folded volume drops out of the bias at the next generate).
+     * A restored before-state belongs to the user again, so it's written back as source=user.
      */
-    suspend fun undoDecision(id: Long) {
+    suspend fun undoDecision(id: Long) = lifecycleMutex.withLock { undoDecisionLocked(id) }
+
+    private suspend fun undoDecisionLocked(id: Long) {
         val d = coachDao.decision(id) ?: return
         if (d.status != STATUS_APPLIED) return
+        // Per-slot LIFO: if a newer still-active coach decision owns this slot's overlay, refuse —
+        // restoring the older before-state would silently wipe the newer change, and the watcher's
+        // own revert pipeline reverts newest-first so the chain unwinds cleanly (seam fix, finding 9).
+        if (newerCoachDecisionOwnsSlot(d)) return
         when (d.type) {
             "swap" -> {
-                val prev = d.undoData
-                if (prev == null || prev == NONE) customizationRepo.clearSwap(d.targetKey)
-                else prev.split("|").let {
-                    customizationRepo.setSwap(d.targetKey, it[0], it.getOrElse(1) { "" })
+                if (customizationRepo.getSwap(d.targetKey)?.source == OverlaySource.COACH) {
+                    val prev = d.undoData
+                    if (prev == null || prev == NONE) customizationRepo.clearSwap(d.targetKey)
+                    else prev.split("|").let {
+                        customizationRepo.setSwap(d.targetKey, it[0], it.getOrElse(1) { "" }, source = OverlaySource.USER)
+                    }
                 }
             }
             "rep_shift" -> {
-                if (d.undoData == null || d.undoData == NONE)
-                    programCustomizationRepo.clearRepRange(d.dayKey, d.targetKey)
-                else programCustomizationRepo.setRepRange(d.dayKey, d.targetKey, d.undoData)
+                if (programCustomizationRepo.overrideFor(d.dayKey, d.targetKey)?.source == OverlaySource.COACH) {
+                    if (d.undoData == null || d.undoData == NONE)
+                        programCustomizationRepo.clearRepRange(d.dayKey, d.targetKey)
+                    else programCustomizationRepo.setRepRange(d.dayKey, d.targetKey, d.undoData, source = OverlaySource.USER)
+                }
             }
-            "volume_up", "volume_down" ->
-                programCustomizationRepo.setSetsOverride(d.dayKey, d.targetKey, d.undoData?.toIntOrNull() ?: 0)
+            "volume_up", "volume_down" -> {
+                if (programCustomizationRepo.overrideFor(d.dayKey, d.targetKey)?.source == OverlaySource.COACH)
+                    programCustomizationRepo.setSetsOverride(
+                        d.dayKey, d.targetKey, d.undoData?.toIntOrNull() ?: 0, source = OverlaySource.USER
+                    )
+            }
             else -> return // deload / revert aren't mechanically undoable
         }
         coachDao.markReverted(id)

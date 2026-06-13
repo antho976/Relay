@@ -1,6 +1,7 @@
 package com.forge.app.data.repo
 
 import com.forge.app.data.db.dao.ProgramCustomizationDao
+import com.forge.app.data.db.entities.OverlaySource
 import com.forge.app.data.db.entities.ProgramCustomization
 import com.forge.app.program.ExercisePlan
 import com.forge.app.program.MuscleGroup
@@ -81,16 +82,30 @@ class ProgramCustomizationRepository @Inject constructor(
     suspend fun effectivePlanForDay(dayKey: String): List<ExercisePlan> =
         editablePlanForDay(dayKey).filterNot { it.removed }.map { it.plan }
 
-    /** Override rep range for an exercise (#90). */
-    suspend fun setRepRange(dayKey: String, exerciseId: String, repRange: String) {
+    /**
+     * Override rep range for an exercise (#90). [source] tags the writer ([OverlaySource]); the
+     * coach passes COACH so its overlay never coach-locks the slot, and a later user edit flips it
+     * back to USER (which does lock) — see the coach-lock scan in CoachRepository (seam findings 5/6).
+     */
+    suspend fun setRepRange(
+        dayKey: String,
+        exerciseId: String,
+        repRange: String,
+        source: String = OverlaySource.USER
+    ) {
         val existing = dao.forDay(dayKey).firstOrNull { it.exerciseId == exerciseId }
-        dao.upsert((existing ?: ProgramCustomization(dayKey, exerciseId)).copy(repRangeOverride = repRange))
+        dao.upsert((existing ?: ProgramCustomization(dayKey, exerciseId)).copy(repRangeOverride = repRange, source = source))
     }
 
-    /** Override set count for an exercise. */
-    suspend fun setSetsOverride(dayKey: String, exerciseId: String, sets: Int) {
+    /** Override set count for an exercise. [source] tags the writer ([OverlaySource]) — see [setRepRange]. */
+    suspend fun setSetsOverride(
+        dayKey: String,
+        exerciseId: String,
+        sets: Int,
+        source: String = OverlaySource.USER
+    ) {
         val existing = dao.forDay(dayKey).firstOrNull { it.exerciseId == exerciseId }
-        dao.upsert((existing ?: ProgramCustomization(dayKey, exerciseId)).copy(setsOverride = sets))
+        dao.upsert((existing ?: ProgramCustomization(dayKey, exerciseId)).copy(setsOverride = sets, source = source))
     }
 
     /** Remove an exercise from a day (#91). */

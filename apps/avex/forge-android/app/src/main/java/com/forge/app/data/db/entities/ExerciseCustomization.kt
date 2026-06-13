@@ -20,5 +20,11 @@ data class ExerciseCustomization(
     /** User-set rest duration in seconds for this exercise. Null = use smart defaults (#59). */
     @ColumnInfo(name = "rest_timer_override_seconds") val restTimerOverrideSeconds: Int? = null,
     /** Always-visible pinned cue in the collapsed card header (#112). Empty = not pinned. */
-    @ColumnInfo(name = "pinned_note") val pinnedNote: String = ""
+    @ColumnInfo(name = "pinned_note") val pinnedNote: String = "",
+    /**
+     * Who wrote the swap ([OverlaySource]). A coach swap is cleared on regenerate (the bias carries
+     * the learning) and never coach-locks its own slot; a user swap survives and locks (auto-coach
+     * seam audit, finding 3 — coach swaps were previously immortal and unreconciled).
+     */
+    @ColumnInfo(name = "source") val source: String = OverlaySource.USER
 )

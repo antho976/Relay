@@ -99,6 +99,24 @@ class SettingsViewModel @Inject constructor(
         loadCoachData()
     }
 
+    // ─── Day-aware scheduling (weekly plan vs sequence) ───────────────────────
+    val scheduleMode: StateFlow<String> = settingsRepo.scheduleMode
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000),
+            com.forge.app.domain.schedule.WeeklySchedule.MODE_SEQUENCE)
+
+    val weeklySchedule: StateFlow<List<String>> = settingsRepo.weeklySchedule
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    fun setScheduleMode(mode: String) = viewModelScope.launch { settingsRepo.setScheduleMode(mode) }
+
+    /** Assign [dayKey] ("" = rest) to weekday [weekdayIndex] (0=Mon..6=Sun) in the weekly schedule. */
+    fun setScheduleDay(weekdayIndex: Int, dayKey: String) = viewModelScope.launch {
+        val current = settingsRepo.weeklySchedule.first().toMutableList()
+        while (current.size < com.forge.app.domain.schedule.WeeklySchedule.SLOTS) current.add("")
+        current[weekdayIndex] = dayKey
+        settingsRepo.setWeeklySchedule(current)
+    }
+
     // ─── Holiday / vacation (#135) ────────────────────────────────────────────
     val vacations: StateFlow<List<com.forge.app.data.db.entities.VacationPeriod>> =
         vacationRepo.observeAll()

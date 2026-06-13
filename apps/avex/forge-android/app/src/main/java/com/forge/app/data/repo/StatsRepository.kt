@@ -69,6 +69,7 @@ class StatsRepository @Inject constructor(
     private val vacationDao: com.forge.app.data.db.dao.VacationDao,
     private val bodyweightRepo: BodyweightRepository,
     private val adaptationRepo: AdaptationRepository,
+    private val settingsRepo: com.forge.app.data.prefs.SettingsRepository,
     private val clock: Clock
 ) {
 
@@ -95,8 +96,13 @@ class StatsRepository @Inject constructor(
             sessionDao.observeVolumeSince(weekStartMs),
             cardioDao.observeMinutesSince(weekStartMs, excludeType = "rest"),
             sessionDao.observeFinishedCount(),
-            sessionDao.observeRecent(120)
-        ) { workouts, volume, cardio, totalFinished, recentSessions ->
+            combine(
+                sessionDao.observeRecent(120),
+                settingsRepo.scheduleMode,
+                settingsRepo.weeklySchedule
+            ) { recent, mode, schedule -> Triple(recent, mode, schedule) }
+        ) { workouts, volume, cardio, totalFinished, recentModeSchedule ->
+            val (recentSessions, scheduleMode, schedule) = recentModeSchedule
             val zone = ZoneId.systemDefault()
             val todayDate = LocalDate.now(zone)
             val isoWeekStart = todayDate.minusDays(todayDate.dayOfWeek.value.toLong() - 1)
@@ -112,8 +118,15 @@ class StatsRepository @Inject constructor(
                 }
                 .toSet()
             val lastFinished = recentSessions.filter { it.finishedAt != null }.maxByOrNull { it.finishedAt!! }
-            val nextUpDayKey = if (lastFinished == null) (Program.dayKeys.firstOrNull() ?: Program.UPPER_A)
-                else { val idx = Program.dayKeys.indexOf(lastFinished.dayKey); Program.dayKeys[(idx + 1) % Program.dayKeys.size] }
+            // Calendar-aware in weekday mode, legacy day-after-last otherwise (shared resolver).
+            val trainedTodayKeys = recentSessions
+                .filter { it.finishedAt != null && Instant.ofEpochMilli(it.finishedAt!!).atZone(zone).toLocalDate() == todayDate }
+                .map { it.dayKey }.toSet()
+            val nextUpDayKey = com.forge.app.domain.schedule.WeeklySchedule.resolveNextUp(
+                mode = scheduleMode, todayIndex = todayDate.dayOfWeek.value - 1, schedule = schedule,
+                dayKeys = Program.dayKeys, lastFinishedDayKey = lastFinished?.dayKey,
+                trainedTodayKeys = trainedTodayKeys
+            ) ?: (Program.dayKeys.firstOrNull() ?: Program.UPPER_A)
             // streakDays is finalized below, once the vacation ranges are known (#135).
             WeeklyStats(
                 workouts = workouts,

@@ -15,6 +15,14 @@ interface ExerciseCustomizationDao {
     @Query("DELETE FROM exercise_customization WHERE exercise_id = :exerciseId")
     suspend fun clear(exerciseId: String)
 
+    /**
+     * Drop every coach-applied swap row — called by a wholesale regenerate (the prefer/avoid bias
+     * carries the learning into the new baseline). User swaps survive (auto-coach seam fix: coach
+     * swaps were previously immortal and unreconciled, finding 3).
+     */
+    @Query("DELETE FROM exercise_customization WHERE source = 'coach'")
+    suspend fun clearCoachSwaps()
+
     @Query("SELECT * FROM exercise_customization WHERE exercise_id = :exerciseId")
     suspend fun get(exerciseId: String): ExerciseCustomization?
 

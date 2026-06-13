@@ -48,6 +48,7 @@ class AdaptationRepository @Inject constructor(
     private val adviceEventDao: AdviceEventDao,
     private val vacationDao: com.forge.app.data.db.dao.VacationDao,
     private val programRepository: ProgramRepository,
+    private val programCustomizationRepo: ProgramCustomizationRepository,
     private val settingsRepository: SettingsRepository,
     private val clock: Clock
 ) {
@@ -73,13 +74,23 @@ class AdaptationRepository @Inject constructor(
             likedIds = settingsRepository.likedExercises.first(),
             dislikedIds = disliked,
             pinnedIds = settingsRepository.pinnedExercises.first(),
-            maxDbLb = settingsRepository.maxDbWeightLb.first()
+            maxDbLb = settingsRepository.maxDbWeightLb.first(),
+            // 0 = no active deload; lets DeloadAdvisor suppress right after an apply, before the
+            // first deload-week session is even logged (seam fix, finding 18).
+            lastDeloadAppliedMs = settingsRepository.deloadWeekStartMs.first().takeIf { it > 0 }
         )
+
+        // The engine plans against EFFECTIVE sets (baseline + the user's/coach's per-slot overrides),
+        // not the bare baseline — otherwise the coach re-proposes volume onto a slot it already boosted
+        // and bakes a phantom set at the next regenerate (seam findings 2/15).
+        val effectiveDays = Program.days.map { day ->
+            day.copy(exercises = programCustomizationRepo.effectivePlanForDay(day.key))
+        }
 
         val now = clock.nowMs()
         return SnapshotAssembler.assemble(
             nowMs = now,
-            program = Program.days,
+            program = effectiveDays,
             swapCandidateIds = { plan ->
                 ExerciseLibrary.swapCandidates(plan.muscle, equipment, disliked, frozenIds)
                     .map { it.id }
@@ -190,6 +201,9 @@ class AdaptationRepository @Inject constructor(
             deload = true,
             frozenIds = settingsRepository.frozenExerciseIds.first()
         )
+        // Persist the deload BEFORE regenerating: generate() leaves a deload marker untouched but
+        // clears it for any non-deload regenerate, so a later manual "Generate" exits the deload (#18).
+        settingsRepository.setDeloadWeekStartMs(clock.nowMs())
         programRepository.generate(
             params,
             settingsRepository.availableEquipment.first()

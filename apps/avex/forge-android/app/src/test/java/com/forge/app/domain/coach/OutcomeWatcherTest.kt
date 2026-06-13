@@ -128,4 +128,37 @@ class OutcomeWatcherTest {
         assertEquals("1", proposals.single().payload)
         assertTrue(proposals.single().summary.startsWith("Revert:"))
     }
+
+    @Test
+    fun revertProposalsFor_selfHealsFromAlreadyFailedRows() {
+        // The durable path: no verdicts in hand, just rows the outcome column already marked failed
+        // (e.g. a prior pass's proposal was dropped by deload-supersession). A revert reappears.
+        val failed = listOf(
+            decision(id = 7, type = "volume_up", undoData = "3"),
+            decision(id = 8, type = "swap", undoData = null) // swap is revertable even with null undo
+        )
+        val proposals = OutcomeWatcher.revertProposalsFor(failed)
+        assertEquals(setOf("7", "8"), proposals.map { it.payload }.toSet())
+        assertTrue(proposals.all { it.type == "revert" })
+    }
+
+    @Test
+    fun revertProposalsFor_skipsChangesWithNoMechanicalUndo() {
+        // A deload has no undo_data and isn't a swap — it can't be reverted mechanically, so no
+        // revert proposal is ever fabricated for it.
+        val proposals = OutcomeWatcher.revertProposalsFor(
+            listOf(decision(id = 9, type = "deload", undoData = null))
+        )
+        assertTrue(proposals.isEmpty())
+    }
+
+    @Test
+    fun revertProposalsFor_emitsNewestFirst() {
+        // Two decisions chained on one slot both failed; Apply All applies reverts in order, so the
+        // NEWER (higher id) must revert first to let the per-slot LIFO guard unwind it (finding 9).
+        val older = decision(id = 3, type = "rep_shift", undoData = "6-8")
+        val newer = decision(id = 9, type = "rep_shift", undoData = "5-7")
+        val proposals = OutcomeWatcher.revertProposalsFor(listOf(older, newer))
+        assertEquals(listOf("9", "3"), proposals.map { it.payload })
+    }
 }

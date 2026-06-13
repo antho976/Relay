@@ -196,6 +196,9 @@ private fun DecisionRow(d: com.forge.app.data.db.entities.CoachDecision, viewMod
             }
             "reverted" -> Text("undone", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.7f))
             CoachRepository.STATUS_SKIPPED -> Text("skipped", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.7f))
+            // A regenerate has baked this accepted change into the program itself — it lives in the
+            // baseline now, not as a reversible overlay, so there's nothing left to undo.
+            CoachRepository.STATUS_FOLDED -> Text("absorbed ✓", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.7f))
             else -> {} // shadow rows (Phase 1 history): display only
         }
     }

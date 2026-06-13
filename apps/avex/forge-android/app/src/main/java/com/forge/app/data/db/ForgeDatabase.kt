@@ -53,7 +53,9 @@ import com.forge.app.data.db.entities.SessionBreak
 import com.forge.app.data.db.entities.VacationPeriod
 
 /**
- * Schema is v20 (v20 added session_segment + session.active_seconds for per-sitting timing;
+ * Schema is v21 (v21 added the `source` origin tag to program_customization +
+ * exercise_customization for the auto-coach lock/undo fix; v20 added session_segment +
+ * session.active_seconds for per-sitting timing;
  * v19 added the coach_decision propose/apply lifecycle columns; v18 added
  * suggestion_outcome for coach step calibration; v17 added the
  * auto-coach tables coach_pass/coach_decision; v16 added the adaptation-engine tables
@@ -95,7 +97,7 @@ import com.forge.app.data.db.entities.VacationPeriod
         SuggestionOutcome::class,
         SessionSegment::class
     ],
-    version = 20,
+    version = 21,
     exportSchema = true
 )
 @TypeConverters(Converters::class)

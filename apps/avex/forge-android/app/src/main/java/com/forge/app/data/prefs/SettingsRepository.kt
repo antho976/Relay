@@ -244,6 +244,31 @@ class SettingsRepository @Inject constructor(
     suspend fun setRotationCounter(n: Int) =
         context.forgePreferences.edit { it[PreferenceKeys.ROTATION_COUNTER] = n }
 
+    /** When the active deload week began (epoch-ms); 0 = not in a deload week (auto-coach seam, #18). */
+    val deloadWeekStartMs: Flow<Long> = context.forgePreferences.data
+        .map { it[PreferenceKeys.DELOAD_WEEK_START_MS] ?: 0L }
+    suspend fun setDeloadWeekStartMs(ms: Long) =
+        context.forgePreferences.edit { it[PreferenceKeys.DELOAD_WEEK_START_MS] = ms }
+
+    // ─── Day-aware scheduling (weekly plan vs legacy sequence) ────────────────
+    /** "sequence" (default — day after the last finished) or "weekday" (fixed Mon..Sun plan). */
+    val scheduleMode: Flow<String> = context.forgePreferences.data
+        .map { it[PreferenceKeys.SCHEDULE_MODE] ?: com.forge.app.domain.schedule.WeeklySchedule.MODE_SEQUENCE }
+    suspend fun setScheduleMode(v: String) =
+        context.forgePreferences.edit { it[PreferenceKeys.SCHEDULE_MODE] = v }
+
+    /** The 7-slot weekly schedule (Mon..Sun; "" = rest). Defaults to program days on the first weekdays. */
+    val weeklySchedule: Flow<List<String>> = context.forgePreferences.data
+        .map {
+            it[PreferenceKeys.SCHEDULE_WEEKLY]
+                ?.let { stored -> com.forge.app.domain.schedule.WeeklySchedule.parse(stored) }
+                ?: com.forge.app.domain.schedule.WeeklySchedule.defaultFor(com.forge.app.program.Program.dayKeys)
+        }
+    suspend fun setWeeklySchedule(slots: List<String>) =
+        context.forgePreferences.edit {
+            it[PreferenceKeys.SCHEDULE_WEEKLY] = com.forge.app.domain.schedule.WeeklySchedule.encode(slots)
+        }
+
     // ─── Cardio weekly-minutes goal (cardio tab — NOT a program day) ──────────
     val cardioWeeklyTargetMin: Flow<Int> = context.forgePreferences.data
         .map { it[PreferenceKeys.CARDIO_WEEKLY_TARGET_MIN] ?: 0 }

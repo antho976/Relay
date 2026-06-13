@@ -60,6 +60,11 @@ class WorkoutRepository @Inject constructor(
     private val programRepository: ProgramRepository
 ) {
 
+    private companion object {
+        /** A deload "week" — how long the applied deload pauses rotation / tags sessions (#18). */
+        const val DELOAD_WEEK_MS = 7L * 24 * 60 * 60 * 1000
+    }
+
     // ─── Session lifecycle ─────────────────────────────────────────────────────
 
     fun observeActiveSession(): Flow<Session?> = sessionDao.observeActiveSession()
@@ -81,7 +86,13 @@ class WorkoutRepository @Inject constructor(
                 hasLoggedWork = loggedExerciseDao.forSession(active.id).isNotEmpty()
             )
         }
-        val session = Session(dayKey = dayKey, startedAt = clock.nowMs(), finishedAt = null)
+        // Tag sessions started inside the deload week so the deload actually shows up in history and
+        // feeds DeloadAdvisor's repeat-suppression (the marker was previously never written — #18).
+        val deloadStart = settingsRepo.deloadWeekStartMs.first()
+        val inDeloadWeek = deloadStart > 0 && clock.nowMs() - deloadStart in 0 until DELOAD_WEEK_MS
+        val session = Session(
+            dayKey = dayKey, startedAt = clock.nowMs(), finishedAt = null, deloadMarkedHere = inDeloadWeek
+        )
         val id = sessionDao.insert(session)
         return StartedSession(session.copy(id = id), created = true, hasLoggedWork = false)
     }
@@ -151,6 +162,11 @@ class WorkoutRepository @Inject constructor(
     /** Rotation (program-unlock Phase 3): re-roll the program every N finished sessions, if enabled. */
     private suspend fun maybeRotateProgram() {
         if (settingsRepo.rotationCadence.first() != "every_n") return
+        // Pause auto-rotation inside the deload week — a rotation regenerates a full-volume program
+        // and would silently wipe the recovery week mid-deload (seam fix #18). The counter is left
+        // untouched, so rotation resumes on the next finish after the deload ends.
+        val deloadStart = settingsRepo.deloadWeekStartMs.first()
+        if (deloadStart > 0 && clock.nowMs() - deloadStart in 0 until DELOAD_WEEK_MS) return
         val n = settingsRepo.rotationEveryN.first().coerceAtLeast(1)
         val next = settingsRepo.rotationCounter.first() + 1
         if (next < n) {

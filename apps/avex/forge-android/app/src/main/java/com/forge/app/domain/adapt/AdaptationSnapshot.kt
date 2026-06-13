@@ -80,5 +80,11 @@ data class PrefsSnap(
     val dislikedIds: Set<String> = emptySet(),
     val pinnedIds: Set<String> = emptySet(),
     /** Heaviest dumbbell owned (lb); null = no ceiling (auto-coach Phase 0). */
-    val maxDbLb: Double? = null
+    val maxDbLb: Double? = null,
+    /**
+     * When the current deload week was applied (epoch-ms), or null if not in one. Persists the
+     * deload so DeloadAdvisor can suppress repeat proposals immediately after an apply — before any
+     * deload-week session exists to scan (seam fix, finding 18).
+     */
+    val lastDeloadAppliedMs: Long? = null
 )

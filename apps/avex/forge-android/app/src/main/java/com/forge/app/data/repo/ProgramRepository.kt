@@ -2,6 +2,9 @@ package com.forge.app.data.repo
 
 import android.content.Context
 import androidx.glance.appwidget.updateAll
+import androidx.room.withTransaction
+import com.forge.app.data.db.ForgeDatabase
+import com.forge.app.data.db.dao.ExerciseCustomizationDao
 import com.forge.app.data.db.dao.ProgramCustomizationDao
 import com.forge.app.data.db.dao.ProgramDao
 import com.forge.app.data.db.dao.SessionDao
@@ -37,8 +40,11 @@ import javax.inject.Singleton
  */
 @Singleton
 class ProgramRepository @Inject constructor(
+    private val database: ForgeDatabase,
     private val dao: ProgramDao,
     private val customizationDao: ProgramCustomizationDao,
+    private val programCustomizationRepo: ProgramCustomizationRepository,
+    private val exerciseCustomizationDao: ExerciseCustomizationDao,
     private val sessionDao: SessionDao,
     private val coachDao: com.forge.app.data.db.dao.CoachDao,
     private val settings: SettingsRepository,
@@ -74,7 +80,9 @@ class ProgramRepository @Inject constructor(
         seed: Long = System.nanoTime()
     ) {
         // The regenerate is about to clear the customization overlay (reconcile below) — fold the
-        // coach's learned adjustments into the new BASELINE so they survive the refresh.
+        // coach's learned adjustments into the new BASELINE so they survive the refresh. volumeBias
+        // and prefer/avoid feed selection inside the generator; repBias is applied to the slot reps
+        // below (a coach rep_shift re-binds to its exercise wherever it lands).
         val bias = coachBias()
         val generated = ProgramGenerator.generate(
             params.copy(volumeBias = bias.volumeBias, avoid = params.avoid + bias.avoid),
@@ -85,17 +93,23 @@ class ProgramRepository @Inject constructor(
         generated.forEachIndexed { i, gd ->
             days += ProgramDay(gd.key, i, gd.name, gd.word, gd.accentHex, gd.archetype)
             gd.exercises.forEachIndexed { j, ge ->
-                slots += ProgramSlot("${gd.key}-$j", gd.key, j, ge.libId, ge.sets, ge.reps)
+                slots += ProgramSlot("${gd.key}-$j", gd.key, j, ge.libId, ge.sets, bias.repBias[ge.libId] ?: ge.reps)
             }
         }
-        dao.replaceProgram(days, slots)
-        // A wholesale rebuild invalidates the old customization overlay — drop stale rep/set/removed
-        // overrides so they can't silently re-bind to (or delete) a freshly generated exercise, and
-        // drop user-added exercises whose day no longer exists. See [reconcileCustomizations].
-        reconcileCustomizations(days)
-        // The exercises just changed under any in-progress workout — discard it so the user isn't
-        // shown a "resume" for a session whose exercises no longer match the program.
-        discardActiveSession()
+        // One transaction so a crash can't leave the fresh program bound to stale overlays (seam
+        // finding 13): replace the program; drop the now-invalid customization overlay AND the
+        // coach-applied swaps (their learning is already folded into the baseline above — see
+        // [reconcileCustomizations]); retire the cleared coach deltas to 'folded' so per-change undo
+        // can't replay stale state onto the new program (findings 0/1); discard the in-progress session.
+        database.withTransaction {
+            dao.replaceProgram(days, slots)
+            reconcileCustomizations(days)
+            coachDao.foldAllAppliedDeltas()
+            discardActiveSession()
+        }
+        // A non-deload regenerate ends any active deload week (a deload generate keeps its own marker,
+        // set by AdaptationRepository.applyDeloadWeek before this call) — auto-coach seam #18.
+        if (!params.deload) settings.setDeloadWeekStartMs(0L)
         loadIntoFacade(refreshWidget = true)
     }
 
@@ -146,19 +160,33 @@ class ProgramRepository @Inject constructor(
         // doesn't hand back a movement another (unchanged) day already uses.
         val recent = Program.days.flatMap { it.exercises }.map { it.id }.toSet()
         val bias = coachBias()
+        // Volume-stable rotation: a single-day re-roll changes WHICH exercises, not how many sets, so
+        // it keeps this day's current EFFECTIVE per-position set counts (baseline + any override) and
+        // never re-plans volume. That removes the cross-path volume oscillation a week-scoped re-derive
+        // caused (seam finding 17); coach volume re-materializes only on a full generate. No volumeBias.
+        val effectiveSets = programCustomizationRepo.effectivePlanForDay(dayKey).map { it.sets }
         val fresh = ProgramGenerator.generate(
-            currentParams().let { it.copy(volumeBias = bias.volumeBias, avoid = it.avoid + bias.avoid) },
+            currentParams().let { it.copy(avoid = it.avoid + bias.avoid) },
             currentEquipment(),
             settings.likedExercises.first() + bias.prefer, settings.dislikedExercises.first(),
             recent, System.nanoTime()
         )
         val day = fresh.firstOrNull { it.key == dayKey } ?: return
-        val slots = day.exercises.mapIndexed { j, ge -> ProgramSlot("$dayKey-$j", dayKey, j, ge.libId, ge.sets, ge.reps) }
-        dao.replaceDaySlots(dayKey, slots)
-        // This day's exercises just changed — drop its stale static overrides (keep user-added ones).
-        reconcileDayCustomizations(dayKey)
-        // If a workout is in progress ON THIS day, its exercises just changed — discard it.
-        sessionDao.getActiveSession()?.takeIf { it.dayKey == dayKey }?.let { sessionDao.delete(it) }
+        val slots = day.exercises.mapIndexed { j, ge ->
+            ProgramSlot(
+                "$dayKey-$j", dayKey, j, ge.libId,
+                effectiveSets.getOrElse(j) { ge.sets }, bias.repBias[ge.libId] ?: ge.reps
+            )
+        }
+        // One transaction (seam finding 13). Only THIS day's overlays were cleared, so fold only this
+        // day's coach deltas; coach swaps are global and survive a single-day re-roll.
+        database.withTransaction {
+            dao.replaceDaySlots(dayKey, slots)
+            reconcileDayCustomizations(dayKey)
+            coachDao.foldAppliedDeltasForDay(dayKey)
+            // If a workout is in progress ON THIS day, its exercises just changed — discard it.
+            sessionDao.getActiveSession()?.takeIf { it.dayKey == dayKey }?.let { sessionDao.delete(it) }
+        }
         loadIntoFacade(refreshWidget = true)
     }
 
@@ -238,6 +266,12 @@ class ProgramRepository @Inject constructor(
      * rep/set/removed override (so it can't re-bind to or silently delete a freshly generated
      * exercise), and user-added exercises whose day no longer exists. User-added ("custom_") exercises
      * on days that survive are kept — re-attaching them is their whole point.
+     *
+     * Coach-applied SWAP overlays are also cleared here (they live in a separate, globally-keyed
+     * table): the prefer/avoid bias already carried that learning into the new baseline, so leaving
+     * the overlay would double-apply it and rebind the old swap to a fresh slot (seam fix, finding 3 —
+     * previously NO regenerate path touched exercise_customization). User swaps are left untouched.
+     * Caller wraps this in the same transaction as replaceProgram (finding 13).
      */
     private suspend fun reconcileCustomizations(days: List<ProgramDay>) {
         val validKeys = days.map { it.id }.toSet()
@@ -245,6 +279,7 @@ class ProgramRepository @Inject constructor(
             val keep = c.exerciseId.startsWith("custom_") && c.dayKey in validKeys
             if (!keep) customizationDao.delete(c.dayKey, c.exerciseId)
         }
+        exerciseCustomizationDao.clearCoachSwaps()
     }
 
     /** Single-day variant: drop this day's stale static overrides, keep its user-added exercises. */

@@ -47,29 +47,35 @@ class DayListViewModel @Inject constructor(
         workoutRepo.observeActiveSession(),
         sessionDao.observeRecent(50),
         settingsRepo.observeAllDayColors(),
-        programRepository.revision
-    ) { dayNames, activeSession, recentSessions, dayColors, _ ->
+        combine(
+            programRepository.revision,
+            settingsRepo.scheduleMode,
+            settingsRepo.weeklySchedule
+        ) { _, mode, schedule -> mode to schedule }
+    ) { dayNames, activeSession, recentSessions, dayColors, modeSchedule ->
+        val (scheduleMode, schedule) = modeSchedule
         val nameByKey = dayNames.associate { it.dayKey to it.customName }
         val lastFinishedByKey = recentSessions
             .filter { it.finishedAt != null }
             .groupBy { it.dayKey }
             .mapValues { (_, sessions) -> sessions.maxOf { it.finishedAt!! } }
 
+        // "Next up" is calendar-aware in weekday mode and the legacy day-after-last otherwise — one
+        // shared resolver so the day list, Overview, and widget agree.
+        val zone = java.time.ZoneId.systemDefault()
+        val today = java.time.LocalDate.now(zone)
+        val trainedTodayKeys = recentSessions
+            .filter { it.finishedAt != null && java.time.Instant.ofEpochMilli(it.finishedAt!!).atZone(zone).toLocalDate() == today }
+            .map { it.dayKey }.toSet()
+        val lastFinishedDayKey = recentSessions
+            .filter { it.finishedAt != null }.maxByOrNull { it.finishedAt!! }?.dayKey
         val nextUpKey = when {
             activeSession != null -> activeSession.dayKey
-            else -> {
-                val lastFinished = recentSessions
-                    .filter { it.finishedAt != null }
-                    .maxByOrNull { it.finishedAt!! }
-                if (lastFinished == null) (Program.dayKeys.firstOrNull() ?: Program.UPPER_A)
-                else {
-                    // A stale finished key (e.g. the user changed day-count since) isn't in the current
-                    // split — fall back to the first day instead of letting indexOf(-1) point at it.
-                    val idx = Program.dayKeys.indexOf(lastFinished.dayKey)
-                    if (idx < 0) (Program.dayKeys.firstOrNull() ?: Program.UPPER_A)
-                    else Program.dayKeys[(idx + 1) % Program.dayKeys.size]
-                }
-            }
+            else -> com.forge.app.domain.schedule.WeeklySchedule.resolveNextUp(
+                mode = scheduleMode, todayIndex = today.dayOfWeek.value - 1, schedule = schedule,
+                dayKeys = Program.dayKeys, lastFinishedDayKey = lastFinishedDayKey,
+                trainedTodayKeys = trainedTodayKeys
+            ) ?: (Program.dayKeys.firstOrNull() ?: Program.UPPER_A)
         }
 
         DayListUiState(

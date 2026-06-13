@@ -78,16 +78,33 @@ object OutcomeWatcher {
         verdicts: List<WatchVerdict>
     ): List<ShadowDecision> {
         val failedById = verdicts.filter { it.outcome == "failed" }.associateBy { it.decisionId }
-        return applied.mapNotNull { d ->
-            val verdict = failedById[d.id] ?: return@mapNotNull null
+        return revertProposalsFor(
+            applied.filter { it.id in failedById },
+            reasonFor = { failedById[it.id]?.failReason ?: "the change didn't land" }
+        )
+    }
+
+    /**
+     * Revert proposals re-derived from every still-applied decision the watcher has already judged
+     * FAILED (its outcome column is durable). Building from the column rather than from this pass's
+     * verdicts alone makes delivery self-healing: a proposal dropped by deload-supersession, the
+     * per-pass cap, or an error pass simply reappears next week (seam fix, finding 4).
+     */
+    fun revertProposalsFor(
+        failed: List<CoachDecision>,
+        reasonFor: (CoachDecision) -> String = { "${it.targetName} didn't land — undo the change" }
+    ): List<ShadowDecision> =
+        // Newest-first: when two decisions chained on one slot both failed, Apply All must revert the
+        // NEWER one first (it owns the overlay), so the per-slot LIFO guard lets the chain unwind
+        // cleanly in a single pass instead of refusing the older revert (seam fix, finding 9).
+        failed.sortedByDescending { it.id }.mapNotNull { d ->
             // A change with no undo data (deload) can't be reverted mechanically — skip.
             if (d.undoData == null && d.type != "swap") return@mapNotNull null
             ShadowDecision(
                 type = "revert", targetKey = d.targetKey, targetName = d.targetName,
                 summary = "Revert: ${d.summary}",
-                reason = verdict.failReason ?: "the change didn't land",
+                reason = reasonFor(d),
                 dayKey = d.dayKey, payload = d.id.toString()
             )
         }
-    }
 }

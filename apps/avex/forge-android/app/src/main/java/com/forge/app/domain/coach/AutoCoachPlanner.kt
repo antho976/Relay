@@ -57,7 +57,13 @@ data class CoachPassInputs(
     /** Net applied volume delta per muscle over the drift window — the ±2 cap (hardening 11). */
     val volumeNetByMuscle: Map<MuscleGroup, Int> = emptyMap(),
     /** Failed applied changes the watcher flagged — surfaced first as revert proposals. */
-    val revertProposals: List<ShadowDecision> = emptyList()
+    val revertProposals: List<ShadowDecision> = emptyList(),
+    /**
+     * Structural proposals the user most recently declined — keys "type:targetKey:payload" for
+     * swap/rep_shift whose latest decision was skipped or reverted. The planner won't re-propose the
+     * identical change, so a rejected swap stops reappearing every week (seam fix, finding 19).
+     */
+    val declinedStructural: Set<String> = emptySet()
 )
 
 /**
@@ -135,6 +141,8 @@ object AutoCoachPlanner {
                 is Recommendation.VariationSwap -> {
                     if (rec.exerciseId in inputs.lockedExerciseIds) return@mapNotNull null
                     val replacementId = rec.candidateIds.firstOrNull() ?: return@mapNotNull null
+                    // Don't re-propose a swap the user already declined (finding 19).
+                    if ("swap:${rec.exerciseId}:$replacementId" in inputs.declinedStructural) return@mapNotNull null
                     val replacementName = ExerciseLibrary.byId(replacementId)?.name ?: replacementId
                     val dayKey = slotByExercise[rec.exerciseId]?.first ?: ""
                     0 to ShadowDecision(
@@ -145,6 +153,7 @@ object AutoCoachPlanner {
                 }
                 is Recommendation.RepRangeShift -> {
                     if (rec.exerciseId in inputs.lockedExerciseIds) return@mapNotNull null
+                    if ("rep_shift:${rec.exerciseId}:${rec.toReps}" in inputs.declinedStructural) return@mapNotNull null
                     val dayKey = slotByExercise[rec.exerciseId]?.first ?: ""
                     1 to ShadowDecision(
                         "rep_shift", rec.exerciseId, rec.exerciseName,

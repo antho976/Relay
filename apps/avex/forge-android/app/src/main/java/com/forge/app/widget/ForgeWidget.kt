@@ -18,12 +18,14 @@ import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
 import androidx.glance.unit.ColorProvider
 import com.forge.app.data.db.dao.SessionDao
+import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.data.repo.ProgramRepository
 import com.forge.app.program.Program
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
 import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.components.SingletonComponent
+import kotlinx.coroutines.flow.first
 
 /**
  * Home screen widget showing next planned workout day + main exercises (#146).
@@ -41,18 +43,23 @@ class ForgeWidget : GlanceAppWidget() {
         )
         entryPoint.programRepository().ensureLoaded()
 
-        // Next day = the day after the most recently finished session, cycling through the
-        // *active* program's days (mirrors StatsRepository.nextUpDayKey — no hard-coded 4-day rotation).
-        val lastDayKey = entryPoint.sessionDao().allFinished()
-            .maxByOrNull { it.finishedAt ?: it.startedAt }?.dayKey
-        val keys = Program.dayKeys
-        val nextDayKey = when {
-            keys.isEmpty() -> null
-            lastDayKey == null -> keys.first()
-            // A stale last-day key (day-count changed since) isn't in the current split — start over
-            // at the first day rather than letting indexOf(-1) resolve to it.
-            else -> keys.indexOf(lastDayKey).let { idx -> if (idx < 0) keys.first() else keys[(idx + 1) % keys.size] }
-        }
+        // Next day via the shared resolver — calendar-aware in weekday mode, legacy day-after-last
+        // otherwise — so the widget agrees with the day list and Overview.
+        val finished = entryPoint.sessionDao().allFinished()
+        val settings = entryPoint.settingsRepository()
+        val zone = java.time.ZoneId.systemDefault()
+        val today = java.time.LocalDate.now(zone)
+        val trainedTodayKeys = finished
+            .filter { it.finishedAt != null && java.time.Instant.ofEpochMilli(it.finishedAt!!).atZone(zone).toLocalDate() == today }
+            .map { it.dayKey }.toSet()
+        val nextDayKey = com.forge.app.domain.schedule.WeeklySchedule.resolveNextUp(
+            mode = settings.scheduleMode.first(),
+            todayIndex = today.dayOfWeek.value - 1,
+            schedule = settings.weeklySchedule.first(),
+            dayKeys = Program.dayKeys,
+            lastFinishedDayKey = finished.maxByOrNull { it.finishedAt ?: it.startedAt }?.dayKey,
+            trainedTodayKeys = trainedTodayKeys
+        )
         val nextDayPlan = nextDayKey?.let { key -> Program.days.firstOrNull { it.key == key } }
 
         provideContent {
@@ -109,4 +116,5 @@ class ForgeWidgetReceiver : GlanceAppWidgetReceiver() {
 interface WidgetEntryPoint {
     fun sessionDao(): SessionDao
     fun programRepository(): ProgramRepository
+    fun settingsRepository(): SettingsRepository
 }

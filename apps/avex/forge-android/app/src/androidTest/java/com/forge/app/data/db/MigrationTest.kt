@@ -126,6 +126,20 @@ class MigrationTest {
     }
 
     @Test
+    fun migrate20To21_addsOverlaySourceColumns() {
+        helper.createDatabase(dbName, 20).close()
+        val db = helper.runMigrationsAndValidate(dbName, 21, true, MIGRATION_20_21)
+
+        listOf("program_customization", "exercise_customization").forEach { table ->
+            db.query("PRAGMA table_info(`$table`)").use { cursor ->
+                val cols = mutableSetOf<String>()
+                while (cursor.moveToNext()) cols += cursor.getString(cursor.getColumnIndexOrThrow("name"))
+                assertEquals("$table.source should exist after 20→21", true, "source" in cols)
+            }
+        }
+    }
+
+    @Test
     fun migrate16To17_addsCoachTables() {
         helper.createDatabase(dbName, 16).close()
         val db = helper.runMigrationsAndValidate(dbName, 17, true, MIGRATION_16_17)

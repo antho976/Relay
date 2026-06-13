@@ -59,7 +59,12 @@ object DeloadAdvisor {
         // Need at least one full window of history or the "trend" is just the whole dataset.
         if (sessions.first().startedAt > windowStart) return null
 
-        val lastDeloadAt = sessions.lastOrNull { it.sessionType == "deload" || it.deloadMarkedHere }?.startedAt
+        // Most recent deload, from a tagged session OR the persisted apply marker — the marker covers
+        // the gap right after an apply, before any deload-week session has been logged (seam fix #18).
+        val lastDeloadAt = listOfNotNull(
+            sessions.lastOrNull { it.sessionType == "deload" || it.deloadMarkedHere }?.startedAt,
+            s.prefs.lastDeloadAppliedMs
+        ).maxOrNull()
         if (lastDeloadAt != null && lastDeloadAt >= s.nowMs - t.deloadRecentDeloadSuppressDays * DAY_MS) return null
 
         val drivers = mutableListOf<Pair<Int, String>>()

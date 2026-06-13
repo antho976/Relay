@@ -211,6 +211,17 @@ class AutoCoachPlannerTest {
     }
 
     @Test
+    fun declinedSwap_isNotReProposed() {
+        // The user skipped/reverted this exact rotation before — it must not reappear every week
+        // (seam fix, finding 19). alt-1 is the only candidate, so declining it yields a hold.
+        val r = AutoCoachPlanner.evaluate(
+            snapshot(mapOf("ua1" to stalledBouts(8))),
+            CoachPassInputs("beginner", declinedStructural = setOf("swap:ua1:alt-1"))
+        )
+        assertEquals(CoachPassStatus.HOLD, r.status)
+    }
+
+    @Test
     fun evaluateIsDeterministic() {
         val s = snapshot(mapOf("ua1" to stalledBouts(8)))
         assertEquals(

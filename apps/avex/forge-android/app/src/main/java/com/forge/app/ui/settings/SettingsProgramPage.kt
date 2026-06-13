@@ -14,6 +14,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import com.forge.app.domain.schedule.WeeklySchedule
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
@@ -123,9 +125,59 @@ private fun SplitSection(state: SettingsUiState, vm: SettingsViewModel) {
     ) {
         ChipFlow { (1..7).forEach { n -> PillChip("$n", state.daysPerWeek == n) { vm.setDaysPerWeek(n) } } }
     }
+    ScheduleBlock(vm)
     GenerateBlock(state, vm)
     Spacer(Modifier.height(16.dp))
     SectionDivider()
+}
+
+/** Day-aware scheduling: choose sequence vs a fixed weekly plan, and (when weekday) assign each day. */
+@Composable
+private fun ScheduleBlock(vm: SettingsViewModel) {
+    val mode by vm.scheduleMode.collectAsState()
+    val schedule by vm.weeklySchedule.collectAsState()
+    ProgramBlock(
+        "Schedule",
+        "By weekday pins each day to a workout (Legs on Monday…) — miss a day and it rolls to the next, " +
+            "no catch-up. In sequence just gives the next day after the one you last finished."
+    ) {
+        ChipFlow {
+            PillChip("In sequence", mode == WeeklySchedule.MODE_SEQUENCE) {
+                vm.setScheduleMode(WeeklySchedule.MODE_SEQUENCE)
+            }
+            PillChip("By weekday", mode == WeeklySchedule.MODE_WEEKDAY) {
+                vm.setScheduleMode(WeeklySchedule.MODE_WEEKDAY)
+            }
+        }
+    }
+    if (mode == WeeklySchedule.MODE_WEEKDAY) {
+        val days = com.forge.app.program.Program.days
+        val weekdays = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+        ProgramBlock("Weekly plan", "Tap a workout for each day, or Rest.") {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                weekdays.forEachIndexed { wd, label ->
+                    val assigned = schedule.getOrElse(wd) { "" }
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            label,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.width(34.dp)
+                        )
+                        ChipFlow {
+                            PillChip("Rest", assigned.isBlank()) { vm.setScheduleDay(wd, "") }
+                            days.forEach { d ->
+                                PillChip(d.defaultName, assigned == d.key) { vm.setScheduleDay(wd, d.key) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable

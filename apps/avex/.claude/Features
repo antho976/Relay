@@ -144,7 +144,10 @@ The old header line "Level {trophy points}" is replaced by the rank ladder.
 - "Pick your day." header
 - NEXT UP tile: "NEXT UP" pill, large name, subtitle + exercise count, accent START/Continue button, "Quick start (skip warmup)" text button
 - Compact tiles for other 3 days (96dp): right-side "→" arrow, last-trained date + exercise count
-- Next-up rotation logic: Upper A → Lower A → Upper B → Lower B; advances from most-recently-finished session; defaults to Upper A if never trained; active session day takes priority
+- Next-up logic: a single shared resolver (`domain/schedule/WeeklySchedule.kt`) used by the Day List, Overview (StatsRepository), and the home-screen widget so all three agree. Two modes (Settings → Program → Split & schedule):
+  - **In sequence** (default, legacy): Upper A → Lower A → Upper B → Lower B; advances from most-recently-finished session; defaults to first day if never trained.
+  - **By weekday** (2026-06-12, opt-in): a fixed Mon–Sun plan (each weekday → a program day or Rest). "Next up" = today's weekday slot; calendar-driven, so a missed day rolls to the next scheduled one (no catch-up), today's slot is skipped once it's been trained, rest days/weekends are scanned past, and an all-rest schedule falls back to sequence. Stored as a 7-slot DataStore pref; editor is 7 weekday rows of day/Rest chips.
+  - active session day takes priority in both modes
 - Per-day accent color from hex (toAccentColor())
 - Spine strip: vertical rotated word (PUSH / QUADS / PULL / HAMS), accent tinted
 - Smooth radial bloom gradient via drawBehind (centered at 92–95% card width, fades to transparent)

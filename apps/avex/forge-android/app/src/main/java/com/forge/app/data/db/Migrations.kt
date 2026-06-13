@@ -187,6 +187,21 @@ val MIGRATION_19_20 = object : Migration(19, 20) {
     }
 }
 
+/**
+ * v20 → v21: overlay rows gain an origin tag (auto-coach seam fix). `program_customization` and
+ * `exercise_customization` get a `source` column ("user" | "coach") so the coach-lock scan and
+ * per-change undo can tell a user's own edit from a coach-applied overlay (seam audit findings 5/6),
+ * and a regenerate can clear coach-origin swaps while keeping user swaps. Additive ALTERs with a
+ * 'user' default — pre-existing rows are treated as user-owned (conservative: errs toward protecting
+ * edits from the coach).
+ */
+val MIGRATION_20_21 = object : Migration(20, 21) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `program_customization` ADD COLUMN `source` TEXT NOT NULL DEFAULT 'user'")
+        db.execSQL("ALTER TABLE `exercise_customization` ADD COLUMN `source` TEXT NOT NULL DEFAULT 'user'")
+    }
+}
+
 /** All migrations, in order. Register every new one here. */
 val ALL_MIGRATIONS: Array<Migration> = arrayOf(
     MIGRATION_12_13,
@@ -196,5 +211,6 @@ val ALL_MIGRATIONS: Array<Migration> = arrayOf(
     MIGRATION_16_17,
     MIGRATION_17_18,
     MIGRATION_18_19,
-    MIGRATION_19_20
+    MIGRATION_19_20,
+    MIGRATION_20_21
 )

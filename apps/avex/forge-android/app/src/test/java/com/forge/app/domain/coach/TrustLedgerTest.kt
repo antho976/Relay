@@ -99,4 +99,24 @@ class TrustLedgerTest {
         // The open proposal neither extends nor breaks the streak.
         assertEquals(3, trustFor("rep_shift", d).streak)
     }
+
+    @Test
+    fun foldedChangesStillCountAsAcceptances() {
+        // A regenerate baked these accepted changes into the baseline (status=folded). They must
+        // keep counting toward the streak, otherwise folding would silently reset earned trust
+        // and autopilot could never be earned by changes a refresh absorbed (seam fix).
+        val d = (1..3).map { decision("rep_shift", "folded", outcome = "pending") }
+        val t = trustFor("rep_shift", d)
+        assertEquals(3, t.streak)
+        assertTrue(t.earned)
+    }
+
+    @Test
+    fun foldedAndAppliedAcceptancesCompose() {
+        val d = (1..2).map { decision("swap", "folded") } +
+            (1..2).map { decision("swap", "applied", "ok") }
+        // 2 folded + 2 applied = a streak of 4 → an aggressive type earns.
+        assertEquals(4, trustFor("swap", d).streak)
+        assertTrue(trustFor("swap", d).earned)
+    }
 }

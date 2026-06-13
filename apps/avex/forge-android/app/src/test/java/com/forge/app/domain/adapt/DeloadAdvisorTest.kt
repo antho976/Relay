@@ -132,6 +132,20 @@ class DeloadAdvisorTest {
     }
 
     @Test
+    fun persistedDeloadMarker_mutesTheAdvisor_beforeAnyDeloadSessionExists() {
+        // A deload was just applied (the pref marker is set) but no deload-tagged session has been
+        // logged yet. The marker alone must suppress, or the very next pass re-proposes the deload
+        // it just ran — the recurring-deload churn (seam fix #18).
+        val snap = AdaptationSnapshot(
+            nowMs = now, program = emptyList(), sessions = baseSessions(),
+            exerciseHistory = mapOf("ua1" to brutalWindowBouts()),
+            moods = lowMoods(), cardio = soreCardio(),
+            prefs = PrefsSnap(lastDeloadAppliedMs = now - 2 * day)
+        )
+        assertNull(DeloadAdvisor.evaluate(snap))
+    }
+
+    @Test
     fun conflictingSignals_trainingGoingWell_calendarAloneNeverFires() {
         // Effort fine, mood good, no soreness — only time has passed. Score stays below
         // threshold: a date is not fatigue.

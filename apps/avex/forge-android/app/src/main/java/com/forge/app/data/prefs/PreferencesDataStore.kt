@@ -124,6 +124,10 @@ object PreferenceKeys {
     val PINNED_EXERCISES = stringSetPreferencesKey("pinned_exercises")
     /** Rotation cadence: "never" | "every_n". */
     val ROTATION_CADENCE = stringPreferencesKey("rotation_cadence")
+    /** Day-aware scheduling: "sequence" (legacy day-after-last) | "weekday" (fixed weekly plan). */
+    val SCHEDULE_MODE = stringPreferencesKey("schedule_mode")
+    /** Weekly schedule: comma-joined 7 slots, Mon..Sun, each a program day key or "" for rest. */
+    val SCHEDULE_WEEKLY = stringPreferencesKey("schedule_weekly")
     /** N for the "every_n" cadence. */
     val ROTATION_EVERY_N = intPreferencesKey("rotation_every_n")
     /** Unit for ROTATION_EVERY_N: "sessions" | "weeks". */
@@ -131,6 +135,11 @@ object PreferenceKeys {
     /** Progress toward the next rotation. */
     val ROTATION_COUNTER = intPreferencesKey("rotation_counter")
     val LAST_ROTATED_AT_MS = longPreferencesKey("last_rotated_at_ms")
+    /**
+     * When the current deload week was applied (epoch-ms). 0 = not in a deload week. Persists the
+     * deload so auto-rotation pauses and DeloadAdvisor suppression fires (auto-coach seam, finding 18).
+     */
+    val DELOAD_WEEK_START_MS = longPreferencesKey("deload_week_start_ms")
     /** ExerciseLibrary ids the user LIKES — weighted up in selection (recurs more). */
     val LIKED_EXERCISES = stringSetPreferencesKey("liked_exercises")
     /** ExerciseLibrary ids the user DISLIKES — excluded from generation + swaps. */

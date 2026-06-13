@@ -94,4 +94,57 @@ class CoachGenBiasTest {
         )
         assertEquals(CoachGenBias.from(rows), CoachGenBias.from(rows))
     }
+
+    // ─── Seam fix: folded = baked into the baseline, still feeds the bias ──────
+
+    @Test
+    fun foldedVolumeStillCountsTowardBias() {
+        // A regenerate baked this +1 into the baseline (status=folded); the bias must keep carrying
+        // it, otherwise the next regenerate would silently forget it (finding 0/1).
+        val bias = CoachGenBias.from(listOf(decision("volume_up", "db-bench-press", status = "folded")))
+        assertEquals(mapOf(MuscleGroup.CHEST to 1), bias.volumeBias)
+    }
+
+    @Test
+    fun biasIsAFixedPoint_whenAnAppliedRowBecomesFolded() {
+        // Folding an applied delta must NOT change what the bias produces — the property that makes
+        // repeated regeneration idempotent rather than compounding (finding 2/16).
+        val applied = CoachGenBias.from(listOf(decision("volume_up", "db-bench-press", status = "applied")))
+        val folded = CoachGenBias.from(listOf(decision("volume_up", "db-bench-press", status = "folded")))
+        assertEquals(applied.volumeBias, folded.volumeBias)
+    }
+
+    @Test
+    fun failedVolumeIsExcluded_evenWhileStillApplied() {
+        // A fatigue-failed +1 must drop out of the bias immediately (it's owed a revert), not keep
+        // re-folding into every future baseline including the deload (finding 4).
+        val bias = CoachGenBias.from(
+            listOf(decision("volume_up", "db-bench-press", status = "applied", outcome = "failed"))
+        )
+        assertTrue(bias.volumeBias.isEmpty())
+    }
+
+    @Test
+    fun repShiftSurvivesViaRepBias_latestNonFailedWins() {
+        val bias = CoachGenBias.from(
+            listOf(
+                decision("rep_shift", "db-bench-press", status = "applied", payload = "6-8"),
+                decision("rep_shift", "db-bench-press", status = "folded", payload = "5-7"),
+                decision("rep_shift", "db-row", status = "applied", outcome = "failed", payload = "12-15")
+            )
+        )
+        // Latest non-failed wins for bench; the failed db-row shift is excluded entirely.
+        assertEquals(mapOf("db-bench-press" to "5-7"), bias.repBias)
+    }
+
+    @Test
+    fun foldedSwapIsPreferred_evenBeforeTheWatcherCouldJudgeIt() {
+        // Folding stops the watcher, so a folded swap can never reach outcome=ok — it earns prefer
+        // by having been accepted and absorbed, otherwise the rotation would be lost (finding 3).
+        val bias = CoachGenBias.from(
+            listOf(decision("swap", "db-row", status = "folded", outcome = "pending", payload = "mwm-standing-bicep-curl"))
+        )
+        assertEquals(setOf("mwm-standing-bicep-curl"), bias.prefer)
+        assertTrue(bias.avoid.isEmpty())
+    }
 }

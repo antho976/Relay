@@ -18,6 +18,8 @@ import androidx.room.PrimaryKey
  * [repRangeOverride] replaces the plan's reps string (e.g. "6-8" instead of "8-10").
  * [setsOverride] overrides the planned set count (0 = use plan default).
  * [orderOverride] drives the display order within the day (lower = earlier).
+ * [source] tags who wrote the row ([OverlaySource]) — the coach-lock scan and per-change undo
+ *   need to tell a user's own edit from a coach-applied overlay (auto-coach seam audit findings 5/6).
  */
 @Entity(tableName = "program_customization", primaryKeys = ["day_key", "exercise_id"])
 data class ProgramCustomization(
@@ -28,5 +30,6 @@ data class ProgramCustomization(
     @ColumnInfo(name = "rep_range_override") val repRangeOverride: String? = null,
     @ColumnInfo(name = "sets_override") val setsOverride: Int = 0,
     @ColumnInfo(name = "order_override") val orderOverride: Int = 999,
-    @ColumnInfo(name = "removed") val removed: Boolean = false
+    @ColumnInfo(name = "removed") val removed: Boolean = false,
+    @ColumnInfo(name = "source") val source: String = OverlaySource.USER
 )

@@ -4,6 +4,7 @@ import com.forge.app.data.db.dao.DayNameOverrideDao
 import com.forge.app.data.db.dao.ExerciseCustomizationDao
 import com.forge.app.data.db.entities.DayNameOverride
 import com.forge.app.data.db.entities.ExerciseCustomization
+import com.forge.app.data.db.entities.OverlaySource
 import kotlinx.coroutines.flow.Flow
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -24,13 +25,19 @@ class CustomizationRepository @Inject constructor(
     suspend fun getSwap(exerciseId: String): ExerciseCustomization? =
         customizationDao.get(exerciseId)
 
-    suspend fun setSwap(exerciseId: String, swappedName: String, swappedUnit: String) {
+    suspend fun setSwap(
+        exerciseId: String,
+        swappedName: String,
+        swappedUnit: String,
+        source: String = OverlaySource.USER
+    ) {
         val existing = customizationDao.get(exerciseId)
         // copy() so untouched fields survive (restTimerOverrideSeconds AND pinnedNote — the old
-        // positional rebuild dropped the pinned note).
+        // positional rebuild dropped the pinned note). [source] tags the writer: a coach swap
+        // (COACH) is cleared on regenerate and never coach-locks its slot; a user swap (USER) locks.
         customizationDao.upsert(
-            existing?.copy(swappedName = swappedName, swappedUnit = swappedUnit)
-                ?: ExerciseCustomization(exerciseId, swappedName, swappedUnit)
+            existing?.copy(swappedName = swappedName, swappedUnit = swappedUnit, source = source)
+                ?: ExerciseCustomization(exerciseId, swappedName, swappedUnit, source = source)
         )
     }
 
