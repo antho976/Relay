@@ -202,6 +202,20 @@ val MIGRATION_20_21 = object : Migration(20, 21) {
     }
 }
 
+/**
+ * v21 → v22: swap re-attribution (#11). `logged_exercise.slot_id` records the program slot a swapped
+ * entry fills, so its `exercise_id` can become the swapped exercise's id (making every PR/stats query
+ * attribute to the real exercise performed) while the day screen still maps the entry to its slot;
+ * `exercise_customization.swapped_exercise_id` carries the swap's real id for persistent swaps. Both
+ * additive nullable columns — pre-existing rows read null (slot = exercise_id; no re-attribution).
+ */
+val MIGRATION_21_22 = object : Migration(21, 22) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `logged_exercise` ADD COLUMN `slot_id` TEXT")
+        db.execSQL("ALTER TABLE `exercise_customization` ADD COLUMN `swapped_exercise_id` TEXT")
+    }
+}
+
 /** All migrations, in order. Register every new one here. */
 val ALL_MIGRATIONS: Array<Migration> = arrayOf(
     MIGRATION_12_13,
@@ -212,5 +226,6 @@ val ALL_MIGRATIONS: Array<Migration> = arrayOf(
     MIGRATION_17_18,
     MIGRATION_18_19,
     MIGRATION_19_20,
-    MIGRATION_20_21
+    MIGRATION_20_21,
+    MIGRATION_21_22
 )

@@ -224,14 +224,17 @@ class WorkoutRepository @Inject constructor(
         exerciseId: String,
         orderIndex: Int,
         swappedName: String? = null,
-        swappedUnit: String? = null
+        swappedUnit: String? = null,
+        /** Program slot this entry fills when [exerciseId] is a swapped exercise (#11). Null = not swapped. */
+        slotId: String? = null
     ): Long = loggedExerciseDao.insert(
         LoggedExercise(
             sessionId = sessionId,
             exerciseId = exerciseId,
             orderIndex = orderIndex,
             swappedName = swappedName,
-            swappedUnit = swappedUnit
+            swappedUnit = swappedUnit,
+            slotId = slotId
         )
     )
 
@@ -253,10 +256,47 @@ class WorkoutRepository @Inject constructor(
         loggedExerciseDao.update(ex.copy(note = note))
     }
 
-    /** Apply a session swap to a logged exercise, preserving every other column (superset group, etc.). */
-    suspend fun setSessionSwap(loggedExerciseId: Long, swappedName: String?, swappedUnit: String?) {
+    /**
+     * Apply a session swap to a logged exercise, preserving every other column (superset group, etc.).
+     * Re-keys `exercise_id` to the swapped exercise so PRs/stats attribute to the real exercise (#11),
+     * stashing the original slot in `slot_id` so the day screen still maps it to its plan slot.
+     *
+     * Re-keying happens ONLY while the entry has no logged sets: once any set exists, `exercise_id`
+     * records what was actually performed and must never change — re-keying it would silently
+     * re-attribute those sets to the swapped exercise (false PRs on it, lost history on the original).
+     * After sets exist a swap is a name/unit relabel only.
+     */
+    suspend fun setSessionSwap(loggedExerciseId: Long, swappedName: String?, swappedUnit: String?, swapExerciseId: String) {
         val ex = loggedExerciseDao.get(loggedExerciseId) ?: return
-        loggedExerciseDao.update(ex.copy(swappedName = swappedName, swappedUnit = swappedUnit))
+        if (loggedSetDao.countForLoggedExercise(loggedExerciseId) > 0) {
+            loggedExerciseDao.update(ex.copy(swappedName = swappedName, swappedUnit = swappedUnit))
+            return
+        }
+        val slot = ex.effectiveSlotId
+        loggedExerciseDao.update(
+            ex.copy(
+                exerciseId = swapExerciseId,
+                // Keep the slot link only while this entry actually differs from its slot — swapping
+                // back to the original exercise clears it (slot == exercise again).
+                slotId = slot.takeIf { it != swapExerciseId },
+                swappedName = swappedName,
+                swappedUnit = swappedUnit
+            )
+        )
+    }
+
+    /**
+     * Revert a swapped entry back to its plan slot — but ONLY while it has no logged sets (#11). A swap
+     * eagerly creates a logged row, so clearing the swap must un-attribute that still-empty row back to
+     * the slot, or the card stays stuck on the swapped exercise. If sets exist, the entry records real
+     * performed work and is left untouched.
+     */
+    suspend fun revertSwapToSlotIfEmpty(loggedExerciseId: Long) {
+        val ex = loggedExerciseDao.get(loggedExerciseId) ?: return
+        if (loggedSetDao.countForLoggedExercise(loggedExerciseId) > 0) return
+        loggedExerciseDao.update(
+            ex.copy(exerciseId = ex.effectiveSlotId, slotId = null, swappedName = null, swappedUnit = null)
+        )
     }
 
     suspend fun lastLoggedExerciseBefore(exerciseId: String, excludeSessionId: Long): LoggedExercise? =

@@ -53,7 +53,9 @@ import com.forge.app.data.db.entities.SessionBreak
 import com.forge.app.data.db.entities.VacationPeriod
 
 /**
- * Schema is v21 (v21 added the `source` origin tag to program_customization +
+ * Schema is v22 (v22 added `logged_exercise.slot_id` + `exercise_customization.swapped_exercise_id`
+ * for swap re-attribution, so a swapped entry's `exercise_id` becomes the real exercise performed and
+ * its PRs/stats attribute correctly; v21 added the `source` origin tag to program_customization +
  * exercise_customization for the auto-coach lock/undo fix; v20 added session_segment +
  * session.active_seconds for per-sitting timing;
  * v19 added the coach_decision propose/apply lifecycle columns; v18 added
@@ -97,7 +99,7 @@ import com.forge.app.data.db.entities.VacationPeriod
         SuggestionOutcome::class,
         SessionSegment::class
     ],
-    version = 21,
+    version = 22,
     exportSchema = true
 )
 @TypeConverters(Converters::class)

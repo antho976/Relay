@@ -280,8 +280,11 @@ class CoachRepository @Inject constructor(
                 // blank name restores the unit-only override cleanly.
                 val prev = customizationRepo.getSwap(d.targetKey)
                     ?.takeIf { it.swappedName.isNotBlank() || it.swappedUnit.isNotBlank() }
-                customizationRepo.setSwap(d.targetKey, def.name, def.unit.code, source = OverlaySource.COACH)
-                coachDao.markApplied(id, clock.nowMs(), prev?.let { "${it.swappedName}|${it.swappedUnit}" } ?: NONE)
+                customizationRepo.setSwap(d.targetKey, def.name, def.unit.code, source = OverlaySource.COACH, swappedExerciseId = def.id)
+                // Record name|unit|swapId so undo restores the exact prior swap — including its
+                // re-attribution id (#11). Without the id, undo would strand the coach's id on the
+                // restored row and mis-attribute every PR/stat. Old 2-part rows parse with a null id.
+                coachDao.markApplied(id, clock.nowMs(), prev?.let { encodeSwapUndo(it.swappedName, it.swappedUnit, it.swappedExerciseId) } ?: NONE)
             }
             "rep_shift" -> {
                 val to = d.payload ?: return
@@ -326,6 +329,23 @@ class CoachRepository @Inject constructor(
      */
     suspend fun undoDecision(id: Long) = lifecycleMutex.withLock { undoDecisionLocked(id) }
 
+    /** Serialize a swap's prior state for undo as JSON — robust to '|' or any char in the name (#11). */
+    private fun encodeSwapUndo(name: String, unit: String, swapId: String?): String =
+        org.json.JSONObject().apply {
+            put("name", name); put("unit", unit); put("swapId", swapId ?: "")
+        }.toString()
+
+    /** Parse a swap undo record: JSON for new rows, legacy "name|unit[|swapId]" for old ones (#11). */
+    private fun decodeSwapUndo(raw: String): Triple<String, String, String?> {
+        if (raw.startsWith("{")) runCatching {
+            val o = org.json.JSONObject(raw)
+            return Triple(o.optString("name"), o.optString("unit"), o.optString("swapId").ifBlank { null })
+        }
+        return raw.split("|").let {
+            Triple(it[0], it.getOrElse(1) { "" }, it.getOrNull(2)?.ifBlank { null })
+        }
+    }
+
     private suspend fun undoDecisionLocked(id: Long) {
         val d = coachDao.decision(id) ?: return
         if (d.status != STATUS_APPLIED) return
@@ -338,8 +358,15 @@ class CoachRepository @Inject constructor(
                 if (customizationRepo.getSwap(d.targetKey)?.source == OverlaySource.COACH) {
                     val prev = d.undoData
                     if (prev == null || prev == NONE) customizationRepo.clearSwap(d.targetKey)
-                    else prev.split("|").let {
-                        customizationRepo.setSwap(d.targetKey, it[0], it.getOrElse(1) { "" }, source = OverlaySource.USER)
+                    else {
+                        // restoreSwap (not setSwap) force-sets the id, so a prior swap with no
+                        // re-attribution id clears the coach's instead of inheriting it (#11).
+                        val (name, unit, swapId) = decodeSwapUndo(prev)
+                        customizationRepo.restoreSwap(
+                            d.targetKey, name, unit,
+                            source = OverlaySource.USER,
+                            swappedExerciseId = swapId
+                        )
                     }
                 }
             }

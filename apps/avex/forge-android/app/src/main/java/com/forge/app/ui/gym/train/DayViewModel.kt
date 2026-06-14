@@ -76,6 +76,10 @@ class DayViewModel @Inject constructor(
     internal val _navigation = Channel<DayNavigationEffect>(Channel.BUFFERED)
     val navigationEffects = _navigation.receiveAsFlow()
 
+    /** One-shot transient messages surfaced as a snackbar (e.g. "can't swap after logging sets"). */
+    internal val _messages = Channel<String>(Channel.BUFFERED)
+    val messages = _messages.receiveAsFlow()
+
     internal var undoClearJob: Job? = null
 
     init {

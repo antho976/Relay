@@ -53,7 +53,18 @@ class ForgeApp : Application(), Configuration.Provider {
             val swapped = runCatching {
                 val live = getDatabasePath("forge.db")
                 live.parentFile?.mkdirs()
-                pending.copyTo(live, overwrite = true)
+                // Stage into a temp in the SAME directory, then atomically rename into place. A
+                // direct copyTo(live, overwrite=true) truncates the live file and streams — if it
+                // dies mid-copy (disk full, process killed) the live DB is left partial and corrupt,
+                // with the original already gone. Rename on one filesystem is atomic: a failed copy
+                // leaves the intact original untouched, and the next boot retries from `pending`.
+                val staged = File(live.parentFile, "forge.db.restoring")
+                if (staged.exists()) staged.delete()
+                pending.copyTo(staged, overwrite = true)
+                if (!staged.renameTo(live)) {
+                    staged.delete()
+                    error("Could not move restored database into place")
+                }
                 // The restored file is authoritative; drop stale WAL/-shm so they can't override it.
                 // delete() returns false instead of throwing, so a sidecar that survives the delete
                 // would let SQLite replay stale frames over the restored DB — silent corruption.

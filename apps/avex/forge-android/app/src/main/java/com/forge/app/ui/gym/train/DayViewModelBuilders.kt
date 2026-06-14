@@ -34,18 +34,33 @@ internal suspend fun DayViewModel.buildExerciseUi(
     bonusSets: Int = 0
 ): ExerciseUiState = coroutineScope {
     val sessionId = _state.value.sessionId ?: error("sessionId required")
-    // One card needs six independent DB reads — fan them out so a build costs ~2 sequential
-    // round-trips instead of ~7 (this runs per exercise on session open and on every set log).
+    // The swap id drives attribution: every history/PR/stats read below keys on the EXERCISE ACTUALLY
+    // PERFORMED (#11) — the swapped exercise when this slot is swapped, else the slot id. UI matching
+    // still keys on plan.id (the slot) — see DayViewModelRefresh.
+    //
+    // Reads that DON'T need the swap id (sets, goal) start immediately and overlap the swap lookup;
+    // only effectiveExerciseId and the reads that use it wait on getSwap. (Runs per exercise on
+    // session open and on every set log, so the overlap matters.)
     val setsDeferred = async { logged?.let { workoutRepo.setsFor(it.id) }.orEmpty() }
+    // Goals stay slot-keyed (the goal-setter opens per slot), so they survive a swap.
+    val goalDeferred = async { goalRepo.get(plan.id)?.targetWeightLb }
+    val persistent = customizationRepo.getSwap(plan.id)
+    // Guard on a non-blank swap name: a cleared swap can leave a blank-name row behind (it shares the
+    // row with a rest-timer override / pinned note), and its swappedExerciseId must NOT re-attribute
+    // stats once the swap is gone (#11).
+    val effectiveExerciseId = logged?.exerciseId
+        ?: persistent?.takeIf { it.swappedName.isNotBlank() }?.swappedExerciseId
+        ?: plan.id
+
+    // The remaining reads key on effectiveExerciseId; fan them out concurrently.
     val prevDeferred = async {
-        val prevLE = workoutRepo.lastLoggedExerciseBefore(plan.id, sessionId)
+        val prevLE = workoutRepo.lastLoggedExerciseBefore(effectiveExerciseId, sessionId)
         prevLE to prevLE?.let { workoutRepo.setsFor(it.id) }.orEmpty()
     }
-    val persistentDeferred = async { customizationRepo.getSwap(plan.id) }
     // Bounded stand-ins for "every set ever logged" (which grew without limit): the per-rep
     // max-weight frontier answers PR questions identically, and the PB is a single LIMIT 1 row.
     val frontierDeferred = async {
-        workoutRepo.repMaxFrontierForExercise(plan.id, logged?.id).map { row ->
+        workoutRepo.repMaxFrontierForExercise(effectiveExerciseId, logged?.id).map { row ->
             // Wrapped as synthetic sets so PrDetector / the SetInputRow PR hint consume the
             // frontier through the same code path as real history (only weightLb/reps are read).
             LoggedSet(
@@ -54,19 +69,23 @@ internal suspend fun DayViewModel.buildExerciseUi(
             )
         }
     }
-    val hasHistoryDeferred = async { workoutRepo.hasHistoryForExercise(plan.id, logged?.id) }
-    val pbDeferred = async { workoutRepo.personalBestSet(plan.id) }
-    val goalDeferred = async { goalRepo.get(plan.id)?.targetWeightLb }
-    val aggregatesDeferred = async { workoutRepo.sessionAggregatesForExercise(plan.id, limit = 8) }
+    val hasHistoryDeferred = async { workoutRepo.hasHistoryForExercise(effectiveExerciseId, logged?.id) }
+    val pbDeferred = async { workoutRepo.personalBestSet(effectiveExerciseId) }
+    val aggregatesDeferred = async { workoutRepo.sessionAggregatesForExercise(effectiveExerciseId, limit = 8) }
 
     val sets = setsDeferred.await()
     val (prevLE, prevSets) = prevDeferred.await()
     val prevFirstSet = prevSets.firstOrNull()
     val preview = prevFirstSet?.let { "Last: ${it.weightText} × ${it.reps}" }
-    val persistent = persistentDeferred.await()
 
     val priorFrontier = frontierDeferred.await()
     val (prSetIds, wasPr) = computePrFlags(priorFrontier, hasHistoryDeferred.await(), sets)
+    // Only the single best PR set carries the gold ★ + gold text (heaviest → most reps → latest),
+    // so a string of ascending PRs doesn't paint every row gold (#3/#4/#7). prSetIds still drives
+    // the PR count + confetti, so each new PR still celebrates.
+    val bestPrSetId = sets.filter { it.id in prSetIds }
+        .maxWithOrNull(compareBy({ it.weightLb ?: Double.NEGATIVE_INFINITY }, { it.reps }, { it.setIndex }))
+        ?.id
 
     if (logged != null && logged.wasPr != wasPr) {
         workoutRepo.updateExercise(logged.copy(wasPr = wasPr))
@@ -74,9 +93,9 @@ internal suspend fun DayViewModel.buildExerciseUi(
 
     // Double-progression suggestion (#12/#13) — pure rules in the adaptation engine; the
     // VM only assembles inputs. inputText is unit-correct (plate count on PLATES exercises).
-    val stepMode = stepCalibration.modeFor(plan.id, plan.unit.code)
+    val stepMode = stepCalibration.modeFor(effectiveExerciseId, plan.unit.code)
     val suggestion = ProgressionAdvisor.suggestNextLoad(
-        exerciseId = plan.id,
+        exerciseId = effectiveExerciseId,
         exerciseName = plan.name,
         prevSets = prevSets,
         prevEffort = prevLE?.difficulty,
@@ -147,6 +166,7 @@ internal suspend fun DayViewModel.buildExerciseUi(
 
     ExerciseUiState(
         plan = plan,
+        effectiveExerciseId = effectiveExerciseId,
         loggedExerciseId = logged?.id,
         loggedSets = sets,
         lastSessionPreviewText = preview,
@@ -157,6 +177,7 @@ internal suspend fun DayViewModel.buildExerciseUi(
         isExpanded = expandedOverride ?: expandedDefault,
         wasPr = wasPr,
         prSetIds = prSetIds,
+        bestPrSetId = bestPrSetId,
         sessionSwapName = logged?.swappedName,
         sessionSwapUnit = logged?.swappedUnit,
         persistentSwapName = persistent?.swappedName,

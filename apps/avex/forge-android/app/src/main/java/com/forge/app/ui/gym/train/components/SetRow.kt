@@ -47,6 +47,7 @@ import androidx.compose.ui.unit.sp
 import com.forge.app.data.db.entities.LoggedSet
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.domain.units.formatWeightDelta
+import com.forge.app.domain.units.unitLabel
 import com.forge.app.domain.units.weightInputValue
 import com.forge.app.ui.theme.ForgeLastGreen
 import com.forge.app.ui.theme.ForgeMotion
@@ -58,8 +59,12 @@ private val REPS_COL_W = 48.dp
 private val RPE_COL_W = 44.dp
 private val DELTA_COL_W = 72.dp
 
+/** Weight deltas at or below this (lb) are treated as "matched" — absorbs kg/plate rounding noise so a
+ *  sub-pound float difference doesn't render a phantom signed delta + trend arrow (#11). */
+private const val WEIGHT_DELTA_EPS_LB = 0.5
+
 /** Plate count display: whole counts drop the decimal ("3"), halves keep one ("2.5"). */
-private fun formatPlateCount(plates: Double): String =
+internal fun formatPlateCount(plates: Double): String =
     if (plates % 1.0 == 0.0) plates.toInt().toString() else "%.1f".format(plates)
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -70,6 +75,9 @@ fun SetRow(
     isPr: Boolean,
     isPlates: Boolean = false,
     priorSet: LoggedSet? = null,
+    /** Last session's FINAL set — the fallback baseline for the LAST delta when you did more sets
+     *  this session than last time (so the column is never blank on a bonus set). */
+    priorFallbackSet: LoggedSet? = null,
     onDelete: () -> Unit,
     onEdit: (weightText: String, reps: Int) -> Unit,
     onLongPress: (() -> Unit)? = null,
@@ -109,23 +117,36 @@ fun SetRow(
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val outline = MaterialTheme.colorScheme.outline
 
-    // Weight delta vs the prior set, shown in the user's display unit (not hard-coded lb) and not
-    // truncated to a whole number. Only meaningful when BOTH sets carry a weight — a bodyweight set
-    // has null weightLb, which must not be treated as 0 lb; then we fall back to the rep delta.
+    // LAST delta vs the prior set, in the exercise's own unit (plate count on PLATES, display unit
+    // otherwise) and ALWAYS signed — "+0" when you match, negative when lower (#2/#6). Compares to
+    // last session's set at this position; if you did more sets than last time it falls back to last
+    // session's final set so the column is never blank. Bodyweight (null weightLb) uses the rep delta.
+    val baseline = priorSet ?: priorFallbackSet
     val curLb = set.weightLb
-    val priorLb = priorSet?.weightLb
-    val wDiff = if (curLb != null && priorLb != null) curLb - priorLb else null
-    val rDiff = if (priorSet != null) set.reps - priorSet.reps else 0
-    val deltaLabel = if (priorSet != null) when {
-        wDiff != null && wDiff >= 0.5 -> "+${formatWeightDelta(wDiff, useKg)}"
-        wDiff != null && wDiff <= -0.5 -> formatWeightDelta(wDiff, useKg)
-        rDiff > 0 -> "+$rDiff rep"
-        rDiff < 0 -> "$rDiff rep"
-        else -> null
-    } else null
-    val deltaPositive = (wDiff != null && wDiff >= 0.5) ||
-        ((wDiff == null || kotlin.math.abs(wDiff) < 0.5) && rDiff > 0)
-    val deltaColor = if (deltaPositive) ForgeLastGreen else muted.copy(alpha = 0.7f)
+    val baseLb = baseline?.weightLb
+    val wDiff = if (curLb != null && baseLb != null) curLb - baseLb else null
+    val rDiff = if (baseline != null) set.reps - baseline.reps else 0
+    val deltaPositive = (wDiff != null && wDiff > WEIGHT_DELTA_EPS_LB) ||
+        ((wDiff == null || kotlin.math.abs(wDiff) <= WEIGHT_DELTA_EPS_LB) && rDiff > 0)
+    val deltaNegative = (wDiff != null && wDiff < -WEIGHT_DELTA_EPS_LB) ||
+        ((wDiff == null || kotlin.math.abs(wDiff) <= WEIGHT_DELTA_EPS_LB) && rDiff < 0)
+    val deltaLabel: String? = when {
+        baseline == null -> null
+        wDiff != null && kotlin.math.abs(wDiff) > WEIGHT_DELTA_EPS_LB ->
+            if (isPlates) {
+                val pd = wDiff / plateLb
+                (if (pd >= 0) "+" else "") + formatPlateCount(pd) + " pl"
+            } else (if (wDiff >= 0) "+" else "") + formatWeightDelta(wDiff, useKg)
+        rDiff != 0 -> (if (rDiff > 0) "+" else "") + "$rDiff rep"
+        // Matched exactly — show a deliberate zero rather than nothing (#6).
+        wDiff != null -> if (isPlates) "+0 pl" else "+0 ${unitLabel(useKg)}"
+        else -> "+0 rep"
+    }
+    val deltaColor = when {
+        deltaPositive -> ForgeLastGreen
+        deltaNegative -> muted.copy(alpha = 0.7f)
+        else -> muted.copy(alpha = 0.5f)
+    }
 
     if (isEditing) {
         val canConfirm = editWeight.isNotBlank() && editReps.toIntOrNull()?.let { it > 0 } == true
@@ -192,7 +213,8 @@ fun SetRow(
             Box(modifier = Modifier.width(SET_COL_W), contentAlignment = Alignment.TopStart) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text("%02d".format(setIndex), style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
-                    if (setIndex == 1) {
+                    // Gold ★ marks the actual record-setting set (the session's best PR), not a fixed row.
+                    if (isPr) {
                         Text("★", style = MaterialTheme.typography.labelSmall, color = ForgePrGold, fontSize = 9.sp)
                     }
                 }
@@ -207,7 +229,10 @@ fun SetRow(
                     fontWeight = if (isPr) FontWeight.SemiBold else FontWeight.Normal
                 )
                 priorSet?.let { prior ->
-                    val priorDisplay = prior.weightLb?.let { formatWeight(it, useKg) } ?: prior.weightText
+                    // Plate exercises read as a plate count, not the lb equivalent (#9).
+                    val priorDisplay = prior.weightLb?.let { lb ->
+                        if (isPlates) "${formatPlateCount(lb / plateLb)} pl" else formatWeight(lb, useKg)
+                    } ?: prior.weightText
                     Text(
                         "$priorDisplay × ${prior.reps}",
                         style = MaterialTheme.typography.labelSmall,
@@ -247,12 +272,14 @@ fun SetRow(
             Box(modifier = Modifier.width(DELTA_COL_W), contentAlignment = Alignment.CenterEnd) {
                 deltaLabel?.let {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Icon(
-                            if (deltaPositive) Icons.Filled.TrendingUp else Icons.Filled.TrendingDown,
-                            contentDescription = null,
-                            tint = deltaColor,
-                            modifier = Modifier.size(13.dp)
-                        )
+                        if (deltaPositive || deltaNegative) {
+                            Icon(
+                                if (deltaPositive) Icons.Filled.TrendingUp else Icons.Filled.TrendingDown,
+                                contentDescription = null,
+                                tint = deltaColor,
+                                modifier = Modifier.size(13.dp)
+                            )
+                        }
                         Text(it, style = MaterialTheme.typography.labelSmall, color = deltaColor, fontSize = 9.sp)
                     }
                 }

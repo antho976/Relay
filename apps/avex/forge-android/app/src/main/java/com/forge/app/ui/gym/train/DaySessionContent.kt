@@ -254,7 +254,6 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
                                 onToggleSetDifficultyTag = { setId, tag -> onEvent(DayUiEvent.ToggleSetDifficultyTag(setId, tag)) },
                                 onSetRpe = { setId, rpe -> onEvent(DayUiEvent.SetRpe(setId, rpe)) },
                                 onAddSet = { onEvent(DayUiEvent.AddBonusSet(id)) },
-                                onSwitchUnit = { onEvent(DayUiEvent.SetUseKg(!useKg)) },
                                 onOpenChart = { chartForExerciseId = id }
                             )
                         }

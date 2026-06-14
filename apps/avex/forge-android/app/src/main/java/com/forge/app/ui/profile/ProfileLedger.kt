@@ -1,5 +1,7 @@
 package com.forge.app.ui.profile
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -18,6 +20,11 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -27,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.domain.rank.StandingMetric
 import com.forge.app.data.repo.SignatureLift
+import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.theme.emphasized
 
 /** Shared section scaffold: hairline divider + small-caps label (+ optional accent action) + body. */
@@ -87,7 +95,10 @@ internal fun StandingSection(
 ) {
     if (standings.isEmpty()) return
     ProfileBlock("STANDING · VS ATHLETES, 90 DAYS", muted, accent, outline) {
-        standings.forEach { m ->
+        // Each bar fills from 0 on first show, staggered by row for a cascade (reduced motion → instant).
+        var play by remember { mutableStateOf(false) }
+        LaunchedEffect(Unit) { play = true }
+        standings.forEachIndexed { i, m ->
             Row(
                 Modifier.fillMaxWidth().padding(vertical = 7.dp),
                 verticalAlignment = Alignment.CenterVertically,
@@ -97,8 +108,17 @@ internal fun StandingSection(
                     modifier = Modifier.width(96.dp))
                 // Fill = how far above the bottom of the pack you are (lower topPercent = fuller).
                 val frac = ((100 - m.topPercent) / 100f).coerceIn(0f, 1f)
+                val w by animateFloatAsState(
+                    targetValue = if (play) frac else 0f,
+                    animationSpec = tween(
+                        durationMillis = ForgeMotion.scaledDuration(ForgeMotion.DurationEmphasized),
+                        delayMillis = ForgeMotion.scaledDuration(i * 90),
+                        easing = ForgeMotion.Standard
+                    ),
+                    label = "standing-bar"
+                )
                 Box(Modifier.weight(1f).height(2.dp).clip(RoundedCornerShape(50)).background(outline.copy(alpha = 0.2f))) {
-                    Box(Modifier.fillMaxWidth(frac).fillMaxHeight().clip(RoundedCornerShape(50)).background(accent.copy(alpha = 0.8f)))
+                    Box(Modifier.fillMaxWidth(w).fillMaxHeight().clip(RoundedCornerShape(50)).background(accent.copy(alpha = 0.8f)))
                 }
                 Text("TOP ${m.topPercent}%", style = MaterialTheme.typography.labelSmall, color = onBg, fontSize = 10.sp,
                     modifier = Modifier.width(58.dp))

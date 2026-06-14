@@ -179,15 +179,15 @@ fun OverviewScreen(
                     }
                     Spacer(Modifier.width(8.dp))
                     Icon(
-                        Icons.Default.AccountCircle, contentDescription = "You",
-                        tint = muted.copy(alpha = 0.7f),
-                        modifier = Modifier.size(18.dp).clickable { onOpenProfile() }
-                    )
-                    Spacer(Modifier.width(10.dp))
-                    Icon(
                         Icons.Default.Settings, contentDescription = "Settings",
                         tint = muted.copy(alpha = 0.7f),
                         modifier = Modifier.size(16.dp).clickable { onGoToSettings() }
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Icon(
+                        Icons.Default.AccountCircle, contentDescription = "You",
+                        tint = muted.copy(alpha = 0.7f),
+                        modifier = Modifier.size(18.dp).clickable { onOpenProfile() }
                     )
                 }
             }

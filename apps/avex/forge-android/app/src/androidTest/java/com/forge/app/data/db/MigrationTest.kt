@@ -140,6 +140,32 @@ class MigrationTest {
     }
 
     @Test
+    fun migrate21To22_addsSwapReattributionColumns() {
+        helper.createDatabase(dbName, 21).close()
+        val db = helper.runMigrationsAndValidate(dbName, 22, true, MIGRATION_21_22)
+
+        db.query("PRAGMA table_info(`logged_exercise`)").use { cursor ->
+            val cols = mutableSetOf<String>()
+            while (cursor.moveToNext()) cols += cursor.getString(cursor.getColumnIndexOrThrow("name"))
+            assertEquals("logged_exercise.slot_id should exist after 21→22", true, "slot_id" in cols)
+        }
+        db.query("PRAGMA table_info(`exercise_customization`)").use { cursor ->
+            val cols = mutableSetOf<String>()
+            while (cursor.moveToNext()) cols += cursor.getString(cursor.getColumnIndexOrThrow("name"))
+            assertEquals("exercise_customization.swapped_exercise_id should exist after 21→22", true, "swapped_exercise_id" in cols)
+        }
+    }
+
+    @Test
+    fun migrateFullChain12To22_runsEveryStepInOrder() {
+        // The pairwise tests above each validate one hop. This runs the WHOLE locked chain in a
+        // single pass — a real v12 install upgrading straight to today's schema — so a gap or an
+        // out-of-order/incompatible step between any two versions is caught, not just each hop alone.
+        helper.createDatabase(dbName, 12).close()
+        helper.runMigrationsAndValidate(dbName, 22, true, *ALL_MIGRATIONS)
+    }
+
+    @Test
     fun migrate16To17_addsCoachTables() {
         helper.createDatabase(dbName, 16).close()
         val db = helper.runMigrationsAndValidate(dbName, 17, true, MIGRATION_16_17)

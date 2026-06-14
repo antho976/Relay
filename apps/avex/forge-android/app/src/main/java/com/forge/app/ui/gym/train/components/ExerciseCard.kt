@@ -80,7 +80,6 @@ fun ExerciseCard(
     onToggleSetDifficultyTag: (setId: Long, currentTag: String?) -> Unit = { _, _ -> },
     onSetRpe: (setId: Long, rpe: Double?) -> Unit = { _, _ -> },
     onAddSet: () -> Unit = {},
-    onSwitchUnit: () -> Unit = {},
     onOpenChart: () -> Unit = {},
     advanceLabel: String = "",
     onAdvance: () -> Unit = {},
@@ -250,9 +249,10 @@ fun ExerciseCard(
                         SetRow(
                             set = set,
                             setIndex = i + 1,
-                            isPr = set.id in state.prSetIds,
+                            isPr = set.id == state.bestPrSetId,
                             isPlates = isPlates,
                             priorSet = state.priorSets.getOrNull(i),
+                            priorFallbackSet = state.priorSets.lastOrNull(),
                             onDelete = { onDeleteSet(set.id) },
                             onEdit = { w, r -> onEditSet(set.id, w, r) },
                             onLongPress = { onLogSameAsLast(set.id) },
@@ -292,8 +292,7 @@ fun ExerciseCard(
                         repsPlaceholder = recommendedRepsOf(state.plan.reps),
                         onAdvance = onAdvance,
                         onSubmit = onLogSet,
-                        onAddSet = onAddSet,
-                        onSwitchUnit = onSwitchUnit
+                        onAddSet = onAddSet
                     )
                 }
 

@@ -37,8 +37,19 @@ import javax.inject.Singleton
 /** A single signature lift (heaviest set ever). */
 data class SignatureLift(val name: String, val weightLb: Double)
 
-/** One trophy in the profile's trophy-case grid. [progress] is 0f..1f (1f when unlocked). */
-data class TrophyCell(val icon: TrophyIcon, val unlocked: Boolean, val progress: Float)
+/**
+ * One trophy in the profile's trophy-case grid. [progress] is 0f..1f (1f when unlocked).
+ * [name] / [description] / [progressLabel] feed the tap-to-inspect popup; [progressLabel] is the
+ * "3 / 10 days"-style hint for locked cells (null when unlocked).
+ */
+data class TrophyCell(
+    val icon: TrophyIcon,
+    val unlocked: Boolean,
+    val progress: Float,
+    val name: String,
+    val description: String,
+    val progressLabel: String?
+)
 
 /** One "On the record" row (a month- or year-in-review summary). */
 data class RecapRowData(val title: String, val subtitle: String, val isYear: Boolean)
@@ -200,14 +211,19 @@ class ProfileRepository @Inject constructor(
             .filter { it.id in unlockedIds }
             .sortedWith(compareByDescending<Trophy> { it.tier.points }.thenBy { it.name })
             .take(HARDEST_DONE)
-            .map { TrophyCell(it.icon, unlocked = true, progress = 1f) }
+            .map { TrophyCell(it.icon, unlocked = true, progress = 1f, name = it.name, description = it.description, progressLabel = null) }
 
         val locked = Trophies.all
             .filter { it.id !in unlockedIds }
             .map { t -> t to (snapshot?.let { TrophyEvaluator.progressFraction(t.unlock, it) }?.coerceIn(0f, 1f) ?: 0f) }
             .sortedWith(compareByDescending<Pair<Trophy, Float>> { it.second }.thenBy { it.first.name })
             .take(TROPHY_HIGHLIGHTS - hardestDone.size)
-            .map { (t, p) -> TrophyCell(t.icon, unlocked = false, progress = p) }
+            .map { (t, p) ->
+                TrophyCell(
+                    t.icon, unlocked = false, progress = p, name = t.name, description = t.description,
+                    progressLabel = snapshot?.let { TrophyEvaluator.progressHint(t.unlock, it) }
+                )
+            }
 
         return hardestDone + locked
     }

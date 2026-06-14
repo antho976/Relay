@@ -26,6 +26,10 @@ interface LoggedSetDao {
     @Query("SELECT * FROM logged_set WHERE logged_exercise_id = :loggedExerciseId ORDER BY set_index")
     suspend fun forLoggedExercise(loggedExerciseId: Long): List<LoggedSet>
 
+    /** Number of sets logged under one exercise entry — guards swap re-attribution (#11). */
+    @Query("SELECT COUNT(*) FROM logged_set WHERE logged_exercise_id = :loggedExerciseId")
+    suspend fun countForLoggedExercise(loggedExerciseId: Long): Int
+
     /**
      * Per-rep-count max weight across every prior non-assisted weighted set of an exercise —
      * the Pareto frontier PR detection compares against. [com.forge.app.domain.pr.PrDetector.isPr]

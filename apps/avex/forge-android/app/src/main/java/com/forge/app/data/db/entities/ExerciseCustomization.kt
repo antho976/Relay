@@ -26,5 +26,11 @@ data class ExerciseCustomization(
      * the learning) and never coach-locks its own slot; a user swap survives and locks (auto-coach
      * seam audit, finding 3 — coach swaps were previously immortal and unreconciled).
      */
-    @ColumnInfo(name = "source") val source: String = OverlaySource.USER
+    @ColumnInfo(name = "source") val source: String = OverlaySource.USER,
+    /**
+     * The swapped exercise's library id (#11). Lets a not-yet-logged slot with a persistent swap log
+     * its first set under the real exercise so PRs/stats attribute correctly. Null = legacy/unit-only
+     * row (no re-attribution; behaves as before). Placed last so positional constructors are unaffected.
+     */
+    @ColumnInfo(name = "swapped_exercise_id") val swappedExerciseId: String? = null
 )

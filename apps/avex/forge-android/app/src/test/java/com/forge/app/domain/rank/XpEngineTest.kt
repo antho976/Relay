@@ -39,10 +39,10 @@ class XpEngineTest {
     }
 
     @Test fun `established lifter lands in a healthy mid-ladder rank`() {
-        // ~85 sessions / ~400k lb / ~20 active weeks → expect Tempered (not capped, not low).
+        // ~85 sessions / ~400k lb / ~20 active weeks → expect Pulsar (not capped, not low).
         val b = XpEngine.compute(XpSnapshot(86, 1900, 23, 412_000.0, 20, 300))
         val rank = RankLadder.rankFor(b.total)
-        assertEquals(RankTier.TEMPERED, rank.tier)
+        assertEquals(RankTier.PULSAR, rank.tier)
     }
 
     @Test fun `deterministic`() {

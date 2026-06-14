@@ -441,8 +441,9 @@ Untracked sessions (#110) are excluded from every signal at snapshot build.
 ## Auto-Coach — "the app does all the thinking" (✅ all 5 phases shipped 2026-06-10)
 
 > Roadmap + the 13 hardening decisions live in `.claude/auto-coach-plan.md`. DB v16→19.
-> **Status:** built + JVM-tested (269 app unit tests, ~50 of them coach); **pending on-device
-> review + `connectedAndroidTest` for migrations 16→17→18→19.** Everything data-driven starts
+> **Status:** built + JVM-tested (269 app unit tests, ~50 of them coach); **`connectedAndroidTest`
+> for migrations 16→17→18→19 PASSES on-device (2026-06-14, Samsung SM-G998U / Android 15 — run as
+> part of the full 12→22 chain); functional on-device review still pending.** Everything data-driven starts
 > empty by design — shadow validation, calibration samples, and trust streaks all need real
 > training weeks, so for the first month the honest output is mostly "the plan is working, no
 > changes" (which is correctness, not breakage).
@@ -474,8 +475,8 @@ Untracked sessions (#110) are excluded from every signal at snapshot build.
   (existing |delta| < 0.5 guard).
 - Tests: 5 ProgressionAdvisor ceiling cases + a statistical generator stack-bias test.
 
-**Phase 1 — Week Brief + shadow-mode planner, shipped (2026-06-10; JVM-tested, device check +
-migration test on emulator pending):**
+**Phase 1 — Week Brief + shadow-mode planner, shipped (2026-06-10; JVM-tested, migration test
+PASSES on-device 2026-06-14, functional device check still pending):**
 - **Pure planner** `domain/coach/AutoCoachPlanner` — the Weekly Coach Pass, shadow-only:
   deload supersedes all (single decision); else plateau-ladder items mapped to shadow decisions
   (swap > rep-shift > weight-nudge), capped at 1/week for beginners (2 otherwise); explained
@@ -484,8 +485,8 @@ migration test on emulator pending):**
 - **Pure assembler** `domain/coach/WeeklyReview` — last week vs prior (sessions/target, volume
   ±%, computed PRs via PrDetector's beats-all-history rule, tracked/stalled lifts, fatigue band
   mirroring the Stats pulse) + a focus line keyed to the week's shape.
-- **DB v16→17** (`MIGRATION_16_17`, schema 17.json exported, MigrationTest case added —
-  run on emulator pending): `coach_pass` (PK = ISO week id → idempotent triggers; status
+- **DB v16→17** (`MIGRATION_16_17`, schema 17.json exported, MigrationTest case —
+  PASSES on-device 2026-06-14): `coach_pass` (PK = ISO week id → idempotent triggers; status
   shadow/hold/error — ERROR ≠ HOLD everywhere) + `coach_decision` (the pass's shadow items).
 - **`CoachRepository`** — `ensureWeeklyPass()` (week-id no-op if exists; vacation → recorded
   HOLD via VacationCalendar; any exception → recorded ERROR pass, fail-loud) + `brief()`.
@@ -502,8 +503,8 @@ migration test on emulator pending):**
 - Tests: 7 planner + 6 review JVM tests (engine-style: cold start, happy path, conflict,
   determinism).
 
-**Phase 2 — Outcome calibration, shipped (2026-06-10; JVM-tested, device + migration test on
-emulator pending):**
+**Phase 2 — Outcome calibration, shipped (2026-06-10; JVM-tested, migration test PASSES
+on-device 2026-06-14, functional device check still pending):**
 - **Capture** (the time-sensitive half): new `suggestion_outcome` table (DB v17→18,
   `MIGRATION_17_18`, schema 18.json, MigrationTest case) — one row per exercise per session,
   written on the FIRST set logged while a suggestion chip was showing: suggested lb vs taken lb,
@@ -522,7 +523,7 @@ emulator pending):**
 - Tests: 9 calibrator + 4 advisor JVM tests.
 
 **Phase 3 — Propose mode + apply path + outcome watcher, shipped (2026-06-10; JVM-tested,
-device + emulator migration tests pending):**
+migration tests PASS on-device 2026-06-14, functional device check still pending):**
 - **DB v18→19**: `coach_decision` gains the lifecycle — `day_key` + `payload` (apply args),
   `applied_at` + `undo_data` (per-change delta undo, hardening 6), `outcome`
   (pending/ok/failed — the watcher's verdict, hardening 5). Statuses now

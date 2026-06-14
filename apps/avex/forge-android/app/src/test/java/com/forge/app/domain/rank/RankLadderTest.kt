@@ -30,30 +30,30 @@ class RankLadderTest {
     }
 
     @Test fun `roman numerals advance within a tier`() {
-        // Iron spans 1500..6000 over 5 sub-ranks (900 each): 1500=I, 2400=II, 3300=III, 4200=IV, 5100=V.
-        assertEquals("Iron I", RankLadder.rankFor(1_500).displayName)
-        assertEquals("Iron II", RankLadder.rankFor(2_400).displayName)
-        assertEquals("Iron IV", RankLadder.rankFor(4_200).displayName)
-        assertEquals("Iron V", RankLadder.rankFor(5_100).displayName)
-        assertEquals("Steel I", RankLadder.rankFor(6_000).displayName)
+        // Flare spans 1500..6000 over 5 sub-ranks (900 each): 1500=I, 2400=II, 3300=III, 4200=IV, 5100=V.
+        assertEquals("Flare I", RankLadder.rankFor(1_500).displayName)
+        assertEquals("Flare II", RankLadder.rankFor(2_400).displayName)
+        assertEquals("Flare IV", RankLadder.rankFor(4_200).displayName)
+        assertEquals("Flare V", RankLadder.rankFor(5_100).displayName)
+        assertEquals("Nova I", RankLadder.rankFor(6_000).displayName)
     }
 
     @Test fun `xpToNextTier counts down to the next tier floor`() {
-        val r = RankLadder.rankFor(5_100) // Iron V, Steel at 6000
-        assertEquals("Steel", r.nextTierName)
+        val r = RankLadder.rankFor(5_100) // Flare V, Nova at 6000
+        assertEquals("Nova", r.nextTierName)
         assertEquals(900L, r.xpToNextTier)
     }
 
     @Test fun `progress within rank is bounded and monotonic`() {
-        val a = RankLadder.rankFor(1_500) // Iron I floor
-        val b = RankLadder.rankFor(1_950) // halfway to Iron II (1500..2400)
+        val a = RankLadder.rankFor(1_500) // Flare I floor
+        val b = RankLadder.rankFor(1_950) // halfway to Flare II (1500..2400)
         assertEquals(0f, a.progressInRank, 0.001f)
         assertTrue(b.progressInRank in 0.4f..0.6f)
     }
 
-    @Test fun `huge xp caps at Damascus V and reports max`() {
+    @Test fun `huge xp caps at Supernova V and reports max`() {
         val r = RankLadder.rankFor(10_000_000)
-        assertEquals(RankTier.DAMASCUS, r.tier)
+        assertEquals(RankTier.SUPERNOVA, r.tier)
         assertEquals(5, r.subRank)
         assertEquals(RankLadder.maxGlobalIndex, r.globalIndex)
         assertTrue(r.isMax)

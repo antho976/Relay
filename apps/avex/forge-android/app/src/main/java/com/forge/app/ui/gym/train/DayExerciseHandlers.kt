@@ -2,6 +2,9 @@ package com.forge.app.ui.gym.train
 
 import androidx.lifecycle.viewModelScope
 import com.forge.app.domain.parser.WeightParser
+import com.forge.app.domain.units.formatWeight
+import com.forge.app.program.ExerciseUnit
+import com.forge.app.ui.gym.train.components.formatPlateCount
 import com.forge.app.ui.gym.train.state.DayUiEvent
 import com.forge.app.ui.gym.train.state.WeightJumpWarning
 import kotlinx.coroutines.delay
@@ -205,20 +208,32 @@ internal fun DayViewModel.logSet(exerciseId: String, weightText: String, reps: I
         // Plan comes from the rendered exercise, so custom/cross-day exercises log correctly
         // (the static dayPlan.exercises doesn't contain them).
         val plan = currentUi.plan
+        // The real exercise this slot logs under — the swapped exercise when swapped (#11).
+        val effectiveExerciseId = currentUi.effectiveExerciseId.ifBlank { exerciseId }
 
-        val newWeightLb = WeightParser.parse(weightText, plan.unit, settingsRepo.plateWeightLb.first())
+        val plateLb = settingsRepo.plateWeightLb.first()
+        val newWeightLb = WeightParser.parse(weightText, plan.unit, plateLb)
         // Compare against the all-time max from the frontier (never contains dummy display
-        // rows) so the warning still means "20% above anything you've ever done".
+        // rows) so the warning still means "well above anything you've ever done".
         val lastWeightLb = currentUi.priorFrontier
             .mapNotNull { it.weightLb }
             .maxOrNull()
-        if (!skipJumpCheck && newWeightLb != null && lastWeightLb != null && lastWeightLb > 0 &&
-            newWeightLb > lastWeightLb * 1.20
-        ) {
-            _state.update {
-                it.copy(pendingWeightJumpWarning = WeightJumpWarning(exerciseId, weightText, reps, lastWeightLb, newWeightLb))
+        if (!skipJumpCheck && newWeightLb != null && lastWeightLb != null && lastWeightLb > 0) {
+            val isPlates = plan.unit == ExerciseUnit.PLATES
+            // Plate machines step one plate at a time, so a single-plate bump reads as a huge % but
+            // is normal progression — only flag a 2+ plate jump. Free weights keep the 20% rule (#1/#10).
+            val bigJump = if (isPlates) (newWeightLb - lastWeightLb) / plateLb >= 1.5
+            else newWeightLb > lastWeightLb * 1.20
+            if (bigJump) {
+                val useKg = settingsRepo.useKg.first()
+                val lastLabel = if (isPlates) formatPlates(lastWeightLb, plateLb) else formatWeight(lastWeightLb, useKg)
+                val newLabel = if (isPlates) formatPlates(newWeightLb, plateLb) else formatWeight(newWeightLb, useKg)
+                val percent = ((newWeightLb / lastWeightLb - 1) * 100).toInt()
+                _state.update {
+                    it.copy(pendingWeightJumpWarning = WeightJumpWarning(exerciseId, weightText, reps, lastLabel, newLabel, percent))
+                }
+                return@launch
             }
-            return@launch
         }
 
         // This set ends the previous rest interval (#82) — stamp the moment now, but write the
@@ -244,10 +259,11 @@ internal fun DayViewModel.logSet(exerciseId: String, weightText: String, reps: I
         val leId = currentUi.loggedExerciseId
             ?: workoutRepo.addExerciseToSession(
                 sessionId = sessionId,
-                exerciseId = exerciseId,
+                exerciseId = effectiveExerciseId,
                 orderIndex = _state.value.exercises.indexOfFirst { it.plan.id == exerciseId },
                 swappedName = currentUi.sessionSwapName ?: currentUi.persistentSwapName,
-                swappedUnit = currentUi.sessionSwapUnit ?: currentUi.persistentSwapUnit
+                swappedUnit = currentUi.sessionSwapUnit ?: currentUi.persistentSwapUnit,
+                slotId = exerciseId.takeIf { it != effectiveExerciseId }
             )
 
         workoutRepo.logSet(
@@ -263,7 +279,7 @@ internal fun DayViewModel.logSet(exerciseId: String, weightText: String, reps: I
         val suggestedLb = currentUi.suggestedTargetLb
         if (currentUi.loggedSets.isEmpty() && newWeightLb != null && suggestedLb != null) {
             workoutRepo.recordSuggestionOutcome(
-                exerciseId = exerciseId,
+                exerciseId = effectiveExerciseId,
                 unitCode = plan.unit.code,
                 suggestedLb = suggestedLb,
                 takenLb = newWeightLb,
@@ -293,4 +309,10 @@ internal fun DayViewModel.logSet(exerciseId: String, weightText: String, reps: I
             }
         }
     }
+}
+
+/** "4 plates" / "2.5 plates" — a plate-loaded weight shown as its plate count for the jump warning. */
+private fun formatPlates(lb: Double, plateLb: Double): String {
+    val plates = lb / plateLb
+    return "${formatPlateCount(plates)} plate${if (plates == 1.0) "" else "s"}"
 }

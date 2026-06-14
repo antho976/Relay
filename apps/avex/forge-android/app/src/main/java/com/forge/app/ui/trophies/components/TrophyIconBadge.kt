@@ -47,7 +47,8 @@ fun TrophyIconBadge(
     unlocked: Boolean,
     modifier: Modifier = Modifier,
     size: Dp = 48.dp,
-    animateEntrance: Boolean = false
+    animateEntrance: Boolean = false,
+    iconModifier: Modifier = Modifier
 ) {
     val accent = MaterialTheme.colorScheme.primary
     val bg = if (unlocked) accent.copy(alpha = 0.20f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.30f)
@@ -58,16 +59,17 @@ fun TrophyIconBadge(
     Box(
         modifier = modifier
             .size(size)
-            .graphicsLayer { scaleX = pop.value; scaleY = pop.value }
-            .clip(CircleShape)
-            .background(bg),
+            .graphicsLayer { scaleX = pop.value; scaleY = pop.value },
         contentAlignment = Alignment.Center
     ) {
+        // Circular background (clipped); the icon sits on top, UNCLIPPED, so an animated [iconModifier]
+        // (e.g. the swaying flame / spinning recycle in the profile trophy case) can overflow the circle.
+        Box(Modifier.matchParentSize().clip(CircleShape).background(bg))
         Icon(
             imageVector = vectorFor(icon),
             contentDescription = null,
             tint = fg,
-            modifier = Modifier.size(size * 0.55f)
+            modifier = iconModifier.size(size * 0.55f)
         )
     }
 }

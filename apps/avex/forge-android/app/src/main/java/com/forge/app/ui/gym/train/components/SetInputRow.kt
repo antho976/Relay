@@ -16,13 +16,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -82,28 +80,22 @@ fun SetInputRow(
     onAdvance: () -> Unit = {},
     onSubmit: (weightText: String, reps: Int) -> Unit,
     onAddSet: (() -> Unit)? = null,
-    onSwitchUnit: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
-    var weight by rememberSaveable(prefillWeight) { mutableStateOf(prefillWeight.orEmpty()) }
-    // Pre-fill the recommended reps, and refresh it for each new set (keyed on the set number).
-    var reps by rememberSaveable(nextSetNumber, targetReps) { mutableStateOf(targetReps?.toString().orEmpty()) }
     val useKg = LocalForgeSettings.current.useKg
+    val plateLb = LocalForgeSettings.current.plateWeightLb
+    // Prefill weight + reps with what you did on THIS set last time (#8) — your previous numbers,
+    // not the plan target. Plate exercises seed a plate count. First time on the exercise → empty
+    // weight + the plan's target reps. Re-seeds per set (keyed on the set number + the seed value).
+    val seedWeight = priorSetForActiveRow?.let { p ->
+        p.weightLb?.let { lb -> if (isPlates) formatPlateCount(lb / plateLb) else weightInputValue(lb, useKg) } ?: p.weightText
+    } ?: prefillWeight.orEmpty()
+    val seedReps = priorSetForActiveRow?.reps?.toString() ?: targetReps?.toString().orEmpty()
+    // Re-seed only when the SET NUMBER changes (a new set), not when the derived seed value shifts —
+    // keying on the volatile seed would wipe a half-typed entry if the prior baseline changed (#11).
+    var weight by rememberSaveable(nextSetNumber) { mutableStateOf(seedWeight) }
+    var reps by rememberSaveable(nextSetNumber) { mutableStateOf(seedReps) }
     val repsFocus = remember { FocusRequester() }
-    var showUnitDialog by remember { mutableStateOf(false) }
-
-    if (showUnitDialog) {
-        val target = if (useKg) "lb" else "kg"
-        AlertDialog(
-            onDismissRequest = { showUnitDialog = false },
-            title = { Text("Switch units?") },
-            text = { Text("Show all weights in $target?") },
-            confirmButton = {
-                TextButton(onClick = { onSwitchUnit(); showUnitDialog = false }) { Text("Switch to $target") }
-            },
-            dismissButton = { TextButton(onClick = { showUnitDialog = false }) { Text("Cancel") } }
-        )
-    }
 
     fun onWeightChange(new: String) {
         // Typing "x"/"X" after a number (e.g. "45x") commits the weight and jumps to the
@@ -133,7 +125,7 @@ fun SetInputRow(
             if (weight.isBlank()) return
             onSubmit(weight.trim(), r)
         }
-        reps = targetReps?.toString().orEmpty()
+        // Fields re-seed from the next set's prior automatically (keyed on the set number) (#8).
     }
 
     val canSubmit = remember(weight, reps, isBodyweight) {
@@ -185,13 +177,12 @@ fun SetInputRow(
                     } else {
                         Column(modifier = Modifier.weight(1f)) {
                             // Plate exercises show "PLATES" (the value is a plate count); free weights
-                            // show "WEIGHT · LB/KG" and tapping the label offers a unit switch.
+                            // show "WEIGHT · LB/KG". (Unit is changed in Settings, not by tapping here — #5.)
                             Text(
                                 if (isPlates) "PLATES" else "WEIGHT${if (useKg) " · KG" else " · LB"}",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = muted,
-                                fontSize = 9.sp,
-                                modifier = if (isPlates) Modifier else Modifier.clickable { showUnitDialog = true }
+                                fontSize = 9.sp
                             )
                             Spacer(Modifier.height(2.dp))
                             UnderlineNumberField(
@@ -230,7 +221,11 @@ fun SetInputRow(
                     // Prior set hint ("try 45 × 10") — tap to autofill the inputs.
                     Box(modifier = Modifier.width(DELTA_COL_W), contentAlignment = Alignment.BottomEnd) {
                         priorSetForActiveRow?.let { prior ->
-                            val priorDisplay = prior.weightLb?.let { formatWeight(it, useKg) } ?: prior.weightText
+                            // Plate exercises read as a plate count, never the lb equivalent (#9) — so
+                            // tapping autofills the plate COUNT into the plate field, not its poundage.
+                            val priorDisplay = prior.weightLb?.let { lb ->
+                                if (isPlates) "${formatPlateCount(lb / plateLb)} pl" else formatWeight(lb, useKg)
+                            } ?: prior.weightText
                             Text(
                                 // The ghost to beat — tap to autofill last time's numbers as your floor.
                                 "beat $priorDisplay × ${prior.reps}",
@@ -239,9 +234,9 @@ fun SetInputRow(
                                 fontSize = 9.sp,
                                 textAlign = TextAlign.End,
                                 modifier = Modifier.clickable {
-                                    // Autofill the bare display-unit number (no " kg"/" lb" suffix),
-                                    // so it parses on submit instead of logging a weightless set.
-                                    weight = prior.weightLb?.let { weightInputValue(it, useKg) } ?: prior.weightText
+                                    weight = prior.weightLb?.let { lb ->
+                                        if (isPlates) formatPlateCount(lb / plateLb) else weightInputValue(lb, useKg)
+                                    } ?: prior.weightText
                                     reps = prior.reps.toString()
                                 }
                             )

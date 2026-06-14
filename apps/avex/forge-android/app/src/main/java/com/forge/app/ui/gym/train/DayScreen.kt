@@ -105,6 +105,10 @@ fun DayScreen(
         }
     }
 
+    LaunchedEffect(viewModel) {
+        viewModel.messages.collect { msg -> snackbarHostState.showSnackbar(msg) }
+    }
+
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         floatingActionButton = {
@@ -189,7 +193,7 @@ fun DayScreen(
         AlertDialog(
             onDismissRequest = { viewModel.onEvent(DayUiEvent.DismissWeightJump) },
             title = { Text("Big jump — are you sure?") },
-            text = { Text("${warning.lastWeightLb.toInt()} lb → ${warning.newWeightLb.toInt()} lb is a ${((warning.newWeightLb / warning.lastWeightLb - 1) * 100).toInt()}% increase. Log it anyway?") },
+            text = { Text("${warning.lastLabel} → ${warning.newLabel} is a ${warning.percent}% increase. Log it anyway?") },
             confirmButton = { Button(onClick = { viewModel.onEvent(DayUiEvent.ConfirmWeightJump) }) { Text("Log it") } },
             dismissButton = { TextButton(onClick = { viewModel.onEvent(DayUiEvent.DismissWeightJump) }) { Text("Go back") } }
         )

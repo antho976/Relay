@@ -17,13 +17,18 @@ enum class VsLastStatus { BEATING, MATCHING, UNDER }
  */
 data class CrossDaySessionInfo(val dayKey: String, val dayName: String)
 
-/** Held in state until the user confirms or cancels the suspicious weight (#117). */
+/**
+ * Held in state until the user confirms or cancels the suspicious weight (#117). [lastLabel] /
+ * [newLabel] are already formatted in the exercise's own unit (plate counts on PLATES, kg/lb
+ * otherwise) so the dialog never shows a raw-lb number the user didn't enter (#1/#10).
+ */
 data class WeightJumpWarning(
     val exerciseId: String,
     val weightText: String,
     val reps: Int,
-    val lastWeightLb: Double,
-    val newWeightLb: Double
+    val lastLabel: String,
+    val newLabel: String,
+    val percent: Int
 )
 
 /**
@@ -162,6 +167,13 @@ internal fun beatsPriorSet(cur: LoggedSet, prior: LoggedSet?): Boolean {
 @Immutable
 data class ExerciseUiState(
     val plan: ExercisePlan,
+    /**
+     * The real exercise this card logs under (#11): the swapped exercise's id when swapped, else the
+     * slot id ([plan].id). PR/stats history is read by this, and new sets are written under it, so a
+     * swapped exercise's work attributes to the actual exercise — while UI/event matching still uses
+     * [plan].id (the slot). Defaults to "" only for never-constructed states; the builder always sets it.
+     */
+    val effectiveExerciseId: String = "",
     val loggedExerciseId: Long? = null,
     val loggedSets: List<LoggedSet> = emptyList(),
     val lastSessionPreviewText: String? = null,
@@ -172,8 +184,14 @@ data class ExerciseUiState(
     val isExpanded: Boolean = false,
     /** True when the user has marked this exercise's session entry as a PR (any set). */
     val wasPr: Boolean = false,
-    /** Set ids known to be PRs (subset of [loggedSets].map { it.id }). Used for per-row badges. */
+    /** Set ids known to be PRs (subset of [loggedSets].map { it.id }). Drives the PR count / confetti. */
     val prSetIds: Set<Long> = emptySet(),
+    /**
+     * The single best PR set of this session (heaviest, then most reps, then latest) — the ONLY row
+     * that shows the gold ★ + gold text, so multiple ascending PR sets don't all light up (#3/#4/#7).
+     * The highlight moves to the new set when you beat your record.
+     */
+    val bestPrSetId: Long? = null,
     /** Active swap for this session only — overrides the static plan's name when non-null. */
     val sessionSwapName: String? = null,
     val sessionSwapUnit: String? = null,

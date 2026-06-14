@@ -226,6 +226,12 @@ class BackupRepository @Inject constructor(
         return file
     }
 
+    /** RFC 4180 CSV field: quote and double embedded quotes when the value holds a comma/quote/newline. */
+    private fun csv(value: String): String =
+        if (value.any { it == ',' || it == '"' || it == '\n' || it == '\r' })
+            "\"" + value.replace("\"", "\"\"") + "\""
+        else value
+
     /** Export as CSV — sessions summary (#138). */
     suspend fun exportSessionsCsv(): File {
         val allSessions = sessionDao.allFinished()
@@ -233,8 +239,10 @@ class BackupRepository @Inject constructor(
         sb.appendLine("id,dayKey,date,durationMin,volumeLb,prs,sets,intensity,tags")
         allSessions.forEach { s ->
             val date = dateFmt.format(Instant.ofEpochMilli(s.startedAt).atZone(zone))
-            val dur = s.finishedAt?.let { ((it - s.startedAt) / 60_000).toInt() } ?: 0
-            sb.appendLine("${s.id},${s.dayKey},$date,$dur,${s.totalVolumeLb ?: 0},${s.prCount},${s.setCount},${s.intensity},\"${s.tags}\"")
+            // Active (summed-sittings) minutes, NOT wall-clock — a "resume later" session spanning
+            // days must report real training time, matching the JSON/PDF exports.
+            val dur = activeMinutesOf(s)
+            sb.appendLine("${s.id},${csv(s.dayKey)},$date,$dur,${s.totalVolumeLb ?: 0},${s.prCount},${s.setCount},${csv(s.intensity)},${csv(s.tags)}")
         }
         // Fixed filename (overwrite) — see #84.
         val file = File(context.filesDir, "forge_sessions.csv")
@@ -373,8 +381,13 @@ class BackupRepository @Inject constructor(
             // Reject a backup newer than this build's schema: Room has no downgrade path and would
             // crash on open. Older versions migrate forward normally, so only a strictly-newer
             // user_version is rejected. (We stage rather than swap live, so nothing is lost on reject.)
+            //
+            // Also reject anything below the migration floor (<12, the pre-lock versions): there is no
+            // migration path for those, so Room's fallbackToDestructiveMigrationFrom(1..11) would DROP
+            // ALL TABLES on open — restoring such a backup would silently wipe it. Refuse instead.
             val currentVersion = db.openHelper.readableDatabase.version
-            if (databaseUserVersion(dbFile) > currentVersion) return@withContext false
+            val incomingVersion = databaseUserVersion(dbFile)
+            if (incomingVersion > currentVersion || incomingVersion < MIN_RESTORABLE_VERSION) return@withContext false
 
             // Don't close Room and swap the file here — that races with any flow still reading the DB
             // until the process is killed. Stage the files instead; ForgeApp.applyPendingRestore swaps
@@ -451,5 +464,11 @@ class BackupRepository @Inject constructor(
         private const val PREFS_DATASTORE_NAME = "forge_settings"
         private const val ZIP_DB_ENTRY = "database.db"
         private const val ZIP_PREFS_ENTRY = "settings.preferences_pb"
+        /**
+         * Lowest schema version restore will accept. Below this are the pre-lock versions Room
+         * destructively resets (DatabaseModule.fallbackToDestructiveMigrationFrom(1..11)), so
+         * restoring one would wipe rather than recover. Must stay one above that destructive range.
+         */
+        private const val MIN_RESTORABLE_VERSION = 12
     }
 }

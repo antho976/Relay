@@ -52,5 +52,15 @@ data class LoggedExercise(
      * are shown as a superset (back-to-back with no rest between them).
      * Null = standalone exercise (default).
      */
-    @ColumnInfo(name = "superset_group") val supersetGroup: String? = null
-)
+    @ColumnInfo(name = "superset_group") val supersetGroup: String? = null,
+    /**
+     * The program SLOT this entry fills (#11). When the user swaps an exercise, [exerciseId] becomes
+     * the swapped exercise's id (so PRs/stats — every `WHERE le.exercise_id` query — attribute to the
+     * real exercise performed), and [slotId] holds the original slot id so the day screen can still
+     * map this entry back to its slot in the plan. Null ⇒ not swapped: the slot IS [exerciseId].
+     */
+    @ColumnInfo(name = "slot_id") val slotId: String? = null
+) {
+    /** The program slot this entry occupies — the swap-aware key the day screen matches plan slots on. */
+    val effectiveSlotId: String get() = slotId ?: exerciseId
+}
