@@ -9,6 +9,7 @@ import com.forge.app.data.db.dao.UnlockedTrophyDao
 import com.forge.app.data.db.entities.Session
 import com.forge.app.data.db.entities.TrophyNearMiss
 import com.forge.app.data.db.entities.UnlockedTrophy
+import com.forge.app.data.db.entities.durationMinutes
 import com.forge.app.data.db.types.EffortRating
 import com.forge.app.domain.trophy.TrophyEvaluator
 import com.forge.app.domain.trophy.TrophyExercises
@@ -162,21 +163,12 @@ class TrophyRepository @Inject constructor(
         }
 
     private fun maxDurationMinutes(sessions: List<Session>): Int =
-        sessions.maxOfOrNull { s ->
-            val fin = s.finishedAt ?: return@maxOfOrNull 0
-            ((fin - s.startedAt) / 60_000).toInt()
-        } ?: 0
+        sessions.maxOfOrNull { it.durationMinutes() ?: 0 } ?: 0
 
-    private fun minDurationMinutes(sessions: List<Session>): Int {
-        val filtered = sessions.filter { s ->
-            val fin = s.finishedAt ?: return@filter false
-            val mins = ((fin - s.startedAt) / 60_000).toInt()
-            s.setCount > 0 && mins >= 5
-        }
-        return filtered.minOfOrNull { s ->
-            ((s.finishedAt!! - s.startedAt) / 60_000).toInt()
-        } ?: Int.MAX_VALUE
-    }
+    private fun minDurationMinutes(sessions: List<Session>): Int =
+        sessions
+            .mapNotNull { s -> s.durationMinutes()?.takeIf { s.setCount > 0 && it >= 5 } }
+            .minOrNull() ?: Int.MAX_VALUE
 
     private fun checkComebackKid(sessions: List<Session>, zone: ZoneId): Boolean {
         if (sessions.size < 2) return false

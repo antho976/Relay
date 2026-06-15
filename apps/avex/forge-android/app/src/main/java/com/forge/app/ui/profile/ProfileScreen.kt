@@ -46,6 +46,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.forge.app.domain.units.unitLabel
+import com.forge.app.ui.theme.LocalForgeSettings
 import com.forge.app.data.repo.ProgressPhoto
 import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.theme.emphasized
@@ -135,10 +137,11 @@ fun ProfileScreen(
 
             state.memory?.let { m ->
                 ProfileBlock("ON THIS DAY", muted, accent, outline) {
+                    val useKg = LocalForgeSettings.current.useKg
                     val ago = if (m.monthsAgo % 12 == 0) "${m.monthsAgo / 12} year${if (m.monthsAgo == 12) "" else "s"} ago"
                     else "${m.monthsAgo} months ago"
                     Text(
-                        "$ago you trained ${m.dayName} — ${formatVolume(m.totalVolumeLb)} lb" +
+                        "$ago you trained ${m.dayName} — ${formatVolume(m.totalVolumeLb, useKg)} ${unitLabel(useKg)}" +
                             if (m.prCount > 0) " · ${m.prCount} PR${if (m.prCount == 1) "" else "s"}" else "",
                         style = MaterialTheme.typography.bodyMedium, color = onBg
                     )

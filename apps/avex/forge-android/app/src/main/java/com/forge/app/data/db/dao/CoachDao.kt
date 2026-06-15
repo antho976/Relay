@@ -84,9 +84,15 @@ interface CoachDao {
     )
     suspend fun foldAppliedDeltasForDay(dayKey: String)
 
-    /** Applied changes the watcher still owes a verdict (hardening decision 5). */
-    @Query("SELECT * FROM coach_decision WHERE status = 'applied' AND outcome = 'pending'")
-    suspend fun appliedPendingOutcome(): List<CoachDecision>
+    /**
+     * Changes the watcher still owes a verdict (hardening decision 5). Includes 'folded' rows: a
+     * regenerate that folds a change before its outcome window closes must NOT shield it from
+     * judgment. The watcher reads session history by target_key (never the overlay, which folding
+     * clears), so it can still rule a folded change ok/failed — which is what lets earned trust gate
+     * on validation rather than mere application (auto-coach seam audit 2026-06-15, finding P1).
+     */
+    @Query("SELECT * FROM coach_decision WHERE status IN ('applied','folded') AND outcome = 'pending'")
+    suspend fun pendingOutcome(): List<CoachDecision>
 
     /**
      * Still-applied changes the watcher judged FAILED but whose revert hasn't run yet. The revert

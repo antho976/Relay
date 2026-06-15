@@ -101,21 +101,40 @@ class TrustLedgerTest {
     }
 
     @Test
-    fun foldedChangesStillCountAsAcceptances() {
-        // A regenerate baked these accepted changes into the baseline (status=folded). They must
-        // keep counting toward the streak, otherwise folding would silently reset earned trust
-        // and autopilot could never be earned by changes a refresh absorbed (seam fix).
+    fun foldedPending_doesNotCount_untilTheWatcherValidatesIt() {
+        // A regenerate folded these before their outcome window closed (status=folded, outcome=pending).
+        // Folding ends the watcher's jurisdiction, so an unjudged fold is "applied but never validated"
+        // and must NOT advance trust — otherwise a refresh/auto-rotation could promote autopilot on
+        // changes nothing ever judged (auto-coach seam audit 2026-06-15, finding P1).
         val d = (1..3).map { decision("rep_shift", "folded", outcome = "pending") }
+        val t = trustFor("rep_shift", d)
+        assertEquals(0, t.streak)
+        assertFalse(t.earned)
+        assertTrue(TrustLedger.earnedTypes(d).isEmpty())
+    }
+
+    @Test
+    fun foldedOk_countsAsAValidatedAcceptance() {
+        // Once the watcher rules an in-window folded change "ok", it has earned its credit and counts.
+        val d = (1..3).map { decision("rep_shift", "folded", outcome = "ok") }
         val t = trustFor("rep_shift", d)
         assertEquals(3, t.streak)
         assertTrue(t.earned)
     }
 
     @Test
-    fun foldedAndAppliedAcceptancesCompose() {
-        val d = (1..2).map { decision("swap", "folded") } +
+    fun foldedFailed_breaksTheStreak() {
+        // A folded change the watcher later judged failed demotes the type, just like an applied failure.
+        val d = (1..3).map { decision("rep_shift", "applied", "ok") } +
+            decision("rep_shift", "folded", outcome = "failed")
+        assertEquals(0, trustFor("rep_shift", d).streak)
+    }
+
+    @Test
+    fun foldedOkAndAppliedAcceptancesCompose() {
+        val d = (1..2).map { decision("swap", "folded", "ok") } +
             (1..2).map { decision("swap", "applied", "ok") }
-        // 2 folded + 2 applied = a streak of 4 → an aggressive type earns.
+        // 2 validated folds + 2 applied-ok = a streak of 4 → an aggressive type earns.
         assertEquals(4, trustFor("swap", d).streak)
         assertTrue(trustFor("swap", d).earned)
     }

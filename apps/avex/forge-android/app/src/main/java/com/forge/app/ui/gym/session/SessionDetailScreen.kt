@@ -94,9 +94,11 @@ fun SessionDetailScreen(
             state.isLoading -> Box(Modifier.fillMaxSize().padding(inner), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = accent)
             }
-            data == null || data.exercises.isEmpty() -> Box(Modifier.fillMaxSize().padding(inner), contentAlignment = Alignment.Center) {
+            // A missing row (stale/broken link) is a different state from a real session that simply
+            // logged nothing — say so distinctly instead of one catch-all message.
+            data == null -> Box(Modifier.fillMaxSize().padding(inner), contentAlignment = Alignment.Center) {
                 Text(
-                    "Nothing logged for this session.",
+                    "Session not found.",
                     style = MaterialTheme.typography.bodySmall,
                     color = muted,
                     fontStyle = FontStyle.Italic
@@ -109,21 +111,36 @@ fun SessionDetailScreen(
             ) {
                 item("header") { Box(Modifier.statsEntrance(0)) { SessionHeader(data, onBg, muted, outline) } }
                 item("summary") { Box(Modifier.statsEntrance(1)) { SummaryStrip(data, onBg, muted) } }
-                item("controls") {
-                    Box(Modifier.statsEntrance(2)) {
-                        MetricStyleControls(metric, style, { metric = it }, { style = it }, onBg, muted, accent, outline)
-                    }
-                }
-                item("overview") {
-                    Box(Modifier.statsEntrance(3)) {
-                        StatCard(title = "${metric.label.uppercase()} PER EXERCISE") {
-                            MetricByExerciseChart(data.exercises, metric, onBg, muted, accent, outline)
+                if (data.exercises.isEmpty()) {
+                    // Session exists but every exercise was skipped or logged no sets — keep its header
+                    // + summary and just note there's nothing to chart.
+                    item("empty") {
+                        Box(Modifier.statsEntrance(2)) {
+                            Text(
+                                "No exercises logged for this session.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = muted,
+                                fontStyle = FontStyle.Italic
+                            )
                         }
                     }
-                }
-                itemsIndexed(data.exercises) { i, ex ->
-                    Box(Modifier.statsEntrance(4 + i)) {
-                        ExerciseCard(ex, metric, style, onBg, muted, accent, outline)
+                } else {
+                    item("controls") {
+                        Box(Modifier.statsEntrance(2)) {
+                            MetricStyleControls(metric, style, { metric = it }, { style = it }, onBg, muted, accent, outline)
+                        }
+                    }
+                    item("overview") {
+                        Box(Modifier.statsEntrance(3)) {
+                            StatCard(title = "${metric.label.uppercase()} PER EXERCISE") {
+                                MetricByExerciseChart(data.exercises, metric, onBg, muted, accent, outline)
+                            }
+                        }
+                    }
+                    itemsIndexed(data.exercises, key = { i, ex -> "${ex.name}#$i" }) { i, ex ->
+                        Box(Modifier.statsEntrance(4 + i)) {
+                            ExerciseCard(ex, metric, style, onBg, muted, accent, outline)
+                        }
                     }
                 }
             }

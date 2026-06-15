@@ -5,8 +5,10 @@ import com.forge.app.data.db.dao.CardioDao
 import com.forge.app.data.db.dao.LoggedExerciseDao
 import com.forge.app.data.db.dao.LoggedSetDao
 import com.forge.app.data.db.dao.SessionDao
+import com.forge.app.data.db.projections.SetWithExerciseId
 import com.forge.app.program.Program
 import com.forge.app.data.db.entities.Session
+import com.forge.app.data.db.entities.durationMinutes
 import com.forge.app.ui.gym.stats.state.DayTypeVolumeStats
 import com.forge.app.ui.gym.stats.state.WeekActivityRow
 import com.forge.app.ui.gym.stats.state.ExerciseFrequency
@@ -19,7 +21,6 @@ import com.forge.app.ui.gym.stats.state.RepMaxSet
 import com.forge.app.ui.gym.stats.state.MuscleSetCount
 import com.forge.app.ui.gym.stats.state.RepRangeDist
 import com.forge.app.ui.gym.stats.state.RpeBucket
-import com.forge.app.ui.gym.stats.state.InsightFlag
 import com.forge.app.ui.gym.stats.state.LifetimeMetrics
 import com.forge.app.ui.gym.stats.state.MuscleVolume
 import com.forge.app.ui.gym.stats.state.OverloadSummary
@@ -54,9 +55,10 @@ import javax.inject.Singleton
 /**
  * Aggregates the rolling-window stats that feed the Overview screen.
  *
- * The "since" parameter for each weekly query is computed once at flow subscription
- * time. That means if the user keeps the app open for a week the window won't slide,
- * but that's a non-issue for a personal app — they'll close and reopen.
+ * "This week" means the current ISO calendar week (Mon 00:00), matching the day-dot grid — its
+ * start is fixed when the flow is subscribed, so reopen the screen after a week rollover. The
+ * rolling-7-day volume window in [observeGymStats], by contrast, is recomputed on each emission
+ * so it slides while the screen stays open.
  *
  * The pure (DAO-free) aggregation helpers used by [observeGymStats] live in sibling
  * files: StatsStrengthAggregations.kt, StatsVolumeAggregations.kt, and
@@ -71,7 +73,6 @@ class StatsRepository @Inject constructor(
     private val loggedSetDao: LoggedSetDao,
     private val vacationDao: com.forge.app.data.db.dao.VacationDao,
     private val bodyweightRepo: BodyweightRepository,
-    private val adaptationRepo: AdaptationRepository,
     private val settingsRepo: com.forge.app.data.prefs.SettingsRepository,
     private val clock: Clock
 ) {
@@ -93,7 +94,13 @@ class StatsRepository @Inject constructor(
     )
 
     fun observeWeeklyStats(): Flow<WeeklyStats> {
-        val weekStartMs = clock.nowMs() - WEEK_MS
+        // "This week" = the current ISO calendar week (Mon 00:00), so the workout/volume/cardio
+        // counts match the Mon–Sun day-dot grid and buildWeekComparison. Was a rolling 7×24h
+        // window (now − WEEK_MS), which disagreed with the dots on early weekdays.
+        val zone = ZoneId.systemDefault()
+        val weekStartMs = LocalDate.now(zone)
+            .let { it.minusDays(it.dayOfWeek.value.toLong() - 1) }
+            .atStartOfDay(zone).toInstant().toEpochMilli()
         val baseFlow = combine(
             sessionDao.observeFinishedCountSince(weekStartMs),
             sessionDao.observeVolumeSince(weekStartMs),
@@ -106,13 +113,12 @@ class StatsRepository @Inject constructor(
             ) { recent, mode, schedule -> Triple(recent, mode, schedule) }
         ) { workouts, volume, cardio, totalFinished, recentModeSchedule ->
             val (recentSessions, scheduleMode, schedule) = recentModeSchedule
-            val zone = ZoneId.systemDefault()
             val todayDate = LocalDate.now(zone)
-            val isoWeekStart = todayDate.minusDays(todayDate.dayOfWeek.value.toLong() - 1)
-            val isoWeekStartMs = isoWeekStart.atStartOfDay(zone).toInstant().toEpochMilli()
             val finishedAts = recentSessions.mapNotNull { it.finishedAt }
+            // Dots use the SAME (subscription-time) week anchor as the workout/volume/cardio counts
+            // above, so the count and the lit dots can never describe different weeks within a view.
             val weekDaysTrained = recentSessions
-                .filter { it.finishedAt != null && it.finishedAt >= isoWeekStartMs }
+                .filter { it.finishedAt != null && it.finishedAt >= weekStartMs }
                 .map {
                     // Bucket by the same timestamp the week filter uses (finishedAt), so a session
                     // that started before midnight but finished this week lands on the right day.
@@ -213,7 +219,10 @@ class StatsRepository @Inject constructor(
             if (sets.isEmpty()) return@mapNotNull null
             val topSet = sets.maxByOrNull { it.weightLb ?: 0.0 }
             val name = ex.swappedName
-                ?: Program.days.flatMap { it.exercises }.firstOrNull { it.id == ex.exerciseId }?.name
+                // Resolve via Program.exercise (active plan → ExerciseLibrary fallback), not just the
+                // active day plans: a swapped exercise's id, or one rotated out by a regenerate, won't be
+                // in Program.days but still resolves from the library — otherwise the raw kebab id shows.
+                ?: Program.exercise(ex.exerciseId)?.name
                 ?: ex.exerciseId
             SessionExerciseLine(
                 exerciseName = name,
@@ -243,7 +252,10 @@ class StatsRepository @Inject constructor(
             // top-weight cluster — straight sets at the same weight shouldn't all read as "the" top.
             val topIdx = if (topWeight == null) -1 else sets.indexOfFirst { it.weightLb == topWeight }
             val name = ex.swappedName
-                ?: Program.days.flatMap { it.exercises }.firstOrNull { it.id == ex.exerciseId }?.name
+                // Resolve via Program.exercise (active plan → ExerciseLibrary fallback), not just the
+                // active day plans: a swapped exercise's id, or one rotated out by a regenerate, won't be
+                // in Program.days but still resolves from the library — otherwise the raw kebab id shows.
+                ?: Program.exercise(ex.exerciseId)?.name
                 ?: ex.exerciseId
             val setDetails = sets.mapIndexed { i, s ->
                 SetDetail(
@@ -273,7 +285,7 @@ class StatsRepository @Inject constructor(
         }
 
         val allRpe = exerciseDetails.flatMap { it.sets }.mapNotNull { it.rpe }
-        val durationMin = session.finishedAt?.let { ((it - session.startedAt) / 60_000).toInt() }
+        val durationMin = session.durationMinutes()
         val title = Program.days.firstOrNull { it.key == session.dayKey }?.defaultName ?: session.dayKey
 
         return SessionDetailData(
@@ -286,6 +298,7 @@ class StatsRepository @Inject constructor(
             prCount = session.prCount,
             setCount = session.setCount,
             intensity = session.intensity,
+            sessionType = session.sessionType,
             deload = session.deloadMarkedHere,
             journal = session.journal,
             avgRpe = if (allRpe.isEmpty()) null else allRpe.average(),
@@ -308,7 +321,6 @@ class StatsRepository @Inject constructor(
         val prsByDayOfWeek: List<Int> = List(7) { 0 },
         val dayTypeBestVsAvg: List<DayTypeVolumeStats> = emptyList(),
         val weekComparison: PeriodComparison? = null,
-        val insights: List<InsightFlag> = emptyList(),
         val lifetimeMetrics: LifetimeMetrics? = null,
         val moodOverTime: List<com.forge.app.data.db.dao.SessionDao.MoodOverTime> = emptyList(),
         /** Raw sessions this ISO week — used internally to build [weekActivity]. */
@@ -348,7 +360,6 @@ class StatsRepository @Inject constructor(
      * into the snapshot the UI consumes.
      */
     fun observeGymStats(): Flow<GymStats> {
-        val volumeStartMs = clock.nowMs() - WEEK_MS
         val zone = ZoneId.systemDefault()
         val isoWeekStart = run {
             val today = LocalDate.now(zone)
@@ -362,11 +373,18 @@ class StatsRepository @Inject constructor(
         val moodFlow = sessionDao.observeMoodOverTime()
 
         return combine(
-            loggedSetDao.observeSetsSinceWithExerciseId(volumeStartMs),
             loggedSetDao.observeAllFinishedSetsWithSession(),
             loggedExerciseDao.observeRecentPrs()
-        ) { volumeSets, allSets, prRows ->
+        ) { allSets, prRows ->
           coroutineScope {
+            // Rolling-7-day working sets for volume-by-muscle / weekly-sets, recomputed per emission
+            // so the window slides while the screen stays open (was frozen at subscription). Derived
+            // from allSets — already tracked / non-skipped / unassisted — and bucketed by session
+            // start, the same basis every other Stats window uses.
+            val volumeStartMs = clock.nowMs() - WEEK_MS
+            val volumeSets = allSets
+                .filter { it.sessionStartedAt >= volumeStartMs }
+                .map { SetWithExerciseId(it.weightLb, it.reps, it.exerciseId) }
             // The independent aggregate queries below ran one-by-one, so their latencies
             // stacked. Fire them concurrently and await — cuts the Stats-tab open time.
             val freqRowsD = async { loggedExerciseDao.frequencySince(eightWeeksMs) }
@@ -396,11 +414,12 @@ class StatsRepository @Inject constructor(
                 avgSessionVolumeLb = if (lifetimeAgg.sessionCount > 0) (lifetimeAgg.totalVolume ?: 0.0) / lifetimeAgg.sessionCount else 0.0,
                 avgSetCount = lifetimeAgg.avgSets ?: 0.0
             )
-            // Insights come from the adaptation engine (System 4) — buildInsights' rules
-            // moved there with snapshot-wide gating; the UI keeps rendering InsightFlag rows.
-            val insights = adaptationRepo.insights().map { InsightFlag(it.icon, it.title, it.body) }
             val e1lifts = buildE1rmLifts(allSets)
             val deloadTrend = buildVolumeDeloadTrend(deloadRows)
+            // Tracked finished sessions drive the session-level signals (count / streak / durations)
+            // so a session counts even when all its sets were assisted/skipped (filtered from allSets).
+            val trackedSessions = finishedSessionsD.await().filter { !it.isUntracked }
+            val trackedSessionStarts = trackedSessions.map { it.startedAt }
             GymStats(
                 volumeByMuscle = buildVolumeByMuscle(volumeSets),
                 recentPrs = buildPrEntries(prRows, allSets),
@@ -413,12 +432,12 @@ class StatsRepository @Inject constructor(
                 rpeDistribution = buildRpeDistribution(allSets),
                 avgRpe = allSets.mapNotNull { it.rpe }.takeIf { it.isNotEmpty() }?.average(),
                 consistencyStreakWeeks = computeConsistencyStreak(
-                    allSets,
+                    trackedSessionStarts,
                     com.forge.app.domain.vacation.VacationCalendar.onVacation(vacationD.await())
                 ),
                 progressiveOverloadPct = computeProgressiveOverload(e1lifts),
                 avgRpePerSession = buildAvgRpePerSession(allSets),
-                weeklySessionCounts = buildWeeklySessionCounts(allSets),
+                weeklySessionCounts = buildWeeklySessionCounts(trackedSessionStarts),
                 prSessionTimestamps = prTimes,
                 exerciseFrequency = buildExerciseFrequency(freqRows),
                 timeToPr = buildTimeToPr(prDates),
@@ -426,10 +445,9 @@ class StatsRepository @Inject constructor(
                 prsByDayOfWeek = buildPrsByDayOfWeek(prTimes),
                 weeklyTonnage = buildWeeklyTonnage(deloadTrend),
                 trainingTimes = buildTrainingTimes(allSets),
-                weeklyDurations = buildWeeklyDurations(finishedSessionsD.await().filter { !it.isUntracked }),
+                weeklyDurations = buildWeeklyDurations(trackedSessions),
                 dayTypeBestVsAvg = buildDayTypeBestVsAvg(dayStats),
                 weekComparison = weekComp,
-                insights = insights,
                 lifetimeMetrics = lifetimeMetrics,
                 overload = buildOverloadSummary(allSets, e1lifts),
                 prRecency = buildPrRecency(prDates, clock.nowMs()),

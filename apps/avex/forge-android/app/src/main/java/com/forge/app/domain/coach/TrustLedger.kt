@@ -46,17 +46,36 @@ object TrustLedger {
     )
 
     fun assess(decisions: List<CoachDecision>): List<TypeTrust> = REQUIRED.map { (type, required) ->
-        // Decided rows only, oldest → newest by insertion order. "folded" = an accepted change a
-        // regenerate has since baked into the baseline — it still counts as an acceptance, otherwise
-        // folding would silently reset earned trust (seam fix: folded must read as accepted here).
+        // Decided rows only, oldest → newest by insertion order. A "folded" change (one a regenerate
+        // baked into the baseline) only PARTICIPATES once the watcher has actually judged it: folding
+        // ends the watcher's jurisdiction, so a folded+pending change is "applied but never validated"
+        // and must stay neutral here, like an undecided proposal — otherwise a refresh or auto-rotation
+        // that folds a change before its 14-day outcome window could promote autopilot on unvalidated
+        // history (auto-coach seam audit 2026-06-15, finding P1). A folded change validated "ok" counts;
+        // one the watcher (which still sees in-window folds — see CoachDao.pendingOutcome) rules
+        // "failed" breaks the streak.
         val decided = decisions
-            .filter { it.type == type && it.status in setOf("applied", "folded", "skipped", "reverted") }
+            .filter { it.type == type }
+            .filter {
+                when (it.status) {
+                    "applied", "skipped", "reverted" -> true
+                    "folded" -> it.outcome != "pending" // only a watcher-judged fold participates
+                    else -> false
+                }
+            }
             .sortedBy { it.id }
-        // Walk backwards: streak = consecutive accepted, broken by a skip, a revert, or an
-        // applied change the watcher judged failed (demotion resets the count entirely).
+        // Walk backwards: streak = consecutive accepted, broken by a skip, a revert, an applied change
+        // judged failed, or a folded change that proved failed. An applied change still inside its
+        // window (outcome pending) counts — it stays under the watcher and demotes later if it fails;
+        // a folded change must be proven "ok", since the watcher can no longer revisit it after folding.
         var streak = 0
         for (d in decided.reversed()) {
-            if (d.status in setOf("applied", "folded") && d.outcome != "failed") streak++ else break
+            val accepted = when (d.status) {
+                "applied" -> d.outcome != "failed"
+                "folded" -> d.outcome == "ok"
+                else -> false // skipped / reverted
+            }
+            if (accepted) streak++ else break
         }
         TypeTrust(type = type, streak = streak, required = required, earned = streak >= required)
     }.sortedBy { it.type }

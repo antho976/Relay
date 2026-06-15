@@ -19,6 +19,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.forge.app.domain.units.formatVolume
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.ui.common.SegmentPill
 import com.forge.app.ui.gym.session.state.ExerciseDetail
@@ -27,13 +28,12 @@ import com.forge.app.ui.gym.session.state.SessionMetric
 import com.forge.app.ui.gym.stats.components.Sparkline
 import com.forge.app.ui.gym.stats.components.rememberDrawProgress
 import com.forge.app.ui.gym.stats.components.staggeredProgress
-import com.forge.app.ui.overview.formatVolumeLb
 import com.forge.app.ui.theme.LocalForgeSettings
 
-/** Volume/weight/reps value as a short label for the chosen metric (weight honors the kg setting). */
+/** Volume/weight/reps value as a short label for the chosen metric (weight & volume honor the kg setting). */
 internal fun formatMetricValue(value: Double, metric: SessionMetric, useKg: Boolean): String = when (metric) {
     SessionMetric.WEIGHT -> formatWeight(value, useKg)
-    SessionMetric.VOLUME -> formatVolumeLb(value)
+    SessionMetric.VOLUME -> formatVolume(value, useKg)
     SessionMetric.REPS -> "${value.toInt()}"
 }
 
@@ -195,7 +195,8 @@ internal fun PerExerciseSetChart(
 @Composable
 private fun SetBars(values: List<Double>, metric: SessionMetric, accent: Color) {
     val max = (values.maxOrNull() ?: 0.0).coerceAtLeast(1.0)
-    // Re-reveal when the metric changes — matches the LINE branch's key so BARS/LINE animate alike.
+    // Keyed by metric so the first draw animates in. The play-once motion kit doesn't replay on a
+    // later metric switch, so BARS (like the LINE branch) just snap to the new values — matching Stats.
     val progress = rememberDrawProgress(metric)
     Row(
         modifier = Modifier.fillMaxWidth().height(56.dp),

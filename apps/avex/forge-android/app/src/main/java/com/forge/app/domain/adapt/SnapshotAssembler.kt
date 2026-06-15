@@ -31,7 +31,9 @@ object SnapshotAssembler {
         prefs: PrefsSnap,
         moods: List<MoodEntry> = emptyList(),
         cardio: List<CardioEntry> = emptyList(),
-        zoneId: java.time.ZoneId = java.time.ZoneOffset.UTC
+        // No default: a missing zone silently binned every session into UTC weeks, giving non-UTC
+        // users wrong "best time of day" insights. Callers must choose (production: systemDefault). (F18.)
+        zoneId: java.time.ZoneId
     ): AdaptationSnapshot {
         val orderedSessions = sessions.sortedBy { it.startedAt }
         val startedAtBySessionId = orderedSessions.associate { it.id to it.startedAt }
@@ -41,7 +43,14 @@ object SnapshotAssembler {
             .mapNotNull { le ->
                 // Drop rows whose parent session isn't in the (finished, tracked) list.
                 val startedAt = startedAtBySessionId[le.sessionId] ?: return@mapNotNull null
-                le.exerciseId to ExerciseBout(
+                // Key by the SLOT, not the re-keyed exercise_id (#11): every engine consumer looks
+                // history up by the program slot id (ProgramSlotSnap.exerciseId = plan.id), and the
+                // `slots` map that resolves names/muscles is slot-keyed too. A swapped row's
+                // exercise_id is the swapped exercise, so keying on it would hide all swapped-slot
+                // sessions from the coach (plateau ladder, volume/skip decisions, OutcomeWatcher,
+                // insights). effectiveSlotId = slotId ?: exerciseId, which equals the slot id for
+                // both pre-v22 rows (exercise_id IS the slot) and post-v22 swapped rows.
+                le.effectiveSlotId to ExerciseBout(
                     sessionStartedAt = startedAt,
                     effort = le.difficulty,
                     hitFullTarget = le.hitFullTarget,

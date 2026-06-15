@@ -2,6 +2,7 @@ package com.forge.app.ui.trophies
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.data.repo.TrophyRepository
 import com.forge.app.domain.trophy.TrophyEvaluator
 import com.forge.app.domain.trophy.TrophyStatsSnapshot
@@ -28,7 +29,8 @@ import javax.inject.Inject
  */
 @HiltViewModel
 class TrophiesViewModel @Inject constructor(
-    private val trophyRepo: TrophyRepository
+    private val trophyRepo: TrophyRepository,
+    private val settingsRepo: SettingsRepository
 ) : ViewModel() {
 
     private val snapshotFlow = MutableStateFlow<TrophyStatsSnapshot?>(null)
@@ -38,8 +40,9 @@ class TrophiesViewModel @Inject constructor(
         trophyRepo.observeAll(),
         trophyRepo.observeNearMisses(),
         snapshotFlow,
-        filterFlow
-    ) { unlocked, nearMisses, snapshot, filter ->
+        filterFlow,
+        settingsRepo.useKg
+    ) { unlocked, nearMisses, snapshot, filter, useKg ->
         if (snapshot == null) {
             TrophiesUiState(isLoading = true, totalCount = Trophies.all.size, selectedFilter = filter)
         } else {
@@ -47,6 +50,7 @@ class TrophiesViewModel @Inject constructor(
                 unlockedByIdToDate = unlocked.associate { it.trophyId to it.unlockedAt },
                 snapshot = snapshot,
                 filter = filter,
+                useKg = useKg,
                 nearMisses = nearMisses.map { nm ->
                     NearMissEntry(
                         trophyName = nm.trophyName,
@@ -77,6 +81,7 @@ class TrophiesViewModel @Inject constructor(
         unlockedByIdToDate: Map<String, Long>,
         snapshot: TrophyStatsSnapshot,
         filter: TrophyFilter,
+        useKg: Boolean,
         nearMisses: List<NearMissEntry> = emptyList()
     ): TrophiesUiState {
         val displays = Trophies.all.map { trophy ->
@@ -85,7 +90,7 @@ class TrophiesViewModel @Inject constructor(
             TrophyDisplay(
                 trophy = trophy,
                 unlockedAt = unlockedAt,
-                progressHint = if (unlockedAt == null) TrophyEvaluator.progressHint(trophy.unlock, snapshot) else null,
+                progressHint = if (unlockedAt == null) TrophyEvaluator.progressHint(trophy.unlock, snapshot, useKg) else null,
                 progressFraction = progressFraction
             )
         }
@@ -95,7 +100,7 @@ class TrophiesViewModel @Inject constructor(
             .filter { !it.isUnlocked && (it.progressFraction ?: 0f) > 0f }
             .maxByOrNull { it.progressFraction ?: 0f }
         val closestTrophyNudge = closestDisplay?.let { d ->
-            TrophyEvaluator.progressRemaining(d.trophy.unlock, snapshot)
+            TrophyEvaluator.progressRemaining(d.trophy.unlock, snapshot, useKg)
                 ?.let { remaining -> "$remaining away from ${d.trophy.name}" }
         }
 

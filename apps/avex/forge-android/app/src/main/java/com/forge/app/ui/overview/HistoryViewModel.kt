@@ -2,6 +2,7 @@ package com.forge.app.ui.overview
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.forge.app.data.db.entities.durationMinutes
 import com.forge.app.data.repo.CardioRepository
 import com.forge.app.data.repo.StatsRepository
 import com.forge.app.program.Program
@@ -45,7 +46,7 @@ class HistoryViewModel @Inject constructor(
     ) { sessions, cardio, dayVolStats ->
         val gym = sessions.map { s ->
             val day = Program.days.firstOrNull { it.key == s.dayKey }
-            val durationMin = s.finishedAt?.let { ((it - s.startedAt) / 60_000).toInt() }
+            val durationMin = s.durationMinutes()
             val volStats = dayVolStats[s.dayKey]
             val vsAvgPct = if (volStats != null && s.totalVolumeLb != null && volStats.avgVolume > 0)
                 (((s.totalVolumeLb - volStats.avgVolume) / volStats.avgVolume) * 100).toInt()

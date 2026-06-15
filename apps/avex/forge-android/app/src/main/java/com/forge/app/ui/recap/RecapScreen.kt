@@ -34,6 +34,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.forge.app.domain.units.formatVolumeCompact
+import com.forge.app.ui.theme.LocalForgeSettings
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -42,6 +44,7 @@ fun RecapScreen(
     viewModel: RecapViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val useKg = LocalForgeSettings.current.useKg
 
     Scaffold(
         topBar = {
@@ -77,7 +80,7 @@ fun RecapScreen(
                     emoji = "📅"
                 ) {
                     BigStat("${recap.sessionCount}", "workouts")
-                    BigStat(formatRecapVolume(recap.totalVolumeLb), "total volume")
+                    BigStat(formatRecapVolume(recap.totalVolumeLb, useKg), "total volume")
                     BigStat("${recap.totalPrs}", "PRs")
                     BigStat("${recap.totalSets}", "sets logged")
                     if (recap.topExercise != null) RecapRow("Most trained", recap.topExercise)
@@ -94,10 +97,10 @@ fun RecapScreen(
                     emoji = "🏆"
                 ) {
                     BigStat("${recap.sessionCount}", "workouts")
-                    BigStat(formatRecapVolume(recap.totalVolumeLb), "total volume")
+                    BigStat(formatRecapVolume(recap.totalVolumeLb, useKg), "total volume")
                     BigStat("${recap.totalPrs}", "total PRs")
                     BigStat("${recap.longestStreak}d", "longest streak")
-                    if (recap.avgWeeklyVolume > 0) RecapRow("Avg weekly volume", "${recap.avgWeeklyVolume.toInt()} lb")
+                    if (recap.avgWeeklyVolume > 0) RecapRow("Avg weekly volume", formatRecapVolume(recap.avgWeeklyVolume, useKg))
                     if (recap.topExercise != null) RecapRow("Most trained exercise", recap.topExercise)
                     if (recap.bestMonthName != null) RecapRow("Best month", recap.bestMonthName)
                 }
@@ -140,8 +143,7 @@ private fun BigStat(value: String, label: String) {
 }
 
 /** Volume for the recap cards: "12.5k lb" for big numbers, the exact value under 1000 lb (no "0k"). */
-private fun formatRecapVolume(lb: Double): String =
-    if (lb >= 1000) "${"%.1f".format(lb / 1000).trimEnd('0').trimEnd('.')}k lb" else "${lb.toInt()} lb"
+private fun formatRecapVolume(lb: Double, useKg: Boolean): String = formatVolumeCompact(lb, useKg)
 
 @Composable
 private fun RecapRow(label: String, value: String) {

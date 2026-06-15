@@ -21,8 +21,10 @@ import com.forge.app.ui.gym.stats.components.LifetimeStat
 import com.forge.app.ui.gym.stats.components.formatVolume
 import com.forge.app.ui.gym.stats.components.numberWord
 import com.forge.app.ui.gym.stats.components.weekCommentary
+import com.forge.app.domain.units.unitLabel
 import com.forge.app.ui.gym.stats.state.ExerciseFrequency
 import com.forge.app.ui.gym.stats.state.LifetimeMetrics
+import com.forge.app.ui.theme.LocalForgeSettings
 
 @Composable
 internal fun StatsHeroSection(
@@ -35,6 +37,7 @@ internal fun StatsHeroSection(
     onBg: Color,
     muted: Color
 ) {
+    val useKg = LocalForgeSettings.current.useKg
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -56,7 +59,7 @@ internal fun StatsHeroSection(
         Spacer(Modifier.height(4.dp))
         val subtitleParts = buildList {
             if ((weekCurrentVolumeLb ?: 0.0) > 0)
-                add("${formatVolume(weekCurrentVolumeLb!!)} lb moved")
+                add("${formatVolume(weekCurrentVolumeLb!!, useKg)} ${unitLabel(useKg)} moved")
             if (weekCurrentPrs > 0)
                 add("$weekCurrentPrs ${if (weekCurrentPrs == 1) "PR" else "PRs"}")
             if (cardioMin > 0)
@@ -124,6 +127,7 @@ internal fun StatsLifetimeSection(
     muted: Color,
     outline: Color
 ) {
+    val useKg = LocalForgeSettings.current.useKg
     Column(Modifier.padding(horizontal = 24.dp)) {
         Text(
             "Your body of work",
@@ -134,7 +138,7 @@ internal fun StatsLifetimeSection(
         Spacer(Modifier.height(4.dp))
         if (lm != null && lm.totalSessions > 0) {
             Text(
-                "${numberWord(lm.totalSessions)} sessions · ${formatVolume(lm.lifetimeVolumeLb)} lb total.",
+                "${numberWord(lm.totalSessions)} sessions · ${formatVolume(lm.lifetimeVolumeLb, useKg)} ${unitLabel(useKg)} total.",
                 style = MaterialTheme.typography.bodySmall,
                 color = muted,
                 fontStyle = FontStyle.Italic
@@ -148,13 +152,13 @@ internal fun StatsLifetimeSection(
                     modifier = Modifier.weight(1f)
                 )
                 LifetimeStat(
-                    value = formatVolume(lm.lifetimeVolumeLb),
-                    label = "LB TOTAL",
+                    value = formatVolume(lm.lifetimeVolumeLb, useKg),
+                    label = "${unitLabel(useKg).uppercase()} TOTAL",
                     muted = muted, onBg = onBg,
                     modifier = Modifier.weight(1f)
                 )
                 LifetimeStat(
-                    value = formatVolume(lm.avgSessionVolumeLb),
+                    value = formatVolume(lm.avgSessionVolumeLb, useKg),
                     label = "AVG / SESSION",
                     muted = muted, onBg = onBg,
                     modifier = Modifier.weight(1f)

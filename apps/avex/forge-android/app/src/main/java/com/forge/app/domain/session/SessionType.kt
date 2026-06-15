@@ -8,6 +8,11 @@ package com.forge.app.domain.session
  *
  * Note: this is the SESSION-type namespace ("normal"/"deload"/"test"/…). It is unrelated to the
  * coach-decision `type` strings ("deload"/"swap"/"rep_shift"/…), which are a separate vocabulary.
+ *
+ * Status today: only NORMAL is auto-written, and DELOAD surfaces via Session.deloadMarkedHere.
+ * TEST / TECHNIQUE / FIRST_BACK have no writer yet (no session-type picker exists), so their pills
+ * can't appear until that UI is built — they're kept here so the write side and the pill won't drift
+ * once it is. If a picker is never planned, these three can be trimmed.
  */
 enum class SessionType(val key: String, val pillLabel: String?) {
     NORMAL("normal", null),

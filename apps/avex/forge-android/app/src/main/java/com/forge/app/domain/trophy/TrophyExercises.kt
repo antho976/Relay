@@ -11,9 +11,16 @@ package com.forge.app.domain.trophy
  * and these lists can be tweaked without touching rule logic.
  */
 object TrophyExercises {
-    /** ua1 = DB Bench Press · ub2 = Incline DB Bench Press. */
-    val BENCH_EXERCISE_IDS: List<String> = listOf("ua1", "ub2")
+    /**
+     * Bench-press variants that count toward the Bench Club trophy. Must list the LIBRARY ids
+     * (`db-bench-press`, `incline-db-bench-press`): once the program is DB-backed, a logged row's
+     * exercise_id is the library id (ProgramSlot.toPlan → ExerciseDef.id), not the seed slot code.
+     * The old seed codes (`ua1`/`ub2`) are kept too so any pre-DB-load / legacy rows still count.
+     */
+    val BENCH_EXERCISE_IDS: List<String> =
+        listOf("ua1", "ub2", "db-bench-press", "incline-db-bench-press")
 
-    /** la1 = Goblet Squat (Lower A) · lb4 = Goblet Squat (Lower B). */
-    val SQUAT_EXERCISE_IDS: List<String> = listOf("la1", "lb4")
+    /** Goblet-squat variants for the Squat Club trophy. Library id `goblet-squat` + legacy seed codes. */
+    val SQUAT_EXERCISE_IDS: List<String> =
+        listOf("la1", "lb4", "goblet-squat")
 }

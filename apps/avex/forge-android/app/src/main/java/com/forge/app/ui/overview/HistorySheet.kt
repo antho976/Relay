@@ -30,6 +30,9 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.data.repo.StatsRepository
+import com.forge.app.domain.units.formatVolume
+import com.forge.app.domain.units.formatWeight
+import com.forge.app.ui.theme.LocalForgeSettings
 import java.time.Instant
 import java.time.YearMonth
 import java.time.ZoneId
@@ -179,10 +182,11 @@ fun SummarySheet(
 
             Spacer(Modifier.height(20.dp))
 
+            val useKg = LocalForgeSettings.current.useKg
             // Stats strip
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
                 if (isGym && volumeLb != null && volumeLb > 0) {
-                    SummaryStat(value = formatVolumeLb(volumeLb), label = "VOLUME", muted = muted, onBg = onBg)
+                    SummaryStat(value = formatVolume(volumeLb, useKg), label = "VOLUME", muted = muted, onBg = onBg)
                 }
                 if (durationMin != null && durationMin > 0) {
                     SummaryStat(value = "$durationMin min", label = "DURATION", muted = muted, onBg = onBg)
@@ -227,7 +231,7 @@ fun SummarySheet(
                             modifier = Modifier.weight(1f)
                         )
                         val setInfo = if (ex.topWeightLb != null && ex.topWeightLb > 0)
-                            "${ex.setCount} × ${ex.topWeightLb.toInt()} lb"
+                            "${ex.setCount} × ${formatWeight(ex.topWeightLb, useKg)}"
                         else "${ex.setCount} sets"
                         Text(setInfo, style = MaterialTheme.typography.labelSmall,
                             color = muted, fontSize = 10.sp)

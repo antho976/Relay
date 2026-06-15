@@ -178,7 +178,7 @@ interface SessionDao {
     /** Avg and max volume per day_key across all finished sessions — for #132 best vs average. */
     @Query("""
         SELECT day_key, AVG(total_volume_lb) AS avg_vol, MAX(total_volume_lb) AS max_vol, COUNT(*) AS session_count
-        FROM session WHERE finished_at IS NOT NULL AND total_volume_lb IS NOT NULL
+        FROM session WHERE finished_at IS NOT NULL AND total_volume_lb IS NOT NULL AND is_untracked = 0
         GROUP BY day_key
     """)
     suspend fun avgMaxVolumeByDayKey(): List<DayVolumeStats>
@@ -187,7 +187,7 @@ interface SessionDao {
     @Query("""
         SELECT SUM(total_volume_lb) AS total_volume, COUNT(*) AS session_count,
                AVG(set_count) AS avg_sets
-        FROM session WHERE finished_at IS NOT NULL AND total_volume_lb IS NOT NULL
+        FROM session WHERE finished_at IS NOT NULL AND total_volume_lb IS NOT NULL AND is_untracked = 0
     """)
     suspend fun lifetimeAggregate(): LifetimeAggregate
 

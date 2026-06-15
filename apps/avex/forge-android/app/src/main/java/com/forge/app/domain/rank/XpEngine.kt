@@ -1,5 +1,7 @@
 package com.forge.app.domain.rank
 
+import com.forge.app.domain.units.formatVolumeCompact
+
 /**
  * Pure XP computation. Every input is derivable from existing finished-session data, so XP carries
  * no new persistence (recomputed on profile open, like the trophy-points sum) — no DB migration.
@@ -40,7 +42,9 @@ object XpEngine {
             XpSource("Workouts", "${s.finishedSessions} × $WORKOUT_XP", workouts),
             XpSource("Sets logged", "${s.totalSets} × $SET_XP", sets),
             XpSource("PRs", "${s.totalPrs} × $PR_XP", prs),
-            XpSource("Volume", "${(s.totalVolumeLb / 1000).toInt()}k lb × $VOLUME_XP_PER_1000LB", volume),
+            // XP is computed per 1000 lb, so the breakdown shows the lb basis + rate for all users —
+            // a kg figure with "× 5 (per 1000 lb)" wouldn't multiply out. Internal scoring detail.
+            XpSource("Volume", "${formatVolumeCompact(s.totalVolumeLb, useKg = false)} × $VOLUME_XP_PER_1000LB", volume),
             XpSource("Consistency", "${s.activeWeeks} wk × $ACTIVE_WEEK_XP", weeks),
             XpSource("Trophies", "tier points", trophies)
         ).filter { it.xp > 0 }

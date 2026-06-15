@@ -23,6 +23,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.forge.app.domain.units.formatVolume
+import com.forge.app.ui.theme.LocalForgeSettings
 import androidx.compose.ui.unit.sp
 import com.forge.app.domain.mood.Mood
 import com.forge.app.ui.gym.train.state.ExerciseHighlight
@@ -130,6 +132,7 @@ internal fun TagPicker(selected: Set<String>, onToggle: (String) -> Unit, onBg: 
 
 @Composable
 internal fun HighlightRow(h: ExerciseHighlight, onBg: Color, muted: Color) {
+    val useKg = LocalForgeSettings.current.useKg
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -137,7 +140,7 @@ internal fun HighlightRow(h: ExerciseHighlight, onBg: Color, muted: Color) {
     ) {
         Column(Modifier.weight(1f)) {
             Text(h.exerciseName, style = MaterialTheme.typography.bodySmall, color = onBg)
-            Text("${h.setsLogged} sets · ${h.volumeLb.toInt()} lb", style = MaterialTheme.typography.bodySmall, color = muted, fontSize = 10.sp)
+            Text("${h.setsLogged} sets · ${formatVolume(h.volumeLb, useKg)}", style = MaterialTheme.typography.bodySmall, color = muted, fontSize = 10.sp)
         }
         if (h.isPr) {
             Text("PR", color = onBg, fontWeight = FontWeight.Black, style = MaterialTheme.typography.labelSmall, fontSize = 9.sp, letterSpacing = 0.5.sp)

@@ -23,7 +23,9 @@ import androidx.compose.ui.graphics.PathMeasure
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.forge.app.domain.units.unitLabel
 import com.forge.app.ui.theme.ForgeMotion
+import com.forge.app.ui.theme.LocalForgeSettings
 
 // ─── Strength Curve Overlay (#94) — two exercises on same chart ───────────────
 
@@ -41,6 +43,7 @@ fun StrengthOverlayCard(
     val allDates = (history1.second + history2.second).map { it.sessionDate }.sorted()
     val minDate = allDates.firstOrNull() ?: return
     val dateRange = (allDates.lastOrNull()?.let { it - minDate } ?: 1L).toFloat().coerceAtLeast(1f)
+    val useKg = LocalForgeSettings.current.useKg
 
     Column(
         modifier = modifier.fillMaxWidth()
@@ -48,7 +51,7 @@ fun StrengthOverlayCard(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Text("STRENGTH COMPARISON · lb", style = MaterialTheme.typography.labelLarge,
+        Text("STRENGTH COMPARISON · ${unitLabel(useKg)}", style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.SemiBold)
         Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             LegendItem(history1.first, primaryColor)

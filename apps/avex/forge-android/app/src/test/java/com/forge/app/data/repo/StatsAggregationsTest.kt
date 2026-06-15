@@ -42,7 +42,7 @@ class StatsAggregationsTest {
         val prs = buildPrEntries(rows, allSets)
         assertEquals(1, prs.size)
         assertEquals(5, prs[0].reps)
-        assertTrue("expected the id-10 set (100), got ${prs[0].weightText}", prs[0].weightText.startsWith("100"))
+        assertEquals("expected the id-10 set (100)", 100.0, prs[0].weightLb, 0.001)
     }
 
     // ── #37: Epley e1RM, taking the best set within each session ──

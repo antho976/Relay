@@ -1,5 +1,7 @@
 package com.forge.app.domain.rank
 
+import com.forge.app.domain.units.formatVolumeCompact
+
 /**
  * Estimated standing "vs typical lifters". The app is offline / single-user, so there are no real
  * other athletes — each metric is mapped through a documented population model and reported as a
@@ -34,10 +36,10 @@ object StandingEngine {
         0.0 to 95, 5_000.0 to 70, 12_000.0 to 50, 25_000.0 to 28, 45_000.0 to 12, 70_000.0 to 6, 110_000.0 to 2
     )
 
-    fun standings(s: StandingSnapshot): List<StandingMetric> = listOf(
+    fun standings(s: StandingSnapshot, useKg: Boolean): List<StandingMetric> = listOf(
         StandingMetric("consistency", "Consistency", "${fmt1(s.sessionsPerWeek)}×/wk", pct(CONSISTENCY, s.sessionsPerWeek)),
         StandingMetric("streak", "Streak length", "${s.streakWeeks} wk", pct(STREAK, s.streakWeeks.toDouble())),
-        StandingMetric("volume", "Weekly volume", "${(s.weeklyVolumeLb / 1000).toInt()}k lb", pct(VOLUME, s.weeklyVolumeLb))
+        StandingMetric("volume", "Weekly volume", formatVolumeCompact(s.weeklyVolumeLb, useKg), pct(VOLUME, s.weeklyVolumeLb))
     )
 
     /** Piecewise-linear interpolation between anchors, clamped to [2, 99]. */

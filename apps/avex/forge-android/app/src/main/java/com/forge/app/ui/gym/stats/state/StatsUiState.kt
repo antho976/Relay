@@ -191,7 +191,7 @@ data class MuscleVolume(
 data class PrEntry(
     val date: Long,
     val exerciseName: String,
-    val weightText: String,
+    val weightLb: Double,
     val reps: Int
 )
 
@@ -205,9 +205,7 @@ data class PrRecord(
     val muscle: MuscleGroup,
     /** Relative strength as multiple of bodyweight. Null if no bodyweight logged (#77). */
     val relativeStrength: Double? = null
-) {
-    val weightText: String get() = "${maxWeightLb.toInt()} lb"
-}
+)
 
 /** One data point in the per-exercise weight history (#27). */
 data class HistoryPoint(

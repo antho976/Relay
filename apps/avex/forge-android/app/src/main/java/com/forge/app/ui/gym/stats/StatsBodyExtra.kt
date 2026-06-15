@@ -23,6 +23,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.forge.app.domain.units.toDisplayWeight
+import com.forge.app.domain.units.unitLabel
 import com.forge.app.ui.gym.stats.components.CountUpText
 import com.forge.app.ui.gym.stats.components.Sparkline
 import com.forge.app.ui.gym.stats.components.rememberDrawProgress
@@ -30,6 +32,7 @@ import com.forge.app.ui.gym.stats.state.BodyweightPoint
 import com.forge.app.ui.gym.stats.state.E1rmLift
 import com.forge.app.ui.gym.stats.state.PrRecord
 import com.forge.app.ui.theme.ForgeLastGreen
+import com.forge.app.ui.theme.LocalForgeSettings
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -38,8 +41,9 @@ import kotlin.math.roundToInt
 /** Bodyweight trend on a real time axis: current value counting up, dated sparkline, delta. */
 @Composable
 internal fun BodyweightCard(points: List<BodyweightPoint>, onBg: Color, muted: Color, accent: Color, outline: Color) {
+    val useKg = LocalForgeSettings.current.useKg
     Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
-        Text("BODYWEIGHT · lb", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
+        Text("BODYWEIGHT · ${unitLabel(useKg)}", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
         Spacer(Modifier.height(8.dp))
         if (points.isEmpty()) {
             Text(
@@ -52,16 +56,17 @@ internal fun BodyweightCard(points: List<BodyweightPoint>, onBg: Color, muted: C
             val delta = if (points.size >= 2) current - points.first().weightLb else 0.0
             Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 CountUpText(
-                    value = current,
-                    fromValue = prev,
+                    value = toDisplayWeight(current, useKg),
+                    fromValue = prev?.let { toDisplayWeight(it, useKg) },
                     style = MaterialTheme.typography.displaySmall,
                     color = onBg
                 )
-                Text("lb", style = MaterialTheme.typography.bodyMedium, color = muted, modifier = Modifier.padding(bottom = 6.dp))
-                if (kotlin.math.abs(delta) >= 0.5) {
-                    // Show one decimal for sub-1 lb changes instead of truncating to "0".
-                    val mag = kotlin.math.abs(delta)
-                    val magStr = if (mag % 1.0 == 0.0) "${mag.toInt()}" else "%.1f".format(mag)
+                Text(unitLabel(useKg), style = MaterialTheme.typography.bodyMedium, color = muted, modifier = Modifier.padding(bottom = 6.dp))
+                val magDisplay = kotlin.math.abs(toDisplayWeight(delta, useKg))
+                if (magDisplay >= 0.5) {
+                    // Show one decimal for sub-1-unit changes instead of truncating to "0".
+                    val mag = magDisplay
+                    val magStr = if (mag % 1.0 == 0.0) "${mag.toInt()}" else String.format(java.util.Locale.US, "%.1f", mag)
                     val sign = if (delta > 0) "+" else "-"
                     Text("$sign$magStr since first log", style = MaterialTheme.typography.labelSmall,
                         color = muted, fontSize = 10.sp, modifier = Modifier.padding(bottom = 6.dp))

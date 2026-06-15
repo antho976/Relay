@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.forge.app.data.db.dao.LoggedExerciseDao
 import com.forge.app.data.db.dao.SessionDao
+import com.forge.app.data.db.entities.durationMinutes
 import com.forge.app.program.Program
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -67,16 +68,16 @@ class RecapViewModel @Inject constructor(
         val yearStart = LocalDate.of(thisYear, 1, 1).atStartOfDay(zone).toInstant().toEpochMilli()
         val yearEnd = LocalDate.of(thisYear + 1, 1, 1).atStartOfDay(zone).toInstant().toEpochMilli()
 
-        val monthSessions = sessionDao.finishedInRange(monthStart, monthEnd)
-        val yearSessions = sessionDao.finishedInRange(yearStart, yearEnd)
+        // Exclude untracked sessions (#110) so the count/volume agree with frequencySince (which now
+        // filters them) — otherwise "most trained" and the session count describe different populations.
+        val monthSessions = sessionDao.finishedInRange(monthStart, monthEnd).filter { !it.isUntracked }
+        val yearSessions = sessionDao.finishedInRange(yearStart, yearEnd).filter { !it.isUntracked }
 
         // Month recap
         val monthRecap = if (monthSessions.isNotEmpty()) {
             val exFreq = loggedExerciseDao.frequencySince(monthStart)
             val topEx = exFreq.maxByOrNull { it.sessionCount }?.let { Program.exercise(it.exerciseId)?.name }
-            val avgDur = monthSessions.mapNotNull { s ->
-                s.finishedAt?.let { ((it - s.startedAt) / 60_000).toInt() }
-            }.average().toInt()
+            val avgDur = monthSessions.mapNotNull { it.durationMinutes() }.average().toInt()
             val bestDay = monthSessions.groupBy { it.dayKey }
                 .maxByOrNull { (_, sessions) -> sessions.sumOf { it.prCount } }
                 ?.key?.let { key -> Program.days.firstOrNull { it.key == key }?.defaultName }

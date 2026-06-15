@@ -2,6 +2,7 @@ package com.forge.app.data.repo
 
 import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.data.db.entities.Session
+import com.forge.app.data.db.entities.durationMinutes
 import com.forge.app.domain.adapt.InsightEngine
 import com.forge.app.program.Program
 import com.forge.app.ui.gym.stats.state.ExerciseFrequency
@@ -13,6 +14,7 @@ import com.forge.app.ui.gym.stats.state.WeeklyEffortCounts
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
+import kotlin.math.roundToInt
 
 // Pure effort / consistency / activity aggregation helpers extracted from
 // StatsRepository. No DAO or DI dependencies.
@@ -65,12 +67,16 @@ internal fun buildEffortDistribution(
         }
 }
 
-/** Session count per ISO week for the last 12 weeks, oldest → newest. */
+/**
+ * Session count per ISO week for the last 12 weeks, oldest → newest. Takes tracked-session start
+ * times (NOT set rows) so a session still counts even if all its sets were assisted/skipped — those
+ * are filtered out of the set aggregations, but the session itself still happened.
+ */
 internal fun buildWeeklySessionCounts(
-    allSets: List<com.forge.app.data.db.projections.SetWithExerciseAndSession>
+    sessionStartedAts: List<Long>
 ): List<Int> {
     val zone = ZoneId.systemDefault()
-    val byWeek = allSets.map { it.sessionStartedAt }.distinct()
+    val byWeek = sessionStartedAts.distinct()
         .groupingBy {
             val d = Instant.ofEpochMilli(it).atZone(zone).toLocalDate()
             d.minusDays(d.dayOfWeek.value.toLong() - 1)
@@ -81,14 +87,18 @@ internal fun buildWeeklySessionCounts(
     return (11 downTo 0).map { i -> byWeek[thisWeek.minusWeeks(i.toLong())] ?: 0 }
 }
 
-/** Consecutive recent weeks (incl. an in-progress current week) hitting the session target. */
+/**
+ * Consecutive recent weeks (incl. an in-progress current week) hitting the session target. Takes
+ * tracked-session start times (NOT set rows) so an all-assisted/all-skipped session still counts
+ * toward the streak — the session happened even if no working set survived the set-level filters.
+ */
 internal fun computeConsistencyStreak(
-    allSets: List<com.forge.app.data.db.projections.SetWithExerciseAndSession>,
+    sessionStartedAts: List<Long>,
     onVacation: (LocalDate) -> Boolean = { false }
 ): Int {
-    if (allSets.isEmpty()) return 0
+    if (sessionStartedAts.isEmpty()) return 0
     val zone = ZoneId.systemDefault()
-    val sessionsPerWeek = allSets.map { it.sessionStartedAt }.distinct()
+    val sessionsPerWeek = sessionStartedAts.distinct()
         .groupingBy {
             val d = Instant.ofEpochMilli(it).atZone(zone).toLocalDate()
             d.minusDays(d.dayOfWeek.value.toLong() - 1) // ISO week start (Monday)
@@ -161,8 +171,12 @@ internal fun buildWeeklyDurations(
 ): List<WeeklyDuration> {
     val byWeek = sessions
         .mapNotNull { s ->
-            val fin = s.finishedAt ?: return@mapNotNull null
-            val min = ((fin - s.startedAt) / 60_000).toInt().takeIf { it in 10..240 } ?: return@mapNotNull null
+            // Active-time minutes via the shared reader, so this chart agrees with the session-detail
+            // and history durations; keep only sane session lengths.
+            val min = (s.durationMinutes() ?: return@mapNotNull null).takeIf { it in 10..240 }
+                ?: return@mapNotNull null
+            // Bucket by startedAt — consistent with the weekly tonnage and training-times trend charts
+            // (the dot-grid is a separate current-week widget and deliberately uses finishedAt).
             val d = Instant.ofEpochMilli(s.startedAt).atZone(zone).toLocalDate()
             d.minusDays(d.dayOfWeek.value.toLong() - 1) to min
         }
@@ -171,9 +185,16 @@ internal fun buildWeeklyDurations(
         .sortedBy { it.key }
         .takeLast(maxWeeks)
         .map { (weekStart, mins) ->
+            val sorted = mins.sorted()
+            val mid = sorted.size / 2
+            // True median: average the two middle elements on even-sized weeks, rounded (Int field) —
+            // was the upper element, which over-reported.
+            val median = if (sorted.size % 2 == 0)
+                ((sorted[mid - 1] + sorted[mid]) / 2.0).roundToInt()
+            else sorted[mid]
             WeeklyDuration(
                 weekLabel = weekStart.toString().substring(5),
-                medianMin = mins.sorted()[mins.size / 2]
+                medianMin = median
             )
         }
 }
@@ -200,7 +221,7 @@ internal fun buildWeekActivity(
             dayLabel = dayLabels[dow],
             sessionName = dayPlan?.defaultName,
             muscleWord = dayPlan?.word,
-            durationMin = session?.finishedAt?.let { fin -> ((fin - session.startedAt) / 60_000).toInt() },
+            durationMin = session?.durationMinutes(),
             setCount = session?.setCount ?: 0,
             hasPr = (session?.prCount ?: 0) > 0,
             cardioType = cardio?.type?.replaceFirstChar { it.uppercase() },

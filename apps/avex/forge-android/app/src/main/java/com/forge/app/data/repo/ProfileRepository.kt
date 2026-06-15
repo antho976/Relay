@@ -4,6 +4,7 @@ import com.forge.app.core.time.Clock
 import com.forge.app.data.db.dao.LoggedSetDao
 import com.forge.app.data.db.dao.SessionDao
 import com.forge.app.data.db.entities.Session
+import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.domain.rank.RankInfo
 import com.forge.app.domain.rank.RankLadder
 import com.forge.app.domain.rank.StandingEngine
@@ -90,9 +91,11 @@ class ProfileRepository @Inject constructor(
     private val loggedSetDao: LoggedSetDao,
     private val trophyRepo: TrophyRepository,
     private val statsRepo: StatsRepository,
+    private val settingsRepo: SettingsRepository,
     private val clock: Clock
 ) {
     suspend fun load(): ProfileData = withContext(Dispatchers.Default) {
+        val useKg = settingsRepo.useKg.first()
         val zone = ZoneId.systemDefault()
         val nowMs = clock.nowMs()
         val sessions = sessionDao.allFinished().filter { !it.isUntracked }
@@ -122,7 +125,8 @@ class ProfileRepository @Inject constructor(
                 sessionsPerWeek = recent.size / weeks90,
                 streakWeeks = currentStreakWeeks(sessions, zone, nowMs),
                 weeklyVolumeLb = recent.sumOf { it.totalVolumeLb ?: 0.0 } / weeks90
-            )
+            ),
+            useKg
         )
 
         // ── Signature ─────────────────────────────────────────────────────────────
@@ -138,13 +142,13 @@ class ProfileRepository @Inject constructor(
 
         // ── Trophy case ───────────────────────────────────────────────────────────
         val snapshot = runCatching { trophyRepo.snapshot() }.getOrNull()
-        val trophyGrid = curatedTrophyGrid(unlockedIds, snapshot)
+        val trophyGrid = curatedTrophyGrid(unlockedIds, snapshot, useKg)
         val closestTrophy = snapshot?.let { snap ->
             Trophies.all.filter { it.id !in unlockedIds }
                 .mapNotNull { t -> TrophyEvaluator.progressFraction(t.unlock, snap)?.let { t to it } }
                 .filter { it.second > 0f }
                 .maxByOrNull { it.second }
-                ?.let { (t, _) -> TrophyEvaluator.progressRemaining(t.unlock, snap)?.let { "$it away from ${t.name}" } }
+                ?.let { (t, _) -> TrophyEvaluator.progressRemaining(t.unlock, snap, useKg)?.let { "$it away from ${t.name}" } }
         }
 
         ProfileData(
@@ -208,7 +212,7 @@ class ProfileRepository @Inject constructor(
      * the [HARDEST_DONE] hardest unlocked trophies (by tier points), then locked trophies ranked by
      * progress (almost-complete first, 0%-progress fillers after) up to [TROPHY_HIGHLIGHTS] cells.
      */
-    private fun curatedTrophyGrid(unlockedIds: Set<String>, snapshot: TrophyStatsSnapshot?): List<TrophyCell> {
+    private fun curatedTrophyGrid(unlockedIds: Set<String>, snapshot: TrophyStatsSnapshot?, useKg: Boolean): List<TrophyCell> {
         val hardestDone = Trophies.all
             .filter { it.id in unlockedIds }
             .sortedWith(compareByDescending<Trophy> { it.tier.points }.thenBy { it.name })
@@ -223,7 +227,7 @@ class ProfileRepository @Inject constructor(
             .map { (t, p) ->
                 TrophyCell(
                     t.icon, unlocked = false, progress = p, name = t.name, description = t.description,
-                    progressLabel = snapshot?.let { TrophyEvaluator.progressHint(t.unlock, it) },
+                    progressLabel = snapshot?.let { TrophyEvaluator.progressHint(t.unlock, it, useKg) },
                     variant = Trophies.variantFor(t.id)
                 )
             }

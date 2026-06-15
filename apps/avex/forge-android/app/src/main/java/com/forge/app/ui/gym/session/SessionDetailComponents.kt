@@ -25,6 +25,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.data.db.types.EffortRating
+import com.forge.app.domain.session.SessionType
+import com.forge.app.domain.units.formatVolume
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.ui.common.rpeLabel
 import com.forge.app.ui.gym.session.state.ExerciseDetail
@@ -33,7 +35,6 @@ import com.forge.app.ui.gym.session.state.SessionDetailData
 import com.forge.app.ui.gym.session.state.SessionMetric
 import com.forge.app.ui.gym.session.state.SetDetail
 import com.forge.app.ui.overview.SummaryStat
-import com.forge.app.ui.overview.formatVolumeLb
 import com.forge.app.ui.theme.LocalForgeSettings
 import java.time.Instant
 import java.time.ZoneId
@@ -49,9 +50,14 @@ internal fun SessionHeader(data: SessionDetailData, onBg: Color, muted: Color, o
     val dateStr = date.format(DateTimeFormatter.ofPattern("EEEE, d MMMM", Locale.getDefault()))
     Column(Modifier.fillMaxWidth()) {
         val sub = buildList {
-            if (data.deload) add("DELOAD")
+            // Deload marker wins; otherwise the stored session-type's pill (TEST/TECHNIQUE/… once a
+            // picker writes them) — same resolution as the Overview status pill so the two can't drift.
+            (if (data.deload) SessionType.DELOAD.pillLabel else SessionType.fromKey(data.sessionType)?.pillLabel)
+                ?.let { add(it) }
             if (data.intensity.isNotBlank() && data.intensity != "normal") add(data.intensity.uppercase())
-            if (data.tag.isNotBlank()) add(data.tag.uppercase())
+            // Quick tags are stored comma-separated (#107); add each as its own token so the sub-line
+            // never shows a raw "FOCUS,HEAVY" (the Overview pill splits them the same way).
+            data.tag.split(",").forEach { t -> t.trim().takeIf { it.isNotEmpty() }?.let { add(it.uppercase()) } }
         }.joinToString(" · ")
         if (sub.isNotEmpty()) {
             Text(sub, style = MaterialTheme.typography.labelSmall, letterSpacing = 1.5.sp, color = muted, fontSize = 9.sp)
@@ -69,8 +75,9 @@ internal fun SessionHeader(data: SessionDetailData, onBg: Color, muted: Color, o
 /** The top stats strip — reuses the overview's [SummaryStat] so the language matches the rest of history. */
 @Composable
 internal fun SummaryStrip(data: SessionDetailData, onBg: Color, muted: Color) {
+    val useKg = LocalForgeSettings.current.useKg
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-        data.volumeLb?.takeIf { it > 0 }?.let { SummaryStat(formatVolumeLb(it), "VOLUME", muted, onBg) }
+        data.volumeLb?.takeIf { it > 0 }?.let { SummaryStat(formatVolume(it, useKg), "VOLUME", muted, onBg) }
         data.durationMin?.takeIf { it > 0 }?.let { SummaryStat("$it min", "DURATION", muted, onBg) }
         if (data.setCount > 0) SummaryStat("${data.setCount}", "SETS", muted, onBg)
         if (data.prCount > 0) SummaryStat("${data.prCount}", "PRs", muted, onBg)

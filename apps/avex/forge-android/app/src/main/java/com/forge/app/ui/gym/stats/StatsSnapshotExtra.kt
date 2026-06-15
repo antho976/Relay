@@ -24,6 +24,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.forge.app.domain.units.toDisplayWeight
+import com.forge.app.domain.units.unitLabel
 import com.forge.app.ui.gym.stats.components.CountUpText
 import com.forge.app.ui.gym.stats.components.Sparkline
 import com.forge.app.ui.gym.stats.components.formatVolume
@@ -34,12 +36,14 @@ import com.forge.app.ui.gym.stats.state.PulseBand
 import com.forge.app.ui.gym.stats.state.ReadinessPulse
 import com.forge.app.ui.theme.ForgeLastGreen
 import com.forge.app.ui.theme.ForgeWarning
+import com.forge.app.ui.theme.LocalForgeSettings
 
 /** "MOMENTUM · VS LAST WEEK" — a 2×2 grid of this-week values with deltas vs last week. */
 @Composable
 internal fun MomentumGrid(current: PeriodStats?, previous: PeriodStats?, onBg: Color, muted: Color, outline: Color) {
     val cur = current ?: PeriodStats(0, 0.0, 0, 0)
     val prev = previous ?: PeriodStats(0, 0.0, 0, 0)
+    val useKg = LocalForgeSettings.current.useKg
     Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
         Text("MOMENTUM · VS LAST WEEK", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
         Spacer(Modifier.height(10.dp))
@@ -48,7 +52,7 @@ internal fun MomentumGrid(current: PeriodStats?, previous: PeriodStats?, onBg: C
         ) {
             Row(Modifier.fillMaxWidth()) {
                 MomentumCell("SESSIONS", "${cur.sessions}", cur.sessions.toDouble(), prev.sessions.toDouble(), "was ${prev.sessions}", onBg, muted, Modifier.weight(1f))
-                MomentumCell("VOLUME LB", formatVolume(cur.volumeLb), cur.volumeLb, prev.volumeLb, "was ${formatVolume(prev.volumeLb)}", onBg, muted, Modifier.weight(1f))
+                MomentumCell("VOLUME ${unitLabel(useKg).uppercase()}", formatVolume(cur.volumeLb, useKg), cur.volumeLb, prev.volumeLb, "was ${formatVolume(prev.volumeLb, useKg)}", onBg, muted, Modifier.weight(1f))
             }
             Spacer(Modifier.height(16.dp))
             Row(Modifier.fillMaxWidth()) {
@@ -101,20 +105,21 @@ private fun MomentumCell(
 internal fun OverloadCard(overload: OverloadSummary?, monthlyPct: Double?, onBg: Color, muted: Color, accent: Color, outline: Color) {
     if (overload == null) return
     val error = MaterialTheme.colorScheme.error
+    val useKg = LocalForgeSettings.current.useKg
     Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
         Text("PROGRESSIVE OVERLOAD", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
         Spacer(Modifier.height(8.dp))
         Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             CountUpText(
-                value = overload.current,
-                fromValue = overload.prevWeek,
+                value = toDisplayWeight(overload.current, useKg),
+                fromValue = overload.prevWeek?.let { toDisplayWeight(it, useKg) },
                 style = MaterialTheme.typography.displaySmall,
                 color = emphasized(onBg)
             )
-            Text("AVG E1RM · LB", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, modifier = Modifier.padding(bottom = 8.dp))
+            Text("AVG E1RM · ${unitLabel(useKg).uppercase()}", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, modifier = Modifier.padding(bottom = 8.dp))
             overload.deltaVsPrevWeek?.let { d ->
                 Text(
-                    "${if (d >= 0) "↑ +" else "↓ "}${d.toInt()} vs last week · was ${overload.prevWeek!!.toInt()}",
+                    "${if (d >= 0) "↑ +" else "↓ "}${String.format(java.util.Locale.US, "%.1f", toDisplayWeight(kotlin.math.abs(d), useKg))} vs last week · was ${String.format(java.util.Locale.US, "%.1f", toDisplayWeight(overload.prevWeek!!, useKg))}",
                     style = MaterialTheme.typography.labelSmall,
                     color = if (d >= 0) ForgeLastGreen else error,
                     fontSize = 9.sp,
@@ -151,18 +156,21 @@ internal fun OverloadCard(overload: OverloadSummary?, monthlyPct: Double?, onBg:
  */
 @Composable
 internal fun PulseCard(pulse: ReadinessPulse?, onBg: Color, muted: Color, outline: Color) {
-    val band = pulse?.band ?: PulseBand.FRESH
-    val color = when (band) {
+    // Null pulse = data gates not open yet; render a neutral cold-start state, NOT a green "Fresh"
+    // (which would falsely signal a healthy reading when there's simply no data). (F16.)
+    val color = when (pulse?.band) {
+        null -> muted
         PulseBand.FRESH -> ForgeLastGreen
         PulseBand.BUILDING -> ForgeWarning
         PulseBand.DELOAD_SOON -> MaterialTheme.colorScheme.error
     }
+    val label = pulse?.band?.label ?: "No read yet"
     Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
         Text("READINESS PULSE", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
         Spacer(Modifier.height(8.dp))
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Box(Modifier.size(8.dp).background(color, CircleShape))
-            Text(band.label, style = MaterialTheme.typography.headlineMedium, color = onBg)
+            Text(label, style = MaterialTheme.typography.headlineMedium, color = onBg)
             if (pulse != null && pulse.score > 0) {
                 Text("FATIGUE ${pulse.score}", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
             }

@@ -133,20 +133,19 @@ class AdaptationRepository @Inject constructor(
         return RecommendationArbiter.arbitrate(recs, mutedAdviceIds())
     }
 
-    /** Engine observations for the Stats insights section (replaces the legacy buildInsights). */
-    suspend fun insights(): List<Recommendation.Insight> = InsightEngine.evaluate(snapshot())
-
     /**
-     * Everything the Stats page reads from the engine, off ONE snapshot fan-out: the
-     * fatigue pulse (System 5), the plateau ladder (System 1), and the always-on balance
-     * ratios (System 4's counting, ungated). Call once per Stats open — surface-level
-     * entry point, never the per-set hot path.
+     * Everything the Stats page reads from the engine, off ONE snapshot fan-out: the fatigue
+     * pulse (System 5), the plateau ladder (System 1), the always-on balance ratios (System 4's
+     * counting, ungated), and the insight observations. Call once per Stats open — surface-level
+     * entry point, never the per-set hot path. (Insights live here, not in StatsRepository's
+     * reactive combine, so Stats open does ONE snapshot instead of two.)
      */
     data class EngineStatsRead(
         val fatigue: DeloadAdvisor.FatigueAssessment?,
         val deloadScoreThreshold: Int,
         val plateaus: List<Recommendation>,
-        val ratios: List<RatioCounts>
+        val ratios: List<RatioCounts>,
+        val insights: List<Recommendation.Insight>
     )
 
     suspend fun engineStatsRead(): EngineStatsRead {
@@ -156,7 +155,8 @@ class AdaptationRepository @Inject constructor(
             fatigue = DeloadAdvisor.fatigue(s, t),
             deloadScoreThreshold = t.deloadScoreThreshold,
             plateaus = ProgressionAdvisor.evaluate(s, t),
-            ratios = InsightEngine.balanceRatios(s, t)
+            ratios = InsightEngine.balanceRatios(s, t),
+            insights = InsightEngine.evaluate(s)
         )
     }
 

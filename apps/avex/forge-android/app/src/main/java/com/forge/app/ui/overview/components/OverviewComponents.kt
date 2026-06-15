@@ -30,9 +30,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.forge.app.domain.units.formatVolume
 import com.forge.app.ui.common.bounceClick
-import com.forge.app.ui.overview.formatVolumeLb
 import com.forge.app.ui.overview.state.OverviewRecentItem
+import com.forge.app.ui.theme.LocalForgeSettings
 
 @Composable
 fun WeekDayBox(
@@ -102,6 +103,7 @@ fun RecentRow(
     outline: Color,
     onClick: () -> Unit = {}
 ) {
+    val useKg = LocalForgeSettings.current.useKg
     Column(
         modifier = Modifier.fillMaxWidth().bounceClick { onClick() },
         verticalArrangement = Arrangement.spacedBy(3.dp)
@@ -145,7 +147,7 @@ fun RecentRow(
             if (item.isGym && item.volumeLb != null && item.volumeLb > 0) {
                 Spacer(Modifier.width(12.dp))
                 Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    val volText = formatVolumeLb(item.volumeLb)
+                    val volText = formatVolume(item.volumeLb, useKg)
                     // Trend vs this day-type's average (reuses vsAvgPct); a best session always reads up.
                     val trend = when {
                         item.isBest || (item.vsAvgPct != null && item.vsAvgPct > 0) -> "↑"

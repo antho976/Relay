@@ -76,7 +76,7 @@ interface LoggedExerciseDao {
         SELECT le.exercise_id, le.swapped_name, s.started_at, le.id AS logged_exercise_id
         FROM logged_exercise le
         INNER JOIN session s ON le.session_id = s.id
-        WHERE le.was_pr = 1 AND s.finished_at IS NOT NULL
+        WHERE le.was_pr = 1 AND s.finished_at IS NOT NULL AND s.is_untracked = 0
         ORDER BY s.started_at DESC
         LIMIT 30
     """)
@@ -87,17 +87,22 @@ interface LoggedExerciseDao {
         SELECT le.exercise_id, le.swapped_name, s.started_at, le.id AS logged_exercise_id
         FROM logged_exercise le
         INNER JOIN session s ON le.session_id = s.id
-        WHERE le.was_pr = 1 AND s.finished_at IS NOT NULL
+        WHERE le.was_pr = 1 AND s.finished_at IS NOT NULL AND s.is_untracked = 0
         ORDER BY s.started_at DESC
     """)
     fun observeAllPrs(): Flow<List<RecentPrRow>>
 
-    /** Exercise frequency in past N weeks — distinct sessions containing each exercise (#73). */
+    /**
+     * Exercise frequency in past N weeks — distinct sessions containing each exercise (#73).
+     * Excludes skipped exercises (you didn't actually do them) and untracked sessions, matching
+     * the Stats history policy (also consumed by the monthly/yearly Recap).
+     */
     @Query("""
         SELECT le.exercise_id, COUNT(DISTINCT le.session_id) AS session_count
         FROM logged_exercise le
         INNER JOIN session s ON le.session_id = s.id
         WHERE s.finished_at IS NOT NULL AND s.started_at >= :sinceMs
+          AND s.is_untracked = 0 AND le.skipped = 0
         GROUP BY le.exercise_id
         ORDER BY session_count DESC
     """)
@@ -113,7 +118,7 @@ interface LoggedExerciseDao {
         SELECT le.exercise_id, s.started_at AS session_date
         FROM logged_exercise le
         INNER JOIN session s ON le.session_id = s.id
-        WHERE le.was_pr = 1 AND s.finished_at IS NOT NULL
+        WHERE le.was_pr = 1 AND s.finished_at IS NOT NULL AND s.is_untracked = 0
         ORDER BY le.exercise_id, s.started_at ASC
     """)
     suspend fun prDatesPerExercise(): List<ExercisePrDate>
@@ -129,6 +134,7 @@ interface LoggedExerciseDao {
         FROM logged_exercise le
         INNER JOIN session s ON le.session_id = s.id
         WHERE s.finished_at IS NOT NULL AND s.started_at >= :sinceMs AND le.difficulty IS NOT NULL
+          AND s.is_untracked = 0 AND le.skipped = 0
     """)
     suspend fun effortRatingsSince(sinceMs: Long): List<EffortWithDate>
 

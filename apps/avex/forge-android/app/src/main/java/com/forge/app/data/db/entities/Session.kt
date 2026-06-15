@@ -41,3 +41,22 @@ data class Session(
      */
     @ColumnInfo(name = "active_seconds") val activeSeconds: Int = 0
 )
+
+/**
+ * Canonical display duration in whole minutes: prefer real ACTIVE training time (excludes away-time
+ * between sittings), falling back to wall-clock only when [activeSeconds] wasn't recorded (pre-feature
+ * sessions stamp 0). Null only when the session never finished and has no active time. Any positive
+ * duration reads as at least 1 min, so a genuine sub-minute session isn't hidden by a `> 0` guard.
+ *
+ * All display surfaces (session detail, overview, history rows, the weekly-duration chart) read
+ * through this so they can never disagree on a session's length.
+ */
+fun Session.durationMinutes(): Int? {
+    val fin = finishedAt
+    val seconds = when {
+        activeSeconds > 0 -> activeSeconds
+        fin != null -> ((fin - startedAt) / 1000L).toInt()
+        else -> return null
+    }
+    return if (seconds <= 0) 0 else (seconds / 60).coerceAtLeast(1)
+}

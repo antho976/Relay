@@ -51,6 +51,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.forge.app.domain.units.toDisplayWeight
+import com.forge.app.ui.theme.LocalForgeSettings
 import com.forge.app.program.Program
 import com.forge.app.program.Trophies
 import com.forge.app.ui.overview.components.CardioTile
@@ -338,12 +340,13 @@ fun OverviewScreen(
 
             Spacer(Modifier.height(16.dp))
 
+            val useKg = LocalForgeSettings.current.useKg
             val animWorkouts by animateIntAsState(state.workoutsThisWeek.coerceAtLeast(0), label = "workouts")
-            val animVolume by animateIntAsState(state.volumeThisWeekLb.coerceAtLeast(0.0).toInt(), label = "volume")
+            val animVolume by animateIntAsState(toDisplayWeight(state.volumeThisWeekLb, useKg).coerceAtLeast(0.0).toInt(), label = "volume")
             val animCardio by animateIntAsState(state.cardioMinutesThisWeek.coerceAtLeast(0), label = "cardio")
             Row(modifier = Modifier.fillMaxWidth()) {
                 OverviewStat(value = "$animWorkouts", label = "WORKOUTS", modifier = Modifier.weight(1f))
-                OverviewStat(value = "$animVolume", label = "LB", modifier = Modifier.weight(1f))
+                OverviewStat(value = "$animVolume", label = if (useKg) "KG" else "LB", modifier = Modifier.weight(1f))
                 OverviewStat(
                     value = if (state.cardioWeeklyTargetMin > 0) "$animCardio/${state.cardioWeeklyTargetMin}" else "$animCardio",
                     label = "CARDIO MIN", modifier = Modifier.weight(1f)

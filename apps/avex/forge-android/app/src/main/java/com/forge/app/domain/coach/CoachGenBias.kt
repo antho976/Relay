@@ -15,7 +15,7 @@ data class GenBias(
      * had no survival channel and was silently discarded on every regenerate).
      */
     val repBias: Map<String, String> = emptyMap(),
-    /** Rotations the watcher judged "ok" (or already folded into the baseline) — boosted like likes. */
+    /** Rotations the watcher judged "ok" (or folded into the baseline and not judged failed) — boosted like likes. */
     val prefer: Set<String> = emptySet(),
     /** Rotations that failed (skipped after the change / user-reverted) — softly avoided. */
     val avoid: Set<String> = emptySet()
@@ -40,8 +40,9 @@ data class GenBias(
  *  - volumeBias: net per muscle of non-failed volume_up/volume_down (reverted/skipped/failed rows
  *    drop out), clamped to ±[VOLUME_CLAMP] — the same bound as the planner's drift cap (hardening 11).
  *  - repBias: latest non-failed rep_shift per exercise.
- *  - prefer: swap replacements judged "ok", OR already folded into the baseline (folding stops the
- *    watcher, so a folded swap can't reach "ok" — it earned its slot by being accepted + absorbed).
+ *  - prefer: swap replacements judged "ok", OR folded into the baseline and not (yet) judged failed.
+ *    Folding keeps a swap preferred for SURVIVAL — carrying its learning forward is independent of
+ *    trust — but an in-window folded swap the watcher later rules failed drops out (CoachDao.pendingOutcome).
  *  - avoid: swap replacements that failed — the generator steers around them softly (it may still
  *    pick one if the muscle has nothing else; dislike remains the hard ban).
  */
@@ -72,8 +73,12 @@ object CoachGenBias {
             .associate { it.targetKey to it.payload!! }
 
         val swaps = decisions.filter { it.type == "swap" && it.payload != null }
+        // A folded swap stays preferred for SURVIVAL (its accepted rotation carries into the new
+        // baseline) as long as it hasn't FAILED — bias survival is independent of trust. Now that the
+        // watcher can still judge an in-window folded swap (CoachDao.pendingOutcome), one it rules
+        // failed must drop out of prefer and into avoid (auto-coach seam audit 2026-06-15, finding P1).
         val prefer = swaps
-            .filter { it.status == "folded" || (it.status == "applied" && it.outcome == "ok") }
+            .filter { (it.status == "folded" && it.outcome != "failed") || (it.status == "applied" && it.outcome == "ok") }
             .mapNotNull { it.payload }.toSet()
         val avoid = swaps.filter { it.outcome == "failed" }
             .mapNotNull { it.payload }.toSet() - prefer

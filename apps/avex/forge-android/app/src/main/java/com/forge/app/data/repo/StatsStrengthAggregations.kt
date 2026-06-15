@@ -1,5 +1,6 @@
 package com.forge.app.data.repo
 
+import com.forge.app.domain.adapt.E1rm
 import com.forge.app.program.MuscleGroup
 import com.forge.app.program.Program
 import com.forge.app.ui.gym.stats.state.E1rmLift
@@ -16,6 +17,7 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.temporal.ChronoUnit
+import kotlin.math.roundToInt
 
 // Pure strength / PR / e1RM aggregation helpers extracted from StatsRepository.
 // These operate on already-loaded set projections — no DAO or DI dependencies — so
@@ -28,17 +30,20 @@ internal fun buildPrEntries(
     // Match each PR row to its exact owning LoggedExercise via loggedExerciseId, so an
     // exercise logged twice in one session resolves to the right set (was matched on
     // session date + exercise id, which picked whichever instance weighed more).
-    return rows.map { row ->
+    return rows.mapNotNull { row ->
         val candidateSets = allSets.filter { it.loggedExerciseId == row.loggedExerciseId }
-        val prSet = candidateSets.maxByOrNull { it.weightLb ?: 0.0 }
+        // No matching set in the tracked/non-skipped/unassisted population (e.g. the PR's sets were
+        // filtered out) — drop the row rather than render a blank "— / 0 reps" entry.
+        val prSet = candidateSets.maxByOrNull { it.weightLb ?: 0.0 } ?: return@mapNotNull null
+        val weightLb = prSet.weightLb ?: return@mapNotNull null
         val name = row.swappedName
             ?: Program.exercise(row.exerciseId)?.name
             ?: row.exerciseId
         PrEntry(
             date = row.sessionStartedAt,
             exerciseName = name,
-            weightText = prSet?.weightLb?.let { "${it.toInt()} lb" } ?: "—",
-            reps = prSet?.reps ?: 0
+            weightLb = weightLb,
+            reps = prSet.reps
         )
     }
 }
@@ -88,8 +93,13 @@ internal fun buildExerciseHistory(
         }
 }
 
-/** Epley estimated 1-rep max. */
-private fun e1rm(weightLb: Double, reps: Int): Double = weightLb * (1.0 + reps / 30.0)
+/**
+ * Epley estimated 1-rep max — delegates to the canonical [E1rm] so the Stats path and the
+ * adaptation engine can never diverge. [E1rm.epley] guards `reps <= 1` (a true single's e1RM is
+ * the weight itself); the old private copy here omitted that guard and inflated heavy singles by
+ * 3.3% on every absolute e1RM number the Stats screen shows.
+ */
+private fun e1rm(weightLb: Double, reps: Int): Double = E1rm.epley(weightLb, reps)
 
 /** Per-lift estimated-1RM progression: best e1RM per session, with growth rate + stall flag. */
 internal fun buildE1rmLifts(
@@ -107,8 +117,10 @@ internal fun buildE1rmLifts(
             val first = points.first()
             val current = points.last()
             val monthlyPct = if (points.size >= 2 && first > 0) {
-                val months = ((dates.last() - dates.first()) / (30.44 * 24 * 60 * 60 * 1000)).coerceAtLeast(0.5)
-                (current - first) / first / months * 100.0
+                // Need ≥ ~15 days of span to annualise a rate; below that show no rate rather than a
+                // wildly off one (was coerceAtLeast(0.5), which deflated brand-new lifts). (F14.)
+                val months = (dates.last() - dates.first()) / (30.44 * 24 * 60 * 60 * 1000)
+                if (months >= 0.5) (current - first) / first / months * 100.0 else null
             } else null
             val stalling = points.size >= 3 && run {
                 val recent = points.takeLast(3)
@@ -166,10 +178,19 @@ internal fun buildOverloadSummary(
         bestPerWeekPerLift.getOrPut(week) { HashMap() }.merge(s.exerciseId, e1rm(w, s.reps), ::maxOf)
     }
     if (bestPerWeekPerLift.isEmpty()) return null
+    // Forward-fill each lift's last-known best e1RM into weeks it wasn't trained, so every week's
+    // average covers the SAME cumulative set of lifts. Without this, on a split program the weekly
+    // average swings with WHICH lifts were trained that week rather than with strength — an
+    // 'a'-only week and a 'b'-only week alternate wildly. (Stats audit F12.) Accumulate across ALL
+    // weeks in order, then keep the last [maxWeeks] for display.
+    val carried = HashMap<String, Double>()
     val weekly = bestPerWeekPerLift.entries
         .sortedBy { it.key }
+        .map { (_, perLift) ->
+            carried.putAll(perLift)
+            carried.values.average()
+        }
         .takeLast(maxWeeks)
-        .map { (_, perLift) -> perLift.values.average() }
     return OverloadSummary(current = weekly.last(), weekly = weekly)
 }
 
@@ -186,7 +207,7 @@ internal fun buildPrRecency(
             .toInt().coerceAtLeast(0)
     val byExercise = rows.groupBy { it.exerciseId }
         .mapValues { (_, rs) -> daysSince(rs.maxOf { it.sessionDate }) }
-    return PrRecency(daysSinceLast = byExercise.values.min(), byExercise = byExercise)
+    return PrRecency(daysSinceLast = byExercise.values.minOrNull() ?: 0, byExercise = byExercise)
 }
 
 /** Movement-pattern buckets for the radar — derived from muscle groups, not exercise ids. */
@@ -240,7 +261,7 @@ internal fun buildTimeToPr(
             if (dates.size < 2) return@mapNotNull null
             val sorted = dates.sortedBy { it.sessionDate }
             val avgMs = sorted.zipWithNext { a, b -> b.sessionDate - a.sessionDate }.average()
-            val avgDays = (avgMs / (24 * 60 * 60 * 1000)).toInt().coerceAtLeast(1)
+            val avgDays = (avgMs / (24 * 60 * 60 * 1000)).roundToInt().coerceAtLeast(1)
             val name = Program.exercise(exerciseId)?.name ?: return@mapNotNull null
             TimeToPrEntry(exerciseId = exerciseId, exerciseName = name, avgDaysBetween = avgDays, prCount = dates.size)
         }

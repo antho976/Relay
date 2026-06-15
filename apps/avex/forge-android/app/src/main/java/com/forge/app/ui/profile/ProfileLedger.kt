@@ -28,6 +28,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import com.forge.app.domain.units.formatVolumeCompact
+import com.forge.app.domain.units.toDisplayWeight
+import com.forge.app.domain.units.unitLabel
+import kotlin.math.roundToInt
+import com.forge.app.ui.theme.LocalForgeSettings
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
@@ -74,10 +79,11 @@ internal fun LedgerSection(
     accent: Color,
     outline: Color
 ) {
+    val useKg = LocalForgeSettings.current.useKg
     ProfileBlock("THE LEDGER · ALL TIME", muted, accent, outline) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             LifetimeStat("$sessions", "WORKOUTS")
-            LifetimeStat(formatVolume(volumeLb), "LIFETIME LB")
+            LifetimeStat(formatVolume(volumeLb, useKg), "LIFETIME ${unitLabel(useKg).uppercase()}")
             LifetimeStat("$prs", "PRs")
             LifetimeStat("$xp", "XP")
         }
@@ -144,11 +150,12 @@ internal fun SignatureSection(
     accent: Color,
     outline: Color
 ) {
+    val useKg = LocalForgeSettings.current.useKg
     ProfileBlock("SIGNATURE", muted, accent, outline) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
             SignatureCell(
                 value = topLift?.name ?: "—",
-                label = if (topLift != null) "TOP LIFT · ${topLift.weightLb.toInt()} LB" else "TOP LIFT",
+                label = if (topLift != null) "TOP LIFT · ${toDisplayWeight(topLift.weightLb, useKg).roundToInt()} ${unitLabel(useKg).uppercase()}" else "TOP LIFT",
                 onBg = onBg, muted = muted, modifier = Modifier.weight(1f)
             )
             SignatureDivider(outline)
@@ -181,6 +188,5 @@ internal fun LifetimeStat(value: String, label: String) {
     }
 }
 
-/** "412k" / "950" — compact lifetime volume. */
-internal fun formatVolume(lb: Double): String =
-    if (lb >= 1000) "${"%.1f".format(lb / 1000).trimEnd('0').trimEnd('.')}k" else "${lb.toInt()}"
+/** "412k" / "950" — compact lifetime volume (unit-less). */
+internal fun formatVolume(lb: Double, useKg: Boolean): String = formatVolumeCompact(lb, useKg, withUnit = false)

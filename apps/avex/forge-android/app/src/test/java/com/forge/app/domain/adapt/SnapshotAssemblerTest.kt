@@ -33,7 +33,8 @@ class SnapshotAssemblerTest {
         sessions = sessions,
         loggedExercises = les,
         loggedSets = sets,
-        prefs = PrefsSnap()
+        prefs = PrefsSnap(),
+        zoneId = java.time.ZoneId.of("UTC")
     )
 
     @Test
@@ -65,6 +66,26 @@ class SnapshotAssemblerTest {
             sets = listOf(set(10, 0), set(99, 0))
         )
         assertEquals(1, snap.exerciseHistory.getValue("ua1").size)
+    }
+
+    @Test
+    fun swappedRowIsKeyedUnderItsSlotNotTheSwappedExercise() {
+        // #11: a pre-sets swap re-keys exercise_id to the swapped exercise and stores the original
+        // slot in slot_id. Every engine consumer looks history up by the program slot id, so the
+        // bout must land under the slot ("ua6") — NOT the swapped exercise's id — or the coach goes
+        // blind to the slot the moment it's swapped.
+        val swapped = LoggedExercise(
+            id = 10, sessionId = 1, exerciseId = "db-incline-curl", orderIndex = 0,
+            slotId = "ua6", swappedName = "DB Incline Curl", difficulty = EffortRating.JUST_RIGHT
+        )
+        val snap = assemble(
+            sessions = listOf(session(1, startedAt = 100)),
+            les = listOf(swapped),
+            sets = listOf(set(10, 0))
+        )
+        assertEquals(1, snap.exerciseHistory.getValue("ua6").size)
+        assertEquals("DB Incline Curl", snap.exerciseHistory.getValue("ua6").first().swappedName)
+        assertTrue("db-incline-curl" !in snap.exerciseHistory)
     }
 
     @Test

@@ -3,6 +3,7 @@ package com.forge.app.ui.overview
 import com.forge.app.data.db.dao.SessionDao
 import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.data.db.entities.Session
+import com.forge.app.data.db.entities.durationMinutes
 import com.forge.app.data.repo.StatsRepository
 import com.forge.app.domain.session.SessionType
 import com.forge.app.program.Program
@@ -38,10 +39,7 @@ internal fun buildOverviewUiState(
 ): OverviewUiState {
     val gymItems = stats.recentGymSessions.map { session ->
         val day = Program.days.firstOrNull { it.key == session.dayKey }
-        // Prefer real ACTIVE training time; fall back to wall-clock only when it wasn't recorded
-        // (pre-feature sessions stamp 0) — mirrors the reader pattern documented on Session.
-        val durationMin = if (session.activeSeconds > 0) session.activeSeconds / 60
-            else session.finishedAt?.let { ((it - session.startedAt) / 60_000).toInt() }
+        val durationMin = session.durationMinutes()
         val exCount = day?.exercises?.size ?: 0
         val sub = listOfNotNull(
             if (exCount > 0) "$exCount ex" else null,

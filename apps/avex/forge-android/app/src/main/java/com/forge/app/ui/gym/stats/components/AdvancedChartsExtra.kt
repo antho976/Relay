@@ -14,6 +14,10 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import com.forge.app.domain.units.toDisplayWeight
+import com.forge.app.domain.units.unitLabel
+import kotlin.math.roundToInt
+import com.forge.app.ui.theme.LocalForgeSettings
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -89,6 +93,7 @@ fun PatternRadarCard(axes: List<PatternAxis>, modifier: Modifier = Modifier) {
             }
         }
         Spacer(Modifier.height(12.dp))
+        val useKg = LocalForgeSettings.current.useKg
         axes.forEach { axis ->
             val pct = (axis.fraction * 100).toInt()
             Row(
@@ -98,7 +103,7 @@ fun PatternRadarCard(axes: List<PatternAxis>, modifier: Modifier = Modifier) {
             ) {
                 Text(axis.label, style = MaterialTheme.typography.labelSmall, color = muted, letterSpacing = 1.sp)
                 Text(
-                    "${axis.currentE1rm.toInt()} / ${axis.peakE1rm.toInt()} lb · $pct%",
+                    "${toDisplayWeight(axis.currentE1rm, useKg).roundToInt()} / ${toDisplayWeight(axis.peakE1rm, useKg).roundToInt()} ${unitLabel(useKg)} · $pct%",
                     style = MaterialTheme.typography.labelSmall,
                     color = if (pct >= 100) accent else onBg.copy(alpha = 0.75f),
                     fontWeight = if (pct >= 100) FontWeight.SemiBold else FontWeight.Normal

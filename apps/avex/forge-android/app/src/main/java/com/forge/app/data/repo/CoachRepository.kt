@@ -160,10 +160,13 @@ class CoachRepository @Inject constructor(
      * so outcome verdicts land on a weekly cadence (the watcher's window math handles the rest).
      */
     private suspend fun assembleInputs(snapshot: AdaptationSnapshot): CoachPassInputs {
-        // 1. Judge previously applied changes (hardening 5), then re-derive revert proposals from the
-        // durable outcome column — every still-applied FAILED change owes a revert, even if a prior
-        // pass's proposal was dropped by deload-supersession / the cap / an error (seam fix, finding 4).
-        val pending = coachDao.appliedPendingOutcome()
+        // 1. Judge previously applied changes (hardening 5) — including in-window folds, so a refresh
+        // that baked a change in before its window can't shield it from an ok/failed verdict (finding
+        // P1). Then re-derive revert proposals from the durable outcome column — every still-applied
+        // FAILED change owes a revert, even if a prior pass's proposal was dropped by deload-supersession
+        // / the cap / an error (seam fix, finding 4). A folded-then-failed change isn't revertable in
+        // place (the overlay is gone); it self-heals by dropping out of the bias at the next generate.
+        val pending = coachDao.pendingOutcome()
         val verdicts = OutcomeWatcher.evaluate(pending, snapshot)
         verdicts.forEach { coachDao.setOutcome(it.decisionId, it.outcome) }
         val reverts = OutcomeWatcher.revertProposalsFor(coachDao.appliedFailed())

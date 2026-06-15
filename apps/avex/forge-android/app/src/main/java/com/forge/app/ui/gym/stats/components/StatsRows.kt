@@ -23,9 +23,12 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.forge.app.domain.units.formatWeight
+import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.ui.gym.stats.state.ExerciseFrequency
 import com.forge.app.ui.gym.stats.state.PrRecord
 import com.forge.app.ui.gym.stats.state.WeekActivityRow
+import com.forge.app.ui.theme.LocalForgeSettings
 import java.text.SimpleDateFormat
 import java.time.LocalDate
 import java.util.Date
@@ -129,12 +132,13 @@ internal fun WeekDayRow(
 @Composable
 internal fun HallOfFameRow(record: PrRecord, muted: Color, onBg: Color, accent: Color, modifier: Modifier = Modifier) {
     val dateText = remember(record.sessionDate) { SimpleDateFormat("MMM d", Locale.getDefault()).format(Date(record.sessionDate)).uppercase() }
+    val useKg = LocalForgeSettings.current.useKg
     Row(modifier = modifier, verticalAlignment = Alignment.CenterVertically) {
         Column(modifier = Modifier.weight(1f)) {
             Text(record.exerciseName, style = MaterialTheme.typography.bodyMedium, color = onBg)
             Text(record.muscle.displayName.lowercase(), style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
         }
-        Text("${record.weightText} × ${record.bestReps}", style = MaterialTheme.typography.labelSmall,
+        Text("${formatWeight(record.maxWeightLb, useKg)} × ${record.bestReps}", style = MaterialTheme.typography.labelSmall,
             color = onBg.copy(alpha = 0.85f), fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(end = 12.dp))
         Text(dateText, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
     }
@@ -172,7 +176,9 @@ internal fun numberWord(n: Int) = when (n) {
     11 -> "Eleven"; 12 -> "Twelve"; else -> n.toString()
 }
 
-internal fun formatVolume(lb: Double): String = "%,d".format(lb.toLong())
+/** Full (non-abbreviated) volume in the display unit, e.g. "12,345" — caller appends the unit. */
+internal fun formatVolume(lb: Double, useKg: Boolean): String =
+    String.format(java.util.Locale.US, "%,d", toDisplayWeight(lb, useKg).toLong())
 
 internal fun weekCommentary(sessions: Int, prs: Int): String = when {
     prs > 1 -> "$prs PRs this week."

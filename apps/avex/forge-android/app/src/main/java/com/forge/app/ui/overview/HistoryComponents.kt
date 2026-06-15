@@ -20,6 +20,8 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.forge.app.domain.units.formatVolume
+import com.forge.app.ui.theme.LocalForgeSettings
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -33,6 +35,7 @@ internal fun HistoryRow(
     outline: Color,
     onClick: () -> Unit
 ) {
+    val useKg = LocalForgeSettings.current.useKg
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -64,7 +67,7 @@ internal fun HistoryRow(
         }
         if (entry.isGym && entry.volumeLb != null && entry.volumeLb > 0) {
             Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(formatVolumeLb(entry.volumeLb), style = MaterialTheme.typography.bodySmall, color = onBg, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
+                Text(formatVolume(entry.volumeLb, useKg), style = MaterialTheme.typography.bodySmall, color = onBg, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
                 when {
                     entry.isBest -> Text("BEST", style = MaterialTheme.typography.labelSmall, color = onBg.copy(alpha = 0.85f), fontSize = 8.sp, letterSpacing = 0.6.sp)
                     entry.vsAvgPct != null -> {

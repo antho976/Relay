@@ -68,6 +68,41 @@ class StatsDerivedAggregationsTest {
         assertNull(buildOverloadSummary(emptyList(), emptyList(), zone))
     }
 
+    @Test
+    fun overload_forwardFillsUntrainedLiftsAcrossWeeks() {
+        // Split program: each later week trains only one of the two tracked lifts. Forward-filling
+        // the untrained lift's last value keeps every week's average over BOTH lifts, so the series
+        // tracks strength, not which lift happened to be trained that week. reps=15 → e1RM = w×1.5.
+        val sets = listOf(
+            set("a", 100.0, 15, dayMs(monday)),                 // a → 150
+            set("b", 200.0, 15, dayMs(monday)),                 // b → 300  ⇒ wk1 avg 225
+            set("a", 110.0, 15, dayMs(monday.plusWeeks(1))),    // a → 165; b carried 300 ⇒ wk2 avg 232.5
+            set("b", 210.0, 15, dayMs(monday.plusWeeks(2)))     // b → 315; a carried 165 ⇒ wk3 avg 240
+        )
+        val summary = buildOverloadSummary(sets, listOf(lift("a"), lift("b")), zone)!!
+        assertEquals(3, summary.weekly.size)
+        assertEquals(225.0, summary.weekly[0], 0.001)
+        assertEquals(232.5, summary.weekly[1], 0.001)
+        assertEquals(240.0, summary.weekly[2], 0.001)
+    }
+
+    // ── e1RM single-rep guard (Stats audit 2026-06-15) ─────────────────────────
+    // A true 1-rep max's e1RM IS the weight (315), NOT 315 × (1 + 1/30) = 325.5. The Stats e1rm()
+    // must stay delegated to the engine's E1rm.epley, which guards reps <= 1; a naive Epley copy
+    // here was inflating every heavy single shown on the Strength tab by 3.3%.
+    @Test
+    fun e1rm_trueSingleIsNotInflated() {
+        val ex = "db-bench-press" // a real library id so Program.exercise(id) resolves a name
+        val sets = listOf(set(ex, 315.0, 1, dayMs(monday)))
+
+        val lifts = buildE1rmLifts(sets)
+        assertEquals(1, lifts.size)
+        assertEquals(315.0, lifts[0].currentE1rm, 0.001)
+
+        val summary = buildOverloadSummary(sets, listOf(lift(ex)), zone)!!
+        assertEquals(315.0, summary.current, 0.001)
+    }
+
     // ── buildPrRecency ─────────────────────────────────────────────────────────
 
     @Test
@@ -185,5 +220,20 @@ class StatsDerivedAggregationsTest {
         assertEquals(2, weeks.size)
         assertEquals(60, weeks[0].medianMin)
         assertEquals(40, weeks[1].medianMin)
+    }
+
+    @Test
+    fun weeklyDurations_evenCount_averagesTheTwoMiddleElements() {
+        fun session(start: Long, minutes: Long) = Session(
+            dayKey = "d", startedAt = start, finishedAt = start + minutes * 60_000
+        )
+        // One ISO week, two sessions: 45 and 75 → median 60, NOT the upper element 75.
+        val sessions = listOf(
+            session(dayMs(monday), 45),
+            session(dayMs(monday.plusDays(1)), 75)
+        )
+        val weeks = buildWeeklyDurations(sessions, zone)
+        assertEquals(1, weeks.size)
+        assertEquals(60, weeks[0].medianMin)
     }
 }

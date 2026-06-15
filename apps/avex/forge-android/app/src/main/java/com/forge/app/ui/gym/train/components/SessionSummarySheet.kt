@@ -32,8 +32,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.domain.mood.Mood
+import com.forge.app.domain.units.formatVolume
+import com.forge.app.domain.units.toDisplayWeight
+import com.forge.app.domain.units.unitLabel
 import com.forge.app.ui.common.ConfettiOverlay
 import com.forge.app.ui.theme.ForgeLastGreen
+import com.forge.app.ui.theme.LocalForgeSettings
 import com.forge.app.ui.gym.train.state.SessionSummary
 import com.forge.app.ui.gym.train.state.UnlockedTrophyHighlight
 
@@ -63,6 +67,7 @@ fun SessionSummarySheet(
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val outline = MaterialTheme.colorScheme.outline
     val bg = MaterialTheme.colorScheme.background
+    val useKg = LocalForgeSettings.current.useKg
 
     ModalBottomSheet(
         onDismissRequest = {},
@@ -102,7 +107,7 @@ fun SessionSummarySheet(
 
                 // Primary stats strip
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-                    FlatStat(value = "${summary.totalVolumeLb.toInt()} lb", label = "VOLUME", onBg = onBg, muted = muted)
+                    FlatStat(value = formatVolume(summary.totalVolumeLb, useKg), label = "VOLUME", onBg = onBg, muted = muted)
                     FlatStat(value = "${summary.prCount}", label = "PRs", onBg = onBg, muted = muted)
                     FlatStat(value = "${summary.durationMinutes} min", label = "TIME", onBg = onBg, muted = muted)
                 }
@@ -125,7 +130,7 @@ fun SessionSummarySheet(
                     Text("SESSION METRICS", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
                         summary.densityScore?.let { density ->
-                            FlatStat(value = "${density.toInt()} lb/min", label = "DENSITY", onBg = onBg, muted = muted)
+                            FlatStat(value = "${toDisplayWeight(density, useKg).toInt()} ${unitLabel(useKg)}/min", label = "DENSITY", onBg = onBg, muted = muted)
                         }
                         summary.avgRestSeconds?.let { rest ->
                             val restStr = if (rest >= 60) "${rest / 60}m ${rest % 60}s" else "${rest}s"
@@ -144,7 +149,7 @@ fun SessionSummarySheet(
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
                         summary.vsLastVolumeDelta?.let { delta ->
                             val sign = if (delta >= 0) "+" else ""
-                            FlatStat(value = "$sign${delta.toInt()} lb", label = "vs LAST", onBg = onBg, muted = muted)
+                            FlatStat(value = "$sign${toDisplayWeight(delta, useKg).toInt()} ${unitLabel(useKg)}", label = "vs LAST", onBg = onBg, muted = muted)
                         }
                         summary.vsLastSetsDelta?.let { delta ->
                             val sign = if (delta >= 0) "+" else ""

@@ -77,4 +77,26 @@ class WeightFormatterTest {
     fun formatWeightDeltaLabelsInDisplayUnit() {
         assertEquals("5 lb", formatWeightDelta(5.0, useKg = false))
     }
+
+    @Test
+    fun formatVolumeLbWholeNumber() {
+        assertEquals("850 lb", formatVolume(850.0, useKg = false))
+    }
+
+    @Test
+    fun formatVolumeLbAbbreviatesPastThousand() {
+        assertEquals("1.2k lb", formatVolume(1234.0, useKg = false))
+    }
+
+    @Test
+    fun formatVolumeKgConvertsBelowThousand() {
+        // 500 lb = 226.8 kg (the unit setting must convert volume, not just weight — #2)
+        assertEquals("226 kg", formatVolume(500.0, useKg = true))
+    }
+
+    @Test
+    fun formatVolumeKgAbbreviatesOnConvertedValue() {
+        // 5000 lb = 2268 kg — the 1k abbreviation applies AFTER conversion, so it reads "2.3k kg".
+        assertEquals("2.3k kg", formatVolume(5000.0, useKg = true))
+    }
 }

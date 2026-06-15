@@ -8,7 +8,6 @@ import androidx.room.Update
 import com.forge.app.data.db.entities.LoggedSet
 import com.forge.app.data.db.projections.ExerciseSessionAggregate
 import com.forge.app.data.db.projections.SetWithExerciseAndSession
-import com.forge.app.data.db.projections.SetWithExerciseId
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -94,23 +93,20 @@ interface LoggedSetDao {
     """)
     suspend fun maxWeightAcrossExercises(exerciseIds: List<String>): Double?
 
-    /** All sets in a window, joined to the exercise id — feeds weekly volume by muscle. */
-    @Query("""
-        SELECT ls.weight_lb, ls.reps, le.exercise_id
-        FROM logged_set ls
-        INNER JOIN logged_exercise le ON ls.logged_exercise_id = le.id
-        INNER JOIN session s ON le.session_id = s.id
-        WHERE ls.completed_at >= :sinceEpochMs AND s.finished_at IS NOT NULL
-    """)
-    fun observeSetsSinceWithExerciseId(sinceEpochMs: Long): Flow<List<SetWithExerciseId>>
-
-    /** Every set across every finished session, joined to exercise + session date. Used by strength curves. */
+    /**
+     * Every set across every finished session, joined to exercise + session date. Used by strength
+     * curves, PRs, hall-of-fame, e1RM lifts, pattern radar, rep-range/RPE, and the consistency/
+     * session counts. Filters to TRACKED, non-skipped, unassisted working sets so these surfaces
+     * match the adaptation engine's population (which excludes untracked sessions, skipped
+     * exercises, and assisted reps) — they previously diverged on the same screen.
+     */
     @Query("""
         SELECT ls.weight_lb, ls.reps, ls.rpe, le.exercise_id, s.started_at, le.id AS logged_exercise_id
         FROM logged_set ls
         INNER JOIN logged_exercise le ON ls.logged_exercise_id = le.id
         INNER JOIN session s ON le.session_id = s.id
         WHERE s.finished_at IS NOT NULL
+          AND s.is_untracked = 0 AND le.skipped = 0 AND ls.is_assisted = 0
         ORDER BY s.started_at ASC
     """)
     fun observeAllFinishedSetsWithSession(): Flow<List<SetWithExerciseAndSession>>

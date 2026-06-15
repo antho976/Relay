@@ -25,9 +25,11 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.forge.app.domain.units.formatWeight
 import com.forge.app.ui.gym.stats.components.CountUpText
 import com.forge.app.ui.gym.stats.state.PrEntry
 import com.forge.app.ui.theme.ForgeLastGreen
+import com.forge.app.ui.theme.LocalForgeSettings
 import com.forge.app.ui.theme.emphasized
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -82,6 +84,7 @@ internal fun PrTimelineRow(
     modifier: Modifier = Modifier
 ) {
     val dateText = remember(pr.date) { SimpleDateFormat("MMM d", Locale.getDefault()).format(Date(pr.date)).uppercase() }
+    val useKg = LocalForgeSettings.current.useKg
     Row(modifier = modifier.height(IntrinsicSize.Min), verticalAlignment = Alignment.Top) {
         Text(
             dateText, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp,
@@ -102,7 +105,7 @@ internal fun PrTimelineRow(
         Column(Modifier.weight(1f).padding(bottom = 14.dp)) {
             Text(pr.exerciseName, style = MaterialTheme.typography.bodyMedium, color = onBg)
             Text(
-                "${pr.weightText} × ${pr.reps}",
+                "${formatWeight(pr.weightLb, useKg)} × ${pr.reps}",
                 style = MaterialTheme.typography.labelSmall,
                 color = if (isFirst) accent else onBg.copy(alpha = 0.7f),
                 fontWeight = FontWeight.SemiBold

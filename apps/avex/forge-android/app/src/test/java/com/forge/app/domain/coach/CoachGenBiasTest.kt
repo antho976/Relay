@@ -138,13 +138,24 @@ class CoachGenBiasTest {
     }
 
     @Test
-    fun foldedSwapIsPreferred_evenBeforeTheWatcherCouldJudgeIt() {
-        // Folding stops the watcher, so a folded swap can never reach outcome=ok — it earns prefer
-        // by having been accepted and absorbed, otherwise the rotation would be lost (finding 3).
+    fun foldedSwapIsPreferredForSurvival_whileNotJudgedFailed() {
+        // A folded swap stays preferred for SURVIVAL (its accepted rotation carries into the new
+        // baseline) as long as it hasn't failed — bias survival is independent of trust (finding 3 / P1).
         val bias = CoachGenBias.from(
             listOf(decision("swap", "db-row", status = "folded", outcome = "pending", payload = "mwm-standing-bicep-curl"))
         )
         assertEquals(setOf("mwm-standing-bicep-curl"), bias.prefer)
         assertTrue(bias.avoid.isEmpty())
+    }
+
+    @Test
+    fun foldedSwapJudgedFailed_isAvoidedNotPreferred() {
+        // Now that the watcher can still judge an in-window folded swap, one it rules failed must
+        // drop out of prefer and into avoid (auto-coach seam audit 2026-06-15, finding P1).
+        val bias = CoachGenBias.from(
+            listOf(decision("swap", "db-row", status = "folded", outcome = "failed", payload = "db-concentration-curl"))
+        )
+        assertTrue(bias.prefer.isEmpty())
+        assertEquals(setOf("db-concentration-curl"), bias.avoid)
     }
 }

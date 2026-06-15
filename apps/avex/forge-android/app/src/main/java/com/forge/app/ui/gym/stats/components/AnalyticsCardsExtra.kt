@@ -12,7 +12,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.forge.app.domain.units.toDisplayWeight
+import com.forge.app.domain.units.unitLabel
+import kotlin.math.roundToInt
 import com.forge.app.ui.gym.stats.state.DayTypeVolumeStats
+import com.forge.app.ui.theme.LocalForgeSettings
 
 // VolumeDeloadCard (#126) was retired in the Stats revamp — its weekly-bucketed
 // replacement is TonnageTrendCard in StatsVolumeExtra.kt.
@@ -20,7 +24,8 @@ import com.forge.app.ui.gym.stats.state.DayTypeVolumeStats
 @Composable
 fun DayTypeBestVsAvgCard(data: List<DayTypeVolumeStats>, modifier: Modifier = Modifier) {
     if (data.isEmpty()) return
-    StatCard(title = "BEST VS AVERAGE · lb", modifier = modifier) {
+    val useKg = LocalForgeSettings.current.useKg
+    StatCard(title = "BEST VS AVERAGE · ${unitLabel(useKg)}", modifier = modifier) {
         data.forEach { stats ->
             Row(
                 modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
@@ -35,13 +40,13 @@ fun DayTypeBestVsAvgCard(data: List<DayTypeVolumeStats>, modifier: Modifier = Mo
                 )
                 Column(horizontalAlignment = Alignment.End) {
                     Text(
-                        "Best: ${stats.maxVolumeLb.toInt()} lb",
+                        "Best: ${toDisplayWeight(stats.maxVolumeLb, useKg).roundToInt()} ${unitLabel(useKg)}",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.primary,
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        "Avg: ${stats.avgVolumeLb.toInt()} lb · ${stats.sessionCount} sessions",
+                        "Avg: ${toDisplayWeight(stats.avgVolumeLb, useKg).roundToInt()} ${unitLabel(useKg)} · ${stats.sessionCount} sessions",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

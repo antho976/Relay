@@ -35,6 +35,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.data.repo.CoachBrief
 import com.forge.app.data.repo.CoachRepository
+import com.forge.app.domain.units.formatVolumeCompact
+import com.forge.app.ui.theme.LocalForgeSettings
 import com.forge.app.ui.theme.emphasized
 
 /**
@@ -83,6 +85,7 @@ private fun BriefContent(brief: CoachBrief, viewModel: CoachBriefViewModel, modi
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val onBg = MaterialTheme.colorScheme.onBackground
     val outline = MaterialTheme.colorScheme.outline
+    val useKg = LocalForgeSettings.current.useKg
 
     Column(
         modifier = modifier
@@ -109,7 +112,7 @@ private fun BriefContent(brief: CoachBrief, viewModel: CoachBriefViewModel, modi
             BriefStatRow("Sessions", "${r.sessionsLastWeek} of ${r.sessionsTarget}")
             BriefStatRow(
                 "Volume",
-                formatVolume(r.volumeLastWeekLb) + (r.volumeDeltaPct?.let { d ->
+                formatVolume(r.volumeLastWeekLb, useKg) + (r.volumeDeltaPct?.let { d ->
                     "  (${if (d >= 0) "+" else ""}$d% vs prior)"
                 } ?: "")
             )
@@ -216,5 +219,4 @@ private fun BriefStatRow(label: String, value: String) {
     }
 }
 
-private fun formatVolume(lb: Double): String =
-    if (lb >= 1000) "${"%.1f".format(lb / 1000).trimEnd('0').trimEnd('.')}k lb" else "${lb.toInt()} lb"
+private fun formatVolume(lb: Double, useKg: Boolean): String = formatVolumeCompact(lb, useKg)

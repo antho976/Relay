@@ -3,10 +3,10 @@ package com.forge.app.ui.gym.session.state
 import com.forge.app.data.db.types.EffortRating
 
 /** The metric the detail-page charts plot. Drives both the session overview and per-exercise charts. */
-enum class SessionMetric(val label: String, val unit: String) {
-    WEIGHT("Weight", "lb"),
-    VOLUME("Volume", "lb"),
-    REPS("Reps", "reps")
+enum class SessionMetric(val label: String) {
+    WEIGHT("Weight"),
+    VOLUME("Volume"),
+    REPS("Reps")
 }
 
 /** How the per-exercise set charts render — switchable from the page controls. */
@@ -73,6 +73,8 @@ data class SessionDetailData(
     val prCount: Int,
     val setCount: Int,
     val intensity: String,
+    /** Stored session-type key (#109); resolve its pill via [com.forge.app.domain.session.SessionType]. */
+    val sessionType: String,
     val deload: Boolean,
     val journal: String,
     val avgRpe: Double?,

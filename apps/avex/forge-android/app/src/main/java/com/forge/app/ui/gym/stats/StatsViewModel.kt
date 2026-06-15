@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.forge.app.data.repo.AdaptationRepository
 import com.forge.app.data.repo.StatsRepository
+import com.forge.app.ui.gym.stats.state.InsightFlag
 import com.forge.app.ui.gym.stats.state.StatsUiState
 import com.forge.app.ui.gym.stats.state.balanceRatioUi
 import com.forge.app.ui.gym.stats.state.buildReadinessPulse
@@ -27,7 +28,9 @@ class StatsViewModel @Inject constructor(
     /**
      * The engine read is a whole-history snapshot fan-out — loaded ONCE per Stats open
      * (the TrophiesViewModel pattern), never inside the reactive combine below, so it
-     * can't join the per-set hot path.
+     * can't join the per-set hot path. Carries the insight observations too, so a single
+     * snapshot feeds the pulse, plateaus, ratios, AND insights (was a second snapshot run
+     * inside StatsRepository's combine on every emission).
      */
     private val engineFlow = MutableStateFlow<AdaptationRepository.EngineStatsRead?>(null)
 
@@ -53,7 +56,7 @@ class StatsViewModel @Inject constructor(
             dayTypeBestVsAvg = snapshot.dayTypeBestVsAvg,
             weekComparison = snapshot.weekComparison,
             prSessionTimestamps = snapshot.prSessionTimestamps,
-            insights = snapshot.insights,
+            insights = engine?.insights.orEmpty().map { InsightFlag(it.icon, it.title, it.body) },
             lifetimeMetrics = snapshot.lifetimeMetrics,
             moodOverTime = snapshot.moodOverTime,
             weekActivity = snapshot.weekActivity,

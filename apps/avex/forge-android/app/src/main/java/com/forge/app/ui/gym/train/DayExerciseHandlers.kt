@@ -242,7 +242,12 @@ internal fun DayViewModel.logSet(exerciseId: String, weightText: String, reps: I
 
         // Start the rest timer before the DB write so the bubble + countdown appear the
         // instant you tap — not after the insert and per-exercise rebuild round-trip.
-        val rest = computeRestPrescription(plan, currentUi.difficulty, currentUi.restTimerOverrideSeconds)
+        // Rest follows the exercise actually performed (#11): a swapped slot uses the swapped exercise's
+        // movement profile (compound/isolation + rep heaviness), so a cross-type swap rests correctly and
+        // the realized-rest sample (keyed below by effectiveExerciseId) tunes the matching role. Falls back
+        // to the slot plan when the id can't be resolved.
+        val restPlan = com.forge.app.program.Program.exercise(effectiveExerciseId) ?: plan
+        val rest = computeRestPrescription(restPlan, currentUi.difficulty, currentUi.restTimerOverrideSeconds)
         restTimer.start(rest.seconds)
         // Push the started timer into UI state synchronously so it's visible before refreshExercise
         // re-renders — don't wait for the collector coroutine to forward the first emission.
@@ -250,7 +255,9 @@ internal fun DayViewModel.logSet(exerciseId: String, weightText: String, reps: I
 
         closeOpenRestEvent(sessionId, restEndedAtMs)
         openRestEvent = OpenRestEvent(
-            exerciseId = exerciseId,
+            // Key the rest sample on the performed exercise (#11) so RestAdvisor.samples re-derives the
+            // role from the swapped exercise's plan, matching the prescription above — not the slot's.
+            exerciseId = effectiveExerciseId,
             setIndex = currentUi.loggedSets.size,
             plannedSeconds = rest.seconds,
             startedAtMs = restEndedAtMs

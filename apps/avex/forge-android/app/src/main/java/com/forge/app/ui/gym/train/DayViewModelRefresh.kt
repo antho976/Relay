@@ -43,9 +43,13 @@ internal suspend fun DayViewModel.refreshExercises() {
     // vanish on refresh (leaving an invisible orphan row). Resolve by the SLOT id (not exercise_id):
     // a swapped entry's exercise_id is the swapped exercise, but it's matched below via bySlotId, so
     // the extra plan must carry the slot id or the row orphans again (#11).
-    val extraPlans = loggedExercises
-        .filterNot { it.effectiveSlotId in effectiveIds }
-        .mapNotNull { Program.exercise(it.effectiveSlotId) }
+    // Iterate the deduped bySlotId keys, not the raw logged rows: when two rows collide on the
+    // same out-of-plan effectiveSlotId (a stale pre-v22 row, a double cross-day add), the raw list
+    // would emit one identical extra plan per row and render duplicate cards. bySlotId already
+    // collapsed the collision to one entry.
+    val extraPlans = bySlotId.keys
+        .filterNot { it in effectiveIds }
+        .mapNotNull { Program.exercise(it) }
     val allPlans = effectivePlans + extraPlans
 
     // Each card's build is independent DB reads — fan them out concurrently instead of
@@ -91,9 +95,15 @@ internal suspend fun DayViewModel.refreshExercise(exerciseId: String) {
     val idx = current.indexOfFirst { it.plan.id == exerciseId }
     if (idx < 0) { refreshExercises(); return }
     val existing = current[idx]
-    // Match by SLOT id — a swapped entry's exercise_id is the swapped exercise (#11).
-    val logged = workoutRepo.loggedExercisesForSession(sessionId)
-        .firstOrNull { it.effectiveSlotId == exerciseId }
+    // Match by SLOT id — a swapped entry's exercise_id is the swapped exercise (#11). On an
+    // effectiveSlotId collision, pick the entry with the MOST logged sets — the same policy the
+    // full refreshExercises uses — so the just-logged set never hides behind an empty swap stub
+    // (firstOrNull picked by order_index, which could return the empty row). setsFor only runs on
+    // an actual collision.
+    val matching = workoutRepo.loggedExercisesForSession(sessionId)
+        .filter { it.effectiveSlotId == exerciseId }
+    val logged = if (matching.size <= 1) matching.firstOrNull()
+        else matching.maxByOrNull { workoutRepo.setsFor(it.id).size }
     val rebuilt = buildExerciseUi(
         plan = existing.plan,
         logged = logged,

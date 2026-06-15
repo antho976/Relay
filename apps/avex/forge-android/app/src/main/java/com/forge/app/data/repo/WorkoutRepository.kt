@@ -1,5 +1,6 @@
 package com.forge.app.data.repo
 
+import androidx.room.withTransaction
 import com.forge.app.core.time.Clock
 import com.forge.app.data.db.dao.LoggedExerciseDao
 import com.forge.app.data.db.dao.LoggedSetDao
@@ -57,7 +58,8 @@ class WorkoutRepository @Inject constructor(
     private val sessionSegmentDao: com.forge.app.data.db.dao.SessionSegmentDao,
     private val clock: Clock,
     private val settingsRepo: SettingsRepository,
-    private val programRepository: ProgramRepository
+    private val programRepository: ProgramRepository,
+    private val database: com.forge.app.data.db.ForgeDatabase
 ) {
 
     private companion object {
@@ -267,22 +269,28 @@ class WorkoutRepository @Inject constructor(
      * After sets exist a swap is a name/unit relabel only.
      */
     suspend fun setSessionSwap(loggedExerciseId: Long, swappedName: String?, swappedUnit: String?, swapExerciseId: String) {
-        val ex = loggedExerciseDao.get(loggedExerciseId) ?: return
-        if (loggedSetDao.countForLoggedExercise(loggedExerciseId) > 0) {
-            loggedExerciseDao.update(ex.copy(swappedName = swappedName, swappedUnit = swappedUnit))
-            return
-        }
-        val slot = ex.effectiveSlotId
-        loggedExerciseDao.update(
-            ex.copy(
-                exerciseId = swapExerciseId,
-                // Keep the slot link only while this entry actually differs from its slot — swapping
-                // back to the original exercise clears it (slot == exercise again).
-                slotId = slot.takeIf { it != swapExerciseId },
-                swappedName = swappedName,
-                swappedUnit = swappedUnit
+        // Atomic check-then-write (SM-2): wrap the set-count read and the re-key in one transaction so a
+        // concurrent logSet can't insert a set between them — which would re-key a row that now has real
+        // sets and silently mis-attribute them to the swapped exercise.
+        database.withTransaction {
+            val ex = loggedExerciseDao.get(loggedExerciseId) ?: return@withTransaction
+            if (loggedSetDao.countForLoggedExercise(loggedExerciseId) > 0) {
+                // Sets exist — a swap is a name/unit relabel only; exercise_id must never change.
+                loggedExerciseDao.update(ex.copy(swappedName = swappedName, swappedUnit = swappedUnit))
+                return@withTransaction
+            }
+            val slot = ex.effectiveSlotId
+            loggedExerciseDao.update(
+                ex.copy(
+                    exerciseId = swapExerciseId,
+                    // Keep the slot link only while this entry actually differs from its slot — swapping
+                    // back to the original exercise clears it (slot == exercise again).
+                    slotId = slot.takeIf { it != swapExerciseId },
+                    swappedName = swappedName,
+                    swappedUnit = swappedUnit
+                )
             )
-        )
+        }
     }
 
     /**

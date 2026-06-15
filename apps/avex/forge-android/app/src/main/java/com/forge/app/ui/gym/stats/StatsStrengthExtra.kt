@@ -30,6 +30,9 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.forge.app.domain.units.toDisplayWeight
+import com.forge.app.domain.units.unitLabel
+import kotlin.math.roundToInt
 import com.forge.app.ui.gym.stats.components.CountUpText
 import com.forge.app.ui.gym.stats.components.Sparkline
 import com.forge.app.ui.gym.stats.components.rememberDrawProgress
@@ -38,6 +41,7 @@ import com.forge.app.ui.gym.stats.state.PlateauFlagUi
 import com.forge.app.ui.gym.stats.state.RepMaxSet
 import com.forge.app.ui.theme.ForgeLastGreen
 import com.forge.app.ui.theme.ForgeWarning
+import com.forge.app.ui.theme.LocalForgeSettings
 import com.forge.app.ui.theme.emphasized
 
 /**
@@ -48,6 +52,7 @@ import com.forge.app.ui.theme.emphasized
 internal fun E1rmChartCard(top: E1rmLift, onBg: Color, muted: Color, accent: Color, outline: Color) {
     val projected = top.monthlyPct?.takeIf { it != 0.0 }?.let { top.currentE1rm * (1 + it / 100.0) }
     val prevSession = top.history.getOrNull(top.history.size - 2)
+    val useKg = LocalForgeSettings.current.useKg
     Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
         Text("Where I'm going", style = MaterialTheme.typography.headlineSmall, color = onBg, fontStyle = FontStyle.Italic)
         Spacer(Modifier.height(4.dp))
@@ -55,17 +60,17 @@ internal fun E1rmChartCard(top: E1rmLift, onBg: Color, muted: Color, accent: Col
         Spacer(Modifier.height(10.dp))
         Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             CountUpText(
-                value = top.currentE1rm,
-                fromValue = prevSession,
+                value = toDisplayWeight(top.currentE1rm, useKg),
+                fromValue = prevSession?.let { toDisplayWeight(it, useKg) },
                 style = MaterialTheme.typography.displayMedium,
                 color = emphasized(onBg)
             )
-            Text("LB", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp, modifier = Modifier.padding(bottom = 10.dp))
+            Text(unitLabel(useKg).uppercase(), style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp, modifier = Modifier.padding(bottom = 10.dp))
             prevSession?.let { prev ->
                 val d = top.currentE1rm - prev
                 val sign = if (d >= 0) "+" else ""
                 Text(
-                    "$sign${d.toInt()} · was ${prev.toInt()}",
+                    "$sign${toDisplayWeight(d, useKg).roundToInt()} · was ${toDisplayWeight(prev, useKg).roundToInt()}",
                     style = MaterialTheme.typography.labelSmall,
                     color = if (d >= 0) ForgeLastGreen else MaterialTheme.colorScheme.error,
                     fontSize = 10.sp,
@@ -84,7 +89,7 @@ internal fun E1rmChartCard(top: E1rmLift, onBg: Color, muted: Color, accent: Col
             )
             projected?.let {
                 Spacer(Modifier.height(10.dp))
-                Text("↗ PROJECTED ${it.toInt()} lb in ~4 wks at current rate", style = MaterialTheme.typography.labelSmall, color = accent, fontSize = 10.sp)
+                Text("↗ PROJECTED ${toDisplayWeight(it, useKg).roundToInt()} ${unitLabel(useKg)} in ~4 wks at current rate", style = MaterialTheme.typography.labelSmall, color = accent, fontSize = 10.sp)
             }
         } else {
             Text("Log this lift twice to see the curve.", style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic)
@@ -155,6 +160,7 @@ internal fun E1rmCard(
     accent: Color,
     outline: Color
 ) {
+    val useKg = LocalForgeSettings.current.useKg
     Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
         Text("Your big lifts", style = MaterialTheme.typography.headlineSmall, color = onBg, fontStyle = FontStyle.Italic)
         Spacer(Modifier.height(4.dp))
@@ -185,7 +191,7 @@ internal fun E1rmCard(
                         )
                     }
                 }
-                Text("${lift.currentE1rm.toInt()}", style = MaterialTheme.typography.bodyMedium, color = onBg, fontWeight = FontWeight.SemiBold, modifier = Modifier.width(44.dp))
+                Text("${toDisplayWeight(lift.currentE1rm, useKg).roundToInt()}", style = MaterialTheme.typography.bodyMedium, color = onBg, fontWeight = FontWeight.SemiBold, modifier = Modifier.width(44.dp))
                 val moColor = when {
                     lift.stalling || plateau != null -> ForgeWarning
                     (lift.monthlyPct ?: 0.0) > 0 -> ForgeLastGreen
@@ -281,6 +287,7 @@ internal fun StrengthColdStart(onBg: Color, muted: Color, outline: Color) {
 @Composable
 internal fun RepMaxCard(repMaxes: RepMaxSet, onBg: Color, muted: Color, outline: Color) {
     if (repMaxes.entries.isEmpty()) return
+    val useKg = LocalForgeSettings.current.useKg
     val maxW = repMaxes.entries.maxOf { it.weightLb }.coerceAtLeast(1.0)
     val progress = rememberDrawProgress(repMaxes.exerciseName)
     Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
@@ -291,7 +298,7 @@ internal fun RepMaxCard(repMaxes: RepMaxSet, onBg: Color, muted: Color, outline:
         Row(Modifier.fillMaxWidth().height(120.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Bottom) {
             repMaxes.entries.forEach { e ->
                 Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("${e.weightLb.toInt()}", style = MaterialTheme.typography.labelSmall, color = onBg, fontSize = 9.sp)
+                    Text("${toDisplayWeight(e.weightLb, useKg).roundToInt()}", style = MaterialTheme.typography.labelSmall, color = onBg, fontSize = 9.sp)
                     val frac = (e.weightLb / maxW).toFloat() * progress
                     Box(Modifier.fillMaxWidth().height((8 + 80 * frac).dp).background(onBg.copy(alpha = 0.85f), RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp)))
                     Text(if (e.reps == 1) "1RM" else "${e.reps}r", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 8.sp)

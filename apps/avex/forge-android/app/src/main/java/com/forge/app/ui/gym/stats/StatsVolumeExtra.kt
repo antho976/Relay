@@ -22,6 +22,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.forge.app.domain.units.unitLabel
+import com.forge.app.ui.theme.LocalForgeSettings
 import com.forge.app.program.MuscleGroup
 import com.forge.app.ui.gym.stats.components.formatVolume
 import com.forge.app.ui.gym.stats.components.rememberDrawProgress
@@ -56,6 +58,7 @@ internal fun MuscleTargetSection(
     if (muscles.isEmpty()) return
     val anyLogged = actualByMuscle.values.any { it > 0 }
     val progress = rememberDrawProgress(actualByMuscle.values.sum())
+    val useKg = LocalForgeSettings.current.useKg
 
     Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
         Text("Where the work goes", style = MaterialTheme.typography.headlineSmall, color = onBg, fontStyle = FontStyle.Italic)
@@ -82,7 +85,7 @@ internal fun MuscleTargetSection(
                     Text(
                         buildString {
                             append(if (target > 0) "$sets / $target sets" else "$sets sets")
-                            lb?.let { append(" · ${formatVolume(it)} lb") }
+                            lb?.let { append(" · ${formatVolume(it, useKg)} ${unitLabel(useKg)}") }
                         },
                         style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp
                     )
@@ -202,9 +205,10 @@ internal fun TonnageTrendCard(weeks: List<WeeklyTonnage>, onBg: Color, muted: Co
             }
         }
         Spacer(Modifier.height(6.dp))
+        val useKg = LocalForgeSettings.current.useKg
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("${weeks.size} WKS AGO", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 8.sp)
-            Text("THIS WEEK · ${formatVolume(weeks.last().volumeLb)} LB", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 8.sp)
+            Text("THIS WEEK · ${formatVolume(weeks.last().volumeLb, useKg)} ${unitLabel(useKg).uppercase()}", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 8.sp)
         }
         Spacer(Modifier.height(20.dp))
         HorizontalDivider(color = outline.copy(alpha = 0.25f))

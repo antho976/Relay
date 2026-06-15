@@ -30,7 +30,9 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.forge.app.domain.units.formatVolume
 import com.forge.app.ui.gym.train.state.ExerciseSessionPoint
+import com.forge.app.ui.theme.LocalForgeSettings
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -120,6 +122,7 @@ fun ExerciseChartSheet(
                 )
             }
 
+            val useKg = LocalForgeSettings.current.useKg
             history.take(5).forEach { pt ->
                 val dateStr = Instant.ofEpochMilli(pt.sessionStartedAt).atZone(zone).toLocalDate().format(dateFmt)
                 Row(
@@ -143,7 +146,7 @@ fun ExerciseChartSheet(
                             Text(meta, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp)
                         }
                     }
-                    Text("${pt.volumeLb.toInt()} lb", style = MaterialTheme.typography.bodyMedium, color = accent, fontWeight = FontWeight.SemiBold)
+                    Text(formatVolume(pt.volumeLb, useKg), style = MaterialTheme.typography.bodyMedium, color = accent, fontWeight = FontWeight.SemiBold)
                 }
             }
 

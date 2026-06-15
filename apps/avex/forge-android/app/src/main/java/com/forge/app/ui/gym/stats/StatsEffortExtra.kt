@@ -109,9 +109,12 @@ internal fun ConsistencyHeatmapCard(weeklyCounts: List<Int>, target: Int, onBg: 
     val grey = muted.copy(alpha = 0.25f)
     val maxBlocks = (weeklyCounts.maxOrNull() ?: 1).coerceIn(3, 5)
     val avgPerWk = if (weeklyCounts.isNotEmpty()) weeklyCounts.average() else 0.0
+    val recentHalf = weeklyCounts.takeLast(weeklyCounts.size / 2)
     val firstHalf = weeklyCounts.take(weeklyCounts.size / 2).ifEmpty { listOf(0) }.average()
-    val secondHalf = weeklyCounts.takeLast(weeklyCounts.size / 2).ifEmpty { listOf(0) }.average()
-    val progressing = secondHalf >= firstHalf
+    val secondHalf = recentHalf.ifEmpty { listOf(0) }.average()
+    // Strictly improving AND the recent half actually has training — otherwise a brand-new user with
+    // an all-zero history reads as "PROGRESSING" (0.0 >= 0.0), and a flat trend is "HOLDING STEADY".
+    val progressing = secondHalf > firstHalf && recentHalf.any { it > 0 }
     val reveal = rememberDrawProgress(weeklyCounts.sum())
     Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
         Text("How you train", style = MaterialTheme.typography.headlineSmall, color = onBg, fontStyle = FontStyle.Italic)

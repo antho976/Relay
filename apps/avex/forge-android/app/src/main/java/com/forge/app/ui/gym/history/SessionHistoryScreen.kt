@@ -35,9 +35,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.forge.app.data.db.entities.durationMinutes
 import com.forge.app.domain.mood.Mood
+import com.forge.app.domain.units.formatVolume
+import com.forge.app.domain.units.toDisplayWeight
+import com.forge.app.domain.units.unitLabel
 import com.forge.app.program.Program
 import com.forge.app.ui.common.EmptyState
+import com.forge.app.ui.theme.LocalForgeSettings
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -50,6 +55,7 @@ fun SessionHistoryScreen(
     viewModel: SessionHistoryViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val useKg = LocalForgeSettings.current.useKg
 
     Scaffold(
         topBar = {
@@ -103,7 +109,7 @@ fun SessionHistoryScreen(
                     FilterChip(
                         selected = state.volumeFilter == SessionHistoryFilter.HIGH_VOLUME,
                         onClick = { viewModel.setVolumeFilter(if (state.volumeFilter == SessionHistoryFilter.HIGH_VOLUME) null else SessionHistoryFilter.HIGH_VOLUME) },
-                        label = { Text("> 3000 lb") },
+                        label = { Text("> ${toDisplayWeight(HIGH_VOLUME_LB, useKg).toInt()} ${unitLabel(useKg)}") },
                         colors = filterChipColors()
                     )
                 }
@@ -141,7 +147,8 @@ private fun SessionRow(
     modifier: Modifier = Modifier
 ) {
     val dayName = Program.days.firstOrNull { it.key == session.dayKey }?.defaultName ?: session.dayKey
-    val durationMin = session.finishedAt?.let { ((it - session.startedAt) / 60_000).toInt() }
+    val durationMin = session.durationMinutes()
+    val useKg = LocalForgeSettings.current.useKg
     Surface(
         modifier = modifier.fillMaxWidth().clickable { onClick() },
         color = MaterialTheme.colorScheme.surface,
@@ -162,7 +169,7 @@ private fun SessionRow(
             }
             Column(horizontalAlignment = Alignment.End) {
                 if (session.totalVolumeLb != null && session.totalVolumeLb > 0) {
-                    Text("${session.totalVolumeLb.toInt()} lb", style = MaterialTheme.typography.bodyMedium,
+                    Text(formatVolume(session.totalVolumeLb, useKg), style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
                 }
                 if (durationMin != null) {

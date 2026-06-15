@@ -7,11 +7,15 @@ import kotlinx.coroutines.launch
 
 internal fun DayViewModel.handleSwapEvent(event: DayUiEvent) {
     when (event) {
-        is DayUiEvent.OpenSwapPicker -> {
+        is DayUiEvent.OpenSwapPicker -> viewModelScope.launch {
             // Swapping is impossible once sets are logged: re-keying would mis-attribute the performed
             // sets, and a name-only relabel would lie about what they were (#11). Warn instead of opening.
-            val hasSets = _state.value.exercises
-                .firstOrNull { it.plan.id == event.exerciseId }?.loggedSets?.isNotEmpty() == true
+            // Confirm against the DB, not just in-memory state (SM-5): a freshly-resumed VM or an in-flight
+            // refresh can show zero sets for a row that already has them, which would open the picker and
+            // silently downgrade the swap to a relabel.
+            val ui = _state.value.exercises.firstOrNull { it.plan.id == event.exerciseId }
+            val hasSets = ui?.loggedSets?.isNotEmpty() == true ||
+                ui?.loggedExerciseId?.let { workoutRepo.setsFor(it).isNotEmpty() } == true
             if (hasSets) {
                 _messages.trySend("Can't swap after logging sets — delete this exercise's sets first.")
             } else {
