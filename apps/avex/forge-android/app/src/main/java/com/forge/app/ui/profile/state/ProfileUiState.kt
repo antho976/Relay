@@ -8,7 +8,6 @@ import com.forge.app.domain.rank.RankInfo
 import com.forge.app.domain.rank.StandingMetric
 import com.forge.app.domain.rank.XpBreakdown
 import com.forge.app.ui.overview.state.OnThisDayMemory
-import java.io.File
 
 /**
  * The "You" hub state. Most fields are surfaced from data the app already computes; the rank/XP
@@ -18,7 +17,6 @@ data class ProfileUiState(
     val loading: Boolean = true,
     val name: String = "",
     val sinceLabel: String = "",
-    val avatarFile: File? = null,
 
     // Rank + XP
     val rank: RankInfo? = null,

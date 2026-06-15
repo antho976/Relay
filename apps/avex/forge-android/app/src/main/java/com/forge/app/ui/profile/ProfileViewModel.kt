@@ -4,7 +4,6 @@ import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.forge.app.data.prefs.SettingsRepository
-import com.forge.app.data.repo.AvatarRepository
 import com.forge.app.data.repo.ProfileRepository
 import com.forge.app.data.repo.ProgressPhoto
 import com.forge.app.data.repo.ProgressPhotoRepository
@@ -19,15 +18,14 @@ import javax.inject.Inject
 
 /**
  * The "You" hub (profile). Pure local — no account, no server. A thin mapper: [ProfileRepository]
- * does the snapshot fan-out + runs the rank/XP/standing engines; this VM layers on the live name,
- * progress photos and avatar, and owns the photo/avatar mutations.
+ * does the snapshot fan-out + runs the rank/XP/standing engines; this VM layers on the live name
+ * and progress photos, and owns the photo mutations.
  */
 @HiltViewModel
 class ProfileViewModel @Inject constructor(
     private val profileRepo: ProfileRepository,
     private val settingsRepo: SettingsRepository,
-    private val photoRepo: ProgressPhotoRepository,
-    private val avatarRepo: AvatarRepository
+    private val photoRepo: ProgressPhotoRepository
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(ProfileUiState())
@@ -41,7 +39,6 @@ class ProfileViewModel @Inject constructor(
             loading = false,
             name = settingsRepo.userName.first(),
             sinceLabel = data.sinceLabel,
-            avatarFile = avatarRepo.current(),
             rank = data.rank,
             xp = data.xp,
             totalSessions = data.totalSessions,
@@ -72,10 +69,5 @@ class ProfileViewModel @Inject constructor(
     fun deletePhoto(photo: ProgressPhoto) = viewModelScope.launch {
         photoRepo.delete(photo)
         _state.value = _state.value.copy(photos = photoRepo.photos())
-    }
-
-    fun setAvatar(uri: Uri) = viewModelScope.launch {
-        avatarRepo.set(uri)
-        _state.value = _state.value.copy(avatarFile = avatarRepo.current())
     }
 }

@@ -3,9 +3,7 @@ package com.forge.app.ui.profile
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -14,14 +12,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -76,11 +71,7 @@ fun ProfileScreen(
     val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         uri?.let { viewModel.addPhoto(it) }
     }
-    val avatarPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        uri?.let { viewModel.setAvatar(it) }
-    }
     fun pickPhoto() = photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-    fun pickAvatar() = avatarPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
 
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
@@ -90,7 +81,7 @@ fun ProfileScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("You.", style = MaterialTheme.typography.headlineMedium) },
+                title = { Text("Profile.", style = MaterialTheme.typography.headlineMedium) },
                 navigationIcon = {
                     IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
                 },
@@ -108,19 +99,14 @@ fun ProfileScreen(
                 style = MaterialTheme.typography.labelSmall, color = emphasized(muted), fontSize = 9.sp
             )
             Spacer(Modifier.height(6.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(state.name.ifBlank { "Athlete" } + ".", style = MaterialTheme.typography.displaySmall, color = emphasized(onBg))
-                    state.rank?.let { r ->
-                        Spacer(Modifier.height(2.dp))
-                        val streak = if (state.streakDays >= 2) " · ${state.streakDays}-day streak, still alive." else ""
-                        Text(
-                            "Rank ${r.roman} — ${r.tier.display}$streak",
-                            style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic
-                        )
-                    }
-                }
-                AvatarCircle(state.avatarFile, accent, outline) { pickAvatar() }
+            Text(state.name.ifBlank { "Athlete" } + ".", style = MaterialTheme.typography.displaySmall, color = emphasized(onBg))
+            state.rank?.let { r ->
+                Spacer(Modifier.height(2.dp))
+                val streak = if (state.streakDays >= 2) " · ${state.streakDays}-day streak, still alive." else ""
+                Text(
+                    "Rank ${r.roman} — ${r.tier.display}$streak",
+                    style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic
+                )
             }
 
             // ── Rank track ──────────────────────────────────────────────────────
@@ -168,32 +154,6 @@ fun ProfileScreen(
         val r = state.rank
         val xp = state.xp
         if (r != null && xp != null) RankInfoSheet(r, xp, onDismiss = { showXpInfo = false })
-    }
-}
-
-@Composable
-private fun AvatarCircle(file: File?, accent: Color, outline: Color, onPick: () -> Unit) {
-    // The outer Box is NOT clipped to a circle: the "+" badge sits at the bottom-right corner,
-    // which is outside the avatar's inscribed circle, so a circle clip would shear it off the
-    // bubble. The photo and "PIC" placeholder each clip themselves to a circle instead.
-    Box(
-        Modifier.size(64.dp).bounceClick { onPick() },
-        contentAlignment = Alignment.BottomEnd
-    ) {
-        if (file != null) {
-            ProgressPhotoImage(file, Modifier.fillMaxSize().clip(CircleShape), reqPx = 200)
-        } else {
-            Box(
-                Modifier.fillMaxSize().clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Text("PIC", style = MaterialTheme.typography.labelSmall, color = outline, fontSize = 9.sp)
-            }
-        }
-        Box(Modifier.size(20.dp).clip(CircleShape).background(accent), contentAlignment = Alignment.Center) {
-            Icon(Icons.Filled.Add, contentDescription = "Set photo", tint = MaterialTheme.colorScheme.background, modifier = Modifier.size(13.dp))
-        }
     }
 }
 

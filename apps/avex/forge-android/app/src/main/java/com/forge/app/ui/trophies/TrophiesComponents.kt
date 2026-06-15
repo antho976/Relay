@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import com.forge.app.ui.theme.emphasized
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.HorizontalDivider
@@ -60,8 +59,6 @@ internal fun HeroSection(state: TrophiesUiState, nextLocked: TrophyDisplay?, onB
             .padding(top = 8.dp, bottom = 16.dp)
     ) {
         Text("${state.totalCount} IN ALL · ${state.unlockedCount} EARNED", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
-        Spacer(Modifier.height(8.dp))
-        Text("${numberWord(state.unlockedCount)} of ${numberWord(state.totalCount)}.", style = MaterialTheme.typography.displayLarge, color = emphasized(onBg))
         Spacer(Modifier.height(14.dp))
         Box(modifier = Modifier.fillMaxWidth().height(3.dp).clip(RoundedCornerShape(50)).background(outline.copy(alpha = 0.2f))) {
             Box(modifier = Modifier.fillMaxWidth(animFrac).fillMaxHeight().clip(RoundedCornerShape(50)).background(accent))
@@ -160,15 +157,4 @@ internal fun FilterChips(selected: TrophyFilter, onSelect: (TrophyFilter) -> Uni
             )
         }
     }
-}
-
-internal fun numberWord(n: Int): String = when (n) {
-    0 -> "Zero"; 1 -> "One"; 2 -> "Two"; 3 -> "Three"; 4 -> "Four"; 5 -> "Five"
-    6 -> "Six"; 7 -> "Seven"; 8 -> "Eight"; 9 -> "Nine"; 10 -> "Ten"
-    11 -> "Eleven"; 12 -> "Twelve"; 13 -> "Thirteen"; 14 -> "Fourteen"; 15 -> "Fifteen"
-    16 -> "Sixteen"; 17 -> "Seventeen"; 18 -> "Eighteen"; 19 -> "Nineteen"; 20 -> "Twenty"
-    21 -> "Twenty-one"; 22 -> "Twenty-two"; 23 -> "Twenty-three"; 24 -> "Twenty-four"
-    25 -> "Twenty-five"; 26 -> "Twenty-six"; 27 -> "Twenty-seven"; 28 -> "Twenty-eight"
-    29 -> "Twenty-nine"; 30 -> "Thirty"; 31 -> "Thirty-one"; 32 -> "Thirty-two"
-    else -> n.toString()
 }
