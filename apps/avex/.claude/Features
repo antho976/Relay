@@ -1,5 +1,5 @@
 # Forge — Built Features Inventory
-Last updated: 2026-06-09
+Last updated: 2026-06-15
 
 > **Legend:** Items below are marked with their current UI status.
 > - ✅ **Visible** — currently reachable in the running app.
@@ -41,10 +41,12 @@ These were verified by codegraph + grep: the file is on disk and compiles, but n
 - `ui/trophies/components/TrophyCard.kt` — TrophiesScreen uses `TrophyRow` from `TrophiesComponents.kt` instead
 
 ### Routes that exist but have no in-app entry point
-These are in `ForgeNavHost.kt` but nothing in the visible UI navigates to them:
-- `Routes.SESSION_HISTORY` → `SessionHistoryScreen` — `onOpenHistory` callback passed to `StatsContent` but never wired to a button
-- `Routes.NOTES_SEARCH` → `NotesSearchScreen` (#60) — same situation, callback unused
-- `Routes.RECAP` → `RecapScreen` (#32, #33) — same situation, callback unused
+> **Mostly resolved (2026-06-11+):** the **Profile "You" hub** and the **Session Detail** work gave
+> most of these real entry points — see those sections below.
+- `Routes.SESSION_HISTORY` → `SessionHistoryScreen` — **✅ reachable**: the Overview RECENT "view all →"
+  `HistorySheet` and the full Session History list both push `SessionDetailScreen` (2026-06-14).
+- `Routes.RECAP` → `RecapScreen` (#32, #33) — **✅ reachable**: surfaced from the Profile hub's "Recaps" row.
+- `Routes.NOTES_SEARCH` → `NotesSearchScreen` (#60) — still orphaned (callback unused, no button).
 
 ### ✅ Resolved since this audit — onboarding now fires (2026-06-08)
 - **Onboarding (#1)** — **NOW LIVE.** Gating moved out of the nav graph into `MainActivity`: it observes `settingsRepo.onboardingDone` and renders `OnboardingScreen` when `false`, `ForgeNavHost` when `true` (blank while DataStore loads). Fresh-install users now see the full multi-step onboarding before reaching Overview. `WelcomeScreen.kt` and the `Routes.WELCOME` / `Routes.ONBOARDING` routes were deleted (onboarding is no longer a nav destination). The "Next" button now gates on valid input (name required; typed bodyweight must parse to a positive number).
@@ -58,7 +60,7 @@ These are in `ForgeNavHost.kt` but nothing in the visible UI navigates to them:
 
 ### Filter / search UI claimed but not visible on its screen
 - **Cardio filter chips (#63)** — **dead code removed (2026-06-08).** `CardioUiState.filteredEntries` / `selectedTypeFilter` were deleted along with the unused lifetime-distance (#79) and run pace-trend (#78) state; `CardioScreen` now reads `state.entries` directly. The cardio screen was deliberately kept simple (weekly card + entry list + log sheet).
-- **Trophy near-miss section (#136)** — `TrophiesUiState` and `TrophiesViewModel` track near-misses; `TrophiesScreen.kt` does not render them.
+- **Trophy near-miss section (#136)** — **✅ now rendered** on the Profile "You" hub (closest-to-unlock + near-misses, see the Profile section); `TrophiesScreen.kt` itself still doesn't show them inline.
 
 ---
 
@@ -196,12 +198,14 @@ Accessed via the Stats tab inside the Gym screen (alongside Train + PRs).
 - **Cross-day guard** (`CrossDaySessionDialog`): opening a day while a *different* day's workout is still in progress prompts "Resume {other day}" (go back) or "Discard & start {this day}" — only one session is active at a time, so it never silently resumes the wrong day
 - **Per-sitting active timing (2026-06-11, DB v19→20):** a workout trained across "resume later" sittings now sums its real ACTIVE time instead of the clock resetting each open. New `session_segment` table (one row per sitting, start/end; cascades on session delete) + denormalized `session.active_seconds` stamped at finish. `beginSessionForThisDay` closes any dangling segment (process-death best-effort = last in-segment set time) and opens a fresh one; leave-and-resume / finish close it; `finishSession` returns the summed active seconds, used for the summary duration. Live readout anchored via `DayUiState.elapsedAnchorMs` (= now − prior-sittings ms) so `LastSessionStrip` shows the running total; the date pill keeps the real first-start. Exports list the per-sitting breakdown; `InsightEngine` estimate-calibration + PDF/JSON read `active_seconds` (fall back to wall-clock for pre-feature rows).
 - "Quick start" nav arg (skipWarmup=true) skips warmup gate entirely
+- **Program-change guard (0.8, `ProgramChangeGuard` Singleton + `ProgramChangeGuardHost` at app root):** generating, deloading, or re-rolling the program while a session is in progress pops a confirmation showing how many logged sets would be lost, instead of silently discarding them
 
 ### Exercise List
 - **Orphan fix (2026-06-11):** opening a finished/skipped exercise that sits *later* in the list no longer hides incomplete ones before it. UP NEXT (`DaySessionContent`) now lists every remaining-work exercise (not just those forward of the shown index), ordered next-after-current then earlier — so nothing vanishes from the view (the data was always intact; resume rebuilt it).
 - Collapsible exercise cards (tap to expand/collapse)
 - Previous session "last time" text shown per exercise (e.g. "Last: 30 lb × 10")
 - Weight prefill from last session
+- **DONE / SKIPPED section (0.6):** completed/skipped exercises collapse into a list below the current one (keyed by position to allow the same exercise twice), still tappable to re-open and edit; **skipping an exercise auto-advances** focus to the next incomplete one
 
 ### Beat the ghost (2026-06-11 — engagement)
 Every set is framed as a duel with last session, building on the existing per-set comparison
@@ -225,6 +229,9 @@ Every set is framed as a duel with last session, building on the existing per-se
 - Long-press any logged set row → instantly logs identical weight + reps as the next set
 - "Use last: X lb" chip pre-fills weight from previous session when field is blank
 - Weight suggestion chip ("Try: X lb · reason") shown when auto-progression or effort rating triggers a change; one tap applies it
+- **Input modes per exercise unit (0.6):** bodyweight exercises show "BODYWEIGHT / BW" and log reps only; cable/machine (PLATES) exercises log a **plate count** ("PLATES", with the lb equivalent shown), using a **configurable plate weight** (Settings → Equipment / onboarding: 5/10/15/20/25/45 lb)
+- **Reps pre-fill** the top of the target rep range and reset to it after each set; weight + reps also seed from your previous session's set at the same position
+- **Δ-vs-last column** always fills (extra "bonus" sets compare against last session's final set; "+0" on an exact match; plate exercises show the delta in plate counts) and the **PR ★ marks the actual record-setting set**, not always set 1
 
 ### Per-Exercise Controls
 - Difficulty rater: EASY / JUST_RIGHT / HARD / BRUTAL (saved to DB per exercise)
@@ -234,6 +241,7 @@ Every set is framed as a duel with last session, building on the existing per-se
   - Persistent swap (saved to ExerciseCustomization, applies to all future sessions)
   - Swap candidates filtered by muscle group from the swap catalog
 - Skip exercise
+- **"VIDEO" chip (0.6)** — on the exercise footer and the collapsed DONE row; opens a YouTube search for the exercise name (machine/cable exercises bias toward machine demos) so you can watch a how-to without leaving the app
 
 ### Rest Timer
 - Auto-starts (2:30 default) when a set is logged
@@ -251,20 +259,31 @@ Every set is framed as a duel with last session, building on the existing per-se
 - Per-exercise highlights: sets · volume · PR badge
 - Trophies unlocked section (shows new unlocks earned in this session)
 - Mood prompt: Drained 😩 / Off 😕 / Fine 😐 / Good 🙂 / Strong 💪 (tap to select, tap again to deselect)
+- **Journal note (0.6):** free-text reflection saved with the session (`session.journal`, shown on the Session Detail page)
+- **Duel result (beat-the-ghost):** "Beat last session on N of M sets" / "Clean sweep"; confetti fires for a trophy, a best-ever session, or a clean sweep
 - Done button — saves mood to MoodEntry table, closes sheet
 
 ---
 
 ## Trophies
 
-- 21 trophies across 3 categories: Firsts · Consistency · Strength
+- **32 trophies** across 3 categories: Firsts · Consistency · Strength (grown from 21; the dumbbell-weight-specific
+  ones were retired during the equipment generalization — see the replacement note below)
 - **Firsts (5):** First Session, First PR, Hit the Wall (brutal rating), Made It Mine (swap used), Full Slate (all target sets hit)
-- **Consistency (8):** Five Strong / Double Digits / Quarter Hundred / Halfway / Century (session milestones), Through the Door (first full workout), Showing Up (10 full workouts), Full Week (all 4 days trained)
-- **Strength (8):** PR Hunter / On a Roll / Forged Strength (PR milestones), 25lb/30lb Bench Club, 30lb Goblet, Volume King (3000 lb session), Volume Beast (5000 lb session)
-- Pure-function evaluator: TrophyEvaluator runs against TrophyStatsSnapshot (no DAO deps — testable in isolation)
+- **Consistency (17):** Five Strong / Double Digits / Quarter Hundred / Halfway to a Hundred / Century (session
+  milestones), Through the Door (first full workout), Showing Up (10 full workouts), **Locked In** (25 workouts),
+  Three Days in a Row, Early Bird, Night Owl, Iron Sunday, Comeback Kid, Consistency King, Variety Pack, Slow Burn, Speed Demon
+- **Strength (10):** PR Hunter / On a Roll / Forged Strength (PR milestones), **Dialed In** (full target sets at
+  target reps across 10 exercises), **Stamina** (50+ reps in one exercise session), **Record Machine** (50 PRs),
+  Volume King (3000 lb session) / Volume Beast (5000 lb) / Volume Mountain (10000 lb), Rep Machine
+- **Equipment-agnostic refresh (0.6):** "Full Week" (all 4 days) → **Locked In** (25 workouts); the three
+  dumbbell-weight clubs (25lb/30lb Bench, 30lb Goblet) → **Dialed In / Stamina / Record Machine** — so trophies
+  no longer assume a specific gear/weight.
+- Pure-function evaluator: TrophyEvaluator runs against TrophyStatsSnapshot (no DAO deps — testable in isolation);
+  new unlock rules `FullTargetHitsAtLeast` + `MaxSingleExerciseRepsAtLeast`; Comeback-Kid uses calendar-day gaps
 - Progress hints for locked trophies (e.g. "7 / 10 PRs")
 - 2-column grid layout, section headers per category
-- Progress bar header: X / 21 unlocked
+- Progress bar header: X / 32 unlocked
 - Unlock date shown on earned trophy cards
 - New unlocks surfaced in Session Summary Sheet immediately after finishing a workout
 - 11 icon types mapped to Material Icons (Spark, Star, Flame, Swap, Check, Stack, Crown, Door, Four, Dumbbell, Bolt)
@@ -304,7 +323,7 @@ All 4 days fully specified with:
 
 > **Superseded by the program-unlock (un-hardlock) work:** the program is now data-driven + auto-generated from `ExerciseLibrary` (a single equipment-tagged pool of 52 movements with per-exercise coaching rationale). The old `Swaps` catalog was merged into the library, so the **swap picker and the generator now draw from the same pool**, filtered by available equipment + dislikes.
 >
-> **"Professional plans" engine (all 6 phases complete):** the generator is goal-aware (rep ranges), experience-aware (volume scale + difficulty cap), frequency-aware (weekly volume via `VolumeModel`), role/pattern-aware (heavy slots → bilateral compounds, no duplicate movement patterns), and safety-aware (problem-area avoidance). Tunable from **Settings → Program**: days/week, goal, experience, priority muscles, problem areas, cadence, deload week, + a **live per-muscle weekly-volume readout**; per-exercise ♥/✕/📌 (like/dislike/pin) on the Exercise-likes page; single-day re-roll from the day-card long-press menu. Onboarding (10 steps) collects all inputs and shows a **live sample-week preview** before finishing. Rest-timer durations + day-card "~min" estimates come from `SessionEstimate`. See `.claude/program-unlock-plan.md`.
+> **"Professional plans" engine (all 6 phases complete):** the generator is goal-aware (rep ranges), experience-aware (volume scale + difficulty cap), frequency-aware (weekly volume via `VolumeModel`), role/pattern-aware (heavy slots → bilateral compounds, no duplicate movement patterns), and safety-aware (problem-area avoidance). Tunable from **Settings → Program**: days/week, goal, experience, priority muscles, problem areas, cadence, deload week, + a **live per-muscle weekly-volume readout**; per-exercise ♥/✕/📌 (like/dislike/pin) on the Exercise-likes page; single-day re-roll from the day-card long-press menu. Onboarding (reorganized into **6 grouped, scrollable pages** in 0.6, + an optional sex step) collects all inputs and shows a **live sample-week preview** before finishing. Rest-timer durations + day-card "~min" estimates come from `SessionEstimate`. See `.claude/program-unlock-plan.md`.
 >
 > **Pro-level plan audit (2026-06-10), tuned around the MWM-989 preset:** library grew to 59 movements — added DB Fly (was zero chest isolation anywhere), Seated Low Row / Close-Grip Pulldown / Straight-Arm Pulldown / DB Pullover (MWM back pool was only 3 movements for 3 pull slots → identical pull days forever), Face Pull (rear delts had a single option), DB Squat (second bilateral squat). New `ExerciseDef.pickBias` weight keeps niche accessories (adductor cross, front raises, pullover) from headlining slots and boosts lateral raises (1.5, stated priority); push-up / diamond push-up / single-leg calf raise became `fallbackOnly` (equipped users never see them). Generator: STRENGTH slots hard-prefer compounds (isolation can't lead when a compound exists) and down-weight AMRAP/timed movements; hip thrust/glute bridge unclassed from HINGE (RDL + hip thrust same day is good programming); front raises classed VERTICAL_PUSH (no more OHP + front raise or double-front-raise days). Templates: 4-day split now mirrors the seed's identity — push-lean Upper A / pull-lean Upper B (chest AND back open STR on both) + quad-lean Lower A / ham-lean Lower B; 2-day full-body got a hinge-led B variant (glutes/rear delts/calves had ZERO weekly volume before); 3-day leg day gained a second hamstring slot (was 4 sets/wk vs quads 7); glute slots run HYP so hip thrust isn't down-weighted; 7-day arms day leads with the triceps press (a STRENGTH curl slot prescribed 4-6 heavy curls under get_stronger). 5 new regression tests incl. full-coverage + no-muscle-dominates-a-day guards on the MWM preset.
 >
@@ -617,6 +636,7 @@ tests.**
 
 ## Settings & UX tweaks (2026-06-10)
 
+- **Accent emphasis (0.6, Appearance):** new Off / Subtle / Medium / Strong setting (`accent_emphasis` pref, `Emphasis.kt` — `emphasized(Color)` / `emphasizedWeight()` helpers) tints big numbers, screen titles and exercise names with your accent color, applied across Overview/Stats/Recap/Settings/ExerciseCard; live preview during onboarding.
 - **Timezone picker** labels are now "City (offset)" — e.g. "New York (EST −5)" — instead of bare codes (`SettingsSubPages.TIMEZONE_OPTIONS`).
 - **Encouragement-messages toggle removed.** It was wired to nothing (no renderer/message bank ever read the flag); deleted across SettingsSubPages/ViewModel/Repository/PreferencesDataStore/ForgeUiSettings/MainActivity + search entries.
 - **Overview-tiles settings page removed** (`SettingsPage.Tiles` + `TilesPage`). The order/visibility prefs it controlled were already dead — `OverviewScreen` hardcodes its tiles and never read `overviewTileOrder`/`hiddenOverviewTiles`. The repo prefs remain (harmless/orphaned).
@@ -629,36 +649,82 @@ tests.**
 
 ## Data Layer
 
-### Database (Room, WAL mode)
+### Database (Room, WAL mode) — **schema v22, 25 entities, migration-locked from v12**
+> Every change past v11 needs a real `Migration` in `Migrations.kt` (in `ALL_MIGRATIONS`), a bumped
+> version, an exported schema JSON, and a `MigrationTest` case — a bump without a migration fails loudly
+> at startup (data is never silently wiped). Full 12→22 chain confirmed on-device (Samsung SM-G998U /
+> Android 15, 2026-06-14).
+
+**Core workout**
 | Table | Purpose |
 |---|---|
-| Session | One row per started workout (dayKey, startedAt, finishedAt) |
-| LoggedExercise | One row per exercise in a session (effortRating, note, skipped) |
-| LoggedSet | One row per set (weight, reps, isPr) |
-| DayNameOverride | User-renamed day labels |
-| ExerciseCustomization | Persistent exercise swaps (name + unit override) |
-| UnlockedTrophy | Trophy IDs + unlock timestamp |
-| CardioEntry | Cardio logs (type, duration, distance, effort, restReason, note) |
+| Session | One row per started workout (dayKey, startedAt, finishedAt, sessionType, **active_seconds** v20, journal) |
+| SessionSegment | One row per "sitting" of a session (start/end) — sums real ACTIVE time across resume-later (v20) |
+| LoggedExercise | One exercise in a session (effortRating, note, skipped, **slot_id** v22 = original slot when swapped) |
+| LoggedSet | One set (weight, reps, isPr, rpe, set-type annotations) |
 | MoodEntry | Post-workout mood per session |
+| RestEvent | Planned vs realized rest per set (how it ended, +seconds) — feeds the adaptive rest timer (v16) |
+| SessionBreak | Legacy break tracking |
+
+**Program / customization**
+| Table | Purpose |
+|---|---|
+| ProgramDay / ProgramSlot | Data-driven generated program (days + their exercise slots) (v14) |
+| ProgramCustomization | Per-slot set/rep/remove overrides (**source** user/auto v21) |
+| ExerciseCustomization | Persistent swaps (name + unit, **source** v21, **swapped_exercise_id** v22) |
+| WarmupRoutineItem | User-edited warmup items |
+| DayNameOverride | User-renamed day labels |
+
+**Coach / adaptation**
+| Table | Purpose |
+|---|---|
+| CoachPass | One Weekly Coach Pass per ISO week (status shadow/hold/error) (v17) |
+| CoachDecision | A pass's proposed/applied/skipped/reverted changes + undo data (v17, lifecycle v19) |
+| SuggestionOutcome | Suggested-vs-taken weight per exercise/session — calibrates the weight chip (v18) |
+| AdviceEvent | Shown/applied/dismissed per recommendation id — drives 14-day cooldowns (v16) |
+
+**Goals / cardio / trophies / misc**
+| Table | Purpose |
+|---|---|
+| CardioEntry | Cardio logs (type, duration, distance, effort, restReason, note) |
+| UnlockedTrophy | Trophy IDs + unlock timestamp |
+| TrophyNearMiss | Near-miss tracking (closest-to-unlock) |
+| ExerciseGoal / ExtendedGoal | Per-exercise + extended goals |
+| BodyweightEntry | Bodyweight log (unique date_key index, v15) |
+| VacationPeriod | Named holiday date ranges (bridge streaks, pause the readiness advisor) |
+| RestDayEntry | Rest-day records (logic-only; no Stats UI caller) |
 
 ### Repositories
-- WorkoutRepository — session + set + exercise CRUD, mood recording, active session observe
-- CustomizationRepository — day name overrides, exercise customizations
-- TrophyRepository — unlock evaluation + persistence, stats snapshot fan-out
+- WorkoutRepository — session + set + exercise CRUD, mood + journal recording, active session observe, rest-event logging
+- CustomizationRepository — day name overrides, exercise customizations (swaps)
+- ProgramRepository — generates/persists the data-driven program; reconcile, re-roll (day + all), widget refresh, coach-bias enrichment
+- ProgramCustomizationRepository — per-slot set/rep/remove overrides (with user/auto source)
+- TrophyRepository — unlock evaluation + persistence, stats snapshot fan-out, near-miss + max-streak (vacation-bridged)
 - CardioRepository — cardio CRUD, weekly minutes flow
-- StatsRepository — all stats queries for the Stats tab
-- BackupRepository — whole-DB-file backup + restore. **Now also backs up app settings** (#138): a backup stages both the Room DB and the DataStore preferences file; on restore they're written to `pending_restore.db` / `pending_restore_prefs.pb` and swapped in at boot by `ForgeApp.applyPendingRestore()` — before Room or DataStore is first opened, avoiding the live-swap race
+- StatsRepository — all stats queries for the Stats tab + `getSessionDetail(id)` (session detail screen)
+- AdaptationRepository — the adaptation engine's only impure piece: `snapshot()` fan-out, `readinessScale()`, `coachRecommendations()`, `engineStatsRead()`, `insights()`, `applyDeloadWeek()`, advice logging
+- CoachRepository — the Weekly Coach Pass orchestration: `ensureWeeklyPass`, `brief`, apply/skip/undo/applyAll, autopilot, markSeen
+- ProfileRepository — fan-out read assembling the "You" hub snapshot (rank/XP/standing/signature) + runs `domain/rank/` engines
+- ProgressPhotoRepository / AvatarRepository — physique photos + avatar in app-private storage (`filesDir/`, JSON index — **no Room table / no migration**)
+- VacationRepository — holiday date ranges
+- BackupRepository — whole-DB-file backup + restore. **Also backs up app settings** (#138): a backup is now a ZIP of the Room DB + DataStore preferences file; restore sniffs ZIP vs raw DB and stages `pending_restore.db` / `pending_restore_prefs.pb`, swapped in at boot by `ForgeApp.applyPendingRestore()` before Room/DataStore is first opened. `VACUUM INTO` → WAL-checkpoint+copy fallback for pre-Android-11. The lossy JSON/CSV exports (`exportFullDataJson`/sessions/weekly) now open the **system share sheet** via a `FileProvider` with fixed overwrite filenames (no more timestamped pile-up)
 
 ### Preferences (DataStore)
-- `welcomed` flag
-- `lastDeloadAtSessionCount` for deload tracking
+- **Onboarding/identity:** `onboarding_done`, `user_name`, `user_goal`, `user_sex` (`welcomed` is legacy)
+- **Appearance:** `accent_color_hex`, `accent_emphasis` (Off/Subtle/Medium/Strong), `amoled_mode`, `font_choice`, `day_color_$dayKey`
+- **Units/format:** `use_kg`, `plate_weight_lb` (configurable plate weight), `date_format`, `timezone`, `time_format_24h`, `first_day_monday`
+- **Program:** `days_per_week`, `program_emphasis`, `program_experience`, `priority_muscles`, `problem_areas`, `frozen_exercise_ids` (curated preset freeze), `max_db_weight_lb` (heaviest dumbbell ceiling), rotation/`schedule_mode`+`schedule_weekly` (weekday plan), `deload_week_start_ms`, `planned_next_day`, `warmup_$dayKey`
+- **Coach:** `coach_mode` (suggest/auto), `last_seen_coach_week_id`
+- **Misc:** `cardio_weekly_target_min`, `monthly_pr_target`, `haptic_strength`, `privacy_mode`, quiet-hours, `compact_set_logging`
+- (Retired: `lastDeloadAtSessionCount` — the fixed deload counter was deleted when the DeloadAdvisor replaced it)
 
-### Domain Utilities
+### Domain Utilities & Engines
 - PrDetector — compares new set against historical max
-- VolumeCalculator — weight × reps per set → total lb
-- WeightParser — parses weight text to Double lb ("45", "2 plates", "BW", "45lb")
+- VolumeCalculator — weight × reps per set → total lb; `WeightFormatter` (locale-safe `formatVolume`/`formatVolumeCompact`)
+- WeightParser — parses weight text to Double lb ("45", "2 plates", "BW", "45lb"); a bare number on a PLATES exercise = plate count × configurable plate weight
 - TrophyEvaluator — pure function, stats snapshot → set of unlocked trophy IDs
-- RestTimerController — coroutine-based countdown state machine (start / pause / resume / reset / stop)
+- RestTimerController — wall-clock countdown state machine (end-instant via injected `Clock`; start / pause / resume / reset / stop)
+- **Pure engine packages:** `domain/adapt/` (6 advisors + arbiter), `domain/coach/` (5 systems + gen-bias), `domain/rank/` (XpEngine / RankLadder / StandingEngine), `domain/schedule/WeeklySchedule`, `domain/vacation/VacationCalendar` — all deterministic, snapshot-fed, unit-tested
 
 ### DI
 - Hilt throughout (ViewModels, Repositories, DAOs, Clock)
