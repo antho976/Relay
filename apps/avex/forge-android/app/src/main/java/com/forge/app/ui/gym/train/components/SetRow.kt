@@ -48,6 +48,7 @@ import com.forge.app.data.db.entities.LoggedSet
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.domain.units.formatWeightDelta
 import com.forge.app.domain.units.unitLabel
+import com.forge.app.ui.common.rpeLabel
 import com.forge.app.domain.units.weightInputValue
 import com.forge.app.ui.theme.ForgeLastGreen
 import com.forge.app.ui.theme.ForgeMotion
@@ -296,8 +297,6 @@ fun SetRow(
         }
     }
 }
-
-private fun rpeLabel(rpe: Double): String = if (rpe % 1.0 == 0.0) "${rpe.toInt()}" else "%.1f".format(rpe)
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable

@@ -351,4 +351,18 @@ object Trophies {
         )
     )
 
+    /**
+     * Decorator index for each trophy so trophies that share an icon don't look identical:
+     * within an icon group, the first member is 0 (no mark) and the rest get 1, 2, 3… little
+     * accent pips. Derived from [all]'s order, so the count escalates with the milestone
+     * (e.g. the 5→10→25→50 session ladder reads 0→1→2→3). Self-maintaining as trophies change.
+     */
+    val iconVariants: Map<String, Int> =
+        all.groupBy { it.icon }
+            .flatMap { (_, group) -> group.mapIndexed { i, t -> t.id to i } }
+            .toMap()
+
+    /** Pip count for a trophy's badge decorator (0 = unmarked / only one of its icon). */
+    fun variantFor(id: String): Int = iconVariants[id] ?: 0
+
 }

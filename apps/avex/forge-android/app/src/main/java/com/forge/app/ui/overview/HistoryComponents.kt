@@ -64,8 +64,7 @@ internal fun HistoryRow(
         }
         if (entry.isGym && entry.volumeLb != null && entry.volumeLb > 0) {
             Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                val volText = if (entry.volumeLb >= 1000) "%.1fk".format(entry.volumeLb / 1000) else "${entry.volumeLb.toInt()}"
-                Text("$volText lb", style = MaterialTheme.typography.bodySmall, color = onBg, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
+                Text(formatVolumeLb(entry.volumeLb), style = MaterialTheme.typography.bodySmall, color = onBg, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
                 when {
                     entry.isBest -> Text("BEST", style = MaterialTheme.typography.labelSmall, color = onBg.copy(alpha = 0.85f), fontSize = 8.sp, letterSpacing = 0.6.sp)
                     entry.vsAvgPct != null -> {

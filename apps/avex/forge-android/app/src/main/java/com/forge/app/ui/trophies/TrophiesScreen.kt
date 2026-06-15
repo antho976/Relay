@@ -24,7 +24,9 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -43,6 +45,9 @@ fun TrophiesScreen(
     viewModel: TrophiesViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    // Trophies whose icon is currently animating. Tapping a row toggles its id here; the set is
+    // screen-scoped, so navigating away clears it — the animation "plays until you leave the page".
+    var activated by remember { mutableStateOf(setOf<String>()) }
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val outline = MaterialTheme.colorScheme.outline
@@ -131,12 +136,15 @@ fun TrophiesScreen(
                     }
                 }
                 items(section.displays, key = { it.trophy.id }) { display ->
+                    val id = display.trophy.id
                     TrophyRow(
                         display = display,
                         onBg = onBg,
                         muted = muted,
                         bg = bg,
                         outline = outline,
+                        active = id in activated,
+                        onToggle = { activated = if (id in activated) activated - id else activated + id },
                         modifier = forgeItemMotion()
                     )
                     HorizontalDivider(

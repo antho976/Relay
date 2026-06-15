@@ -126,7 +126,7 @@ private fun TrophyGridCell(
                 }
             }
             Box(contentAlignment = Alignment.BottomEnd) {
-                AnimatedTrophyBadge(icon = cell.icon, unlocked = cell.unlocked, active = open, size = 34.dp, accent = accent)
+                AnimatedTrophyBadge(icon = cell.icon, unlocked = cell.unlocked, active = open, size = 34.dp, accent = accent, variant = cell.variant)
                 if (cell.unlocked) {
                     Box(Modifier.size(14.dp).clip(CircleShape).background(bg), contentAlignment = Alignment.Center) {
                         Box(Modifier.size(11.dp).clip(CircleShape).background(onBackground), contentAlignment = Alignment.Center) {

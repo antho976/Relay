@@ -118,6 +118,14 @@ The old header line "Level {trophy points}" is replaced by the rank ladder.
 - Tests: `domain/rank/` — `RankLadderTest` (boundaries, sub-rank romans, Damascus cap, monotonicity),
   `XpEngineTest` (per-source weights, the Tempered calibration), `StandingEngineTest` (monotonic,
   clamp, interpolation). JVM suite green; `compileDebugKotlin` clean. **Pending:** on-device check.
+- **Hero-emblem redesign (2026-06-14):** `RankSection` reworked from the cramped 6-node track into a
+  big **hero emblem** for the current tier (glow + tier ring) over a **slim six-dot rail** where the
+  connector lives only in the gaps (no longer slices through the emblems) and every dot wears its own
+  `RankTier.colorArgb`. Ember/Flare now render a **custom Canvas fire** (`RankEmblem.kt`: 3 stacked
+  flame paths + rising embers, out-of-phase oscillators read at draw time) so the flames themselves
+  lick/flicker instead of the whole glyph swaying; other tiers keep their animated Material glyph as a
+  hero fallback until they get bespoke drawings. Reduced-motion honoured (still flame). `compileDebugKotlin`
+  clean; **pending:** on-device check + custom drawings for Nova/Pulsar/Quasar/Supernova.
 
 ## Overview Screen
 
@@ -128,7 +136,7 @@ The old header line "Level {trophy points}" is replaced by the rank ladder.
 - **Resume banner** — when `activeSessionDayKey != null` (an unfinished workout exists), an "IN PROGRESS · {day} · tap to resume" accent-tinted row appears above the hero; tapping reopens that day's session
 - "Start session →" white pill button + "skip warmup" outlined chip. When a session is in progress the button becomes "Resume session →" (targets the active day) and the skip-warmup chip is hidden (skip only applies to a fresh start)
 - "THIS WEEK" section: M T W T F S S strip (trained / today markers) + 3 inline stats (workouts · LB · cardio min)
-- "RECENT" list: clickable rows opening `SummarySheet`; "view all →" opens `HistorySheet`
+- "RECENT" list: clickable rows; "view all →" opens `HistorySheet`. **Session detail page (2026-06-14):** tapping a **gym** session (RECENT row, the view-all `HistorySheet`, or the full-screen Session History list) now pushes a full-screen **`SessionDetailScreen`** (`ui/gym/session/`, route `gym/session-detail/{sessionId}`) — header + journal, a summary strip (volume/duration/sets/PRs/avg-RPE), a session "metric per exercise" overview chart, and a card per exercise (set table with weight×reps/RPE/PR·AMRAP·FAIL·DROP tags + a per-exercise graph). A **Metric** toggle (Weight/Volume/Reps) and a **Bars↔Line** toggle restyle every chart at once. Data via new `StatsRepository.getSessionDetail(sessionId)` (no schema change); reuses the Stats `Sparkline`/`StatCard`/motion kit. **Cardio** sessions still open the lightweight `SummarySheet`. **At-a-glance enrichment (2026-06-14):** each gym row now shows set count + real ACTIVE duration in the subtitle (`activeSeconds`, wall-clock fallback — fixes the "0 min" reading), a status pill (DELOAD/TEST/TECHNIQUE/first quick tag, beside the category chip), the session's **marquee lift** (heaviest set, e.g. "Bench Press 185 × 5", fetched in `OverviewViewModel.topLiftFor` via the existing `getSessionExerciseLines`), and a **trend arrow** ↑/↓ next to volume (reuses `vsAvgPct`). No new DB queries/migrations; all fields already on the `Session` row except the marquee (≤2 cheap reads per emission).
 - `CardioTile` (full-width) + `StatsTile` + `TrophiesTile` (side-by-side)
 - Faint "Nutrition →" link → `NutritionPlaceholderScreen`
 
@@ -260,6 +268,8 @@ Every set is framed as a duel with last session, building on the existing per-se
 - Unlock date shown on earned trophy cards
 - New unlocks surfaced in Session Summary Sheet immediately after finishing a workout
 - 11 icon types mapped to Material Icons (Spark, Star, Flame, Swap, Check, Stack, Crown, Door, Four, Dumbbell, Bolt)
+- **Tap-to-animate (full list):** tapping a trophy row plays the icon's signature motion (reuses the profile trophy-case `AnimatedTrophyBadge`); it keeps playing until you leave the screen, and multiple can run at once
+- **Same-icon distinction:** trophies that share a base icon get a tier-pip "crown" (0/1/2/3 small accent dots, via `Trophies.variantFor`) so duplicates never look identical — applied in both the full list and the profile trophy-case grid
 
 ---
 

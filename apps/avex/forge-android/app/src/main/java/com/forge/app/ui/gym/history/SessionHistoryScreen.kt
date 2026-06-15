@@ -1,5 +1,6 @@
 package com.forge.app.ui.gym.history
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -45,6 +46,7 @@ import java.util.Locale
 @Composable
 fun SessionHistoryScreen(
     onBack: () -> Unit,
+    onOpenSession: (Long) -> Unit,
     viewModel: SessionHistoryViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -120,7 +122,11 @@ fun SessionHistoryScreen(
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(state.filtered, key = { it.id }) { session ->
-                        SessionRow(session = session, modifier = forgeItemMotion())
+                        SessionRow(
+                            session = session,
+                            onClick = { onOpenSession(session.id) },
+                            modifier = forgeItemMotion()
+                        )
                     }
                 }
             }
@@ -129,11 +135,15 @@ fun SessionHistoryScreen(
 }
 
 @Composable
-private fun SessionRow(session: com.forge.app.data.db.entities.Session, modifier: Modifier = Modifier) {
+private fun SessionRow(
+    session: com.forge.app.data.db.entities.Session,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
     val dayName = Program.days.firstOrNull { it.key == session.dayKey }?.defaultName ?: session.dayKey
     val durationMin = session.finishedAt?.let { ((it - session.startedAt) / 60_000).toInt() }
     Surface(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth().clickable { onClick() },
         color = MaterialTheme.colorScheme.surface,
         shape = RoundedCornerShape(12.dp)
     ) {

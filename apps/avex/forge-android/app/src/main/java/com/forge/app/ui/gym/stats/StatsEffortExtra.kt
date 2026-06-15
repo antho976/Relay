@@ -22,6 +22,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.forge.app.ui.common.rpeLabel
 import com.forge.app.ui.gym.stats.components.Sparkline
 import com.forge.app.ui.gym.stats.components.rememberDrawProgress
 import com.forge.app.ui.gym.stats.components.staggeredProgress
@@ -73,8 +74,6 @@ internal fun RpeCard(buckets: List<RpeBucket>, avg: Double?, onBg: Color, muted:
         Spacer(Modifier.height(20.dp))
     }
 }
-
-private fun rpeLabel(rpe: Double): String = if (rpe % 1.0 == 0.0) "${rpe.toInt()}" else "%.1f".format(rpe)
 
 /** "Are you pushing hard enough?" — average RPE per session over time, vs the 7–9 sweet spot. */
 @Composable

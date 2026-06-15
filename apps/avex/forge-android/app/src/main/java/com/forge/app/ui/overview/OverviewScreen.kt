@@ -76,6 +76,7 @@ fun OverviewScreen(
     onGoToSettings: () -> Unit = {},
     onOpenCoachBrief: () -> Unit = {},
     onOpenProfile: () -> Unit = {},
+    onOpenSession: (Long) -> Unit = {},
     viewModel: OverviewViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -123,7 +124,10 @@ fun OverviewScreen(
     }
 
     if (showHistory) {
-        HistorySheet(onDismiss = { showHistory = false })
+        HistorySheet(
+            onDismiss = { showHistory = false },
+            onOpenSession = { id -> showHistory = false; onOpenSession(id) }
+        )
     }
 
     if (selectedItem != null) {
@@ -401,7 +405,8 @@ fun OverviewScreen(
             } else {
                 state.recentItems.forEach { item ->
                     RecentRow(item = item, muted = muted, onBg = onBg, outline = outline,
-                        onClick = { viewModel.selectRecentItem(item) })
+                        // Gym sessions open the full detail page; cardio keeps the lightweight summary sheet.
+                        onClick = { if (item.isGym) onOpenSession(item.id) else viewModel.selectRecentItem(item) })
                     Spacer(Modifier.height(14.dp))
                 }
             }

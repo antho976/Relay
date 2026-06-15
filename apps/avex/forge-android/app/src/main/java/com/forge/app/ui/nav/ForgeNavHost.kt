@@ -40,6 +40,7 @@ import com.forge.app.ui.cardio.CardioScreen
 import com.forge.app.ui.coach.CoachBriefScreen
 import com.forge.app.ui.common.ProgramChangeGuardHost
 import com.forge.app.ui.gym.history.SessionHistoryScreen
+import com.forge.app.ui.gym.session.SessionDetailScreen
 import com.forge.app.ui.gym.notes.NotesSearchScreen
 import com.forge.app.ui.gym.train.DayListScreen
 import com.forge.app.ui.gym.train.ProgramViewerScreen
@@ -115,7 +116,8 @@ fun ForgeNavHost() {
                 onGoToNutrition = { nav.navigate(Routes.NUTRITION) },
                 onGoToSettings = { nav.navigate(Routes.SETTINGS) },
                 onOpenCoachBrief = { nav.navigate(Routes.COACH_BRIEF) },
-                onOpenProfile = { nav.navigate(Routes.PROFILE) }
+                onOpenProfile = { nav.navigate(Routes.PROFILE) },
+                onOpenSession = { sessionId -> nav.navigate(Routes.sessionDetail(sessionId)) }
             )
         }
         composable(Routes.GYM_TRAIN) {
@@ -150,7 +152,16 @@ fun ForgeNavHost() {
             NutritionPlaceholderScreen(onBack = { nav.popBackStack() })
         }
         composable(Routes.SESSION_HISTORY) {
-            SessionHistoryScreen(onBack = { nav.popBackStack() })
+            SessionHistoryScreen(
+                onBack = { nav.popBackStack() },
+                onOpenSession = { sessionId -> nav.navigate(Routes.sessionDetail(sessionId)) }
+            )
+        }
+        composable(
+            route = Routes.SESSION_DETAIL,
+            arguments = listOf(navArgument(Routes.ARG_SESSION_ID) { type = NavType.LongType })
+        ) {
+            SessionDetailScreen(onBack = { nav.popBackStack() })
         }
         composable(Routes.NOTES_SEARCH) {
             NotesSearchScreen(onBack = { nav.popBackStack() })

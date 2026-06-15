@@ -43,17 +43,18 @@ internal fun AnimatedTrophyBadge(
     active: Boolean,
     size: Dp,
     accent: Color,
+    variant: Int = 0,
     modifier: Modifier = Modifier
 ) {
     if (!active || ForgeMotion.durationScale <= 0f) {
-        TrophyIconBadge(icon = icon, unlocked = unlocked, modifier = modifier, size = size)
+        TrophyIconBadge(icon = icon, unlocked = unlocked, modifier = modifier, size = size, variant = variant)
         return
     }
     val t = rememberInfiniteTransition(label = "trophy-icon-motion")
     when (icon.motion()) {
         Motion.SPIN -> {
             val a by t.animateFloat(0f, 360f, infiniteRepeatable(tween(1400, easing = LinearEasing)), label = "spin")
-            TrophyIconBadge(icon = icon, unlocked = unlocked, modifier = modifier, size = size,
+            TrophyIconBadge(icon = icon, unlocked = unlocked, modifier = modifier, size = size, variant = variant,
                 iconModifier = Modifier.graphicsLayer { rotationZ = a })
         }
         Motion.FLAME -> {
@@ -61,7 +62,7 @@ internal fun AnimatedTrophyBadge(
             val s1 by t.animateFloat(-1f, 1f, infiniteRepeatable(tween(560, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "sway-1")
             val s2 by t.animateFloat(-1f, 1f, infiniteRepeatable(tween(340, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "sway-2")
             val lick by t.animateFloat(0f, 1f, infiniteRepeatable(tween(460, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "lick")
-            TrophyIconBadge(icon = icon, unlocked = unlocked, modifier = modifier, size = size,
+            TrophyIconBadge(icon = icon, unlocked = unlocked, modifier = modifier, size = size, variant = variant,
                 iconModifier = Modifier.graphicsLayer {
                     transformOrigin = TransformOrigin(0.5f, 1f)
                     rotationZ = s1 * 8f + s2 * 4f
@@ -72,7 +73,7 @@ internal fun AnimatedTrophyBadge(
         Motion.TURN -> {
             val rot by t.animateFloat(0f, 360f, infiniteRepeatable(tween(3800, easing = LinearEasing)), label = "turn")
             val tw by t.animateFloat(0f, 1f, infiniteRepeatable(tween(820, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "twinkle")
-            TrophyIconBadge(icon = icon, unlocked = unlocked, modifier = modifier, size = size,
+            TrophyIconBadge(icon = icon, unlocked = unlocked, modifier = modifier, size = size, variant = variant,
                 iconModifier = Modifier.graphicsLayer { rotationZ = rot; scaleX = 0.94f + 0.10f * tw; scaleY = 0.94f + 0.10f * tw })
         }
         Motion.HEARTBEAT -> {
@@ -84,42 +85,42 @@ internal fun AnimatedTrophyBadge(
                 }),
                 label = "beat"
             )
-            TrophyIconBadge(icon = icon, unlocked = unlocked, modifier = modifier, size = size,
+            TrophyIconBadge(icon = icon, unlocked = unlocked, modifier = modifier, size = size, variant = variant,
                 iconModifier = Modifier.graphicsLayer { scaleX = s; scaleY = s })
         }
         Motion.SLIDE -> {
             val n by t.animateFloat(-1f, 1f, infiniteRepeatable(tween(560, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "slide")
             val dx = with(LocalDensity.current) { (size * 0.18f).toPx() }
-            TrophyIconBadge(icon = icon, unlocked = unlocked, modifier = modifier, size = size,
+            TrophyIconBadge(icon = icon, unlocked = unlocked, modifier = modifier, size = size, variant = variant,
                 iconModifier = Modifier.graphicsLayer { translationX = n * dx })
         }
         Motion.BOB -> {
             val b by t.animateFloat(-1f, 1f, infiniteRepeatable(tween(680, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "bob")
             val dy = with(LocalDensity.current) { (size * 0.14f).toPx() }
-            TrophyIconBadge(icon = icon, unlocked = unlocked, modifier = modifier, size = size,
+            TrophyIconBadge(icon = icon, unlocked = unlocked, modifier = modifier, size = size, variant = variant,
                 iconModifier = Modifier.graphicsLayer { translationY = b * dy })
         }
         Motion.TILT -> {
             val s1 by t.animateFloat(-1f, 1f, infiniteRepeatable(tween(720, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "tilt")
             val pl by t.animateFloat(0f, 1f, infiniteRepeatable(tween(900, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "tilt-pulse")
-            TrophyIconBadge(icon = icon, unlocked = unlocked, modifier = modifier, size = size,
+            TrophyIconBadge(icon = icon, unlocked = unlocked, modifier = modifier, size = size, variant = variant,
                 iconModifier = Modifier.graphicsLayer { rotationZ = s1 * 9f; scaleX = 0.97f + 0.06f * pl; scaleY = 0.97f + 0.06f * pl })
         }
         Motion.PAGE -> {
             val r by t.animateFloat(-1f, 1f, infiniteRepeatable(tween(900, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "page")
-            TrophyIconBadge(icon = icon, unlocked = unlocked, modifier = modifier, size = size,
+            TrophyIconBadge(icon = icon, unlocked = unlocked, modifier = modifier, size = size, variant = variant,
                 iconModifier = Modifier.graphicsLayer { rotationX = r * 18f })
         }
         Motion.SHAKE -> {
             // Fast, buzzy jitter — a lightning strike.
             val r by t.animateFloat(-1f, 1f, infiniteRepeatable(tween(110, easing = LinearEasing), RepeatMode.Reverse), label = "shake")
             val dx = with(LocalDensity.current) { (size * 0.05f).toPx() }
-            TrophyIconBadge(icon = icon, unlocked = unlocked, modifier = modifier, size = size,
+            TrophyIconBadge(icon = icon, unlocked = unlocked, modifier = modifier, size = size, variant = variant,
                 iconModifier = Modifier.graphicsLayer { rotationZ = r * 7f; translationX = r * dx })
         }
         Motion.POP -> {
             val p by t.animateFloat(0f, 1f, infiniteRepeatable(tween(560, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "pop")
-            TrophyIconBadge(icon = icon, unlocked = unlocked, modifier = modifier, size = size,
+            TrophyIconBadge(icon = icon, unlocked = unlocked, modifier = modifier, size = size, variant = variant,
                 iconModifier = Modifier.graphicsLayer { scaleX = 1f + 0.12f * p; scaleY = 1f + 0.12f * p; rotationZ = (p - 0.5f) * 8f })
         }
         Motion.SPARKLE -> {
@@ -127,7 +128,7 @@ internal fun AnimatedTrophyBadge(
             val p by t.animateFloat(0f, 1f, infiniteRepeatable(tween(1500, easing = LinearEasing)), label = "sparkle")
             val tw by t.animateFloat(0f, 1f, infiniteRepeatable(tween(620, easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "twinkle")
             Box(modifier.size(size), contentAlignment = Alignment.Center) {
-                TrophyIconBadge(icon = icon, unlocked = unlocked, size = size,
+                TrophyIconBadge(icon = icon, unlocked = unlocked, size = size, variant = variant,
                     iconModifier = Modifier.graphicsLayer {
                         rotationZ = 16f * (tw * 2f - 1f)
                         scaleX = 0.9f + 0.16f * tw

@@ -10,6 +10,7 @@ import com.forge.app.data.repo.StatsRepository
 import com.forge.app.data.repo.TrophyRepository
 import com.forge.app.data.repo.WorkoutRepository
 import com.forge.app.domain.adapt.Recommendation
+import com.forge.app.domain.units.weightInputValue
 import com.forge.app.program.ExerciseLibrary
 import com.forge.app.ui.overview.state.CoachItem
 import com.forge.app.ui.overview.state.OnThisDayMemory
@@ -25,6 +26,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -93,6 +95,12 @@ class OverviewViewModel @Inject constructor(
         s.copy(activeSessionDayKey = active?.dayKey)
     }.combine(_coach) { s, coach ->
         s.copy(coach = coach)
+    }.map { s ->
+        // Attach each recent gym row's marquee lift (its heaviest set). Each lookup is a real DB
+        // read, so withTopLifts memoizes by session: a finished session's top set is immutable.
+        // Without this the read re-ran on EVERY emission of the combine chain above (active-session,
+        // coach, weekly-stats ticks) for the same unchanged sessions.
+        s.copy(recentItems = withTopLifts(s.recentItems))
     }.flowOn(Dispatchers.Default).stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(stopTimeoutMillis = 5_000),
@@ -189,4 +197,31 @@ class OverviewViewModel @Inject constructor(
 
     fun selectRecentItem(item: OverviewRecentItem) { _selectedItem.value = item }
     fun clearSelectedItem() { _selectedItem.value = null }
+
+    /**
+     * Marquee lift per gym row, memoized by sessionId → (volume signature, lift). A finished
+     * session's heaviest set is immutable, so it's computed once; the volume key busts the entry if
+     * the session is later edited (its denormalized volume changes). Cardio rows and unsaved items
+     * pass through unchanged. Accessed only from the single flow collector above, so a plain map is
+     * safe (no concurrent writers).
+     */
+    private val topLiftCache = HashMap<Long, Pair<Double?, String?>>()
+
+    private suspend fun withTopLifts(items: List<OverviewRecentItem>): List<OverviewRecentItem> =
+        items.map { item ->
+            if (!item.isGym || item.id < 0) return@map item
+            val cached = topLiftCache[item.id]
+            val lift = if (cached != null && cached.first == item.volumeLb) cached.second
+                else topLiftFor(item.id).also { topLiftCache[item.id] = item.volumeLb to it }
+            item.copy(topLift = lift)
+        }
+
+    /** Heaviest weighted set of a session, formatted "Name 185 × 5". Null for bodyweight-only days. */
+    private suspend fun topLiftFor(sessionId: Long): String? {
+        val top = statsRepo.getSessionExerciseLines(sessionId)
+            .filter { (it.topWeightLb ?: 0.0) > 0.0 }
+            .maxByOrNull { it.topWeightLb!! } ?: return null
+        val wText = weightInputValue(top.topWeightLb!!, useKg = false)
+        return "${top.exerciseName} $wText × ${top.topReps ?: 0}"
+    }
 }

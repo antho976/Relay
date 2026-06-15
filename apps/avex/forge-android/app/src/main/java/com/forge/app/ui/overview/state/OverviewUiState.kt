@@ -27,6 +27,10 @@ data class OverviewRecentItem(
     val isBest: Boolean = false,
     val durationMin: Int? = null,
     val distanceKm: Double? = null,
+    /** A single status chip (gym only): DELOAD / TEST / TECHNIQUE / first quick tag. Empty = none. */
+    val statusPill: String = "",
+    /** Marquee lift — the session's heaviest set, e.g. "Bench Press 185 × 5". Filled in the VM. */
+    val topLift: String? = null,
 )
 
 /**

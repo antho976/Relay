@@ -33,6 +33,7 @@ import androidx.compose.ui.unit.sp
 import com.forge.app.data.db.types.EffortRating
 import com.forge.app.domain.timer.RestTimerState
 import com.forge.app.program.ExerciseUnit
+import com.forge.app.ui.common.rpeLabel
 import com.forge.app.ui.gym.train.state.ExerciseUiState
 
 /** Reps to PRE-FILL the field with — numeric targets only ("8-12" → 12, "15" → 15); null otherwise. */
@@ -155,8 +156,7 @@ fun ExerciseCard(
                         if (priorLastSet != null) {
                             append(" · last session ${priorLastSet.weightText} × ${priorLastSet.reps}")
                             priorLastSet.rpe?.let { rpe ->
-                                val rpeStr = if (rpe % 1.0 == 0.0) "${rpe.toInt()}" else "%.1f".format(rpe)
-                                append(" @ RPE $rpeStr")
+                                append(" @ RPE ${rpeLabel(rpe)}")
                             }
                         } else {
                             append(" · first time — no history yet")

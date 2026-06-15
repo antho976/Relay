@@ -1,8 +1,6 @@
 package com.forge.app.ui.trophies
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -39,7 +37,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.forge.app.ui.trophies.components.TrophyIconBadge
+import com.forge.app.program.Trophies
+import com.forge.app.ui.common.SegmentPill
+import com.forge.app.ui.common.bounceClick
+import com.forge.app.ui.profile.AnimatedTrophyBadge
 import com.forge.app.ui.trophies.state.TrophiesUiState
 import com.forge.app.ui.trophies.state.TrophyDisplay
 import com.forge.app.ui.trophies.state.TrophyFilter
@@ -82,18 +83,36 @@ internal fun HeroSection(state: TrophiesUiState, nextLocked: TrophyDisplay?, onB
 }
 
 @Composable
-internal fun TrophyRow(display: TrophyDisplay, onBg: Color, muted: Color, bg: Color, outline: Color, modifier: Modifier = Modifier) {
+internal fun TrophyRow(
+    display: TrophyDisplay,
+    onBg: Color,
+    muted: Color,
+    bg: Color,
+    outline: Color,
+    active: Boolean = false,
+    onToggle: () -> Unit = {},
+    modifier: Modifier = Modifier
+) {
     val accent = MaterialTheme.colorScheme.primary
     val unlocked = display.isUnlocked
     val nameColor = if (unlocked) onBg else muted.copy(alpha = 0.65f)
     val descColor = muted.copy(alpha = if (unlocked) 0.6f else 0.45f)
     Row(
-        modifier = modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 14.dp),
+        // Tapping a row brings its icon to life (the same per-icon motion as the profile trophy case)
+        // and keeps it playing — [active] stays true until the screen clears it.
+        modifier = modifier.fillMaxWidth().bounceClick { onToggle() }.padding(horizontal = 24.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         Box(contentAlignment = Alignment.BottomEnd) {
-            TrophyIconBadge(icon = display.trophy.icon, unlocked = unlocked, size = 40.dp)
+            AnimatedTrophyBadge(
+                icon = display.trophy.icon,
+                unlocked = unlocked,
+                active = active,
+                size = 40.dp,
+                accent = accent,
+                variant = Trophies.variantFor(display.trophy.id)
+            )
             if (unlocked) {
                 Box(modifier = Modifier.size(17.dp).clip(CircleShape).background(bg), contentAlignment = Alignment.Center) {
                     Box(modifier = Modifier.size(14.dp).clip(CircleShape).background(onBg), contentAlignment = Alignment.Center) {
@@ -133,17 +152,12 @@ internal fun FilterChips(selected: TrophyFilter, onSelect: (TrophyFilter) -> Uni
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         TrophyFilter.entries.forEach { filter ->
-            val isSelected = filter == selected
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(50))
-                    .border(0.5.dp, if (isSelected) accent else outline.copy(alpha = 0.35f), RoundedCornerShape(50))
-                    .background(if (isSelected) accent.copy(alpha = 0.15f) else Color.Transparent)
-                    .clickable { onSelect(filter) }
-                    .padding(horizontal = 12.dp, vertical = 5.dp)
-            ) {
-                Text(filter.label, style = MaterialTheme.typography.labelSmall, color = if (isSelected) onBg else muted.copy(alpha = 0.65f), fontSize = 10.sp)
-            }
+            SegmentPill(
+                text = filter.label,
+                selected = filter == selected,
+                onClick = { onSelect(filter) },
+                accent = accent, onBg = onBg, muted = muted, outline = outline
+            )
         }
     }
 }

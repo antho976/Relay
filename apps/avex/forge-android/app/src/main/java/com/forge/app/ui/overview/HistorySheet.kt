@@ -40,6 +40,7 @@ import java.util.Locale
 @Composable
 fun HistorySheet(
     onDismiss: () -> Unit,
+    onOpenSession: (Long) -> Unit,
     vm: HistoryViewModel = hiltViewModel()
 ) {
     val entries by vm.entries.collectAsStateWithLifecycle()
@@ -100,7 +101,8 @@ fun HistorySheet(
                     items(monthEntries, key = { "${it.isGym}_${it.id}" }) { entry ->
                         HistoryRow(
                             entry = entry, muted = muted, onBg = onBg, outline = outline,
-                            onClick = { vm.selectEntry(entry) }
+                            // Gym sessions open the full detail page; cardio keeps the lightweight summary sheet.
+                            onClick = { if (entry.isGym) onOpenSession(entry.id) else vm.selectEntry(entry) }
                         )
                         HorizontalDivider(
                             modifier = Modifier.padding(horizontal = 24.dp),
@@ -180,8 +182,7 @@ fun SummarySheet(
             // Stats strip
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
                 if (isGym && volumeLb != null && volumeLb > 0) {
-                    val volText = if (volumeLb >= 1000) "%.1fk lb".format(volumeLb / 1000) else "${volumeLb.toInt()} lb"
-                    SummaryStat(value = volText, label = "VOLUME", muted = muted, onBg = onBg)
+                    SummaryStat(value = formatVolumeLb(volumeLb), label = "VOLUME", muted = muted, onBg = onBg)
                 }
                 if (durationMin != null && durationMin > 0) {
                     SummaryStat(value = "$durationMin min", label = "DURATION", muted = muted, onBg = onBg)

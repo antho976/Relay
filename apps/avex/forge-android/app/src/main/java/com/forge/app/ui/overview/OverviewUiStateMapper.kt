@@ -2,7 +2,9 @@ package com.forge.app.ui.overview
 
 import com.forge.app.data.db.dao.SessionDao
 import com.forge.app.data.db.entities.CardioEntry
+import com.forge.app.data.db.entities.Session
 import com.forge.app.data.repo.StatsRepository
+import com.forge.app.domain.session.SessionType
 import com.forge.app.program.Program
 import com.forge.app.ui.overview.state.MilestoneEvent
 import com.forge.app.ui.overview.state.OnThisDayMemory
@@ -36,10 +38,14 @@ internal fun buildOverviewUiState(
 ): OverviewUiState {
     val gymItems = stats.recentGymSessions.map { session ->
         val day = Program.days.firstOrNull { it.key == session.dayKey }
-        val durationMin = session.finishedAt?.let { ((it - session.startedAt) / 60_000).toInt() }
+        // Prefer real ACTIVE training time; fall back to wall-clock only when it wasn't recorded
+        // (pre-feature sessions stamp 0) — mirrors the reader pattern documented on Session.
+        val durationMin = if (session.activeSeconds > 0) session.activeSeconds / 60
+            else session.finishedAt?.let { ((it - session.startedAt) / 60_000).toInt() }
         val exCount = day?.exercises?.size ?: 0
         val sub = listOfNotNull(
             if (exCount > 0) "$exCount ex" else null,
+            if (session.setCount > 0) "${session.setCount} sets" else null,
             durationMin?.let { "${it} min" }
         ).joinToString(" · ")
         val volStats = dayVolStats[session.dayKey]
@@ -64,7 +70,8 @@ internal fun buildOverviewUiState(
             prCount = session.prCount,
             vsAvgPct = vsAvgPct,
             isBest = isBest,
-            durationMin = durationMin
+            durationMin = durationMin,
+            statusPill = sessionStatusPill(session)
         ))
     }
     val cardioItems = recentCardio.map { entry ->
@@ -118,6 +125,19 @@ internal fun buildOverviewUiState(
         trophiesUnlocked = trophiesUnlocked,
         cardioDistanceKm = distanceKm
     )
+}
+
+/**
+ * One status chip for a finished session, or "" for a plain session. An explicit session-type
+ * marker wins over the user's end-of-session quick tags (#107, #109); only the first tag is shown
+ * so the row stays uncluttered.
+ */
+private fun sessionStatusPill(session: Session): String {
+    // An explicit session-type marker (or a here-marked deload) wins over the user's quick tags.
+    val type = if (session.deloadMarkedHere) SessionType.DELOAD else SessionType.fromKey(session.sessionType)
+    type?.pillLabel?.let { return it }
+    // Otherwise show only the first quick tag, so the row stays uncluttered (#107, #109).
+    return session.tags.split(",").map { it.trim() }.firstOrNull { it.isNotEmpty() }?.uppercase().orEmpty()
 }
 
 private fun relativeDay(epochMs: Long): String {

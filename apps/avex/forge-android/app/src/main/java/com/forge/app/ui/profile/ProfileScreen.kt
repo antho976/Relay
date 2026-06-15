@@ -124,7 +124,7 @@ fun ProfileScreen(
             // ── Rank track ──────────────────────────────────────────────────────
             state.rank?.let { r ->
                 Spacer(Modifier.height(20.dp))
-                RankSection(r, onBg, muted, accent, outline, onInfo = { showXpInfo = true })
+                RankSection(r, muted, accent, outline, onInfo = { showXpInfo = true })
             }
 
             // ── Sections ────────────────────────────────────────────────────────
@@ -170,8 +170,11 @@ fun ProfileScreen(
 
 @Composable
 private fun AvatarCircle(file: File?, accent: Color, outline: Color, onPick: () -> Unit) {
+    // The outer Box is NOT clipped to a circle: the "+" badge sits at the bottom-right corner,
+    // which is outside the avatar's inscribed circle, so a circle clip would shear it off the
+    // bubble. The photo and "PIC" placeholder each clip themselves to a circle instead.
     Box(
-        Modifier.size(64.dp).clip(CircleShape).bounceClick { onPick() },
+        Modifier.size(64.dp).bounceClick { onPick() },
         contentAlignment = Alignment.BottomEnd
     ) {
         if (file != null) {

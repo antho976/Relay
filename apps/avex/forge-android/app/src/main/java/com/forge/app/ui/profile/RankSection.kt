@@ -1,15 +1,8 @@
 package com.forge.app.ui.profile
 
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,18 +13,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.BlurOn
-import androidx.compose.material.icons.filled.Flare
-import androidx.compose.material.icons.filled.LocalFireDepartment
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
@@ -46,11 +30,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -64,79 +51,127 @@ import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.theme.emphasized
 
-// Each tier's signature emblem — a stellar object that intensifies up the ladder. The
-// emblem grows across a tier's sub-ranks (see [RankNode]), generalizing "the flame gets bigger".
-private fun tierIcon(t: RankTier): ImageVector = when (t) {
-    RankTier.EMBER -> Icons.Filled.LocalFireDepartment
-    RankTier.FLARE -> Icons.Filled.Flare
-    RankTier.NOVA -> Icons.Filled.Star
-    RankTier.PULSAR -> Icons.Filled.AutoAwesome
-    RankTier.QUASAR -> Icons.Filled.BlurOn
-    RankTier.SUPERNOVA -> Icons.Filled.WbSunny
-}
-
-/** The rank track: six tier nodes (Ember → Supernova) with a progress line and the XP-to-next bar. */
+/**
+ * The rank section: a big, alive hero emblem for the current tier (a real drawn fire at Ember /
+ * Flare — see [HeroEmblem]), a slim six-dot rail beneath it tracking the journey Ember → Supernova,
+ * and the XP-to-next bar. The connector lives only in the gaps between dots, so it never cuts
+ * through an emblem, and every dot wears its own tier colour. Tap anywhere for the "How XP works" sheet.
+ */
 @Composable
 internal fun RankSection(
     rank: RankInfo,
-    onBg: Color,
     muted: Color,
     accent: Color,
     outline: Color,
     onInfo: () -> Unit
 ) {
     val tiers = RankTier.entries
-    // Smooth fill: how far along the 5 gaps between the 6 nodes we are.
+    // Smooth fill: how far along the 5 gaps between the 6 dots we are.
     val withinTier = ((rank.subRank - 1) + rank.progressInRank) / SUB_RANKS_PER_TIER
     val pos = ((rank.tier.ordinal + withinTier) / (tiers.size - 1)).coerceIn(0f, 1f)
+    val tierColor = rank.tier.color()
+    val motion = ForgeMotion.durationScale > 0f
+    // The emblem animation loops forever; pause it while the section is scrolled out of view
+    // (the parent screen is a verticalScroll, which keeps children composed off-screen).
+    var visible by remember { mutableStateOf(true) }
 
-    Column(Modifier.fillMaxWidth().bounceClick { onInfo() }) {
-        Box(Modifier.fillMaxWidth()) {
-            // Connecting line + fill, behind the nodes, aligned to node centres.
-            Canvas(Modifier.matchParentSize()) {
-                val cell = size.width / tiers.size
-                val y = 15.dp.toPx()
-                val startX = cell / 2
-                val endX = size.width - cell / 2
-                drawLine(outline.copy(alpha = 0.25f), Offset(startX, y), Offset(endX, y), strokeWidth = 2.dp.toPx(), cap = StrokeCap.Round)
-                if (pos > 0f) {
-                    drawLine(accent, Offset(startX, y), Offset(startX + (endX - startX) * pos, y), strokeWidth = 2.dp.toPx(), cap = StrokeCap.Round)
+    var play by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { play = true }
+    val enter by animateFloatAsState(
+        targetValue = if (play) 1f else 0f,
+        animationSpec = ForgeMotion.standardTween(ForgeMotion.DurationEmphasized),
+        label = "rank-enter"
+    )
+
+    Column(
+        Modifier.fillMaxWidth()
+            .onGloballyPositioned { visible = it.boundsInWindow().height > 0f }
+            .bounceClick { onInfo() }
+    ) {
+        // ── Hero emblem ───────────────────────────────────────────────────────
+        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+            Box(Modifier.size(104.dp), contentAlignment = Alignment.Center) {
+                // Soft tier-coloured glow behind the emblem. Fades to the same hue at 0 alpha — NOT
+                // to Color.Transparent (transparent black), which interpolates through grey and
+                // leaves a muddy dark fringe.
+                Canvas(Modifier.matchParentSize()) {
+                    val r = size.minDimension / 2f
+                    drawCircle(
+                        brush = Brush.radialGradient(
+                            colors = listOf(tierColor.copy(alpha = 0.30f), tierColor.copy(alpha = 0f)),
+                            center = center,
+                            radius = r
+                        ),
+                        radius = r,
+                        center = center
+                    )
+                }
+                // Faint tier disc + thin ring, drawn in one pass.
+                Canvas(Modifier.size(86.dp)) {
+                    val r = size.minDimension / 2f
+                    drawCircle(tierColor.copy(alpha = 0.06f), radius = r)
+                    drawCircle(tierColor.copy(alpha = 0.40f), radius = r, style = Stroke(width = 1.5.dp.toPx()))
+                }
+                Box(
+                    Modifier.graphicsLayer {
+                        val s = 0.82f + 0.18f * enter
+                        scaleX = s; scaleY = s; alpha = enter
+                    },
+                    contentAlignment = Alignment.Center
+                ) {
+                    HeroEmblem(rank.tier, animated = motion && visible, size = 60.dp)
                 }
             }
-            Row(Modifier.fillMaxWidth()) {
-                tiers.forEach { tier ->
-                    Column(
-                        Modifier.weight(1f),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        RankNode(tier, rank.tier, withinTier, accent, outline)
-                        Spacer(Modifier.height(6.dp))
-                        Text(
-                            tier.display.uppercase(),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (tier == rank.tier) emphasized(onBg) else muted.copy(alpha = 0.55f),
-                            fontSize = 7.sp,
-                            fontWeight = if (tier == rank.tier) FontWeight.Bold else FontWeight.Normal
-                        )
-                    }
+        }
+
+        Spacer(Modifier.height(16.dp))
+        // ── Slim rail ─────────────────────────────────────────────────────────
+        Canvas(Modifier.fillMaxWidth().height(18.dp)) {
+            val n = tiers.size
+            val cy = size.height / 2f
+            val dotR = 4.5.dp.toPx()
+            val curR = 6.5.dp.toPx()
+            val startX = curR + 1.dp.toPx()
+            val endX = size.width - curR - 1.dp.toPx()
+            fun cxAt(i: Int) = startX + (endX - startX) * i / (n - 1)
+            val gap = 2.5.dp.toPx()
+            val stroke = 2.dp.toPx()
+
+            // Connector segments — gaps only, so the line never crosses a dot.
+            for (i in 0 until n - 1) {
+                val a = cxAt(i) + dotR + gap
+                val b = cxAt(i + 1) - dotR - gap
+                if (b <= a) continue
+                drawLine(outline.copy(alpha = 0.25f), Offset(a, cy), Offset(b, cy), strokeWidth = stroke, cap = StrokeCap.Round)
+                val segFrac = ((pos * enter - i.toFloat() / (n - 1)) * (n - 1)).coerceIn(0f, 1f)
+                if (segFrac > 0f) {
+                    val fill = lerp(tiers[i].color(), tiers[i + 1].color(), 0.5f)
+                    drawLine(fill, Offset(a, cy), Offset(a + (b - a) * segFrac, cy), strokeWidth = stroke, cap = StrokeCap.Round)
+                }
+            }
+            // Dots — reached solid in tier colour, current with a halo ring, locked faint.
+            for (i in 0 until n) {
+                val c = Offset(cxAt(i), cy)
+                val tc = tiers[i].color()
+                val reached = i <= rank.tier.ordinal
+                val isCur = i == rank.tier.ordinal
+                if (reached) {
+                    drawCircle(tc, radius = if (isCur) curR else dotR, center = c)
+                    if (isCur) drawCircle(tc.copy(alpha = 0.35f), radius = curR + 3.dp.toPx(), center = c, style = Stroke(width = 1.5.dp.toPx()))
+                } else {
+                    drawCircle(outline.copy(alpha = 0.40f), radius = dotR, center = c, style = Stroke(width = 1.5.dp.toPx()))
                 }
             }
         }
 
         Spacer(Modifier.height(16.dp))
         // XP-to-next bar: progress through the current tier toward the next (full once maxed). Fills in on
-        // enter. Inset to 5/6 width so its ends line up with the first/last node centres above it.
+        // enter. Inset to 5/6 width so it reads as one piece with the rail above.
         val barTarget = if (rank.isMax) 1f else withinTier
-        var play by remember { mutableStateOf(false) }
-        LaunchedEffect(Unit) { play = true }
-        val barFill by animateFloatAsState(
-            targetValue = if (play) barTarget else 0f,
-            animationSpec = ForgeMotion.standardTween(ForgeMotion.DurationEmphasized),
-            label = "xp-bar"
-        )
+        val barFill = barTarget * enter
         Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
             Box(Modifier.fillMaxWidth(5f / 6f).height(4.dp).clip(RoundedCornerShape(50)).background(outline.copy(alpha = 0.2f))) {
-                Box(Modifier.fillMaxWidth(barFill).fillMaxHeight().clip(RoundedCornerShape(50)).background(accent))
+                Box(Modifier.fillMaxWidth(barFill).fillMaxHeight().clip(RoundedCornerShape(50)).background(tierColor))
             }
         }
 
@@ -145,103 +180,6 @@ internal fun RankSection(
             Text("HOW XP WORKS →", style = MaterialTheme.typography.labelSmall, color = accent, fontSize = 9.sp)
             val tail = if (rank.isMax) "MAX RANK" else "${rank.xpToNextTier} TO ${rank.nextTierName?.uppercase()}"
             Text("${rank.xpTotal} XP · $tail", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
-        }
-    }
-}
-
-@Composable
-private fun RankNode(
-    tier: RankTier,
-    current: RankTier,
-    currentWithin: Float,
-    accent: Color,
-    outline: Color
-) {
-    val isCurrent = tier == current
-    val reached = tier.ordinal <= current.ordinal
-    val node = if (isCurrent) 30.dp else 26.dp
-
-    // Emblem growth: the current tier's emblem swells across its sub-ranks (I → V); past tiers
-    // sit at full size, locked tiers stay small. Resets small when you cross into the next tier.
-    val iconScale = when {
-        isCurrent -> 0.62f + 0.38f * currentWithin.coerceIn(0f, 1f)
-        reached -> 1f
-        else -> 0.62f
-    }
-
-    // The current emblem physically moves in-character (flame sways/licks, star turns, sparkle rocks,
-    // burst spins). Real movement, not a flicker. Off under "Remove animations"; only the active tier moves.
-    val motion = ForgeMotion.durationScale > 0f
-    val anim = rememberEmblemMotion(tier, isCurrent && motion)
-
-    val bg = when {
-        isCurrent -> accent
-        reached -> accent.copy(alpha = 0.85f)
-        else -> Color.Transparent
-    }
-    Box(contentAlignment = Alignment.Center) {
-        // The circle (clipped). The emblem is drawn on top, UNCLIPPED, so its motion can overflow.
-        Box(
-            Modifier
-                .size(node)
-                .clip(CircleShape)
-                .background(bg)
-                .then(if (!reached) Modifier.border(1.dp, outline.copy(alpha = 0.45f), CircleShape) else Modifier)
-        )
-        Icon(
-            tierIcon(tier),
-            contentDescription = tier.display,
-            tint = if (reached) MaterialTheme.colorScheme.background else outline.copy(alpha = 0.6f),
-            modifier = Modifier
-                .size(node * 0.52f * iconScale)
-                .graphicsLayer {
-                    transformOrigin = TransformOrigin(0.5f, anim.pivotY)
-                    rotationZ = anim.rotation
-                    scaleX = anim.scaleX
-                    scaleY = anim.scaleY
-                }
-        )
-    }
-}
-
-/** Per-tier "alive" motion for the current emblem — real movement (sway / turn / pulse), not a flicker. */
-private data class EmblemMotion(val rotation: Float, val scaleX: Float, val scaleY: Float, val pivotY: Float)
-
-@Composable
-private fun rememberEmblemMotion(tier: RankTier, enabled: Boolean): EmblemMotion {
-    if (!enabled) return EmblemMotion(0f, 1f, 1f, 0.5f)
-    val t = rememberInfiniteTransition(label = "emblem-${tier.name}")
-    return when (tier) {
-        RankTier.EMBER, RankTier.FLARE -> {
-            // Flame dance: the tip sways around the base (two speeds = organic) and licks upward.
-            val s1 by t.animateFloat(-1f, 1f, infiniteRepeatable(tween(620), RepeatMode.Reverse), label = "sway-1")
-            val s2 by t.animateFloat(-1f, 1f, infiniteRepeatable(tween(370), RepeatMode.Reverse), label = "sway-2")
-            val lick by t.animateFloat(0f, 1f, infiniteRepeatable(tween(480), RepeatMode.Reverse), label = "lick")
-            EmblemMotion(rotation = s1 * 7f + s2 * 4f, scaleX = 1f - 0.05f * lick, scaleY = 1f + 0.12f * lick, pivotY = 1f)
-        }
-        RankTier.NOVA -> {
-            // Star slowly turns and twinkles.
-            val rot by t.animateFloat(0f, 360f, infiniteRepeatable(tween(4200, easing = LinearEasing)), label = "turn")
-            val tw by t.animateFloat(0f, 1f, infiniteRepeatable(tween(820), RepeatMode.Reverse), label = "twinkle")
-            EmblemMotion(rotation = rot, scaleX = 0.94f + 0.10f * tw, scaleY = 0.94f + 0.10f * tw, pivotY = 0.5f)
-        }
-        RankTier.PULSAR -> {
-            // Sparkle: rocks back and forth and pulses.
-            val rock by t.animateFloat(-1f, 1f, infiniteRepeatable(tween(700), RepeatMode.Reverse), label = "rock")
-            val pl by t.animateFloat(0f, 1f, infiniteRepeatable(tween(520), RepeatMode.Reverse), label = "pulse")
-            EmblemMotion(rotation = rock * 22f, scaleX = 0.88f + 0.20f * pl, scaleY = 0.88f + 0.20f * pl, pivotY = 0.5f)
-        }
-        RankTier.QUASAR -> {
-            // Bright core: slow spin + breathing pulse.
-            val rot by t.animateFloat(0f, 360f, infiniteRepeatable(tween(7000, easing = LinearEasing)), label = "spin")
-            val pl by t.animateFloat(0f, 1f, infiniteRepeatable(tween(680), RepeatMode.Reverse), label = "breathe")
-            EmblemMotion(rotation = rot, scaleX = 0.90f + 0.16f * pl, scaleY = 0.90f + 0.16f * pl, pivotY = 0.5f)
-        }
-        RankTier.SUPERNOVA -> {
-            // Sun rays rotate steadily while the whole burst breathes.
-            val rot by t.animateFloat(0f, 360f, infiniteRepeatable(tween(6000, easing = LinearEasing)), label = "rays")
-            val br by t.animateFloat(0f, 1f, infiniteRepeatable(tween(900), RepeatMode.Reverse), label = "burst")
-            EmblemMotion(rotation = rot, scaleX = 0.95f + 0.10f * br, scaleY = 0.95f + 0.10f * br, pivotY = 0.5f)
         }
     }
 }

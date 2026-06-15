@@ -48,7 +48,9 @@ data class TrophyCell(
     val progress: Float,
     val name: String,
     val description: String,
-    val progressLabel: String?
+    val progressLabel: String?,
+    /** Tier-pip count so same-icon cells stay visually distinct (see [Trophies.variantFor]). */
+    val variant: Int = 0
 )
 
 /** One "On the record" row (a month- or year-in-review summary). */
@@ -211,7 +213,7 @@ class ProfileRepository @Inject constructor(
             .filter { it.id in unlockedIds }
             .sortedWith(compareByDescending<Trophy> { it.tier.points }.thenBy { it.name })
             .take(HARDEST_DONE)
-            .map { TrophyCell(it.icon, unlocked = true, progress = 1f, name = it.name, description = it.description, progressLabel = null) }
+            .map { TrophyCell(it.icon, unlocked = true, progress = 1f, name = it.name, description = it.description, progressLabel = null, variant = Trophies.variantFor(it.id)) }
 
         val locked = Trophies.all
             .filter { it.id !in unlockedIds }
@@ -221,7 +223,8 @@ class ProfileRepository @Inject constructor(
             .map { (t, p) ->
                 TrophyCell(
                     t.icon, unlocked = false, progress = p, name = t.name, description = t.description,
-                    progressLabel = snapshot?.let { TrophyEvaluator.progressHint(t.unlock, it) }
+                    progressLabel = snapshot?.let { TrophyEvaluator.progressHint(t.unlock, it) },
+                    variant = Trophies.variantFor(t.id)
                 )
             }
 

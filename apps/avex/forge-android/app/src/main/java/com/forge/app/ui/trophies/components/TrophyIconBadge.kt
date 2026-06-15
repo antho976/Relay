@@ -1,7 +1,10 @@
 package com.forge.app.ui.trophies.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
@@ -48,7 +51,9 @@ fun TrophyIconBadge(
     modifier: Modifier = Modifier,
     size: Dp = 48.dp,
     animateEntrance: Boolean = false,
-    iconModifier: Modifier = Modifier
+    iconModifier: Modifier = Modifier,
+    /** Number of small accent pips crowning the badge — distinguishes trophies that share an icon. */
+    variant: Int = 0
 ) {
     val accent = MaterialTheme.colorScheme.primary
     val bg = if (unlocked) accent.copy(alpha = 0.20f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.30f)
@@ -71,6 +76,17 @@ fun TrophyIconBadge(
             tint = fg,
             modifier = iconModifier.size(size * 0.55f)
         )
+        // Tier pips crowning the top edge — same icon, distinct count, so siblings never look alike.
+        if (variant > 0) {
+            Row(
+                modifier = Modifier.align(Alignment.TopCenter).padding(top = size * 0.04f),
+                horizontalArrangement = Arrangement.spacedBy(size * 0.05f)
+            ) {
+                repeat(variant) {
+                    Box(Modifier.size(size * 0.1f).clip(CircleShape).background(fg))
+                }
+            }
+        }
     }
 }
 

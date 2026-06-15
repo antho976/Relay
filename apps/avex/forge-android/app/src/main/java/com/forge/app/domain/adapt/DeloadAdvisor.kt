@@ -2,6 +2,7 @@ package com.forge.app.domain.adapt
 
 import com.forge.app.data.db.types.EffortRating
 import com.forge.app.domain.mood.Mood
+import com.forge.app.domain.session.SessionType
 import kotlin.math.roundToInt
 
 /**
@@ -62,7 +63,7 @@ object DeloadAdvisor {
         // Most recent deload, from a tagged session OR the persisted apply marker — the marker covers
         // the gap right after an apply, before any deload-week session has been logged (seam fix #18).
         val lastDeloadAt = listOfNotNull(
-            sessions.lastOrNull { it.sessionType == "deload" || it.deloadMarkedHere }?.startedAt,
+            sessions.lastOrNull { it.sessionType == SessionType.DELOAD.key || it.deloadMarkedHere }?.startedAt,
             s.prefs.lastDeloadAppliedMs
         ).maxOrNull()
         if (lastDeloadAt != null && lastDeloadAt >= s.nowMs - t.deloadRecentDeloadSuppressDays * DAY_MS) return null

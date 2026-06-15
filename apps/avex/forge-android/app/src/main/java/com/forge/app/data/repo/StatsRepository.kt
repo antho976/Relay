@@ -32,6 +32,9 @@ import com.forge.app.ui.gym.stats.state.TrainingTimes
 import com.forge.app.ui.gym.stats.state.WeeklyDuration
 import com.forge.app.ui.gym.stats.state.WeeklyEffortCounts
 import com.forge.app.ui.gym.stats.state.WeeklyTonnage
+import com.forge.app.ui.gym.session.state.ExerciseDetail
+import com.forge.app.ui.gym.session.state.SessionDetailData
+import com.forge.app.ui.gym.session.state.SetDetail
 import com.forge.app.ui.overview.state.OnThisDayMemory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -219,6 +222,75 @@ class StatsRepository @Inject constructor(
                 setCount = sets.size
             )
         }
+    }
+
+    /**
+     * The full per-session breakdown that drives the session-detail page: the session row's
+     * aggregates plus every non-skipped exercise with its sets. Pure read — assembled off the
+     * main thread by the caller. Returns null if the session id no longer exists.
+     */
+    suspend fun getSessionDetail(sessionId: Long): SessionDetailData? {
+        val session = sessionDao.get(sessionId) ?: return null
+        val exercises = loggedExerciseDao.forSession(sessionId)
+        val setsByExId = loggedSetDao.allForSession(sessionId).groupBy { it.loggedExerciseId }
+
+        val exerciseDetails = exercises.mapNotNull { ex ->
+            if (ex.skipped) return@mapNotNull null
+            val sets = (setsByExId[ex.id] ?: emptyList()).sortedBy { it.setIndex }
+            if (sets.isEmpty()) return@mapNotNull null
+            val topWeight = sets.mapNotNull { it.weightLb }.maxOrNull()
+            // Mark only ONE set as the top set (the first at the heaviest weight), not the whole
+            // top-weight cluster — straight sets at the same weight shouldn't all read as "the" top.
+            val topIdx = if (topWeight == null) -1 else sets.indexOfFirst { it.weightLb == topWeight }
+            val name = ex.swappedName
+                ?: Program.days.flatMap { it.exercises }.firstOrNull { it.id == ex.exerciseId }?.name
+                ?: ex.exerciseId
+            val setDetails = sets.mapIndexed { i, s ->
+                SetDetail(
+                    number = i + 1,
+                    weightLb = s.weightLb,
+                    weightText = s.weightText,
+                    reps = s.reps,
+                    rpe = s.rpe,
+                    isTopSet = i == topIdx,
+                    isAmrap = s.isAmrap,
+                    toFailure = s.toFailure,
+                    isAssisted = s.isAssisted,
+                    dropAnnotation = s.dropAnnotation
+                )
+            }
+            ExerciseDetail(
+                name = name,
+                isPr = ex.wasPr,
+                effort = ex.difficulty,
+                hitFullTarget = ex.hitFullTarget,
+                note = ex.note?.takeIf { it.isNotBlank() },
+                topWeightLb = topWeight,
+                totalReps = setDetails.sumOf { it.reps },
+                volumeLb = setDetails.sumOf { it.volumeLb },
+                sets = setDetails
+            )
+        }
+
+        val allRpe = exerciseDetails.flatMap { it.sets }.mapNotNull { it.rpe }
+        val durationMin = session.finishedAt?.let { ((it - session.startedAt) / 60_000).toInt() }
+        val title = Program.days.firstOrNull { it.key == session.dayKey }?.defaultName ?: session.dayKey
+
+        return SessionDetailData(
+            sessionId = session.id,
+            title = title,
+            dateMs = session.startedAt,
+            tag = session.tags,
+            durationMin = durationMin,
+            volumeLb = session.totalVolumeLb,
+            prCount = session.prCount,
+            setCount = session.setCount,
+            intensity = session.intensity,
+            deload = session.deloadMarkedHere,
+            journal = session.journal,
+            avgRpe = if (allRpe.isEmpty()) null else allRpe.average(),
+            exercises = exerciseDetails
+        )
     }
 
     // ─── Gym stats subtab ──────────────────────────────────────────────────────

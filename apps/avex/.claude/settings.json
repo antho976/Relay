@@ -20,4 +20,6 @@
       "PowerShell($env:JAVA_HOME = 'C:\\\\Program Files\\\\Android\\\\Android Studio\\\\jbr'; & 'C:\\\\Users\\\\antho\\\\.gradle\\\\wrapper\\\\dists\\\\gradle-9.4.1-bin\\\\arn2x92ynaizyzdaamcbpbhtj\\\\gradle-9.4.1\\\\bin\\\\gradle.bat' -p forge-android compileDebugKotlin --console=plain 2>&1 | Select-String -Pattern \"^e:|BUILD SUCCESSFUL|BUILD FAILED|FAILURE:\")"
     ]
   }
+
 }
+
