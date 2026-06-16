@@ -785,7 +785,8 @@ A 26-dimension audit (2026-06-15, see `.claude/improvement-ideas-*.md`) drove a 
 ### P1 · Health Connect → coach + Coach depth (2026-06-16)
 - **Recovery → coach (#2/#3)** — `AdaptationSnapshot.health` (`HealthSnap` / `SleepNight` / `RestingHrSample`, plain Kotlin — no SDK in the engine). `DeloadAdvisor` gained two **gated, additive** fatigue drivers: sleep debt (+2, avg < 6.5h over ≥5 nights) and elevated resting HR (+2, ≥5 bpm over the prior-month baseline). No HC data ⇒ no driver, so the no-HC experience is unchanged. 6 new `DeloadAdvisorTest` cases.
 - **HC plumbing** — `data/health/HealthConnectManager` is the only SDK touchpoint (availability + permission + `readRecovery→HealthSnap`, fail-soft), wired into `AdaptationRepository.snapshot()`. **Settings → Recovery** page connects it via the Health Connect permission flow (install / update / connect / manage states). Dep `androidx.health.connect:connect-client:1.1.0` ⇒ **compileSdk bumped 35→36** (targetSdk stays 35 — compile-only, no runtime/permission change). Manifest: `READ_SLEEP` + `READ_RESTING_HEART_RATE`, provider `<queries>`, rationale handlers. **Still no INTERNET permission** — HC is on-device IPC. ✅ _Device-verify pending; HC-2 bodyweight + HC-3 write-back deferred._
-- **Coach lab (#5)** — `Routes.COACH_LAB` → `CoachLabScreen` over `CoachRepository.coachLab()`→`CoachWatch`: what the coach is tracking, in plain words — tracked lifts ("still forming" until concrete), recovery signals (incl. HC), learned biases, current recovery load; "inputs, not verdicts." Reachable from the Week Brief (both states) + the Overview line. ✅
+- **Coach lab (#5)** — `Routes.COACH_LAB` → `CoachLabScreen` over `CoachRepository.coachLab()`→`CoachWatch`: what the coach is tracking, in plain words — tracked lifts ("still forming" until concrete), recovery signals (incl. HC), learned biases, current recovery load; "inputs, not verdicts." Reachable from the Week Brief (both states) + the Overview line. Footer links to the learning timeline. ✅
+- **Coach learning timeline (P2 Tier 6)** — `Routes.COACH_TIMELINE` → `CoachTimelineScreen`/`CoachTimelineViewModel` over `CoachRepository.timeline()`→`CoachTimeline`: earned trust per type (segmented `TrustProgressBar` with an animated fill), a milestone ladder (`CoachMilestone`), and the week-by-week record. Reached from the Coach lab footer. `TrustProgressBar` is also used in Settings → Program → Earned trust. ✅
 - **Overview "still learning" line (CD-1)** — below the coach's activation gate (`AutoCoachPlanner.MIN_SESSIONS`) with nothing actionable, Overview shows "N more sessions → See what it's tracking" instead of rendering nothing. ✅
 
 ### P1 · Engagement & notifications (2026-06-16)
@@ -819,6 +820,47 @@ A 26-dimension audit (2026-06-15, see `.claude/improvement-ideas-*.md`) drove a 
 > discoverability** (all deferred by Antho — the tour until the surfaces settle), and **i18n / French**
 > (deferred to the end).
 
+### P2 · Deeper coach smarts — slice 1 (2026-06-16)
+Two new pure `InsightEngine` rules (auto-surface as inline insights on Stats; 4 new `InsightEngineTest` cases):
+- **Sweet-spot rep range (A2)** — `sweetSpotRepRange`: the rep bucket (1-5/6-10/11-15/16+) where a lift's average Epley e1RM peaks. "DB Bench Press hits its highest estimated 1RM at 6-10 reps." ✅
+- **Lagging lift (A6-flavored)** — `laggingLift`: within a muscle with ≥2 lifts, flags one stalled (by its own e1RM trend) while another climbs. "On Chest: Bench is climbing (+20%) but Incline has stalled." ✅
+- First slice of the ~26-item "coach transparency & smarts" P2 cluster; remainder tracked in `.claude/p2-coach-smarts-plan.md`.
+
+### P2 · Deeper coach smarts — Tier 1: "what the coach knows right now" (2026-06-16)
+Cluster now tiered (6 tiers) in `.claude/p2-coach-smarts-plan.md`. Tier 1 (reuses already-computed data):
+- **Coach lab marks stalling lifts** — `CoachWatch.TrackedLift.stalling` from `ProgressionAdvisor.evaluate`; stalling lifts sort first + show a "stalling" tag, so the lab shows exactly what the weekly pass is acting on. ✅
+- **Settings → Program → Earned trust "next milestone"** — rows now read "N more to auto-apply" per change type (reuses `TypeTrust.streak/required`). ✅
+
+### P2 · Deeper coach smarts — Tier 2: decision & outcome legibility (2026-06-16)
+New pure `domain/coach/CoachOutcome.label()` (5 tests) makes the invisible 14-day `OutcomeWatcher` legible:
+- **Week Brief** applied rows now read "applied ✓ · still watching · ~N days left" → "worked" / "didn't stick". ✅
+- **Settings → coach history** rows show the plain-English status (skipped → "you skipped this", reverted → "you undid this", applied → the watcher window/verdict) instead of the raw status word. ✅
+
+### P2 · Deeper coach smarts — Tier 3: invisible systems made visible (2026-06-16)
+- **Weight calibration (StepMode) surfaced** — the per-set suggestion reason now appends the SuggestionCalibrator's verdict: "bigger jumps fit you" (FASTER) / "holding to consolidate" (CONSOLIDATE), shown in the exercise card + set-input row. The calibration was completely invisible before. ✅
+- **Overview sub-threshold fatigue line** — `AdaptationRepository.coachFeed()` (recs + building-fatigue read off one snapshot) drives a "Recovery signals building · Fatigue N of M · <driver>" line on the Overview COACH section when the active coach is quiet but fatigue is rising (taps into Coach lab). ✅
+
+### P2 · Deeper coach smarts — Tier 6: narrative surfaces (2026-06-16) — CLUSTER COMPLETE
+UI, not pure-engine (Compose + one repo read; verified by compile):
+- **Coach learning timeline** (`CoachTimelineScreen`, route `coach-timeline`) — earned trust per type, a milestone ladder (first report → first suggestion → first applied → first confirmed win → autopilot unlocked, each reached/ahead from the ledger), and the week-by-week record (reuses `CoachOutcome.label`). New `CoachRepository.timeline()`→`CoachTimeline`/`CoachMilestone`. Reached from the Coach lab footer. ✅
+- **Segmented trust bars + fill animation** — shared `TrustProgressBar` (animated continuous fill + milestone dividers; fully filled in primary when earned). On the timeline screen AND the Settings Earned-trust rows. ✅
+- Closes the "deeper coach transparency & smarts" cluster (Slice 0 + Tiers 1–6). Two items remain deferred as data-model work: **RPE-outcome calibration** (per-set RPE column) and **best-lift-order A3** (intra-session position in the snapshot).
+
+### P2 · Deeper coach smarts — Tier 5: data-hungry intelligence (2026-06-16)
+Three new pure `InsightEngine` rules — all auto-surface on Stats, all confound-normalised, all stay silent until the data is real (hard sample gates: months of training):
+- **When you're strongest** (`timeofdayperf`) — strength (e1RM, normalised per-lift) by time-of-day window; flags if you're materially stronger training earlier vs later in the day. Distinct from the existing set-count "best time to train." ✅
+- **Volume tolerance (A1)** (`volumeresponse.<muscle>`) — per muscle, relates weekly set volume to that week's e1RM change; calls "responding to volume — room to push" vs "near its volume ceiling." ✅
+- **Recovery curve** (`restresponse`) — session volume (normalised to its day-type) vs the rest gap before it; surfaces the spacing that gets your best work. ✅
+- _Deferred — best-lift-order (A3): needs intra-session exercise position, which the snapshot doesn't expose (a future `AdaptationSnapshot` extension)._
+
+### P2 · Deeper coach smarts — Tier 4: new planner smarts (2026-06-16)
+All pure-engine, unit-tested (new thresholds `consolidateBandPoints`/`mesocycleWeeks`/`repShiftRegressFraction`):
+- **Consolidation week before a deload** — a quiet weekly pass with fatigue in the "building" band now HOLDs with a consolidation-week message (hold weights, fill ranges, sleep) instead of "plan is working" — a softer call that heads off a forced deload (`AutoCoachPlanner`). ✅
+- **Mesocycle phase in the Week Brief** — `WeeklyReview.focusLine` tracks the week-in-block (anchored on last deload / first session): accumulation → mid-block push → peak week → "ease off soon". ✅
+- **Rep-shift judged on strength** — `OutcomeWatcher` splits `rep_shift` from `swap`; at window close a shift whose best e1RM slipped below the pre-change best is FAILED (owes a revert), not a free pass for "didn't get skipped." ✅
+- **Weak-point volume** — the +1-set target is the qualifying muscle climbing *slowest* (`muscleGrowth`), bringing the laggard up rather than feeding the muscle already winning. ✅
+- _Deferred — RPE-outcome calibration tier: needs a per-set RPE column on `suggestion_outcome` (DB migration + write-path), out of scope for a pure-engine tier._
+
 ---
 
 ## Not Yet Built (known gaps)
@@ -831,4 +873,4 @@ A 26-dimension audit (2026-06-15, see `.claude/improvement-ideas-*.md`) drove a 
 - **Exercise tutorial videos (#9)** — deferred; conflicts with offline-first
 - **Galaxy Watch 6 / Wear OS companion (#42)** — deferred; needs Wear expertise
 - **Nutrition tracking** — deferred indefinitely
-- **Data-hungry intelligence (#153–156, A1–A6)** — volume-tolerance / sweet-spot rep range / best-lift-order / recovery curves / AI summaries / lift-twin — all gated on months of real data; revisit after a full season of use
+- **Data-hungry intelligence (#153–156, A1–A6)** — sweet-spot rep range (A2), lagging-lift (A6), volume-tolerance (A1), time-of-day performance, and the recovery curve are all now BUILT (P2 coach smarts, Slice 0 + Tier 5) and will activate once there's a season of data. Still genuinely deferred: **best-lift-order (A3)** (needs intra-session exercise position in the snapshot), AI session summaries, and the "lift-twin" comparison

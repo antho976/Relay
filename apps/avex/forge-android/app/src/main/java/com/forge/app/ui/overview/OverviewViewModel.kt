@@ -53,6 +53,9 @@ class OverviewViewModel @Inject constructor(
     /** Sub-gate "still learning" nudge (CD-1) — null once the coach has activated. */
     private val _coachLearning = MutableStateFlow<CoachLearningHint?>(null)
 
+    /** Sub-threshold fatigue nudge (Tier 3) — null unless the active coach is quiet but fatigue builds. */
+    private val _coachFatigue = MutableStateFlow<com.forge.app.ui.overview.state.FatigueHint?>(null)
+
     /** "New report ready" banner (auto-coach) — null when this week's brief has been seen. */
     private val _coachBanner = MutableStateFlow<com.forge.app.data.repo.CoachBanner?>(null)
     val coachBanner: StateFlow<com.forge.app.data.repo.CoachBanner?> = _coachBanner
@@ -106,6 +109,8 @@ class OverviewViewModel @Inject constructor(
         s.copy(coach = coach)
     }.combine(_coachLearning) { s, hint ->
         s.copy(coachLearning = hint)
+    }.combine(_coachFatigue) { s, f ->
+        s.copy(coachFatigue = f)
     }.combine(settingsRepo.useKg) { s, useKg ->
         // Attach each recent gym row's marquee lift (its heaviest set). Each lookup is a real DB
         // read, so withTopLifts memoizes by session: a finished session's top set is immutable.
@@ -141,7 +146,8 @@ class OverviewViewModel @Inject constructor(
     // ─── Coach feed (adaptation engine) ───────────────────────────────────────
 
     private suspend fun reloadCoach() {
-        val recs = adaptationRepo.coachRecommendations()
+        val feed = adaptationRepo.coachFeed()
+        val recs = feed.recommendations
             .mapNotNull { it.toCoachItem() }
             .take(3)
         _coach.value = recs
@@ -150,6 +156,12 @@ class OverviewViewModel @Inject constructor(
         val logged = sessionDao.finishedCount()
         _coachLearning.value = if (recs.isEmpty() && logged < AutoCoachPlanner.MIN_SESSIONS)
             CoachLearningHint(logged, AutoCoachPlanner.MIN_SESSIONS - logged) else null
+        // Tier 3: when the coach is active but quiet, surface building fatigue (System 5 sub-threshold).
+        _coachFatigue.value = if (recs.isEmpty() && logged >= AutoCoachPlanner.MIN_SESSIONS) {
+            feed.fatigueBuilding?.let {
+                com.forge.app.ui.overview.state.FatigueHint(it.score, feed.fatigueThreshold, it.drivers.firstOrNull())
+            }
+        } else null
     }
 
     /**

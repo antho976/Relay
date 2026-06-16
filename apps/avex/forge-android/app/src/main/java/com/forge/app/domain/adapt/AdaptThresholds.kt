@@ -90,6 +90,18 @@ data class AdaptThresholds(
     /** Plateau driver: ≥ N currently-stalled lifts (from System 1). */
     val deloadPlateauCount: Int = 3,
 
+    // ── Auto-coach weekly pass (Phase 1 + 3 planner / Phase 5 watcher) ──────────
+    /** Consolidation nudge: a fatigue score this many points below [deloadScoreThreshold] reads
+     *  as "building", so a quiet weekly pass holds with a consolidation-week message (hold your
+     *  weights, fill the ranges) instead of a generic "plan is working" line. */
+    val consolidateBandPoints: Int = 2,
+    /** Mesocycle phase line (Week Brief focus cue): a training block runs ~this many weeks of
+     *  accumulation → intensification → peak before a deload; the cue tracks the week-in-block. */
+    val mesocycleWeeks: Int = 5,
+    /** Watcher: a rep-range shift whose best e1RM ends below this fraction of the pre-change best
+     *  (once its window closes) is judged FAILED — the shift backfired rather than restarting it. */
+    val repShiftRegressFraction: Double = 0.97,
+
     // ── Readiness (System 6: daily autoregulation) ─────────────────────────────
     /** Data gate: below this many sessions / recent moods the scale stays neutral (silent). */
     val readinessMinSessions: Int = 3,
@@ -124,6 +136,33 @@ data class AdaptThresholds(
     /** Session-estimate calibration: sessions per day type, and the drift (min) worth surfacing. */
     val insightEstimateMinSessions: Int = 4,
     val insightEstimateDriftMinutes: Int = 15,
+    /** Sweet-spot rep range: sets needed in a bucket to score it, and the e1RM edge (fraction)
+     *  the best bucket must beat the runner-up by before it's worth calling a "sweet spot". */
+    val insightSweetSpotMinSetsPerBucket: Int = 5,
+    val insightSweetSpotEdge: Double = 0.03,
+    /** Lagging lift (within a muscle): the growth % that reads as "climbing", and the ceiling
+     *  at/below which the other lift reads as "stalled" — only flagged when both occur. */
+    val insightLagGrowthPct: Int = 5,
+    val insightLagFlatPct: Int = 0,
+
+    // ── Insights · data-hungry (System 4, Tier 5 — gated on months of data) ─────
+    /** Time-of-day performance: the hour that splits "earlier" vs "later", the min within-lift
+     *  normalized bouts needed on EACH side, and the % e1RM gap worth reporting. */
+    val insightTimePerfSplitHour: Int = 14,
+    val insightTimePerfMinBouts: Int = 12,
+    val insightTimePerfPct: Int = 4,
+    /** Volume response (A1 — MEV/MRV flavour): training weeks a muscle needs, the min weeks in
+     *  EACH volume tier (above/at-or-below its median weekly sets), and the per-week e1RM-gain
+     *  gap (lb) between high- and low-volume weeks worth calling responsive vs near-ceiling. */
+    val insightVolumeMinWeeks: Int = 8,
+    val insightVolumeMinPerTier: Int = 3,
+    val insightVolumeDeltaGapLb: Double = 1.0,
+    /** Rest-day response (recovery curve): sessions needed with a computable prior gap, the min
+     *  per spacing tier, the rest-day split, and the normalized-volume % difference worth surfacing. */
+    val insightRestMinSessions: Int = 12,
+    val insightRestMinPerTier: Int = 4,
+    val insightRestSplitDays: Int = 2,
+    val insightRestPct: Int = 8,
 
     // ── Ordering (System 3: fatigue-aware session order) ───────────────────────
     /** Same-muscle back-to-back pairings the day must have before a reorder is suggested. */

@@ -341,9 +341,9 @@ object ProgressionAdvisor {
         }
     }
 
-    private fun bestE1rm(sets: List<LoggedSet>): Double =
-        sets.filter { it.weightLb != null && !it.isAssisted }
-            .maxOf { E1rm.epley(it.weightLb!!, it.reps) }
+    // Callers only reach this with at least one working set; the shared helper returns null only when
+    // there are none, so !! preserves the original "must have a working set" contract.
+    private fun bestE1rm(sets: List<LoggedSet>): Double = bestWorkingE1rm(sets)!!
 
     // ── Shared helpers ─────────────────────────────────────────────────────────
 

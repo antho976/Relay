@@ -1,5 +1,6 @@
 package com.forge.app.ui.coach
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -44,6 +45,7 @@ import com.forge.app.ui.theme.emphasized
 @Composable
 fun CoachLabScreen(
     onBack: () -> Unit,
+    onOpenTimeline: () -> Unit,
     viewModel: CoachLabViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -75,13 +77,13 @@ fun CoachLabScreen(
                     textAlign = TextAlign.Center
                 )
             }
-            else -> WatchContent(state.watch!!, Modifier.padding(inner))
+            else -> WatchContent(state.watch!!, onOpenTimeline, Modifier.padding(inner))
         }
     }
 }
 
 @Composable
-private fun WatchContent(w: CoachWatch, modifier: Modifier = Modifier) {
+private fun WatchContent(w: CoachWatch, onOpenTimeline: () -> Unit, modifier: Modifier = Modifier) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val onBg = MaterialTheme.colorScheme.onBackground
     val outline = MaterialTheme.colorScheme.outline
@@ -123,7 +125,11 @@ private fun WatchContent(w: CoachWatch, modifier: Modifier = Modifier) {
                 WatchRow(
                     label = lift.name,
                     detail = "${lift.bouts} session${if (lift.bouts == 1) "" else "s"}",
-                    tag = if (lift.concrete) null else "still forming",
+                    tag = when {
+                        lift.stalling -> "stalling"
+                        !lift.concrete -> "still forming"
+                        else -> null
+                    },
                     onBg = onBg, muted = muted
                 )
             }
@@ -150,6 +156,18 @@ private fun WatchContent(w: CoachWatch, modifier: Modifier = Modifier) {
                 WatchRow(label = b.label, detail = b.detail, tag = null, onBg = onBg, muted = muted)
             }
         }
+
+        Section("THE LONG VIEW", outline, muted)
+        Text(
+            "See the learning timeline →",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.fillMaxWidth().clickable { onOpenTimeline() }.padding(vertical = 8.dp)
+        )
+        Text(
+            "Trust earned per change type, the milestones it's hit, and the week-by-week record.",
+            style = MaterialTheme.typography.bodySmall, color = muted
+        )
 
         Spacer(Modifier.height(24.dp))
         Text(

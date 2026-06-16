@@ -40,6 +40,7 @@ import androidx.navigation.navArgument
 import com.forge.app.ui.cardio.CardioScreen
 import com.forge.app.ui.coach.CoachBriefScreen
 import com.forge.app.ui.coach.CoachLabScreen
+import com.forge.app.ui.coach.CoachTimelineScreen
 import com.forge.app.ui.common.ProgramChangeGuardHost
 import com.forge.app.ui.gym.history.SessionHistoryScreen
 import com.forge.app.ui.gym.session.SessionDetailScreen
@@ -205,7 +206,13 @@ fun ForgeNavHost() {
             )
         }
         composable(Routes.COACH_LAB) {
-            CoachLabScreen(onBack = { nav.popBackStack() })
+            CoachLabScreen(
+                onBack = { nav.popBackStack() },
+                onOpenTimeline = { nav.navigate(Routes.COACH_TIMELINE) }
+            )
+        }
+        composable(Routes.COACH_TIMELINE) {
+            CoachTimelineScreen(onBack = { nav.popBackStack() })
         }
         composable(Routes.PROFILE) {
             ProfileScreen(

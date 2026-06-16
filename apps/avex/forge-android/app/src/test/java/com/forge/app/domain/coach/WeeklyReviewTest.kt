@@ -40,6 +40,10 @@ class WeeklyReviewTest {
         exerciseHistory = history, prefs = PrefsSnap()
     )
 
+    /** [count] sessions one day apart starting at [firstDay] — first session anchors the block. */
+    private fun blockSessions(firstDay: Int, count: Int = 8): List<Session> =
+        (0 until count).map { session(it + 1L, startDay = firstDay + it, volume = 1000.0) }
+
     @Test
     fun countsSessionsAndVolumePerWeekWindow() {
         val s = snapshot(
@@ -89,6 +93,30 @@ class WeeklyReviewTest {
         assertTrue(calm.focusLine.contains("Keep doing"))
         val deload = WeeklyReview.assemble(snapshot(emptyList()), weekStart, 4, hasDeloadShadow = true)
         assertTrue(deload.focusLine.contains("Recovery"))
+    }
+
+    @Test
+    fun focusLine_tracksTheMesocyclePhase() {
+        // weekStart = day 56. With no deload, the block is anchored on the first session, so the
+        // week-in-block (and thus the phase cue) is set by how far back that first session sits.
+        val accumulation = WeeklyReview.assemble(snapshot(blockSessions(firstDay = 49)), weekStart, 4, hasDeloadShadow = false)
+        assertTrue("week 1 → accumulation: ${accumulation.focusLine}", accumulation.focusLine.contains("accumulation"))
+
+        val mid = WeeklyReview.assemble(snapshot(blockSessions(firstDay = 42)), weekStart, 4, hasDeloadShadow = false)
+        assertTrue("week 2 → mid-block: ${mid.focusLine}", mid.focusLine.contains("Mid-block"))
+
+        val peak = WeeklyReview.assemble(snapshot(blockSessions(firstDay = 28)), weekStart, 4, hasDeloadShadow = false)
+        assertTrue("week 4 → peak: ${peak.focusLine}", peak.focusLine.contains("Peak week"))
+
+        val overdue = WeeklyReview.assemble(snapshot(blockSessions(firstDay = 0)), weekStart, 4, hasDeloadShadow = false)
+        assertTrue("week 8 → ease off soon: ${overdue.focusLine}", overdue.focusLine.contains("lighter week"))
+    }
+
+    @Test
+    fun focusLine_staysGenericBelowTheDataGate() {
+        // Only 4 sessions — not enough block to name a phase, so the boring-good line holds.
+        val r = WeeklyReview.assemble(snapshot(blockSessions(firstDay = 49, count = 4)), weekStart, 4, hasDeloadShadow = false)
+        assertTrue(r.focusLine.contains("Keep doing"))
     }
 
     @Test

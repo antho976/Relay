@@ -1,0 +1,73 @@
+package com.forge.app.ui.coach
+
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.unit.dp
+import com.forge.app.ui.theme.ForgeMotion
+
+/**
+ * A segmented earned-trust meter (Tier 6 narrative surface). The continuous fill animates to the
+ * current streak's share of [required]; thin dividers in the background colour split it into the
+ * milestone segments a type must clear to auto-apply. When [earned] the bar fills fully in the
+ * primary colour — the "milestone reached" state — and the fill animation plays the moment it does.
+ */
+@Composable
+fun TrustProgressBar(
+    streak: Int,
+    required: Int,
+    earned: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val fraction = if (required <= 0) 0f else streak.coerceIn(0, required).toFloat() / required
+    val animated by animateFloatAsState(
+        targetValue = if (earned) 1f else fraction,
+        // Routed through ForgeMotion so the system "Remove animations" preference collapses it to a snap.
+        animationSpec = ForgeMotion.standardTween(650),
+        label = "trustFill"
+    )
+    val accent = if (earned)
+        androidx.compose.material3.MaterialTheme.colorScheme.primary
+    else
+        androidx.compose.material3.MaterialTheme.colorScheme.secondary
+    val track = androidx.compose.material3.MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)
+    val segmentGap = androidx.compose.material3.MaterialTheme.colorScheme.background
+
+    Box(
+        modifier
+            .height(8.dp)
+            .clip(RoundedCornerShape(4.dp))
+            .background(track)
+    ) {
+        // Continuous, animated fill behind the segment dividers.
+        Box(
+            Modifier
+                .fillMaxHeight()
+                .fillMaxWidth(animated)
+                .background(accent)
+        )
+        // Milestone dividers: required − 1 thin gaps painted in the background colour, so the fill
+        // reads as discrete segments without a separate per-segment animation.
+        if (required > 1) {
+            Row(Modifier.fillMaxSize()) {
+                repeat(required) { i ->
+                    Box(Modifier.weight(1f).fillMaxHeight())
+                    if (i < required - 1) {
+                        Box(Modifier.width(2.dp).fillMaxHeight().background(segmentGap))
+                    }
+                }
+            }
+        }
+    }
+}

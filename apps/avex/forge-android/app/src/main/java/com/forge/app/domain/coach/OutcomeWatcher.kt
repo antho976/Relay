@@ -4,6 +4,7 @@ import com.forge.app.data.db.entities.CoachDecision
 import com.forge.app.domain.adapt.AdaptThresholds
 import com.forge.app.domain.adapt.AdaptationSnapshot
 import com.forge.app.domain.adapt.DeloadAdvisor
+import com.forge.app.domain.adapt.bestE1rm
 
 /** The watcher's verdict on one applied change. */
 data class WatchVerdict(
@@ -20,8 +21,11 @@ data class WatchVerdict(
  * weekly pass.
  *
  * Per type, inside the [WINDOW_DAYS] evaluation window:
- *  - swap / rep_shift: the changed exercise getting skipped (≥2 of its bouts since apply) is
- *    avoidance — failed. Quietly trained until the window closes — ok.
+ *  - swap: the changed exercise getting skipped (≥2 of its bouts since apply) is avoidance —
+ *    failed. Quietly trained until the window closes — ok.
+ *  - rep_shift: same skip rule, plus an evidence check at window close — a rep-range shift exists
+ *    to RESTART progress, so if the lift's best e1RM since the change sits below where it was
+ *    before (by [AdaptThresholds.repShiftRegressFraction]) the shift backfired — failed.
  *  - volume_up: the fatigue score crossing into deload territory after the addition — failed.
  *  - volume_down / deload / revert: conservative actions; they pass once the window closes.
  *
@@ -40,11 +44,15 @@ object OutcomeWatcher {
         applied: List<CoachDecision>,
         s: AdaptationSnapshot,
         t: AdaptThresholds = AdaptThresholds()
-    ): List<WatchVerdict> = applied.mapNotNull { d ->
+    ): List<WatchVerdict> {
+        // Only volume_up decisions need the fatigue score — compute it at most once, lazily, instead
+        // of once per decision inside the loop.
+        val fatigue by lazy { DeloadAdvisor.fatigue(s, t) }
+        return applied.mapNotNull { d ->
         val appliedAt = d.appliedAt ?: return@mapNotNull null
         val windowClosed = s.nowMs - appliedAt >= WINDOW_DAYS * DAY_MS
         when (d.type) {
-            "swap", "rep_shift" -> {
+            "swap" -> {
                 val boutsSince = s.exerciseHistory[d.targetKey].orEmpty()
                     .filter { it.sessionStartedAt >= appliedAt }
                 val skips = boutsSince.count { it.skipped }
@@ -57,10 +65,35 @@ object OutcomeWatcher {
                     else -> null
                 }
             }
-            "volume_up" -> {
-                val fatigue = DeloadAdvisor.fatigue(s, t)
+            "rep_shift" -> {
+                val all = s.exerciseHistory[d.targetKey].orEmpty()
+                val boutsSince = all.filter { it.sessionStartedAt >= appliedAt }
+                val skips = boutsSince.count { it.skipped }
                 when {
-                    fatigue != null && fatigue.score >= t.deloadScoreThreshold -> WatchVerdict(
+                    skips >= SKIP_FAIL_COUNT -> WatchVerdict(
+                        d.id, "failed",
+                        "${d.targetName} has been skipped $skips times since the change — it isn't landing"
+                    )
+                    windowClosed -> {
+                        // A rep-range shift is meant to break a stall — judge it on strength, not just
+                        // attendance. Best e1RM since the change vs. the best before it: a slip below the
+                        // tolerance means the shift didn't restart progress, so it owes a revert.
+                        val priorBest = all.filter { it.sessionStartedAt < appliedAt && !it.skipped }.bestE1rm()
+                        val sinceBest = boutsSince.filter { !it.skipped }.bestE1rm()
+                        if (priorBest != null && sinceBest != null &&
+                            sinceBest < priorBest * t.repShiftRegressFraction
+                        ) WatchVerdict(
+                            d.id, "failed",
+                            "${d.targetName}'s estimated 1RM slipped after the rep-range change — it didn't restart progress"
+                        ) else WatchVerdict(d.id, "ok")
+                    }
+                    else -> null
+                }
+            }
+            "volume_up" -> {
+                val f = fatigue
+                when {
+                    f != null && f.score >= t.deloadScoreThreshold -> WatchVerdict(
                         d.id, "failed",
                         "fatigue climbed into deload territory after adding volume"
                     )
@@ -69,6 +102,7 @@ object OutcomeWatcher {
                 }
             }
             else -> if (windowClosed) WatchVerdict(d.id, "ok") else null
+        }
         }
     }
 

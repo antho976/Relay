@@ -32,6 +32,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
+import com.forge.app.ui.coach.TrustProgressBar
 
 /**
  * The Program settings, split into a small menu of focused sub-pages so the page isn't one
@@ -261,6 +262,7 @@ private fun CoachSection(state: SettingsUiState, vm: SettingsViewModel, onOpenCo
     val onBg = MaterialTheme.colorScheme.onBackground
     val trust by vm.coachTrust.collectAsState()
     val history by vm.coachHistory.collectAsState()
+    val now = remember { System.currentTimeMillis() }
     LaunchedEffect(Unit) { vm.loadCoachData() }
 
     ProgramBlock("Week brief", "Your coach's read on the week — last week's numbers, any proposed changes, and a focus.") {
@@ -289,15 +291,26 @@ private fun CoachSection(state: SettingsUiState, vm: SettingsViewModel, onOpenCo
                 )
             }
             trust.forEach { t ->
-                Row(
-                    Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(t.label, style = MaterialTheme.typography.bodySmall, color = onBg)
-                    Text(
-                        if (t.earned) "auto ✓" else "${t.streak}/${t.required} accepted",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = if (t.earned) MaterialTheme.colorScheme.primary else muted
+                Column(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(t.label, style = MaterialTheme.typography.bodySmall, color = onBg)
+                        Text(
+                            when {
+                                t.earned -> "auto ✓"
+                                // Next milestone: how many more accepted weeks unlock auto-apply for this type.
+                                else -> "${t.streak}/${t.required} · ${(t.required - t.streak).coerceAtLeast(1)} more to auto-apply"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = if (t.earned) MaterialTheme.colorScheme.primary else muted
+                        )
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    TrustProgressBar(
+                        streak = t.streak, required = t.required, earned = t.earned,
+                        modifier = Modifier.fillMaxWidth()
                     )
                 }
             }
@@ -326,8 +339,11 @@ private fun CoachSection(state: SettingsUiState, vm: SettingsViewModel, onOpenCo
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        // Plain-English status: the watcher window/verdict for applied changes, else the raw status.
+                        val statusText = com.forge.app.domain.coach.CoachOutcome
+                            .label(d.status, d.outcome, d.appliedAt, now) ?: d.status
                         Text(
-                            "${d.summary} · ${d.status}",
+                            "${d.summary} · $statusText",
                             style = MaterialTheme.typography.bodySmall, color = muted,
                             modifier = Modifier.weight(1f)
                         )

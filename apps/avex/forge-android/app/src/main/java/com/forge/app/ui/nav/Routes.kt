@@ -15,6 +15,7 @@ object Routes {
     const val RECAP = "recap"
     const val COACH_BRIEF = "coach-brief"
     const val COACH_LAB = "coach-lab"
+    const val COACH_TIMELINE = "coach-timeline"
     const val PROFILE = "profile"
     const val GOALS = "goals"
     const val PROGRAM_EDITOR = "program-editor/{dayKey}"

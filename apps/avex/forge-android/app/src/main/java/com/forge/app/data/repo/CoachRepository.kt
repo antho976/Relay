@@ -12,6 +12,8 @@ import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.domain.adapt.AdaptThresholds
 import com.forge.app.domain.adapt.AdaptationSnapshot
 import com.forge.app.domain.adapt.DeloadAdvisor
+import com.forge.app.domain.adapt.ProgressionAdvisor
+import com.forge.app.domain.adapt.Recommendation
 import com.forge.app.domain.coach.AutoCoachPlanner
 import com.forge.app.domain.coach.CoachGenBias
 import com.forge.app.domain.coach.CoachPassInputs
@@ -71,9 +73,23 @@ data class CoachWatch(
     val learnedBiases: List<LearnedBias>
 )
 
-data class TrackedLift(val name: String, val bouts: Int, val concrete: Boolean)
+data class TrackedLift(val name: String, val bouts: Int, val concrete: Boolean, val stalling: Boolean = false)
 data class RecoverySignal(val label: String, val detail: String, val active: Boolean)
 data class LearnedBias(val label: String, val detail: String)
+
+/**
+ * The "Coach learning timeline" (Tier 6 narrative surface): how the coach has grown over time —
+ * its earned trust per change type, the journey milestones it's hit (and the ones still ahead),
+ * and the week-by-week record. Read-only; everything here is derived from the coach's own ledger.
+ */
+data class CoachTimeline(
+    val trust: List<TypeTrust>,
+    val milestones: List<CoachMilestone>,
+    val weeks: List<CoachRepository.CoachHistoryEntry>
+)
+
+/** One step of the coach's journey — a named achievement, [reached] or still ahead. */
+data class CoachMilestone(val label: String, val detail: String, val reached: Boolean)
 
 /**
  * The Weekly Coach Pass trigger + Week Brief assembly + the propose/apply lifecycle
@@ -184,6 +200,61 @@ class CoachRepository @Inject constructor(
 
     suspend fun history(limit: Int = 12): List<CoachHistoryEntry> =
         coachDao.recentPasses(limit).map { CoachHistoryEntry(it, coachDao.decisionsFor(it.weekId)) }
+
+    /**
+     * The Coach learning timeline (Tier 6): earned trust + journey milestones + the week-by-week
+     * record, all from the coach's own ledger. One read for the whole narrative screen.
+     */
+    suspend fun timeline(limit: Int = 26): CoachTimeline {
+        val passes = coachDao.recentPasses(limit)
+        val all = coachDao.allDecisions()
+        val trust = TrustLedger.assess(all)
+        // Group the decisions we already loaded by week instead of a per-pass query (was 1 + N).
+        val byWeek = all.groupBy { it.weekId }
+        val weeks = passes.map { CoachHistoryEntry(it, byWeek[it.weekId].orEmpty().sortedBy { d -> d.id }) }
+        return CoachTimeline(trust = trust, milestones = coachMilestones(passes, all, trust), weeks = weeks)
+    }
+
+    /** Fixed achievement ladder, each marked reached/ahead from the pass + decision ledger. */
+    private fun coachMilestones(
+        passes: List<CoachPass>,
+        all: List<CoachDecision>,
+        trust: List<TypeTrust>
+    ): List<CoachMilestone> {
+        // "Applied" includes folded (baked into the baseline) and reverted (applied, then undone) —
+        // both crossed the apply line once. "Wins" are changes the watcher later judged ok.
+        val applied = all.count { it.status == "applied" || it.status == "folded" || it.status == "reverted" }
+        val wins = all.count { it.outcome == "ok" }
+        val earned = trust.filter { it.earned }
+        val proposed = all.isNotEmpty()
+        return listOf(
+            CoachMilestone(
+                "First weekly report",
+                if (passes.isNotEmpty()) "${passes.size} week${if (passes.size == 1) "" else "s"} on record" else "After your first full week",
+                passes.isNotEmpty()
+            ),
+            CoachMilestone(
+                "First suggestion made",
+                if (proposed) "The coach has started calling changes" else "Once it has a baseline to act on",
+                proposed
+            ),
+            CoachMilestone(
+                "First change applied",
+                if (applied > 0) "$applied accepted so far" else "When you apply a weekly suggestion",
+                applied > 0
+            ),
+            CoachMilestone(
+                "First win confirmed",
+                if (wins > 0) "$wins change${if (wins == 1) "" else "s"} stuck after the watch window" else "When an applied change proves out",
+                wins > 0
+            ),
+            CoachMilestone(
+                "Autopilot unlocked",
+                if (earned.isNotEmpty()) earned.joinToString(", ") { it.label } else "Accept a change type a few weeks running",
+                earned.isNotEmpty()
+            )
+        )
+    }
 
     /**
      * Watcher pre-pass + planner inputs. Runs only when a fresh weekly pass is being created,
@@ -459,6 +530,17 @@ class CoachRepository @Inject constructor(
         val dayMs = 24L * 60 * 60 * 1000
         val windowStart = s.nowMs - t.deloadWindowDays * dayMs
 
+        // Lifts the plateau ladder (System 1) currently flags as stalling — same source the weekly
+        // pass uses, so the lab shows exactly what the coach is acting on.
+        val stalledIds = ProgressionAdvisor.evaluate(s, t).mapNotNull { rec ->
+            when (rec) {
+                is Recommendation.VariationSwap -> rec.exerciseId
+                is Recommendation.RepRangeShift -> rec.exerciseId
+                is Recommendation.WeightChange -> rec.exerciseId
+                else -> null
+            }
+        }.toSet()
+
         // Tracked lifts: anything with non-skipped history; "concrete" once it clears the same
         // weighted-bout gate the planner uses to judge progress (AutoCoachPlanner.trackedLiftIds).
         val tracked = s.exerciseHistory.mapNotNull { (slotId, bouts) ->
@@ -468,8 +550,14 @@ class CoachRepository @Inject constructor(
             val name = ExerciseLibrary.byId(slotId)?.name
                 ?: bouts.lastOrNull { !it.swappedName.isNullOrBlank() }?.swappedName
                 ?: slotId
-            TrackedLift(name = name, bouts = nonSkipped, concrete = weighted > t.plateauMinBouts)
-        }.sortedWith(compareByDescending<TrackedLift> { it.concrete }.thenByDescending { it.bouts })
+            TrackedLift(
+                name = name, bouts = nonSkipped,
+                concrete = weighted > t.plateauMinBouts, stalling = slotId in stalledIds
+            )
+        }.sortedWith(
+            compareByDescending<TrackedLift> { it.stalling }
+                .thenByDescending { it.concrete }.thenByDescending { it.bouts }
+        )
 
         val moodCount = s.moods.count { it.recordedAt >= windowStart }
         val restFlags = s.cardio.count { it.date >= windowStart && (it.restReason == "sore" || it.restReason == "sick") }

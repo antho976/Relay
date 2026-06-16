@@ -50,6 +50,12 @@ data class CoachItem(
  */
 data class CoachLearningHint(val sessionsLogged: Int, val sessionsToGo: Int)
 
+/**
+ * Sub-threshold fatigue nudge (Tier 3): the coach is active but holding, and recovery signals are
+ * building toward — but not yet at — a deload. Surfaces the otherwise-invisible System 5 pulse.
+ */
+data class FatigueHint(val score: Int, val threshold: Int, val topDriver: String?)
+
 data class OverviewUiState(
     val workoutsThisWeek: Int = 0,
     val volumeThisWeekLb: Double = 0.0,
@@ -80,7 +86,9 @@ data class OverviewUiState(
      */
     val coach: List<CoachItem> = emptyList(),
     /** Non-null only when [coach] is empty and the coach hasn't activated yet (CD-1). */
-    val coachLearning: CoachLearningHint? = null
+    val coachLearning: CoachLearningHint? = null,
+    /** Non-null only when [coach] is empty, the coach IS active, and fatigue is building (Tier 3). */
+    val coachFatigue: FatigueHint? = null
 ) {
     val hasActiveSession: Boolean get() = activeSessionDayKey != null
 }

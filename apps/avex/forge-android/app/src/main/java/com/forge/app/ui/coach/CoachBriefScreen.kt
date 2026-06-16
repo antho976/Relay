@@ -26,6 +26,8 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import com.forge.app.domain.coach.CoachOutcome
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -196,6 +198,7 @@ private fun DecisionRow(d: com.forge.app.data.db.entities.CoachDecision, viewMod
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val onBg = MaterialTheme.colorScheme.onBackground
     val accent = MaterialTheme.colorScheme.primary
+    val now = remember { System.currentTimeMillis() }
 
     Column(Modifier.fillMaxWidth().padding(bottom = 14.dp)) {
         Text(d.summary, style = MaterialTheme.typography.bodyMedium, color = onBg)
@@ -213,8 +216,19 @@ private fun DecisionRow(d: com.forge.app.data.db.entities.CoachDecision, viewMod
                     modifier = Modifier.clickable { viewModel.skip(d.id) }.padding(vertical = 2.dp)
                 )
             }
-            CoachRepository.STATUS_APPLIED -> Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+            CoachRepository.STATUS_APPLIED -> Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(20.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Text("applied ✓", style = MaterialTheme.typography.labelSmall, color = muted)
+                // Surface the otherwise-invisible 14-day watcher: "still watching · ~N days left" → verdict.
+                // weight(1f) so the (possibly long) watcher label takes the slack and never pushes the
+                // 'undo' tap target off-screen on a narrow display.
+                CoachOutcome.label(d.status, d.outcome, d.appliedAt, now)?.let { wl ->
+                    Text(wl, style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.7f),
+                        modifier = Modifier.weight(1f, fill = false))
+                }
                 if (d.undoData != null) Text(
                     "undo", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.7f),
                     modifier = Modifier.clickable { viewModel.undo(d.id) }.padding(vertical = 2.dp)

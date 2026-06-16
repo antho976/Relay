@@ -3,6 +3,8 @@ package com.forge.app.domain.coach
 import com.forge.app.domain.adapt.AdaptThresholds
 import com.forge.app.domain.adapt.AdaptationSnapshot
 import com.forge.app.domain.adapt.DeloadAdvisor
+import com.forge.app.domain.adapt.ProgramSlotSnap
+import com.forge.app.domain.adapt.bestE1rm
 import com.forge.app.domain.adapt.ProgressionAdvisor
 import com.forge.app.domain.adapt.Recommendation
 import com.forge.app.program.ExerciseLibrary
@@ -165,17 +167,34 @@ object AutoCoachPlanner {
             }
         }.sortedBy { it.first }.map { it.second }
 
-        val volume = volumeDecisions(s, inputs, stalledIds, t)
+        // Computed once and shared by the +1-volume freshness gate and the consolidation-band check below.
+        val fatigue = DeloadAdvisor.fatigue(s, t)
+        val volume = volumeDecisions(s, inputs, stalledIds, fatigue, t)
 
         val candidates = inputs.revertProposals + structural + volume
         val tracked = trackedLiftCount(s, t)
         if (candidates.isEmpty()) {
-            return if (tracked == 0) hold(
-                "Not enough lift history to judge progress yet — keep logging and the weekly calls will start."
-            ) else hold(
-                "All $tracked tracked lift(s) are progressing or too fresh to judge — " +
-                    "the plan is working. That's what a hold looks like."
-            )
+            // A quiet pass isn't always "all good" — if fatigue is creeping toward (but hasn't crossed)
+            // the deload line, the smart call is a consolidation week: hold the weights, own the ranges,
+            // and head off a forced deload before it's needed (a softer intervention than a full reset).
+            val building = fatigue != null &&
+                fatigue.score >= t.deloadScoreThreshold - t.consolidateBandPoints &&
+                fatigue.score < t.deloadScoreThreshold
+            return when {
+                building -> hold(
+                    "Fatigue is creeping up (${fatigue!!.score} of ${t.deloadScoreThreshold}) — make this a " +
+                        "consolidation week: hold your working weights, chase the top of your rep ranges instead " +
+                        "of adding load, and bank some sleep. Consolidating now usually heads off a forced deload" +
+                        (fatigue.drivers.firstOrNull()?.let { " ($it)" } ?: "") + "."
+                )
+                tracked == 0 -> hold(
+                    "Not enough lift history to judge progress yet — keep logging and the weekly calls will start."
+                )
+                else -> hold(
+                    "All $tracked tracked lift(s) are progressing or too fresh to judge — " +
+                        "the plan is working. That's what a hold looks like."
+                )
+            }
         }
 
         val cap = if (inputs.experience == "beginner") 1 else 2
@@ -192,6 +211,7 @@ object AutoCoachPlanner {
         s: AdaptationSnapshot,
         inputs: CoachPassInputs,
         stalledIds: Set<String>,
+        fatigue: DeloadAdvisor.FatigueAssessment?,
         t: AdaptThresholds
     ): List<ShadowDecision> {
         val out = mutableListOf<ShadowDecision>()
@@ -218,7 +238,6 @@ object AutoCoachPlanner {
         }
 
         // ── +1: one muscle that's earning more ────────────────────────────────
-        val fatigue = DeloadAdvisor.fatigue(s, t)
         val fresh = fatigue == null || fatigue.score < t.deloadScoreThreshold - 2
         val weekSessions = s.sessions.count { it.startedAt >= s.nowMs - 7 * DAY_MS }
         if (fresh && inputs.sessionsTarget > 0 && weekSessions >= inputs.sessionsTarget) {
@@ -228,19 +247,22 @@ object AutoCoachPlanner {
                 if ((inputs.volumeNetByMuscle[muscle] ?: 0) >= VOLUME_DRIFT_CAP) return@mapNotNull null
                 val tracked = muscleSlots.map { it.second.exerciseId }.filter { it in trackedIds }
                 if (tracked.isEmpty() || tracked.any { it in stalledIds }) return@mapNotNull null
-                val slot = muscleSlots
+                val (dayKey, slot) = muscleSlots
                     .filter { it.second.exerciseId !in inputs.lockedExerciseIds && it.second.targetSets < MAX_SLOT_SETS }
                     .minByOrNull { it.second.targetSets } ?: return@mapNotNull null
-                Triple(muscle, slot, tracked.size)
-            }.maxWithOrNull(compareBy({ it.third }, { -it.first.ordinal }))
-            candidate?.let { (muscle, daySlot, trackedCount) ->
-                val (dayKey, slot) = daySlot
+                VolPick(muscle, dayKey, slot, tracked.size, muscleGrowth(s, tracked))
+            }
+                // Weak-point first (Phase 4 smarts): of the muscles that qualify, the extra set goes to
+                // the one whose lifts are climbing SLOWEST — bring the laggard up rather than feed the
+                // muscle already winning. Ties break toward more evidence, then a stable ordinal.
+                .minWithOrNull(compareBy({ it.growth }, { -it.trackedCount }, { it.muscle.ordinal }))
+            candidate?.let { pick ->
                 out += ShadowDecision(
-                    "volume_up", slot.exerciseId, slot.name,
-                    "Add a set to ${slot.name} (${slot.targetSets} → ${slot.targetSets + 1})",
-                    "${muscle.displayName} is responding — $trackedCount tracked lift(s) all progressing, " +
-                        "recovery is fresh, and last week hit the session target.",
-                    dayKey = dayKey, payload = (slot.targetSets + 1).toString()
+                    "volume_up", pick.slot.exerciseId, pick.slot.name,
+                    "Add a set to ${pick.slot.name} (${pick.slot.targetSets} → ${pick.slot.targetSets + 1})",
+                    "${pick.muscle.displayName} is responding but is your slowest-climbing muscle right now — an " +
+                        "extra set puts the work on the lagging area while recovery is fresh and last week hit the target.",
+                    dayKey = pick.dayKey, payload = (pick.slot.targetSets + 1).toString()
                 )
             }
         }
@@ -254,6 +276,34 @@ object AutoCoachPlanner {
         }.keys
 
     private fun trackedLiftCount(s: AdaptationSnapshot, t: AdaptThresholds): Int = trackedLiftIds(s, t).size
+
+    /** A qualifying +1-volume target plus its weak-point score (lower [growth] = more lagging). */
+    private data class VolPick(
+        val muscle: MuscleGroup,
+        val dayKey: String,
+        val slot: ProgramSlotSnap,
+        val trackedCount: Int,
+        val growth: Double
+    )
+
+    /** How many recent bouts the weak-point growth signal looks back over (a RECENT trend, not lifetime). */
+    private const val RECENT_GROWTH_BOUTS = 8
+
+    /** Average per-lift e1RM growth (recent-window first bout's best → last) across a muscle's tracked
+     *  lifts — the weak-point signal: a lower ratio means the muscle is progressing more slowly. Windowed
+     *  on purpose: a long-trained lift's beginner-weight first-ever bout would otherwise inflate its ratio
+     *  and hide a muscle that's actually stalling now (the rest of the engine windows everything too). */
+    private fun muscleGrowth(s: AdaptationSnapshot, exerciseIds: List<String>): Double {
+        val ratios = exerciseIds.mapNotNull { id ->
+            val series = s.exerciseHistory[id].orEmpty()
+                .filter { !it.skipped }.takeLast(RECENT_GROWTH_BOUTS)
+                .mapNotNull { it.bestE1rm() }
+            if (series.size < 2) return@mapNotNull null
+            val first = series.first()
+            if (first <= 0.0) null else series.last() / first
+        }
+        return if (ratios.isEmpty()) 1.0 else ratios.average()
+    }
 
     private fun hold(reason: String) = CoachPassResult(CoachPassStatus.HOLD, reason, emptyList())
 }

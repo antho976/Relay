@@ -414,6 +414,26 @@ fun OverviewScreen(
                 }
             }
 
+            // ── Coach: recovery signals building (Tier 3) — active coach, quiet, fatigue rising ──
+            state.coachFatigue?.let { f ->
+                Spacer(Modifier.height(20.dp))
+                HorizontalDivider(color = outline.copy(alpha = 0.3f))
+                Spacer(Modifier.height(16.dp))
+                Text("COACH", style = MaterialTheme.typography.labelMedium, color = emphasized(muted))
+                Spacer(Modifier.height(10.dp))
+                Column(
+                    Modifier.fillMaxWidth().clickable { onOpenCoachLab() }.padding(vertical = 2.dp)
+                ) {
+                    Text("Recovery signals building.", style = MaterialTheme.typography.bodyMedium, color = onBg)
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        "Fatigue ${f.score} of ${f.threshold}${f.topDriver?.let { " · $it" } ?: ""} — " +
+                            "not a deload yet, but easing up helps. See what it's tracking →",
+                        style = MaterialTheme.typography.bodySmall, color = muted
+                    )
+                }
+            }
+
             Spacer(Modifier.height(20.dp))
             HorizontalDivider(color = outline.copy(alpha = 0.3f))
             Spacer(Modifier.height(16.dp))

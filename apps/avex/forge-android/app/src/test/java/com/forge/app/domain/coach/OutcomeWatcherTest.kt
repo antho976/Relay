@@ -42,6 +42,13 @@ class OutcomeWatcherTest {
             skipped = skipped, swappedName = null, sets = listOf(set(45.0))
         )
 
+    /** A non-skipped bout at a chosen working weight — for the rep_shift e1RM-trend checks. */
+    private fun wbout(startDay: Int, weight: Double) =
+        ExerciseBout(
+            sessionStartedAt = startDay * day, effort = EffortRating.JUST_RIGHT, hitFullTarget = false,
+            skipped = false, swappedName = null, sets = listOf(set(weight))
+        )
+
     private fun sessions(): List<Session> = (0 until 8).map {
         Session(
             id = it + 1L, dayKey = "upper-a", startedAt = (34 + it * 3) * day,
@@ -85,6 +92,38 @@ class OutcomeWatcherTest {
             snapshot(mapOf("ua1" to listOf(bout(48), bout(52))))
         )
         assertEquals("ok", verdicts.single().outcome)
+    }
+
+    @Test
+    fun repShift_windowClosed_strengthClimbed_ok() {
+        // Applied day 44 (window elapsed), no skips, and the lift's best e1RM climbed after the
+        // change — the rep shift restarted progress, so it passes.
+        val verdicts = OutcomeWatcher.evaluate(
+            listOf(decision(type = "rep_shift", appliedAtDay = 44, undoData = "6-8")),
+            snapshot(mapOf("ua1" to listOf(wbout(40, 45.0), wbout(48, 55.0), wbout(52, 60.0))))
+        )
+        assertEquals("ok", verdicts.single().outcome)
+    }
+
+    @Test
+    fun repShift_windowClosed_strengthSlipped_fails() {
+        // Window elapsed, no skips — but the best e1RM since the change sits below where it was
+        // before. The shift backfired (judged on strength, not just attendance) → failed.
+        val verdicts = OutcomeWatcher.evaluate(
+            listOf(decision(type = "rep_shift", appliedAtDay = 44, undoData = "6-8")),
+            snapshot(mapOf("ua1" to listOf(wbout(40, 60.0), wbout(48, 45.0), wbout(52, 45.0))))
+        )
+        assertEquals("failed", verdicts.single().outcome)
+        assertTrue(verdicts.single().failReason!!.contains("1RM"))
+    }
+
+    @Test
+    fun repShift_insideWindow_quietlyTrained_noVerdictYet() {
+        val verdicts = OutcomeWatcher.evaluate(
+            listOf(decision(type = "rep_shift", appliedAtDay = 50, undoData = "6-8")),
+            snapshot(mapOf("ua1" to listOf(wbout(53, 50.0), wbout(57, 55.0))))
+        )
+        assertTrue(verdicts.isEmpty())
     }
 
     @Test

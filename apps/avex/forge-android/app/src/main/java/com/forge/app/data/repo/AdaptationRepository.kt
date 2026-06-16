@@ -161,14 +161,31 @@ class AdaptationRepository @Inject constructor(
     }
 
     /**
-     * The Overview coach feed: actionable, arbitrated recommendations (deload + plateau
-     * ladder). Insights are deliberately excluded — observations live on Stats.
+     * The Overview coach feed off ONE snapshot: actionable arbitrated recommendations (deload +
+     * plateau ladder) PLUS a sub-threshold fatigue read so Overview can show "recovery signals
+     * building" before a deload actually fires (Tier 3). Insights stay on Stats.
      */
-    suspend fun coachRecommendations(): List<Recommendation> {
+    data class CoachFeed(
+        val recommendations: List<Recommendation>,
+        /** Fatigue that's building but hasn't crossed the deload line yet, or null. */
+        val fatigueBuilding: DeloadAdvisor.FatigueAssessment?,
+        val fatigueThreshold: Int
+    )
+
+    suspend fun coachFeed(): CoachFeed {
         val s = snapshot()
-        val recs = ProgressionAdvisor.evaluate(s) + listOfNotNull(DeloadAdvisor.evaluate(s))
-        return RecommendationArbiter.arbitrate(recs, mutedAdviceIds())
+        val t = AdaptThresholds()
+        val recs = ProgressionAdvisor.evaluate(s, t) + listOfNotNull(DeloadAdvisor.evaluate(s, t))
+        val arbitrated = RecommendationArbiter.arbitrate(recs, mutedAdviceIds())
+        // The same "building" band AutoCoachPlanner uses for its consolidation hold — read from the
+        // shared threshold so the Overview nudge and the planner can't describe different ranges.
+        val building = DeloadAdvisor.fatigue(s, t)
+            ?.takeIf { it.score in (t.deloadScoreThreshold - t.consolidateBandPoints) until t.deloadScoreThreshold }
+        return CoachFeed(arbitrated, building, t.deloadScoreThreshold)
     }
+
+    /** Just the actionable recommendations (kept for callers that don't need the fatigue read). */
+    suspend fun coachRecommendations(): List<Recommendation> = coachFeed().recommendations
 
     /**
      * Everything the Stats page reads from the engine, off ONE snapshot fan-out: the fatigue

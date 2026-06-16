@@ -53,9 +53,18 @@ class AutoCoachPlannerTest {
     private fun progressingBouts(n: Int): List<ExerciseBout> =
         (0..n).map { i -> bout(startDay = 38 + i * 2, weight = 45.0 + i * 5) }
 
-    private fun slot(id: String = "ua1", swaps: List<String> = listOf("alt-1", "alt-2"), sets: Int = 3) =
+    /** Progressing bouts at a chosen per-bout step — a small step is "slow but climbing", not stalled. */
+    private fun progressing(stepWeight: Double, startWeight: Double = 45.0, n: Int = 8): List<ExerciseBout> =
+        (0..n).map { i -> bout(startDay = 38 + i * 2, weight = startWeight + i * stepWeight) }
+
+    private fun slot(
+        id: String = "ua1",
+        swaps: List<String> = listOf("alt-1", "alt-2"),
+        sets: Int = 3,
+        muscle: MuscleGroup = MuscleGroup.CHEST
+    ) =
         ProgramSlotSnap(
-            exerciseId = id, name = "Lift $id", muscle = MuscleGroup.CHEST,
+            exerciseId = id, name = "Lift $id", muscle = muscle,
             unit = ExerciseUnit.DUMBBELL, tags = emptyList(), targetSets = sets,
             repsText = "8-10", swapCandidateIds = swaps
         )
@@ -166,6 +175,36 @@ class AutoCoachPlannerTest {
         assertEquals("volume_up", d.type)
         assertEquals("4", d.payload)
         assertEquals("ua1", d.targetKey)
+    }
+
+    @Test
+    fun buildingFatigue_holdsWithConsolidationGuidance() {
+        // Fatigue at 3/5 (low moods +2, sore cardio +1) — below the deload line but climbing.
+        // Lifts are progressing and target is 0 (no volume_up), so the pass is otherwise quiet:
+        // the smart call is a consolidation week, not a generic "plan is working" hold.
+        val moods = listOf(
+            MoodEntry(1, null, "upper-a", "drained", now - 1 * day),
+            MoodEntry(2, null, "upper-a", "off", now - 3 * day),
+            MoodEntry(3, null, "upper-a", "drained", now - 5 * day)
+        )
+        val cardio = listOf(CardioEntry(1, date = now - 2 * day, type = "rest", durationMin = 0, restReason = "sore"))
+        val r = AutoCoachPlanner.evaluate(
+            snapshot(mapOf("ua1" to progressingBouts(8)), moods = moods, cardio = cardio), beginner()
+        )
+        assertEquals(CoachPassStatus.HOLD, r.status)
+        assertTrue("reason should propose a consolidation week: ${r.holdReason}", "consolidation" in r.holdReason!!)
+    }
+
+    @Test
+    fun volumeUp_prioritisesTheLaggingMuscle() {
+        // Two qualifying muscles: CHEST climbing fast, BACK climbing slowly. The extra set goes to
+        // the laggard (BACK), not the muscle already winning.
+        val history = mapOf("ua1" to progressing(5.0), "ub1" to progressing(1.0))
+        val slots = listOf(slot("ua1"), slot("ub1", muscle = MuscleGroup.BACK))
+        val r = AutoCoachPlanner.evaluate(snapshot(history, slots = slots), beginner(target = 1))
+        assertEquals(CoachPassStatus.SHADOW, r.status)
+        val d = r.decisions.single { it.type == "volume_up" }
+        assertEquals("ub1", d.targetKey)
     }
 
     @Test

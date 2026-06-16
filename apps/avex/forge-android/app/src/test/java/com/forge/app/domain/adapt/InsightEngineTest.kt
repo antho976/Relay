@@ -238,6 +238,139 @@ class InsightEngineTest {
         assertTrue(insight!!.body.contains("~90 min"))
     }
 
+    // ── Sweet-spot rep range (A2) ──────────────────────────────────────────────
+
+    private fun repSet(weight: Double, reps: Int, idx: Int) = LoggedSet(
+        loggedExerciseId = 1, setIndex = idx, weightText = "$weight", weightLb = weight, reps = reps, completedAt = 0
+    )
+
+    private fun mixedBout(atDay: Int, sets: List<LoggedSet>) = ExerciseBout(
+        sessionStartedAt = atDay * day, effort = null, hitFullTarget = false,
+        skipped = false, swappedName = null, sets = sets
+    )
+
+    @Test
+    fun sweetSpotRepRange_namesTheStrongestBucket() {
+        // 6 sets at 100×8 (e1RM ~127) clearly beat 6 sets at 70×12 (e1RM ~98) → the 6-10 bucket wins.
+        val sets = List(6) { repSet(100.0, 8, it) } + List(6) { repSet(70.0, 12, it) }
+        val fired = InsightEngine.evaluate(snapshot(history = mapOf("ua1" to listOf(mixedBout(90, sets)))))
+        val insight = keyStartingWith(fired, "sweetspot")
+        assertNotNull(insight)
+        assertTrue(insight!!.body.contains("DB Bench Press"))
+        assertTrue(insight.body.contains("6-10"))
+    }
+
+    @Test
+    fun sweetSpotRepRange_silentWithoutTwoFullBuckets() {
+        // Only one bucket clears the per-bucket sample gate — nothing to compare.
+        val sets = List(6) { repSet(100.0, 8, it) } + List(2) { repSet(70.0, 12, it) }
+        assertNull(keyStartingWith(InsightEngine.evaluate(snapshot(history = mapOf("ua1" to listOf(mixedBout(90, sets))))), "sweetspot"))
+    }
+
+    // ── Lagging lift (A6) ───────────────────────────────────────────────────────
+
+    @Test
+    fun laggingLift_flagsTheStalledLiftWhenAnotherClimbs() {
+        // Same muscle: Bench climbs (e1RM 53→73), Incline flat — Incline is the laggard.
+        val slots = listOf(slot("ua1", "DB Bench Press", MuscleGroup.CHEST), slot("ua2", "Incline Press", MuscleGroup.CHEST))
+        val history = mapOf(
+            "ua1" to listOf(bout(80, 40.0), bout(85, 40.0), bout(90, 55.0), bout(95, 55.0)),
+            "ua2" to listOf(bout(80, 40.0), bout(85, 40.0), bout(90, 40.0), bout(95, 40.0))
+        )
+        val insight = keyStartingWith(InsightEngine.evaluate(snapshot(slots = slots, history = history)), "lagging")
+        assertNotNull(insight)
+        assertTrue(insight!!.body.contains("Incline Press"))
+        assertTrue(insight.body.contains("DB Bench Press"))
+    }
+
+    @Test
+    fun laggingLift_silentWhenBothLiftsProgress() {
+        val slots = listOf(slot("ua1", "DB Bench Press", MuscleGroup.CHEST), slot("ua2", "Incline Press", MuscleGroup.CHEST))
+        val history = mapOf(
+            "ua1" to listOf(bout(80, 40.0), bout(85, 40.0), bout(90, 55.0), bout(95, 55.0)),
+            "ua2" to listOf(bout(80, 40.0), bout(85, 40.0), bout(90, 52.0), bout(95, 52.0))
+        )
+        assertNull(keyStartingWith(InsightEngine.evaluate(snapshot(slots = slots, history = history)), "lagging"))
+    }
+
+    // ── Tier 5 · session-start-time vs performance ─────────────────────────────
+
+    @Test
+    fun timeOfDayPerformance_flagsTheStrongerWindow() {
+        // One lift trained both morning (8:00, 60 lb) and evening (18:00, 50 lb), 12 bouts each.
+        val am = (0 until 12).map { bout(60 + it, weight = 60.0).copy(sessionStartedAt = (60 + it) * day + 8 * hour) }
+        val pm = (0 until 12).map { bout(60 + it, weight = 50.0).copy(sessionStartedAt = (60 + it) * day + 18 * hour) }
+        val fired = InsightEngine.evaluate(snapshot(history = mapOf("ua1" to (am + pm))))
+        val insight = keyOf(fired, "timeofdayperf")
+        assertNotNull(insight)
+        assertTrue(insight!!.body.contains("earlier"))
+    }
+
+    @Test
+    fun timeOfDayPerformance_silentWithoutBothWindows() {
+        // Only ever trained in the morning — nothing to compare, so it stays silent.
+        val amOnly = (0 until 14).map { bout(60 + it, weight = 60.0).copy(sessionStartedAt = (60 + it) * day + 8 * hour) }
+        assertNull(keyOf(InsightEngine.evaluate(snapshot(history = mapOf("ua1" to amOnly))), "timeofdayperf"))
+    }
+
+    // ── Tier 5 · volume tolerance (A1) ─────────────────────────────────────────
+
+    /** 9 distinct ISO weeks (7 days apart), each one bout: (setCount, weight). */
+    private fun weeklyHistory(plan: List<Pair<Int, Double>>) =
+        plan.mapIndexed { i, p -> bout(atDay = 30 + i * 7, weight = p.second, setCount = p.first) }
+
+    @Test
+    fun volumeResponse_flagsAMuscleThatRespondsToVolume() {
+        // The gain follows the high-volume (8-set) weeks: each 8-set week is followed by a heavier
+        // week, while the low-volume (4-set) weeks lead into a flat week — high volume → strength.
+        val plan = listOf(8 to 50.0, 4 to 55.0, 8 to 55.0, 4 to 60.0, 8 to 60.0, 4 to 65.0, 8 to 65.0, 4 to 70.0, 8 to 70.0)
+        val fired = InsightEngine.evaluate(snapshot(history = mapOf("ua1" to weeklyHistory(plan))))
+        val insight = keyStartingWith(fired, "volumeresponse")
+        assertNotNull(insight)
+        assertTrue(insight!!.body.contains("Chest"))
+        assertTrue(insight.body.contains("responding to more volume"))
+    }
+
+    @Test
+    fun volumeResponse_flagsAVolumeCeiling() {
+        // Inverted: the gain follows the LOW-volume (4-set) weeks; the extra sets in the 8-set weeks
+        // lead into a flat week — past the split, more volume isn't paying off.
+        val plan = listOf(4 to 50.0, 8 to 55.0, 4 to 55.0, 8 to 60.0, 4 to 60.0, 8 to 65.0, 4 to 65.0, 8 to 70.0, 4 to 70.0)
+        val fired = InsightEngine.evaluate(snapshot(history = mapOf("ua1" to weeklyHistory(plan))))
+        val insight = keyStartingWith(fired, "volumeresponse")
+        assertNotNull(insight)
+        assertTrue(insight!!.body.contains("volume ceiling"))
+    }
+
+    @Test
+    fun volumeResponse_silentBelowTheWeekGate() {
+        val few = (0 until 4).map { bout(atDay = 30 + it * 7, weight = 50.0 + it * 5, setCount = 5) }
+        assertNull(keyStartingWith(InsightEngine.evaluate(snapshot(history = mapOf("ua1" to few))), "volumeresponse"))
+    }
+
+    // ── Tier 5 · recovery curve (rest gap vs performance) ──────────────────────
+
+    private fun restSessions(days: List<Int>, vols: List<Double>) =
+        days.indices.map { Session(it + 1L, "upper-a", days[it] * day, days[it] * day + hour, totalVolumeLb = vols[it]) }
+
+    @Test
+    fun restResponse_flagsTheProductiveSpacing() {
+        // Sessions after 3 rest days move 2000 lb; after 1 rest day, 1000 lb. Same workout (one dayKey),
+        // so the day-type normalisation is neutral and the rest gap is the only thing varying.
+        val days = listOf(20, 23, 24, 27, 28, 31, 32, 35, 36, 39, 40, 43, 44, 47)
+        val vols = listOf(1500.0, 2000.0, 1000.0, 2000.0, 1000.0, 2000.0, 1000.0, 2000.0, 1000.0, 2000.0, 1000.0, 2000.0, 1000.0, 2000.0)
+        val insight = keyOf(InsightEngine.evaluate(snapshot(sessions = restSessions(days, vols))), "restresponse")
+        assertNotNull(insight)
+        assertTrue(insight!!.body.contains("recovery"))
+    }
+
+    @Test
+    fun restResponse_silentBelowTheSessionGate() {
+        val days = listOf(20, 23, 24, 27, 28, 31, 32, 35)
+        val vols = List(8) { if (it % 2 == 0) 2000.0 else 1000.0 }
+        assertNull(keyOf(InsightEngine.evaluate(snapshot(sessions = restSessions(days, vols))), "restresponse"))
+    }
+
     // ── Determinism ────────────────────────────────────────────────────────────
 
     @Test

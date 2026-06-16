@@ -149,8 +149,18 @@ internal suspend fun DayViewModel.buildExerciseUi(
     } else prevSets
 
     val displaySuggested = suggestion?.inputText ?: if (DUMMY_TRAINING_DATA) "45" else null
-    val displayReason = suggestion?.reason
+    // Tier 3 — make the invisible weight calibration visible: append the SuggestionCalibrator's
+    // StepMode to the suggestion reason, so it shows wherever the reason renders (card + input row).
+    val stepModeNote = when (stepMode) {
+        com.forge.app.domain.coach.StepMode.FASTER -> "bigger jumps fit you"
+        com.forge.app.domain.coach.StepMode.CONSOLIDATE -> "holding to consolidate"
+        else -> null
+    }
+    val baseReason = suggestion?.reason
         ?: if (DUMMY_TRAINING_DATA && displaySuggested != null) "matches set 1" else null
+    val displayReason = if (displaySuggested != null)
+        listOfNotNull(baseReason, stepModeNote).joinToString(" · ").ifBlank { null }
+    else baseReason
 
     val displayHistory = if (DUMMY_TRAINING_DATA && sessionHistory.isEmpty()) {
         val now = System.currentTimeMillis()
