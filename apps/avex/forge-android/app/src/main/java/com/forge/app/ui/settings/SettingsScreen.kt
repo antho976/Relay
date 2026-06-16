@@ -52,7 +52,8 @@ enum class SettingsPage(val title: String) {
     Privacy("Privacy"),
     Program("Program"),
     ExercisePrefs("Exercise likes"),
-    Vacation("Holiday / Vacation")
+    Vacation("Holiday / Vacation"),
+    About("About")
 }
 
 internal data class SettingsRow(val label: String, val tags: String, val page: SettingsPage)
@@ -262,6 +263,7 @@ fun SettingsScreen(
             SettingsPage.Program -> ProgramPage(state, viewModel, Modifier.padding(inner), onOpenCoachBrief)
             SettingsPage.ExercisePrefs -> ExercisePrefsPage(state, viewModel, Modifier.padding(inner))
             SettingsPage.Vacation -> VacationPage(viewModel, Modifier.padding(inner))
+            SettingsPage.About -> AboutPage(Modifier.padding(inner))
         }
     }
 

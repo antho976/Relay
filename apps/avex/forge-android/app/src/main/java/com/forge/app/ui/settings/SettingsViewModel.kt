@@ -379,7 +379,25 @@ class SettingsViewModel @Inject constructor(
     fun restoreDatabase(uri: android.net.Uri) = viewModelScope.launch {
         val ok = runCatching { backupRepo.restoreFromUri(uri) }.getOrDefault(false)
         if (ok) _restoreSucceeded.value = true
-        else _statusMessage.value = "Restore failed — that file isn't a valid Forge backup."
+        else _statusMessage.value = "Restore failed — that file isn't a valid Forge backup (or was made by a newer version)."
+    }
+
+    /** Formatted date of the weekly auto-backup slot, or null when none exists yet (#86). */
+    private val _autoBackupSavedAt = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+    val autoBackupSavedAt: StateFlow<String?> = _autoBackupSavedAt.asStateFlow()
+
+    /** Refresh the auto-backup date — call when the data dialog opens (the worker may have written since). */
+    fun refreshAutoBackupInfo() {
+        _autoBackupSavedAt.value = backupRepo.autoBackupSavedAtMs()?.let { ms ->
+            java.text.SimpleDateFormat("MMM d, yyyy", java.util.Locale.getDefault()).format(java.util.Date(ms))
+        }
+    }
+
+    /** In-app restore from the weekly auto-backup slot — the recovery path for the local auto-backup (#86). */
+    fun restoreAutoBackup() = viewModelScope.launch {
+        val ok = runCatching { backupRepo.restoreFromAutoBackup() }.getOrDefault(false)
+        if (ok) _restoreSucceeded.value = true
+        else _statusMessage.value = "No auto-backup to restore yet."
     }
 
     fun exportCrashLogs(uri: android.net.Uri) = viewModelScope.launch {

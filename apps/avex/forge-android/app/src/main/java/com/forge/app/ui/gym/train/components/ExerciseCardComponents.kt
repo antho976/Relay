@@ -54,6 +54,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.data.db.types.EffortRating
 import com.forge.app.domain.timer.RestTimerState
+import com.forge.app.domain.units.toDisplayWeight
+import com.forge.app.domain.units.unitLabel
+import com.forge.app.ui.theme.LocalForgeSettings
 import com.forge.app.program.ExerciseUnit
 import com.forge.app.ui.gym.stats.components.Sparkline
 import com.forge.app.ui.gym.train.state.ExerciseSessionPoint
@@ -141,19 +144,22 @@ internal fun CollapsedRow(
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             val machine = state.plan.unit == ExerciseUnit.PLATES
-            Icon(
-                Icons.Outlined.Visibility,
-                contentDescription = "Watch a demo",
-                tint = muted.copy(alpha = 0.55f),
-                modifier = Modifier.size(18.dp)
-                    .clickable { runCatching { context.startActivity(youTubeSearchIntent(state.effectiveName, machine)) } }
-            )
-            Icon(
-                Icons.Outlined.SwapHoriz,
-                contentDescription = "Swap",
-                tint = muted.copy(alpha = 0.55f),
-                modifier = Modifier.size(18.dp).clickable { onOpenSwapPicker() }
-            )
+            // 18dp glyphs but a 44dp touch target (a11y minimum) — the icon centers inside a larger box.
+            Box(
+                modifier = Modifier.size(44.dp)
+                    .clickable { runCatching { context.startActivity(youTubeSearchIntent(state.effectiveName, machine)) } },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(Icons.Outlined.Visibility, contentDescription = "Watch a demo",
+                    tint = muted.copy(alpha = 0.55f), modifier = Modifier.size(18.dp))
+            }
+            Box(
+                modifier = Modifier.size(44.dp).clickable { onOpenSwapPicker() },
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(Icons.Outlined.SwapHoriz, contentDescription = "Swap",
+                    tint = muted.copy(alpha = 0.55f), modifier = Modifier.size(18.dp))
+            }
         }
     }
 }
@@ -177,8 +183,9 @@ internal fun LastSessionStrip(
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val outline = MaterialTheme.colorScheme.outline
+    val useKg = LocalForgeSettings.current.useKg
     // Count the volume up to its new total when a set lands, instead of snapping.
-    val animatedVolume by animateIntAsState(targetValue = currentVolumeLb.toInt(), label = "volume")
+    val animatedVolume by animateIntAsState(targetValue = toDisplayWeight(currentVolumeLb, useKg).toInt(), label = "volume")
 
     // Tick once a second so the elapsed time advances live — but only when a session has
     // actually started. Without the guard the loop recomposes the strip every second even
@@ -206,7 +213,7 @@ internal fun LastSessionStrip(
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(elapsedStr, style = MaterialTheme.typography.labelMedium, color = onBg, fontSize = 11.sp)
             Text("·", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.5f))
-            Text("$animatedVolume lb", style = MaterialTheme.typography.labelMedium, color = onBg, fontSize = 11.sp)
+            Text("$animatedVolume ${unitLabel(useKg)}", style = MaterialTheme.typography.labelMedium, color = onBg, fontSize = 11.sp)
             Text("·", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.5f))
             Text("$currentSets/$targetSets", style = MaterialTheme.typography.labelMedium, color = muted, fontSize = 11.sp)
         }

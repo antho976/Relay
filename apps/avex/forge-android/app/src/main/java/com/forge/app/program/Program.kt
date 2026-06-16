@@ -51,7 +51,8 @@ data class EquipmentPreset(
 )
 
 /**
- * One-tap equipment presets shared by onboarding + Settings. The **Developer's preset** is Antho's
+ * One-tap equipment presets shared by onboarding + Settings. The **Home machine gym** preset
+ * (id `developer`) is Antho's
  * own MWM-989 home gym = dumbbells + a FLAT bench (the bench-press bench; its bar is benching-only
  * and barbell movements aren't modeled) + the machine's cable (high/low pulley) + machine stations
  * (leg developer, press arm). It is CURATED: its exercise pool is frozen to
@@ -60,7 +61,8 @@ data class EquipmentPreset(
  */
 val equipmentPresets: List<EquipmentPreset> = listOf(
     EquipmentPreset(
-        "developer", "Developer's preset",
+        // Label renamed for sharing; id "developer" + frozenIds kept intact so the curated pool is unchanged.
+        "developer", "Home machine gym",
         setOf(Equipment.DUMBBELLS.name, Equipment.BENCH.name, Equipment.CABLE.name, Equipment.MACHINE.name),
         frozenIds = ExerciseLibrary.DEVELOPER_FROZEN_IDS
     ),
@@ -143,7 +145,7 @@ object Program {
             ),
             exercises = listOf(
                 ExercisePlan("ua1", "DB Bench Press", 3, "8-10", ExerciseUnit.DUMBBELL, MuscleGroup.CHEST, Difficulty.BEGINNER, "1-2 reps shy of failure"),
-                ExercisePlan("ua2", "Seated Bench Press", 3, "10-12", ExerciseUnit.PLATES, MuscleGroup.CHEST, Difficulty.BEGINNER, "MWM-989 chest press station"),
+                ExercisePlan("ua2", "Seated Bench Press", 3, "10-12", ExerciseUnit.PLATES, MuscleGroup.CHEST, Difficulty.BEGINNER, "Seated chest press machine"),
                 ExercisePlan("ua3", "Wide Lat Pulldown", 4, "8-12", ExerciseUnit.PLATES, MuscleGroup.BACK, Difficulty.BEGINNER, "Wide grip, pull to upper chest"),
                 ExercisePlan("ua4", "DB Lateral Raise", 4, "12-15", ExerciseUnit.DUMBBELL, MuscleGroup.SHOULDERS, Difficulty.BEGINNER, "Priority — slow eccentric"),
                 ExercisePlan("ua5", "DB Overhead Tricep Ext.", 3, "10-12", ExerciseUnit.DUMBBELL, MuscleGroup.TRICEPS, Difficulty.BEGINNER, "Long head — biggest visual lever"),
@@ -165,7 +167,7 @@ object Program {
             exercises = listOf(
                 ExercisePlan("la1", "Goblet Squat", 4, "10-12", ExerciseUnit.DUMBBELL, MuscleGroup.QUADS, Difficulty.BEGINNER, "Heaviest DB you have"),
                 ExercisePlan("la2", "DB Romanian Deadlift", 4, "8-10", ExerciseUnit.DUMBBELL, MuscleGroup.HAMSTRINGS, Difficulty.INTERMEDIATE, "Posture work too"),
-                ExercisePlan("la3", "Leg Extension", 3, "12-15", ExerciseUnit.PLATES, MuscleGroup.QUADS, Difficulty.BEGINNER, "MWM-989 leg developer"),
+                ExercisePlan("la3", "Leg Extension", 3, "12-15", ExerciseUnit.PLATES, MuscleGroup.QUADS, Difficulty.BEGINNER, "Leg extension machine"),
                 ExercisePlan("la4", "DB Walking Lunge", 3, "10/leg", ExerciseUnit.DUMBBELL, MuscleGroup.GLUTES, Difficulty.BEGINNER, "Unilateral balance"),
                 ExercisePlan("la5", "Standing Calf Raise", 4, "12-15", ExerciseUnit.DUMBBELL, MuscleGroup.CALVES, Difficulty.BEGINNER, "DB in hand"),
                 ExercisePlan("la6", "Hanging Knee Raise", 3, "10-15", ExerciseUnit.BODYWEIGHT, MuscleGroup.CORE, Difficulty.INTERMEDIATE, "Or plank 30-60s")
@@ -208,7 +210,7 @@ object Program {
             exercises = listOf(
                 ExercisePlan("lb1", "DB Bulgarian Split Squat", 4, "8-10/leg", ExerciseUnit.DUMBBELL, MuscleGroup.QUADS, Difficulty.ADVANCED, "Brutal but it works"),
                 ExercisePlan("lb2", "DB Stiff-Leg Deadlift", 3, "10-12", ExerciseUnit.DUMBBELL, MuscleGroup.HAMSTRINGS, Difficulty.INTERMEDIATE, "Hamstring stretch"),
-                ExercisePlan("lb3", "Leg Curl", 3, "12-15", ExerciseUnit.PLATES, MuscleGroup.HAMSTRINGS, Difficulty.BEGINNER, "MWM-989 leg developer"),
+                ExercisePlan("lb3", "Leg Curl", 3, "12-15", ExerciseUnit.PLATES, MuscleGroup.HAMSTRINGS, Difficulty.BEGINNER, "Leg curl machine"),
                 ExercisePlan("lb4", "Goblet Squat", 3, "12-15", ExerciseUnit.DUMBBELL, MuscleGroup.QUADS, Difficulty.BEGINNER, "Higher reps today"),
                 ExercisePlan("lb5", "Seated Calf Raise", 4, "12-15", ExerciseUnit.DUMBBELL, MuscleGroup.CALVES, Difficulty.BEGINNER, "Different head"),
                 ExercisePlan("lb6", "High Pulley Ab Crunch", 3, "10-15", ExerciseUnit.PLATES, MuscleGroup.CORE, Difficulty.BEGINNER, "Loaded abs")
@@ -230,9 +232,16 @@ object Program {
     fun setActive(newDays: List<DayPlan>) { active = newDays }
 
     fun day(key: String): DayPlan =
+        dayOrNull(key)
+            // Defensive fallback: a stale/zombie day key (e.g. a session left over from a
+            // since-regenerated program) resolves to a real day instead of crashing the screen.
+            ?: active.firstOrNull()
+            ?: defaultDays.first()
+
+    /** Like [day] but null (no crash) when the key isn't in the active or seed program. */
+    fun dayOrNull(key: String): DayPlan? =
         active.firstOrNull { it.key == key }
             ?: defaultDays.firstOrNull { it.key == key }
-            ?: error("Unknown day key: $key")
 
     fun exercise(id: String): ExercisePlan? =
         active.flatMap { it.exercises }.firstOrNull { it.id == id }

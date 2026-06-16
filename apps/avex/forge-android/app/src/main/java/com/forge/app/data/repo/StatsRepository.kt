@@ -42,6 +42,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
@@ -184,6 +185,18 @@ class StatsRepository @Inject constructor(
                 else -> return streak
             }
         }
+    }
+
+    /**
+     * The day-streak as a one-shot read — same logic and data source as [observeWeeklyStats]'s
+     * streakDays, but WITHOUT subscribing the whole weekly fan-out (sessions/volume/cardio/schedule/
+     * vacation flows) just to extract one number. For callers like the Profile hub that only need
+     * the streak: two focused reads (recent finished sessions + vacation periods) instead of nine.
+     */
+    suspend fun currentStreakDays(): Int {
+        val finishedAts = sessionDao.observeRecent(120).first().mapNotNull { it.finishedAt }
+        val periods = vacationDao.all()
+        return computeStreak(finishedAts, com.forge.app.domain.vacation.VacationCalendar.onVacation(periods))
     }
 
     private fun computeDaysSinceLast(finishedAts: List<Long>): Int? {

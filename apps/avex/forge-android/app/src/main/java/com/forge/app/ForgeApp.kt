@@ -48,7 +48,8 @@ class ForgeApp : Application(), Configuration.Provider {
     private fun applyPendingRestore() {
         val pending = File(filesDir, "pending_restore.db")
         val pendingPrefs = File(filesDir, "pending_restore_prefs.pb")
-        if (!pending.exists() && !pendingPrefs.exists()) return
+        val pendingPhotos = File(filesDir, "pending_restore_photos")
+        if (!pending.exists() && !pendingPrefs.exists() && !pendingPhotos.exists()) return
         if (pending.exists()) {
             val swapped = runCatching {
                 val live = getDatabasePath("forge.db")
@@ -81,9 +82,37 @@ class ForgeApp : Application(), Configuration.Provider {
                 // Must match preferencesDataStore(name = "forge_settings").
                 val livePrefs = File(filesDir, "datastore/forge_settings.preferences_pb")
                 livePrefs.parentFile?.mkdirs()
-                pendingPrefs.copyTo(livePrefs, overwrite = true)
+                // Stage + atomic rename, same reasoning as the DB swap above: a direct overwrite that
+                // dies mid-copy would leave the live prefs partial/corrupt with the original gone.
+                val stagedPrefs = File(livePrefs.parentFile, "forge_settings.preferences_pb.restoring")
+                if (stagedPrefs.exists()) stagedPrefs.delete()
+                pendingPrefs.copyTo(stagedPrefs, overwrite = true)
+                if (!stagedPrefs.renameTo(livePrefs)) {
+                    stagedPrefs.delete()
+                    error("Could not move restored preferences into place")
+                }
             }.isSuccess
             if (swapped) pendingPrefs.delete()
+        }
+        if (pendingPhotos.isDirectory) {
+            val swapped = runCatching {
+                // Must match ProgressPhotoRepository's "progress_photos" folder. Swap via rename: move
+                // the current folder aside first, slot the restored one in, then drop the old copy — and
+                // if the slot-in fails, move the original back. renameTo within filesDir is atomic, so
+                // there's no window where the user is left with neither folder.
+                val livePhotos = File(filesDir, "progress_photos")
+                val oldPhotos = File(filesDir, "progress_photos.old")
+                if (oldPhotos.exists()) oldPhotos.deleteRecursively()
+                val hadLive = livePhotos.exists()
+                if (hadLive && !livePhotos.renameTo(oldPhotos)) error("Could not move current photos aside")
+                if (!pendingPhotos.renameTo(livePhotos)) {
+                    if (hadLive) oldPhotos.renameTo(livePhotos) // roll back to the originals
+                    error("Could not move restored photos into place")
+                }
+                oldPhotos.deleteRecursively()
+            }.isSuccess
+            // Only discard the staged folder once it's actually in place; otherwise keep it for retry.
+            if (swapped) pendingPhotos.deleteRecursively()
         }
     }
 

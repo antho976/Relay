@@ -11,6 +11,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
@@ -37,6 +39,7 @@ internal fun SegmentPill(
             .border(0.5.dp, if (selected) accent else outline.copy(alpha = 0.35f), RoundedCornerShape(50))
             .background(if (selected) accent.copy(alpha = 0.15f) else Color.Transparent)
             .clickable { onClick() }
+            .semantics { this.selected = selected } // TalkBack announces the active segment
             .padding(horizontal = 12.dp, vertical = 5.dp)
     ) {
         Text(

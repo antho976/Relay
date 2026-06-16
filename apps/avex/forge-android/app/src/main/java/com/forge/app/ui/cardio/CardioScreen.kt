@@ -37,6 +37,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.domain.cardio.CardioType
 import com.forge.app.ui.cardio.components.CardioEntryRow
+import com.forge.app.ui.common.EmptyState
 import com.forge.app.ui.common.forgeItemMotion
 import com.forge.app.ui.cardio.components.CardioLogSheet
 import com.forge.app.ui.cardio.state.CardioUiState
@@ -194,12 +195,11 @@ private fun CardioListContent(
                 }
             } else if (!state.isLoading) {
                 item("empty") {
-                    Text(
-                        "No activity logged yet.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = muted.copy(alpha = 0.55f),
-                        fontStyle = FontStyle.Italic,
-                        modifier = Modifier.padding(horizontal = 24.dp)
+                    EmptyState(
+                        emoji = "🏃",
+                        title = "No cardio yet.",
+                        subtitle = "Tap \"Log today\" above to add a run, walk, or any session.",
+                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
                     )
                 }
             }

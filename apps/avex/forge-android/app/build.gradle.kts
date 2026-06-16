@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
@@ -5,6 +7,21 @@ plugins {
     alias(libs.plugins.ksp)
     alias(libs.plugins.hilt)
 }
+
+// Release signing — reads credentials from forge-android/keystore.properties (gitignored).
+// If that file is absent (fresh clone, CI without secrets) the release build is simply left
+// unsigned and debug builds are unaffected. Copy keystore.properties.example to get started.
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+val keystoreProperties = Properties().apply {
+    if (keystorePropertiesFile.exists()) keystorePropertiesFile.inputStream().use { load(it) }
+}
+// A keystore is usable only when ALL four credentials are present. Guard on that, not merely on the
+// file existing: a half-filled keystore.properties would otherwise pass file(null) to the signing
+// config and fail configuration for EVERY build type (debug included), since signingConfigs is
+// evaluated at configuration time.
+val hasReleaseKeystore = keystorePropertiesFile.exists() &&
+    listOf("storeFile", "storePassword", "keyAlias", "keyPassword")
+        .all { !keystoreProperties.getProperty(it).isNullOrBlank() }
 
 android {
     namespace = "com.forge.app"
@@ -14,17 +31,34 @@ android {
         applicationId = "com.forge.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 85
+        versionName = "0.8.5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
+    }
+
+    signingConfigs {
+        // Created only when a COMPLETE keystore.properties exists, so an unconfigured or half-filled
+        // machine still builds (the release just stays unsigned).
+        if (hasReleaseKeystore) {
+            create("release") {
+                storeFile = file(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            // Sign the release only when a complete keystore is configured; otherwise it stays unsigned.
+            if (hasReleaseKeystore) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
         debug {
             applicationIdSuffix = ".debug"

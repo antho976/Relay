@@ -30,7 +30,7 @@ object XpEngine {
     const val VOLUME_XP_PER_1000LB = 5L
     const val ACTIVE_WEEK_XP = 40L
 
-    fun compute(s: XpSnapshot): XpBreakdown {
+    fun compute(s: XpSnapshot, useKg: Boolean = false): XpBreakdown {
         val workouts = s.finishedSessions * WORKOUT_XP
         val sets = s.totalSets * SET_XP
         val prs = s.totalPrs * PR_XP
@@ -38,13 +38,19 @@ object XpEngine {
         val weeks = s.activeWeeks * ACTIVE_WEEK_XP
         val trophies = s.trophyPoints.toLong()
 
+        // XP is scored per 1000 lb. lb users see "<vol> × 5" so the math reads literally; for kg users
+        // that multiplication wouldn't hold (1000 lb isn't a round kg figure), so we show the volume in
+        // kg without the misleading "× 5" — the earned XP is shown on the row either way.
+        val volumeDetail = if (useKg)
+            "${formatVolumeCompact(s.totalVolumeLb, useKg = true)} moved"
+        else
+            "${formatVolumeCompact(s.totalVolumeLb, useKg = false)} × $VOLUME_XP_PER_1000LB"
+
         val sources = listOf(
             XpSource("Workouts", "${s.finishedSessions} × $WORKOUT_XP", workouts),
             XpSource("Sets logged", "${s.totalSets} × $SET_XP", sets),
             XpSource("PRs", "${s.totalPrs} × $PR_XP", prs),
-            // XP is computed per 1000 lb, so the breakdown shows the lb basis + rate for all users —
-            // a kg figure with "× 5 (per 1000 lb)" wouldn't multiply out. Internal scoring detail.
-            XpSource("Volume", "${formatVolumeCompact(s.totalVolumeLb, useKg = false)} × $VOLUME_XP_PER_1000LB", volume),
+            XpSource("Volume", volumeDetail, volume),
             XpSource("Consistency", "${s.activeWeeks} wk × $ACTIVE_WEEK_XP", weeks),
             XpSource("Trophies", "tier points", trophies)
         ).filter { it.xp > 0 }

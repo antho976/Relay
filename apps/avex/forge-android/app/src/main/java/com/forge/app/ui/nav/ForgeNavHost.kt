@@ -28,6 +28,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontStyle
@@ -246,10 +247,12 @@ private fun NutritionPlaceholderScreen(onBack: () -> Unit) {
             contentAlignment = Alignment.Center
         ) {
             Text(
-                "Nutrition — coming soon.",
-                style = MaterialTheme.typography.headlineSmall,
+                "Nutrition tracking is coming. For now, Forge is all about your training.",
+                style = MaterialTheme.typography.titleMedium,
                 fontStyle = FontStyle.Italic,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                modifier = Modifier.padding(horizontal = 32.dp)
             )
         }
     }

@@ -32,7 +32,8 @@ data class ProgressPhoto(
 class ProgressPhotoRepository @Inject constructor(
     @ApplicationContext private val context: Context
 ) {
-    private val dir: File by lazy { File(context.filesDir, "progress_photos").apply { mkdirs() } }
+    /** Public so the backup archive ([BackupRepository]) + factory reset can read/clear the folder. */
+    val dir: File by lazy { File(context.filesDir, "progress_photos").apply { mkdirs() } }
     private val indexFile: File by lazy { File(dir, "index.json") }
 
     /** All photos, newest first. */
@@ -65,6 +66,12 @@ class ProgressPhotoRepository @Inject constructor(
 
     suspend fun setNote(photo: ProgressPhoto, note: String) = withContext(Dispatchers.IO) {
         writeIndex(readIndex().map { if (it.fileName == photo.fileName) it.copy(note = note) else it })
+    }
+
+    /** Wipe every progress photo + the index — called by factory reset (these files live outside the DB). */
+    suspend fun deleteAll() = withContext(Dispatchers.IO) {
+        dir.deleteRecursively()
+        dir.mkdirs()
     }
 
     private fun readIndex(): List<ProgressPhoto> {

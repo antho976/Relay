@@ -36,6 +36,7 @@ import com.forge.app.domain.units.formatVolume
 import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.ui.common.ConfettiOverlay
+import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.theme.ForgeLastGreen
 import com.forge.app.ui.theme.LocalForgeSettings
 import com.forge.app.ui.gym.train.state.SessionSummary
@@ -241,7 +242,7 @@ fun SessionSummarySheet(
                         .padding(top = 8.dp, bottom = 16.dp)
                         .clip(RoundedCornerShape(4.dp))
                         .border(0.5.dp, outline.copy(alpha = 0.4f), RoundedCornerShape(4.dp))
-                        .clickable { onDismiss(selectedMood, selectedTags.toList(), journal) }
+                        .bounceClick { onDismiss(selectedMood, selectedTags.toList(), journal) }
                         .padding(vertical = 16.dp),
                     contentAlignment = Alignment.Center
                 ) {

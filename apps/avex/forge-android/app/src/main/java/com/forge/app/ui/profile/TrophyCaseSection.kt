@@ -47,6 +47,7 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
 import com.forge.app.data.repo.TrophyCell
+import com.forge.app.ui.common.InlineEmptyHint
 import com.forge.app.ui.common.bounceClick
 
 /** Fixed popup width so the card centers exactly over the tapped trophy (and the caret aligns). */
@@ -90,6 +91,10 @@ internal fun TrophyCaseSection(
                 }
                 repeat(6 - row.size) { Box(Modifier.weight(1f)) }
             }
+        }
+        if (unlocked == 0) {
+            Spacer(Modifier.height(10.dp))
+            InlineEmptyHint("No trophies yet — finish your first workout to start unlocking them.", color = muted)
         }
         if (closestTrophy != null) {
             Spacer(Modifier.height(10.dp))

@@ -68,11 +68,13 @@ fun CoachBriefScreen(
             state.loading -> Box(Modifier.fillMaxSize().padding(inner), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator()
             }
-            state.brief == null -> Box(Modifier.fillMaxSize().padding(inner), contentAlignment = Alignment.Center) {
+            state.brief == null -> Box(Modifier.fillMaxSize().padding(inner).padding(horizontal = 32.dp), contentAlignment = Alignment.Center) {
                 Text(
-                    "Couldn't load this week's brief.",
+                    "Your coach is still learning. It writes your first brief after about a week of " +
+                        "training — finish a few workouts and it'll appear here.",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.error
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
                 )
             }
             else -> BriefContent(state.brief!!, viewModel, Modifier.padding(inner))
@@ -99,7 +101,7 @@ private fun BriefContent(brief: CoachBrief, viewModel: CoachBriefViewModel, modi
             when (brief.pass.status) {
                 CoachRepository.STATUS_PROPOSED, CoachRepository.STATUS_APPLIED ->
                     "Proposals — nothing changes until you apply it. Every applied change can be undone."
-                else -> "Shadow mode — observations only. Nothing changes unless you change it."
+                else -> "The coach is watching and learning — anything it would change shows up here as a suggestion. Nothing changes unless you apply it."
             },
             style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic
         )

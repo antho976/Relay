@@ -17,6 +17,7 @@ class ResetRepository @Inject constructor(
     private val trophyDao: UnlockedTrophyDao,
     private val cardioDao: CardioDao,
     private val settingsRepo: SettingsRepository,
+    private val photoRepo: ProgressPhotoRepository,
     private val db: ForgeDatabase
 ) {
     suspend fun resetSessions() = sessionDao.deleteAll()
@@ -33,6 +34,7 @@ class ResetRepository @Inject constructor(
      */
     suspend fun factoryReset() {
         withContext(Dispatchers.IO) { db.clearAllTables() }
+        photoRepo.deleteAll() // progress photos live as files outside the DB — clear them too (#138).
         settingsRepo.resetAll()
     }
 }

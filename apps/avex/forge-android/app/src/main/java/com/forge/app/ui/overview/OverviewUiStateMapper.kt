@@ -25,6 +25,8 @@ import java.util.Locale
 internal const val MILESTONE_SESSIONS_100 = "sessions_100"
 internal const val MILESTONE_VOLUME_10K = "volume_10k_week"
 internal const val MILESTONE_FIRST_MONTH = "first_full_month"
+/** Weekly-volume milestone threshold, kept in the stored unit (lb) so it triggers the same for everyone. */
+private const val VOLUME_MILESTONE_LB = 10_000.0
 
 internal fun buildOverviewUiState(
     stats: StatsRepository.WeeklyStats,
@@ -35,7 +37,8 @@ internal fun buildOverviewUiState(
     trophiesUnlocked: Int,
     distanceKm: Double,
     dayVolStats: Map<String, SessionDao.DayVolumeStats>,
-    cardioTargetMin: Int = 0
+    cardioTargetMin: Int = 0,
+    useKg: Boolean = false
 ): OverviewUiState {
     val gymItems = stats.recentGymSessions.map { session ->
         val day = Program.days.firstOrNull { it.key == session.dayKey }
@@ -110,7 +113,7 @@ internal fun buildOverviewUiState(
         cardioWeeklyTargetMin = cardioTargetMin,
         totalFinishedSessions = stats.totalFinishedSessions,
         streakDays = stats.streakDays,
-        pendingMilestone = computePendingMilestone(stats, shown),
+        pendingMilestone = computePendingMilestone(stats, shown, useKg),
         onThisDayMemory = memory,
         plannedNextDay = plannedDay,
         // A user-chosen "Train X today" overrides the rotation default until it's consumed when a
@@ -151,13 +154,17 @@ private fun relativeDay(epochMs: Long): String {
 
 private fun computePendingMilestone(
     stats: StatsRepository.WeeklyStats,
-    shown: Set<String>
+    shown: Set<String>,
+    useKg: Boolean
 ): MilestoneEvent? {
     if (stats.totalFinishedSessions >= 100 && MILESTONE_SESSIONS_100 !in shown) {
         return MilestoneEvent(MILESTONE_SESSIONS_100, "100 workouts complete. You've earned this.")
     }
-    if (stats.volumeLb >= 10_000.0 && MILESTONE_VOLUME_10K !in shown) {
-        return MilestoneEvent(MILESTONE_VOLUME_10K, "10,000 lb this week. Volume beast.")
+    if (stats.volumeLb >= VOLUME_MILESTONE_LB && MILESTONE_VOLUME_10K !in shown) {
+        // Threshold stays in lb (the stored unit) so it fires consistently; the label honours the
+        // user's unit — "10k lb" / "4.5k kg" — instead of always reading lb.
+        val volLabel = com.forge.app.domain.units.formatVolumeCompact(VOLUME_MILESTONE_LB, useKg)
+        return MilestoneEvent(MILESTONE_VOLUME_10K, "$volLabel this week. Volume beast.")
     }
     val firstMs = stats.firstFinishedSessionMs
     if (firstMs != null && MILESTONE_FIRST_MONTH !in shown) {

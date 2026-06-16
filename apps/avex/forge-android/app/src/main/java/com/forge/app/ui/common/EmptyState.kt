@@ -10,6 +10,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -52,4 +54,25 @@ fun EmptyState(
             )
         }
     }
+}
+
+/**
+ * A lightweight one-line empty hint for sub-sections that already sit inside a populated screen
+ * (the Overview "recent" block, the trophy case). The big [EmptyState] card is for full empty
+ * surfaces; this shares the italic/muted styling so the inline hints can't drift apart. [color] is
+ * passed in because these call sites already derive their own muted tone from the screen theme.
+ */
+@Composable
+fun InlineEmptyHint(
+    text: String,
+    color: Color,
+    modifier: Modifier = Modifier
+) {
+    Text(
+        text,
+        modifier = modifier,
+        style = MaterialTheme.typography.bodySmall,
+        color = color,
+        fontStyle = FontStyle.Italic
+    )
 }

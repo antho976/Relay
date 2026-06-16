@@ -27,7 +27,7 @@ class DayEditViewModel @Inject constructor(
     private val warmupRepo: WarmupRepository
 ) : ViewModel() {
 
-    private val _selectedDayKey = MutableStateFlow(Program.dayKeys.first())
+    private val _selectedDayKey = MutableStateFlow(Program.dayKeys.firstOrNull() ?: "")
     val selectedDayKey: StateFlow<String> = _selectedDayKey
 
     fun selectDay(key: String) { _selectedDayKey.value = key }

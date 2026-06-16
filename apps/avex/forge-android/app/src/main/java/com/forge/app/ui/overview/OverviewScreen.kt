@@ -55,6 +55,7 @@ import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.ui.theme.LocalForgeSettings
 import com.forge.app.program.Program
 import com.forge.app.program.Trophies
+import com.forge.app.ui.common.InlineEmptyHint
 import com.forge.app.ui.overview.components.CardioTile
 import com.forge.app.ui.overview.components.OverviewStat
 import com.forge.app.ui.overview.components.RecentRow
@@ -403,8 +404,8 @@ fun OverviewScreen(
             }
             Spacer(Modifier.height(10.dp))
             if (state.recentItems.isEmpty()) {
-                Text("no activity logged yet.", style = MaterialTheme.typography.bodySmall,
-                    color = muted, fontStyle = FontStyle.Italic)
+                InlineEmptyHint("No workouts yet — tap \"Start session\" above to log your first, and it'll show up here.",
+                    color = muted)
             } else {
                 state.recentItems.forEach { item ->
                     RecentRow(item = item, muted = muted, onBg = onBg, outline = outline,
@@ -432,7 +433,7 @@ fun OverviewScreen(
 
             Spacer(Modifier.height(8.dp))
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                Text("Nutrition →", style = MaterialTheme.typography.labelSmall,
+                Text("Nutrition · soon", style = MaterialTheme.typography.labelSmall,
                     color = muted.copy(alpha = 0.7f), fontSize = 10.sp,
                     modifier = Modifier.clickable { onGoToNutrition() }.padding(4.dp))
             }

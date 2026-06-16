@@ -24,8 +24,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import com.forge.app.domain.units.unitLabel
+import com.forge.app.domain.units.weightInputValue
+import java.util.Locale
 import kotlin.math.floor
 import kotlin.math.round
+
+// Both tools work entirely in the user's display unit: the seed weight is converted in, the
+// arithmetic (percentages, plate math) is unit-agnostic, and the labels read in kg or lb. Plate
+// denominations and bar weights switch to the kg set when the user trains in kg.
+
+/** "2.5" / "1.25" / "45" — a plate or bar weight with trailing zeros trimmed (no spurious ".0"). */
+private fun trimWeight(v: Double): String =
+    if (v % 1.0 == 0.0) "${v.toInt()}" else String.format(Locale.US, "%.2f", v).trimEnd('0').trimEnd('.')
 
 // ─── Warmup Set Suggester (#10) ───────────────────────────────────────────────
 
@@ -35,9 +46,11 @@ import kotlin.math.round
 @Composable
 fun WarmupSuggesterDialog(
     workingWeightLb: Double?,
+    useKg: Boolean,
     onDismiss: () -> Unit
 ) {
-    var input by remember { mutableStateOf(workingWeightLb?.toInt()?.toString() ?: "") }
+    val unit = unitLabel(useKg)
+    var input by remember { mutableStateOf(workingWeightLb?.let { weightInputValue(it, useKg) } ?: "") }
     val working = input.toDoubleOrNull()
 
     AlertDialog(
@@ -48,7 +61,7 @@ fun WarmupSuggesterDialog(
                 OutlinedTextField(
                     value = input,
                     onValueChange = { input = it },
-                    label = { Text("Working weight (lb)") },
+                    label = { Text("Working weight ($unit)") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     singleLine = true
                 )
@@ -80,7 +93,7 @@ fun WarmupSuggesterDialog(
                             ) {
                                 Text(label, style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text("${weight.toInt()} lb × $reps",
+                                Text("${trimWeight(weight)} $unit × $reps",
                                     style = MaterialTheme.typography.bodyMedium,
                                     fontWeight = FontWeight.SemiBold)
                                 Text("${(pct * 100).toInt()}%",
@@ -101,22 +114,27 @@ private fun roundToNearest(value: Double, increment: Double): Double =
 
 // ─── Plate Calculator (#11) ───────────────────────────────────────────────────
 
-private val STANDARD_PLATES = listOf(45.0, 35.0, 25.0, 10.0, 5.0, 2.5)
-private const val BAR_WEIGHT = 45.0
+private val STANDARD_PLATES_LB = listOf(45.0, 35.0, 25.0, 10.0, 5.0, 2.5)
+private val STANDARD_PLATES_KG = listOf(25.0, 20.0, 15.0, 10.0, 5.0, 2.5, 1.25)
 
 /**
- * Shows which plates to load on each side for a given total weight.
- * Assumes a 45 lb bar (standard). User can toggle to a lighter bar.
+ * Shows which plates to load on each side for a given total weight. Uses a 45 lb / 20 kg bar by
+ * default (toggle to the lighter 35 lb / 15 kg bar), with the matching plate denominations.
  */
 @Composable
 fun PlateCalculatorDialog(
     initialWeightLb: Double? = null,
+    useKg: Boolean,
     onDismiss: () -> Unit
 ) {
-    var input by remember { mutableStateOf(initialWeightLb?.toInt()?.toString() ?: "") }
+    val unit = unitLabel(useKg)
+    val plateSet = if (useKg) STANDARD_PLATES_KG else STANDARD_PLATES_LB
+    val heavyBar = if (useKg) 20.0 else 45.0
+    val lightBar = if (useKg) 15.0 else 35.0
+    var input by remember { mutableStateOf(initialWeightLb?.let { weightInputValue(it, useKg) } ?: "") }
     var useHeavyBar by remember { mutableStateOf(true) }
-    val barLb = if (useHeavyBar) BAR_WEIGHT else 35.0
-    val targetLb = input.toDoubleOrNull()
+    val bar = if (useHeavyBar) heavyBar else lightBar
+    val target = input.toDoubleOrNull()
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -126,7 +144,7 @@ fun PlateCalculatorDialog(
                 OutlinedTextField(
                     value = input,
                     onValueChange = { input = it },
-                    label = { Text("Target weight (lb)") },
+                    label = { Text("Target weight ($unit)") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     singleLine = true
                 )
@@ -135,16 +153,15 @@ fun PlateCalculatorDialog(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Bar: ${barLb.toInt()} lb", style = MaterialTheme.typography.bodySmall)
+                    Text("Bar: ${trimWeight(bar)} $unit", style = MaterialTheme.typography.bodySmall)
                     TextButton(onClick = { useHeavyBar = !useHeavyBar }) {
-                        Text(if (useHeavyBar) "Switch to 35 lb bar" else "Switch to 45 lb bar")
+                        Text(if (useHeavyBar) "Switch to ${trimWeight(lightBar)} $unit bar"
+                             else "Switch to ${trimWeight(heavyBar)} $unit bar")
                     }
                 }
-                if (targetLb != null && targetLb > barLb) {
-                    val perSide = (targetLb - barLb) / 2
-                    val perSideText = if (perSide % 1.0 == 0.0) "${perSide.toInt()}"
-                                      else String.format(java.util.Locale.US, "%.1f", perSide)
-                    val plates = calculatePlates(perSide)
+                if (target != null && target > bar) {
+                    val perSide = (target - bar) / 2
+                    val plates = calculatePlates(perSide, plateSet)
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -152,7 +169,7 @@ fun PlateCalculatorDialog(
                             .padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Text("EACH SIDE ($perSideText lb):",
+                        Text("EACH SIDE (${trimWeight(perSide)} $unit):",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.SemiBold)
                         if (plates.isEmpty()) {
@@ -163,24 +180,24 @@ fun PlateCalculatorDialog(
                             plates.forEach { (plate, count) ->
                                 Row(modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.SpaceBetween) {
-                                    Text("${plate.toInt()} lb", style = MaterialTheme.typography.bodyMedium)
+                                    Text("${trimWeight(plate)} $unit", style = MaterialTheme.typography.bodyMedium)
                                     Text("× $count", style = MaterialTheme.typography.bodyMedium,
                                         fontWeight = FontWeight.SemiBold,
                                         color = MaterialTheme.colorScheme.primary)
                                 }
                             }
                             HorizontalDivider()
-                            val actualTotal = barLb + plates.sumOf { (p, c) -> p * c * 2 }
+                            val actualTotal = bar + plates.sumOf { (p, c) -> p * c * 2 }
                             // Float accumulation can leave actualTotal a hair off an exact target;
                             // compare with a small epsilon so a correct load isn't painted as an error.
-                            Text("Total: ${actualTotal.toInt()} lb",
+                            Text("Total: ${trimWeight(actualTotal)} $unit",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = if (kotlin.math.abs(actualTotal - targetLb) < 0.01) MaterialTheme.colorScheme.primary
+                                color = if (kotlin.math.abs(actualTotal - target) < 0.01) MaterialTheme.colorScheme.primary
                                         else MaterialTheme.colorScheme.error)
                         }
                     }
-                } else if (targetLb != null && targetLb <= barLb) {
-                    Text("Bar only (${barLb.toInt()} lb)", style = MaterialTheme.typography.bodyMedium,
+                } else if (target != null && target <= bar) {
+                    Text("Bar only (${trimWeight(bar)} $unit)", style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
@@ -189,10 +206,10 @@ fun PlateCalculatorDialog(
     )
 }
 
-private fun calculatePlates(perSide: Double): List<Pair<Double, Int>> {
+private fun calculatePlates(perSide: Double, plateSet: List<Double>): List<Pair<Double, Int>> {
     var remaining = perSide
     val result = mutableListOf<Pair<Double, Int>>()
-    for (plate in STANDARD_PLATES) {
+    for (plate in plateSet) {
         val count = floor(remaining / plate).toInt()
         if (count > 0) {
             result.add(plate to count)

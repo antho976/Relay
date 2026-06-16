@@ -47,9 +47,14 @@ import com.forge.app.domain.rank.RankLadder
 import com.forge.app.domain.rank.RankTier
 import com.forge.app.domain.rank.SUB_RANKS_PER_TIER
 import com.forge.app.domain.rank.XpBreakdown
+import com.forge.app.domain.rank.XpEngine
+import com.forge.app.domain.units.toDisplayWeight
+import com.forge.app.domain.units.unitLabel
 import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.theme.ForgeMotion
+import com.forge.app.ui.theme.LocalForgeSettings
 import com.forge.app.ui.theme.emphasized
+import kotlin.math.roundToInt
 
 /**
  * The rank section: a big, alive hero emblem for the current tier (a real drawn fire at Ember /
@@ -228,12 +233,17 @@ internal fun RankInfoSheet(
             Spacer(Modifier.height(14.dp))
             Text("HOW TO EARN MORE", style = MaterialTheme.typography.labelSmall, color = emphasized(muted), fontSize = 10.sp)
             Spacer(Modifier.height(8.dp))
+            val useKg = LocalForgeSettings.current.useKg
+            // Amounts + the volume threshold are derived from XpEngine so this list can never drift
+            // from the actual scoring. The kg figure is the true conversion of 1000 lb (≈454 kg),
+            // not a hand-rounded "450".
+            val per1000 = toDisplayWeight(1000.0, useKg).roundToInt()
             listOf(
-                "Finish a workout" to "+100",
-                "Each set logged" to "+4",
-                "Set a PR" to "+50",
-                "Every 1,000 lb moved" to "+5",
-                "Each week you train" to "+40",
+                "Finish a workout" to "+${XpEngine.WORKOUT_XP}",
+                "Each set logged" to "+${XpEngine.SET_XP}",
+                "Set a PR" to "+${XpEngine.PR_XP}",
+                "Every ${String.format(java.util.Locale.US, "%,d", per1000)} ${unitLabel(useKg)} moved" to "+${XpEngine.VOLUME_XP_PER_1000LB}",
+                "Each week you train" to "+${XpEngine.ACTIVE_WEEK_XP}",
                 "Unlock a trophy" to "+10–100"
             ).forEach { (what, amt) ->
                 Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.SpaceBetween) {

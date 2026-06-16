@@ -31,6 +31,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.domain.units.formatVolume
+import com.forge.app.domain.units.formatWeight
+import com.forge.app.domain.units.unitLabel
 import com.forge.app.ui.gym.train.state.ExerciseSessionPoint
 import com.forge.app.ui.theme.LocalForgeSettings
 import java.time.Instant
@@ -74,9 +76,10 @@ fun ExerciseChartSheet(
                 .padding(horizontal = 24.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            val useKg = LocalForgeSettings.current.useKg
             Text(exerciseName, style = MaterialTheme.typography.headlineSmall, color = onBg)
             Text(
-                "VOLUME ACROSS SESSIONS · lb",
+                "VOLUME ACROSS SESSIONS · ${unitLabel(useKg)}",
                 style = MaterialTheme.typography.labelSmall,
                 color = muted,
                 fontSize = 9.sp,
@@ -122,7 +125,6 @@ fun ExerciseChartSheet(
                 )
             }
 
-            val useKg = LocalForgeSettings.current.useKg
             history.take(5).forEach { pt ->
                 val dateStr = Instant.ofEpochMilli(pt.sessionStartedAt).atZone(zone).toLocalDate().format(dateFmt)
                 Row(
@@ -139,7 +141,7 @@ fun ExerciseChartSheet(
                             pt.durationMin?.let { append("$it min") }
                             pt.topWeightLb?.let {
                                 if (isNotEmpty()) append(" · ")
-                                append("top ${it.toInt()} lb")
+                                append("top ${formatWeight(it, useKg)}")
                             }
                         }
                         if (meta.isNotBlank()) {

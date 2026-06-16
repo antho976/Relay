@@ -15,12 +15,15 @@ import com.forge.app.domain.rank.XpEngine
 import com.forge.app.domain.rank.XpSnapshot
 import com.forge.app.domain.trophy.TrophyEvaluator
 import com.forge.app.domain.trophy.TrophyStatsSnapshot
+import com.forge.app.domain.units.formatVolumeCompact
 import com.forge.app.program.Program
 import com.forge.app.program.Trophy
 import com.forge.app.program.TrophyIcon
 import com.forge.app.program.Trophies
 import com.forge.app.ui.overview.state.OnThisDayMemory
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import java.time.Instant
@@ -94,25 +97,40 @@ class ProfileRepository @Inject constructor(
     private val settingsRepo: SettingsRepository,
     private val clock: Clock
 ) {
-    suspend fun load(): ProfileData = withContext(Dispatchers.Default) {
+    suspend fun load(): ProfileData = withContext(Dispatchers.IO) {
         val useKg = settingsRepo.useKg.first()
         val zone = ZoneId.systemDefault()
         val nowMs = clock.nowMs()
-        val sessions = sessionDao.allFinished().filter { !it.isUntracked }
+        coroutineScope {
+        // Fire the independent DAO reads concurrently — the trophy snapshot's 13+ queries are the
+        // long pole, so overlapping it with the rest is the main win for profile-open latency (#8).
+        val sessionsD = async { sessionDao.allFinished().filter { !it.isUntracked } }
+        val unlockedD = async { trophyRepo.unlockedIds() }
+        val snapshotD = async { runCatching { trophyRepo.snapshot() }.getOrNull() }
+        val topLiftD = async { loggedSetDao.topLift() }
+        val memoryD = async { runCatching { statsRepo.findOnThisDayMemory() }.getOrNull() }
+        // Focused streak read (two queries) rather than subscribing the whole weekly fan-out just
+        // to pull one Int — see StatsRepository.currentStreakDays.
+        val streakD = async { runCatching { statsRepo.currentStreakDays() }.getOrDefault(0) }
 
-        val unlockedIds = trophyRepo.unlockedIds()
+        val sessions = sessionsD.await()
+        val unlockedIds = unlockedD.await()
         val trophyPoints = Trophies.all.filter { it.id in unlockedIds }.sumOf { it.tier.points }
+        // Hoisted once — these full-list sums feed both the XP snapshot and the ProfileData below.
+        val totalVolumeLb = sessions.sumOf { it.totalVolumeLb ?: 0.0 }
+        val totalPrs = sessions.sumOf { it.prCount }
 
         // ── XP + rank ───────────────────────────────────────────────────────────
         val xp = XpEngine.compute(
             XpSnapshot(
                 finishedSessions = sessions.size,
                 totalSets = sessions.sumOf { it.setCount },
-                totalPrs = sessions.sumOf { it.prCount },
-                totalVolumeLb = sessions.sumOf { it.totalVolumeLb ?: 0.0 },
+                totalPrs = totalPrs,
+                totalVolumeLb = totalVolumeLb,
                 activeWeeks = sessions.mapTo(mutableSetOf()) { weekKey(it.startedAt, zone) }.size,
                 trophyPoints = trophyPoints
-            )
+            ),
+            useKg
         )
         val rank = RankLadder.rankFor(xp.total)
 
@@ -130,18 +148,20 @@ class ProfileRepository @Inject constructor(
         )
 
         // ── Signature ─────────────────────────────────────────────────────────────
-        val topLift = loggedSetDao.topLift()?.let { row ->
+        val topLift = topLiftD.await()?.let { row ->
             Program.exercise(row.exerciseId)?.name?.let { SignatureLift(it, row.weightLb) }
         }
         val mostLoggedDay = sessions.groupingBy { it.dayKey }.eachCount().maxByOrNull { it.value }?.key
-            ?.let { key -> runCatching { Program.day(key).defaultName }.getOrNull() }
+            // dayOrNull (not day) so a since-deleted history key shows no name rather than the wrong
+            // day's name — Program.day would now substitute a real (but unrelated) day for a stale key.
+            ?.let { key -> Program.dayOrNull(key)?.defaultName }
         val usualHour = sessions
             .groupingBy { Instant.ofEpochMilli(it.startedAt).atZone(zone).hour }
             .eachCount().maxByOrNull { it.value }?.key
             ?.let { LocalTime.of(it, 0).format(HOUR_FMT) }
 
         // ── Trophy case ───────────────────────────────────────────────────────────
-        val snapshot = runCatching { trophyRepo.snapshot() }.getOrNull()
+        val snapshot = snapshotD.await()
         val trophyGrid = curatedTrophyGrid(unlockedIds, snapshot, useKg)
         val closestTrophy = snapshot?.let { snap ->
             Trophies.all.filter { it.id !in unlockedIds }
@@ -156,9 +176,9 @@ class ProfileRepository @Inject constructor(
             xp = xp,
             standings = standings,
             totalSessions = sessions.size,
-            totalVolumeLb = sessions.sumOf { it.totalVolumeLb ?: 0.0 },
-            totalPrs = sessions.sumOf { it.prCount },
-            streakDays = runCatching { statsRepo.observeWeeklyStats().first().streakDays }.getOrDefault(0),
+            totalVolumeLb = totalVolumeLb,
+            totalPrs = totalPrs,
+            streakDays = streakD.await(),
             sinceLabel = sessions.minOfOrNull { it.startedAt }
                 ?.let { Instant.ofEpochMilli(it).atZone(zone).format(SINCE_FMT).uppercase() } ?: "",
             topLift = topLift,
@@ -168,14 +188,15 @@ class ProfileRepository @Inject constructor(
             trophyTotal = Trophies.all.size,
             trophyGrid = trophyGrid,
             closestTrophy = closestTrophy,
-            memory = runCatching { statsRepo.findOnThisDayMemory() }.getOrNull(),
-            recaps = buildRecaps(sessions, zone, nowMs)
+            memory = memoryD.await(),
+            recaps = buildRecaps(sessions, zone, nowMs, useKg)
         )
+        }
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────────
 
-    private fun buildRecaps(sessions: List<Session>, zone: ZoneId, nowMs: Long): List<RecapRowData> {
+    private fun buildRecaps(sessions: List<Session>, zone: ZoneId, nowMs: Long, useKg: Boolean): List<RecapRowData> {
         if (sessions.isEmpty()) return emptyList()
         val now = Instant.ofEpochMilli(nowMs).atZone(zone)
         val thisMonth = YearMonth.from(now)
@@ -188,7 +209,7 @@ class ProfileRepository @Inject constructor(
                     add(
                         RecapRowData(
                             title = "${m.month.getDisplayName(TextStyle.FULL, Locale.getDefault())} in review",
-                            subtitle = recapLine(inMonth),
+                            subtitle = recapLine(inMonth, useKg),
                             isYear = false
                         )
                     )
@@ -197,14 +218,14 @@ class ProfileRepository @Inject constructor(
                 m = m.minusMonths(1)
             }
             val inYear = sessions.filter { Instant.ofEpochMilli(it.startedAt).atZone(zone).year == now.year }
-            if (inYear.isNotEmpty()) add(RecapRowData("${now.year}, so far", recapLine(inYear), isYear = true))
+            if (inYear.isNotEmpty()) add(RecapRowData("${now.year}, so far", recapLine(inYear, useKg), isYear = true))
         }
     }
 
-    private fun recapLine(s: List<Session>): String {
+    private fun recapLine(s: List<Session>, useKg: Boolean): String {
         val vol = s.sumOf { it.totalVolumeLb ?: 0.0 }
         val prs = s.sumOf { it.prCount }
-        return "${s.size} sessions · ${String.format(Locale.US, "%,d", vol.toInt())} lb · $prs PRs"
+        return "${s.size} sessions · ${formatVolumeCompact(vol, useKg)} · $prs PRs"
     }
 
     /**

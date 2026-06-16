@@ -108,7 +108,9 @@ class WorkoutRepository @Inject constructor(
     suspend fun finishSession(sessionId: Long, totalVolumeLb: Double, prCount: Int, setCount: Int): Int {
         val now = clock.nowMs()
         sessionSegmentDao.closeOpen(sessionId, now)
-        val session = sessionDao.get(sessionId) ?: error("Session $sessionId not found")
+        // Soft-fail instead of crashing if the row vanished (e.g. a concurrent program regenerate
+        // discarded the active session mid-finish): nothing to stamp, report 0 active seconds.
+        val session = sessionDao.get(sessionId) ?: return 0
         val segMs = closedSegmentMs(sessionId)
         val activeSeconds = if (segMs > 0) (segMs / 1000L).toInt()
             else ((now - session.startedAt) / 1000L).toInt().coerceAtLeast(0)

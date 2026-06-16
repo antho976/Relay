@@ -13,6 +13,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -35,7 +36,9 @@ class StatsViewModel @Inject constructor(
     private val engineFlow = MutableStateFlow<AdaptationRepository.EngineStatsRead?>(null)
 
     init {
-        viewModelScope.launch { engineFlow.value = adaptationRepo.engineStatsRead() }
+        // Guard the whole-history snapshot fan-out: a failure here leaves the engine read null
+        // (no pulse/plateaus/insights) instead of an uncaught crash in viewModelScope.
+        viewModelScope.launch { engineFlow.value = runCatching { adaptationRepo.engineStatsRead() }.getOrNull() }
     }
 
     val state: StateFlow<StatsUiState> = combine(
@@ -84,6 +87,10 @@ class StatsViewModel @Inject constructor(
             balanceRatios = engine?.ratios.orEmpty().map(::balanceRatioUi),
             userSex = sex
         )
+    }.catch {
+        // A crash in any stats aggregation drops to a non-loading empty state instead of an
+        // infinite spinner; the empty-state copy (Tier 5) then explains there's nothing yet.
+        emit(StatsUiState(isLoading = false))
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(stopTimeoutMillis = 5_000),

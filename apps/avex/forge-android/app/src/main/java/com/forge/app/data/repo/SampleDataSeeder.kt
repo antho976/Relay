@@ -47,6 +47,9 @@ class SampleDataSeeder @Inject constructor(
         // program has different day keys and would crash the old `first { it.key == ... }` lookup.
         val programDays = Program.days
         if (programDays.isEmpty()) return
+        // Anchor the seeded bodyweight trend on the user's own logged weight (entered in onboarding).
+        // If they have none, skip bodyweight seeding entirely rather than invent a personal number.
+        val anchorBwLb = bodyweightDao.latest()?.weightLb
         var sessionIndex = 0
         // All-time best working weight per exercise, accumulated oldest-week-first so PR flags are
         // realistic across the seeded history.
@@ -136,12 +139,14 @@ class SampleDataSeeder @Inject constructor(
                     }
                 }
 
-                sessionDao.update(sessionDao.get(sessionId)!!.copy(
-                    finishedAt = finishedMs,
-                    totalVolumeLb = totalVol,
-                    prCount = prCount,
-                    setCount = day.exercises.sumOf { it.sets }
-                ))
+                sessionDao.get(sessionId)?.let { row ->
+                    sessionDao.update(row.copy(
+                        finishedAt = finishedMs,
+                        totalVolumeLb = totalVol,
+                        prCount = prCount,
+                        setCount = day.exercises.sumOf { it.sets }
+                    ))
+                }
 
                 // Post-workout mood, loosely tracking how hard the sessions roll.
                 val mood = when (rng.nextInt(6)) {
@@ -154,13 +159,14 @@ class SampleDataSeeder @Inject constructor(
                 sessionIndex++
             }
 
-            // One bodyweight log per seeded week, drifting up ~0.4 lb/week.
+            // One bodyweight log per seeded week, drifting up to the user's own current weight
+            // (~0.4 lb/week). Skipped entirely when the user has no logged bodyweight to anchor on.
             val bwDate = weekStart.plusDays(2)
-            if (!bwDate.isAfter(today)) {
+            if (anchorBwLb != null && !bwDate.isAfter(today)) {
                 val bwMs = bwDate.atTime(8, 0).atZone(zone).toInstant().toEpochMilli()
                 bodyweightDao.upsert(BodyweightEntry(
                     dateKey = bwDate.toString(),
-                    weightLb = 178.0 + (7 - weekOffset) * 0.4 + rng.nextDouble(-0.6, 0.6),
+                    weightLb = anchorBwLb - weekOffset * 0.4 + rng.nextDouble(-0.6, 0.6),
                     recordedAt = bwMs
                 ))
             }

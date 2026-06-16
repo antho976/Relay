@@ -265,7 +265,7 @@ internal fun EquipmentPage(state: SettingsUiState, vm: SettingsViewModel, modifi
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             listOf(5.0, 10.0, 15.0, 20.0, 25.0, 45.0).forEach { w ->
-                PillChip("${w.toInt()} lb", state.plateWeightLb == w) { vm.setPlateWeightLb(w) }
+                PillChip(com.forge.app.domain.units.formatWeight(w, state.useKg), state.plateWeightLb == w) { vm.setPlateWeightLb(w) }
             }
         }
         Spacer(Modifier.height(24.dp))
@@ -288,7 +288,7 @@ internal fun EquipmentPage(state: SettingsUiState, vm: SettingsViewModel, modifi
         ) {
             PillChip("No limit", state.maxDbWeightLb == null) { vm.setMaxDbWeightLb(null) }
             listOf(15.0, 20.0, 25.0, 30.0, 40.0, 50.0, 75.0, 100.0).forEach { w ->
-                PillChip("${w.toInt()} lb", state.maxDbWeightLb == w) { vm.setMaxDbWeightLb(w) }
+                PillChip(com.forge.app.domain.units.formatWeight(w, state.useKg), state.maxDbWeightLb == w) { vm.setMaxDbWeightLb(w) }
             }
         }
         Spacer(Modifier.height(16.dp))

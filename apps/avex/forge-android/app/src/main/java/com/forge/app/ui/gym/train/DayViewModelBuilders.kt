@@ -76,7 +76,9 @@ internal suspend fun DayViewModel.buildExerciseUi(
     val sets = setsDeferred.await()
     val (prevLE, prevSets) = prevDeferred.await()
     val prevFirstSet = prevSets.firstOrNull()
+    // No prior-session set → first time on this exercise: prompt a baseline instead of a blank helper.
     val preview = prevFirstSet?.let { "Last: ${it.weightText} × ${it.reps}" }
+        ?: "First time — set your baseline"
 
     val priorFrontier = frontierDeferred.await()
     val (prSetIds, wasPr) = computePrFlags(priorFrontier, hasHistoryDeferred.await(), sets)

@@ -33,6 +33,7 @@ class BackupRepository @Inject constructor(
     private val loggedSetDao: LoggedSetDao,
     private val cardioDao: CardioDao,
     private val settingsRepo: SettingsRepository,
+    private val photoRepo: ProgressPhotoRepository,
     private val db: ForgeDatabase
 ) {
 
@@ -250,14 +251,27 @@ class BackupRepository @Inject constructor(
         return file
     }
 
-    /** Auto-backup: runs silently, overwrites the weekly auto-backup slot (#86). */
-    suspend fun autoBackup(): File {
-        val file = File(context.filesDir, "forge_auto_backup.json")
-        val full = exportFullDataJson()
-        full.copyTo(file, overwrite = true)
-        full.delete()
-        return file
+    /**
+     * Auto-backup: runs silently, overwrites the weekly auto-backup slot (#86). Writes a real,
+     * RESTORABLE ZIP (DB + prefs + progress photos) — the same format as [backupToUri] — instead of
+     * the lossy JSON export it used to write, which nothing could ever read back in.
+     */
+    suspend fun autoBackup(): File = withContext(Dispatchers.IO) {
+        val file = File(context.filesDir, AUTO_BACKUP_NAME)
+        val snap = snapshotDatabase()
+        try {
+            file.outputStream().use { out -> writeBackupZip(out, snap) }
+        } finally {
+            snap.delete()
+        }
+        // Drop the stale lossy JSON slot from earlier builds so it can't mislead a future restore.
+        File(context.filesDir, "forge_auto_backup.json").delete()
+        file
     }
+
+    /** When the auto-backup slot was last written, or null if none exists yet (#86 restore affordance). */
+    fun autoBackupSavedAtMs(): Long? =
+        File(context.filesDir, AUTO_BACKUP_NAME).takeIf { it.exists() }?.lastModified()
 
     // ─── Complete database backup & restore ───────────────────────────────────
     // Unlike the JSON exports above (lossy + app-private), these capture the *entire*
@@ -317,21 +331,42 @@ class BackupRepository @Inject constructor(
         val snap = snapshotDatabase()
         try {
             context.contentResolver.openOutputStream(uri)?.use { out ->
-                java.util.zip.ZipOutputStream(out).use { zip ->
-                    zip.putNextEntry(java.util.zip.ZipEntry(ZIP_DB_ENTRY))
-                    snap.inputStream().use { it.copyTo(zip) }
-                    zip.closeEntry()
-                    // Preferences may not exist yet on a brand-new install — only add if present.
-                    val prefs = preferencesFile()
-                    if (prefs.exists()) {
-                        zip.putNextEntry(java.util.zip.ZipEntry(ZIP_PREFS_ENTRY))
-                        prefs.inputStream().use { it.copyTo(zip) }
-                        zip.closeEntry()
-                    }
-                }
+                writeBackupZip(out, snap)
             } ?: error("Could not open the chosen destination")
         } finally {
             snap.delete()
+        }
+    }
+
+    /**
+     * Writes the backup archive to [out]: the DB snapshot, the DataStore prefs (if present), and
+     * every progress-photo file (under [PHOTOS_PREFIX]). Shared by [backupToUri] and [autoBackup]
+     * so the two formats can never drift. The ZipOutputStream's use{} closes [out].
+     */
+    private fun writeBackupZip(out: java.io.OutputStream, snap: File) {
+        java.util.zip.ZipOutputStream(out).use { zip ->
+            zip.putNextEntry(java.util.zip.ZipEntry(ZIP_DB_ENTRY))
+            snap.inputStream().use { it.copyTo(zip) }
+            zip.closeEntry()
+            // Preferences may not exist yet on a brand-new install — only add if present.
+            val prefs = preferencesFile()
+            if (prefs.exists()) {
+                zip.putNextEntry(java.util.zip.ZipEntry(ZIP_PREFS_ENTRY))
+                prefs.inputStream().use { it.copyTo(zip) }
+                zip.closeEntry()
+            }
+            // Progress photos live as files outside the DB (ProgressPhotoRepository) — fold the folder
+            // in so a restore brings the physique photos back too (#138). Flat: progress_photos/<name>.
+            val photosDir = photoRepo.dir
+            if (photosDir.exists()) {
+                photosDir.listFiles()?.forEach { f ->
+                    if (f.isFile) {
+                        zip.putNextEntry(java.util.zip.ZipEntry("$PHOTOS_PREFIX${f.name}"))
+                        f.inputStream().use { it.copyTo(zip) }
+                        zip.closeEntry()
+                    }
+                }
+            }
         }
     }
 
@@ -346,8 +381,32 @@ class BackupRepository @Inject constructor(
         context.contentResolver.openInputStream(uri)?.use { input ->
             incoming.outputStream().use { input.copyTo(it) }
         } ?: return@withContext false
+        restoreFromIncoming(incoming)
+    }
 
+    /**
+     * Restore from the weekly auto-backup slot (#86) — the same validation + staging as a user-picked
+     * file, so this is the in-app recovery path for the otherwise write-only auto-backup. Copies the
+     * slot to a cache temp first so [restoreFromIncoming]'s cleanup never deletes the live slot itself.
+     */
+    suspend fun restoreFromAutoBackup(): Boolean = withContext(Dispatchers.IO) {
+        val auto = File(context.filesDir, AUTO_BACKUP_NAME)
+        if (!auto.exists()) return@withContext false
+        val incoming = File(context.cacheDir, "forge_restore_in_${System.currentTimeMillis()}")
+        if (incoming.exists()) incoming.delete()
+        auto.copyTo(incoming, overwrite = true)
+        restoreFromIncoming(incoming)
+    }
+
+    /**
+     * Validate [incoming] and, if it's a real Forge backup, STAGE the DB, prefs and progress photos
+     * as pending files that [com.forge.app.ForgeApp.applyPendingRestore] swaps in atomically at next
+     * boot — DB, prefs and photos together, so a kill or copy failure can never leave the live DB and
+     * photo folder from different backups. Returns true once everything is staged. Deletes [incoming].
+     */
+    private suspend fun restoreFromIncoming(incoming: File): Boolean = withContext(Dispatchers.IO) {
         val temps = mutableListOf(incoming) // cache-dir temp files to clean up before returning
+        var photoStage: File? = null        // extracted progress photos, staged only after validation
         try {
             // Sniff the format: a #14 backup is a ZIP { database.db, settings.preferences_pb };
             // a pre-#14 backup is the raw SQLite DB. Restore both.
@@ -360,13 +419,24 @@ class BackupRepository @Inject constructor(
                 java.util.zip.ZipInputStream(incoming.inputStream()).use { zin ->
                     var entry = zin.nextEntry
                     while (entry != null) {
-                        when (entry.name) {
-                            ZIP_DB_ENTRY -> { exDb.outputStream().use { zin.copyTo(it) }; sawDb = true }
-                            ZIP_PREFS_ENTRY -> {
+                        val name = entry.name
+                        when {
+                            name == ZIP_DB_ENTRY -> { exDb.outputStream().use { zin.copyTo(it) }; sawDb = true }
+                            name == ZIP_PREFS_ENTRY -> {
                                 val exPrefs = File(context.cacheDir, "forge_restore_prefs_${System.currentTimeMillis()}.pb")
                                     .also { it.delete(); temps.add(it) }
                                 exPrefs.outputStream().use { zin.copyTo(it) }
                                 prefsFile = exPrefs
+                            }
+                            name.startsWith(PHOTOS_PREFIX) -> {
+                                val photoName = name.removePrefix(PHOTOS_PREFIX)
+                                // Flat basename only — zip-slip guard against path-traversal entries.
+                                if (photoName.isNotBlank() && !photoName.contains('/') && !photoName.contains('\\')) {
+                                    val stage = photoStage ?: File(
+                                        context.cacheDir, "forge_restore_photos_${System.currentTimeMillis()}"
+                                    ).also { it.deleteRecursively(); it.mkdirs(); photoStage = it }
+                                    File(stage, photoName).outputStream().use { zin.copyTo(it) }
+                                }
                             }
                         }
                         zin.closeEntry()
@@ -400,9 +470,26 @@ class BackupRepository @Inject constructor(
             if (pendingPrefs.exists()) pendingPrefs.delete()
             prefsFile?.copyTo(pendingPrefs, overwrite = true)
 
+            // Photos passed validation alongside the DB — stage them as a pending folder rather than
+            // touching the live one. ForgeApp.applyPendingRestore swaps it in at boot in the SAME pass
+            // as the DB, so the two can't end up from different backups (and a refused restore, which
+            // returns before here, never creates the pending folder → existing photos stay put). A
+            // null photoStage (pre-photos backup) leaves the live folder untouched, as before.
+            photoStage?.let { stage ->
+                val pendingPhotos = File(context.filesDir, PENDING_PHOTOS_DIR)
+                pendingPhotos.deleteRecursively()
+                // cacheDir and filesDir share the app's internal filesystem, so the move is atomic and
+                // free; fall back to a copy if a rename across the two is ever refused.
+                if (!stage.renameTo(pendingPhotos)) {
+                    pendingPhotos.mkdirs()
+                    stage.listFiles()?.forEach { it.copyTo(File(pendingPhotos, it.name), overwrite = true) }
+                }
+            }
+
             return@withContext true
         } finally {
             temps.forEach { it.delete() }
+            photoStage?.deleteRecursively()
         }
     }
 
@@ -464,6 +551,12 @@ class BackupRepository @Inject constructor(
         private const val PREFS_DATASTORE_NAME = "forge_settings"
         private const val ZIP_DB_ENTRY = "database.db"
         private const val ZIP_PREFS_ENTRY = "settings.preferences_pb"
+        /** Prefix for progress-photo entries in the backup ZIP: progress_photos/<basename>. */
+        private const val PHOTOS_PREFIX = "progress_photos/"
+        /** The weekly auto-backup slot, written by [autoBackup] and read by [restoreFromAutoBackup] (#86). */
+        private const val AUTO_BACKUP_NAME = "forge_auto_backup.zip"
+        /** Staged restored photos; ForgeApp.applyPendingRestore swaps this over progress_photos/ at boot. */
+        private const val PENDING_PHOTOS_DIR = "pending_restore_photos"
         /**
          * Lowest schema version restore will accept. Below this are the pre-lock versions Room
          * destructively resets (DatabaseModule.fallbackToDestructiveMigrationFrom(1..11)), so

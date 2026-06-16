@@ -18,6 +18,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -49,8 +50,12 @@ internal fun DataExportDialog(
             Text("DATA", style = MaterialTheme.typography.labelSmall, color = muted, letterSpacing = 1.5.sp)
 
             // ── Backup & restore — the real safety net ───────────────────────────
+            // The auto-backup slot is refreshed on open (the weekly worker may have written since).
+            androidx.compose.runtime.LaunchedEffect(Unit) { viewModel.refreshAutoBackupInfo() }
+            val autoBackupSavedAt by viewModel.autoBackupSavedAt.collectAsState()
+            var confirmAutoRestore by remember { mutableStateOf(false) }
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Backup & restore (.db)", style = MaterialTheme.typography.bodyMedium, color = onBg)
+                Text("Backup & restore (.zip)", style = MaterialTheme.typography.bodyMedium, color = onBg)
                 Text(
                     "Your whole database in one file. Save it somewhere safe; restore replaces all current data and restarts the app.",
                     style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp
@@ -59,6 +64,25 @@ internal fun DataExportDialog(
                     PillChip("Back up", selected = false) { onBackup(); onDismiss() }
                     PillChip("Restore", selected = false) { onRestore(); onDismiss() }
                 }
+                // Recover from the silent weekly auto-backup without needing the file picker (#86).
+                autoBackupSavedAt?.let { savedAt ->
+                    Text(
+                        "Restore last auto-backup · saved $savedAt",
+                        style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp,
+                        modifier = Modifier.clickable { confirmAutoRestore = true }.padding(vertical = 2.dp)
+                    )
+                }
+            }
+            if (confirmAutoRestore) {
+                AlertDialog(
+                    onDismissRequest = { confirmAutoRestore = false },
+                    title = { Text("Restore last auto-backup?") },
+                    text = { Text("Replaces all current data with the weekly auto-backup (saved ${autoBackupSavedAt ?: ""}) and restarts the app.") },
+                    confirmButton = {
+                        TextButton(onClick = { confirmAutoRestore = false; viewModel.restoreAutoBackup(); onDismiss() }) { Text("Restore") }
+                    },
+                    dismissButton = { TextButton(onClick = { confirmAutoRestore = false }) { Text("Cancel") } }
+                )
             }
 
             HorizontalDivider(color = outline.copy(alpha = 0.2f))

@@ -47,9 +47,14 @@ class DayViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
-    internal val dayKey: String = savedStateHandle.get<String>(Routes.ARG_DAY_KEY)
+    private val requestedDayKey: String = savedStateHandle.get<String>(Routes.ARG_DAY_KEY)
         ?: error("dayKey missing from SavedStateHandle")
-    internal val dayPlan = Program.day(dayKey)
+    internal val dayPlan = Program.day(requestedDayKey)
+    // Use the resolved plan's own key, not the requested one. If the requested key is stale (the
+    // program regenerated since it was issued), Program.day() falls back to a real day — pinning
+    // dayKey to that day keeps the session attribution, warmup lookups and rendered plan in lockstep
+    // instead of logging this session under a key whose plan we never showed.
+    internal val dayKey: String = dayPlan.key
     internal val skipWarmup: Boolean = savedStateHandle.get<Boolean>(Routes.ARG_SKIP_WARMUP) ?: false
 
     internal val restTimer = RestTimerController(viewModelScope, clock)

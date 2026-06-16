@@ -116,12 +116,12 @@ fun SessionHistoryScreen(
             }
 
             if (state.filtered.isEmpty()) {
-                EmptyState(
-                    emoji = "📋",
-                    title = "No sessions match.",
-                    subtitle = "Try clearing a filter.",
-                    modifier = Modifier.padding(16.dp)
-                )
+                val filtersActive = state.moodFilter != null || state.durationFilter != null || state.volumeFilter != null
+                val (emoji, title, subtitle) = if (filtersActive)
+                    Triple("📋", "No sessions match.", "Try clearing a filter.")
+                else
+                    Triple("🏋️", "No sessions yet.", "Finish your first workout and it'll show up here.")
+                EmptyState(emoji = emoji, title = title, subtitle = subtitle, modifier = Modifier.padding(16.dp))
             } else {
                 LazyColumn(
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 4.dp),

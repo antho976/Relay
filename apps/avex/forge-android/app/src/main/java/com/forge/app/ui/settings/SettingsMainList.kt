@@ -47,6 +47,11 @@ internal fun MainList(
                 SettingsNavRow("Export data", "Sessions · weekly · full backup · PDF") { onOpenDataDialog() }
                 SectionDivider()
             }
+            item("about") {
+                SectionLabel("ABOUT")
+                SettingsNavRow("About Forge", "Version · privacy · what's stored") { onOpenPage(SettingsPage.About) }
+                SectionDivider()
+            }
             item("reset") {
                 SectionLabel("RESET")
                 ResetTarget.entries.forEach { target ->
@@ -112,6 +117,7 @@ internal fun rowSubtitle(page: SettingsPage, s: SettingsUiState): String = when 
     SettingsPage.ExercisePrefs -> "${s.liked.size} liked · ${s.disliked.size} disliked"
     // Reached via a dedicated MainList row, not the search/nav grid — subtitle unused.
     SettingsPage.Vacation -> "Pause your streak during a holiday"
+    SettingsPage.About -> "Version · privacy · what's stored"
 }
 
 internal fun dateShort(f: String) = when (f) {

@@ -3,6 +3,8 @@ package com.forge.app.ui.onboarding
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
@@ -168,14 +170,18 @@ fun OnboardingScreen(
             // Page indicator
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 repeat(PAGE_COUNT) { i ->
+                    val active = i == page
+                    val dotWidth by animateDpAsState(if (active) 20.dp else 8.dp, label = "dotWidth")
+                    val dotColor by animateColorAsState(
+                        if (active) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
+                        label = "dotColor"
+                    )
                     Box(
                         Modifier
-                            .size(8.dp)
+                            .size(width = dotWidth, height = 8.dp)
                             .clip(CircleShape)
-                            .background(
-                                if (i == page) MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)
-                            )
+                            .background(dotColor)
                     )
                 }
             }
@@ -208,6 +214,11 @@ fun OnboardingScreen(
                                 StepBodyweight(input = bodyweightInput, useKg = useKg, onInputChange = { bodyweightInput = it })
                                 StepSex(selected = sex, onSelect = { sex = it })
                                 StepUnits(useKg = useKg, onToggle = { useKg = it })
+                                Text(
+                                    "Everything stays on your phone — no account, no sign-up. Forge has no internet access, so it can't send your data anywhere.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                             }
                             1 -> {
                                 StepGoal(selected = goal, onSelect = { goal = it })
