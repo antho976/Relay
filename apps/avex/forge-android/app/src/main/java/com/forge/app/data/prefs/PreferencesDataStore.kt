@@ -73,6 +73,9 @@ object PreferenceKeys {
     val QUIET_HOURS_ENABLED = booleanPreferencesKey("quiet_hours_enabled")
     val QUIET_HOURS_START = intPreferencesKey("quiet_hours_start")  // 0–23
     val QUIET_HOURS_END = intPreferencesKey("quiet_hours_end")      // 0–23
+    /** Daily "train today" reminder (engagement). Off by default; hour is 0–23, default 18 (6pm). */
+    val TRAINING_REMINDER_ENABLED = booleanPreferencesKey("training_reminder_enabled")
+    val TRAINING_REMINDER_HOUR = intPreferencesKey("training_reminder_hour")
 
     // ─── Monthly PR target (#84) ──────────────────────────────────────────────
     /** Target PRs per calendar month. 0 = no goal set. */

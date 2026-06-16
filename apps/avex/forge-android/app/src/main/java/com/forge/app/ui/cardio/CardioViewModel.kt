@@ -50,20 +50,21 @@ class CardioViewModel @Inject constructor(
     }
 
     private val dbFlow = combine(
-        cardioRepo.observeRecent(limit = 20),
+        cardioRepo.observeAll(),
         cardioRepo.observeMinutesSince(weekStartMs),
         cardioRepo.observeSince(weekStartMs)
-    ) { recent, weekMin, weekEntries ->
-        Triple(recent, weekMin, weekEntries)
+    ) { all, weekMin, weekEntries ->
+        Triple(all, weekMin, weekEntries)
     }
 
-    val state: StateFlow<CardioUiState> = combine(dbFlow, transient) { (recent, weekMin, weekEntries), tr ->
+    val state: StateFlow<CardioUiState> = combine(dbFlow, transient) { (all, weekMin, weekEntries), tr ->
         CardioUiState(
             isLoading = false,
             weekMinutes = weekMin ?: 0,
             weekDailyMinutes = buildDailyMinutes(weekEntries),
-            entries = recent,
+            entries = all,
             sheetOpen = tr.sheetOpen,
+            editing = tr.editing,
             pendingDeleteId = tr.pendingDeleteId
         )
     }.stateIn(
@@ -72,8 +73,16 @@ class CardioViewModel @Inject constructor(
         initialValue = CardioUiState()
     )
 
-    fun openSheet() = transient.update { it.copy(sheetOpen = true) }
-    fun closeSheet() = transient.update { it.copy(sheetOpen = false) }
+    /** Open the sheet to log a NEW entry. */
+    fun openSheet() = transient.update { it.copy(sheetOpen = true, editing = null) }
+
+    /** Open the sheet pre-filled to edit an existing entry. */
+    fun editEntry(id: Long) = viewModelScope.launch {
+        val entry = cardioRepo.get(id) ?: return@launch
+        transient.update { it.copy(sheetOpen = true, editing = entry) }
+    }
+
+    fun closeSheet() = transient.update { it.copy(sheetOpen = false, editing = null) }
 
     fun requestDelete(id: Long) = transient.update { it.copy(pendingDeleteId = id) }
     fun cancelDelete() = transient.update { it.copy(pendingDeleteId = null) }
@@ -88,36 +97,39 @@ class CardioViewModel @Inject constructor(
     }
 
     /**
-     * Persists a new entry. Caller has already validated duration > 0 (or that
-     * this is a REST day where duration may be 0). Distance / effort / restReason
-     * are nullable in the DB; pass null when the form chose to skip them.
+     * Persists the sheet — inserts a new entry, or updates the one being edited (keeping its id).
+     * [dateMs] is the chosen day (backdating supported); the form validates duration/rest reason.
+     * Distance / effort / restReason are nullable; pass null when the form skipped them.
      */
-    fun logEntry(
+    fun saveEntry(
         type: CardioType,
         durationMin: Int,
         distanceKm: Double?,
         effort: CardioEffort?,
         restReason: CardioRestReason?,
-        note: String?
+        note: String?,
+        dateMs: Long
     ) {
+        val editingId = transient.value.editing?.id
         viewModelScope.launch {
-            cardioRepo.add(
-                CardioEntry(
-                    date = clock.nowMs(),
-                    type = type.code,
-                    durationMin = durationMin.coerceAtLeast(0),
-                    distanceKm = if (type.isRest) null else distanceKm,
-                    effort = if (type.isRest) null else effort?.code,
-                    restReason = if (type.isRest) restReason?.code else null,
-                    note = note?.takeIf { it.isNotBlank() }
-                )
+            val entry = CardioEntry(
+                id = editingId ?: 0,
+                date = dateMs,
+                type = type.code,
+                durationMin = durationMin.coerceAtLeast(0),
+                distanceKm = if (type.isRest) null else distanceKm,
+                effort = if (type.isRest) null else effort?.code,
+                restReason = if (type.isRest) restReason?.code else null,
+                note = note?.takeIf { it.isNotBlank() }
             )
-            transient.update { it.copy(sheetOpen = false) }
+            if (editingId != null) cardioRepo.update(entry) else cardioRepo.add(entry)
+            transient.update { it.copy(sheetOpen = false, editing = null) }
         }
     }
 
     private data class TransientState(
         val sheetOpen: Boolean = false,
+        val editing: CardioEntry? = null,
         val pendingDeleteId: Long? = null
     )
 

@@ -174,6 +174,16 @@ internal fun SessionPage(state: SettingsUiState, vm: SettingsViewModel, modifier
 @Composable
 internal fun NotificationsPage(state: SettingsUiState, vm: SettingsViewModel, modifier: Modifier = Modifier) {
     Column(modifier.fillMaxSize()) {
+        ToggleRow(
+            "Training reminders",
+            "A daily nudge to train on your scheduled days — keeps your streak alive",
+            state.trainingReminderEnabled, vm::setTrainingReminderEnabled
+        )
+        SectionDivider()
+        if (state.trainingReminderEnabled) {
+            HourPickerRow("Remind me at", state.trainingReminderHour, vm::setTrainingReminderHour)
+            SectionDivider()
+        }
         ToggleRow("Quiet hours", "Suppress timer + recap notifications", state.quietHoursEnabled, vm::setQuietHoursEnabled)
         SectionDivider()
         if (state.quietHoursEnabled) {

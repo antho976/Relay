@@ -39,8 +39,14 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import androidx.compose.material.icons.filled.Share
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.platform.LocalContext
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.ui.theme.LocalForgeSettings
 import com.forge.app.data.repo.ProgressPhoto
@@ -62,16 +68,22 @@ fun ProfileScreen(
     onBack: () -> Unit,
     onOpenTrophies: () -> Unit,
     onOpenRecaps: () -> Unit,
+    onOpenGoals: () -> Unit = {},
     viewModel: ProfileViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     var viewing by remember { mutableStateOf<ProgressPhoto?>(null) }
     var showXpInfo by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
     val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
         uri?.let { viewModel.addPhoto(it) }
     }
     fun pickPhoto() = photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+    val avatarPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        uri?.let { viewModel.setAvatar(it) }
+    }
 
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
@@ -85,15 +97,44 @@ fun ProfileScreen(
                 navigationIcon = {
                     IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
                 },
+                actions = {
+                    state.rank?.let { r ->
+                        IconButton(onClick = {
+                            scope.launch {
+                                val uri = withContext(Dispatchers.Default) {
+                                    RankCardRenderer.render(
+                                        context, state.name, r.displayName, r.roman, r.xpTotal, r.tier.colorArgb,
+                                        standingLine = state.standings.minByOrNull { it.topPercent }
+                                            ?.let { s -> "Top ${s.topPercent}% · ${s.label}" }
+                                    )
+                                }
+                                uri?.let { RankCardRenderer.share(context, it) }
+                            }
+                        }) {
+                            Icon(Icons.Filled.Share, contentDescription = "Share rank card", tint = muted)
+                        }
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
             )
         },
         containerColor = Color.Transparent
     ) { inner ->
+        if (state.loading) {
+            // Shimmer placeholder instead of the empty-default flash while load() runs (#8).
+            ProfileSkeleton(Modifier.fillMaxSize().padding(inner).padding(horizontal = 24.dp))
+        } else
         Column(
             Modifier.fillMaxSize().padding(inner).verticalScroll(rememberScrollState()).padding(horizontal = 24.dp)
         ) {
-            // ── Header ──────────────────────────────────────────────────────────
+            // ── Avatar + Header ─────────────────────────────────────────────────
+            ProfileAvatar(
+                hasAvatar = state.hasAvatar, file = viewModel.avatarFile(), stamp = state.avatarStamp,
+                initial = state.name.trim().firstOrNull()?.uppercase() ?: "",
+                muted = muted, outline = outline,
+                onPick = { avatarPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
+            )
+            Spacer(Modifier.height(14.dp))
             Text(
                 "ATHLETE PROFILE" + if (state.sinceLabel.isNotBlank()) " · SINCE ${state.sinceLabel}" else "",
                 style = MaterialTheme.typography.labelSmall, color = emphasized(muted), fontSize = 9.sp
@@ -135,6 +176,18 @@ fun ProfileScreen(
             }
 
             TrophyCaseSection(state.trophyGrid, state.trophyUnlocked, state.trophyTotal, state.closestTrophy, onOpenTrophies, onBg, muted, accent, outline)
+
+            ProfileBlock("GOALS", muted, accent, outline) {
+                Row(
+                    Modifier.fillMaxWidth().bounceClick { onOpenGoals() },
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Set targets, track your lifts", style = MaterialTheme.typography.bodyMedium, color = onBg)
+                    Text("→", style = MaterialTheme.typography.bodyMedium, color = accent)
+                }
+            }
+
             OnTheRecordSection(state.recaps, onOpenRecaps, onBg, muted, accent, outline)
 
             Spacer(Modifier.height(40.dp))

@@ -1,5 +1,5 @@
 # Forge — Built Features Inventory
-Last updated: 2026-06-15
+Last updated: 2026-06-16
 
 > **Legend:** Items below are marked with their current UI status.
 > - ✅ **Visible** — currently reachable in the running app.
@@ -86,7 +86,8 @@ computes; this is mostly a surfacing screen. Offline, single-user; no login, no 
   (`ProgressPhotoRepository`: `filesDir/progress_photos/` + a JSON index — deliberately **no Room
   table / no migration**). 3-col thumbnail grid → tap for a full-screen viewer with delete.
   `ProgressPhotoImage` decodes downsampled + EXIF-rotated bitmaps off the main thread (no Coil in
-  the project). *Known follow-up:* image files aren't in the whole-DB backup (#138) yet.
+  the project). *Resolved 2026-06-16:* photos (#138) **and** the avatar now ride in the whole-DB
+  backup zip with boot-staged atomic restore (see the Sharing-readiness section).
 - **Memories** — on-this-day (#106, `StatsRepository.findOnThisDayMemory`, previously computed but
   unsurfaced).
 - **Trophies summary** — unlocked/total + **points** (`cumulativeScore`/`tier.points`, #150,
@@ -756,6 +757,67 @@ The editorial pass simplified Overview + Stats + Trophies to no-card hairline la
 - **WarmupGate**: removed Surface card wrapper — plain Column with monospace `WARMUP` label
 - **TrophiesScreen**: serif "N of 21." hero count + `LinearProgressIndicator(height = 2.dp)` — no card wrapper
 - **SettingsScreen**: accent color `FilterChip` row in Appearance section (Navy / Red / Olive / Gold)
+
+---
+
+## Sharing-readiness — P0 (share-blockers) + P1 (high-impact), 2026-06-16
+
+A 26-dimension audit (2026-06-15, see `.claude/improvement-ideas-*.md`) drove a **P0 "safe to hand to a stranger"** pass, then **P1 high-impact threads**. Everything below compiles and the full JVM unit suite is green offline; device-only verifications are flagged per item. Plans: `.claude/p0-execution-plan.md`, `p1-profile-plan.md`, `p1-health-coach-plan.md`, `p1-engagement-plan.md`.
+
+### P0 — share-blockers (Tiers 1–10)
+- **Release config + signing** — `build.gradle.kts` versionCode 85 / 0.8.5; a `release` signing config reads gitignored `keystore.properties` (absent ⇒ release stays unsigned, debug unaffected) + `keystore.properties.example`. ✅
+- **De-personalization** — the curated "Developer's preset" is **label-only** renamed to "Home machine gym"; its frozen exercise ids + order are byte-for-byte untouched (Antho's curated pool stays intact). MWM-989 dev notes genericized.
+- **Crash guards** — `WorkoutRepository.finishSession` soft-return, `StatsViewModel` `runCatching` + `.catch`, defensive guards across seed / day-edit paths.
+- **Data safety** — progress photos (#138, was an open gap) **and the avatar** now ride in the whole-DB backup zip with the same boot-staged atomic restore as the DB/prefs (`BackupRepository` + `ForgeApp.applyPendingRestore`); added to `data_extraction_rules.xml`; cleared on factory reset. ✅
+- **Empty states** — reusable `InlineEmptyHint` / `EmptyState` across Overview / Cardio / Stats / history so a fresh install never shows a blank panel. ✅
+- **kg everywhere** — volume + weights honor `useKg` app-wide, Stats layer included.
+- **Profile load latency** (#8) — `ProfileRepository.load()` fan-out parallelized with `coroutineScope { async }` (the 13-query trophy snapshot was the long pole). ✅
+- **Coach copy** — Overview coach subtitle de-jargoned.
+- **Accessibility** — ≥48dp touch targets on icon controls; motion respects reduced-motion.
+- **About page** — new `SettingsAboutPage` (real installed version + offline/privacy stance). ✅ Reached from Settings → About.
+
+### P1 · Profile finishing (2026-06-16)
+- **Loading skeleton** — `ForgeShimmer` (reduced-motion-aware `Modifier.forgeShimmer()`) + `ProfileSkeleton`; Profile open shimmers instead of flashing blank/half-data. ✅
+- **Bespoke rank emblems** — `RankEmblem.kt` Canvas art for the upper tiers (Nova twinkle · Pulsar beams · Quasar rings · Supernova burst) replacing the Material-glyph fallback; `HeroEmblem`'s `when` is now exhaustive. ✅ _Aesthetics device-unverified (Canvas)._
+- **Shareable rank card** — `RankCardRenderer` draws a 1080×1080 PNG (name · tier emblem + roman · rank · XP · best standing · FORGE) → FileProvider share, from a Share icon in the Profile top bar. ✅
+- **Avatar** — `AvatarRepository` (app-private `avatar.jpg`) + `ProfileAvatar` circular avatar (Photo Picker; initial placeholder; `key(stamp)` cache-busts on change); folded into backup/restore + factory reset. ✅
+
+### P1 · Health Connect → coach + Coach depth (2026-06-16)
+- **Recovery → coach (#2/#3)** — `AdaptationSnapshot.health` (`HealthSnap` / `SleepNight` / `RestingHrSample`, plain Kotlin — no SDK in the engine). `DeloadAdvisor` gained two **gated, additive** fatigue drivers: sleep debt (+2, avg < 6.5h over ≥5 nights) and elevated resting HR (+2, ≥5 bpm over the prior-month baseline). No HC data ⇒ no driver, so the no-HC experience is unchanged. 6 new `DeloadAdvisorTest` cases.
+- **HC plumbing** — `data/health/HealthConnectManager` is the only SDK touchpoint (availability + permission + `readRecovery→HealthSnap`, fail-soft), wired into `AdaptationRepository.snapshot()`. **Settings → Recovery** page connects it via the Health Connect permission flow (install / update / connect / manage states). Dep `androidx.health.connect:connect-client:1.1.0` ⇒ **compileSdk bumped 35→36** (targetSdk stays 35 — compile-only, no runtime/permission change). Manifest: `READ_SLEEP` + `READ_RESTING_HEART_RATE`, provider `<queries>`, rationale handlers. **Still no INTERNET permission** — HC is on-device IPC. ✅ _Device-verify pending; HC-2 bodyweight + HC-3 write-back deferred._
+- **Coach lab (#5)** — `Routes.COACH_LAB` → `CoachLabScreen` over `CoachRepository.coachLab()`→`CoachWatch`: what the coach is tracking, in plain words — tracked lifts ("still forming" until concrete), recovery signals (incl. HC), learned biases, current recovery load; "inputs, not verdicts." Reachable from the Week Brief (both states) + the Overview line. ✅
+- **Overview "still learning" line (CD-1)** — below the coach's activation gate (`AutoCoachPlanner.MIN_SESSIONS`) with nothing actionable, Overview shows "N more sessions → See what it's tracking" instead of rendering nothing. ✅
+
+### P1 · Engagement & notifications (2026-06-16)
+- **Daily training reminder** — `domain/notify/TrainingReminder` (pure decision, 5 tests) + `service/TrainingReminderWorker` (periodic daily; gated on enabled + not-quiet-hours + not-trained-today; weekday mode stays silent on rest days, sequence mode nudges the next-up). Folds in **streak-at-risk**: copy upgrades to protect a streak (≥2) — one notification, never two in a day. `service/ReminderScheduler` arms/cancels from `ForgeApp` boot + `SettingsViewModel`. **Opt-in (default OFF)**, configurable hour (default 18) under Settings → Notifications. The **weekly recap** notification already existed (`WeeklyRecapWorker`). ✅ _Device-verify pending (WorkManager periodic timing is ±a window)._
+
+### P1 · Trophies & Goals (2026-06-16)
+- **Goals surfaced** — per-exercise weight goals already existed + worked *inside a workout* (goal-setter
+  dialog, progress vs PB); they were just buried with no overview. Added an aggregated **Goals screen**
+  (`ui/goals/`, route `goals`, reached from a "Goals" row on the Profile hub): every goal with a progress
+  bar + current/target + "reached ✓", and **add/clear a goal for any program exercise outside a workout**.
+  `GoalRepository.goalsWithProgress()` joins each goal with its heaviest logged set. No migration
+  (`exercise_goal` table already existed). ✅
+- **Trophies expanded** — **14 new trophies** filling catalog gaps (`workouts_50/100`, `sessions_250`,
+  `streak_7/14/30`, `distinct_days_4`, `sundays_12`, `pr_100`, `brutal_10`, `precision_25`,
+  `volume_15000`, `reps_200`) — all reusing existing `UnlockRule`s. ✅
+- **Goals→trophy tie-in** — new `UnlockRule.ExerciseGoalsAchievedAtLeast` + `TrophyStatsSnapshot.exerciseGoalsAchieved`
+  (computed in `TrophyRepository.snapshot()` via `GoalRepository`); two trophies: **Goal Crusher** (reach 1)
+  + **Goal Getter** (reach 5). New `TrophyEvaluatorTest` (the evaluator previously had none). ✅
+
+### P1 · Cardio depth (2026-06-16)
+- **More types** — `CardioType` added CYCLE / SWIM / ROW / HIKE / ELLIPTICAL / YOGA (was RUN/WALK/TREADMILL/REST/OTHER). ✅
+- **Edit entries** — tap a cardio row → the log sheet opens **pre-filled**; saving updates the same row
+  (previously delete + re-add only). `CardioUiState.editing` + `editEntry()` + `saveEntry()` (insert-or-update). ✅
+- **Backdate** — the log sheet got a "When?" field → Material3 date picker; the chosen day keeps the entry's
+  time-of-day. Works for new + edited entries. ✅
+- **Cap lifted** — the cardio history list shows the **full history** (`CardioDao.observeAll()`), no longer
+  capped at the 20 most recent. ✅
+- No DB migration (the DAO already had `update`/`get`).
+
+> Still-open P1: **Wear OS watch** (#1/#42), the **Indigo light theme**, the **first-run tour /
+> discoverability** (all deferred by Antho — the tour until the surfaces settle), and **i18n / French**
+> (deferred to the end).
 
 ---
 

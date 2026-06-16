@@ -78,6 +78,7 @@ fun OverviewScreen(
     onGoToNutrition: () -> Unit = {},
     onGoToSettings: () -> Unit = {},
     onOpenCoachBrief: () -> Unit = {},
+    onOpenCoachLab: () -> Unit = {},
     onOpenProfile: () -> Unit = {},
     onOpenSession: (Long) -> Unit = {},
     viewModel: OverviewViewModel = hiltViewModel()
@@ -387,6 +388,29 @@ fun OverviewScreen(
                             )
                         }
                     }
+                }
+            }
+
+            // ── Coach still learning (CD-1): only when there's no actionable advice yet ──
+            state.coachLearning?.let { hint ->
+                Spacer(Modifier.height(20.dp))
+                HorizontalDivider(color = outline.copy(alpha = 0.3f))
+                Spacer(Modifier.height(16.dp))
+                Text("COACH", style = MaterialTheme.typography.labelMedium, color = emphasized(muted))
+                Spacer(Modifier.height(10.dp))
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .clickable { onOpenCoachLab() }
+                        .padding(vertical = 2.dp)
+                ) {
+                    Text("Still learning your training.", style = MaterialTheme.typography.bodyMedium, color = onBg)
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        "${hint.sessionsToGo} more session${if (hint.sessionsToGo == 1) "" else "s"} and it starts " +
+                            "calling weekly adjustments. See what it's tracking →",
+                        style = MaterialTheme.typography.bodySmall, color = muted
+                    )
                 }
             }
 

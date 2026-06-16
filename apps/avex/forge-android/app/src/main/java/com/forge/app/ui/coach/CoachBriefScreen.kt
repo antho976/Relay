@@ -48,6 +48,7 @@ import com.forge.app.ui.theme.emphasized
 @Composable
 fun CoachBriefScreen(
     onBack: () -> Unit,
+    onOpenCoachLab: () -> Unit = {},
     viewModel: CoachBriefViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -69,21 +70,30 @@ fun CoachBriefScreen(
                 CircularProgressIndicator()
             }
             state.brief == null -> Box(Modifier.fillMaxSize().padding(inner).padding(horizontal = 32.dp), contentAlignment = Alignment.Center) {
-                Text(
-                    "Your coach is still learning. It writes your first brief after about a week of " +
-                        "training — finish a few workouts and it'll appear here.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                )
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        "Your coach is still learning. It writes your first brief after about a week of " +
+                            "training — finish a few workouts and it'll appear here.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    Text(
+                        "See what it's tracking →",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.clickable { onOpenCoachLab() }.padding(vertical = 4.dp)
+                    )
+                }
             }
-            else -> BriefContent(state.brief!!, viewModel, Modifier.padding(inner))
+            else -> BriefContent(state.brief!!, viewModel, onOpenCoachLab, Modifier.padding(inner))
         }
     }
 }
 
 @Composable
-private fun BriefContent(brief: CoachBrief, viewModel: CoachBriefViewModel, modifier: Modifier = Modifier) {
+private fun BriefContent(brief: CoachBrief, viewModel: CoachBriefViewModel, onOpenCoachLab: () -> Unit, modifier: Modifier = Modifier) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val onBg = MaterialTheme.colorScheme.onBackground
     val outline = MaterialTheme.colorScheme.outline
@@ -165,6 +175,17 @@ private fun BriefContent(brief: CoachBrief, viewModel: CoachBriefViewModel, modi
             Spacer(Modifier.height(8.dp))
             Text(r.focusLine, style = MaterialTheme.typography.bodyMedium, color = onBg, fontStyle = FontStyle.Italic)
         }
+
+        // ── What I'm watching (Coach lab) ─────────────────────────────────────
+        Spacer(Modifier.height(20.dp))
+        HorizontalDivider(color = outline.copy(alpha = 0.3f))
+        Spacer(Modifier.height(12.dp))
+        Text(
+            "What I'm watching →",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.clickable { onOpenCoachLab() }.padding(vertical = 4.dp)
+        )
 
         Spacer(Modifier.height(40.dp))
     }

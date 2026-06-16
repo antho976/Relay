@@ -11,6 +11,17 @@
     <!-- Timer vibration -->
     <uses-permission android:name="android.permission.VIBRATE" />
 
+    <!-- Health Connect: read-only recovery signals (sleep, resting HR) feed the coach. These are
+         on-device permissions granted via the Health Connect app; Forge holds NO internet permission,
+         so the data never leaves the device. -->
+    <uses-permission android:name="android.permission.health.READ_SLEEP" />
+    <uses-permission android:name="android.permission.health.READ_RESTING_HEART_RATE" />
+
+    <!-- Lets us detect / launch the Health Connect provider to check availability + manage grants. -->
+    <queries>
+        <package android:name="com.google.android.apps.healthdata" />
+    </queries>
+
     <application
         android:name=".ForgeApp"
         android:allowBackup="true"
@@ -32,7 +43,24 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- Health Connect permission rationale (Android 13 and below): HC opens this when the
+                 user taps "why does this app want my data". We just bring up Forge. -->
+            <intent-filter>
+                <action android:name="androidx.health.connect.action.SHOW_PERMISSIONS_RATIONALE" />
+            </intent-filter>
         </activity>
+
+        <!-- Health Connect permission rationale (Android 14+): same purpose, framework-routed. -->
+        <activity-alias
+            android:name="ViewPermissionUsageActivity"
+            android:exported="true"
+            android:targetActivity=".MainActivity"
+            android:permission="android.permission.START_VIEW_PERMISSION_USAGE">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW_PERMISSION_USAGE" />
+                <category android:name="android.intent.category.HEALTH_PERMISSIONS" />
+            </intent-filter>
+        </activity-alias>
 
         <service
             android:name=".service.WorkoutSessionService"

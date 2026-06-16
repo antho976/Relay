@@ -1,5 +1,6 @@
 package com.forge.app.ui.cardio.components
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,8 +20,11 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -44,10 +48,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.domain.cardio.CardioEffort
 import com.forge.app.domain.cardio.CardioRestReason
 import com.forge.app.domain.cardio.CardioType
 import java.text.SimpleDateFormat
+import java.time.Instant
+import java.time.ZoneId
+import java.time.ZoneOffset
 import java.util.Date
 import java.util.Locale
 
@@ -55,21 +63,28 @@ import java.util.Locale
 @Composable
 fun CardioLogSheet(
     onDismiss: () -> Unit,
-    onLog: (
+    onSave: (
         type: CardioType,
         durationMin: Int,
         distanceKm: Double?,
         effort: CardioEffort?,
         restReason: CardioRestReason?,
-        note: String?
-    ) -> Unit
+        note: String?,
+        dateMs: Long
+    ) -> Unit,
+    editing: CardioEntry? = null
 ) {
-    var type by remember { mutableStateOf(CardioType.RUN) }
-    var durationText by remember { mutableStateOf("") }
-    var distanceText by remember { mutableStateOf("") }
-    var effort by remember { mutableStateOf<CardioEffort?>(null) }
-    var restReason by remember { mutableStateOf<CardioRestReason?>(null) }
-    var note by remember { mutableStateOf("") }
+    // Keyed on the edited entry's id so the form re-seeds if the sheet is ever reused for a different
+    // entry without leaving composition — fields can't carry over from the previously-opened entry.
+    val editKey = editing?.id
+    var type by remember(editKey) { mutableStateOf(editing?.let { CardioType.fromCode(it.type) } ?: CardioType.RUN) }
+    var durationText by remember(editKey) { mutableStateOf(editing?.durationMin?.takeIf { it > 0 }?.toString() ?: "") }
+    var distanceText by remember(editKey) { mutableStateOf(editing?.distanceKm?.toString() ?: "") }
+    var effort by remember(editKey) { mutableStateOf(editing?.let { CardioEffort.fromCode(it.effort) }) }
+    var restReason by remember(editKey) { mutableStateOf(editing?.let { CardioRestReason.fromCode(it.restReason) }) }
+    var note by remember(editKey) { mutableStateOf(editing?.note ?: "") }
+    var dateMs by remember(editKey) { mutableStateOf(editing?.date ?: System.currentTimeMillis()) }
+    var showDatePicker by remember { mutableStateOf(false) }
 
     val durationInt = durationText.toIntOrNull() ?: 0
     val distanceDouble = distanceText.toDoubleOrNull()
@@ -81,12 +96,14 @@ fun CardioLogSheet(
     val bg = MaterialTheme.colorScheme.background
     val accent = MaterialTheme.colorScheme.primary
 
-    val dateHeader = remember {
-        val now = Date()
-        val day = SimpleDateFormat("EEE", Locale.getDefault()).format(now).uppercase().take(3)
-        val date = SimpleDateFormat("MMM d", Locale.getDefault()).format(now).uppercase()
-        val time = SimpleDateFormat("H:mm", Locale.getDefault()).format(now)
-        "$day · $date · $time"
+    val dateHeader = run {
+        val d = Date(dateMs)
+        val day = SimpleDateFormat("EEE", Locale.getDefault()).format(d).uppercase().take(3)
+        val date = SimpleDateFormat("MMM d", Locale.getDefault()).format(d).uppercase()
+        "$day · $date"
+    }
+    val fullDateLabel = remember(dateMs) {
+        SimpleDateFormat("EEE, MMM d, yyyy", Locale.getDefault()).format(Date(dateMs))
     }
 
     Scaffold(
@@ -142,6 +159,19 @@ fun CardioLogSheet(
                                 onBg = onBg, bg = bg, muted = muted, outline = outline
                             )
                         }
+                    }
+                }
+            }
+
+            item("when") {
+                FormSection(label = "When?", optional = false, muted = muted, onBg = onBg, outline = outline) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().clickable { showDatePicker = true }.padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(fullDateLabel, style = MaterialTheme.typography.bodyMedium, color = onBg)
+                        Text("change", style = MaterialTheme.typography.labelSmall, color = accent)
                     }
                 }
             }
@@ -243,13 +273,14 @@ fun CardioLogSheet(
                 ) {
                     OutlinedButton(
                         onClick = {
-                            onLog(
+                            onSave(
                                 type,
                                 if (type.isRest) 0 else durationInt,
                                 if (type.isRest) null else distanceDouble,
                                 if (type.isRest) null else effort,
                                 if (type.isRest) restReason else null,
-                                note.ifBlank { null }
+                                note.ifBlank { null },
+                                dateMs
                             )
                         },
                         enabled = canSubmit,
@@ -265,7 +296,11 @@ fun CardioLogSheet(
                         contentPadding = PaddingValues(horizontal = 24.dp, vertical = 14.dp)
                     ) {
                         Text(
-                            if (type.isRest) "Save rest day →" else "Save entry →",
+                            when {
+                                editing != null -> "Save changes →"
+                                type.isRest -> "Save rest day →"
+                                else -> "Save entry →"
+                            },
                             style = MaterialTheme.typography.bodyMedium,
                             fontWeight = FontWeight.SemiBold
                         )
@@ -278,5 +313,33 @@ fun CardioLogSheet(
             }
         }
     }
+
+    if (showDatePicker) {
+        val dpState = rememberDatePickerState(initialSelectedDateMillis = dateMs)
+        DatePickerDialog(
+            onDismissRequest = { showDatePicker = false },
+            confirmButton = {
+                TextButton(onClick = {
+                    dpState.selectedDateMillis?.let { picked -> dateMs = combineDay(picked, dateMs) }
+                    showDatePicker = false
+                }) { Text("OK") }
+            },
+            dismissButton = { TextButton(onClick = { showDatePicker = false }) { Text("Cancel") } }
+        ) {
+            DatePicker(state = dpState)
+        }
+    }
+}
+
+/**
+ * The date picker returns a UTC-midnight millis for the chosen day; keep the time-of-day from
+ * [keepTimeFromMs] (the entry's original time, or "now" for a new entry) so backdating only moves
+ * the calendar day, not the clock.
+ */
+private fun combineDay(pickedUtcMidnightMs: Long, keepTimeFromMs: Long): Long {
+    val zone = ZoneId.systemDefault()
+    val day = Instant.ofEpochMilli(pickedUtcMidnightMs).atZone(ZoneOffset.UTC).toLocalDate()
+    val time = Instant.ofEpochMilli(keepTimeFromMs).atZone(zone).toLocalTime()
+    return day.atTime(time).atZone(zone).toInstant().toEpochMilli()
 }
 

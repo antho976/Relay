@@ -18,8 +18,13 @@ import kotlin.math.roundToInt
  *  - e1RM regression (+2): ≥ N lifts below the prior month's strength
  *  - low mood (+2): DRAINED/OFF in ≥ N of the last 5 mood entries
  *  - cardio rest reasons (+2 sick / +1 sore): the body is already asking for recovery
+ *  - sleep debt (+2): averaging below the nightly target over ≥ N nights (Health Connect)
+ *  - elevated resting HR (+2): window resting HR ≥ N bpm above the prior month (Health Connect)
  *  - overdue (+1): no deload week in the last N weeks of training history
  *  - plateaus (+1): ≥ N lifts currently stalled (System 1's stall detection)
+ *
+ * The two Health Connect drivers are additive and gated: with no connected health data the
+ * snapshot's [AdaptationSnapshot.health] is empty, so they contribute nothing.
  *
  * Gates: ≥ [AdaptThresholds.deloadMinSessions] finished sessions AND at least one full
  * window of history; a deload inside the last [AdaptThresholds.deloadRecentDeloadSuppressDays]
@@ -35,6 +40,9 @@ object DeloadAdvisor {
     private const val POINTS_SORE = 1
     private const val POINTS_OVERDUE = 1
     private const val POINTS_PLATEAUS = 1
+    /** Health Connect recovery signals (off-app), gated on the user having connected it. */
+    private const val POINTS_SLEEP_DEBT = 2
+    private const val POINTS_RESTING_HR = 2
 
     private const val DAY_MS = 24L * 60 * 60 * 1000
 
@@ -103,7 +111,7 @@ object DeloadAdvisor {
         }
 
         // ── e1RM regression on multiple lifts ──────────────────────────────────────
-        val priorStart = windowStart - 28 * DAY_MS
+        val priorStart = windowStart - t.deloadPriorBaselineDays * DAY_MS
         val regressing = s.exerciseHistory.values.count { bouts ->
             val inWindow = bouts.filter { it.sessionStartedAt >= windowStart && !it.skipped }
             val prior = bouts.filter { it.sessionStartedAt in priorStart until windowStart && !it.skipped }
@@ -130,6 +138,33 @@ object DeloadAdvisor {
         when {
             windowCardio.any { it.restReason == "sick" } -> drivers += POINTS_SICK to "sick day logged recently"
             windowCardio.any { it.restReason == "sore" } -> drivers += POINTS_SORE to "soreness flagged on a rest day"
+        }
+
+        // ── Sleep debt (Health Connect): chronically short nights blunt recovery ──
+        // Additive + gated: only fires when the user has connected Health Connect AND there are
+        // enough nights in the window to mean something — no HC data, no driver, no behavior change.
+        val windowSleep = s.health.sleepNights.filter { it.endedAtMs >= windowStart }
+        if (windowSleep.size >= t.deloadMinSleepNights) {
+            val avgMin = windowSleep.map { it.durationMin }.average()
+            if (avgMin <= t.deloadSleepDebtMinutes) {
+                // Locale.US so the decimal point matches the app's English copy (fr devices use ',').
+                drivers += POINTS_SLEEP_DEBT to
+                    "averaging ${String.format(java.util.Locale.US, "%.1f", avgMin / 60.0)}h sleep over ${windowSleep.size} nights"
+            }
+        }
+
+        // ── Elevated resting HR (Health Connect) vs your own baseline ─────────────
+        // The body's classic "not recovered" tell: window resting HR meaningfully above the prior
+        // month's average. Compared against each user's OWN baseline, never an absolute number.
+        val windowHr = s.health.restingHr.filter { it.timeMs >= windowStart }
+        val priorHr = s.health.restingHr.filter { it.timeMs in priorStart until windowStart }
+        if (windowHr.size >= t.deloadMinRestingHrSamples && priorHr.size >= t.deloadMinRestingHrSamples) {
+            val windowAvg = windowHr.map { it.bpm }.average()
+            val priorAvg = priorHr.map { it.bpm }.average()
+            if (priorAvg > 0 && windowAvg >= priorAvg + t.deloadRestingHrDeltaBpm) {
+                drivers += POINTS_RESTING_HR to
+                    "resting HR up ${(windowAvg - priorAvg).roundToInt()} bpm vs your baseline"
+            }
         }
 
         // ── Overdue: long stretch with no deload week ──────────────────────────────

@@ -94,6 +94,25 @@ interface LoggedSetDao {
     suspend fun maxWeightAcrossExercises(exerciseIds: List<String>): Double?
 
     /**
+     * Heaviest set PER exercise for the given ids in ONE query — the Goals screen's progress join,
+     * instead of N separate [maxWeightAcrossExercises] calls. Exercises with no weighted set are
+     * simply absent from the result (the caller defaults them to 0).
+     */
+    @Query("""
+        SELECT le.exercise_id AS exercise_id, MAX(s.weight_lb) AS weight_lb
+        FROM logged_set s
+        INNER JOIN logged_exercise le ON s.logged_exercise_id = le.id
+        WHERE le.exercise_id IN (:exerciseIds) AND s.weight_lb IS NOT NULL
+        GROUP BY le.exercise_id
+    """)
+    suspend fun maxWeightPerExercise(exerciseIds: List<String>): List<ExerciseMaxRow>
+
+    data class ExerciseMaxRow(
+        @androidx.room.ColumnInfo(name = "exercise_id") val exerciseId: String,
+        @androidx.room.ColumnInfo(name = "weight_lb") val weightLb: Double
+    )
+
+    /**
      * Every set across every finished session, joined to exercise + session date. Used by strength
      * curves, PRs, hall-of-fame, e1RM lifts, pattern radar, rep-range/RPE, and the consistency/
      * session counts. Filters to TRACKED, non-skipped, unassisted working sets so these surfaces

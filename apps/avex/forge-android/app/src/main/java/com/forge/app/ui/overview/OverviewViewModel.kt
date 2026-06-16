@@ -10,9 +10,11 @@ import com.forge.app.data.repo.StatsRepository
 import com.forge.app.data.repo.TrophyRepository
 import com.forge.app.data.repo.WorkoutRepository
 import com.forge.app.domain.adapt.Recommendation
+import com.forge.app.domain.coach.AutoCoachPlanner
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.program.ExerciseLibrary
 import com.forge.app.ui.overview.state.CoachItem
+import com.forge.app.ui.overview.state.CoachLearningHint
 import com.forge.app.ui.overview.state.OnThisDayMemory
 import com.forge.app.ui.overview.state.OverviewRecentItem
 import com.forge.app.ui.overview.state.OverviewUiState
@@ -39,6 +41,7 @@ class OverviewViewModel @Inject constructor(
     private val trophyRepo: TrophyRepository,
     private val customizationRepo: CustomizationRepository,
     private val workoutRepo: WorkoutRepository,
+    private val sessionDao: SessionDao,
     private val adaptationRepo: com.forge.app.data.repo.AdaptationRepository,
     private val coachRepo: com.forge.app.data.repo.CoachRepository,
     private val programChangeGuard: com.forge.app.ui.common.ProgramChangeGuard
@@ -46,6 +49,9 @@ class OverviewViewModel @Inject constructor(
 
     private val _onThisDayMemory = MutableStateFlow<OnThisDayMemory?>(null)
     private val _coach = MutableStateFlow<List<CoachItem>>(emptyList())
+
+    /** Sub-gate "still learning" nudge (CD-1) — null once the coach has activated. */
+    private val _coachLearning = MutableStateFlow<CoachLearningHint?>(null)
 
     /** "New report ready" banner (auto-coach) — null when this week's brief has been seen. */
     private val _coachBanner = MutableStateFlow<com.forge.app.data.repo.CoachBanner?>(null)
@@ -98,6 +104,8 @@ class OverviewViewModel @Inject constructor(
         s.copy(activeSessionDayKey = active?.dayKey)
     }.combine(_coach) { s, coach ->
         s.copy(coach = coach)
+    }.combine(_coachLearning) { s, hint ->
+        s.copy(coachLearning = hint)
     }.combine(settingsRepo.useKg) { s, useKg ->
         // Attach each recent gym row's marquee lift (its heaviest set). Each lookup is a real DB
         // read, so withTopLifts memoizes by session: a finished session's top set is immutable.
@@ -133,9 +141,15 @@ class OverviewViewModel @Inject constructor(
     // ─── Coach feed (adaptation engine) ───────────────────────────────────────
 
     private suspend fun reloadCoach() {
-        _coach.value = adaptationRepo.coachRecommendations()
+        val recs = adaptationRepo.coachRecommendations()
             .mapNotNull { it.toCoachItem() }
             .take(3)
+        _coach.value = recs
+        // CD-1: only nudge "still learning" when there's nothing actionable AND the weekly pass
+        // hasn't activated yet (below MIN_SESSIONS). Cheap finished-count query, off the hot path.
+        val logged = sessionDao.finishedCount()
+        _coachLearning.value = if (recs.isEmpty() && logged < AutoCoachPlanner.MIN_SESSIONS)
+            CoachLearningHint(logged, AutoCoachPlanner.MIN_SESSIONS - logged) else null
     }
 
     /**

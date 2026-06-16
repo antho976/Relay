@@ -39,6 +39,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.forge.app.ui.cardio.CardioScreen
 import com.forge.app.ui.coach.CoachBriefScreen
+import com.forge.app.ui.coach.CoachLabScreen
 import com.forge.app.ui.common.ProgramChangeGuardHost
 import com.forge.app.ui.gym.history.SessionHistoryScreen
 import com.forge.app.ui.gym.session.SessionDetailScreen
@@ -46,6 +47,7 @@ import com.forge.app.ui.gym.notes.NotesSearchScreen
 import com.forge.app.ui.gym.train.DayListScreen
 import com.forge.app.ui.gym.train.ProgramViewerScreen
 import com.forge.app.ui.gym.train.DayScreen
+import com.forge.app.ui.goals.GoalsScreen
 import com.forge.app.ui.overview.OverviewScreen
 import com.forge.app.ui.profile.ProfileScreen
 import com.forge.app.ui.programeditor.ProgramEditorScreen
@@ -117,6 +119,7 @@ fun ForgeNavHost() {
                 onGoToNutrition = { nav.navigate(Routes.NUTRITION) },
                 onGoToSettings = { nav.navigate(Routes.SETTINGS) },
                 onOpenCoachBrief = { nav.navigate(Routes.COACH_BRIEF) },
+                onOpenCoachLab = { nav.navigate(Routes.COACH_LAB) },
                 onOpenProfile = { nav.navigate(Routes.PROFILE) },
                 onOpenSession = { sessionId -> nav.navigate(Routes.sessionDetail(sessionId)) }
             )
@@ -196,14 +199,24 @@ fun ForgeNavHost() {
             RecapScreen(onBack = { nav.popBackStack() })
         }
         composable(Routes.COACH_BRIEF) {
-            CoachBriefScreen(onBack = { nav.popBackStack() })
+            CoachBriefScreen(
+                onBack = { nav.popBackStack() },
+                onOpenCoachLab = { nav.navigate(Routes.COACH_LAB) }
+            )
+        }
+        composable(Routes.COACH_LAB) {
+            CoachLabScreen(onBack = { nav.popBackStack() })
         }
         composable(Routes.PROFILE) {
             ProfileScreen(
                 onBack = { nav.popBackStack() },
                 onOpenTrophies = { nav.navigate(Routes.TROPHIES) },
-                onOpenRecaps = { nav.navigate(Routes.RECAP) }
+                onOpenRecaps = { nav.navigate(Routes.RECAP) },
+                onOpenGoals = { nav.navigate(Routes.GOALS) }
             )
+        }
+        composable(Routes.GOALS) {
+            GoalsScreen(onBack = { nav.popBackStack() })
         }
         composable(
             route = Routes.PROGRAM_EDITOR,

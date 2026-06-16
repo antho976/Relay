@@ -30,6 +30,9 @@ data class SettingsUiState(
     val quietHoursEnabled: Boolean = false,
     val quietHoursStart: Int = 22,
     val quietHoursEnd: Int = 7,
+    /** Daily training reminder (engagement) — opt-in, default off. */
+    val trainingReminderEnabled: Boolean = false,
+    val trainingReminderHour: Int = 18,
     val privacyMode: Boolean = false,
     val availableEquipment: Set<String> = emptySet(),
     /** Curated/frozen exercise pool (Developer's preset); null = ordinary equipment filtering. */
@@ -71,6 +74,7 @@ class SettingsViewModel @Inject constructor(
     private val programRepository: com.forge.app.data.repo.ProgramRepository,
     private val vacationRepo: com.forge.app.data.repo.VacationRepository,
     private val coachRepo: com.forge.app.data.repo.CoachRepository,
+    private val reminderScheduler: com.forge.app.service.ReminderScheduler,
     private val programChangeGuard: com.forge.app.ui.common.ProgramChangeGuard
 ) : ViewModel() {
 
@@ -160,6 +164,10 @@ class SettingsViewModel @Inject constructor(
         s.copy(overviewTileOrder = order)
     }.combine(settingsRepo.privacyMode) { s, v ->
         s.copy(privacyMode = v)
+    }.combine(settingsRepo.trainingReminderEnabled) { s, v ->
+        s.copy(trainingReminderEnabled = v)
+    }.combine(settingsRepo.trainingReminderHour) { s, v ->
+        s.copy(trainingReminderHour = v)
     }.combine(settingsRepo.availableEquipment) { s, equip ->
         s.copy(availableEquipment = equip)
     }.combine(settingsRepo.frozenExerciseIds) { s, v ->
@@ -224,6 +232,16 @@ class SettingsViewModel @Inject constructor(
     fun setQuietHoursEnabled(v: Boolean) = viewModelScope.launch { settingsRepo.setQuietHoursEnabled(v) }
     fun setQuietHoursStart(v: Int) = viewModelScope.launch { settingsRepo.setQuietHoursStart(v) }
     fun setQuietHoursEnd(v: Int) = viewModelScope.launch { settingsRepo.setQuietHoursEnd(v) }
+
+    fun setTrainingReminderEnabled(v: Boolean) = viewModelScope.launch {
+        settingsRepo.setTrainingReminderEnabled(v)
+        reminderScheduler.apply(v, settingsRepo.trainingReminderHour.first())
+    }
+    fun setTrainingReminderHour(h: Int) = viewModelScope.launch {
+        settingsRepo.setTrainingReminderHour(h)
+        // Re-arm only if reminders are on; otherwise just persist the preferred time for later.
+        if (settingsRepo.trainingReminderEnabled.first()) reminderScheduler.apply(true, h.coerceIn(0, 23))
+    }
 
     fun setTileHidden(id: String, hidden: Boolean) = viewModelScope.launch { settingsRepo.setTileHidden(id, hidden) }
     fun setCompactSetLogging(v: Boolean) = viewModelScope.launch { settingsRepo.setCompactSetLogging(v) }

@@ -25,7 +25,11 @@ val hasReleaseKeystore = keystorePropertiesFile.exists() &&
 
 android {
     namespace = "com.forge.app"
-    compileSdk = 35
+    // compileSdk 36 (Android 16) is required by Health Connect 1.1.0. It only changes which APIs
+    // are available at COMPILE time — targetSdk stays 35, so runtime behavior, permissions and
+    // minSdk are unchanged. Bumping compile without bumping target is the supported, low-risk way
+    // to adopt a library that needs newer APIs.
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.forge.app"
@@ -120,6 +124,10 @@ dependencies {
 
     // DataStore
     implementation(libs.androidx.datastore.preferences)
+
+    // Health Connect — on-device IPC for recovery signals (sleep, resting HR). No INTERNET; the
+    // data is read from the Health Connect system app and never leaves the device.
+    implementation(libs.androidx.health.connect)
 
     // Coroutines
     implementation(libs.kotlinx.coroutines.android)

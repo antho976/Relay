@@ -45,6 +45,10 @@ interface SessionDao {
     @Query("SELECT COUNT(*) FROM session WHERE finished_at IS NOT NULL")
     suspend fun finishedCount(): Int
 
+    /** Day key of the most recently finished session — the training reminder's "next up" anchor. */
+    @Query("SELECT day_key FROM session WHERE finished_at IS NOT NULL ORDER BY finished_at DESC LIMIT 1")
+    suspend fun lastFinishedDayKey(): String?
+
     /** Previous finished session for the same day (excludes current — used for session comparison #52). */
     @Query("""
         SELECT * FROM session

@@ -35,6 +35,7 @@ object TrophyEvaluator {
         is UnlockRule.ComebackKidRule -> s.comebackKidEarned
         is UnlockRule.ConsistencyKingRule -> s.consistencyKingEarned
         is UnlockRule.VarietyPackRule -> s.varietyPackEarned
+        is UnlockRule.ExerciseGoalsAchievedAtLeast -> s.exerciseGoalsAchieved >= rule.n
     }
 
     fun progressHint(rule: UnlockRule, s: TrophyStatsSnapshot, useKg: Boolean): String? = when (rule) {
@@ -58,6 +59,7 @@ object TrophyEvaluator {
         is UnlockRule.ComebackKidRule -> if (s.comebackKidEarned) "Earned" else "PR after 5+ day gap"
         is UnlockRule.ConsistencyKingRule -> if (s.consistencyKingEarned) "Earned" else "No missed week in 3 months"
         is UnlockRule.VarietyPackRule -> if (s.varietyPackEarned) "Earned" else "Train all 4 days in one week"
+        is UnlockRule.ExerciseGoalsAchievedAtLeast -> "${s.exerciseGoalsAchieved} / ${rule.n} goals"
     }
 
     fun progressFraction(rule: UnlockRule, s: TrophyStatsSnapshot): Float = when (rule) {
@@ -81,6 +83,7 @@ object TrophyEvaluator {
         is UnlockRule.ComebackKidRule -> if (s.comebackKidEarned) 1f else 0f
         is UnlockRule.ConsistencyKingRule -> if (s.consistencyKingEarned) 1f else 0f
         is UnlockRule.VarietyPackRule -> if (s.varietyPackEarned) 1f else 0f
+        is UnlockRule.ExerciseGoalsAchievedAtLeast -> (s.exerciseGoalsAchieved.toFloat() / rule.n).coerceIn(0f, 1f)
     }
 
     /** Returns (currentProgress, target) as integers for near-miss detection (#136). -1 = not applicable. */
@@ -97,6 +100,7 @@ object TrophyEvaluator {
         is UnlockRule.NightOwlSessionsAtLeast -> s.nightOwlSessions to rule.n
         is UnlockRule.SundaysTrainedAtLeast -> s.sundaysTrainedCount to rule.n
         is UnlockRule.MaxSingleExerciseRepsAtLeast -> s.maxSingleExerciseReps to rule.n
+        is UnlockRule.ExerciseGoalsAchievedAtLeast -> s.exerciseGoalsAchieved to rule.n
         else -> -1 to -1
     }
 
@@ -121,5 +125,6 @@ object TrophyEvaluator {
         is UnlockRule.ComebackKidRule -> null
         is UnlockRule.ConsistencyKingRule -> null
         is UnlockRule.VarietyPackRule -> null
+        is UnlockRule.ExerciseGoalsAchievedAtLeast -> "${rule.n - s.exerciseGoalsAchieved} more goal(s)"
     }
 }

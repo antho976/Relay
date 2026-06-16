@@ -80,7 +80,7 @@ data class CoachPassInputs(
 object AutoCoachPlanner {
 
     /** Below this many finished sessions there is no baseline to coach against. */
-    private const val MIN_SESSIONS = 4
+    const val MIN_SESSIONS = 4
     /** A training gap at least this long means "ease back in", not "restructure". */
     private const val GAP_HOLD_DAYS = 14
     /** Per-muscle net applied-volume drift cap, in sets (hardening 11). */

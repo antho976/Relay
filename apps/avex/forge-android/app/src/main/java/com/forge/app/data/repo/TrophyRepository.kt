@@ -35,6 +35,7 @@ class TrophyRepository @Inject constructor(
     private val loggedSetDao: LoggedSetDao,
     private val nearMissDao: TrophyNearMissDao,
     private val vacationDao: com.forge.app.data.db.dao.VacationDao,
+    private val goalRepository: GoalRepository,
     private val clock: Clock
 ) {
     fun observeAll(): Flow<List<UnlockedTrophy>> = unlockedDao.observeAll()
@@ -76,7 +77,8 @@ class TrophyRepository @Inject constructor(
             maxSingleExerciseReps = loggedSetDao.maxRepsSummedPerExercise() ?: 0,
             comebackKidEarned = checkComebackKid(allSessions, zone),
             consistencyKingEarned = checkConsistencyKing(allSessions, zone),
-            varietyPackEarned = checkVarietyPack(allSessions, zone)
+            varietyPackEarned = checkVarietyPack(allSessions, zone),
+            exerciseGoalsAchieved = goalRepository.achievedCount()
         )
     }
 

@@ -50,14 +50,29 @@ class AdaptationRepository @Inject constructor(
     private val programRepository: ProgramRepository,
     private val programCustomizationRepo: ProgramCustomizationRepository,
     private val settingsRepository: SettingsRepository,
+    private val healthConnectManager: com.forge.app.data.health.HealthConnectManager,
     private val clock: Clock
 ) {
 
     /** Moods/cardio older than this can't influence any current signal — skip loading them. */
     private val signalWindowMs = 90L * 24 * 60 * 60 * 1000
 
+    /**
+     * How far back to read Health Connect: at least [signalWindowMs], but always enough to cover
+     * DeloadAdvisor's fatigue window PLUS its prior-month baseline (+1 week margin), so widening
+     * either threshold can't leave the resting-HR driver's prior window outside the fetched data.
+     */
+    private val healthLookbackMs: Long = run {
+        val t = AdaptThresholds()
+        val needDays = (t.deloadWindowDays + t.deloadPriorBaselineDays + 7).toLong()
+        maxOf(signalWindowMs, needDays * 24 * 60 * 60 * 1000)
+    }
+
     /** Dismissing or applying advice mutes that id for this long — no re-nagging. */
     private val adviceCooldownMs = 14L * 24 * 60 * 60 * 1000
+
+    /** How long a snapshot stays reusable by [snapshotCached] — long enough to bridge a screen hop. */
+    private val SNAPSHOT_CACHE_MS = 60_000L
 
     suspend fun snapshot(): AdaptationSnapshot {
         // The DAO queries already exclude unfinished + untracked; the session list must too.
@@ -88,7 +103,7 @@ class AdaptationRepository @Inject constructor(
         }
 
         val now = clock.nowMs()
-        return SnapshotAssembler.assemble(
+        val snap = SnapshotAssembler.assemble(
             nowMs = now,
             program = effectiveDays,
             swapCandidateIds = { plan ->
@@ -102,8 +117,30 @@ class AdaptationRepository @Inject constructor(
             prefs = prefs,
             moods = moodDao.since(now - signalWindowMs),
             cardio = cardioDao.since(now - signalWindowMs),
+            // Off-app recovery signals (sleep, resting HR). Returns empty unless the user has
+            // connected Health Connect AND granted access — so this is a no-op for everyone else.
+            // Fetch back far enough to cover DeloadAdvisor's prior-month baseline (its resting-HR
+            // driver compares the fatigue window against deloadWindowDays + deloadPriorBaselineDays
+            // ago), so widening either threshold can't silently starve that window.
+            health = healthConnectManager.readRecovery(now - healthLookbackMs, now),
             zoneId = java.time.ZoneId.systemDefault()
         )
+        lastSnapshot = snap
+        lastSnapshotAtMs = now
+        return snap
+    }
+
+    @Volatile private var lastSnapshot: AdaptationSnapshot? = null
+    @Volatile private var lastSnapshotAtMs: Long = 0L
+
+    /**
+     * Like [snapshot] but reuses one assembled in the last [SNAPSHOT_CACHE_MS] — for READ-ONLY display
+     * (the Coach Lab) opened right after a path that already snapshotted (the Week Brief / Overview), so
+     * the whole-history fan-out doesn't run twice in one user action. Mutating callers must use [snapshot].
+     */
+    suspend fun snapshotCached(): AdaptationSnapshot {
+        lastSnapshot?.let { if (clock.nowMs() - lastSnapshotAtMs <= SNAPSHOT_CACHE_MS) return it }
+        return snapshot()
     }
 
     /**

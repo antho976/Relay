@@ -24,4 +24,7 @@ interface ExerciseGoalDao {
 
     @Query("SELECT * FROM exercise_goal")
     fun observeAll(): Flow<List<ExerciseGoal>>
+
+    @Query("SELECT * FROM exercise_goal")
+    suspend fun getAll(): List<ExerciseGoal>
 }

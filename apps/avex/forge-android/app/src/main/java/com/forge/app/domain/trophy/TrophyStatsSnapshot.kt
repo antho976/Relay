@@ -29,5 +29,7 @@ data class TrophyStatsSnapshot(
     val maxSingleExerciseReps: Int = 0,
     val comebackKidEarned: Boolean = false,
     val consistencyKingEarned: Boolean = false,
-    val varietyPackEarned: Boolean = false
+    val varietyPackEarned: Boolean = false,
+    /** How many user-set exercise weight goals have been reached (Goals tie-in). */
+    val exerciseGoalsAchieved: Int = 0
 )

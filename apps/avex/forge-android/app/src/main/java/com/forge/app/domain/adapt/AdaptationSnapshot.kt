@@ -36,8 +36,32 @@ data class AdaptationSnapshot(
     val moods: List<MoodEntry> = emptyList(),
     /** Cardio entries, newest-first — restReason sore/sick feeds recovery (System 5/6). */
     val cardio: List<CardioEntry> = emptyList(),
-    val prefs: PrefsSnap
+    val prefs: PrefsSnap,
+    /**
+     * Off-app recovery signals read from Health Connect (sleep, resting HR), when the user has
+     * connected it. Last + defaulted on purpose: every advisor treats it as additive, so no HC
+     * means no behavior change, and the existing test corpus keeps building without touching it.
+     */
+    val health: HealthSnap = HealthSnap()
 )
+
+/**
+ * Recovery telemetry mirrored out of Health Connect (the only external source Forge reads).
+ * Kept as plain Kotlin — no androidx.health types leak into the engine — so advisors stay pure
+ * and unit tests build these from fake data exactly like [AdaptationSnapshot.moods]/[AdaptationSnapshot.cardio].
+ */
+data class HealthSnap(
+    /** Recent sleep sessions (any order; the advisor windows them). */
+    val sleepNights: List<SleepNight> = emptyList(),
+    /** Recent resting-heart-rate readings (any order). */
+    val restingHr: List<RestingHrSample> = emptyList()
+)
+
+/** One night's sleep: when it ended (epoch-ms) and how long it lasted (minutes). */
+data class SleepNight(val endedAtMs: Long, val durationMin: Int)
+
+/** One resting-HR reading: when it was taken (epoch-ms) and the value in beats per minute. */
+data class RestingHrSample(val timeMs: Long, val bpm: Int)
 
 data class ProgramDaySnap(
     val dayKey: String,

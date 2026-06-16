@@ -12,6 +12,9 @@ class CardioRepository @Inject constructor(
 ) {
     fun observeRecent(limit: Int = 20): Flow<List<CardioEntry>> = cardioDao.observeRecent(limit)
 
+    /** Full cardio history, newest-first (the log list no longer caps at 20). */
+    fun observeAll(): Flow<List<CardioEntry>> = cardioDao.observeAll()
+
     fun observeSince(sinceEpochMs: Long): Flow<List<CardioEntry>> = cardioDao.observeSince(sinceEpochMs)
 
     /** Total cardio minutes since [sinceEpochMs], excluding REST entries. */

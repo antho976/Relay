@@ -14,7 +14,9 @@ object Routes {
     const val NOTES_SEARCH = "gym/notes-search"
     const val RECAP = "recap"
     const val COACH_BRIEF = "coach-brief"
+    const val COACH_LAB = "coach-lab"
     const val PROFILE = "profile"
+    const val GOALS = "goals"
     const val PROGRAM_EDITOR = "program-editor/{dayKey}"
     const val PROGRAM_VIEWER = "program-viewer"
 

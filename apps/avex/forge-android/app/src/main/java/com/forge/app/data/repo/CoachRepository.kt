@@ -9,7 +9,9 @@ import com.forge.app.data.db.entities.CoachDecision
 import com.forge.app.data.db.entities.CoachPass
 import com.forge.app.data.db.entities.OverlaySource
 import com.forge.app.data.prefs.SettingsRepository
+import com.forge.app.domain.adapt.AdaptThresholds
 import com.forge.app.domain.adapt.AdaptationSnapshot
+import com.forge.app.domain.adapt.DeloadAdvisor
 import com.forge.app.domain.coach.AutoCoachPlanner
 import com.forge.app.domain.coach.CoachGenBias
 import com.forge.app.domain.coach.CoachPassInputs
@@ -44,6 +46,34 @@ data class CoachBrief(
     /** Null when the review itself failed to assemble — the Brief still renders the pass. */
     val review: WeeklyReviewData?
 )
+
+/**
+ * The "Coach lab" read-out (finding #5): a plain-language portrait of what the coach is
+ * currently watching and how far along its learning is — surfaced so a quiet coach reads as
+ * "still gathering data", not broken. Nothing here is a verdict; it's the inputs, labelled.
+ */
+data class CoachWatch(
+    val sessionsLogged: Int,
+    /** Finished sessions needed before the weekly pass starts calling adjustments. */
+    val minSessions: Int,
+    /** max(0, minSessions − sessionsLogged) — 0 once the coach is active. */
+    val sessionsToGo: Int,
+    /** True when earned changes apply themselves (Settings → coach mode "auto"). */
+    val autopilot: Boolean,
+    /** Current accumulated-fatigue score, or null below the deload data gates. */
+    val fatigueScore: Int?,
+    val fatigueThreshold: Int,
+    /** Lifts with logged history, "concrete" once they clear the judge-it gate. */
+    val trackedLifts: List<TrackedLift>,
+    /** Recovery inputs the coach reads — each active or "still forming". */
+    val recoverySignals: List<RecoverySignal>,
+    /** What the coach has learned from changes you've accepted (empty when it hasn't yet). */
+    val learnedBiases: List<LearnedBias>
+)
+
+data class TrackedLift(val name: String, val bouts: Int, val concrete: Boolean)
+data class RecoverySignal(val label: String, val detail: String, val active: Boolean)
+data class LearnedBias(val label: String, val detail: String)
 
 /**
  * The Weekly Coach Pass trigger + Week Brief assembly + the propose/apply lifecycle
@@ -413,6 +443,70 @@ class CoachRepository @Inject constructor(
             )
         }.getOrNull()
         return CoachBrief(pass, decisions, review)
+    }
+
+    /**
+     * The "Coach lab" portrait (finding #5): what the coach is tracking, right now, in plain
+     * words — tracked lifts, the recovery inputs it reads, and what it has learned so far. Pure
+     * read off ONE snapshot + the decision history; never writes. Call on screen open only.
+     */
+    suspend fun coachLab(): CoachWatch {
+        // Read-only display: reuse a recent snapshot (e.g. the Week Brief's) rather than re-running the
+        // whole-history fan-out again when Coach Lab is opened straight from it.
+        val s = adaptationRepository.snapshotCached()
+        val t = AdaptThresholds()
+        val bias = CoachGenBias.from(coachDao.allDecisions())
+        val dayMs = 24L * 60 * 60 * 1000
+        val windowStart = s.nowMs - t.deloadWindowDays * dayMs
+
+        // Tracked lifts: anything with non-skipped history; "concrete" once it clears the same
+        // weighted-bout gate the planner uses to judge progress (AutoCoachPlanner.trackedLiftIds).
+        val tracked = s.exerciseHistory.mapNotNull { (slotId, bouts) ->
+            val nonSkipped = bouts.count { !it.skipped }
+            if (nonSkipped == 0) return@mapNotNull null
+            val weighted = bouts.count { b -> !b.skipped && b.sets.any { it.weightLb != null && !it.isAssisted } }
+            val name = ExerciseLibrary.byId(slotId)?.name
+                ?: bouts.lastOrNull { !it.swappedName.isNullOrBlank() }?.swappedName
+                ?: slotId
+            TrackedLift(name = name, bouts = nonSkipped, concrete = weighted > t.plateauMinBouts)
+        }.sortedWith(compareByDescending<TrackedLift> { it.concrete }.thenByDescending { it.bouts })
+
+        val moodCount = s.moods.count { it.recordedAt >= windowStart }
+        val restFlags = s.cardio.count { it.date >= windowStart && (it.restReason == "sore" || it.restReason == "sick") }
+        val sleepNights = s.health.sleepNights.count { it.endedAtMs >= windowStart }
+        val hrReadings = s.health.restingHr.count { it.timeMs >= windowStart }
+        val recovery = listOf(
+            RecoverySignal("Effort check-ins",
+                if (moodCount > 0) "$moodCount in the last 2 weeks" else "none yet — rate how a session felt", moodCount > 0),
+            RecoverySignal("Rest-day flags",
+                if (restFlags > 0) "$restFlags sore/sick day(s) noted" else "none flagged", restFlags > 0),
+            RecoverySignal("Sleep",
+                if (sleepNights > 0) "$sleepNights night(s) via Health Connect" else "not connected", sleepNights > 0),
+            RecoverySignal("Resting heart rate",
+                if (hrReadings > 0) "$hrReadings reading(s) via Health Connect" else "not connected", hrReadings > 0)
+        )
+
+        val learned = buildList {
+            bias.volumeBias.forEach { (muscle, delta) ->
+                add(LearnedBias("${muscle.displayName} volume", "${if (delta > 0) "+" else ""}$delta set(s) carried forward"))
+            }
+            if (bias.repBias.isNotEmpty()) add(LearnedBias("Rep ranges", "${bias.repBias.size} lift(s) re-ranged"))
+            if (bias.prefer.isNotEmpty()) add(LearnedBias("Preferred rotations", "${bias.prefer.size} swap(s) kept"))
+            if (bias.avoid.isNotEmpty()) add(LearnedBias("Avoided rotations", "${bias.avoid.size} swap(s) steered around"))
+        }
+
+        val fatigue = DeloadAdvisor.fatigue(s, t)
+        return CoachWatch(
+            sessionsLogged = s.sessions.size,
+            minSessions = AutoCoachPlanner.MIN_SESSIONS,
+            sessionsToGo = (AutoCoachPlanner.MIN_SESSIONS - s.sessions.size).coerceAtLeast(0),
+            autopilot = settings.coachMode.first() == "auto",
+            fatigueScore = fatigue?.score,
+            fatigueThreshold = t.deloadScoreThreshold,
+            trackedLifts = tracked,
+            recoverySignals = recovery,
+            learnedBiases = learned
+        )
     }
 
     /** One-line summary of where [pass] landed (Overview banner + Settings entry). */

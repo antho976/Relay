@@ -51,6 +51,7 @@ enum class SettingsPage(val title: String) {
     Equipment("Equipment"),
     Privacy("Privacy"),
     Program("Program"),
+    Recovery("Recovery"),
     ExercisePrefs("Exercise likes"),
     Vacation("Holiday / Vacation"),
     About("About")
@@ -66,6 +67,7 @@ internal val ALL_ROWS = listOf(
     SettingsRow("Equipment", "equipment available barbell dumbbell cable machine", SettingsPage.Equipment),
     SettingsRow("Privacy", "privacy mode blur screenshot", SettingsPage.Privacy),
     SettingsRow("Program", "program generate auto split days routine rotate trainings workouts", SettingsPage.Program),
+    SettingsRow("Recovery", "health connect sleep heart rate resting recovery samsung watch coach deload", SettingsPage.Recovery),
     SettingsRow("Exercise likes", "like dislike favourite exclude exercises preferences movements heart", SettingsPage.ExercisePrefs)
 )
 
@@ -82,6 +84,7 @@ internal val ALL_ITEMS = listOf(
     SettingsItem("Timezone", "timezone locale region", SettingsPage.Format),
     SettingsItem("Haptic feedback", "haptic vibration strength", SettingsPage.Session),
     SettingsItem("Note templates", "notes templates prompts form energy pain focus", SettingsPage.Session),
+    SettingsItem("Training reminders", "reminder notify nudge daily streak train schedule engagement", SettingsPage.Notifications),
     SettingsItem("Quiet hours", "quiet hours suppress notifications silent", SettingsPage.Notifications),
     SettingsItem("Notifications", "notifications enable disable notify", SettingsPage.Notifications),
     SettingsItem("Available equipment", "equipment barbell dumbbell cable machine body weight", SettingsPage.Equipment),
@@ -261,6 +264,7 @@ fun SettingsScreen(
             SettingsPage.Equipment -> EquipmentPage(state, viewModel, Modifier.padding(inner))
             SettingsPage.Privacy -> PrivacyPage(state, viewModel, Modifier.padding(inner))
             SettingsPage.Program -> ProgramPage(state, viewModel, Modifier.padding(inner), onOpenCoachBrief)
+            SettingsPage.Recovery -> RecoveryPage(Modifier.padding(inner))
             SettingsPage.ExercisePrefs -> ExercisePrefsPage(state, viewModel, Modifier.padding(inner))
             SettingsPage.Vacation -> VacationPage(viewModel, Modifier.padding(inner))
             SettingsPage.About -> AboutPage(Modifier.padding(inner))

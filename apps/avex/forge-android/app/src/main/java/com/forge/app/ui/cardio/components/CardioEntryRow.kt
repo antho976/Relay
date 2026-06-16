@@ -1,6 +1,7 @@
 package com.forge.app.ui.cardio.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -43,6 +44,7 @@ fun CardioEntryRow(
     entry: CardioEntry,
     today: LocalDate,
     onRequestDelete: () -> Unit,
+    onEdit: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val type = CardioType.fromCode(entry.type)
@@ -85,6 +87,7 @@ fun CardioEntryRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .clickable(onClick = onEdit)
                 .padding(horizontal = 24.dp, vertical = 14.dp),
             verticalAlignment = Alignment.Top,
             horizontalArrangement = Arrangement.spacedBy(12.dp)

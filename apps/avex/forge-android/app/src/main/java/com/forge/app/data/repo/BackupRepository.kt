@@ -34,6 +34,7 @@ class BackupRepository @Inject constructor(
     private val cardioDao: CardioDao,
     private val settingsRepo: SettingsRepository,
     private val photoRepo: ProgressPhotoRepository,
+    private val avatarRepo: AvatarRepository,
     private val db: ForgeDatabase
 ) {
 
@@ -367,6 +368,13 @@ class BackupRepository @Inject constructor(
                     }
                 }
             }
+            // The profile avatar (single app-private file) — folded in like the photos. exists() is
+            // length-checked, so a stray zero-byte avatar.jpg can't be zipped and later overwrite a good one.
+            if (avatarRepo.exists()) {
+                zip.putNextEntry(java.util.zip.ZipEntry(ZIP_AVATAR_ENTRY))
+                avatarRepo.file.inputStream().use { it.copyTo(zip) }
+                zip.closeEntry()
+            }
         }
     }
 
@@ -407,6 +415,7 @@ class BackupRepository @Inject constructor(
     private suspend fun restoreFromIncoming(incoming: File): Boolean = withContext(Dispatchers.IO) {
         val temps = mutableListOf(incoming) // cache-dir temp files to clean up before returning
         var photoStage: File? = null        // extracted progress photos, staged only after validation
+        var avatarStage: File? = null       // extracted avatar temp (in temps), applied after validation
         try {
             // Sniff the format: a #14 backup is a ZIP { database.db, settings.preferences_pb };
             // a pre-#14 backup is the raw SQLite DB. Restore both.
@@ -437,6 +446,12 @@ class BackupRepository @Inject constructor(
                                     ).also { it.deleteRecursively(); it.mkdirs(); photoStage = it }
                                     File(stage, photoName).outputStream().use { zin.copyTo(it) }
                                 }
+                            }
+                            name == ZIP_AVATAR_ENTRY -> {
+                                val a = File(context.cacheDir, "forge_restore_avatar_${System.currentTimeMillis()}.jpg")
+                                    .also { it.delete(); temps.add(it) }
+                                a.outputStream().use { zin.copyTo(it) }
+                                avatarStage = a
                             }
                         }
                         zin.closeEntry()
@@ -484,6 +499,12 @@ class BackupRepository @Inject constructor(
                     pendingPhotos.mkdirs()
                     stage.listFiles()?.forEach { it.copyTo(File(pendingPhotos, it.name), overwrite = true) }
                 }
+            }
+            // Avatar staged the same way — swapped in at boot alongside the DB/prefs/photos.
+            avatarStage?.let { a ->
+                val pendingAvatar = File(context.filesDir, PENDING_AVATAR_NAME)
+                if (pendingAvatar.exists()) pendingAvatar.delete()
+                a.copyTo(pendingAvatar, overwrite = true)
             }
 
             return@withContext true
@@ -557,6 +578,9 @@ class BackupRepository @Inject constructor(
         private const val AUTO_BACKUP_NAME = "forge_auto_backup.zip"
         /** Staged restored photos; ForgeApp.applyPendingRestore swaps this over progress_photos/ at boot. */
         private const val PENDING_PHOTOS_DIR = "pending_restore_photos"
+        /** Backup-ZIP entry for the profile avatar — derived from AvatarRepository so a rename can't desync. */
+        private const val ZIP_AVATAR_ENTRY = AvatarRepository.FILE_NAME
+        private const val PENDING_AVATAR_NAME = "pending_restore_avatar.jpg"
         /**
          * Lowest schema version restore will accept. Below this are the pre-lock versions Room
          * destructively resets (DatabaseModule.fallbackToDestructiveMigrationFrom(1..11)), so

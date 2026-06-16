@@ -7,11 +7,13 @@
              brings settings and physique photos back, not just the Room database. -->
         <include domain="file" path="datastore/" />
         <include domain="file" path="progress_photos/" />
+        <include domain="file" path="avatar.jpg" />
     </cloud-backup>
     <device-transfer>
         <include domain="database" path="." />
         <include domain="sharedpref" path="." />
         <include domain="file" path="datastore/" />
         <include domain="file" path="progress_photos/" />
+        <include domain="file" path="avatar.jpg" />
     </device-transfer>
 </data-extraction-rules>

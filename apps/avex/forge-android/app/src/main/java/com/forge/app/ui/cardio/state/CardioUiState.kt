@@ -13,5 +13,7 @@ data class CardioUiState(
     val weekDailyMinutes: List<Int> = emptyList(),
     val entries: List<CardioEntry> = emptyList(),
     val sheetOpen: Boolean = false,
+    /** Non-null when the open sheet is editing an existing entry (vs logging a new one). */
+    val editing: CardioEntry? = null,
     val pendingDeleteId: Long? = null
 )

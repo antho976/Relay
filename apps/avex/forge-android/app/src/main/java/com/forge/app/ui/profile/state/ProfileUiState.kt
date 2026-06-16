@@ -39,6 +39,10 @@ data class ProfileUiState(
     // The mirror test (progress photos)
     val photos: List<ProgressPhoto> = emptyList(),
 
+    // Avatar (app-private file)
+    val hasAvatar: Boolean = false,
+    val avatarStamp: Long = 0L,
+
     // Trophy case
     val trophyUnlocked: Int = 0,
     val trophyTotal: Int = 0,

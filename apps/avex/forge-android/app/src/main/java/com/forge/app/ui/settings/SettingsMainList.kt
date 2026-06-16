@@ -114,6 +114,7 @@ internal fun rowSubtitle(page: SettingsPage, s: SettingsUiState): String = when 
     SettingsPage.Equipment -> if (s.availableEquipment.isEmpty()) "All equipment" else "${s.availableEquipment.size} selected"
     SettingsPage.Privacy -> if (s.privacyMode) "Screenshots blocked" else "Off"
     SettingsPage.Program -> "${s.daysPerWeek} days/week · auto-generate"
+    SettingsPage.Recovery -> "Health Connect · sleep & resting HR"
     SettingsPage.ExercisePrefs -> "${s.liked.size} liked · ${s.disliked.size} disliked"
     // Reached via a dedicated MainList row, not the search/nav grid — subtitle unused.
     SettingsPage.Vacation -> "Pause your streak during a holiday"

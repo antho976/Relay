@@ -2,33 +2,21 @@ package com.forge.app.ui.profile
 
 import androidx.compose.animation.core.InfiniteTransition
 import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.size
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AutoAwesome
-import androidx.compose.material.icons.filled.BlurOn
-import androidx.compose.material.icons.filled.Flare
-import androidx.compose.material.icons.filled.LocalFireDepartment
-import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.filled.WbSunny
-import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.State
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.TransformOrigin
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.unit.Dp
 import com.forge.app.domain.rank.RankTier
 import com.forge.app.ui.theme.ForgeMotion
@@ -37,12 +25,11 @@ import com.forge.app.ui.theme.ForgeMotion
 internal fun RankTier.color(): Color = Color(colorArgb)
 
 /**
- * The big, alive emblem for a rank tier — the focal point of the rank section.
- *
- * Ember & Flare render as a custom, hand-drawn fire whose flame tongues actually lick and
- * flicker and throw embers (real internal motion, not a swaying glyph). The other tiers fall
- * back to their Material emblem with subtle in-character motion until they grow bespoke
- * drawings of their own (star twinkle, pulsar sweep, quasar orbit, supernova rings).
+ * The big, alive emblem for a rank tier — the focal point of the rank section. Every tier now has a
+ * bespoke, hand-drawn Canvas identity with real internal motion (not a swaying glyph):
+ * Ember/Flare a licking fire, Nova a twinkling star, Pulsar sweeping beams, Quasar orbiting rings,
+ * Supernova an expanding shockwave. The `when` is exhaustive (no `else`) so a newly-added tier fails
+ * to compile until it's given a drawing.
  *
  * [animated] is false under the system "Remove animations" preference — everything draws static.
  */
@@ -51,12 +38,14 @@ internal fun HeroEmblem(tier: RankTier, animated: Boolean, size: Dp) {
     when (tier) {
         RankTier.EMBER, RankTier.FLARE ->
             FireEmblem(tier.color(), animated, Modifier.size(width = size * 0.82f, height = size))
-        else ->
-            GlyphEmblem(tier, animated, Modifier.size(size * 0.7f))
+        RankTier.NOVA -> NovaEmblem(tier.color(), animated, Modifier.size(size))
+        RankTier.PULSAR -> PulsarEmblem(tier.color(), animated, Modifier.size(size))
+        RankTier.QUASAR -> QuasarEmblem(tier.color(), animated, Modifier.size(size))
+        RankTier.SUPERNOVA -> SupernovaEmblem(tier.color(), animated, Modifier.size(size))
     }
 }
 
-// ── Fire ─────────────────────────────────────────────────────────────────────
+// ── Fire (Ember / Flare) ───────────────────────────────────────────────────────
 
 /**
  * A live fire drawn from three stacked flame paths (deep outer body → bright mid → hot core) plus
@@ -143,68 +132,120 @@ private fun buildFlame(path: Path, cx: Float, baseY: Float, halfW: Float, tipY: 
     }
 }
 
-// ── Glyph fallback (non-fire tiers) ───────────────────────────────────────────
-
-// Exhaustive over every tier (no `else`) so a newly-added tier fails to compile until handled here,
-// rather than being silently absorbed. Ember/Flare draw as fire and never reach the glyph path, but
-// are mapped anyway to keep the function total.
-private fun tierIcon(t: RankTier): ImageVector = when (t) {
-    RankTier.EMBER -> Icons.Filled.LocalFireDepartment
-    RankTier.FLARE -> Icons.Filled.Flare
-    RankTier.NOVA -> Icons.Filled.Star
-    RankTier.PULSAR -> Icons.Filled.AutoAwesome
-    RankTier.QUASAR -> Icons.Filled.BlurOn
-    RankTier.SUPERNOVA -> Icons.Filled.WbSunny
-}
+// ── Nova: a twinkling eight-point star ─────────────────────────────────────────
 
 @Composable
-private fun GlyphEmblem(tier: RankTier, animated: Boolean, modifier: Modifier) {
-    val anim = rememberEmblemMotion(tier, animated)
-    Icon(
-        tierIcon(tier),
-        contentDescription = tier.display,
-        tint = tier.color(),
-        modifier = modifier.graphicsLayer {
-            transformOrigin = TransformOrigin(0.5f, anim.pivotY)
-            rotationZ = anim.rotation
-            scaleX = anim.scaleX
-            scaleY = anim.scaleY
+private fun NovaEmblem(tierColor: Color, animated: Boolean, modifier: Modifier) {
+    val core = lerp(tierColor, Color.White, 0.72f)
+    val t = if (animated) rememberInfiniteTransition(label = "nova") else null
+    val spin = t?.phase(9000)   // slow turn
+    val twk = t?.phase(900)     // twinkle
+    val star = remember { Path() }
+    Canvas(modifier) {
+        val c = Offset(size.width / 2f, size.height / 2f)
+        val r = size.minDimension / 2f
+        val rot = (spin?.value ?: 0.06f) * TAU
+        val tw = osc(twk)
+        drawCircle(tierColor.copy(alpha = 0.16f + 0.12f * tw), radius = r * 0.92f, center = c)
+        val long = r * (0.74f + 0.12f * tw)
+        val short = r * 0.30f
+        star.rewind()
+        for (i in 0 until 8) {
+            val a = rot + i * (TAU / 8f)
+            val rad = if (i % 2 == 0) long else short
+            val px = c.x + cosf(a) * rad
+            val py = c.y + sinf(a) * rad
+            if (i == 0) star.moveTo(px, py) else star.lineTo(px, py)
         }
-    )
+        star.close()
+        drawPath(star, tierColor)
+        drawCircle(core, radius = r * (0.15f + 0.05f * tw), center = c)
+    }
 }
 
-/** Per-tier "alive" motion for the glyph emblems — real movement (turn / sweep / breathe). */
-private data class EmblemMotion(val rotation: Float, val scaleX: Float, val scaleY: Float, val pivotY: Float)
+// ── Pulsar: two beams sweeping from a pulsing core ─────────────────────────────
 
 @Composable
-private fun rememberEmblemMotion(tier: RankTier, enabled: Boolean): EmblemMotion {
-    if (!enabled) return EmblemMotion(0f, 1f, 1f, 0.5f)
-    val t = rememberInfiniteTransition(label = "emblem-${tier.name}")
-    return when (tier) {
-        // Ember/Flare render as fire (FireEmblem) and never reach the glyph path; mapped to identity
-        // so this `when` stays exhaustive and a new tier won't silently fall through.
-        RankTier.EMBER, RankTier.FLARE -> EmblemMotion(0f, 1f, 1f, 0.5f)
-        RankTier.NOVA -> {
-            val rot by t.animateFloat(0f, 360f, infiniteRepeatable(tween(4200, easing = LinearEasing)), label = "turn")
-            val tw by t.animateFloat(0f, 1f, infiniteRepeatable(tween(820), RepeatMode.Reverse), label = "twinkle")
-            EmblemMotion(rot, 0.94f + 0.10f * tw, 0.94f + 0.10f * tw, 0.5f)
+private fun PulsarEmblem(tierColor: Color, animated: Boolean, modifier: Modifier) {
+    val core = lerp(tierColor, Color.White, 0.82f)
+    val t = if (animated) rememberInfiniteTransition(label = "pulsar") else null
+    val sweep = t?.phase(2600)
+    val pulse = t?.phase(700)
+    val beam = remember { Path() }
+    Canvas(modifier) {
+        val c = Offset(size.width / 2f, size.height / 2f)
+        val r = size.minDimension / 2f
+        val ang = (sweep?.value ?: 0.12f) * TAU
+        val p = osc(pulse)
+        drawCircle(tierColor.copy(alpha = 0.15f), radius = r * 0.9f, center = c)
+        for (dir in 0 until 2) {
+            val a = ang + dir * (TAU / 2f)
+            val perp = a + TAU / 4f
+            val half = r * 0.15f
+            val tip = Offset(c.x + cosf(a) * r * 0.96f, c.y + sinf(a) * r * 0.96f)
+            beam.rewind()
+            beam.moveTo(c.x + cosf(perp) * half, c.y + sinf(perp) * half)
+            beam.lineTo(tip.x, tip.y)
+            beam.lineTo(c.x - cosf(perp) * half, c.y - sinf(perp) * half)
+            beam.close()
+            drawPath(beam, tierColor.copy(alpha = 0.85f))
         }
-        RankTier.PULSAR -> {
-            val rock by t.animateFloat(-1f, 1f, infiniteRepeatable(tween(700), RepeatMode.Reverse), label = "rock")
-            val pl by t.animateFloat(0f, 1f, infiniteRepeatable(tween(520), RepeatMode.Reverse), label = "pulse")
-            EmblemMotion(rock * 22f, 0.88f + 0.20f * pl, 0.88f + 0.20f * pl, 0.5f)
+        drawCircle(core.copy(alpha = 0.45f * (1f - p)), radius = r * (0.28f + 0.6f * p), center = c, style = Stroke(width = r * 0.045f))
+        drawCircle(core, radius = r * (0.17f + 0.07f * p), center = c)
+    }
+}
+
+// ── Quasar: a bright core inside two orbited rings ─────────────────────────────
+
+@Composable
+private fun QuasarEmblem(tierColor: Color, animated: Boolean, modifier: Modifier) {
+    val core = lerp(tierColor, Color.White, 0.78f)
+    val t = if (animated) rememberInfiniteTransition(label = "quasar") else null
+    val o1 = t?.phase(5200)
+    val o2 = t?.phase(3400)
+    val breathe = t?.phase(1500)
+    Canvas(modifier) {
+        val c = Offset(size.width / 2f, size.height / 2f)
+        val r = size.minDimension / 2f
+        val br = osc(breathe)
+        drawCircle(tierColor.copy(alpha = 0.14f), radius = r * 0.95f, center = c)
+        drawCircle(tierColor.copy(alpha = 0.5f), radius = r * 0.84f, center = c, style = Stroke(width = r * 0.025f))
+        drawCircle(tierColor.copy(alpha = 0.38f), radius = r * 0.58f, center = c, style = Stroke(width = r * 0.02f))
+        val a1 = (o1?.value ?: 0f) * TAU
+        val a2 = (o2?.value ?: 0.3f) * TAU
+        drawCircle(core, radius = r * 0.085f, center = Offset(c.x + cosf(a1) * r * 0.84f, c.y + sinf(a1) * r * 0.84f))
+        drawCircle(core.copy(alpha = 0.85f), radius = r * 0.06f, center = Offset(c.x - cosf(a2) * r * 0.58f, c.y - sinf(a2) * r * 0.58f))
+        drawCircle(core, radius = r * (0.19f + 0.05f * br), center = c)
+    }
+}
+
+// ── Supernova: rotating burst rays + expanding shockwave rings ─────────────────
+
+@Composable
+private fun SupernovaEmblem(tierColor: Color, animated: Boolean, modifier: Modifier) {
+    val core = lerp(tierColor, Color.White, 0.85f)
+    val t = if (animated) rememberInfiniteTransition(label = "supernova") else null
+    val wave = t?.phase(2000)
+    val rays = t?.phase(8000)
+    Canvas(modifier) {
+        val c = Offset(size.width / 2f, size.height / 2f)
+        val r = size.minDimension / 2f
+        drawCircle(tierColor.copy(alpha = 0.2f), radius = r * 0.9f, center = c)
+        val rot = (rays?.value ?: 0f) * TAU
+        for (i in 0 until 12) {
+            val a = rot + i * (TAU / 12f)
+            drawLine(
+                color = tierColor.copy(alpha = 0.7f),
+                start = Offset(c.x + cosf(a) * r * 0.3f, c.y + sinf(a) * r * 0.3f),
+                end = Offset(c.x + cosf(a) * r * 0.92f, c.y + sinf(a) * r * 0.92f),
+                strokeWidth = r * 0.03f
+            )
         }
-        RankTier.QUASAR -> {
-            val rot by t.animateFloat(0f, 360f, infiniteRepeatable(tween(7000, easing = LinearEasing)), label = "spin")
-            val pl by t.animateFloat(0f, 1f, infiniteRepeatable(tween(680), RepeatMode.Reverse), label = "breathe")
-            EmblemMotion(rot, 0.90f + 0.16f * pl, 0.90f + 0.16f * pl, 0.5f)
+        for (k in 0 until 3) {
+            val local = if (wave == null) 0.5f else (wave.value + k / 3f) % 1f
+            drawCircle(core.copy(alpha = (1f - local) * 0.55f), radius = r * (0.2f + local * 0.72f), center = c, style = Stroke(width = r * 0.03f))
         }
-        RankTier.SUPERNOVA -> {
-            // Sun rays rotate steadily while the whole burst breathes.
-            val rot by t.animateFloat(0f, 360f, infiniteRepeatable(tween(6000, easing = LinearEasing)), label = "rays")
-            val br by t.animateFloat(0f, 1f, infiniteRepeatable(tween(900), RepeatMode.Reverse), label = "burst")
-            EmblemMotion(rot, 0.95f + 0.10f * br, 0.95f + 0.10f * br, 0.5f)
-        }
+        drawCircle(core, radius = r * 0.19f, center = c)
     }
 }
 
@@ -213,6 +254,10 @@ private fun rememberEmblemMotion(tier: RankTier, enabled: Boolean): EmblemMotion
 private const val TAU = 6.2831855f
 
 private fun sinf(x: Float): Float = kotlin.math.sin(x.toDouble()).toFloat()
+private fun cosf(x: Float): Float = kotlin.math.cos(x.toDouble()).toFloat()
+
+/** A sawtooth phase mapped to a 0f..1f sine oscillation; 0.5 (mid) when not animating. */
+private fun osc(p: State<Float>?): Float = if (p == null) 0.5f else (sinf(p.value * TAU) + 1f) / 2f
 
 /** A 0f→1f sawtooth phase that loops every [periodMs] (honoring reduced-motion scaling). */
 @Composable

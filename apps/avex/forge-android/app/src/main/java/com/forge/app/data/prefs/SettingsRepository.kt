@@ -167,6 +167,18 @@ class SettingsRepository @Inject constructor(
     suspend fun setQuietHoursEnd(hour: Int) =
         context.forgePreferences.edit { it[PreferenceKeys.QUIET_HOURS_END] = hour }
 
+    /** Daily training reminder (engagement) — opt-in, default OFF so a new user is never nagged. */
+    val trainingReminderEnabled: Flow<Boolean> = context.forgePreferences.data
+        .map { it[PreferenceKeys.TRAINING_REMINDER_ENABLED] ?: false }
+    suspend fun setTrainingReminderEnabled(value: Boolean) =
+        context.forgePreferences.edit { it[PreferenceKeys.TRAINING_REMINDER_ENABLED] = value }
+
+    /** Hour-of-day (0–23) the reminder fires; default 18 (6pm). */
+    val trainingReminderHour: Flow<Int> = context.forgePreferences.data
+        .map { it[PreferenceKeys.TRAINING_REMINDER_HOUR] ?: 18 }
+    suspend fun setTrainingReminderHour(hour: Int) =
+        context.forgePreferences.edit { it[PreferenceKeys.TRAINING_REMINDER_HOUR] = hour.coerceIn(0, 23) }
+
     // ─── Monthly PR target (#84) ──────────────────────────────────────────────
 
     val monthlyPrTarget: Flow<Int> = context.forgePreferences.data

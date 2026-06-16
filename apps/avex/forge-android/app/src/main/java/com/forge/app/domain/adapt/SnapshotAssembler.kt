@@ -31,6 +31,8 @@ object SnapshotAssembler {
         prefs: PrefsSnap,
         moods: List<MoodEntry> = emptyList(),
         cardio: List<CardioEntry> = emptyList(),
+        /** Off-app recovery signals from Health Connect; empty when the user hasn't connected it. */
+        health: HealthSnap = HealthSnap(),
         // No default: a missing zone silently binned every session into UTC weeks, giving non-UTC
         // users wrong "best time of day" insights. Callers must choose (production: systemDefault). (F18.)
         zoneId: java.time.ZoneId
@@ -89,7 +91,8 @@ object SnapshotAssembler {
             exerciseHistory = history,
             moods = moods.sortedByDescending { it.recordedAt },
             cardio = cardio.sortedByDescending { it.date },
-            prefs = prefs
+            prefs = prefs,
+            health = health
         )
     }
 }

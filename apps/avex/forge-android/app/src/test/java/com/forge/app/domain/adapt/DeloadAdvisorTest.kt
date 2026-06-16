@@ -67,11 +67,24 @@ class DeloadAdvisorTest {
         sessions: List<Session> = baseSessions(),
         history: Map<String, List<ExerciseBout>> = mapOf("ua1" to brutalWindowBouts()),
         moods: List<MoodEntry> = emptyList(),
-        cardio: List<CardioEntry> = emptyList()
+        cardio: List<CardioEntry> = emptyList(),
+        health: HealthSnap = HealthSnap()
     ) = AdaptationSnapshot(
         nowMs = now, program = emptyList(), sessions = sessions,
-        exerciseHistory = history, moods = moods, cardio = cardio, prefs = PrefsSnap()
+        exerciseHistory = history, moods = moods, cardio = cardio, prefs = PrefsSnap(), health = health
     )
+
+    /** Calm, single-set bouts that fire NO driver on their own — a clean stage for one recovery signal. */
+    private fun calmBouts(): List<ExerciseBout> =
+        (0 until 6).map { bout(startDay = 48 + it * 2, effort = EffortRating.JUST_RIGHT) }
+
+    private fun nights(count: Int, durationMin: Int): List<SleepNight> =
+        (0 until count).map { SleepNight(endedAtMs = now - (1 + it) * day, durationMin = durationMin) }
+
+    /** [windowBpm] readings inside the fatigue window, [priorBpm] in the prior month. */
+    private fun hr(windowBpm: Int, priorBpm: Int, count: Int = 5): List<RestingHrSample> =
+        (0 until count).map { RestingHrSample(timeMs = now - (1 + it) * day, bpm = windowBpm) } +
+            (0 until count).map { RestingHrSample(timeMs = (20 + it) * day, bpm = priorBpm) }
 
     // ── Cold start ─────────────────────────────────────────────────────────────
 
@@ -167,6 +180,79 @@ class DeloadAdvisorTest {
         assertNotNull(rec)
         assertEquals(6, rec!!.score) // 2 + 2 + 2 (sick), the sore +1 must not stack
         assertTrue(rec.reason.contains("sick"))
+    }
+
+    // ── Health Connect recovery drivers (additive, gated) ───────────────────────
+
+    @Test
+    fun noHealthData_addsNoRecoveryDrivers() {
+        // The clean stage with empty HealthSnap must score 0 — HC is purely additive.
+        val f = DeloadAdvisor.fatigue(snapshot(history = mapOf("ua1" to calmBouts())))
+        assertNotNull(f)
+        assertEquals(0, f!!.score)
+        assertTrue(f.drivers.isEmpty())
+    }
+
+    @Test
+    fun sleepDebt_firesWhenAveragingBelowTarget() {
+        // 6 nights at 6h (360 min ≤ 390 ceiling) → +2, on an otherwise-silent snapshot.
+        val f = DeloadAdvisor.fatigue(
+            snapshot(history = mapOf("ua1" to calmBouts()), health = HealthSnap(sleepNights = nights(6, 360)))
+        )
+        assertNotNull(f)
+        assertEquals(2, f!!.score)
+        assertTrue(f.drivers.any { it.contains("6.0h sleep over 6 nights") })
+    }
+
+    @Test
+    fun sleepDebt_silentWhenWellRested_orTooFewNights() {
+        // Enough nights but a healthy average — no driver.
+        val rested = DeloadAdvisor.fatigue(
+            snapshot(history = mapOf("ua1" to calmBouts()), health = HealthSnap(sleepNights = nights(6, 450)))
+        )
+        assertEquals(0, rested!!.score)
+        // Short nights but below the count gate (4 < 5) — too sparse to judge, stays silent.
+        val sparse = DeloadAdvisor.fatigue(
+            snapshot(history = mapOf("ua1" to calmBouts()), health = HealthSnap(sleepNights = nights(4, 330)))
+        )
+        assertEquals(0, sparse!!.score)
+    }
+
+    @Test
+    fun restingHr_firesWhenElevatedAboveOwnBaseline() {
+        // Window 62 bpm vs prior 55 bpm = +7 ≥ 5 threshold → +2.
+        val f = DeloadAdvisor.fatigue(
+            snapshot(history = mapOf("ua1" to calmBouts()), health = HealthSnap(restingHr = hr(windowBpm = 62, priorBpm = 55)))
+        )
+        assertNotNull(f)
+        assertEquals(2, f!!.score)
+        assertTrue(f.drivers.any { it.contains("resting HR up 7 bpm vs your baseline") })
+    }
+
+    @Test
+    fun restingHr_silentWhenWithinNormalDrift() {
+        // Only +3 bpm over baseline — under the 5 bpm threshold, no driver.
+        val f = DeloadAdvisor.fatigue(
+            snapshot(history = mapOf("ua1" to calmBouts()), health = HealthSnap(restingHr = hr(windowBpm = 58, priorBpm = 55)))
+        )
+        assertEquals(0, f!!.score)
+    }
+
+    @Test
+    fun recoveryDriversStackWithTrainingSignalsToCrossThreshold() {
+        // sleep debt (+2) + elevated resting HR (+2) + soreness (+1) = 5 → fires at MEDIUM.
+        val rec = DeloadAdvisor.evaluate(
+            snapshot(
+                history = mapOf("ua1" to calmBouts()),
+                cardio = soreCardio(),
+                health = HealthSnap(sleepNights = nights(6, 360), restingHr = hr(windowBpm = 62, priorBpm = 55))
+            )
+        )
+        assertNotNull(rec)
+        assertEquals(5, rec!!.score)
+        assertEquals(Confidence.MEDIUM, rec.confidence)
+        assertTrue(rec.reason.contains("sleep"))
+        assertTrue(rec.reason.contains("resting HR"))
     }
 
     // ── Determinism ────────────────────────────────────────────────────────────

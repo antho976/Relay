@@ -57,14 +57,16 @@ fun CardioScreen(
     if (state.sheetOpen) {
         CardioLogSheet(
             onDismiss = viewModel::closeSheet,
-            onLog = viewModel::logEntry
+            onSave = viewModel::saveEntry,
+            editing = state.editing
         )
     } else {
         CardioListContent(
             state = state,
             onBack = onBack,
             onOpenLog = viewModel::openSheet,
-            onRequestDelete = viewModel::requestDelete
+            onRequestDelete = viewModel::requestDelete,
+            onEdit = viewModel::editEntry
         )
     }
 
@@ -85,7 +87,8 @@ private fun CardioListContent(
     state: CardioUiState,
     onBack: () -> Unit,
     onOpenLog: () -> Unit,
-    onRequestDelete: (Long) -> Unit
+    onRequestDelete: (Long) -> Unit,
+    onEdit: (Long) -> Unit
 ) {
     val zone = ZoneId.systemDefault()
     val today = LocalDate.now(zone)
@@ -186,6 +189,7 @@ private fun CardioListContent(
                         entry = entry,
                         today = today,
                         onRequestDelete = { onRequestDelete(entry.id) },
+                        onEdit = { onEdit(entry.id) },
                         modifier = forgeItemMotion()
                     )
                     HorizontalDivider(

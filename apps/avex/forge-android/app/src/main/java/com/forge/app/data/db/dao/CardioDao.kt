@@ -26,6 +26,10 @@ interface CardioDao {
     @Query("SELECT * FROM cardio_entry ORDER BY date DESC LIMIT :limit")
     fun observeRecent(limit: Int = 20): Flow<List<CardioEntry>>
 
+    /** Full history, newest-first — the cardio log list is no longer capped at 20. */
+    @Query("SELECT * FROM cardio_entry ORDER BY date DESC")
+    fun observeAll(): Flow<List<CardioEntry>>
+
     @Query("SELECT * FROM cardio_entry WHERE date >= :since ORDER BY date DESC")
     fun observeSince(since: Long): Flow<List<CardioEntry>>
 

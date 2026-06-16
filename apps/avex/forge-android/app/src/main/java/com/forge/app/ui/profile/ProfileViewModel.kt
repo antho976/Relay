@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.data.repo.ProfileRepository
+import com.forge.app.data.repo.AvatarRepository
 import com.forge.app.data.repo.ProgressPhoto
 import com.forge.app.data.repo.ProgressPhotoRepository
 import com.forge.app.ui.profile.state.ProfileUiState
@@ -14,6 +15,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import java.io.File
 import javax.inject.Inject
 
 /**
@@ -25,7 +27,8 @@ import javax.inject.Inject
 class ProfileViewModel @Inject constructor(
     private val profileRepo: ProfileRepository,
     private val settingsRepo: SettingsRepository,
-    private val photoRepo: ProgressPhotoRepository
+    private val photoRepo: ProgressPhotoRepository,
+    private val avatarRepo: AvatarRepository
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(ProfileUiState())
@@ -50,6 +53,8 @@ class ProfileViewModel @Inject constructor(
             mostLoggedDay = data.mostLoggedDay,
             usualHour = data.usualHour,
             photos = photoRepo.photos(),
+            hasAvatar = avatarRepo.exists(),
+            avatarStamp = if (avatarRepo.exists()) avatarRepo.file.lastModified() else 0L,
             trophyUnlocked = data.trophyUnlocked,
             trophyTotal = data.trophyTotal,
             trophyGrid = data.trophyGrid,
@@ -69,5 +74,13 @@ class ProfileViewModel @Inject constructor(
     fun deletePhoto(photo: ProgressPhoto) = viewModelScope.launch {
         photoRepo.delete(photo)
         _state.value = _state.value.copy(photos = photoRepo.photos())
+    }
+
+    fun avatarFile(): File = avatarRepo.file
+
+    fun setAvatar(uri: Uri) = viewModelScope.launch {
+        if (avatarRepo.set(uri)) {
+            _state.value = _state.value.copy(hasAvatar = true, avatarStamp = System.currentTimeMillis())
+        }
     }
 }

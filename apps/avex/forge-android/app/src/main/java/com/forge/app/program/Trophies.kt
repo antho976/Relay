@@ -57,6 +57,9 @@ sealed interface UnlockRule {
     data object ComebackKidRule : UnlockRule
     data object ConsistencyKingRule : UnlockRule
     data object VarietyPackRule : UnlockRule
+    // ─── Goals tie-in ────────────────────────────────────────────────────────
+    /** Reached at least [n] of the weight goals the user set on their lifts. */
+    data class ExerciseGoalsAchievedAtLeast(val n: Int) : UnlockRule
 }
 
 /** Difficulty tier for a trophy — affects display and cumulative score (#150). */
@@ -348,6 +351,87 @@ object Trophies {
             category = TrophyCategory.CONSISTENCY,
             icon = TrophyIcon.BOLT,
             unlock = UnlockRule.SessionDurationAtMost(45)
+        ),
+
+        // ─── Consistency (expanded) ───────────────────────────────────────────
+        Trophy(
+            id = "workouts_50", name = "Iron Habit", description = "Completed 50 full workouts",
+            category = TrophyCategory.CONSISTENCY, icon = TrophyIcon.DOOR,
+            unlock = UnlockRule.WorkoutsCompletedAtLeast(50), tier = TrophyTier.HARD
+        ),
+        Trophy(
+            id = "workouts_100", name = "Centurion", description = "Completed 100 full workouts",
+            category = TrophyCategory.CONSISTENCY, icon = TrophyIcon.CROWN,
+            unlock = UnlockRule.WorkoutsCompletedAtLeast(100), tier = TrophyTier.LEGENDARY
+        ),
+        Trophy(
+            id = "sessions_250", name = "Relentless", description = "250 exercises logged",
+            category = TrophyCategory.CONSISTENCY, icon = TrophyIcon.STACK,
+            unlock = UnlockRule.TotalSessionsAtLeast(250), tier = TrophyTier.HARD
+        ),
+        Trophy(
+            id = "streak_7", name = "Seven-Day Forge", description = "Trained 7 consecutive days",
+            category = TrophyCategory.CONSISTENCY, icon = TrophyIcon.FLAME,
+            unlock = UnlockRule.MaxStreakAtLeast(7), tier = TrophyTier.MEDIUM
+        ),
+        Trophy(
+            id = "streak_14", name = "Two Weeks Unbroken", description = "Trained 14 consecutive days",
+            category = TrophyCategory.CONSISTENCY, icon = TrophyIcon.FLAME,
+            unlock = UnlockRule.MaxStreakAtLeast(14), tier = TrophyTier.HARD
+        ),
+        Trophy(
+            id = "streak_30", name = "Unbreakable", description = "Trained 30 consecutive days",
+            category = TrophyCategory.CONSISTENCY, icon = TrophyIcon.FLAME,
+            unlock = UnlockRule.MaxStreakAtLeast(30), tier = TrophyTier.LEGENDARY
+        ),
+        Trophy(
+            id = "distinct_days_4", name = "Full Rotation", description = "Trained 4 different day types",
+            category = TrophyCategory.CONSISTENCY, icon = TrophyIcon.FOUR,
+            unlock = UnlockRule.DistinctDaysTrainedAtLeast(4), tier = TrophyTier.EASY
+        ),
+        Trophy(
+            id = "sundays_12", name = "Sunday Service", description = "Trained on 12 different Sundays",
+            category = TrophyCategory.CONSISTENCY, icon = TrophyIcon.CALENDAR,
+            unlock = UnlockRule.SundaysTrainedAtLeast(12), tier = TrophyTier.MEDIUM
+        ),
+
+        // ─── Strength (expanded) ──────────────────────────────────────────────
+        Trophy(
+            id = "pr_100", name = "PR Legend", description = "Set 100 personal records",
+            category = TrophyCategory.STRENGTH, icon = TrophyIcon.CROWN,
+            unlock = UnlockRule.TotalPRsAtLeast(100), tier = TrophyTier.LEGENDARY
+        ),
+        Trophy(
+            id = "brutal_10", name = "Iron Will", description = "Rated 10 exercises \"Brutal\"",
+            category = TrophyCategory.STRENGTH, icon = TrophyIcon.FLAME,
+            unlock = UnlockRule.BrutalCountAtLeast(10), tier = TrophyTier.MEDIUM
+        ),
+        Trophy(
+            id = "precision_25", name = "Surgical", description = "Hit every target set at target reps in 25 exercises",
+            category = TrophyCategory.STRENGTH, icon = TrophyIcon.CHECK,
+            unlock = UnlockRule.FullTargetHitsAtLeast(25), tier = TrophyTier.HARD
+        ),
+        Trophy(
+            id = "volume_15000", name = "Volume Titan", description = "Hit 15,000+ lb total volume in one session",
+            category = TrophyCategory.STRENGTH, icon = TrophyIcon.BOLT,
+            unlock = UnlockRule.MaxSessionVolumeAtLeast(15_000.0), tier = TrophyTier.LEGENDARY
+        ),
+        Trophy(
+            id = "reps_200", name = "Endless", description = "Hit 200+ reps in a single exercise",
+            category = TrophyCategory.STRENGTH, icon = TrophyIcon.REPEAT,
+            unlock = UnlockRule.MaxSingleExerciseRepsAtLeast(200), tier = TrophyTier.HARD
+        ),
+
+        // ─── Goals tie-in ─────────────────────────────────────────────────────
+        Trophy(
+            id = "goal_crusher", name = "Goal Crusher", description = "Reached a weight goal you set on a lift",
+            category = TrophyCategory.STRENGTH, icon = TrophyIcon.STAR,
+            unlock = UnlockRule.ExerciseGoalsAchievedAtLeast(1), tier = TrophyTier.MEDIUM
+        ),
+        Trophy(
+            id = "goals_5", name = "Goal Getter", description = "Reached 5 of your lift goals",
+            category = TrophyCategory.STRENGTH, icon = TrophyIcon.CROWN,
+            unlock = UnlockRule.ExerciseGoalsAchievedAtLeast(5), tier = TrophyTier.HARD
         )
     )
 

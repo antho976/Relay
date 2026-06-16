@@ -67,11 +67,24 @@ data class AdaptThresholds(
     /** Intra-session rep drop-off (first set → last set) that reads as fatigue, with min bouts. */
     val deloadDropoffThreshold: Double = 0.30,
     val deloadMinDropoffBouts: Int = 6,
+    /** The "prior month" baseline span (days before the fatigue window) used by the e1RM-regression
+     *  and resting-HR drivers. Health data must be fetched far enough back to cover
+     *  deloadWindowDays + this — [com.forge.app.data.repo.AdaptationRepository] derives its HC read
+     *  range from it so the two can't silently drift apart. */
+    val deloadPriorBaselineDays: Int = 28,
     /** e1RM regression: window best below this fraction of the prior month's best, on ≥ N lifts. */
     val deloadRegressionFraction: Double = 0.95,
     val deloadRegressionLifts: Int = 2,
     /** Low-mood driver: DRAINED/OFF in ≥ N of the last 5 mood entries. */
     val deloadLowMoodCount: Int = 3,
+    /** Sleep-debt driver (Health Connect): nights needed in-window, and the avg-minutes ceiling
+     *  (390 = 6.5 h) at/below which short sleep reads as a recovery drag. */
+    val deloadMinSleepNights: Int = 5,
+    val deloadSleepDebtMinutes: Int = 390,
+    /** Resting-HR driver (Health Connect): samples needed in each of window/prior, and the bpm
+     *  rise over the prior-month baseline that reads as "not recovered". */
+    val deloadMinRestingHrSamples: Int = 4,
+    val deloadRestingHrDeltaBpm: Int = 5,
     /** "Overdue" driver: no deload week inside the last N weeks of training history. */
     val deloadNoDeloadWeeks: Int = 8,
     /** Plateau driver: ≥ N currently-stalled lifts (from System 1). */

@@ -44,6 +44,12 @@ data class CoachItem(
     val applyLabel: String? = null
 )
 
+/**
+ * Sub-gate "still learning" nudge (CD-1): shown only when the coach has nothing actionable yet
+ * AND is below its activation session gate, so a quiet coach reads as "warming up", not absent.
+ */
+data class CoachLearningHint(val sessionsLogged: Int, val sessionsToGo: Int)
+
 data class OverviewUiState(
     val workoutsThisWeek: Int = 0,
     val volumeThisWeekLb: Double = 0.0,
@@ -72,7 +78,9 @@ data class OverviewUiState(
      * Actionable adaptation-engine recommendations (deload, plateau ladder), arbitrated and
      * capped. Replaces the old fixed-counter deload / comeback / 3-days-straight flags.
      */
-    val coach: List<CoachItem> = emptyList()
+    val coach: List<CoachItem> = emptyList(),
+    /** Non-null only when [coach] is empty and the coach hasn't activated yet (CD-1). */
+    val coachLearning: CoachLearningHint? = null
 ) {
     val hasActiveSession: Boolean get() = activeSessionDayKey != null
 }
