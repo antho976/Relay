@@ -33,6 +33,7 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.data.db.entities.VacationPeriod
+import com.forge.app.ui.common.clickableLabeled
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
@@ -68,7 +69,7 @@ internal fun VacationPage(vm: SettingsViewModel, modifier: Modifier = Modifier) 
             Text(
                 "+ Add holiday",
                 style = MaterialTheme.typography.bodyMedium, color = accent,
-                modifier = Modifier.fillMaxWidth().clickable { showAdd = true }.padding(horizontal = 24.dp, vertical = 14.dp)
+                modifier = Modifier.fillMaxWidth().clickableLabeled("Add holiday") { showAdd = true }.padding(horizontal = 24.dp, vertical = 14.dp)
             )
             SectionDivider()
         }
@@ -94,7 +95,7 @@ internal fun VacationPage(vm: SettingsViewModel, modifier: Modifier = Modifier) 
                     Text(
                         "✕",
                         style = MaterialTheme.typography.bodyLarge, color = muted,
-                        modifier = Modifier.clickable { vm.deleteVacation(v) }.padding(start = 16.dp)
+                        modifier = Modifier.clickableLabeled("Delete holiday") { vm.deleteVacation(v) }.padding(start = 16.dp)
                     )
                 }
                 HorizontalDivider(color = outline.copy(alpha = 0.12f), modifier = Modifier.padding(horizontal = 24.dp))

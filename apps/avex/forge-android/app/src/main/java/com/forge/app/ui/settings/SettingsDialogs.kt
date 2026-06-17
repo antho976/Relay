@@ -31,6 +31,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
+import com.forge.app.ui.common.clickableLabeled
 
 @Composable
 internal fun DataExportDialog(
@@ -72,7 +73,7 @@ internal fun DataExportDialog(
                     Text(
                         "Restore last auto-backup · saved $savedAt",
                         style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp,
-                        modifier = Modifier.clickable { confirmAutoRestore = true }.padding(vertical = 2.dp)
+                        modifier = Modifier.clickableLabeled("Restore last auto-backup") { confirmAutoRestore = true }.padding(vertical = 2.dp)
                     )
                 }
             }
@@ -102,7 +103,7 @@ internal fun DataExportDialog(
 
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp, Alignment.End)) {
                 Text("close", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.6f),
-                    modifier = Modifier.clickable(onClick = onDismiss).padding(4.dp))
+                    modifier = Modifier.clickableLabeled("Close", onClick = onDismiss).padding(4.dp))
             }
         }
     }

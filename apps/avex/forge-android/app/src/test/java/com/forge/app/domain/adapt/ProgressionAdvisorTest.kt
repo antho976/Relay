@@ -147,8 +147,29 @@ class ProgressionAdvisorTest {
     }
 
     @Test
-    fun oneTopSetShortOfRangeTop_staysSilent_doubleProgressionSaysAddReps() {
-        assertNull(suggest(listOf(set(45.0, 10), set(45.0, 8, idx = 1)), EffortRating.JUST_RIGHT))
+    fun oneTopSetShortOfRangeTop_showsKeepGoingCue_notSilence() {
+        // Below the rep-range top at this weight: instead of vanishing (which reads as "chip broken"),
+        // surface a same-weight "keep going / reach the top" cue that teaches double-progression.
+        val s = suggest(listOf(set(45.0, 10), set(45.0, 8, idx = 1)), EffortRating.JUST_RIGHT)
+        assertNotNull(s)
+        assertEquals(45.0, s!!.targetWeightLb, 0.0001)
+        assertEquals(0.0, s.deltaLb, 0.0001)
+        assertTrue("reason should explain working up: ${s.reason}", "reach" in s.reason)
+    }
+
+    @Test
+    fun belowRangeTop_singleSet_showsKeepGoingCue() {
+        // First time at a new weight, mid-range reps: still surfaces the explicit "keep this weight" cue.
+        val s = suggest(listOf(set(45.0, 8)), EffortRating.JUST_RIGHT)
+        assertNotNull(s)
+        assertEquals(45.0, s!!.targetWeightLb, 0.0001)
+        assertEquals(0.0, s.deltaLb, 0.0001)
+    }
+
+    @Test
+    fun belowRangeTop_amrapHasNoTop_staysSilent() {
+        // AMRAP / timed targets have no parseable range top to "reach", so no working-up cue fires.
+        assertNull(suggest(listOf(set(45.0, 8)), EffortRating.JUST_RIGHT, reps = "AMRAP"))
     }
 
     @Test

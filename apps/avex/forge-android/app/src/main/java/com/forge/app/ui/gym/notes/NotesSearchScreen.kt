@@ -90,9 +90,7 @@ fun NotesSearchScreen(
 
 @Composable
 private fun NoteResultRow(result: com.forge.app.data.db.dao.LoggedExerciseDao.NoteSearchResult) {
-    val exerciseName = result.swappedName
-        ?: Program.exercise(result.exerciseId)?.name
-        ?: result.exerciseId
+    val exerciseName = Program.exerciseDisplayName(result.exerciseId, result.swappedName)
     Surface(
         modifier = Modifier.fillMaxWidth(),
         color = MaterialTheme.colorScheme.surface,

@@ -33,6 +33,7 @@ import com.forge.app.ui.theme.ForgeUiSettings
 import com.forge.app.ui.theme.LocalForgeSettings
 import androidx.lifecycle.lifecycleScope
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -101,9 +102,16 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        installSplashScreen()
+        val splash = installSplashScreen()
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
+        // Hold the splash until prefs resolve, so the bare theme gradient (the null onboarding state)
+        // never flashes before the first real screen (P1). A 2s backstop releases it even if the prefs
+        // flow never emits (corrupt/stalled DataStore) — a brief gradient beats a permanent splash.
+        var contentReady = false
+        splash.setKeepOnScreenCondition { !contentReady }
+        lifecycleScope.launch { delay(2000); contentReady = true }
 
         // Honor the system "Remove animations" preference so ForgeMotion gates every transition.
         ForgeMotion.durationScale =
@@ -163,6 +171,7 @@ class MainActivity : ComponentActivity() {
             }
             val uiSettings by uiSettingsFlow.collectAsState(initial = ForgeUiSettings())
             val onboardingDone by settingsRepo.onboardingDone.collectAsState(initial = null)
+            LaunchedEffect(onboardingDone) { if (onboardingDone != null) contentReady = true }
 
             CompositionLocalProvider(LocalForgeSettings provides uiSettings) {
                 ForgeTheme(

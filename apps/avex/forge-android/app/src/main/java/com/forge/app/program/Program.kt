@@ -257,4 +257,31 @@ object Program {
     fun exercise(id: String): ExercisePlan? =
         active.flatMap { it.exercises }.firstOrNull { it.id == id }
             ?: ExerciseLibrary.byId(id)?.toPlan()
+
+    /**
+     * The single resolution point every display surface (history, PR list, goals, notes search,
+     * stats, export) should use instead of `exercise(id)?.name ?: rawId`. Prefers a session/persistent
+     * swap name, then the active program, the seed split, and the full library; only an id that matches
+     * NONE of those (e.g. a library movement removed in a later version) falls back to a humanized form
+     * of the id rather than the raw kebab slug — so a generated or post-regenerate program can never
+     * surface a raw key like "cable-crunch" to a stranger (C3).
+     */
+    fun exerciseDisplayName(id: String, swappedName: String? = null): String =
+        swappedName?.takeIf { it.isNotBlank() }
+            ?: exercise(id)?.name
+            // Seed-split ids (ua1..lb6) logged before the user regenerated to a data-driven program
+            // aren't in [active] or the library, but they're real exercises — resolve their NAME from
+            // the seed so old history/PRs read right. Kept on the DISPLAY path only (not in [exercise])
+            // so volume/muscle aggregation and the adaptation engine still treat a rotated-out id as
+            // absent, exactly as before — this fix is about names, not about counting old sets (C3).
+            ?: defaultDays.flatMap { it.exercises }.firstOrNull { it.id == id }?.name
+            ?: humanizeExerciseId(id)
+
+    /** Last-ditch readable label from an id ("cable-crunch" / "cable_crunch" → "Cable Crunch"). Only
+     *  reached for an id that resolves nowhere above; a resolvable id always returns its real name. */
+    private fun humanizeExerciseId(id: String): String {
+        val words = id.trim().removePrefix("ex-").split('-', '_', ' ').filter { it.isNotBlank() }
+        if (words.isEmpty()) return "Exercise"
+        return words.joinToString(" ") { w -> w.replaceFirstChar { it.uppercase() } }
+    }
 }

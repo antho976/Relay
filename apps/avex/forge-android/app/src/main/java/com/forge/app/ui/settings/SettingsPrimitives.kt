@@ -30,6 +30,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.forge.app.ui.common.clickableLabeled
 import com.forge.app.ui.theme.AccentEmphasis
 import com.forge.app.ui.theme.emphasized
 
@@ -243,12 +244,12 @@ internal fun HourPickerRow(label: String, hour: Int, onHourChange: (Int) -> Unit
         ) {
             Text(
                 "−", style = MaterialTheme.typography.bodyLarge, color = muted,
-                modifier = Modifier.clickable { onHourChange((hour - 1 + 24) % 24) }.padding(4.dp)
+                modifier = Modifier.clickableLabeled("Earlier hour") { onHourChange((hour - 1 + 24) % 24) }.padding(4.dp)
             )
             Text("${hour.toString().padStart(2, '0')}:00", style = MaterialTheme.typography.bodyMedium, color = onBg)
             Text(
                 "+", style = MaterialTheme.typography.bodyLarge, color = muted,
-                modifier = Modifier.clickable { onHourChange((hour + 1) % 24) }.padding(4.dp)
+                modifier = Modifier.clickableLabeled("Later hour") { onHourChange((hour + 1) % 24) }.padding(4.dp)
             )
         }
     }
@@ -276,12 +277,12 @@ internal fun TileOrderRow(
             Text(
                 "↑", style = MaterialTheme.typography.bodyMedium,
                 color = if (canMoveUp) muted else muted.copy(alpha = 0.2f),
-                modifier = if (canMoveUp) Modifier.clickable(onClick = onMoveUp).padding(4.dp) else Modifier.padding(4.dp)
+                modifier = if (canMoveUp) Modifier.clickableLabeled("Move up", onClick = onMoveUp).padding(4.dp) else Modifier.padding(4.dp)
             )
             Text(
                 "↓", style = MaterialTheme.typography.bodyMedium,
                 color = if (canMoveDown) muted else muted.copy(alpha = 0.2f),
-                modifier = if (canMoveDown) Modifier.clickable(onClick = onMoveDown).padding(4.dp) else Modifier.padding(4.dp)
+                modifier = if (canMoveDown) Modifier.clickableLabeled("Move down", onClick = onMoveDown).padding(4.dp) else Modifier.padding(4.dp)
             )
         }
     }

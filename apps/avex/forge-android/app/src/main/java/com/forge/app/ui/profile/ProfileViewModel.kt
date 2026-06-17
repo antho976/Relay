@@ -4,6 +4,7 @@ import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.forge.app.data.prefs.SettingsRepository
+import com.forge.app.data.repo.ProfileData
 import com.forge.app.data.repo.ProfileRepository
 import com.forge.app.data.repo.AvatarRepository
 import com.forge.app.data.repo.ProgressPhoto
@@ -37,32 +38,46 @@ class ProfileViewModel @Inject constructor(
     init { load() }
 
     private fun load() = viewModelScope.launch {
+        val name = settingsRepo.userName.first()
+        val photos = photoRepo.photos()
+        val hasAvatar = avatarRepo.exists()
+        val avatarStamp = if (hasAvatar) avatarRepo.file.lastModified() else 0L
+        // Instant first paint on re-entry: render the last-assembled data while the fresh fan-out runs (P3).
+        profileRepo.cached()?.let { _state.value = buildState(it, name, photos, hasAvatar, avatarStamp) }
         val data = profileRepo.load()
-        _state.value = ProfileUiState(
-            loading = false,
-            name = settingsRepo.userName.first(),
-            sinceLabel = data.sinceLabel,
-            rank = data.rank,
-            xp = data.xp,
-            totalSessions = data.totalSessions,
-            totalVolumeLb = data.totalVolumeLb,
-            totalPrs = data.totalPrs,
-            streakDays = data.streakDays,
-            standings = data.standings,
-            topLift = data.topLift,
-            mostLoggedDay = data.mostLoggedDay,
-            usualHour = data.usualHour,
-            photos = photoRepo.photos(),
-            hasAvatar = avatarRepo.exists(),
-            avatarStamp = if (avatarRepo.exists()) avatarRepo.file.lastModified() else 0L,
-            trophyUnlocked = data.trophyUnlocked,
-            trophyTotal = data.trophyTotal,
-            trophyGrid = data.trophyGrid,
-            closestTrophy = data.closestTrophy,
-            memory = data.memory,
-            recaps = data.recaps
-        )
+        _state.value = buildState(data, name, photos, hasAvatar, avatarStamp)
     }
+
+    private fun buildState(
+        data: ProfileData,
+        name: String,
+        photos: List<ProgressPhoto>,
+        hasAvatar: Boolean,
+        avatarStamp: Long
+    ) = ProfileUiState(
+        loading = false,
+        name = name,
+        sinceLabel = data.sinceLabel,
+        rank = data.rank,
+        xp = data.xp,
+        totalSessions = data.totalSessions,
+        totalVolumeLb = data.totalVolumeLb,
+        totalPrs = data.totalPrs,
+        streakDays = data.streakDays,
+        standings = data.standings,
+        topLift = data.topLift,
+        mostLoggedDay = data.mostLoggedDay,
+        usualHour = data.usualHour,
+        photos = photos,
+        hasAvatar = hasAvatar,
+        avatarStamp = avatarStamp,
+        trophyUnlocked = data.trophyUnlocked,
+        trophyTotal = data.trophyTotal,
+        trophyGrid = data.trophyGrid,
+        closestTrophy = data.closestTrophy,
+        memory = data.memory,
+        recaps = data.recaps
+    )
 
     fun fileFor(photo: ProgressPhoto) = photoRepo.fileFor(photo)
 

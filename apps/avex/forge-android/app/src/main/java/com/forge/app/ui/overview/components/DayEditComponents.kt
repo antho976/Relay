@@ -36,6 +36,7 @@ import androidx.compose.ui.unit.sp
 import com.forge.app.data.db.entities.ProgramCustomization
 import com.forge.app.program.ExercisePlan
 import com.forge.app.program.MuscleGroup
+import com.forge.app.ui.common.clickableLabeled
 
 @Composable
 internal fun NameSection(
@@ -81,12 +82,12 @@ internal fun NameSection(
                 Text(if (text.isEmpty()) defaultName else text,
                     style = MaterialTheme.typography.bodyMedium,
                     color = if (text.isEmpty()) muted.copy(alpha = 0.4f) else onBg,
-                    modifier = Modifier.fillMaxWidth().clickable { isEditing = true })
+                    modifier = Modifier.fillMaxWidth().clickableLabeled("Edit day name") { isEditing = true })
             }
         }
         if (customName != null) {
             Text("reset", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.5f), fontSize = 9.sp,
-                modifier = Modifier.clickable { text = ""; isEditing = false; onSave("") })
+                modifier = Modifier.clickableLabeled("Reset day name") { text = ""; isEditing = false; onSave("") })
         }
     }
 }
@@ -113,15 +114,15 @@ internal fun ExerciseEditRow(
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Text(plan.name, style = MaterialTheme.typography.bodyMedium, color = onBg.copy(alpha = textAlpha), modifier = Modifier.weight(1f))
             Text(if (removed) "restore" else "remove", style = MaterialTheme.typography.labelSmall,
-                color = muted.copy(alpha = 0.55f), fontSize = 9.sp, modifier = Modifier.clickable { onToggleRemoved() })
+                color = muted.copy(alpha = 0.55f), fontSize = 9.sp, modifier = Modifier.clickableLabeled("Remove or restore exercise") { onToggleRemoved() })
         }
         if (!removed) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(0.dp)) {
                 Text("−", style = MaterialTheme.typography.bodySmall, color = muted,
-                    modifier = Modifier.clickable { onSetsChange((currentSets - 1).coerceAtLeast(1)) }.padding(end = 8.dp, top = 2.dp, bottom = 2.dp))
+                    modifier = Modifier.clickableLabeled("Fewer sets") { onSetsChange((currentSets - 1).coerceAtLeast(1)) }.padding(end = 8.dp, top = 2.dp, bottom = 2.dp))
                 Text("$currentSets", style = MaterialTheme.typography.bodySmall, color = onBg)
                 Text("+", style = MaterialTheme.typography.bodySmall, color = muted,
-                    modifier = Modifier.clickable { onSetsChange(currentSets + 1) }.padding(start = 8.dp, top = 2.dp, bottom = 2.dp))
+                    modifier = Modifier.clickableLabeled("More sets") { onSetsChange(currentSets + 1) }.padding(start = 8.dp, top = 2.dp, bottom = 2.dp))
                 Text(" sets  ·  ", style = MaterialTheme.typography.bodySmall, color = muted.copy(alpha = 0.4f))
                 BasicTextField(
                     value = repsText,
@@ -165,7 +166,7 @@ internal fun AddWarmupRow(onAdd: (String) -> Unit, muted: Color, outline: Color,
         )
         Text("+", style = MaterialTheme.typography.bodyLarge,
             color = if (text.isNotBlank()) onBg else muted.copy(alpha = 0.3f),
-            modifier = Modifier.clickable { if (text.isNotBlank()) { onAdd(text); text = "" } })
+            modifier = Modifier.clickableLabeled("Add") { if (text.isNotBlank()) { onAdd(text); text = "" } })
     }
 }
 
@@ -209,11 +210,11 @@ internal fun AddExerciseRow(onAdd: (String, MuscleGroup) -> Unit, muted: Color, 
             fontSize = 10.sp,
             modifier = Modifier
                 .border(BorderStroke(0.5.dp, outline.copy(alpha = 0.3f)), RoundedCornerShape(4.dp))
-                .clickable { muscleIdx = (muscleIdx + 1) % muscles.size }
+                .clickableLabeled("Change muscle group") { muscleIdx = (muscleIdx + 1) % muscles.size }
                 .padding(horizontal = 8.dp, vertical = 8.dp)
         )
         Text("+", style = MaterialTheme.typography.bodyLarge,
             color = if (text.isNotBlank()) onBg else muted.copy(alpha = 0.3f),
-            modifier = Modifier.clickable { submit() })
+            modifier = Modifier.clickableLabeled("Add exercise") { submit() })
     }
 }

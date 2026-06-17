@@ -1,7 +1,6 @@
 package com.forge.app.ui.gym.train.components
 
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -251,7 +250,7 @@ fun SessionSummarySheet(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable(enabled = !sharing) {
+                        .bounceClick(enabled = !sharing) {
                             // Render the ~4.7 MB bitmap off the main thread (it allocates, draws, PNG-
                             // compresses and writes a file); only the share intent touches the UI thread.
                             sharing = true

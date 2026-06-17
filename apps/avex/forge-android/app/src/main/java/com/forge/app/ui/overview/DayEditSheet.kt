@@ -34,6 +34,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.data.db.entities.WarmupRoutineItem
 import com.forge.app.program.Program
+import com.forge.app.ui.common.clickableLabeled
 import com.forge.app.ui.overview.components.AddExerciseRow
 import com.forge.app.ui.overview.components.AddWarmupRow
 import com.forge.app.ui.overview.components.ExerciseEditRow
@@ -125,7 +126,7 @@ fun DayEditSheet(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable { onSelectAsToday(selectedDayKey) }
+                                .clickableLabeled("Set as today's workout") { onSelectAsToday(selectedDayKey) }
                                 .padding(vertical = 8.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
@@ -175,7 +176,7 @@ fun DayEditSheet(
                         style = MaterialTheme.typography.labelSmall,
                         color = muted.copy(alpha = 0.5f),
                         fontSize = 10.sp,
-                        modifier = Modifier.clickable { vm.resetExercises() }
+                        modifier = Modifier.clickableLabeled("Reset exercises") { vm.resetExercises() }
                     )
                 }
             }
@@ -228,7 +229,7 @@ fun DayEditSheet(
                         style = MaterialTheme.typography.labelSmall,
                         color = muted.copy(alpha = 0.5f),
                         fontSize = 10.sp,
-                        modifier = Modifier.clickable { vm.resetWarmup() }
+                        modifier = Modifier.clickableLabeled("Reset warm-up") { vm.resetWarmup() }
                     )
                 }
             }
@@ -281,7 +282,7 @@ fun DayEditSheet(
                         style = MaterialTheme.typography.bodyMedium,
                         color = muted.copy(alpha = 0.5f),
                         modifier = Modifier
-                            .clickable { vm.removeWarmupItem(item) }
+                            .clickableLabeled("Remove warm-up item") { vm.removeWarmupItem(item) }
                             .padding(start = 16.dp, top = 4.dp, bottom = 4.dp)
                     )
                 }

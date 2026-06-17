@@ -99,7 +99,7 @@ internal fun LedgerSection(
     }
 }
 
-/** STANDING · VS ATHLETES, 90 DAYS — offline percentile estimate. */
+/** STANDING · ESTIMATED, 90 DAYS — offline percentile estimate (never a live leaderboard). */
 @Composable
 internal fun StandingSection(
     standings: List<StandingMetric>,
@@ -109,7 +109,9 @@ internal fun StandingSection(
     outline: Color
 ) {
     if (standings.isEmpty()) return
-    ProfileBlock("STANDING · VS ATHLETES, 90 DAYS", muted, accent, outline) {
+    // "ESTIMATED" (not "VS ATHLETES") in the header itself so a stranger can't misread these
+    // percentiles as a real online ranking before they reach the disclaimer below.
+    ProfileBlock("STANDING · ESTIMATED, 90 DAYS", muted, accent, outline) {
         // Each bar fills from 0 on first show, staggered by row for a cascade (reduced motion → instant).
         var play by remember { mutableStateOf(false) }
         LaunchedEffect(Unit) { play = true }
@@ -141,7 +143,7 @@ internal fun StandingSection(
         }
         Spacer(Modifier.height(6.dp))
         Text(
-            "Estimated vs typical lifters — nothing ever leaves your phone.",
+            "These percentiles are modelled estimates, not a live leaderboard. Your data never leaves your device.",
             style = MaterialTheme.typography.bodySmall, color = muted.copy(alpha = 0.7f),
             fontStyle = FontStyle.Italic, fontSize = 10.sp
         )

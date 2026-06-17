@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.forge.app.data.repo.CoachBrief
 import com.forge.app.data.repo.CoachRepository
+import com.forge.app.data.repo.CoachWatch
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -25,8 +26,13 @@ class CoachBriefViewModel @Inject constructor(
 
     data class UiState(
         val loading: Boolean = true,
-        /** Null after loading = even the pass record failed to load — render the error body. */
+        /** Null after loading = even the pass record failed to load — render the empty/error body. */
         val brief: CoachBrief? = null,
+        /**
+         * Activation countdown for the empty state (CO1): only fetched when [brief] is null, so a
+         * brand-new user sees a concrete "N of M sessions logged, K to go" instead of generic copy.
+         */
+        val countdown: CoachWatch? = null,
         /** Show the one-time "how your coach learns" card on first Brief open (CO6). */
         val showIntroCard: Boolean = false
     )
@@ -37,9 +43,12 @@ class CoachBriefViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             val brief = runCatching { coachRepo.brief() }.getOrNull()
+            // No brief yet (brand-new user, or the pass couldn't assemble): pull the lightweight
+            // learning countdown so the empty state can explain itself with real numbers (CO1).
+            val countdown = if (brief == null) runCatching { coachRepo.coachLab() }.getOrNull() else null
             // Default to "seen" on a read failure so we never flash the intro on every open.
             val introSeen = runCatching { settingsRepo.coachBriefIntroSeen.first() }.getOrDefault(true)
-            _state.value = UiState(loading = false, brief = brief, showIntroCard = !introSeen)
+            _state.value = UiState(loading = false, brief = brief, countdown = countdown, showIntroCard = !introSeen)
             // Opening the brief (from the banner OR Settings) clears the Overview "new report" banner.
             brief?.let { runCatching { coachRepo.markSeen(it.pass.weekId) } }
         }

@@ -122,6 +122,8 @@ object ProgressionAdvisor {
         val range = RepRange.parse(repsText)
         val topSets = working.filter { it.weightLb == prevMax }
         val hitTopOnAllTopSets = range != null && topSets.all { it.reps >= range.max }
+        // Both same-weight cues (consolidate, keep-going) render prevMax identically — derive once.
+        val sameWeightInput = if (unit == ExerciseUnit.PLATES) inputTextFor(prevMax, unit, plateLb) else trim(prevMax)
 
         return when {
             backOff -> backOffSuggestion(exerciseId, exerciseName, prevMax, unit, plateLb, scale, scaleNote, backOffReason, t)
@@ -129,11 +131,23 @@ object ProgressionAdvisor {
             hitTopOnAllTopSets && okToProgress && consolidate ->
                 weightChange(
                     exerciseId, exerciseName, prevMax, prevMax,
-                    inputText = if (unit == ExerciseUnit.PLATES) inputTextFor(prevMax, unit, plateLb) else trim(prevMax),
+                    inputText = sameWeightInput,
                     reason = "calibrated to you — recent jumps haven't stuck, consolidate this weight first"
                 )
             hitTopOnAllTopSets && okToProgress ->
                 progressSuggestion(exerciseId, exerciseName, prevMax, unit, plateLb, scale, scaleNote, dbMaxLb, fastStep, t)
+            // Worked at this weight last time but hasn't filled the rep range yet — surface an explicit
+            // same-weight "keep going" cue instead of vanishing, so the missing chip never reads as
+            // broken. This teaches double-progression (earn the reps here before the weight moves) and
+            // distinguishes "still working up to this weight" from the plateau ladder's "stuck for N
+            // sessions" (that read lives on the coach/snapshot path). BODYWEIGHT already returned above;
+            // a null range (AMRAP / timed holds) has no top to reach, so it stays silent.
+            range != null && !hitTopOnAllTopSets ->
+                weightChange(
+                    exerciseId, exerciseName, prevMax, prevMax,
+                    inputText = sameWeightInput,
+                    reason = "keep this weight — reach ${range.max} reps on every set before adding load"
+                )
             else -> null
         }
     }

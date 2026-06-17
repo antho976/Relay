@@ -74,6 +74,28 @@ import java.util.Locale
  * A dismissible info strip (e.g. the auto-resolved orphan-session notice, E8). The close affordance
  * is a 48 dp touch target — the [Icon] itself stays 16 dp, but its hit area meets the a11y minimum.
  */
+/** The shared "COACH" home-section scaffold (divider + label + a tappable headline/body). At most one
+ *  of three states fills it — learning countdown, fatigue nudge, or persistent entry — so they share
+ *  one treatment and can't drift apart. Emits into the calling column in order. */
+@Composable
+private fun CoachHomeBlock(headline: String, body: String, clickLabel: String, onClick: () -> Unit) {
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val onBg = MaterialTheme.colorScheme.onBackground
+    val outline = MaterialTheme.colorScheme.outline
+    Spacer(Modifier.height(20.dp))
+    HorizontalDivider(color = outline.copy(alpha = 0.3f))
+    Spacer(Modifier.height(16.dp))
+    Text("COACH", style = MaterialTheme.typography.labelMedium, color = emphasized(muted))
+    Spacer(Modifier.height(10.dp))
+    Column(
+        Modifier.fillMaxWidth().clickableLabeled(clickLabel) { onClick() }.padding(vertical = 2.dp)
+    ) {
+        Text(headline, style = MaterialTheme.typography.bodyMedium, color = onBg)
+        Spacer(Modifier.height(2.dp))
+        Text(body, style = MaterialTheme.typography.bodySmall, color = muted)
+    }
+}
+
 @Composable
 private fun DismissibleNotice(text: String, onBg: Color, muted: Color, onDismiss: () -> Unit) {
     Spacer(Modifier.height(16.dp))
@@ -452,47 +474,30 @@ fun OverviewScreen(
                 }
             }
 
-            // ── Coach still learning (CD-1): only when there's no actionable advice yet ──
+            // ── Coach (home entry) — at most one shows: a learning countdown (CD-1), a fatigue nudge
+            // (Tier 3), or a persistent "quiet but reachable" entry (D3). All share CoachHomeBlock. ──
             state.coachLearning?.let { hint ->
-                Spacer(Modifier.height(20.dp))
-                HorizontalDivider(color = outline.copy(alpha = 0.3f))
-                Spacer(Modifier.height(16.dp))
-                Text("COACH", style = MaterialTheme.typography.labelMedium, color = emphasized(muted))
-                Spacer(Modifier.height(10.dp))
-                Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .clickableLabeled("Open Coach Lab") { onOpenCoachLab() }
-                        .padding(vertical = 2.dp)
-                ) {
-                    Text("Still learning your training.", style = MaterialTheme.typography.bodyMedium, color = onBg)
-                    Spacer(Modifier.height(2.dp))
-                    Text(
-                        "${hint.sessionsToGo} more session${if (hint.sessionsToGo == 1) "" else "s"} and it starts " +
-                            "calling weekly adjustments. See what it's tracking →",
-                        style = MaterialTheme.typography.bodySmall, color = muted
-                    )
-                }
+                CoachHomeBlock(
+                    "Still learning your training.",
+                    "${hint.sessionsToGo} more session${if (hint.sessionsToGo == 1) "" else "s"} and it starts " +
+                        "calling weekly adjustments. See what it's tracking →",
+                    clickLabel = "Open Coach Lab", onClick = onOpenCoachLab
+                )
             }
-
-            // ── Coach: recovery signals building (Tier 3) — active coach, quiet, fatigue rising ──
             state.coachFatigue?.let { f ->
-                Spacer(Modifier.height(20.dp))
-                HorizontalDivider(color = outline.copy(alpha = 0.3f))
-                Spacer(Modifier.height(16.dp))
-                Text("COACH", style = MaterialTheme.typography.labelMedium, color = emphasized(muted))
-                Spacer(Modifier.height(10.dp))
-                Column(
-                    Modifier.fillMaxWidth().clickableLabeled("Open Coach Lab") { onOpenCoachLab() }.padding(vertical = 2.dp)
-                ) {
-                    Text("Recovery signals building.", style = MaterialTheme.typography.bodyMedium, color = onBg)
-                    Spacer(Modifier.height(2.dp))
-                    Text(
-                        "Fatigue ${f.score} of ${f.threshold}${f.topDriver?.let { " · $it" } ?: ""} — " +
-                            "not a deload yet, but easing up helps. See what it's tracking →",
-                        style = MaterialTheme.typography.bodySmall, color = muted
-                    )
-                }
+                CoachHomeBlock(
+                    "Recovery signals building.",
+                    "Fatigue ${f.score} of ${f.threshold}${f.topDriver?.let { " · $it" } ?: ""} — " +
+                        "not a deload yet, but easing up helps. See what it's tracking →",
+                    clickLabel = "Open Coach Lab", onClick = onOpenCoachLab
+                )
+            }
+            if (state.coach.isEmpty() && state.coachLearning == null && state.coachFatigue == null) {
+                CoachHomeBlock(
+                    "Your coach.",
+                    "See your weekly brief and what it's tracking →",
+                    clickLabel = "Open the week brief", onClick = onOpenCoachBrief
+                )
             }
 
             Spacer(Modifier.height(20.dp))

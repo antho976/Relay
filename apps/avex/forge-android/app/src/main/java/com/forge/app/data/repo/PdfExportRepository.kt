@@ -95,7 +95,7 @@ class PdfExportRepository @Inject constructor(
         for (ex in exercises) {
             if (y > 780f) break // safety: don't overflow page
             val sets = loggedSetDao.forLoggedExercise(ex.id)
-            val exName = ex.swappedName ?: Program.exercise(ex.exerciseId)?.name ?: ex.exerciseId
+            val exName = Program.exerciseDisplayName(ex.exerciseId, ex.swappedName)
             val effort = ex.difficulty?.name?.lowercase()?.replace('_', ' ')
             canvas.drawText(exName + if (effort != null) "  —  felt $effort" else "", margin, y, headerPaint)
             y += 16f

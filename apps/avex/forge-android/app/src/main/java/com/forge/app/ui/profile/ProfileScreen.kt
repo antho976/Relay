@@ -82,9 +82,6 @@ fun ProfileScreen(
         uri?.let { viewModel.addPhoto(it) }
     }
     fun pickPhoto() = photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
-    val avatarPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        uri?.let { viewModel.setAvatar(it) }
-    }
 
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
@@ -128,14 +125,7 @@ fun ProfileScreen(
         Column(
             Modifier.fillMaxSize().padding(inner).verticalScroll(rememberScrollState()).padding(horizontal = 24.dp)
         ) {
-            // ── Avatar + Header ─────────────────────────────────────────────────
-            ProfileAvatar(
-                hasAvatar = state.hasAvatar, file = viewModel.avatarFile(), stamp = state.avatarStamp,
-                initial = state.name.trim().firstOrNull()?.uppercase() ?: "",
-                muted = muted, outline = outline,
-                onPick = { avatarPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
-            )
-            Spacer(Modifier.height(14.dp))
+            // ── Header ──────────────────────────────────────────────────────────
             Text(
                 "ATHLETE PROFILE" + if (state.sinceLabel.isNotBlank()) " · SINCE ${state.sinceLabel}" else "",
                 style = MaterialTheme.typography.labelSmall, color = emphasized(muted), fontSize = 9.sp

@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.forge.app.ui.common.clickableLabeled
 
 private val TIMEZONE_OPTIONS = listOf(
     "America/Los_Angeles" to "Los Angeles (PST −8)",
@@ -239,7 +240,7 @@ private fun NoteTemplatesEditor(
                 ) {
                     Text(t.trim(), style = MaterialTheme.typography.bodySmall, color = onBg)
                     Text("✕", style = MaterialTheme.typography.labelSmall, color = muted,
-                        modifier = Modifier.clickable { onRemove(t) }.padding(2.dp))
+                        modifier = Modifier.clickableLabeled("Remove") { onRemove(t) }.padding(2.dp))
                 }
             }
         }
@@ -257,7 +258,7 @@ private fun NoteTemplatesEditor(
                 style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier
-                    .clickable { if (input.isNotBlank()) { onAdd(input); input = "" } }
+                    .clickableLabeled("Add") { if (input.isNotBlank()) { onAdd(input); input = "" } }
                     .padding(8.dp)
             )
         }
@@ -273,7 +274,7 @@ internal fun SectionResetRow(section: com.forge.app.data.prefs.SettingsSection, 
         "Reset this page to defaults",
         style = MaterialTheme.typography.labelSmall,
         color = muted.copy(alpha = 0.8f),
-        modifier = Modifier.fillMaxWidth().clickable { vm.resetSection(section) }.padding(horizontal = 24.dp, vertical = 16.dp)
+        modifier = Modifier.fillMaxWidth().clickableLabeled("Reset to defaults") { vm.resetSection(section) }.padding(horizontal = 24.dp, vertical = 16.dp)
     )
 }
 

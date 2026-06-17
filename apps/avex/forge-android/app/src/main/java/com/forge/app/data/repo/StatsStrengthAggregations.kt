@@ -36,9 +36,8 @@ internal fun buildPrEntries(
         // filtered out) — drop the row rather than render a blank "— / 0 reps" entry.
         val prSet = candidateSets.maxByOrNull { it.weightLb ?: 0.0 } ?: return@mapNotNull null
         val weightLb = prSet.weightLb ?: return@mapNotNull null
-        val name = row.swappedName
-            ?: Program.exercise(row.exerciseId)?.name
-            ?: row.exerciseId
+        // Never a raw id: swap name → active/library, humanized (incl. seed split) as a last resort (C3).
+        val name = Program.exerciseDisplayName(row.exerciseId, row.swappedName)
         PrEntry(
             date = row.sessionStartedAt,
             exerciseName = name,

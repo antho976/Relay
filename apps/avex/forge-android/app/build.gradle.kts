@@ -6,6 +6,7 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.ksp)
     alias(libs.plugins.hilt)
+    alias(libs.plugins.androidx.baselineprofile)
 }
 
 // Release signing — reads credentials from forge-android/keystore.properties (gitignored).
@@ -144,6 +145,11 @@ dependencies {
     // Glance for home screen widget (#146)
     implementation("androidx.glance:glance-appwidget:1.1.1")
     implementation("androidx.glance:glance-material3:1.1.1")
+
+    // Baseline Profile — installs the generated app/src/main/baseline-prof.txt at runtime (P2).
+    // profileinstaller is a no-op until the profile is generated on a device.
+    implementation(libs.androidx.profileinstaller)
+    baselineProfile(project(":baselineprofile"))
 
     // Test
     testImplementation(libs.junit)

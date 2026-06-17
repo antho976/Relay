@@ -33,6 +33,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import com.forge.app.ui.coach.TrustProgressBar
+import com.forge.app.ui.common.clickableLabeled
 
 /**
  * The Program settings, split into a small menu of focused sub-pages so the page isn't one
@@ -280,6 +281,22 @@ private fun CoachSection(state: SettingsUiState, vm: SettingsViewModel, onOpenCo
             PillChip("Suggest", state.coachMode != "auto") { vm.setCoachMode("suggest") }
             PillChip("Earn auto-apply", state.coachMode == "auto") { vm.setCoachMode("auto") }
         }
+        // "Earn auto-apply" is a TARGET, not an on-switch: until a change type builds its accepted
+        // streak, nothing self-applies. Say so explicitly so the user never believes they've handed
+        // over control prematurely — the trust gate is a core safety property, not a hidden one.
+        // trust.isNotEmpty() gates out the load window — coachTrust starts empty, so without it the
+        // note would flash on a fully-trusted coach until loadCoachData() populates trust.
+        if (state.coachMode == "auto" && trust.isNotEmpty() && trust.none { it.earned }) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Auto-apply isn't active yet — no change type has built the required streak, so every " +
+                    "proposal still waits for your tap. It switches on per type as trust is earned below.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+                fontStyle = FontStyle.Italic,
+                modifier = Modifier.padding(horizontal = 24.dp)
+            )
+        }
     }
 
     ProgramBlock("Earned trust", "What the coach has earned so far, per change type.") {
@@ -353,7 +370,7 @@ private fun CoachSection(state: SettingsUiState, vm: SettingsViewModel, onOpenCo
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.primary,
                                 modifier = Modifier
-                                    .clickable { vm.undoCoachDecision(d.id) }
+                                    .clickableLabeled("Undo this change") { vm.undoCoachDecision(d.id) }
                                     .padding(start = 12.dp, top = 2.dp, bottom = 2.dp)
                             )
                         }

@@ -3,7 +3,6 @@ package com.forge.app.ui.gym.train.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,6 +23,7 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.forge.app.domain.units.formatVolume
+import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.theme.LocalForgeSettings
 import androidx.compose.ui.unit.sp
 import com.forge.app.domain.mood.Mood
@@ -66,7 +66,7 @@ internal fun MoodChip(mood: Mood, isSelected: Boolean, onClick: () -> Unit, onBg
             .clip(RoundedCornerShape(4.dp))
             .border(0.5.dp, if (isSelected) onBg else outline.copy(alpha = 0.35f), RoundedCornerShape(4.dp))
             .background(if (isSelected) onBg.copy(alpha = 0.08f) else Color.Transparent)
-            .clickable { onClick() }
+            .bounceClick { onClick() }
             .padding(vertical = 8.dp),
         contentAlignment = Alignment.Center
     ) {
@@ -120,7 +120,7 @@ internal fun TagPicker(selected: Set<String>, onToggle: (String) -> Unit, onBg: 
                         .clip(RoundedCornerShape(4.dp))
                         .border(0.5.dp, if (tag in selected) onBg else outline.copy(alpha = 0.35f), RoundedCornerShape(4.dp))
                         .background(if (tag in selected) onBg.copy(alpha = 0.08f) else Color.Transparent)
-                        .clickable { onToggle(tag) }
+                        .bounceClick { onToggle(tag) }
                         .padding(horizontal = 10.dp, vertical = 6.dp)
                 ) {
                     Text(tag, style = MaterialTheme.typography.labelSmall, color = if (tag in selected) onBg else muted.copy(alpha = 0.7f), fontSize = 10.sp)

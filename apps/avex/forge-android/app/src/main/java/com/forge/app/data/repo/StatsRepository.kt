@@ -231,12 +231,9 @@ class StatsRepository @Inject constructor(
             val sets = setsByExId[ex.id] ?: emptyList()
             if (sets.isEmpty()) return@mapNotNull null
             val topSet = sets.maxByOrNull { it.weightLb ?: 0.0 }
-            val name = ex.swappedName
-                // Resolve via Program.exercise (active plan → ExerciseLibrary fallback), not just the
-                // active day plans: a swapped exercise's id, or one rotated out by a regenerate, won't be
-                // in Program.days but still resolves from the library — otherwise the raw kebab id shows.
-                ?: Program.exercise(ex.exerciseId)?.name
-                ?: ex.exerciseId
+            // Resolves swap name → active plan → seed split → library, with a humanized last-ditch
+            // fallback so a swapped/rotated-out/removed id never surfaces as a raw kebab key (C3).
+            val name = Program.exerciseDisplayName(ex.exerciseId, ex.swappedName)
             SessionExerciseLine(
                 exerciseName = name,
                 topWeightLb = topSet?.weightLb,
@@ -264,12 +261,9 @@ class StatsRepository @Inject constructor(
             // Mark only ONE set as the top set (the first at the heaviest weight), not the whole
             // top-weight cluster — straight sets at the same weight shouldn't all read as "the" top.
             val topIdx = if (topWeight == null) -1 else sets.indexOfFirst { it.weightLb == topWeight }
-            val name = ex.swappedName
-                // Resolve via Program.exercise (active plan → ExerciseLibrary fallback), not just the
-                // active day plans: a swapped exercise's id, or one rotated out by a regenerate, won't be
-                // in Program.days but still resolves from the library — otherwise the raw kebab id shows.
-                ?: Program.exercise(ex.exerciseId)?.name
-                ?: ex.exerciseId
+            // Resolves swap name → active plan → seed split → library, with a humanized last-ditch
+            // fallback so a swapped/rotated-out/removed id never surfaces as a raw kebab key (C3).
+            val name = Program.exerciseDisplayName(ex.exerciseId, ex.swappedName)
             val setDetails = sets.mapIndexed { i, s ->
                 SetDetail(
                     number = i + 1,

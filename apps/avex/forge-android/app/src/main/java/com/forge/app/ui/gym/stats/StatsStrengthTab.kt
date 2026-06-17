@@ -89,8 +89,8 @@ internal fun LazyListScope.strengthTab(state: StatsUiState, c: StatsColors) {
         val a = withHistory[0]; val b = withHistory[1]
         cardItem("overlay") {
             StrengthOverlayCard(
-                history1 = (Program.exercise(a.key)?.name ?: a.key) to a.value,
-                history2 = (Program.exercise(b.key)?.name ?: b.key) to b.value
+                history1 = Program.exerciseDisplayName(a.key) to a.value,
+                history2 = Program.exerciseDisplayName(b.key) to b.value
             )
         }
     }

@@ -25,3 +25,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "Forge"
 include(":app")
+include(":baselineprofile")

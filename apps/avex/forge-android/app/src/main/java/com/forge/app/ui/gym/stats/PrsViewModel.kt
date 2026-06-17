@@ -71,7 +71,8 @@ class PrsViewModel @Inject constructor(
 
         val displayRows = allPrs.mapNotNull { row ->
             val plan = Program.exercise(row.exerciseId)
-            val name = row.swappedName ?: plan?.name ?: row.exerciseId
+            // Never a raw id: swap name → active/seed/library, humanized as a last resort (C3).
+            val name = Program.exerciseDisplayName(row.exerciseId, row.swappedName)
             PrDisplayRow(
                 loggedExerciseId = row.loggedExerciseId,
                 exerciseId = row.exerciseId,

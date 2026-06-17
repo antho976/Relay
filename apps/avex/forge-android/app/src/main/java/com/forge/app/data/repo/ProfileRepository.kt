@@ -97,6 +97,11 @@ class ProfileRepository @Inject constructor(
     private val settingsRepo: SettingsRepository,
     private val clock: Clock
 ) {
+    /** Last assembled data — lets the ViewModel paint instantly on profile re-entry (P3); always refreshed. */
+    @Volatile private var lastData: ProfileData? = null
+    /** The cached profile data, or null before the first load. */
+    fun cached(): ProfileData? = lastData
+
     suspend fun load(): ProfileData = withContext(Dispatchers.IO) {
         val useKg = settingsRepo.useKg.first()
         val zone = ZoneId.systemDefault()
@@ -149,7 +154,8 @@ class ProfileRepository @Inject constructor(
 
         // ── Signature ─────────────────────────────────────────────────────────────
         val topLift = topLiftD.await()?.let { row ->
-            Program.exercise(row.exerciseId)?.name?.let { SignatureLift(it, row.weightLb) }
+            // Humanized (incl. seed split) so a signature lift never drops out or shows a raw id (C3).
+            SignatureLift(Program.exerciseDisplayName(row.exerciseId), row.weightLb)
         }
         val mostLoggedDay = sessions.groupingBy { it.dayKey }.eachCount().maxByOrNull { it.value }?.key
             // dayOrNull (not day) so a since-deleted history key shows no name rather than the wrong
@@ -191,7 +197,7 @@ class ProfileRepository @Inject constructor(
             memory = memoryD.await(),
             recaps = buildRecaps(sessions, zone, nowMs, useKg)
         )
-        }
+        }.also { lastData = it }
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────────

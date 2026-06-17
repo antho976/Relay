@@ -76,7 +76,7 @@ class RecapViewModel @Inject constructor(
         // Month recap
         val monthRecap = if (monthSessions.isNotEmpty()) {
             val exFreq = loggedExerciseDao.frequencySince(monthStart)
-            val topEx = exFreq.maxByOrNull { it.sessionCount }?.let { Program.exercise(it.exerciseId)?.name }
+            val topEx = exFreq.maxByOrNull { it.sessionCount }?.let { Program.exerciseDisplayName(it.exerciseId) }
             val avgDur = monthSessions.mapNotNull { it.durationMinutes() }.average().toInt()
             val bestDay = monthSessions.groupBy { it.dayKey }
                 .maxByOrNull { (_, sessions) -> sessions.sumOf { it.prCount } }
@@ -96,7 +96,7 @@ class RecapViewModel @Inject constructor(
         // Year recap
         val yearRecap = if (yearSessions.isNotEmpty()) {
             val exFreq = loggedExerciseDao.frequencySince(yearStart)
-            val topEx = exFreq.maxByOrNull { it.sessionCount }?.let { Program.exercise(it.exerciseId)?.name }
+            val topEx = exFreq.maxByOrNull { it.sessionCount }?.let { Program.exerciseDisplayName(it.exerciseId) }
             val totalVol = yearSessions.sumOf { it.totalVolumeLb ?: 0.0 }
             // Divide by calendar weeks elapsed this year, not sessions/7 (which wildly inflated it).
             val weeksElapsed = (java.time.temporal.ChronoUnit.DAYS

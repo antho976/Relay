@@ -79,13 +79,55 @@ fun CoachBriefScreen(
             }
             state.brief == null -> Box(Modifier.fillMaxSize().padding(inner).padding(horizontal = 32.dp), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(
-                        "Your coach is still learning. It writes your first brief after about a week of " +
-                            "training — finish a few workouts and it'll appear here.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                    )
+                    // Prefer a concrete "sessions to go" countdown when we have the numbers (CO1) — it
+                    // explains the empty Brief far better than the generic copy, which stays the fallback
+                    // when even the lightweight learning read failed (the genuine error case).
+                    val cd = state.countdown
+                    when {
+                        cd != null && cd.sessionsToGo > 0 -> {
+                            Text(
+                                "Your coach is still learning.",
+                                style = MaterialTheme.typography.headlineSmall,
+                                color = MaterialTheme.colorScheme.onBackground,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                            )
+                            Spacer(Modifier.height(10.dp))
+                            Text(
+                                "${cd.sessionsLogged} of ${cd.minSessions} sessions logged — " +
+                                    "${cd.sessionsToGo} more workout${if (cd.sessionsToGo == 1) "" else "s"} and your " +
+                                    "first weekly brief appears here.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                            )
+                        }
+                        // Threshold met (sessionsToGo == 0) but the weekly pass hasn't written a brief yet:
+                        // don't tell someone who's already logged enough to "finish a few workouts" (CO1).
+                        cd != null -> {
+                            Text(
+                                "Your coach is ready.",
+                                style = MaterialTheme.typography.headlineSmall,
+                                color = MaterialTheme.colorScheme.onBackground,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                            )
+                            Spacer(Modifier.height(10.dp))
+                            Text(
+                                "You've logged enough — your first weekly brief lands at the start of next week.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                            )
+                        }
+                        else -> {
+                            Text(
+                                "Your coach is still learning. It writes your first brief after about a week of " +
+                                    "training — finish a few workouts and it'll appear here.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                            )
+                        }
+                    }
                     Spacer(Modifier.height(16.dp))
                     Text(
                         "See what it's tracking →",

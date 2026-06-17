@@ -48,9 +48,10 @@ class GoalRepository @Inject constructor(
         return goals.map { g ->
             GoalProgress(
                 exerciseId = g.exerciseId,
-                // Falls back to the raw id only for a goal whose exercise was removed from the program;
-                // such a goal stays clearable from the Goals screen's edit dialog.
-                name = Program.exercise(g.exerciseId)?.name ?: g.exerciseId,
+                // Resolves through the active program, the seed split, then the library; a goal whose
+                // exercise was removed entirely still shows a readable (humanized) name, never a raw id,
+                // and stays clearable from the Goals screen's edit dialog (C3).
+                name = Program.exerciseDisplayName(g.exerciseId),
                 targetLb = g.targetWeightLb,
                 currentBestLb = bestByExercise[g.exerciseId] ?: 0.0,
                 createdAt = g.createdAt
