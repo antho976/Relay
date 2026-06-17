@@ -22,6 +22,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
@@ -53,6 +54,20 @@ private fun recommendedRepsOf(reps: String): Int? {
     if (t.equals("AMRAP", ignoreCase = true)) return 12
     if (t.contains('s')) return null
     return Regex("""\d+""").findAll(t).map { it.value.toInt() }.lastOrNull()
+}
+
+/** One italic "Suggested next → …" cue line, with an optional parenthesised reason. Shared by the
+ *  weighted suggestion and the bodyweight rep-progression cue so the two can't drift in styling (CO5). */
+@Composable
+private fun SuggestionLine(label: String, reason: String?, muted: Color) {
+    Spacer(Modifier.height(2.dp))
+    val line = buildAnnotatedString {
+        withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
+            append(label)
+            if (!reason.isNullOrBlank()) append(" ($reason)")
+        }
+    }
+    Text(line, style = MaterialTheme.typography.bodySmall, color = muted.copy(alpha = 0.75f))
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -165,18 +180,12 @@ fun ExerciseCard(
                 }
                 Text(targetText, style = MaterialTheme.typography.bodySmall, color = muted)
 
-                // Suggested next line
+                // Suggested next line — a weight (weighted lifts) or, for bodyweight, more reps (CO5).
                 if (state.suggestedWeight != null) {
-                    Spacer(Modifier.height(2.dp))
-                    val suggLine = buildAnnotatedString {
-                        withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
-                            append("Suggested next → ${state.suggestedWeight}")
-                            if (!state.suggestionReason.isNullOrBlank()) {
-                                append(" (${state.suggestionReason})")
-                            }
-                        }
-                    }
-                    Text(suggLine, style = MaterialTheme.typography.bodySmall, color = muted.copy(alpha = 0.75f))
+                    SuggestionLine("Suggested next → ${state.suggestedWeight}", state.suggestionReason, muted)
+                }
+                if (state.suggestedReps != null) {
+                    SuggestionLine("Suggested next → ${state.suggestedReps} reps", state.suggestedRepsReason, muted)
                 }
 
                 // Pinned cue

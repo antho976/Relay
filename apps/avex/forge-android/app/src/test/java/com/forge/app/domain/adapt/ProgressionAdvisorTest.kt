@@ -67,6 +67,59 @@ class ProgressionAdvisorTest {
         assertNull(suggest(listOf(set(45.0, 10)), EffortRating.EASY, unit = ExerciseUnit.BODYWEIGHT))
     }
 
+    // ── Bodyweight rep progression (CO5) ─────────────────────────────────────────
+
+    private fun suggestReps(
+        sets: List<LoggedSet>,
+        effort: EffortRating? = null,
+        reps: String = "8-12"
+    ) = ProgressionAdvisor.suggestNextReps(
+        exerciseId = "pull1", exerciseName = "Pull-up",
+        prevSets = sets, prevEffort = effort, repsText = reps
+    )
+
+    @Test
+    fun bodyweightReps_allSetsAtRangeTop_okEffort_suggestsOneMore() {
+        val s = suggestReps(listOf(set(null, 12), set(null, 12, idx = 1)), EffortRating.JUST_RIGHT)
+        assertNotNull(s)
+        assertEquals(13, s!!.targetReps)
+        assertEquals("8-12", s.fromReps)
+    }
+
+    @Test
+    fun bodyweightReps_midRange_staysSilent() {
+        // 9 reps in an 8-12 range: still climbing within the range, no nudge yet.
+        assertNull(suggestReps(listOf(set(null, 9)), EffortRating.JUST_RIGHT))
+    }
+
+    @Test
+    fun bodyweightReps_brutalEffort_staysSilent() {
+        assertNull(suggestReps(listOf(set(null, 12)), EffortRating.BRUTAL))
+    }
+
+    @Test
+    fun bodyweightReps_noHistory_staysSilent() {
+        assertNull(suggestReps(emptyList(), EffortRating.JUST_RIGHT))
+    }
+
+    @Test
+    fun bodyweightReps_oneSetBelowTop_staysSilent() {
+        // Double progression: EVERY working set must clear the top before adding a rep.
+        assertNull(suggestReps(listOf(set(null, 12), set(null, 10, idx = 1)), EffortRating.JUST_RIGHT))
+    }
+
+    @Test
+    fun bodyweightReps_allAssisted_staysSilent() {
+        // Every set band-assisted = no unassisted target. No fallback to assisted sets: stay silent,
+        // exactly as the weighted chip does (would otherwise nudge +1 off easier assisted reps).
+        assertNull(
+            suggestReps(
+                listOf(set(null, 12, assisted = true), set(null, 12, assisted = true, idx = 1)),
+                EffortRating.JUST_RIGHT
+            )
+        )
+    }
+
     // ── Happy path ─────────────────────────────────────────────────────────────
 
     @Test

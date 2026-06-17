@@ -112,6 +112,11 @@ internal suspend fun DayViewModel.buildExerciseUi(
         consolidate = stepMode == com.forge.app.domain.coach.StepMode.CONSOLIDATE
     )
 
+    // Bodyweight movements have no weight to suggest, so they get a rep-progression cue instead (CO5).
+    val repSuggestion = if (plan.unit == com.forge.app.program.ExerciseUnit.BODYWEIGHT)
+        ProgressionAdvisor.suggestNextReps(effectiveExerciseId, plan.name, prevSets, prevLE?.difficulty, plan.reps)
+    else null
+
     val pbSet = pbDeferred.await()
     val allTimePbLb = pbSet?.weightLb
     val allTimePbText = pbSet?.let { "${it.weightText} × ${it.reps}" }
@@ -198,6 +203,8 @@ internal suspend fun DayViewModel.buildExerciseUi(
         suggestionReason = displayReason,
         suggestedDeltaLb = suggestion?.deltaLb,
         suggestedTargetLb = suggestion?.targetWeightLb,
+        suggestedReps = repSuggestion?.targetReps,
+        suggestedRepsReason = repSuggestion?.reason,
         priorSets = displayPrior,
         priorFrontier = priorFrontier,
         allTimePbText = allTimePbText,

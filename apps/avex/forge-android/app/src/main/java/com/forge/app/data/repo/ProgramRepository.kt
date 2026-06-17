@@ -28,6 +28,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -54,8 +56,13 @@ class ProgramRepository @Inject constructor(
     /** Bumps whenever the active program changes (load/generate) so program-display VMs can refresh. */
     val revision: StateFlow<Long> = _revision.asStateFlow()
 
-    /** Seed-if-empty, then load the DB program into the [Program] facade. Safe to call at startup. */
-    suspend fun ensureLoaded() {
+    /** Serializes [ensureLoaded] so two concurrent callers (e.g. app startup + a ViewModel awaiting the
+     *  load before resolving orphan sessions) can't both seed an empty DB or double-load the facade. */
+    private val loadMutex = Mutex()
+
+    /** Seed-if-empty, then load the DB program into the [Program] facade. Safe to call at startup,
+     *  idempotent, and safe to call concurrently — on return [Program.isLoaded] is guaranteed true. */
+    suspend fun ensureLoaded() = loadMutex.withLock {
         if (dao.dayCount() == 0) seedFromDefault()
         loadIntoFacade()
     }

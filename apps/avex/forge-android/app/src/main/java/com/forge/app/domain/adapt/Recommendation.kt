@@ -61,6 +61,24 @@ sealed interface Recommendation {
     }
 
     /**
+     * Bodyweight double-progression (CO5): there's no weight to add, so the next target is more reps.
+     * Emitted only when every working set cleared the top of the rep range at acceptable effort.
+     * [targetReps] is the rep count to aim for next time; surfaced as a hint on the day-screen chip
+     * (pull-ups / push-ups had no progression cue before this), never auto-applied.
+     */
+    data class RepProgression(
+        val exerciseId: String,
+        val exerciseName: String,
+        val fromReps: String,
+        val targetReps: Int,
+        override val reason: String,
+        override val confidence: Confidence
+    ) : Recommendation {
+        override val id: String get() = "progression.reps.$exerciseId"
+        override val system: AdviceSystem get() = AdviceSystem.PROGRESSION
+    }
+
+    /**
      * Plateau escalation: swap the movement. [candidateIds] are [com.forge.app.program.ExerciseLibrary]
      * ids already filtered by the user's equipment and dislikes (the snapshot builder does
      * that filtering so this stays a pure value).

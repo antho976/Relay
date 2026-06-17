@@ -19,8 +19,10 @@ import com.forge.app.data.db.entities.SessionSegment
 import com.forge.app.data.db.entities.SuggestionOutcome
 import com.forge.app.data.db.types.EffortRating
 import com.forge.app.data.prefs.SettingsRepository
+import com.forge.app.domain.volume.VolumeCalculator
 import com.forge.app.program.Equipment
 import com.forge.app.program.GenerationParams
+import com.forge.app.program.Program
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import javax.inject.Inject
@@ -93,11 +95,20 @@ class WorkoutRepository @Inject constructor(
      */
     suspend fun startOrResumeSession(dayKey: String): StartedSession {
         sessionDao.getActiveSession()?.let { active ->
-            return StartedSession(
-                session = active,
-                created = false,
-                hasLoggedWork = loggedExerciseDao.forSession(active.id).isNotEmpty()
-            )
+            // Don't resume a "zombie" session whose day the program no longer has — resuming it would
+            // load the wrong day's plan (Program.day() falls back to the first day) and log under a stale
+            // key. Resolve it here too (not just at Overview-open, E8) so every start path upholds the
+            // invariant, then fall through to a fresh start. Gate on isLoaded so a not-yet-loaded program
+            // (seed keys only, on a cold start) can't mis-classify a perfectly valid live session.
+            val isZombie = Program.isLoaded && active.dayKey !in Program.dayKeys
+            if (!isZombie) {
+                return StartedSession(
+                    session = active,
+                    created = false,
+                    hasLoggedWork = loggedExerciseDao.forSession(active.id).isNotEmpty()
+                )
+            }
+            resolveOrphanSession(Program.dayKeys.toSet())
         }
         // Tag sessions started inside the deload week so the deload actually shows up in history and
         // feeds DeloadAdvisor's repeat-suppression (the marker was previously never written — #18).
@@ -222,6 +233,50 @@ class WorkoutRepository @Inject constructor(
     suspend fun discardSession(sessionId: Long) {
         val session = sessionDao.get(sessionId) ?: return
         sessionDao.delete(session) // CASCADE removes LoggedExercises and their LoggedSets
+    }
+
+    /** What [resolveOrphanSession] did, so the UI can surface it once. */
+    data class OrphanResolution(val finishedToHistory: Boolean)
+
+    /**
+     * A "zombie" active session is one in progress on a day key the current program no longer has — a
+     * force-stop, or a program regenerate that bypassed the workout-discard guard, can leave one behind.
+     * It would otherwise drive a misleading resume banner or silently block a fresh start. Resolve it
+     * NON-DESTRUCTIVELY: an empty session is discarded (nothing to lose); one with real logged sets is
+     * finished to history (the work is preserved and still attributes to its exercises' all-time PRs).
+     * No rotation side-effects (unlike [finishSession]). Returns what happened, or null if no orphan.
+     */
+    suspend fun resolveOrphanSession(validDayKeys: Set<String>): OrphanResolution? {
+        // Empty = the program isn't loaded yet; never treat a live session as orphan on no information.
+        if (validDayKeys.isEmpty()) return null
+        val active = sessionDao.getActiveSession() ?: return null
+        if (active.dayKey in validDayKeys) return null
+        val sets = loggedSetDao.allForSession(active.id)
+        if (sets.isEmpty()) {
+            discardSession(active.id)
+            return OrphanResolution(finishedToHistory = false)
+        }
+        val now = clock.nowMs()
+        // This session was abandoned earlier (force-stop / regenerate), not finished just now: close any
+        // open sitting at the LAST logged-set activity rather than `now` (which could be days later), then
+        // stamp the real active time exactly as [finishSession] does — otherwise activeSeconds stays 0 and
+        // [Session.durationMinutes] falls back to wall-clock, showing a multi-day "workout" in history.
+        closeDanglingSegments(active.id)
+        val activeSeconds = (closedSegmentMs(active.id) / 1000L).toInt().coerceAtLeast(0)
+        // Mirror finishSession's denormalised stamps so history/recap/trophies read this session correctly:
+        // volume through the shared calculator (no divergence if its formula changes), and prCount from the
+        // per-exercise PR flags (the sets also count toward all-time PRs via the frontier queries).
+        val prCount = loggedExerciseDao.forSession(active.id).count { it.wasPr }
+        sessionDao.update(
+            active.copy(
+                finishedAt = now,
+                totalVolumeLb = VolumeCalculator.sessionVolumeLb(sets),
+                setCount = sets.size,
+                prCount = prCount,
+                activeSeconds = activeSeconds
+            )
+        )
+        return OrphanResolution(finishedToHistory = true)
     }
 
     // ─── Logged exercises ──────────────────────────────────────────────────────

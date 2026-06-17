@@ -210,6 +210,9 @@ data class ExerciseUiState(
     val suggestedDeltaLb: Double? = null,
     /** Suggested target in raw lb — outcome capture compares it against the first logged set. */
     val suggestedTargetLb: Double? = null,
+    /** Bodyweight rep-progression target — "aim for N reps" (CO5). Null for weighted exercises. */
+    val suggestedReps: Int? = null,
+    val suggestedRepsReason: String? = null,
     /**
      * The PREVIOUS session's sets in performed order — the positional "ghost" comparisons
      * (same-position duels, per-row ghost values) and "last session" labels read these.

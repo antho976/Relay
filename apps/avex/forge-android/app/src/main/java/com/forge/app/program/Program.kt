@@ -221,6 +221,9 @@ object Program {
     @Volatile
     private var active: List<DayPlan> = defaultDays
 
+    @Volatile
+    private var loaded = false
+
     /** The hard-coded split, used to seed the DB the first time (program-unlock Phase 1). */
     val seedDays: List<DayPlan> get() = defaultDays
 
@@ -228,8 +231,16 @@ object Program {
     val days: List<DayPlan> get() = active
     val dayKeys: List<String> get() = active.map { it.key }
 
+    /**
+     * True once the DB-backed program has been loaded into the facade (via [setActive]). Until then
+     * [days]/[dayKeys] report the hard-coded seed split, which is NON-empty — so a "program loaded yet?"
+     * check must gate on this, not on a non-empty key set. Anything that would mutate data based on the
+     * active day list (e.g. orphan-session resolution) must wait for this to avoid acting on seed keys.
+     */
+    val isLoaded: Boolean get() = loaded
+
     /** Swap in a new active program (ProgramRepository, after load / generate). */
-    fun setActive(newDays: List<DayPlan>) { active = newDays }
+    fun setActive(newDays: List<DayPlan>) { active = newDays; loaded = true }
 
     fun day(key: String): DayPlan =
         dayOrNull(key)

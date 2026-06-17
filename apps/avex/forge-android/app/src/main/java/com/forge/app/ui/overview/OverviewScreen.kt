@@ -67,6 +67,42 @@ import java.time.format.TextStyle
 import java.time.temporal.WeekFields
 import java.util.Locale
 
+/**
+ * A dismissible info strip (e.g. the auto-resolved orphan-session notice, E8). The close affordance
+ * is a 48 dp touch target — the [Icon] itself stays 16 dp, but its hit area meets the a11y minimum.
+ */
+@Composable
+private fun DismissibleNotice(text: String, onBg: Color, muted: Color, onDismiss: () -> Unit) {
+    Spacer(Modifier.height(16.dp))
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(muted.copy(alpha = 0.10f))
+            .padding(start = 14.dp, end = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(
+            text, style = MaterialTheme.typography.bodySmall, color = onBg,
+            modifier = Modifier.weight(1f).padding(vertical = 12.dp)
+        )
+        Box(
+            modifier = Modifier
+                .size(48.dp)
+                .clip(CircleShape)
+                .clickable(onClick = onDismiss),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                Icons.Default.Close, contentDescription = "Dismiss",
+                tint = muted.copy(alpha = 0.7f),
+                modifier = Modifier.size(16.dp)
+            )
+        }
+    }
+}
+
 @Composable
 fun OverviewScreen(
     onStartSession: (dayKey: String) -> Unit,
@@ -85,6 +121,7 @@ fun OverviewScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val coachBanner by viewModel.coachBanner.collectAsStateWithLifecycle()
+    val orphanNotice by viewModel.orphanNotice.collectAsStateWithLifecycle()
     val selectedItem by viewModel.selectedItem.collectAsStateWithLifecycle()
     val summaryLines by viewModel.sessionExerciseLines.collectAsStateWithLifecycle()
     var showDayEdit by remember { mutableStateOf(false) }
@@ -227,6 +264,11 @@ fun OverviewScreen(
                             .clickable { viewModel.dismissCoachBanner() }
                     )
                 }
+            }
+
+            // ── Orphan-session notice: a zombie session was auto-resolved (E8) ──
+            orphanNotice?.let { notice ->
+                DismissibleNotice(notice, onBg, muted) { viewModel.dismissOrphanNotice() }
             }
 
             // ── Resume reminder: an unfinished workout is waiting ────────────

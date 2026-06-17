@@ -109,18 +109,15 @@ object ProgressionAdvisor {
         // Per-set RPE outranks the coarse exercise rating when present.
         val maxRpe = working.mapNotNull { it.rpe }.maxOrNull()
         val backOff: Boolean
-        val okToProgress: Boolean
         val backOffReason: String
         if (maxRpe != null) {
             backOff = maxRpe >= t.rpeBrutalMin
-            okToProgress = maxRpe <= t.rpeEasyMax
             backOffReason = "last RPE hit ${trim(maxRpe)}"
         } else {
             backOff = prevEffort == EffortRating.BRUTAL
-            okToProgress = prevEffort == null ||
-                prevEffort == EffortRating.EASY || prevEffort == EffortRating.JUST_RIGHT
             backOffReason = "last rated brutal"
         }
+        val okToProgress = isEasyEnough(maxRpe, prevEffort, t)
 
         val range = RepRange.parse(repsText)
         val topSets = working.filter { it.weightLb == prevMax }
@@ -140,6 +137,60 @@ object ProgressionAdvisor {
             else -> null
         }
     }
+
+    /**
+     * Bodyweight rep double-progression for the in-session chip (CO5). When every working set cleared
+     * the top of the rep range at acceptable effort, aim for one more rep next time. Stays silent
+     * mid-range (fill the range first) and when the last set was brutal — mirroring [suggestNextLoad]'s
+     * deliberate silences. This is the only progression cue a pure-bodyweight movement ever gets, since
+     * [suggestNextLoad] has no weight to suggest for BODYWEIGHT.
+     */
+    fun suggestNextReps(
+        exerciseId: String,
+        exerciseName: String,
+        prevSets: List<LoggedSet>,
+        prevEffort: EffortRating?,
+        repsText: String,
+        t: AdaptThresholds = AdaptThresholds()
+    ): Recommendation.RepProgression? {
+        // Unassisted working sets only — an assisted (band) set is an easier variation, not the target.
+        // No fallback to assisted sets: with no unassisted history there's no defensible target, so stay
+        // silent (mirrors suggestNextLoad, which returns null when every set is assisted).
+        val working = prevSets.filterNot { it.isAssisted }
+        if (working.isEmpty()) return null
+        val prevMaxReps = working.maxOf { it.reps }
+        if (prevMaxReps <= 0) return null
+        val range = RepRange.parse(repsText) ?: return null
+
+        // Per-set RPE outranks the coarse exercise rating — the same gate as the weighted chip.
+        val maxRpe = working.mapNotNull { it.rpe }.maxOrNull()
+        val okToProgress = isEasyEnough(maxRpe, prevEffort, t)
+
+        // Only nudge once every working set has cleared the top of the range at acceptable effort.
+        if (!working.all { it.reps >= range.max } || !okToProgress) return null
+
+        // Always one more than the best set just done — correct whether they're at the range top or
+        // already past it (pure bodyweight has no weight to add, so reps keep climbing). The reason
+        // stays honest in both cases (it would read oddly to say "hit the top" when they're well above).
+        val target = prevMaxReps + 1
+        return Recommendation.RepProgression(
+            exerciseId = exerciseId,
+            exerciseName = exerciseName,
+            fromReps = repsText,
+            targetReps = target,
+            reason = "cleared every set — add a rep",
+            confidence = Confidence.MEDIUM
+        )
+    }
+
+    /**
+     * Effort gate shared by both chip entry points ([suggestNextLoad] / [suggestNextReps]): progress
+     * only when the last bout was easy enough. Per-set RPE (when logged) outranks the coarse per-exercise
+     * [EffortRating]; with neither logged we give the benefit of the doubt and allow progress.
+     */
+    private fun isEasyEnough(maxRpe: Double?, prevEffort: EffortRating?, t: AdaptThresholds): Boolean =
+        if (maxRpe != null) maxRpe <= t.rpeEasyMax
+        else prevEffort == null || prevEffort == EffortRating.EASY || prevEffort == EffortRating.JUST_RIGHT
 
     private fun progressSuggestion(
         exerciseId: String,
