@@ -13,6 +13,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -27,18 +28,35 @@ class DayListViewModel @Inject constructor(
     private val programChangeGuard: com.forge.app.ui.common.ProgramChangeGuard
 ) : ViewModel() {
 
-    /** Personal rest pace (engine System 2) — folds into the day cards' "~min" estimate. */
-    private val restTuning = kotlinx.coroutines.flow.MutableStateFlow(
-        com.forge.app.domain.adapt.RestTuning.NEUTRAL
+    /** Personal rest pace (engine System 2) + the user's rest bases — both fold into the day cards'
+     *  "~min" estimate. Bundled so the estimate is computed against the SAME base the tuning was
+     *  calibrated against (mismatched bases mis-scale the estimate). */
+    private data class RestConfig(
+        val tuning: com.forge.app.domain.adapt.RestTuning,
+        val compoundBase: Int,
+        val isolationBase: Int
+    )
+
+    private val restConfig = kotlinx.coroutines.flow.MutableStateFlow(
+        RestConfig(
+            com.forge.app.domain.adapt.RestTuning.NEUTRAL,
+            com.forge.app.program.SessionEstimate.COMPOUND_REST,
+            com.forge.app.program.SessionEstimate.ISOLATION_REST
+        )
     )
 
     init {
         viewModelScope.launch {
-            restTuning.value = com.forge.app.domain.adapt.RestAdvisor.tuning(
-                com.forge.app.domain.adapt.RestAdvisor.samples(workoutRepo.recentRestEvents()) {
-                    Program.exercise(it)
-                }
+            val cBase = settingsRepo.restCompoundSeconds.first()
+            val iBase = settingsRepo.restIsolationSeconds.first()
+            val tuning = com.forge.app.domain.adapt.RestAdvisor.tuning(
+                com.forge.app.domain.adapt.RestAdvisor.samples(
+                    workoutRepo.recentRestEvents(),
+                    compoundBase = cBase,
+                    isolationBase = iBase
+                ) { Program.exercise(it) }
             )
+            restConfig.value = RestConfig(tuning, cBase, iBase)
         }
     }
 
@@ -92,9 +110,14 @@ class DayListViewModel @Inject constructor(
             },
             activeSession = activeSession
         )
-    }.combine(restTuning) { s, tuning ->
+    }.combine(restConfig) { s, cfg ->
         s.copy(days = s.days.map { item ->
-            item.copy(estimatedMinutes = com.forge.app.domain.adapt.RestAdvisor.estimateMinutes(item.plan, tuning))
+            item.copy(
+                estimatedMinutes = com.forge.app.domain.adapt.RestAdvisor.estimateMinutes(
+                    item.plan, cfg.tuning,
+                    compoundBase = cfg.compoundBase, isolationBase = cfg.isolationBase
+                )
+            )
         })
     }.stateIn(
         scope = viewModelScope,

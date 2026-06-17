@@ -15,8 +15,9 @@ object SessionEstimate {
     )
     private const val WORK_SECONDS_PER_SET = 45
     private const val WARMUP_SECONDS = 300
-    private const val COMPOUND_REST = 180
-    private const val ISOLATION_REST = 90
+    /** Canonical rest bases (seconds) — also the defaults a user's Session-settings override falls back to. */
+    const val COMPOUND_REST = 180
+    const val ISOLATION_REST = 90
     private const val HEAVY_REST_BONUS = 30
 
     /**
@@ -28,9 +29,17 @@ object SessionEstimate {
         if (plan.tags.isNotEmpty()) ExerciseTag.COMPOUND in plan.tags
         else plan.muscle in BIG_MUSCLES
 
-    /** Recommended rest between sets (seconds): longer for compounds, +30s when the reps are heavy (≤8). */
-    fun restSeconds(plan: ExercisePlan): Int {
-        val base = if (isCompound(plan)) COMPOUND_REST else ISOLATION_REST
+    /**
+     * Recommended rest between sets (seconds): longer for compounds, +30s when the reps are heavy (≤8).
+     * [compoundBase]/[isolationBase] default to the canonical values; the rest timer passes the user's
+     * Session-settings overrides so a "I rest 4 min on compounds" preference flows through everywhere.
+     */
+    fun restSeconds(
+        plan: ExercisePlan,
+        compoundBase: Int = COMPOUND_REST,
+        isolationBase: Int = ISOLATION_REST
+    ): Int {
+        val base = if (isCompound(plan)) compoundBase else isolationBase
         // Heaviness = the LOW end of the range (the heaviest set you'd do). Using the max rep
         // meant strength ranges like "6-10" were never flagged heavy.
         val heavy = minReps(plan.reps)?.let { if (it <= 8) HEAVY_REST_BONUS else 0 } ?: 0

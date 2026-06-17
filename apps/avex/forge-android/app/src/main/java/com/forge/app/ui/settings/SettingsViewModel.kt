@@ -27,6 +27,9 @@ data class SettingsUiState(
     val timeFormat24h: Boolean = false,
     val firstDayMonday: Boolean = true,
     val hapticStrength: String = "strong",
+    /** Default rest bases (seconds) per movement type — the Session-settings rest override. */
+    val restCompoundSeconds: Int = 180,
+    val restIsolationSeconds: Int = 90,
     val quietHoursEnabled: Boolean = false,
     val quietHoursStart: Int = 22,
     val quietHoursEnd: Int = 7,
@@ -196,6 +199,10 @@ class SettingsViewModel @Inject constructor(
         s.copy(rotationEveryN = v)
     }.combine(settingsRepo.cardioWeeklyTargetMin) { s, v ->
         s.copy(cardioWeeklyTargetMin = v)
+    }.combine(settingsRepo.restCompoundSeconds) { s, v ->
+        s.copy(restCompoundSeconds = v)
+    }.combine(settingsRepo.restIsolationSeconds) { s, v ->
+        s.copy(restIsolationSeconds = v)
     }.combine(settingsRepo.userGoal) { s, v ->
         s.copy(userGoal = v.ifBlank { "build_muscle" })
     }.combine(settingsRepo.userSex) { s, v ->
@@ -229,6 +236,10 @@ class SettingsViewModel @Inject constructor(
     fun setTimeFormat24h(v: Boolean) = viewModelScope.launch { settingsRepo.setTimeFormat24h(v) }
     fun setFirstDayMonday(v: Boolean) = viewModelScope.launch { settingsRepo.setFirstDayMonday(v) }
     fun setHapticStrength(v: String) = viewModelScope.launch { settingsRepo.setHapticStrength(v) }
+    fun setRestCompoundSeconds(s: Int) = viewModelScope.launch { settingsRepo.setRestCompoundSeconds(s) }
+    fun setRestIsolationSeconds(s: Int) = viewModelScope.launch { settingsRepo.setRestIsolationSeconds(s) }
+    fun addNoteTemplate(t: String) = viewModelScope.launch { settingsRepo.addNoteTemplate(t) }
+    fun removeNoteTemplate(t: String) = viewModelScope.launch { settingsRepo.removeNoteTemplate(t) }
     fun setQuietHoursEnabled(v: Boolean) = viewModelScope.launch { settingsRepo.setQuietHoursEnabled(v) }
     fun setQuietHoursStart(v: Int) = viewModelScope.launch { settingsRepo.setQuietHoursStart(v) }
     fun setQuietHoursEnd(v: Int) = viewModelScope.launch { settingsRepo.setQuietHoursEnd(v) }
@@ -254,6 +265,9 @@ class SettingsViewModel @Inject constructor(
     fun resetTrophies() = viewModelScope.launch { resetRepo.resetTrophies() }
     fun resetCardio() = viewModelScope.launch { resetRepo.resetCardio() }
     fun resetSettings() = viewModelScope.launch { resetRepo.resetAppSettings() }
+    /** Scoped per-section "reset to defaults" (#544) — clears just this page's preferences. */
+    fun resetSection(section: com.forge.app.data.prefs.SettingsSection) =
+        viewModelScope.launch { settingsRepo.resetSection(section) }
     fun factoryReset() = viewModelScope.launch { resetRepo.factoryReset() }
     fun loadSampleData() = viewModelScope.launch { sampleDataSeeder.seed() }
     fun setPrivacyMode(v: Boolean) = viewModelScope.launch { settingsRepo.setPrivacyMode(v) }
@@ -375,6 +389,10 @@ class SettingsViewModel @Inject constructor(
     }
     fun exportSessionsCsv() = viewModelScope.launch {
         val file = backupRepo.exportSessionsCsv()
+        _exportPath.value = file.absolutePath
+    }
+    fun exportPrsCsv() = viewModelScope.launch {
+        val file = backupRepo.exportPrsCsv()
         _exportPath.value = file.absolutePath
     }
     fun clearExportPath() { _exportPath.value = null }

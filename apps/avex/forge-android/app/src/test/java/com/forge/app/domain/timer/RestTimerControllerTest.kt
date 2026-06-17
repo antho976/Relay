@@ -143,6 +143,38 @@ class RestTimerControllerTest {
     }
 
     @Test
+    fun backwardClockJumpReAnchorsToTrueRemaining() {
+        // NTP correction / manual time change moves the wall clock backward mid-rest. (endAtMs − now)
+        // balloons, but the timer must RE-ANCHOR to its true remaining (≈150s) — never show hours and
+        // never freeze waiting for the clock to catch back up.
+        val scope = newScope()
+        val clock = FakeClock(0)
+        val c = RestTimerController(scope, clock)
+        c.start(150)
+        clock.now = -3_600_000 // jumped back an hour
+        c.pause()
+        assertEquals(150, c.state.value!!.secondsRemaining)
+        scope.cancel()
+    }
+
+    @Test
+    fun backwardClockJumpStillFinishesAfterResume() {
+        // The real regression: after a backward jump the countdown must still be able to reach 0,
+        // not hang for the duration of the jump. Re-anchor, resume, advance past the remaining.
+        val scope = newScope()
+        val clock = FakeClock(0)
+        val c = RestTimerController(scope, clock)
+        c.start(150)
+        clock.now = -3_600_000 // jumped back an hour mid-rest
+        c.pause()              // re-anchors to ~150s remaining
+        c.resume()
+        clock.now += 151_000   // 151s of real time elapses from the re-anchored point
+        c.pause()              // recompute remaining off the wall clock
+        assertEquals(0, c.state.value!!.secondsRemaining)
+        scope.cancel()
+    }
+
+    @Test
     fun controlsAreNoOpsWhenNoTimerRunning() {
         val scope = newScope()
         val c = RestTimerController(scope, FakeClock(0))

@@ -59,13 +59,18 @@ object RestAdvisor {
     fun samples(
         events: List<RestEvent>,
         t: AdaptThresholds = AdaptThresholds(),
+        compoundBase: Int = SessionEstimate.COMPOUND_REST,
+        isolationBase: Int = SessionEstimate.ISOLATION_REST,
         planFor: (String) -> ExercisePlan?
     ): List<RestSample> = events.mapNotNull { e ->
         if (e.realizedSeconds < t.minSaneRestSeconds || e.realizedSeconds > t.maxSaneRestSeconds) return@mapNotNull null
         val plan = planFor(e.exerciseId) ?: return@mapNotNull null
         RestSample(
             role = movementRole(plan),
-            baseSeconds = SessionEstimate.restSeconds(plan),
+            // The factor is realized ÷ base, so this base MUST be the SAME one [restSeconds] later
+            // applies the factor to (the user's Session-settings override), or the learned correction
+            // mis-scales every prescription for anyone whose base isn't the canonical 180/90.
+            baseSeconds = SessionEstimate.restSeconds(plan, compoundBase, isolationBase),
             realizedSeconds = e.realizedSeconds
         )
     }
@@ -86,13 +91,15 @@ object RestAdvisor {
         lastEffort: EffortRating?,
         overrideSeconds: Int?,
         tuning: RestTuning = RestTuning.NEUTRAL,
-        t: AdaptThresholds = AdaptThresholds()
+        t: AdaptThresholds = AdaptThresholds(),
+        compoundBase: Int = SessionEstimate.COMPOUND_REST,
+        isolationBase: Int = SessionEstimate.ISOLATION_REST
     ): RestPrescription {
         if (overrideSeconds != null) {
             return RestPrescription(overrideSeconds, "your custom rest for this exercise")
         }
         val role = movementRole(plan)
-        val base = SessionEstimate.restSeconds(plan)
+        val base = SessionEstimate.restSeconds(plan, compoundBase, isolationBase)
         val roleLabel = if (role == MovementRole.COMPOUND) "compound" else "isolation"
         val parts = mutableListOf("$roleLabel base ${mmss(base)}")
 
@@ -121,9 +128,14 @@ object RestAdvisor {
     fun estimateMinutes(
         plan: com.forge.app.program.DayPlan,
         tuning: RestTuning,
-        t: AdaptThresholds = AdaptThresholds()
+        t: AdaptThresholds = AdaptThresholds(),
+        compoundBase: Int = SessionEstimate.COMPOUND_REST,
+        isolationBase: Int = SessionEstimate.ISOLATION_REST
     ): Int = SessionEstimate.estimateMinutes(plan) { ex ->
-        restSeconds(ex, lastEffort = null, overrideSeconds = null, tuning = tuning, t = t).seconds
+        restSeconds(
+            ex, lastEffort = null, overrideSeconds = null, tuning = tuning, t = t,
+            compoundBase = compoundBase, isolationBase = isolationBase
+        ).seconds
     }
 
     private fun median(values: List<Double>): Double {

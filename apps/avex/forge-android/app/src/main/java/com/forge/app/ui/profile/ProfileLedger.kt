@@ -31,6 +31,7 @@ import androidx.compose.ui.draw.clip
 import com.forge.app.domain.units.formatVolumeCompact
 import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.domain.units.unitLabel
+import com.forge.app.ui.common.InlineEmptyHint
 import kotlin.math.roundToInt
 import com.forge.app.ui.theme.LocalForgeSettings
 import androidx.compose.ui.graphics.Color
@@ -81,11 +82,19 @@ internal fun LedgerSection(
 ) {
     val useKg = LocalForgeSettings.current.useKg
     ProfileBlock("THE LEDGER · ALL TIME", muted, accent, outline) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            LifetimeStat("$sessions", "WORKOUTS")
-            LifetimeStat(formatVolume(volumeLb, useKg), "LIFETIME ${unitLabel(useKg).uppercase()}")
-            LifetimeStat("$prs", "PRs")
-            LifetimeStat("$xp", "XP")
+        if (sessions == 0) {
+            // Four bare zeros on a stranger's first open read as "empty/broken" — name what fills them.
+            InlineEmptyHint(
+                "Finish your first workout — your lifetime workouts, volume, PRs, and XP start tallying here.",
+                muted
+            )
+        } else {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                LifetimeStat("$sessions", "WORKOUTS")
+                LifetimeStat(formatVolume(volumeLb, useKg), "LIFETIME ${unitLabel(useKg).uppercase()}")
+                LifetimeStat("$prs", "PRs")
+                LifetimeStat("$xp", "XP")
+            }
         }
     }
 }
@@ -152,16 +161,24 @@ internal fun SignatureSection(
 ) {
     val useKg = LocalForgeSettings.current.useKg
     ProfileBlock("SIGNATURE", muted, accent, outline) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-            SignatureCell(
-                value = topLift?.name ?: "—",
-                label = if (topLift != null) "TOP LIFT · ${toDisplayWeight(topLift.weightLb, useKg).roundToInt()} ${unitLabel(useKg).uppercase()}" else "TOP LIFT",
-                onBg = onBg, muted = muted, modifier = Modifier.weight(1f)
+        if (topLift == null && mostLoggedDay == null && usualHour == null) {
+            // Three "—" cells look like a rendering error to a stranger — explain what they become.
+            InlineEmptyHint(
+                "Your signature — your go-to lift, the day you train most, and your usual hour — takes shape after a few logged sessions.",
+                muted
             )
-            SignatureDivider(outline)
-            SignatureCell(value = mostLoggedDay ?: "—", label = "MOST LOGGED", onBg = onBg, muted = muted, modifier = Modifier.weight(1f))
-            SignatureDivider(outline)
-            SignatureCell(value = usualHour ?: "—", label = "USUAL HOUR", onBg = onBg, muted = muted, modifier = Modifier.weight(1f))
+        } else {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                SignatureCell(
+                    value = topLift?.name ?: "—",
+                    label = if (topLift != null) "TOP LIFT · ${toDisplayWeight(topLift.weightLb, useKg).roundToInt()} ${unitLabel(useKg).uppercase()}" else "TOP LIFT",
+                    onBg = onBg, muted = muted, modifier = Modifier.weight(1f)
+                )
+                SignatureDivider(outline)
+                SignatureCell(value = mostLoggedDay ?: "—", label = "MOST LOGGED", onBg = onBg, muted = muted, modifier = Modifier.weight(1f))
+                SignatureDivider(outline)
+                SignatureCell(value = usualHour ?: "—", label = "USUAL HOUR", onBg = onBg, muted = muted, modifier = Modifier.weight(1f))
+            }
         }
     }
 }

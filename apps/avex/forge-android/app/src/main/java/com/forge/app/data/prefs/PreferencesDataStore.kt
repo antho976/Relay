@@ -152,6 +152,11 @@ object PreferenceKeys {
     /** Weekly cardio goal in minutes. 0 = no goal. */
     val CARDIO_WEEKLY_TARGET_MIN = intPreferencesKey("cardio_weekly_target_min")
 
+    /** Default rest between sets (seconds), per movement type — the base the RestAdvisor builds on.
+     *  Absent ⇒ the canonical 180 (compound) / 90 (isolation). */
+    val REST_COMPOUND_SECONDS = intPreferencesKey("rest_compound_seconds")
+    val REST_ISOLATION_SECONDS = intPreferencesKey("rest_isolation_seconds")
+
     /** Weight of one plate (in lb) for plate-loaded machine/cable exercises. Default 15 (MWM-989). */
     val PLATE_WEIGHT_LB = doublePreferencesKey("plate_weight_lb")
 

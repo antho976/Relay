@@ -27,6 +27,7 @@ internal fun MainList(
     searchQuery: String,
     modifier: Modifier,
     onOpenPage: (SettingsPage) -> Unit,
+    onOpenCoachBrief: () -> Unit,
     onOpenDataDialog: () -> Unit,
     onResetTarget: (ResetTarget) -> Unit
 ) {
@@ -37,6 +38,13 @@ internal fun MainList(
                     SettingsNavRow(row.label, rowSubtitle(row.page, state)) { onOpenPage(row.page) }
                     SectionDivider()
                 }
+            }
+            // Persistent Coach entry: the Overview banner is conditional (no new brief ⇒ no banner),
+            // so Settings is the one always-available door to the coach (its brief + what it's learning).
+            item("coach") {
+                SectionLabel("COACH")
+                SettingsNavRow("Your coach", "This week's brief · what it's tracking") { onOpenCoachBrief() }
+                SectionDivider()
             }
             item("vacation") {
                 SettingsNavRow("Holiday / Vacation", "Pause your streak during a holiday") { onOpenPage(SettingsPage.Vacation) }

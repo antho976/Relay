@@ -58,6 +58,8 @@ data class FatigueHint(val score: Int, val threshold: Int, val topDriver: String
 
 data class OverviewUiState(
     val workoutsThisWeek: Int = 0,
+    /** The user's chosen days/week — the "of N" denominator, NOT a hardcoded 6 (multi-user). */
+    val weeklyWorkoutTarget: Int = 4,
     val volumeThisWeekLb: Double = 0.0,
     val cardioMinutesThisWeek: Int = 0,
     val cardioWeeklyTargetMin: Int = 0,

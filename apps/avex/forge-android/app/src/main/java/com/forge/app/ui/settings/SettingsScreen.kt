@@ -62,7 +62,7 @@ internal data class SettingsRow(val label: String, val tags: String, val page: S
 internal val ALL_ROWS = listOf(
     SettingsRow("Appearance", "amoled dark theme accent compact logging display", SettingsPage.Appearance),
     SettingsRow("Units & format", "kg lb weight date time week timezone locale", SettingsPage.Format),
-    SettingsRow("Session", "haptic feedback vibration notes templates", SettingsPage.Session),
+    SettingsRow("Session", "haptic feedback vibration notes templates rest timer between sets compound isolation", SettingsPage.Session),
     SettingsRow("Notifications", "quiet hours notify suppress", SettingsPage.Notifications),
     SettingsRow("Equipment", "equipment available barbell dumbbell cable machine", SettingsPage.Equipment),
     SettingsRow("Privacy", "privacy mode blur screenshot", SettingsPage.Privacy),
@@ -83,6 +83,7 @@ internal val ALL_ITEMS = listOf(
     SettingsItem("First day of week", "week start monday sunday", SettingsPage.Format),
     SettingsItem("Timezone", "timezone locale region", SettingsPage.Format),
     SettingsItem("Haptic feedback", "haptic vibration strength", SettingsPage.Session),
+    SettingsItem("Rest times", "rest timer seconds between sets compound isolation default", SettingsPage.Session),
     SettingsItem("Note templates", "notes templates prompts form energy pain focus", SettingsPage.Session),
     SettingsItem("Training reminders", "reminder notify nudge daily streak train schedule engagement", SettingsPage.Notifications),
     SettingsItem("Quiet hours", "quiet hours suppress notifications silent", SettingsPage.Notifications),
@@ -254,6 +255,7 @@ fun SettingsScreen(
                 searchQuery = searchQuery,
                 modifier = Modifier.fillMaxSize().padding(inner),
                 onOpenPage = { currentPage = it },
+                onOpenCoachBrief = onOpenCoachBrief,
                 onOpenDataDialog = { showDataDialog = true },
                 onResetTarget = { confirmReset = it }
             )

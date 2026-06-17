@@ -253,6 +253,26 @@ class BackupRepository @Inject constructor(
     }
 
     /**
+     * All-time best lift per exercise (the "hall of fame") as CSV — PRs are the most personally
+     * motivating records to share or keep (#542). One row per exercise: its heaviest tracked set ever.
+     * Reuses the same tracked/non-assisted set projection the Stats hall of fame is built from.
+     */
+    suspend fun exportPrsCsv(): File {
+        val sets = loggedSetDao.observeAllFinishedSetsWithSession().first()
+        val sb = StringBuilder()
+        sb.appendLine("exercise,muscle,bestWeightLb,reps,date")
+        // Reuse the exact aggregation the Stats hall of fame renders from, so the exported PRs can
+        // never diverge from what the user sees in-app (one place to fix tie-breaking / attribution).
+        buildHallOfFame(sets).forEach { pr ->
+            val date = dateFmt.format(Instant.ofEpochMilli(pr.sessionDate).atZone(zone))
+            sb.appendLine("${csv(pr.exerciseName)},${csv(pr.muscle.displayName)},${pr.maxWeightLb},${pr.bestReps},$date")
+        }
+        val file = File(context.filesDir, "forge_prs.csv")
+        file.writeText(sb.toString())
+        return file
+    }
+
+    /**
      * Auto-backup: runs silently, overwrites the weekly auto-backup slot (#86). Writes a real,
      * RESTORABLE ZIP (DB + prefs + progress photos) — the same format as [backupToUri] — instead of
      * the lossy JSON export it used to write, which nothing could ever read back in.

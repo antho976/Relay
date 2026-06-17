@@ -34,6 +34,9 @@ internal fun StatsHeroSection(
     weekCurrentVolumeLb: Double?,
     weekCurrentPrs: Int,
     cardioMin: Int,
+    /** False for a user who has never logged a session — turns the "Zero sessions" hero into a
+     *  first-touch editorial instead of reading "Zero sessions logged. · Rest week." */
+    hasHistory: Boolean,
     onBg: Color,
     muted: Color
 ) {
@@ -51,37 +54,53 @@ internal fun StatsHeroSection(
             fontSize = 9.sp
         )
         Spacer(Modifier.height(8.dp))
-        Text(
-            "${numberWord(weekSessions)} sessions logged.",
-            style = MaterialTheme.typography.displayLarge,
-            color = emphasized(onBg)
-        )
-        Spacer(Modifier.height(4.dp))
-        val subtitleParts = buildList {
-            if ((weekCurrentVolumeLb ?: 0.0) > 0)
-                add("${formatVolume(weekCurrentVolumeLb!!, useKg)} ${unitLabel(useKg)} moved")
-            if (weekCurrentPrs > 0)
-                add("$weekCurrentPrs ${if (weekCurrentPrs == 1) "PR" else "PRs"}")
-            if (cardioMin > 0)
-                add("$cardioMin cardio min")
-        }
-        if (subtitleParts.isNotEmpty()) {
+        if (weekSessions == 0 && !hasHistory) {
+            // Brand-new user: a warm "first session pending" beats "Zero sessions logged. · Rest week."
             Text(
-                subtitleParts.joinToString(" · "),
+                "Your first session is pending.",
+                style = MaterialTheme.typography.displayLarge,
+                color = emphasized(onBg)
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "Log a workout and your week — volume, PRs, momentum — starts filling in right here.",
                 style = MaterialTheme.typography.bodySmall,
                 color = muted,
                 fontStyle = FontStyle.Italic
             )
-        }
-        val commentary = weekCommentary(weekSessions, weekCurrentPrs)
-        if (commentary.isNotEmpty()) {
-            Spacer(Modifier.height(2.dp))
+        } else {
             Text(
-                commentary,
-                style = MaterialTheme.typography.bodySmall,
-                color = muted.copy(alpha = 0.7f),
-                fontStyle = FontStyle.Italic
+                "${numberWord(weekSessions)} sessions logged.",
+                style = MaterialTheme.typography.displayLarge,
+                color = emphasized(onBg)
             )
+            Spacer(Modifier.height(4.dp))
+            val subtitleParts = buildList {
+                if ((weekCurrentVolumeLb ?: 0.0) > 0)
+                    add("${formatVolume(weekCurrentVolumeLb!!, useKg)} ${unitLabel(useKg)} moved")
+                if (weekCurrentPrs > 0)
+                    add("$weekCurrentPrs ${if (weekCurrentPrs == 1) "PR" else "PRs"}")
+                if (cardioMin > 0)
+                    add("$cardioMin cardio min")
+            }
+            if (subtitleParts.isNotEmpty()) {
+                Text(
+                    subtitleParts.joinToString(" · "),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = muted,
+                    fontStyle = FontStyle.Italic
+                )
+            }
+            val commentary = weekCommentary(weekSessions, weekCurrentPrs)
+            if (commentary.isNotEmpty()) {
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    commentary,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = muted.copy(alpha = 0.7f),
+                    fontStyle = FontStyle.Italic
+                )
+            }
         }
         Spacer(Modifier.height(20.dp))
     }

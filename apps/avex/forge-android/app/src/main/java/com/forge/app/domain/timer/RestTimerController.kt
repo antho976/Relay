@@ -114,8 +114,16 @@ class RestTimerController(
     /** Seconds left per the wall clock (never negative). Rounds up so a fresh 150 reads 150, not 149. */
     private fun remainingNow(state: RestTimerState): Int {
         if (state.isPaused) return state.secondsRemaining
-        val ms = endAtMs - clock.nowMs()
-        return if (ms <= 0) 0 else ((ms + 999) / 1000).toInt()
+        var ms = endAtMs - clock.nowMs()
+        // A BACKWARD wall-clock jump (NTP correction on a stale-clock boot, or a manual time change)
+        // pushes (endAtMs − now) far past any real rest. Detect it (remaining beyond the ceiling) and
+        // RE-ANCHOR the end instant to the last known-good remaining, so the countdown keeps running
+        // and still finishes — instead of either showing hours or freezing for the length of the jump.
+        if (ms > MAX_REST_SECONDS * 1000L) {
+            endAtMs = clock.nowMs() + state.secondsRemaining * 1000L
+            ms = endAtMs - clock.nowMs()
+        }
+        return if (ms <= 0) 0 else ((ms + 999) / 1000).toInt().coerceAtMost(MAX_REST_SECONDS)
     }
 
     private fun relaunchTickJob() {
@@ -139,5 +147,8 @@ class RestTimerController(
 
     companion object {
         const val DEFAULT_REST_SECONDS: Int = 150 // 2:30
+        /** Upper bound on displayed remaining time AND the threshold past which a backward wall-clock
+         *  jump is detected and re-anchored. 1 h is far above any real rest period or "+30s" extension. */
+        const val MAX_REST_SECONDS: Int = 3600
     }
 }

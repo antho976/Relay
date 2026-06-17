@@ -37,6 +37,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.program.Trophies
+import com.forge.app.ui.common.InlineEmptyHint
 import com.forge.app.ui.common.SegmentPill
 import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.profile.AnimatedTrophyBadge
@@ -62,6 +63,14 @@ internal fun HeroSection(state: TrophiesUiState, nextLocked: TrophyDisplay?, onB
         Spacer(Modifier.height(14.dp))
         Box(modifier = Modifier.fillMaxWidth().height(3.dp).clip(RoundedCornerShape(50)).background(outline.copy(alpha = 0.2f))) {
             Box(modifier = Modifier.fillMaxWidth(animFrac).fillMaxHeight().clip(RoundedCornerShape(50)).background(accent))
+        }
+        if (state.unlockedCount == 0) {
+            // An empty bar next to "0 EARNED" reads as broken — reassure it's a start line, not a bug.
+            Spacer(Modifier.height(12.dp))
+            InlineEmptyHint(
+                "Nothing earned yet — every trophy below is up for grabs. Finish a workout to start unlocking them.",
+                muted
+            )
         }
         if (nextLocked != null) {
             Spacer(Modifier.height(12.dp))

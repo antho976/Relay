@@ -7,7 +7,9 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
@@ -15,6 +17,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -91,6 +94,7 @@ internal fun DataExportDialog(
             Text("Quick export", style = MaterialTheme.typography.bodyMedium, color = onBg)
             ExportRow("This week", "JSON", "summary for AI analysis", onBg, muted) { viewModel.exportWeeklyJson(); onDismiss() }
             ExportRow("All sessions", "CSV", "spreadsheet of every session", onBg, muted) { viewModel.exportSessionsCsv(); onDismiss() }
+            ExportRow("All PRs", "CSV", "your best lift per exercise", onBg, muted) { viewModel.exportPrsCsv(); onDismiss() }
             ExportRow("Last session", "PDF", "printable session sheet", onBg, muted) { viewModel.exportLastSessionPdf(); onDismiss() }
             ExportRow("Crash logs", "ZIP", "diagnostics if something broke", onBg, muted) { onExportCrashLogs(); onDismiss() }
 
@@ -128,12 +132,36 @@ private fun ExportRow(
 
 @Composable
 internal fun ResetConfirmDialog(target: ResetTarget, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    // A factory reset is irreversible and wipes EVERYTHING — too dangerous behind a single tap on a
+    // shared device. Gate it behind typing a word; lesser resets keep their one-tap confirm.
+    val needsTyped = target == ResetTarget.FACTORY
+    val confirmWord = "ERASE"
+    var typed by remember { mutableStateOf("") }
+    val canConfirm = !needsTyped || typed.trim().equals(confirmWord, ignoreCase = true)
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(target.label) },
-        text = { Text(target.message) },
+        text = {
+            Column {
+                Text(target.message)
+                if (needsTyped) {
+                    Spacer(Modifier.height(16.dp))
+                    OutlinedTextField(
+                        value = typed,
+                        onValueChange = { typed = it },
+                        singleLine = true,
+                        label = { Text("Type $confirmWord to confirm") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        },
         confirmButton = {
-            Button(onClick = onConfirm, colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)) { Text("Confirm") }
+            Button(
+                onClick = onConfirm,
+                enabled = canConfirm,
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+            ) { Text("Confirm") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )

@@ -2,7 +2,11 @@
 package com.forge.app.ui.settings
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
@@ -17,6 +21,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -56,6 +61,7 @@ internal fun AppearancePage(state: SettingsUiState, vm: SettingsViewModel, modif
         Spacer(Modifier.height(8.dp))
         AccentEmphasisRow(state.accentEmphasis, vm::setAccentEmphasis)
         SectionDivider()
+        SectionResetRow(com.forge.app.data.prefs.SettingsSection.APPEARANCE, vm)
     }
 }
 
@@ -156,19 +162,109 @@ internal fun FormatPage(state: SettingsUiState, vm: SettingsViewModel, modifier:
             HorizontalDivider(color = outline.copy(alpha = 0.12f), modifier = Modifier.padding(horizontal = 24.dp))
         }
         item("timezone-footer") { Spacer(Modifier.height(8.dp)) }
+        item("reset") { SectionResetRow(com.forge.app.data.prefs.SettingsSection.FORMAT, vm) }
     }
 }
 
 @Composable
 internal fun SessionPage(state: SettingsUiState, vm: SettingsViewModel, modifier: Modifier = Modifier) {
-    Column(modifier.fillMaxSize()) {
+    Column(modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         ChipSection(
             "Haptic feedback",
             listOf("off" to "Off", "light" to "Light", "medium" to "Medium", "strong" to "Strong"),
             state.hapticStrength, vm::setHapticStrength
         )
         SectionDivider()
+        ChipSection(
+            "Rest · compound lifts",
+            listOf("120" to "2:00", "150" to "2:30", "180" to "3:00", "210" to "3:30", "240" to "4:00", "300" to "5:00"),
+            state.restCompoundSeconds.toString()
+        ) { vm.setRestCompoundSeconds(it.toInt()) }
+        SectionDivider()
+        ChipSection(
+            "Rest · isolation lifts",
+            listOf("45" to "0:45", "60" to "1:00", "90" to "1:30", "120" to "2:00", "150" to "2:30"),
+            state.restIsolationSeconds.toString()
+        ) { vm.setRestIsolationSeconds(it.toInt()) }
+        SectionDivider()
+        Text(
+            "Your starting rest per set. The timer adapts from here — heavier sets and a brutal rating add time, " +
+                "and it learns how long you actually rest. Set a per-exercise override on its card mid-workout.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontStyle = FontStyle.Italic,
+            modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp)
+        )
+        SectionDivider()
+        NoteTemplatesEditor(state.noteTemplates, vm::addNoteTemplate, vm::removeNoteTemplate)
+        SectionResetRow(com.forge.app.data.prefs.SettingsSection.SESSION, vm)
     }
+}
+
+/** Edit the quick-insert note templates shown under the note field when logging a set (#540). */
+@Composable
+private fun NoteTemplatesEditor(
+    templates: Set<String>,
+    onAdd: (String) -> Unit,
+    onRemove: (String) -> Unit
+) {
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val onBg = MaterialTheme.colorScheme.onBackground
+    var input by remember { mutableStateOf("") }
+    Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp)) {
+        Text("NOTE TEMPLATES", style = MaterialTheme.typography.labelMedium, color = muted)
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "Quick-insert chips that show under the note field when you log a set.",
+            style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic
+        )
+        Spacer(Modifier.height(10.dp))
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            templates.forEach { t ->
+                Row(
+                    Modifier.background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(50))
+                        .padding(start = 12.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(t.trim(), style = MaterialTheme.typography.bodySmall, color = onBg)
+                    Text("✕", style = MaterialTheme.typography.labelSmall, color = muted,
+                        modifier = Modifier.clickable { onRemove(t) }.padding(2.dp))
+                }
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                value = input,
+                onValueChange = { input = it },
+                singleLine = true,
+                label = { Text("New template") },
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                "Add",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .clickable { if (input.isNotBlank()) { onAdd(input); input = "" } }
+                    .padding(8.dp)
+            )
+        }
+    }
+}
+
+/** A scoped "reset to defaults" affordance for a settings sub-page (#544) — clears only this page's
+ *  preferences (no data loss), so a user can clean-slate one area without a global/factory reset. */
+@Composable
+internal fun SectionResetRow(section: com.forge.app.data.prefs.SettingsSection, vm: SettingsViewModel) {
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    Text(
+        "Reset this page to defaults",
+        style = MaterialTheme.typography.labelSmall,
+        color = muted.copy(alpha = 0.8f),
+        modifier = Modifier.fillMaxWidth().clickable { vm.resetSection(section) }.padding(horizontal = 24.dp, vertical = 16.dp)
+    )
 }
 
 @Composable
@@ -191,6 +287,7 @@ internal fun NotificationsPage(state: SettingsUiState, vm: SettingsViewModel, mo
             HourPickerRow("Until", state.quietHoursEnd, vm::setQuietHoursEnd)
             SectionDivider()
         }
+        SectionResetRow(com.forge.app.data.prefs.SettingsSection.NOTIFICATIONS, vm)
     }
 }
 
@@ -309,7 +406,8 @@ internal fun EquipmentPage(state: SettingsUiState, vm: SettingsViewModel, modifi
 @Composable
 internal fun PrivacyPage(state: SettingsUiState, vm: SettingsViewModel, modifier: Modifier = Modifier) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    Column(modifier.fillMaxSize()) {
+    val onBg = MaterialTheme.colorScheme.onBackground
+    Column(modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         ToggleRow("Privacy mode", "Hide the app preview in recent apps & block screenshots", state.privacyMode, vm::setPrivacyMode)
         SectionDivider()
         Text(
@@ -318,6 +416,30 @@ internal fun PrivacyPage(state: SettingsUiState, vm: SettingsViewModel, modifier
             style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic,
             modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp)
         )
+
+        // What Forge stores — a plain data inventory, so someone handed the app knows exactly what's
+        // kept and that none of it leaves the phone (there is no internet permission).
+        Column(Modifier.padding(horizontal = 24.dp, vertical = 12.dp)) {
+            Text("WHAT FORGE STORES", style = MaterialTheme.typography.labelMedium, color = muted)
+            Spacer(Modifier.height(8.dp))
+            listOf(
+                "Workouts — sets, reps, weights & notes",
+                "Bodyweight history & progress photos",
+                "Mood check-ins & cardio",
+                "Trophies, XP & rank",
+                "What the coach has learned from you",
+                "Your settings & generated program"
+            ).forEach { line ->
+                Text("·  $line", style = MaterialTheme.typography.bodySmall, color = onBg,
+                    modifier = Modifier.padding(vertical = 2.dp))
+            }
+            Spacer(Modifier.height(12.dp))
+            Text(
+                "All of it stays in this app's private storage on this device. Forge holds no internet " +
+                    "permission, so nothing is ever uploaded or shared — use Export / Backup to keep your own copy.",
+                style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic
+            )
+        }
     }
 }
 

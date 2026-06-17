@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
@@ -62,6 +63,10 @@ class DayViewModel @Inject constructor(
     /** Personal rest-correction factors (engine System 2). Neutral until the init load lands. */
     internal var restTuning: com.forge.app.domain.adapt.RestTuning =
         com.forge.app.domain.adapt.RestTuning.NEUTRAL
+
+    /** User's default rest bases (Session settings) — canonical until the init load lands. */
+    internal var restBaseCompound: Int = com.forge.app.program.SessionEstimate.COMPOUND_REST
+    internal var restBaseIsolation: Int = com.forge.app.program.SessionEstimate.ISOLATION_REST
 
     /** Per-exercise step calibration (auto-coach Phase 2). Neutral until the init load lands. */
     internal var stepCalibration: com.forge.app.domain.coach.StepCalibration =
@@ -121,13 +126,27 @@ class DayViewModel @Inject constructor(
                 }
             }
         }
-        // Learn the user's realized-rest factors once per screen — the per-set timer math
-        // then stays pure and synchronous (no DB on the set-logging hot path).
+        // The user's default rest bases (Session settings) — kept LIVE (collect, not a one-shot read)
+        // so changing them in Settings mid-session applies without recreating the screen. The cached
+        // vars keep the per-set timer math synchronous (no DB on the set-logging hot path).
         viewModelScope.launch {
+            settingsRepo.restCompoundSeconds.collect { restBaseCompound = it }
+        }
+        viewModelScope.launch {
+            settingsRepo.restIsolationSeconds.collect { restBaseIsolation = it }
+        }
+        // Learn the user's realized-rest factors once per screen — calibrated against the user's CURRENT
+        // rest bases so the learned realized÷base factor matches the base the timer prescribes from
+        // (a non-default base would otherwise mis-scale every prescription). Pure/synchronous after.
+        viewModelScope.launch {
+            val cBase = settingsRepo.restCompoundSeconds.first()
+            val iBase = settingsRepo.restIsolationSeconds.first()
             restTuning = com.forge.app.domain.adapt.RestAdvisor.tuning(
-                com.forge.app.domain.adapt.RestAdvisor.samples(workoutRepo.recentRestEvents()) {
-                    Program.exercise(it)
-                }
+                com.forge.app.domain.adapt.RestAdvisor.samples(
+                    workoutRepo.recentRestEvents(),
+                    compoundBase = cBase,
+                    isolationBase = iBase
+                ) { Program.exercise(it) }
             )
         }
         // Learn the user's suggestion-outcome calibration once per screen (auto-coach Phase 2) —

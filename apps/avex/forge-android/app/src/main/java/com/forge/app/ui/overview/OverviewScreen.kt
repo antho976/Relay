@@ -314,7 +314,7 @@ fun OverviewScreen(
                 verticalAlignment = Alignment.CenterVertically) {
                 Text("THIS WEEK", style = MaterialTheme.typography.labelMedium, color = emphasized(muted))
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("${state.workoutsThisWeek} of 6 target", style = MaterialTheme.typography.labelSmall, color = muted)
+                    Text("${state.workoutsThisWeek} of ${state.weeklyWorkoutTarget} target", style = MaterialTheme.typography.labelSmall, color = muted)
                     Text("·", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.5f))
                     Text("view program →", style = MaterialTheme.typography.labelSmall,
                         color = muted, fontSize = 10.sp,

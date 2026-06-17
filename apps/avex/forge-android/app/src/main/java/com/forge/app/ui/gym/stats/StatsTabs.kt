@@ -3,6 +3,10 @@ package com.forge.app.ui.gym.stats
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -74,7 +78,10 @@ fun StatsTabBar(selected: StatsTab, onSelect: (StatsTab) -> Unit) {
                         if (isSel) Modifier.background(onBg)
                         else Modifier.border(1.dp, outline.copy(alpha = 0.5f), RoundedCornerShape(50))
                     )
-                    .clickable { onSelect(tab) }
+                    .clickable(onClickLabel = "View ${tab.label}") { onSelect(tab) }
+                    // TalkBack announces "selected" + the Tab role, so the active stats view is clear.
+                    // `this.selected` is qualified — the bare name collides with the `selected` param.
+                    .semantics { this.selected = isSel; role = Role.Tab }
                     .padding(horizontal = 14.dp, vertical = 7.dp)
             ) {
                 Text(
@@ -119,14 +126,20 @@ internal fun LazyListScope.snapshotTab(
     weekCurrent: PeriodStats?,
     weekPrev: PeriodStats?,
     weekSessions: Int,
-    c: StatsColors
+    c: StatsColors,
+    onOpenNotes: () -> Unit
 ) {
     item("hero") {
         EntranceItem(0) {
             StatsHeroSection(
                 weekNum = weekNum, weekLabel = weekLabel, weekSessions = weekSessions,
                 weekCurrentVolumeLb = weekCurrent?.volumeLb, weekCurrentPrs = weekCurrent?.prs ?: 0,
-                cardioMin = state.thisWeekCardioMin, onBg = c.onBg, muted = c.muted
+                cardioMin = state.thisWeekCardioMin,
+                // While lifetimeMetrics is still loading (null) assume history EXISTS, so a returning
+                // user never flashes the brand-new "first session pending" editorial. The true
+                // first-touch state only shows once metrics confirm zero lifetime sessions.
+                hasHistory = state.lifetimeMetrics?.let { it.totalSessions > 0 } ?: true,
+                onBg = c.onBg, muted = c.muted
             )
         }
     }
@@ -178,6 +191,27 @@ internal fun LazyListScope.snapshotTab(
             }
         }
         item("insights-bottom") { Spacer(Modifier.height(8.dp)) }
+    }
+    // Notes search is otherwise unreachable (its callback was plumbed here but never rendered) —
+    // surface it where it belongs, alongside the rest of the training read-out.
+    item("notes-search") {
+        EntranceItem(0) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
+                HorizontalDivider(color = c.outline.copy(alpha = 0.25f))
+                Spacer(Modifier.height(16.dp))
+                Text(
+                    "Search your notes →",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = c.accent,
+                    modifier = Modifier.fillMaxWidth().clickable { onOpenNotes() }.padding(vertical = 6.dp)
+                )
+                Text(
+                    "Full-text search across every note you've logged on an exercise.",
+                    style = MaterialTheme.typography.bodySmall, color = c.muted
+                )
+                Spacer(Modifier.height(8.dp))
+            }
+        }
     }
 }
 

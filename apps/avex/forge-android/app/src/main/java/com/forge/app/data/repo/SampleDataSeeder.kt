@@ -131,7 +131,9 @@ class SampleDataSeeder @Inject constructor(
                             setIndex = setIdx,
                             weightText = weightLb?.let { "${it.toInt()}" } ?: "BW",
                             weightLb = weightLb,
-                            reps = setReps,
+                            // Funnel through the same reps clamp as the live write path so no insert
+                            // route can poison downstream stats (the values here are already sane).
+                            reps = sanitizeReps(setReps),
                             completedAt = completedAt,
                             rpe = rpe
                         ))

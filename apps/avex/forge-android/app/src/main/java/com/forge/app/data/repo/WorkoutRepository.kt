@@ -39,6 +39,17 @@ data class StartedSession(
 )
 
 /**
+ * Sane upper bound on a single logged set's reps. A 4-digit fat-finger (numeric-keyboard
+ * autocomplete can drop a "9999") would otherwise inflate Epley e1RM by ×(reps/30) and volume by
+ * ×reps — permanently poisoning every downstream stat, PR, and coach signal. 999 kills the typo
+ * without rejecting any conceivable real set; the floor of 0 absorbs a stray negative.
+ */
+internal const val MAX_LOGGED_REPS = 999
+
+/** Clamp a set's reps to a sane, non-poisoning range at the write boundary. Pure + testable. */
+internal fun sanitizeReps(reps: Int): Int = reps.coerceIn(0, MAX_LOGGED_REPS)
+
+/**
  * The aggregate the day-screen ViewModel talks to. Wraps sessions, logged exercises,
  * sets, and mood entries — anything that's part of one workout's lifecycle.
  *
@@ -329,14 +340,14 @@ class WorkoutRepository @Inject constructor(
             setIndex = setIndex,
             weightText = weightText,
             weightLb = weightLb,
-            reps = reps,
+            reps = sanitizeReps(reps),
             completedAt = clock.nowMs()
         )
     )
 
     suspend fun deleteSet(set: LoggedSet) = loggedSetDao.delete(set)
 
-    suspend fun updateSet(set: LoggedSet) = loggedSetDao.update(set)
+    suspend fun updateSet(set: LoggedSet) = loggedSetDao.update(set.copy(reps = sanitizeReps(set.reps)))
 
     /**
      * Bounded all-time-history reads — replace loading every set ever logged for an

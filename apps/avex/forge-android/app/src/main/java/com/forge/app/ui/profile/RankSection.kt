@@ -35,6 +35,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -118,10 +120,13 @@ internal fun RankSection(
                     drawCircle(tierColor.copy(alpha = 0.40f), radius = r, style = Stroke(width = 1.5.dp.toPx()))
                 }
                 Box(
-                    Modifier.graphicsLayer {
-                        val s = 0.82f + 0.18f * enter
-                        scaleX = s; scaleY = s; alpha = enter
-                    },
+                    Modifier
+                        // The animated rank emblem is the Profile hero but a silent Canvas — name it.
+                        .semantics { contentDescription = "${rank.displayName} rank emblem" }
+                        .graphicsLayer {
+                            val s = 0.82f + 0.18f * enter
+                            scaleX = s; scaleY = s; alpha = enter
+                        },
                     contentAlignment = Alignment.Center
                 ) {
                     HeroEmblem(rank.tier, animated = motion && visible, size = 60.dp)

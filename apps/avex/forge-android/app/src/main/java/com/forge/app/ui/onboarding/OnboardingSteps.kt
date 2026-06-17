@@ -30,6 +30,7 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.ui.theme.AccentEmphasis
 import com.forge.app.program.Equipment
 import com.forge.app.program.EquipmentPreset
@@ -37,6 +38,7 @@ import com.forge.app.program.ExerciseLibrary
 import com.forge.app.program.GeneratedDay
 import com.forge.app.program.ProblemArea
 import com.forge.app.program.equipmentPresets
+import kotlin.math.roundToInt
 
 /** Goal options with a one-line explanation of what each one changes (it only reshapes rep ranges). */
 private val GOAL_DETAILS = listOf(
@@ -174,6 +176,11 @@ internal fun StepSex(selected: String?, onSelect: (String) -> Unit) {
 @Composable
 internal fun StepBodyweight(input: String, useKg: Boolean, onInputChange: (String) -> Unit) {
     val unitLabel = if (useKg) "kg" else "lb"
+    // A typed value that's blank-or-valid lets "Next" proceed; anything outside the plausible range
+    // would otherwise just disable Next with no hint, leaving the user stuck. Show why instead.
+    val invalid = input.isNotBlank() && parseSaneBodyweightLb(input, useKg) == null
+    val minDisp = toDisplayWeight(MIN_BODYWEIGHT_LB, useKg).roundToInt()
+    val maxDisp = toDisplayWeight(MAX_BODYWEIGHT_LB, useKg).roundToInt()
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Headline("Starting bodyweight")
         Caption("Optional — used for relative strength comparisons.")
@@ -182,6 +189,10 @@ internal fun StepBodyweight(input: String, useKg: Boolean, onInputChange: (Strin
             modifier = Modifier.fillMaxWidth(),
             placeholder = { Text("e.g. 170") },
             suffix = { Text(unitLabel) },
+            isError = invalid,
+            supportingText = if (invalid) {
+                { Text("Enter a weight between $minDisp and $maxDisp $unitLabel, or leave it blank.") }
+            } else null,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
             singleLine = true
         )

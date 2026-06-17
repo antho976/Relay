@@ -87,7 +87,7 @@ fun StatsContent(
                 contentPadding = PaddingValues(bottom = 56.dp)
             ) {
                 when (tabs[page]) {
-                    StatsTab.SNAPSHOT -> snapshotTab(state, today, weekNum, weekLabel, weekCurrent, weekPrev, weekSessions, c)
+                    StatsTab.SNAPSHOT -> snapshotTab(state, today, weekNum, weekLabel, weekCurrent, weekPrev, weekSessions, c, onOpenNotes)
                     StatsTab.STRENGTH -> strengthTab(state, c)
                     StatsTab.VOLUME -> volumeTab(state, c)
                     StatsTab.BODY -> bodyTab(state, c)

@@ -10,12 +10,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -34,7 +34,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.ui.draw.clip
 import com.forge.app.domain.units.formatVolumeCompact
+import com.forge.app.ui.common.forgeShimmer
 import com.forge.app.ui.theme.LocalForgeSettings
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -59,9 +61,9 @@ fun RecapScreen(
         containerColor = Color.Transparent
     ) { inner ->
         if (state.isLoading) {
-            Box(Modifier.fillMaxSize().padding(inner), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
-            }
+            // A skeleton that mirrors the two recap cards anchors the layout, so content swaps in
+            // without a jump — beats a generic spinner that teaches the user nothing (#404).
+            RecapSkeleton(Modifier.fillMaxSize().padding(inner).padding(horizontal = 16.dp, vertical = 8.dp))
             return@Scaffold
         }
 
@@ -108,6 +110,32 @@ fun RecapScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
 
             Spacer(Modifier.height(16.dp))
+        }
+    }
+}
+
+/** Loading placeholder mirroring the two recap cards (title · big stats · rows) — uses the shared
+ *  [forgeShimmer] so the populated content swaps in without a layout jump (#404). */
+@Composable
+private fun RecapSkeleton(modifier: Modifier = Modifier) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        repeat(2) {
+            Column(
+                Modifier.fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(16.dp))
+                    .padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                Box(Modifier.width(180.dp).height(18.dp).clip(RoundedCornerShape(50)).forgeShimmer())
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                    repeat(4) {
+                        Box(Modifier.width(56.dp).height(40.dp).clip(RoundedCornerShape(8.dp)).forgeShimmer())
+                    }
+                }
+                repeat(3) {
+                    Box(Modifier.fillMaxWidth().height(12.dp).clip(RoundedCornerShape(50)).forgeShimmer())
+                }
+            }
         }
     }
 }

@@ -237,7 +237,10 @@ internal fun DayViewModel.computeRestPrescription(
     plan: ExercisePlan,
     effortRating: EffortRating?,
     overrideSeconds: Int? = null
-): RestPrescription = RestAdvisor.restSeconds(plan, effortRating, overrideSeconds, restTuning)
+): RestPrescription = RestAdvisor.restSeconds(
+    plan, effortRating, overrideSeconds, restTuning,
+    compoundBase = restBaseCompound, isolationBase = restBaseIsolation
+)
 
 internal fun computePrFlags(
     priorFrontier: List<LoggedSet>,

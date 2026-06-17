@@ -111,6 +111,13 @@ class OverviewViewModel @Inject constructor(
         s.copy(coachLearning = hint)
     }.combine(_coachFatigue) { s, f ->
         s.copy(coachFatigue = f)
+    }.combine(settingsRepo.daysPerWeek) { s, days ->
+        // The "of N target" denominator is the actual number of training days in the generated program
+        // (the real weekly schedule), not a hardcoded 6 and not the raw days/week preference — the two
+        // can diverge (a frozen preset, equipment-driven slot merging). Fall back to the preference
+        // while the program isn't populated yet (early startup).
+        val target = com.forge.app.program.Program.days.size.takeIf { it in 1..7 } ?: days.coerceIn(1, 7)
+        s.copy(weeklyWorkoutTarget = target)
     }.combine(settingsRepo.useKg) { s, useKg ->
         // Attach each recent gym row's marquee lift (its heaviest set). Each lookup is a real DB
         // read, so withTopLifts memoizes by session: a finished session's top set is immutable.

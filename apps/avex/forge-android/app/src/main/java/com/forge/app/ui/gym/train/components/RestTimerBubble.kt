@@ -39,6 +39,8 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -63,6 +65,13 @@ fun RestTimerBubble(
     val isPaused = state.isPaused && !state.isFinished
     val fraction = if (state.totalSeconds > 0)
         (state.secondsRemaining.toFloat() / state.totalSeconds).coerceIn(0f, 1f) else 0f
+    // Spoken label: the bubble otherwise reads only its raw "1:30" to TalkBack, with no context.
+    val restA11y = if (state.isFinished) "Rest complete" else {
+        val mins = state.secondsRemaining / 60
+        val rem = state.secondsRemaining % 60
+        val time = if (mins > 0) "$mins min ${rem}s" else "${rem}s"
+        if (isPaused) "Rest timer paused, $time left" else "Rest timer, $time left"
+    }
     // Deplete the ring smoothly between the per-second ticks instead of stepping each second.
     val animFraction by animateFloatAsState(
         targetValue = fraction,
@@ -128,7 +137,9 @@ fun RestTimerBubble(
             .combinedClickable(
                 onClick = onOpenControls,
                 onLongClick = onLongClick
-            ),
+            )
+            // Merge so TalkBack reads the spoken state ("Rest timer, 1 min 30s left") in place of "1:30".
+            .semantics(mergeDescendants = true) { contentDescription = restA11y },
         contentAlignment = Alignment.Center
     ) {
         if (state.isFinished) {

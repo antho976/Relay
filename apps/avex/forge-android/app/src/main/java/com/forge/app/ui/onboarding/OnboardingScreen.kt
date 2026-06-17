@@ -8,6 +8,7 @@ import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import com.forge.app.domain.units.parseToLb
 import com.forge.app.ui.theme.ForgeMotion
 import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
@@ -129,6 +130,38 @@ class OnboardingViewModel @Inject constructor(
 private const val PAGE_COUNT = 6
 private const val LAST_PAGE = PAGE_COUNT - 1
 
+/** Step names for the page indicator — so a new user can see where they are and what's left,
+ *  instead of guessing from anonymous dots. One per page, in order. */
+private val ONBOARDING_STEP_NAMES = listOf(
+    "About you", "Your goal", "Your gym", "Fine-tuning", "Style", "Your plan"
+)
+
+/** Most of the world lifts in kg; the US (and Liberia / Myanmar) use lb. Seed the onboarding unit
+ *  from the device locale so a non-US user isn't forced to flip a toggle on the very first screen.
+ *  An empty country (locale carries only a language, common on emulators / minimal setups) is
+ *  uninformative — fall back to the app's historical lb default rather than guessing kg. */
+private fun localeDefaultUseKg(): Boolean {
+    val country = java.util.Locale.getDefault().country.uppercase(java.util.Locale.ROOT)
+    if (country.isBlank()) return false
+    return country !in setOf("US", "LR", "MM")
+}
+
+/**
+ * Plausible adult bodyweight range, in lb (~27–454 kg) — guards the relative-strength denominator.
+ * A fat-finger "1" instead of "100" kg would otherwise log a 1-kg bodyweight and render a ~50× ratio
+ * on the Stats strength-standards card. Out-of-range input simply isn't recorded (treated as blank).
+ */
+internal const val MIN_BODYWEIGHT_LB = 60.0
+internal const val MAX_BODYWEIGHT_LB = 1000.0
+
+/** Parse a typed bodyweight (in the user's display unit) to a sane lb value, or null if blank,
+ *  unparseable, or outside the plausible human range. Uses the shared [parseToLb] converter so the
+ *  kg→lb factor can never drift from the rest of the app. Pure + testable. */
+internal fun parseSaneBodyweightLb(input: String, useKg: Boolean): Double? {
+    val lb = parseToLb(input, useKg) ?: return null
+    return if (lb in MIN_BODYWEIGHT_LB..MAX_BODYWEIGHT_LB) lb else null
+}
+
 @Composable
 fun OnboardingScreen(
     onFinished: () -> Unit,
@@ -136,7 +169,7 @@ fun OnboardingScreen(
 ) {
     var page by remember { mutableIntStateOf(0) }
     var name by remember { mutableStateOf("") }
-    var useKg by remember { mutableStateOf(false) }
+    var useKg by remember { mutableStateOf(localeDefaultUseKg()) }
     // Program-shaping choices start UNSELECTED — the user actively picks them; nothing is pre-highlighted.
     var goal by remember { mutableStateOf("") }
     var experience by remember { mutableStateOf("") }
@@ -185,6 +218,12 @@ fun OnboardingScreen(
                     )
                 }
             }
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "Step ${page + 1} of $PAGE_COUNT · ${ONBOARDING_STEP_NAMES.getOrElse(page) { "" }}",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
             Spacer(Modifier.height(24.dp))
 
             // Page content — each page groups related steps in a scrolling column.
@@ -258,7 +297,7 @@ fun OnboardingScreen(
             // positive number; goal + experience must be picked; days + equipment must be chosen (an
             // empty equipment set otherwise means "full gym" to the generator).
             val canAdvance = when (page) {
-                0 -> bodyweightInput.isBlank() || (bodyweightInput.toDoubleOrNull()?.let { it > 0 } == true)
+                0 -> bodyweightInput.isBlank() || parseSaneBodyweightLb(bodyweightInput, useKg) != null
                 1 -> goal.isNotEmpty() && experience.isNotEmpty()
                 2 -> daysPerWeek in 1..7 && equipment.isNotEmpty()
                 else -> true
@@ -279,7 +318,7 @@ fun OnboardingScreen(
                         if (page < LAST_PAGE) {
                             page++
                         } else {
-                            val bwLb = bodyweightInput.toDoubleOrNull()?.let { raw -> if (useKg) raw * 2.20462 else raw }
+                            val bwLb = parseSaneBodyweightLb(bodyweightInput, useKg)
                             viewModel.complete(
                                 name.trim(), useKg, goal, bwLb,
                                 daysPerWeek, equipment, cadence.ifEmpty { "never" }, everyN, experience, problemAreas,
@@ -309,7 +348,7 @@ fun OnboardingScreen(
                 confirmButton = {
                     TextButton(onClick = {
                         showSkipConfirm = false
-                        val bwLb = bodyweightInput.toDoubleOrNull()?.let { raw -> if (useKg) raw * 2.20462 else raw }
+                        val bwLb = parseSaneBodyweightLb(bodyweightInput, useKg)
                         viewModel.complete(
                             name.trim(), useKg, "build_muscle", bwLb,
                             daysPerWeek = 4,

@@ -1,6 +1,7 @@
 package com.forge.app.data.prefs
 
 import android.content.Context
+import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
@@ -8,6 +9,39 @@ import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.map
 import javax.inject.Inject
 import javax.inject.Singleton
+
+/**
+ * The settings sub-pages that support a scoped "reset to defaults" (#544). Each carries EXACTLY the
+ * preference keys its page owns, so a reset clears that page (and only that page) back to defaults.
+ * Keeping the key list on the enum — the single place that maps a page to its keys — is what stops
+ * the drift the old stringly-typed when() invited (it silently dropped USER_SEX from "format").
+ */
+enum class SettingsSection(val keys: List<Preferences.Key<*>>) {
+    APPEARANCE(
+        listOf(
+            PreferenceKeys.AMOLED_MODE, PreferenceKeys.COMPACT_SET_LOGGING,
+            PreferenceKeys.ACCENT_COLOR_HEX, PreferenceKeys.ACCENT_EMPHASIS, PreferenceKeys.FONT_CHOICE
+        )
+    ),
+    FORMAT(
+        listOf(
+            PreferenceKeys.USE_KG, PreferenceKeys.USER_SEX, PreferenceKeys.DATE_FORMAT,
+            PreferenceKeys.TIMEZONE, PreferenceKeys.TIME_FORMAT_24H, PreferenceKeys.FIRST_DAY_MONDAY
+        )
+    ),
+    SESSION(
+        listOf(
+            PreferenceKeys.HAPTIC_STRENGTH, PreferenceKeys.REST_COMPOUND_SECONDS,
+            PreferenceKeys.REST_ISOLATION_SECONDS, PreferenceKeys.NOTE_TEMPLATES
+        )
+    ),
+    NOTIFICATIONS(
+        listOf(
+            PreferenceKeys.QUIET_HOURS_ENABLED, PreferenceKeys.QUIET_HOURS_START, PreferenceKeys.QUIET_HOURS_END,
+            PreferenceKeys.TRAINING_REMINDER_ENABLED, PreferenceKeys.TRAINING_REMINDER_HOUR
+        )
+    )
+}
 
 /**
  * Small typed wrapper over the app's DataStore. Each setting is a Flow + setter pair.
@@ -92,6 +126,22 @@ class SettingsRepository @Inject constructor(
 
     val noteTemplates: Flow<Set<String>> = context.forgePreferences.data
         .map { it[PreferenceKeys.NOTE_TEMPLATES] ?: defaultNoteTemplates }
+
+    /** Add a user-defined note template (materializes the default set on first edit). Blank = no-op. */
+    suspend fun addNoteTemplate(template: String) {
+        val t = template.trim()
+        if (t.isBlank()) return
+        context.forgePreferences.edit { prefs ->
+            val cur = prefs[PreferenceKeys.NOTE_TEMPLATES] ?: defaultNoteTemplates
+            prefs[PreferenceKeys.NOTE_TEMPLATES] = cur + t
+        }
+    }
+
+    suspend fun removeNoteTemplate(template: String) =
+        context.forgePreferences.edit { prefs ->
+            val cur = prefs[PreferenceKeys.NOTE_TEMPLATES] ?: defaultNoteTemplates
+            prefs[PreferenceKeys.NOTE_TEMPLATES] = cur - template
+        }
 
     // ─── Units (#2) ───────────────────────────────────────────────────────────
 
@@ -212,6 +262,17 @@ class SettingsRepository @Inject constructor(
         .map { it[PreferenceKeys.DAYS_PER_WEEK] ?: 4 }
     suspend fun setDaysPerWeek(n: Int) =
         context.forgePreferences.edit { it[PreferenceKeys.DAYS_PER_WEEK] = n.coerceIn(1, 7) }
+
+    /** Default rest base (seconds) per movement type — what the rest timer starts at before personal
+     *  tuning + the brutal bonus. Defaults to the canonical 180 / 90; clamped to a sane 30s–10min. */
+    val restCompoundSeconds: Flow<Int> = context.forgePreferences.data
+        .map { it[PreferenceKeys.REST_COMPOUND_SECONDS] ?: 180 }
+    val restIsolationSeconds: Flow<Int> = context.forgePreferences.data
+        .map { it[PreferenceKeys.REST_ISOLATION_SECONDS] ?: 90 }
+    suspend fun setRestCompoundSeconds(s: Int) =
+        context.forgePreferences.edit { it[PreferenceKeys.REST_COMPOUND_SECONDS] = s.coerceIn(30, 600) }
+    suspend fun setRestIsolationSeconds(s: Int) =
+        context.forgePreferences.edit { it[PreferenceKeys.REST_ISOLATION_SECONDS] = s.coerceIn(30, 600) }
 
     val programEmphasis: Flow<String> = context.forgePreferences.data
         .map { it[PreferenceKeys.PROGRAM_EMPHASIS] ?: "balanced" }
@@ -427,6 +488,16 @@ class SettingsRepository @Inject constructor(
             name?.let { prefs[PreferenceKeys.USER_NAME] = it }
             goal?.let { prefs[PreferenceKeys.USER_GOAL] = it }
         }
+    }
+
+    /**
+     * Scoped "reset to defaults" for one settings section — removes just that section's keys so their
+     * defaults reapply, without touching the rest of the user's setup (#544). Identity/onboarding and
+     * program/equipment config are never in scope here. The key list lives on [SettingsSection].
+     */
+    suspend fun resetSection(section: SettingsSection) {
+        if (section.keys.isNotEmpty())
+            context.forgePreferences.edit { prefs -> section.keys.forEach { prefs.remove(it) } }
     }
 
     /** Returns true if the current wall-clock time falls within the user's quiet hours window (#122). */
