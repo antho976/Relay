@@ -46,8 +46,15 @@ data class CoachBrief(
     val pass: CoachPass,
     val decisions: List<CoachDecision>,
     /** Null when the review itself failed to assemble — the Brief still renders the pass. */
-    val review: WeeklyReviewData?
-)
+    val review: WeeklyReviewData?,
+    /** Finished tracked sessions so far — drives the "still learning, N to go" subtitle (CO1). */
+    val sessionsLogged: Int = 0,
+    /** Sessions needed before the weekly pass starts calling adjustments. */
+    val minSessions: Int = 0
+) {
+    /** Sessions remaining before the coach activates; 0 once it's calling weekly adjustments. */
+    val sessionsToGo: Int get() = (minSessions - sessionsLogged).coerceAtLeast(0)
+}
 
 /**
  * The "Coach lab" read-out (finding #5): a plain-language portrait of what the coach is
@@ -162,6 +169,8 @@ class CoachRepository @Inject constructor(
                 }
             }
         }.getOrElse { e ->
+            // Don't launder a cancelled scope into a persisted STATUS_ERROR pass — let cancellation unwind.
+            if (e is kotlinx.coroutines.CancellationException) throw e
             // Fail loud: an errored pass is its own status, never a silent hold.
             CoachPass(weekId, clock.nowMs(), STATUS_ERROR,
                 "Couldn't evaluate this week (${e.message ?: e.javaClass.simpleName}) — no changes were considered.")
@@ -505,15 +514,27 @@ class CoachRepository @Inject constructor(
 
     private suspend fun briefFor(pass: CoachPass): CoachBrief {
         val decisions = coachDao.decisionsFor(pass.weekId)
-        val review = runCatching {
-            WeeklyReview.assemble(
-                s = adaptationRepository.snapshot(),
-                weekStartMs = weekStartMs(),
-                sessionsTarget = settings.daysPerWeek.first(),
-                hasDeloadShadow = decisions.any { it.type == "deload" }
-            )
-        }.getOrNull()
-        return CoachBrief(pass, decisions, review)
+        // Snapshot once and reuse: feeds the review AND the activation-progress subtitle (CO1).
+        val snapshot = runCatching { adaptationRepository.snapshot() }.getOrNull()
+        val review = snapshot?.let { snap ->
+            runCatching {
+                WeeklyReview.assemble(
+                    s = snap,
+                    weekStartMs = weekStartMs(),
+                    sessionsTarget = settings.daysPerWeek.first(),
+                    hasDeloadShadow = decisions.any { it.type == "deload" }
+                )
+            }.getOrNull()
+        }
+        return CoachBrief(
+            pass, decisions, review,
+            sessionsLogged = snapshot?.sessions?.size ?: 0,
+            // When the snapshot failed (null) we DON'T know the real session count — leave minSessions 0
+            // so sessionsToGo is 0 and the Brief shows the neutral "watching and learning" line instead
+            // of telling an established user "Still learning — 0 of N sessions logged" (a failed read is
+            // not a fresh account). The "Last week" section is already hidden because review is null.
+            minSessions = if (snapshot != null) AutoCoachPlanner.MIN_SESSIONS else 0
+        )
     }
 
     /**

@@ -74,7 +74,43 @@ class AdaptationRepository @Inject constructor(
     /** How long a snapshot stays reusable by [snapshotCached] — long enough to bridge a screen hop. */
     private val SNAPSHOT_CACHE_MS = 60_000L
 
-    suspend fun snapshot(): AdaptationSnapshot {
+    /**
+     * The full adaptation snapshot. THROWS on a read/assembly failure so error-aware callers can tell a
+     * real failure apart from a genuinely empty pre-baseline history — the Week Brief hides "Last week"
+     * and drops its "N sessions logged" countdown, the weekly pass records STATUS_ERROR, and Stats'
+     * engine read degrades to no pulse/plateaus. Surfaces that fan out from this but have NO error path
+     * of their own use [snapshotOrEmpty] instead.
+     */
+    suspend fun snapshot(): AdaptationSnapshot = assembleSnapshot()
+
+    /**
+     * Crash-safe snapshot for surfaces with no error handling of their own (the Overview coach feed runs
+     * in a bare launch): a single corrupt row degrades to an empty (pre-baseline) snapshot instead of
+     * taking the screen down. Re-throws [CancellationException] so coroutine cancellation still propagates
+     * (a bare runCatching/catch would otherwise swallow it and keep the cancelled coroutine running).
+     */
+    suspend fun snapshotOrEmpty(): AdaptationSnapshot =
+        try {
+            assembleSnapshot()
+        } catch (c: kotlinx.coroutines.CancellationException) {
+            throw c
+        } catch (t: Throwable) {
+            emptySnapshot()
+        }
+
+    /** Empty pre-baseline snapshot used when [assembleSnapshot] fails — pure, can't itself throw. */
+    private fun emptySnapshot(): AdaptationSnapshot = SnapshotAssembler.assemble(
+        nowMs = clock.nowMs(),
+        program = Program.days,
+        swapCandidateIds = { emptyList() },
+        sessions = emptyList(),
+        loggedExercises = emptyList(),
+        loggedSets = emptyList(),
+        prefs = PrefsSnap(),
+        zoneId = java.time.ZoneId.systemDefault()
+    )
+
+    private suspend fun assembleSnapshot(): AdaptationSnapshot {
         // The DAO queries already exclude unfinished + untracked; the session list must too.
         val sessions = sessionDao.allFinished().filter { !it.isUntracked }
         val loggedExercises = loggedExerciseDao.allForFinishedSessions()
@@ -173,7 +209,9 @@ class AdaptationRepository @Inject constructor(
     )
 
     suspend fun coachFeed(): CoachFeed {
-        val s = snapshot()
+        // Overview calls this from a bare viewModelScope.launch with no error path, so degrade to an
+        // empty snapshot (no recs) rather than crashing the home screen on a corrupt row.
+        val s = snapshotOrEmpty()
         val t = AdaptThresholds()
         val recs = ProgressionAdvisor.evaluate(s, t) + listOfNotNull(DeloadAdvisor.evaluate(s, t))
         val arbitrated = RecommendationArbiter.arbitrate(recs, mutedAdviceIds())

@@ -138,7 +138,7 @@ class WorkoutSessionService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         return NotificationCompat.Builder(this, CHANNEL_SESSION)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setSmallIcon(R.drawable.ic_stat_forge)
             .setContentTitle(title)
             .setContentText(text)
             .setContentIntent(tapIntent)
@@ -158,7 +158,7 @@ class WorkoutSessionService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val notification = NotificationCompat.Builder(this, CHANNEL_TIMER)
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setSmallIcon(R.drawable.ic_stat_forge)
             .setContentTitle("Rest timer done")
             .setContentText("Time to get back to it")
             .setContentIntent(tapIntent)

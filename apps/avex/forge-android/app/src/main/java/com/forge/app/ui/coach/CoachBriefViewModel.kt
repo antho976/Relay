@@ -8,6 +8,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -18,13 +19,16 @@ import javax.inject.Inject
 @HiltViewModel
 class CoachBriefViewModel @Inject constructor(
     private val coachRepo: CoachRepository,
+    private val settingsRepo: com.forge.app.data.prefs.SettingsRepository,
     private val programChangeGuard: com.forge.app.ui.common.ProgramChangeGuard
 ) : ViewModel() {
 
     data class UiState(
         val loading: Boolean = true,
         /** Null after loading = even the pass record failed to load — render the error body. */
-        val brief: CoachBrief? = null
+        val brief: CoachBrief? = null,
+        /** Show the one-time "how your coach learns" card on first Brief open (CO6). */
+        val showIntroCard: Boolean = false
     )
 
     private val _state = MutableStateFlow(UiState())
@@ -33,10 +37,18 @@ class CoachBriefViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             val brief = runCatching { coachRepo.brief() }.getOrNull()
-            _state.value = UiState(loading = false, brief = brief)
+            // Default to "seen" on a read failure so we never flash the intro on every open.
+            val introSeen = runCatching { settingsRepo.coachBriefIntroSeen.first() }.getOrDefault(true)
+            _state.value = UiState(loading = false, brief = brief, showIntroCard = !introSeen)
             // Opening the brief (from the banner OR Settings) clears the Overview "new report" banner.
             brief?.let { runCatching { coachRepo.markSeen(it.pass.weekId) } }
         }
+    }
+
+    /** Dismiss the one-time coach intro card and remember it so it never shows again (CO6). */
+    fun dismissIntro() {
+        _state.value = _state.value.copy(showIntroCard = false)
+        viewModelScope.launch { runCatching { settingsRepo.setCoachBriefIntroSeen() } }
     }
 
     fun apply(decisionId: Long) {

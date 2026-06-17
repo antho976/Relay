@@ -164,6 +164,24 @@ object ProgramGenerator {
                 ExerciseLibrary.patternOf(pick).takeIf { it != MovementPattern.ISOLATION }
                     ?.let { usedPatterns += it }
                 GeneratedExercise(pick.id, setsByDay[di][si], repsFor(pick, slot.scheme, params.goal))
+            }.ifEmpty {
+                // A generated day must never ship empty — disliking every movement for a muscle (or
+                // aggressive equipment / problem-area filters) can otherwise drop every slot, stranding
+                // the user on a blank session screen. Last resort, ignoring the dislikes that emptied the
+                // day: one movement for the lead slot's muscle; if the pool has nothing for that muscle
+                // (e.g. a frozen preset, or a muscle with no available movement), ANY available movement,
+                // so the day is never blank whenever there's at least one target and a non-empty pool.
+                val lead = day.targets.firstOrNull()
+                val pool = ExerciseLibrary.availablePool(available, params.frozenIds)
+                val fallback = lead?.let { slot -> pool.firstOrNull { it.muscle == slot.muscle } }
+                    ?: pool.firstOrNull()
+                if (lead != null && fallback != null) {
+                    listOf(GeneratedExercise(
+                        fallback.id,
+                        setsByDay[di].getOrElse(0) { VolumeModel.MIN_SETS },
+                        repsFor(fallback, lead.scheme, params.goal)
+                    ))
+                } else emptyList()
             }
             GeneratedDay(day.key, day.name, day.word, day.accentHex, day.key, exercises)
         }

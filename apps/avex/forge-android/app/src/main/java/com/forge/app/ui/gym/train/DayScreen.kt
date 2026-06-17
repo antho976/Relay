@@ -23,6 +23,7 @@ import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -82,6 +83,14 @@ fun DayScreen(
         }
         prevTotalSets.intValue = totalSets
         prevTotalPrs.intValue = totalPrSets
+    }
+
+    // Keep the screen awake while a session is in progress so the phone doesn't lock mid-rest and
+    // force a PIN/biometric unlock between sets. Released the moment the session finishes or the
+    // screen leaves composition.
+    DisposableEffect(state.isFinished) {
+        view.keepScreenOn = !state.isFinished
+        onDispose { view.keepScreenOn = false }
     }
 
     LaunchedEffect(state.restTimer?.isFinished) {

@@ -122,9 +122,10 @@ class StatsViewModel @Inject constructor(
             userSex = sex
         )
     }.catch {
-        // A crash in any stats aggregation drops to a non-loading empty state instead of an
-        // infinite spinner; the empty-state copy (Tier 5) then explains there's nothing yet.
-        emit(StatsUiState(isLoading = false))
+        // A crash in any stats aggregation drops to a non-loading ERROR state instead of an
+        // infinite spinner OR a silent empty (which would read as "no data yet"). The screen
+        // shows a distinct "couldn't load your stats" message (E4).
+        emit(StatsUiState(isLoading = false, loadError = true))
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(stopTimeoutMillis = 5_000),

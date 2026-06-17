@@ -3,10 +3,13 @@ package com.forge.app.ui.gym.stats
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -74,6 +77,14 @@ fun StatsContent(
     val selectedTab = tabs[pagerState.currentPage]
 
     Column(modifier = modifier.fillMaxSize()) {
+        if (state.loadError) {
+            Text(
+                "Couldn't load your stats just now. Go back and reopen this tab — if it keeps happening, restart the app.",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 12.dp)
+            )
+        }
         StatsTabBar(
             selected = selectedTab,
             onSelect = { tab -> scope.launch { pagerState.animateScrollToPage(tab.ordinal) } }

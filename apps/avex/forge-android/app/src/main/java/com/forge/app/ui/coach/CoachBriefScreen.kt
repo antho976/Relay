@@ -1,6 +1,8 @@
 package com.forge.app.ui.coach
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -27,10 +29,13 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import com.forge.app.domain.coach.CoachOutcome
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
@@ -90,17 +95,25 @@ fun CoachBriefScreen(
                     )
                 }
             }
-            else -> BriefContent(state.brief!!, viewModel, onOpenCoachLab, Modifier.padding(inner))
+            else -> BriefContent(state.brief!!, viewModel, onOpenCoachLab, state.showIntroCard, viewModel::dismissIntro, Modifier.padding(inner))
         }
     }
 }
 
 @Composable
-private fun BriefContent(brief: CoachBrief, viewModel: CoachBriefViewModel, onOpenCoachLab: () -> Unit, modifier: Modifier = Modifier) {
+private fun BriefContent(
+    brief: CoachBrief,
+    viewModel: CoachBriefViewModel,
+    onOpenCoachLab: () -> Unit,
+    showIntro: Boolean,
+    onDismissIntro: () -> Unit,
+    modifier: Modifier = Modifier
+) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val onBg = MaterialTheme.colorScheme.onBackground
     val outline = MaterialTheme.colorScheme.outline
     val useKg = LocalForgeSettings.current.useKg
+    var holdExpanded by remember { mutableStateOf(false) }
 
     Column(
         modifier = modifier
@@ -108,12 +121,20 @@ private fun BriefContent(brief: CoachBrief, viewModel: CoachBriefViewModel, onOp
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 24.dp)
     ) {
+        if (showIntro) {
+            Spacer(Modifier.height(8.dp))
+            CoachIntroCard(onDismiss = onDismissIntro)
+        }
         Text(brief.pass.weekId.uppercase(), style = MaterialTheme.typography.labelMedium, color = emphasized(muted))
         Spacer(Modifier.height(4.dp))
         Text(
-            when (brief.pass.status) {
-                CoachRepository.STATUS_PROPOSED, CoachRepository.STATUS_APPLIED ->
+            when {
+                brief.pass.status == CoachRepository.STATUS_PROPOSED || brief.pass.status == CoachRepository.STATUS_APPLIED ->
                     "Proposals — nothing changes until you apply it. Every applied change can be undone."
+                // Pre-baseline: a concrete countdown so a quiet coach reads as "still gathering data" (CO1).
+                brief.sessionsToGo > 0 ->
+                    "Still learning — ${brief.sessionsLogged} of ${brief.minSessions} sessions logged. " +
+                        "${brief.sessionsToGo} more and I'll start calling weekly adjustments."
                 else -> "The coach is watching and learning — anything it would change shows up here as a suggestion. Nothing changes unless you apply it."
             },
             style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic
@@ -163,10 +184,29 @@ private fun BriefContent(brief: CoachBrief, viewModel: CoachBriefViewModel, onOp
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.error
             )
-            else -> Text(
-                brief.pass.holdReason ?: "No changes this week.",
-                style = MaterialTheme.typography.bodyMedium, color = onBg
-            )
+            else -> {
+                val holdReason = brief.pass.holdReason
+                if (holdReason != null) {
+                    // The hold reason is the most-confusing state for a new user — make it an explicit,
+                    // tappable "why" rather than a bare line that reads as the coach being broken (CO2).
+                    Text(
+                        "Why the coach held this week  ${if (holdExpanded) "▾" else "▸"}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .clickable(onClickLabel = "Show why the coach held", role = Role.Button) {
+                                holdExpanded = !holdExpanded
+                            }
+                            .padding(vertical = 2.dp)
+                    )
+                    if (holdExpanded) {
+                        Spacer(Modifier.height(6.dp))
+                        Text(holdReason, style = MaterialTheme.typography.bodyMedium, color = onBg)
+                    }
+                } else {
+                    Text("No changes this week.", style = MaterialTheme.typography.bodyMedium, color = onBg)
+                }
+            }
         }
 
         // ── Focus ─────────────────────────────────────────────────────────────
@@ -260,6 +300,39 @@ private fun BriefStatRow(label: String, value: String) {
     ) {
         Text(label, style = MaterialTheme.typography.bodySmall, color = muted)
         Text(value, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground)
+    }
+}
+
+/** One-time card on first Brief open explaining how the coach learns and that it never auto-changes (CO6). */
+@Composable
+private fun CoachIntroCard(onDismiss: () -> Unit) {
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 8.dp, bottom = 4.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+            .padding(16.dp)
+    ) {
+        Text("How your coach learns", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "Forge watches your sessions — the weights you lift, how hard they feel, your recovery — and " +
+                "writes a brief like this each week. It never changes your plan on its own: anything it " +
+                "suggests waits here until you apply it, and every applied change can be undone.",
+            style = MaterialTheme.typography.bodySmall, color = muted
+        )
+        Spacer(Modifier.height(10.dp))
+        Text(
+            "Got it",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier
+                .align(Alignment.End)
+                .clickable(onClickLabel = "Dismiss", role = Role.Button) { onDismiss() }
+                .padding(vertical = 4.dp)
+        )
     }
 }
 

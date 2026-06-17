@@ -104,7 +104,10 @@ class OverviewViewModel @Inject constructor(
         val customName = names.firstOrNull { it.dayKey == s.nextUpDayKey }?.customName
         s.copy(customDayName = customName)
     }.combine(workoutRepo.observeActiveSession()) { s, active ->
-        s.copy(activeSessionDayKey = active?.dayKey)
+        // Guard against a "zombie" active session whose day was removed by a program regenerate (or a
+        // force-stop mid-first-gen): don't offer to resume a day that no longer exists — Program.day()
+        // would silently resolve the stale key to the wrong day. An invalid key reads as no resume here.
+        s.copy(activeSessionDayKey = active?.dayKey?.takeIf { it in com.forge.app.program.Program.dayKeys })
     }.combine(_coach) { s, coach ->
         s.copy(coach = coach)
     }.combine(_coachLearning) { s, hint ->

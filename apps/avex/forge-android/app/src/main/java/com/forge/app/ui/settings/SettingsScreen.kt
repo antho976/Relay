@@ -276,7 +276,7 @@ fun SettingsScreen(
     if (showDataDialog) {
         DataExportDialog(
             viewModel = viewModel,
-            onBackup = { backupLauncher.launch("forge_backup_$dateStamp.db") },
+            onBackup = { backupLauncher.launch("forge_backup_$dateStamp.zip") },
             onRestore = { restoreLauncher.launch(arrayOf("*/*")) },
             onExportCrashLogs = { crashLauncher.launch("forge_crash_logs_$dateStamp.zip") },
             onDismiss = { showDataDialog = false }

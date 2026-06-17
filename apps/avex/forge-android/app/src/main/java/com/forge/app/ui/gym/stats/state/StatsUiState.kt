@@ -18,6 +18,8 @@ data class WeekActivityRow(
 
 data class StatsUiState(
     val isLoading: Boolean = true,
+    /** True when a stats aggregation threw — the screen shows an error message, not a silent empty. */
+    val loadError: Boolean = false,
     val volumeByMuscle: List<MuscleVolume> = emptyList(),
     val recentPrs: List<PrEntry> = emptyList(),
     val hallOfFame: List<PrRecord> = emptyList(),

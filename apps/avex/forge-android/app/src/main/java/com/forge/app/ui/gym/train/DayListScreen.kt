@@ -125,6 +125,11 @@ private fun TrainTab(
             style = MaterialTheme.typography.headlineMedium,
             color = emphasized(MaterialTheme.colorScheme.onSurface)
         )
+        Text(
+            "Hold a day for options — re-roll, recolor, or edit it.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
         state.days.forEach { item ->
             DayCard(
                 item = item,

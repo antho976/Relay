@@ -171,6 +171,9 @@ object PreferenceKeys {
     /** Coach mode (auto-coach Phase 4): "suggest" (default) | "auto" (earned auto-apply). */
     val COACH_MODE = stringPreferencesKey("coach_mode")
 
+    /** Whether the one-time "how your coach learns" intro card has been dismissed (CO6). */
+    val COACH_BRIEF_INTRO_SEEN = booleanPreferencesKey("coach_brief_intro_seen")
+
     /** ISO week id of the most recent Week Brief the user has seen — drives the "new report" banner. */
     val LAST_SEEN_COACH_WEEK_ID = stringPreferencesKey("last_seen_coach_week_id")
 }

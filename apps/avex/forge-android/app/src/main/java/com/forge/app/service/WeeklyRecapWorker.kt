@@ -2,7 +2,9 @@ package com.forge.app.service
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
 import androidx.core.app.NotificationCompat
 import androidx.hilt.work.HiltWorker
 import androidx.work.BackoffPolicy
@@ -12,6 +14,8 @@ import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import com.forge.app.MainActivity
+import com.forge.app.R
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.data.repo.StatsRepository
 import com.forge.app.domain.units.formatWeight
@@ -48,11 +52,19 @@ class WeeklyRecapWorker @AssistedInject constructor(
             if (stats.cardioMinutes > 0) append(" · ${stats.cardioMinutes} min cardio")
             if (stats.streakDays > 0) append(" · ${stats.streakDays}-day streak")
         }
+        // Tapping the recap opens the app (lands on Overview, the home/start destination) instead of
+        // doing nothing — the recap is a stats nudge, so it should at least bring the user back in.
+        val tap = PendingIntent.getActivity(
+            ctx, 0,
+            Intent(ctx, MainActivity::class.java).apply { flags = Intent.FLAG_ACTIVITY_SINGLE_TOP },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
         val notification = NotificationCompat.Builder(ctx, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setSmallIcon(R.drawable.ic_stat_forge)
             .setContentTitle("Weekly recap")
             .setContentText(body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+            .setContentIntent(tap)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setAutoCancel(true)
             .build()

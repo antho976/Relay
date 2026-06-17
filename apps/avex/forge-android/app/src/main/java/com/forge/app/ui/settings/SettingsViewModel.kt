@@ -3,6 +3,7 @@ package com.forge.app.ui.settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.forge.app.data.prefs.SettingsRepository
+import com.forge.app.data.repo.BackupRepository.RestoreOutcome
 import com.forge.app.data.repo.ResetRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -413,10 +414,31 @@ class SettingsViewModel @Inject constructor(
     }
 
     fun restoreDatabase(uri: android.net.Uri) = viewModelScope.launch {
-        val ok = runCatching { backupRepo.restoreFromUri(uri) }.getOrDefault(false)
-        if (ok) _restoreSucceeded.value = true
-        else _statusMessage.value = "Restore failed — that file isn't a valid Forge backup (or was made by a newer version)."
+        val outcome = runCatching { backupRepo.restoreFromUri(uri) }
+            .getOrDefault(RestoreOutcome.IO_ERROR)
+        if (outcome == RestoreOutcome.SUCCESS) _restoreSucceeded.value = true
+        else _statusMessage.value = restoreFailureMessage(outcome)
     }
+
+    /** Plain-English reason for a failed restore, so the user knows what to do next (E6). */
+    private fun restoreFailureMessage(outcome: RestoreOutcome): String =
+        when (outcome) {
+            RestoreOutcome.NOT_A_BACKUP ->
+                "That file isn't a Forge backup — pick the .zip you exported from Forge."
+            RestoreOutcome.NEWER_VERSION ->
+                "That backup was made by a newer version of Forge. Update the app, then restore."
+            RestoreOutcome.TOO_OLD ->
+                "That backup is too old to restore safely (made before this app's schema)."
+            RestoreOutcome.CORRUPT ->
+                "That backup is corrupted or incomplete — try a different copy or re-export it."
+            RestoreOutcome.TOO_LARGE ->
+                "That file is too large to be a Forge backup."
+            RestoreOutcome.NO_BACKUP_FILE ->
+                "No auto-backup to restore yet."
+            RestoreOutcome.IO_ERROR ->
+                "Couldn't read that file. Try again, or pick a different copy."
+            RestoreOutcome.SUCCESS -> ""
+        }
 
     /** Formatted date of the weekly auto-backup slot, or null when none exists yet (#86). */
     private val _autoBackupSavedAt = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
@@ -431,9 +453,10 @@ class SettingsViewModel @Inject constructor(
 
     /** In-app restore from the weekly auto-backup slot — the recovery path for the local auto-backup (#86). */
     fun restoreAutoBackup() = viewModelScope.launch {
-        val ok = runCatching { backupRepo.restoreFromAutoBackup() }.getOrDefault(false)
-        if (ok) _restoreSucceeded.value = true
-        else _statusMessage.value = "No auto-backup to restore yet."
+        val outcome = runCatching { backupRepo.restoreFromAutoBackup() }
+            .getOrDefault(RestoreOutcome.IO_ERROR)
+        if (outcome == RestoreOutcome.SUCCESS) _restoreSucceeded.value = true
+        else _statusMessage.value = restoreFailureMessage(outcome)
     }
 
     fun exportCrashLogs(uri: android.net.Uri) = viewModelScope.launch {

@@ -272,6 +272,12 @@ fun OverviewScreen(
                     style = MaterialTheme.typography.bodyMedium.copy(fontStyle = FontStyle.Italic),
                     color = muted
                 )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "Tap the day name to edit or swap it",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = muted.copy(alpha = 0.7f)
+                )
             }
 
             Spacer(Modifier.height(20.dp))

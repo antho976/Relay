@@ -231,6 +231,12 @@ class SettingsRepository @Inject constructor(
     suspend fun setTrainingReminderEnabled(value: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.TRAINING_REMINDER_ENABLED] = value }
 
+    /** Whether the one-time "how your coach learns" card has been dismissed (CO6). */
+    val coachBriefIntroSeen: Flow<Boolean> = context.forgePreferences.data
+        .map { it[PreferenceKeys.COACH_BRIEF_INTRO_SEEN] ?: false }
+    suspend fun setCoachBriefIntroSeen() =
+        context.forgePreferences.edit { it[PreferenceKeys.COACH_BRIEF_INTRO_SEEN] = true }
+
     /** Hour-of-day (0–23) the reminder fires; default 18 (6pm). */
     val trainingReminderHour: Flow<Int> = context.forgePreferences.data
         .map { it[PreferenceKeys.TRAINING_REMINDER_HOUR] ?: 18 }

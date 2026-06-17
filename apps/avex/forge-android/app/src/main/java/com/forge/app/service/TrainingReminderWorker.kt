@@ -14,6 +14,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.forge.app.MainActivity
+import com.forge.app.R
 import com.forge.app.data.db.dao.SessionDao
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.data.repo.StatsRepository
@@ -72,7 +73,7 @@ class TrainingReminderWorker @AssistedInject constructor(
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val notification = NotificationCompat.Builder(ctx, CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setSmallIcon(R.drawable.ic_stat_forge)
             .setContentTitle(nudge.title)
             .setContentText(nudge.body)
             .setStyle(NotificationCompat.BigTextStyle().bigText(nudge.body))

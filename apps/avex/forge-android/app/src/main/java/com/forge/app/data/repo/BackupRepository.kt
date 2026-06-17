@@ -41,6 +41,9 @@ class BackupRepository @Inject constructor(
     private val zone = ZoneId.systemDefault()
     private val dateFmt = DateTimeFormatter.ofPattern("yyyy-MM-dd")
 
+    /** The outcome of a restore attempt — distinct reasons so the UI can explain a failure (E6). */
+    enum class RestoreOutcome { SUCCESS, NOT_A_BACKUP, NEWER_VERSION, TOO_OLD, CORRUPT, TOO_LARGE, IO_ERROR, NO_BACKUP_FILE }
+
     // ── Active-time helpers (per-sitting timing) ────────────────────────────────
     /** Real active seconds: the stamped sum of sittings, falling back to wall-clock for old rows. */
     private fun activeSecondsOf(s: com.forge.app.data.db.entities.Session): Int =
@@ -398,17 +401,41 @@ class BackupRepository @Inject constructor(
         }
     }
 
+    /** Stream [input] into [dest], returning false (and stopping) once it exceeds [maxBytes] (E3). */
+    private fun copyAtMost(input: java.io.InputStream, dest: File, maxBytes: Long): Boolean {
+        var total = 0L
+        dest.outputStream().use { out ->
+            val buf = ByteArray(64 * 1024)
+            while (true) {
+                val n = input.read(buf)
+                if (n < 0) break
+                total += n
+                if (total > maxBytes) return false
+                out.write(buf, 0, n)
+            }
+        }
+        return true
+    }
+
     /**
      * Replace the live database with the backup at [uri]. Validates it's a real Forge DB
-     * first; only then closes Room and swaps the file. Returns true on success — the caller
-     * MUST restart the app afterward (Room is closed and the file replaced underneath it).
+     * first; only then stages the swap. Returns a [RestoreOutcome] — on SUCCESS the caller
+     * MUST restart the app afterward (the file is swapped at next boot).
      */
-    suspend fun restoreFromUri(uri: Uri): Boolean = withContext(Dispatchers.IO) {
+    suspend fun restoreFromUri(uri: Uri): RestoreOutcome = withContext(Dispatchers.IO) {
         val incoming = File(context.cacheDir, "forge_restore_in_${System.currentTimeMillis()}")
         if (incoming.exists()) incoming.delete()
-        context.contentResolver.openInputStream(uri)?.use { input ->
-            incoming.outputStream().use { input.copyTo(it) }
-        } ?: return@withContext false
+        val copied = try {
+            context.contentResolver.openInputStream(uri)?.use { input ->
+                copyAtMost(input, incoming, MAX_RESTORE_BYTES)
+            } ?: return@withContext RestoreOutcome.IO_ERROR
+        } catch (e: java.io.IOException) {
+            // A read/write failure mid-copy (unreadable source, disk full) must not leave the partial
+            // staging temp behind — restoreFromIncoming, which cleans up, is never reached on this path.
+            incoming.delete()
+            return@withContext RestoreOutcome.IO_ERROR
+        }
+        if (!copied) { incoming.delete(); return@withContext RestoreOutcome.TOO_LARGE }
         restoreFromIncoming(incoming)
     }
 
@@ -417,12 +444,19 @@ class BackupRepository @Inject constructor(
      * file, so this is the in-app recovery path for the otherwise write-only auto-backup. Copies the
      * slot to a cache temp first so [restoreFromIncoming]'s cleanup never deletes the live slot itself.
      */
-    suspend fun restoreFromAutoBackup(): Boolean = withContext(Dispatchers.IO) {
+    suspend fun restoreFromAutoBackup(): RestoreOutcome = withContext(Dispatchers.IO) {
         val auto = File(context.filesDir, AUTO_BACKUP_NAME)
-        if (!auto.exists()) return@withContext false
+        if (!auto.exists()) return@withContext RestoreOutcome.NO_BACKUP_FILE
         val incoming = File(context.cacheDir, "forge_restore_in_${System.currentTimeMillis()}")
         if (incoming.exists()) incoming.delete()
-        auto.copyTo(incoming, overwrite = true)
+        // Cap + clean up like restoreFromUri (E3): a corrupt/oversized slot can't fill the cache here either.
+        val copied = try {
+            auto.inputStream().use { copyAtMost(it, incoming, MAX_RESTORE_BYTES) }
+        } catch (e: java.io.IOException) {
+            incoming.delete()
+            return@withContext RestoreOutcome.IO_ERROR
+        }
+        if (!copied) { incoming.delete(); return@withContext RestoreOutcome.TOO_LARGE }
         restoreFromIncoming(incoming)
     }
 
@@ -430,9 +464,9 @@ class BackupRepository @Inject constructor(
      * Validate [incoming] and, if it's a real Forge backup, STAGE the DB, prefs and progress photos
      * as pending files that [com.forge.app.ForgeApp.applyPendingRestore] swaps in atomically at next
      * boot — DB, prefs and photos together, so a kill or copy failure can never leave the live DB and
-     * photo folder from different backups. Returns true once everything is staged. Deletes [incoming].
+     * photo folder from different backups. Returns a [RestoreOutcome]. Deletes [incoming].
      */
-    private suspend fun restoreFromIncoming(incoming: File): Boolean = withContext(Dispatchers.IO) {
+    private suspend fun restoreFromIncoming(incoming: File): RestoreOutcome = withContext(Dispatchers.IO) {
         val temps = mutableListOf(incoming) // cache-dir temp files to clean up before returning
         var photoStage: File? = null        // extracted progress photos, staged only after validation
         var avatarStage: File? = null       // extracted avatar temp (in temps), applied after validation
@@ -478,11 +512,16 @@ class BackupRepository @Inject constructor(
                         entry = zin.nextEntry
                     }
                 }
-                if (!sawDb) return@withContext false
+                if (!sawDb) return@withContext RestoreOutcome.NOT_A_BACKUP
                 dbFile = exDb
             }
 
-            if (!isForgeDatabase(dbFile)) return@withContext false
+            if (!isForgeDatabase(dbFile)) {
+                // A file that carries the SQLite header but lacks our schema is a damaged/incomplete DB
+                // (e.g. a backup truncated in transfer) — report CORRUPT so the user re-exports rather
+                // than hunting for "the .zip". A file without the header was never a backup at all.
+                return@withContext if (isSqlite(dbFile)) RestoreOutcome.CORRUPT else RestoreOutcome.NOT_A_BACKUP
+            }
             // Reject a backup newer than this build's schema: Room has no downgrade path and would
             // crash on open. Older versions migrate forward normally, so only a strictly-newer
             // user_version is rejected. (We stage rather than swap live, so nothing is lost on reject.)
@@ -492,7 +531,8 @@ class BackupRepository @Inject constructor(
             // ALL TABLES on open — restoring such a backup would silently wipe it. Refuse instead.
             val currentVersion = db.openHelper.readableDatabase.version
             val incomingVersion = databaseUserVersion(dbFile)
-            if (incomingVersion > currentVersion || incomingVersion < MIN_RESTORABLE_VERSION) return@withContext false
+            if (incomingVersion > currentVersion) return@withContext RestoreOutcome.NEWER_VERSION
+            if (incomingVersion < MIN_RESTORABLE_VERSION) return@withContext RestoreOutcome.TOO_OLD
 
             // Don't close Room and swap the file here — that races with any flow still reading the DB
             // until the process is killed. Stage the files instead; ForgeApp.applyPendingRestore swaps
@@ -527,7 +567,14 @@ class BackupRepository @Inject constructor(
                 a.copyTo(pendingAvatar, overwrite = true)
             }
 
-            return@withContext true
+            return@withContext RestoreOutcome.SUCCESS
+        } catch (e: java.util.zip.ZipException) {
+            // A truncated or malformed ZIP (e.g. a backup that got corrupted in an email / cloud
+            // transfer) fails cleanly with a distinct reason instead of escaping the restore path.
+            return@withContext RestoreOutcome.CORRUPT
+        } catch (e: java.io.IOException) {
+            // Any other read/copy failure mid-restore (unreadable entry, disk full).
+            return@withContext RestoreOutcome.IO_ERROR
         } finally {
             temps.forEach { it.delete() }
             photoStage?.deleteRecursively()
@@ -575,7 +622,16 @@ class BackupRepository @Inject constructor(
     private fun preferencesFile(): File =
         File(context.filesDir, "datastore/$PREFS_DATASTORE_NAME.preferences_pb")
 
-    /** True if [file] starts with the ZIP local-file-header magic (PK). */
+    /** True if [file] starts with the SQLite format-3 magic (so a non-zip candidate is at least a DB). */
+    private fun isSqlite(file: File): Boolean = runCatching {
+        val magic = "SQLite format 3".toByteArray(Charsets.US_ASCII) + 0.toByte()
+        file.inputStream().use { ins ->
+            val buf = ByteArray(magic.size)
+            ins.read(buf) == magic.size && buf.contentEquals(magic)
+        }
+    }.getOrDefault(false)
+
+    /** True if [file] starts with the ZIP local-file-header magic (PK signature). */
     private fun isZip(file: File): Boolean = runCatching {
         file.inputStream().use { ins ->
             val sig = ByteArray(4)
@@ -607,5 +663,8 @@ class BackupRepository @Inject constructor(
          * restoring one would wipe rather than recover. Must stay one above that destructive range.
          */
         private const val MIN_RESTORABLE_VERSION = 12
+
+        /** Cap on the staged restore copy — guards a budget device's cache against an oversized file (E3). */
+        private const val MAX_RESTORE_BYTES = 2L * 1024 * 1024 * 1024 // 2 GiB
     }
 }
