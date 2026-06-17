@@ -83,6 +83,8 @@ private fun DayViewModel.finishWorkout() {
         // finishSession closes the open sitting and returns total ACTIVE seconds (summed across
         // sittings) — the real duration, not wall-clock from the first start.
         val activeSeconds = workoutRepo.finishSession(sessionId, totalVolumeLb, prCount, allSets.size)
+        // First-touch onboarding cards hide for good once any workout is completed.
+        settingsRepo.setFirstWorkoutDone()
         // An interval left open didn't lead to another set — drop it, don't write it.
         openRestEvent = null
         restTimer.stop()

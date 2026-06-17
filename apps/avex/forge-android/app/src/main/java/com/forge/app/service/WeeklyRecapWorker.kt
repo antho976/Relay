@@ -38,6 +38,8 @@ class WeeklyRecapWorker @AssistedInject constructor(
 ) : CoroutineWorker(ctx, params) {
 
     override suspend fun doWork(): Result {
+        // Per-type opt-out (Settings → Notifications, N2). Disabled ⇒ nothing to post.
+        if (!settingsRepo.weeklyRecapEnabled.first()) return Result.success()
         // Defer (retry) rather than silently drop the recap if we land in quiet hours.
         if (settingsRepo.isQuietNow()) return Result.retry()
         val stats = statsRepo.observeWeeklyStats().firstOrNull() ?: return Result.success()

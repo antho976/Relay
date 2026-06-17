@@ -1,15 +1,20 @@
 package com.forge.app.ui.common
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -75,4 +80,37 @@ fun InlineEmptyHint(
         color = color,
         fontStyle = FontStyle.Italic
     )
+}
+
+/**
+ * Left-aligned [title] + [body] card shown to a brand-new user on an otherwise-empty surface (the
+ * Overview welcome, the Profile header, the first session). Distinct from [EmptyState] (centered,
+ * emoji-anchored) and [InlineEmptyHint] (one-liner) — this is the multi-line onboarding nudge. Kept
+ * here so the first-touch sites share one treatment instead of each hand-rolling the same card.
+ */
+@Composable
+fun FirstTouchTip(
+    title: String,
+    body: String,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+            .padding(16.dp)
+    ) {
+        Text(
+            title,
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.onBackground
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            body,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
 }

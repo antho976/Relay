@@ -3,8 +3,8 @@ package com.forge.app.ui.coach
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.layout.Arrangement
+import com.forge.app.ui.common.clickableLabeled
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -91,7 +91,7 @@ fun CoachBriefScreen(
                         "See what it's tracking →",
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.clickable { onOpenCoachLab() }.padding(vertical = 4.dp)
+                        modifier = Modifier.clickableLabeled("Open Coach Lab") { onOpenCoachLab() }.padding(vertical = 4.dp)
                     )
                 }
             }
@@ -174,7 +174,7 @@ private fun BriefContent(
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.primary,
                         modifier = Modifier
-                            .clickable { viewModel.applyAll(brief.pass.weekId) }
+                            .clickableLabeled("Apply all coach changes this week") { viewModel.applyAll(brief.pass.weekId) }
                             .padding(vertical = 4.dp)
                     )
                 }
@@ -194,7 +194,7 @@ private fun BriefContent(
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.primary,
                         modifier = Modifier
-                            .clickable(onClickLabel = "Show why the coach held", role = Role.Button) {
+                            .clickableLabeled("Show why the coach held") {
                                 holdExpanded = !holdExpanded
                             }
                             .padding(vertical = 2.dp)
@@ -227,7 +227,7 @@ private fun BriefContent(
             "What I'm watching →",
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.clickable { onOpenCoachLab() }.padding(vertical = 4.dp)
+            modifier = Modifier.clickableLabeled("Open Coach Lab") { onOpenCoachLab() }.padding(vertical = 4.dp)
         )
 
         Spacer(Modifier.height(40.dp))
@@ -251,13 +251,13 @@ private fun DecisionRow(d: com.forge.app.data.db.entities.CoachDecision, viewMod
                 Text(
                     "Apply →", style = MaterialTheme.typography.labelSmall, color = accent,
                     modifier = Modifier
-                        .clickable(onClickLabel = "Apply this change", role = Role.Button) { viewModel.apply(d.id) }
+                        .clickableLabeled("Apply this change") { viewModel.apply(d.id) }
                         .padding(vertical = 2.dp)
                 )
                 Text(
                     "skip", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.7f),
                     modifier = Modifier
-                        .clickable(onClickLabel = "Skip this change", role = Role.Button) { viewModel.skip(d.id) }
+                        .clickableLabeled("Skip this change") { viewModel.skip(d.id) }
                         .padding(vertical = 2.dp)
                 )
             }
@@ -277,7 +277,7 @@ private fun DecisionRow(d: com.forge.app.data.db.entities.CoachDecision, viewMod
                 if (d.undoData != null) Text(
                     "undo", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.7f),
                     modifier = Modifier
-                        .clickable(onClickLabel = "Undo this change", role = Role.Button) { viewModel.undo(d.id) }
+                        .clickableLabeled("Undo this change") { viewModel.undo(d.id) }
                         .padding(vertical = 2.dp)
                 )
             }
@@ -330,7 +330,7 @@ private fun CoachIntroCard(onDismiss: () -> Unit) {
             color = MaterialTheme.colorScheme.primary,
             modifier = Modifier
                 .align(Alignment.End)
-                .clickable(onClickLabel = "Dismiss", role = Role.Button) { onDismiss() }
+                .clickableLabeled("Dismiss") { onDismiss() }
                 .padding(vertical = 4.dp)
         )
     }

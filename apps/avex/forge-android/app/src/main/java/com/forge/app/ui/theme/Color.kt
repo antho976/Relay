@@ -8,7 +8,7 @@ val PearlSurface     = Color(0xFF18181C)
 val PearlSurfaceVar  = Color(0xFF222228)
 val PearlOutline     = Color(0xFF2E2E38)
 val PearlOnBg        = Color(0xFFEEEEF2)
-val PearlMuted       = Color(0xFFA6A6B6)   // brightened: old 0xFF7A7A8A was too faint to read
+val PearlMuted       = Color(0xFFB4B4C2)   // A6: brightened so muted text — incl. the .65–.7 alpha captions — clears WCAG-AA 4.5:1 on PearlBackground (old #A6A6B6 fell to ~4.4:1 once alpha-dimmed; full tone now ~9.4:1, alpha-0.7 ~5.1:1)
 
 val PearlGradTop     = Color(0xFF131318)
 val PearlGradBottom  = Color(0xFF090909)

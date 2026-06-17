@@ -54,7 +54,10 @@ import com.forge.app.ui.gym.train.state.DayUiState
 import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.theme.LocalForgeSettings
 
-@Suppress("UNUSED_PARAMETER")
+// DEPRECATION: View.announceForAccessibility (A4) is deprecated as of API 36 but is still the
+// reliable one-shot screen-reader announce; the suggested live-region replacement needs a persistent
+// hidden node and is far more fragile, so we keep this until a clean Compose API exists.
+@Suppress("UNUSED_PARAMETER", "DEPRECATION")
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DayScreen(
@@ -77,6 +80,8 @@ fun DayScreen(
             prevTotalPrs.intValue >= 0 && totalPrSets > prevTotalPrs.intValue -> {
                 view.forgeHaptic(ForgeHapticType.PR_OR_FINISH, hapticStrength)
                 showPrBurst = true
+                // A4: announce to TalkBack (phone is often face-down mid-set). No-op without a screen reader.
+                view.announceForAccessibility("New personal record!")
             }
             prevTotalSets.intValue >= 0 && totalSets > prevTotalSets.intValue ->
                 view.forgeHaptic(ForgeHapticType.SET_LOGGED, hapticStrength)
@@ -93,8 +98,16 @@ fun DayScreen(
         onDispose { view.keepScreenOn = false }
     }
 
+    // Fire only on a genuine not-finished → finished transition. Seeding prev with the current value
+    // means re-entering the screen with an already-finished timer doesn't re-buzz / re-announce (A4).
+    var prevRestFinished by remember { mutableStateOf(state.restTimer?.isFinished == true) }
     LaunchedEffect(state.restTimer?.isFinished) {
-        if (state.restTimer?.isFinished == true) view.forgeHaptic(ForgeHapticType.PR_OR_FINISH, hapticStrength)
+        val finished = state.restTimer?.isFinished == true
+        if (finished && !prevRestFinished) {
+            view.forgeHaptic(ForgeHapticType.PR_OR_FINISH, hapticStrength)
+            view.announceForAccessibility("Rest complete") // A4: spoken even with the phone face-down.
+        }
+        prevRestFinished = finished
     }
     LaunchedEffect(state.restTimer?.secondsRemaining) {
         if (state.restTimer?.secondsRemaining == 10) view.forgeHaptic(ForgeHapticType.COUNTDOWN_TICK, hapticStrength)

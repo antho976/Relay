@@ -50,6 +50,7 @@ import kotlinx.coroutines.withContext
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.ui.theme.LocalForgeSettings
 import com.forge.app.data.repo.ProgressPhoto
+import com.forge.app.ui.common.FirstTouchTip
 import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.theme.emphasized
 import java.io.File
@@ -147,6 +148,16 @@ fun ProfileScreen(
                 Text(
                     "Rank ${r.roman} — ${r.tier.display}$streak",
                     style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic
+                )
+            }
+
+            // First-touch (D1): a brand-new profile is all dashes and empty bars — say what fills it in.
+            // Persistent flag too, so a returning user (e.g. after a data wipe) isn't told they're new.
+            if (state.totalSessions == 0 && !LocalForgeSettings.current.firstWorkoutDone) {
+                Spacer(Modifier.height(20.dp))
+                FirstTouchTip(
+                    "Your profile starts with your first set.",
+                    "Log a workout and this page fills in — you'll earn XP, climb the rank ladder, and unlock your standing, signature lifts and trophies."
                 )
             }
 

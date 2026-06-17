@@ -12,10 +12,17 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.service.AutoBackupWorker
 import com.forge.app.ui.nav.ForgeNavHost
@@ -59,6 +66,40 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestPermission()
     ) { /* proceed either way; notifications no-op if denied */ }
 
+    /** One-time, explained POST_NOTIFICATIONS request (N1) — shown after onboarding, never a cold blast. */
+    @Composable
+    private fun NotifPermissionRationale() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        val asked by settingsRepo.notifPermAsked.collectAsState(initial = true) // true until loaded → no flash
+        var show by remember { mutableStateOf(false) }
+        LaunchedEffect(asked) {
+            show = !asked && this@MainActivity.checkSelfPermission(
+                Manifest.permission.POST_NOTIFICATIONS
+            ) != PackageManager.PERMISSION_GRANTED
+        }
+        if (!show) return
+        val markAsked: () -> Unit = {
+            show = false
+            lifecycleScope.launch { settingsRepo.setNotifPermAsked() }
+        }
+        AlertDialog(
+            onDismissRequest = markAsked,
+            title = { Text("Stay on track?") },
+            text = {
+                Text(
+                    "Forge can nudge you to train, send a weekly recap, and alert you when your rest ends. " +
+                        "You can turn each off any time in Settings → Notifications."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { markAsked(); notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) }) {
+                    Text("Allow")
+                }
+            },
+            dismissButton = { TextButton(onClick = markAsked) { Text("Not now") } }
+        )
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
         super.onCreate(savedInstanceState)
@@ -68,11 +109,8 @@ class MainActivity : ComponentActivity() {
         ForgeMotion.durationScale =
             Settings.Global.getFloat(contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f)
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) {
-            notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-        }
+        // POST_NOTIFICATIONS is requested through a rationale gate in the UI (N1) — after onboarding,
+        // explained, and only once — instead of a context-free system prompt on cold launch.
 
         AutoBackupWorker.schedule(this)
 
@@ -119,6 +157,8 @@ class MainActivity : ComponentActivity() {
                     s.copy(accentEmphasis = v)
                 }.combine(settingsRepo.plateWeightLb) { s, v ->
                     s.copy(plateWeightLb = v)
+                }.combine(settingsRepo.firstWorkoutDone) { s, v ->
+                    s.copy(firstWorkoutDone = v)
                 }
             }
             val uiSettings by uiSettingsFlow.collectAsState(initial = ForgeUiSettings())
@@ -131,7 +171,10 @@ class MainActivity : ComponentActivity() {
                 ) {
                     when (onboardingDone) {
                         false -> OnboardingScreen(onFinished = {})
-                        true -> ForgeNavHost()
+                        true -> {
+                            ForgeNavHost()
+                            NotifPermissionRationale()
+                        }
                         null -> {} // DataStore still loading; the theme's gradient shows briefly
                     }
                 }

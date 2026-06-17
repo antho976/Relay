@@ -30,6 +30,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import com.forge.app.ui.common.clickableLabeled
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -233,7 +234,9 @@ fun SetInputRow(
                                 color = onBg.copy(alpha = 0.7f),
                                 fontSize = 9.sp,
                                 textAlign = TextAlign.End,
-                                modifier = Modifier.clickable {
+                                modifier = Modifier.clickableLabeled(
+                                    "Autofill last session's weight and reps"
+                                ) {
                                     weight = prior.weightLb?.let { lb ->
                                         if (isPlates) formatPlateCount(lb / plateLb) else weightInputValue(lb, useKg)
                                     } ?: prior.weightText

@@ -44,6 +44,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.domain.units.toStoredWeightText
 import com.forge.app.program.ExerciseUnit
+import com.forge.app.ui.common.FirstTouchTip
+import com.forge.app.ui.common.clickableLabeled
 import com.forge.app.ui.gym.train.components.CollapsedRow
 import com.forge.app.ui.gym.train.components.ExerciseCard
 import com.forge.app.ui.gym.train.components.ExerciseChartSheet
@@ -93,6 +95,7 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
     }
 
     val useKg = LocalForgeSettings.current.useKg
+    val firstWorkoutDone = LocalForgeSettings.current.firstWorkoutDone
 
     // Single-exercise focus. The shown exercise is an explicit selection — it does NOT
     // auto-advance when sets complete. The user advances manually via the "MOVE TO NEXT"
@@ -130,6 +133,20 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
                 SessionHero(state = state, onBack = { onEvent(DayUiEvent.RequestBack) }, onFinish = { onEvent(DayUiEvent.FinishWorkout) })
             }
 
+            // First-touch (D8/D10): a brand-new user opens to a list of names with no obvious action.
+            // Gated on the lifetime "first workout done" flag (not per-exercise history) so it shows only
+            // for a genuinely new user — never for a returning user starting an all-new program. Auto-hides
+            // after the first set of this session.
+            if (!firstWorkoutDone && state.exercises.isNotEmpty() && state.exercises.all { it.loggedSets.isEmpty() }) {
+                item(key = "first-time-tip") {
+                    FirstTouchTip(
+                        "Your week starts here.",
+                        "Tap an exercise to open it, then log each set with the weight and reps you hit. The coach starts learning from your very first session.",
+                        Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
+                    )
+                }
+            }
+
             // ── Suggested order (engine System 3) — pre-work only ────────────
             val ordering = state.orderingSuggestion
             if (ordering != null && state.exercises.all { it.loggedSets.isEmpty() }) {
@@ -152,12 +169,12 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
                             Text(
                                 "Apply →",
                                 style = MaterialTheme.typography.labelSmall, color = accent,
-                                modifier = Modifier.clickable { onEvent(DayUiEvent.ApplyOrderingSuggestion) }.padding(vertical = 2.dp)
+                                modifier = Modifier.clickableLabeled("Apply the suggested order") { onEvent(DayUiEvent.ApplyOrderingSuggestion) }.padding(vertical = 2.dp)
                             )
                             Text(
                                 "dismiss",
                                 style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.7f),
-                                modifier = Modifier.clickable { onEvent(DayUiEvent.DismissOrderingSuggestion) }.padding(vertical = 2.dp)
+                                modifier = Modifier.clickableLabeled("Dismiss the suggestion") { onEvent(DayUiEvent.DismissOrderingSuggestion) }.padding(vertical = 2.dp)
                             )
                         }
                     }
@@ -357,7 +374,7 @@ internal fun SessionHero(state: DayUiState, onBack: () -> Unit, onFinish: () -> 
                 Text(datePillText, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, maxLines = 1)
             }
             Spacer(Modifier.width(8.dp))
-            Box(modifier = Modifier.background(Color.White, RoundedCornerShape(50)).clickable { onFinish() }.padding(horizontal = 16.dp, vertical = 7.dp)) {
+            Box(modifier = Modifier.background(Color.White, RoundedCornerShape(50)).clickableLabeled("Finish session") { onFinish() }.padding(horizontal = 16.dp, vertical = 7.dp)) {
                 Text("FINISH", style = MaterialTheme.typography.labelSmall, color = Color.Black, maxLines = 1)
             }
         }

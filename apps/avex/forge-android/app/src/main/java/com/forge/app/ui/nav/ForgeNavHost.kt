@@ -7,8 +7,11 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
-import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -26,7 +29,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.graphics.Color
@@ -262,17 +264,34 @@ private fun NutritionPlaceholderScreen(onBack: () -> Unit) {
         },
         containerColor = Color.Transparent
     ) { inner ->
-        Box(
-            modifier = Modifier.fillMaxSize().padding(inner),
-            contentAlignment = Alignment.Center
+        // A real "coming soon" with a short roadmap, so the entry reads as a planned feature rather
+        // than a broken / abandoned link (Nutrition P0s — Cat 22).
+        Column(
+            modifier = Modifier.fillMaxSize().padding(inner).padding(horizontal = 32.dp),
+            verticalArrangement = Arrangement.Center
         ) {
+            Text("Nutrition.", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onBackground)
+            Spacer(Modifier.height(12.dp))
             Text(
-                "Nutrition tracking is coming. For now, Forge is all about your training.",
-                style = MaterialTheme.typography.titleMedium,
-                fontStyle = FontStyle.Italic,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                modifier = Modifier.padding(horizontal = 32.dp)
+                "Coming in a future update — built like the rest of Forge: offline, on your device, no account, and no giant food database to wrestle with.",
+                style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(Modifier.height(20.dp))
+            Text("WHAT'S PLANNED", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(8.dp))
+            Text("•  Daily protein + calorie targets — just the numbers that move the needle.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(6.dp))
+            Text("•  A bodyweight trend tied to your training volume.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(6.dp))
+            Text("•  A simple cut / bulk readout from your weight and workload.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(18.dp))
+            Text(
+                "Already here: log your bodyweight any time from Stats → Body.",
+                style = MaterialTheme.typography.bodySmall, fontStyle = FontStyle.Italic,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }

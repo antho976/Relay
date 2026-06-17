@@ -37,6 +37,9 @@ data class SettingsUiState(
     /** Daily training reminder (engagement) — opt-in, default off. */
     val trainingReminderEnabled: Boolean = false,
     val trainingReminderHour: Int = 18,
+    /** Per-type notification opt-outs (N2) — both default on. */
+    val weeklyRecapEnabled: Boolean = true,
+    val restTimerAlertEnabled: Boolean = true,
     val privacyMode: Boolean = false,
     val availableEquipment: Set<String> = emptySet(),
     /** Curated/frozen exercise pool (Developer's preset); null = ordinary equipment filtering. */
@@ -172,6 +175,10 @@ class SettingsViewModel @Inject constructor(
         s.copy(trainingReminderEnabled = v)
     }.combine(settingsRepo.trainingReminderHour) { s, v ->
         s.copy(trainingReminderHour = v)
+    }.combine(settingsRepo.weeklyRecapEnabled) { s, v ->
+        s.copy(weeklyRecapEnabled = v)
+    }.combine(settingsRepo.restTimerAlertEnabled) { s, v ->
+        s.copy(restTimerAlertEnabled = v)
     }.combine(settingsRepo.availableEquipment) { s, equip ->
         s.copy(availableEquipment = equip)
     }.combine(settingsRepo.frozenExerciseIds) { s, v ->
@@ -254,6 +261,8 @@ class SettingsViewModel @Inject constructor(
         // Re-arm only if reminders are on; otherwise just persist the preferred time for later.
         if (settingsRepo.trainingReminderEnabled.first()) reminderScheduler.apply(true, h.coerceIn(0, 23))
     }
+    fun setWeeklyRecapEnabled(v: Boolean) = viewModelScope.launch { settingsRepo.setWeeklyRecapEnabled(v) }
+    fun setRestTimerAlertEnabled(v: Boolean) = viewModelScope.launch { settingsRepo.setRestTimerAlertEnabled(v) }
 
     fun setTileHidden(id: String, hidden: Boolean) = viewModelScope.launch { settingsRepo.setTileHidden(id, hidden) }
     fun setCompactSetLogging(v: Boolean) = viewModelScope.launch { settingsRepo.setCompactSetLogging(v) }

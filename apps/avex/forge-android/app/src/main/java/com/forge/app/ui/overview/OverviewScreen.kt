@@ -44,6 +44,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
+import com.forge.app.ui.common.FirstTouchTip
+import com.forge.app.ui.common.clickableLabeled
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -226,15 +229,25 @@ fun OverviewScreen(
                     Icon(
                         Icons.Default.Settings, contentDescription = "Settings",
                         tint = muted.copy(alpha = 0.7f),
-                        modifier = Modifier.size(16.dp).clickable { onGoToSettings() }
+                        modifier = Modifier.size(16.dp).clickable(role = Role.Button) { onGoToSettings() }
                     )
                     Spacer(Modifier.width(10.dp))
                     Icon(
                         Icons.Default.AccountCircle, contentDescription = "You",
                         tint = muted.copy(alpha = 0.7f),
-                        modifier = Modifier.size(18.dp).clickable { onOpenProfile() }
+                        modifier = Modifier.size(18.dp).clickable(role = Role.Button) { onOpenProfile() }
                     )
                 }
+            }
+
+            // First-touch (D9): a brand-new user shouldn't open to a wall of zeros — lead with a welcome.
+            // Gated on the persistent flag too, so it never re-appears for a returning user (e.g. after a wipe).
+            if (state.totalFinishedSessions == 0 && !LocalForgeSettings.current.firstWorkoutDone) {
+                Spacer(Modifier.height(16.dp))
+                FirstTouchTip(
+                    "Welcome to Forge.",
+                    "Your first workout is below — tap Start session to log it. Your stats, rank, and the coach all fill in as you train."
+                )
             }
 
             // ── Coach: a new Week Brief is ready (dismissible; lives in Settings too) ──
@@ -245,7 +258,7 @@ fun OverviewScreen(
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(10.dp))
                         .background(accent.copy(alpha = 0.12f))
-                        .clickable { viewModel.dismissCoachBanner(); onOpenCoachBrief() }
+                        .clickableLabeled("Open the week brief") { viewModel.dismissCoachBanner(); onOpenCoachBrief() }
                         .padding(start = 14.dp, end = 8.dp, top = 12.dp, bottom = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
@@ -261,7 +274,7 @@ fun OverviewScreen(
                         modifier = Modifier
                             .padding(start = 8.dp)
                             .size(16.dp)
-                            .clickable { viewModel.dismissCoachBanner() }
+                            .clickableLabeled("Dismiss") { viewModel.dismissCoachBanner() }
                     )
                 }
             }
@@ -280,7 +293,7 @@ fun OverviewScreen(
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(10.dp))
                         .background(accent.copy(alpha = 0.12f))
-                        .clickable { viewModel.onSessionStarting(); onStartSession(activeKey) }
+                        .clickableLabeled("Resume your workout") { viewModel.onSessionStarting(); onStartSession(activeKey) }
                         .padding(horizontal = 14.dp, vertical = 12.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
@@ -305,7 +318,7 @@ fun OverviewScreen(
                 state.customDayName ?: nextDay?.defaultName ?: "Ready",
                 style = MaterialTheme.typography.displayLarge,
                 color = emphasized(onBg),
-                modifier = if (nextDay != null) Modifier.clickable { showDayEdit = true } else Modifier
+                modifier = if (nextDay != null) Modifier.clickableLabeled("Edit or swap this day") { showDayEdit = true } else Modifier
             )
             if (nextDay != null) {
                 Spacer(Modifier.height(10.dp))
@@ -345,7 +358,7 @@ fun OverviewScreen(
                         modifier = Modifier
                             .clip(RoundedCornerShape(50))
                             .border(0.5.dp, muted.copy(alpha = 0.4f), RoundedCornerShape(50))
-                            .clickable { val d = state.nextUpDayKey; viewModel.onSessionStarting(); onStartSessionSkipWarmup(d) }
+                            .clickableLabeled("Start, skipping warmup") { val d = state.nextUpDayKey; viewModel.onSessionStarting(); onStartSessionSkipWarmup(d) }
                             .padding(horizontal = 18.dp, vertical = 12.dp)
                     ) {
                         Text("skip warmup", style = MaterialTheme.typography.bodySmall, color = muted)
@@ -366,7 +379,7 @@ fun OverviewScreen(
                     Text("·", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.5f))
                     Text("view program →", style = MaterialTheme.typography.labelSmall,
                         color = muted, fontSize = 10.sp,
-                        modifier = Modifier.clickable { onViewProgram() }.padding(vertical = 2.dp))
+                        modifier = Modifier.clickableLabeled("View your program") { onViewProgram() }.padding(vertical = 2.dp))
                 }
             }
             Spacer(Modifier.height(12.dp))
@@ -422,7 +435,7 @@ fun OverviewScreen(
                                     "${item.applyLabel} →",
                                     style = MaterialTheme.typography.labelSmall, color = accent,
                                     modifier = Modifier
-                                        .clickable { viewModel.applyCoach(item) }
+                                        .clickableLabeled("Apply this suggestion") { viewModel.applyCoach(item) }
                                         .padding(vertical = 2.dp)
                                 )
                             }
@@ -431,7 +444,7 @@ fun OverviewScreen(
                                 style = MaterialTheme.typography.labelSmall,
                                 color = muted.copy(alpha = 0.7f),
                                 modifier = Modifier
-                                    .clickable { viewModel.dismissCoach(item) }
+                                    .clickableLabeled("Dismiss this suggestion") { viewModel.dismissCoach(item) }
                                     .padding(vertical = 2.dp)
                             )
                         }
@@ -449,7 +462,7 @@ fun OverviewScreen(
                 Column(
                     Modifier
                         .fillMaxWidth()
-                        .clickable { onOpenCoachLab() }
+                        .clickableLabeled("Open Coach Lab") { onOpenCoachLab() }
                         .padding(vertical = 2.dp)
                 ) {
                     Text("Still learning your training.", style = MaterialTheme.typography.bodyMedium, color = onBg)
@@ -470,7 +483,7 @@ fun OverviewScreen(
                 Text("COACH", style = MaterialTheme.typography.labelMedium, color = emphasized(muted))
                 Spacer(Modifier.height(10.dp))
                 Column(
-                    Modifier.fillMaxWidth().clickable { onOpenCoachLab() }.padding(vertical = 2.dp)
+                    Modifier.fillMaxWidth().clickableLabeled("Open Coach Lab") { onOpenCoachLab() }.padding(vertical = 2.dp)
                 ) {
                     Text("Recovery signals building.", style = MaterialTheme.typography.bodyMedium, color = onBg)
                     Spacer(Modifier.height(2.dp))
@@ -492,7 +505,7 @@ fun OverviewScreen(
                 Text("RECENT", style = MaterialTheme.typography.labelMedium, color = emphasized(muted))
                 Text("view all →", style = MaterialTheme.typography.labelSmall,
                     color = muted, fontSize = 10.sp,
-                    modifier = Modifier.clickable { showHistory = true }.padding(vertical = 2.dp))
+                    modifier = Modifier.clickableLabeled("View all sessions") { showHistory = true }.padding(vertical = 2.dp))
             }
             Spacer(Modifier.height(10.dp))
             if (state.recentItems.isEmpty()) {
@@ -527,7 +540,7 @@ fun OverviewScreen(
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                 Text("Nutrition · soon", style = MaterialTheme.typography.labelSmall,
                     color = muted.copy(alpha = 0.7f), fontSize = 10.sp,
-                    modifier = Modifier.clickable { onGoToNutrition() }.padding(4.dp))
+                    modifier = Modifier.clickableLabeled("Open Nutrition") { onGoToNutrition() }.padding(4.dp))
             }
 
             Spacer(Modifier.height(24.dp))

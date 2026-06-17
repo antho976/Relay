@@ -81,6 +81,14 @@ object PreferenceKeys {
     /** Daily "train today" reminder (engagement). Off by default; hour is 0–23, default 18 (6pm). */
     val TRAINING_REMINDER_ENABLED = booleanPreferencesKey("training_reminder_enabled")
     val TRAINING_REMINDER_HOUR = intPreferencesKey("training_reminder_hour")
+    /** Per-type opt-outs (N2). Recap + rest-timer alert default ON; the reminder defaults OFF above. */
+    val WEEKLY_RECAP_ENABLED = booleanPreferencesKey("weekly_recap_enabled")
+    val REST_TIMER_ALERT_ENABLED = booleanPreferencesKey("rest_timer_alert_enabled")
+    /** Whether the one-time notification-permission rationale has been shown (N1). */
+    val NOTIF_PERM_ASKED = booleanPreferencesKey("notif_perm_asked")
+    /** Set true once the first workout is finished. First-touch onboarding cards gate on this so they
+     *  never reappear for a returning user — it lives in DataStore, so it survives a DB wipe/restore. */
+    val FIRST_WORKOUT_DONE = booleanPreferencesKey("first_workout_done")
 
     // ─── Monthly PR target (#84) ──────────────────────────────────────────────
     /** Target PRs per calendar month. 0 = no goal set. */

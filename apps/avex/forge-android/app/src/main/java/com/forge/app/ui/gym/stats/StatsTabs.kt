@@ -7,6 +7,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import com.forge.app.ui.common.clickableLabeled
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -203,7 +204,7 @@ internal fun LazyListScope.snapshotTab(
                     "Search your notes →",
                     style = MaterialTheme.typography.bodyMedium,
                     color = c.accent,
-                    modifier = Modifier.fillMaxWidth().clickable { onOpenNotes() }.padding(vertical = 6.dp)
+                    modifier = Modifier.fillMaxWidth().clickableLabeled("Search your notes") { onOpenNotes() }.padding(vertical = 6.dp)
                 )
                 Text(
                     "Full-text search across every note you've logged on an exercise.",

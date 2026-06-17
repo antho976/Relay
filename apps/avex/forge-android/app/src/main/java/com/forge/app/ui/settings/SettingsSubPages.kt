@@ -1,6 +1,11 @@
 @file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 package com.forge.app.ui.settings
 
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
+import android.provider.Settings
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -24,14 +29,19 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 
 private val TIMEZONE_OPTIONS = listOf(
     "America/Los_Angeles" to "Los Angeles (PST −8)",
@@ -267,9 +277,56 @@ internal fun SectionResetRow(section: com.forge.app.data.prefs.SettingsSection, 
     )
 }
 
+/**
+ * Shown at the top of Notifications when the OS notification permission is denied (Android 13+) —
+ * every toggle below is inert until it's granted. The in-app rationale (N1) is one-time, so this is
+ * the re-enable path for a user who declined it: tapping opens the OS app-notification settings,
+ * which always works regardless of how many times the permission was denied. Re-checks on resume so
+ * it disappears the moment the user flips notifications on and returns.
+ */
+@Composable
+private fun NotificationsBlockedBanner() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    fun granted() = context.checkSelfPermission(
+        Manifest.permission.POST_NOTIFICATIONS
+    ) == PackageManager.PERMISSION_GRANTED
+    var blocked by remember { mutableStateOf(!granted()) }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) blocked = !granted()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    if (!blocked) return
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClickLabel = "Open notification settings") {
+                context.startActivity(
+                    Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                        .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+                )
+            }
+            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
+            .padding(horizontal = 24.dp, vertical = 14.dp)
+    ) {
+        Text("Notifications are turned off", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground)
+        Spacer(Modifier.height(2.dp))
+        Text(
+            "Forge can't send any of the below until you turn them on for the app. Tap to open system settings.",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+    SectionDivider()
+}
+
 @Composable
 internal fun NotificationsPage(state: SettingsUiState, vm: SettingsViewModel, modifier: Modifier = Modifier) {
     Column(modifier.fillMaxSize()) {
+        NotificationsBlockedBanner()
         ToggleRow(
             "Training reminders",
             "A daily nudge to train on your scheduled days — keeps your streak alive",
@@ -280,6 +337,18 @@ internal fun NotificationsPage(state: SettingsUiState, vm: SettingsViewModel, mo
             HourPickerRow("Remind me at", state.trainingReminderHour, vm::setTrainingReminderHour)
             SectionDivider()
         }
+        ToggleRow(
+            "Weekly recap",
+            "A weekly summary of your training — workouts, volume, streak",
+            state.weeklyRecapEnabled, vm::setWeeklyRecapEnabled
+        )
+        SectionDivider()
+        ToggleRow(
+            "Rest timer alerts",
+            "Buzz + notify when your rest ends while the app is in the background",
+            state.restTimerAlertEnabled, vm::setRestTimerAlertEnabled
+        )
+        SectionDivider()
         ToggleRow("Quiet hours", "Suppress timer + recap notifications", state.quietHoursEnabled, vm::setQuietHoursEnabled)
         SectionDivider()
         if (state.quietHoursEnabled) {

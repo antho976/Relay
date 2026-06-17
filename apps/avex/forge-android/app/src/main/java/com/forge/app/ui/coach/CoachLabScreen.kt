@@ -29,6 +29,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import com.forge.app.ui.common.clickableLabeled
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -162,7 +163,7 @@ private fun WatchContent(w: CoachWatch, onOpenTimeline: () -> Unit, modifier: Mo
             "See the learning timeline →",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.fillMaxWidth().clickable { onOpenTimeline() }.padding(vertical = 8.dp)
+            modifier = Modifier.fillMaxWidth().clickableLabeled("Open the learning timeline") { onOpenTimeline() }.padding(vertical = 8.dp)
         )
         Text(
             "Trust earned per change type, the milestones it's hit, and the week-by-week record.",

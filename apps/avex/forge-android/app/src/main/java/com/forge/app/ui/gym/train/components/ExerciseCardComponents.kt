@@ -39,6 +39,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import com.forge.app.ui.common.clickableLabeled
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -324,7 +325,7 @@ internal fun InlineRestTimer(timer: RestTimerState, onTap: () -> Unit, onSkip: (
     }
 
     Row(
-        modifier = Modifier.fillMaxWidth().clickable { onTap() }.padding(vertical = 10.dp),
+        modifier = Modifier.fillMaxWidth().clickableLabeled("Open the rest timer") { onTap() }.padding(vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
@@ -354,7 +355,7 @@ internal fun InlineRestTimer(timer: RestTimerState, onTap: () -> Unit, onSkip: (
                 color = (if (isReady) readyColor else muted).copy(alpha = 0.8f),
                 fontSize = 9.sp,
                 letterSpacing = 1.sp,
-                modifier = Modifier.clickable { onSkip() }.padding(start = 2.dp)
+                modifier = Modifier.clickableLabeled("End rest") { onSkip() }.padding(start = 2.dp)
             )
         }
     }
@@ -405,7 +406,7 @@ internal fun ExerciseCardFooter(
         style = MaterialTheme.typography.bodySmall,
         color = muted,
         fontStyle = FontStyle.Italic,
-        modifier = Modifier.clickable { showRater = !showRater }
+        modifier = Modifier.clickableLabeled("Toggle the effort rating") { showRater = !showRater }
     )
     if (showRater) {
         Spacer(Modifier.height(8.dp))
@@ -493,7 +494,7 @@ internal fun UpNextBubble(
                 color = muted,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clickable { onAddExercise() }
+                    .clickableLabeled("Add an exercise") { onAddExercise() }
                     .padding(horizontal = 24.dp, vertical = 16.dp)
             )
         }

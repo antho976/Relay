@@ -21,6 +21,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathMeasure
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.forge.app.domain.units.unitLabel
@@ -60,7 +62,8 @@ fun StrengthOverlayCard(
         // Curves draw themselves on first appearance (path-trim 0→1) instead of snapping in.
         val drawProgress = remember { Animatable(0f) }
         LaunchedEffect(Unit) { drawProgress.animateTo(1f, animationSpec = tween(ForgeMotion.scaledDuration(700), easing = ForgeMotion.Decelerate)) }
-        Canvas(modifier = Modifier.fillMaxWidth().height(100.dp)) {
+        Canvas(modifier = Modifier.fillMaxWidth().height(100.dp)
+            .semantics { contentDescription = "Line chart comparing estimated 1RM of ${history1.first} and ${history2.first} over time." }) {
             val p = drawProgress.value
             fun drawCurve(pts: List<com.forge.app.ui.gym.stats.state.HistoryPoint>, color: androidx.compose.ui.graphics.Color) {
                 if (pts.size < 2) return
@@ -111,7 +114,8 @@ fun EffortOverTimeCard(
             color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.SemiBold)
         val drawProgress = remember { Animatable(0f) }
         LaunchedEffect(Unit) { drawProgress.animateTo(1f, animationSpec = tween(ForgeMotion.scaledDuration(700), easing = ForgeMotion.Decelerate)) }
-        Canvas(modifier = Modifier.fillMaxWidth().height(80.dp)) {
+        Canvas(modifier = Modifier.fillMaxWidth().height(80.dp)
+            .semantics { contentDescription = "Energy trend over the last ${recentPoints.size} sessions, from drained to strong." }) {
             val p = drawProgress.value
             val step = size.width / (recentPoints.size - 1).coerceAtLeast(1)
             val path = Path()

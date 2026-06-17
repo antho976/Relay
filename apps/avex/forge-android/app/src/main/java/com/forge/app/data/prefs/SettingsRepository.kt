@@ -243,6 +243,31 @@ class SettingsRepository @Inject constructor(
     suspend fun setTrainingReminderHour(hour: Int) =
         context.forgePreferences.edit { it[PreferenceKeys.TRAINING_REMINDER_HOUR] = hour.coerceIn(0, 23) }
 
+    /** Weekly "your week in numbers" recap notification (N2). On by default. */
+    val weeklyRecapEnabled: Flow<Boolean> = context.forgePreferences.data
+        .map { it[PreferenceKeys.WEEKLY_RECAP_ENABLED] ?: true }
+    suspend fun setWeeklyRecapEnabled(value: Boolean) =
+        context.forgePreferences.edit { it[PreferenceKeys.WEEKLY_RECAP_ENABLED] = value }
+
+    /** Rest-timer "done" alert — buzz + notification when the app is backgrounded (N2). On by default. */
+    val restTimerAlertEnabled: Flow<Boolean> = context.forgePreferences.data
+        .map { it[PreferenceKeys.REST_TIMER_ALERT_ENABLED] ?: true }
+    suspend fun setRestTimerAlertEnabled(value: Boolean) =
+        context.forgePreferences.edit { it[PreferenceKeys.REST_TIMER_ALERT_ENABLED] = value }
+
+    /** Whether the one-time notification-permission rationale has been shown (N1). */
+    val notifPermAsked: Flow<Boolean> = context.forgePreferences.data
+        .map { it[PreferenceKeys.NOTIF_PERM_ASKED] ?: false }
+    suspend fun setNotifPermAsked() =
+        context.forgePreferences.edit { it[PreferenceKeys.NOTIF_PERM_ASKED] = true }
+
+    /** True once the first workout is finished — gates the first-touch onboarding cards so they never
+     *  reappear for a returning user (survives a DB wipe; see [PreferenceKeys.FIRST_WORKOUT_DONE]). */
+    val firstWorkoutDone: Flow<Boolean> = context.forgePreferences.data
+        .map { it[PreferenceKeys.FIRST_WORKOUT_DONE] ?: false }
+    suspend fun setFirstWorkoutDone() =
+        context.forgePreferences.edit { it[PreferenceKeys.FIRST_WORKOUT_DONE] = true }
+
     // ─── Monthly PR target (#84) ──────────────────────────────────────────────
 
     val monthlyPrTarget: Flow<Int> = context.forgePreferences.data

@@ -16,6 +16,7 @@ import android.os.VibratorManager
 import androidx.core.app.NotificationCompat
 import com.forge.app.MainActivity
 import com.forge.app.R
+import com.forge.app.data.prefs.SettingsRepository
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -39,10 +40,13 @@ import javax.inject.Inject
 class WorkoutSessionService : Service() {
 
     @Inject lateinit var bridge: WorkoutSessionBridge
+    @Inject lateinit var settingsRepo: SettingsRepository
 
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var currentState: SessionNotifState? = null
     private var initialized = false
+    /** Cached per-type opt-out (N2), kept live by a collector — defaults to the pref's own default. */
+    private var restTimerAlertEnabled = true
 
     companion object {
         const val CHANNEL_SESSION = "forge_session"
@@ -102,10 +106,17 @@ class WorkoutSessionService : Service() {
                 }
             }
 
+            // Keep the per-type opt-out cached + live (N2) so the timer-done path is a plain boolean
+            // check, not a DataStore read on every event.
+            serviceScope.launch {
+                settingsRepo.restTimerAlertEnabled.collect { restTimerAlertEnabled = it }
+            }
+
             // Handle timer-done events: vibrate + post alert notification (#16)
             serviceScope.launch {
                 bridge.timerDone.collect {
-                    postTimerDoneNotification()
+                    // N2: respect the per-type opt-out (buzz + notify when the app is backgrounded).
+                    if (restTimerAlertEnabled) postTimerDoneNotification()
                 }
             }
 
