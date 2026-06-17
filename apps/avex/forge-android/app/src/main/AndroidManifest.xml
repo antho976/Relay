@@ -16,6 +16,10 @@
          so the data never leaves the device. -->
     <uses-permission android:name="android.permission.health.READ_SLEEP" />
     <uses-permission android:name="android.permission.health.READ_RESTING_HEART_RATE" />
+    <!-- Bodyweight sync (HC-2/HC-3): read a smart-scale value INTO Forge, write a Forge weigh-in
+         BACK. Both opt-in and granted in the Health Connect app; still no internet permission. -->
+    <uses-permission android:name="android.permission.health.READ_WEIGHT" />
+    <uses-permission android:name="android.permission.health.WRITE_WEIGHT" />
 
     <!-- Lets us detect / launch the Health Connect provider to check availability + manage grants. -->
     <queries>

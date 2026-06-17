@@ -49,6 +49,11 @@ object PreferenceKeys {
     // ─── Units (#2) ───────────────────────────────────────────────────────────
     val USE_KG = booleanPreferencesKey("use_kg")
 
+    // ─── Health Connect bodyweight sync (HC-3) ────────────────────────────────
+    /** When ON (and the WeightRecord write permission is granted), Forge mirrors each weigh-in to
+     *  Health Connect. Off by default — write-back is strictly opt-in. */
+    val HC_WRITE_BODYWEIGHT = booleanPreferencesKey("hc_write_bodyweight")
+
     // ─── Appearance (#35a) ────────────────────────────────────────────────────
     val AMOLED_MODE = booleanPreferencesKey("amoled_mode")
     /** Stored hex string e.g. "#EF4444". Empty = use default. Reserved for UI pass. */

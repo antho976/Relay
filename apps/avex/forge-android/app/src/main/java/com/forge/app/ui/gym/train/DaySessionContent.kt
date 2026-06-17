@@ -97,7 +97,11 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
     // Single-exercise focus. The shown exercise is an explicit selection — it does NOT
     // auto-advance when sets complete. The user advances manually via the "MOVE TO NEXT"
     // CTA (shown once target sets are met) or by tapping an exercise in the UP NEXT bubble.
-    val firstIncompleteId = state.exercises.firstOrNull { !it.skipped && it.loggedSets.size < it.targetSets }?.plan?.id
+    // Keyed on the exercise list (same reference across rest-timer-tick state copies), so this list
+    // walk doesn't re-run on every per-second recomposition — only when the exercises actually change.
+    val firstIncompleteId = remember(state.exercises) {
+        state.exercises.firstOrNull { !it.skipped && it.loggedSets.size < it.targetSets }?.plan?.id
+    }
     var shownExerciseId by remember { mutableStateOf<String?>(null) }
     // Initialise the selection (and repair it if the shown exercise disappears), without
     // re-pointing it as exercises get completed.

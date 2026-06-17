@@ -38,6 +38,7 @@ data class WeightJumpWarning(
  * for the project's no-cloud, single-user scope — re-checking four boxes on resume
  * is cheaper than a schema bump.
  */
+@Immutable
 data class DayUiState(
     val dayPlan: DayPlan,
     val displayName: String,

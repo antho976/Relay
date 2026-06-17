@@ -9,8 +9,10 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
@@ -38,6 +40,9 @@ fun StatsContent(
     viewModel: StatsViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val weightConnected by viewModel.weightConnected.collectAsStateWithLifecycle()
+    val bodyweightMessage by viewModel.bodyweightMessage.collectAsStateWithLifecycle()
+    var showWeightSheet by remember { mutableStateOf(false) }
 
     val zone = ZoneId.systemDefault()
     val today = LocalDate.now(zone)
@@ -90,10 +95,33 @@ fun StatsContent(
                     StatsTab.SNAPSHOT -> snapshotTab(state, today, weekNum, weekLabel, weekCurrent, weekPrev, weekSessions, c, onOpenNotes)
                     StatsTab.STRENGTH -> strengthTab(state, c)
                     StatsTab.VOLUME -> volumeTab(state, c)
-                    StatsTab.BODY -> bodyTab(state, c)
+                    StatsTab.BODY -> bodyTab(state, c, onLogWeight = {
+                        // Fresh sheet: drop any prior "Saved."/import line and re-check HC permission so
+                        // a grant made in Settings since this screen opened surfaces the import option.
+                        viewModel.clearBodyweightMessage()
+                        viewModel.refreshWeightConnected()
+                        showWeightSheet = true
+                    })
                     StatsTab.TRENDS -> trendsTab(state, c)
                 }
             }
         }
+    }
+
+    if (showWeightSheet) {
+        BodyweightLogSheet(
+            latestLb = state.bodyweightPoints.lastOrNull()?.weightLb,
+            canImport = weightConnected,
+            message = bodyweightMessage,
+            onSave = { lb ->
+                viewModel.logBodyweight(lb)
+                showWeightSheet = false
+            },
+            onImport = { viewModel.importBodyweight() },  // stays open so the result line shows
+            onDismiss = {
+                showWeightSheet = false
+                viewModel.clearBodyweightMessage()
+            }
+        )
     }
 }

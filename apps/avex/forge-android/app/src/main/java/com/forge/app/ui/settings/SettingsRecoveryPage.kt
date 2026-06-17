@@ -3,8 +3,10 @@ package com.forge.app.ui.settings
 import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -16,9 +18,11 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -41,8 +45,12 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
 
-    // Health Connect's own permission flow — the result tells us what the user granted.
+    // Health Connect's own permission flow — the result tells us what the user granted. Recovery
+    // (sleep + resting HR) and bodyweight are separate launchers so each stays independently opt-in.
     val permissionLauncher = rememberLauncherForActivityResult(
+        contract = PermissionController.createRequestPermissionResultContract()
+    ) { viewModel.refresh() }
+    val weightLauncher = rememberLauncherForActivityResult(
         contract = PermissionController.createRequestPermissionResultContract()
     ) { viewModel.refresh() }
 
@@ -97,7 +105,51 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
             }
         }
 
+        // ─── Bodyweight sync (HC-2/HC-3) — only meaningful once a provider exists ──────────────
+        if (state.available) {
+            Spacer(Modifier.height(20.dp))
+            SectionDivider()
+            Column(Modifier.padding(start = 24.dp, end = 24.dp, top = 16.dp, bottom = 4.dp)) {
+                Text("BODYWEIGHT SYNC", style = MaterialTheme.typography.headlineSmall, color = emphasized(onBg))
+            }
+            Paragraph(
+                "Forge can read your latest weight from a smart scale that writes to Health Connect, so " +
+                    "your bodyweight trend stays current without typing it. You can also write your Forge " +
+                    "weigh-ins back, so other apps see them."
+            )
+            if (state.weightGranted) {
+                StatusLine("Connected — Forge can read and write your weight.", emphasized(onBg))
+                ActionButton("Import latest weight now") { viewModel.importNow() }
+                state.importMessage?.let { StatusLine(it, muted) }
+                ToggleRow(
+                    label = "Write my weigh-ins to Health Connect",
+                    checked = state.writeBodyweight,
+                    onCheckedChange = { viewModel.setWriteBodyweight(it) }
+                )
+            } else {
+                StatusLine("Bodyweight isn't connected yet.", muted)
+                ActionButton("Connect bodyweight") { weightLauncher.launch(viewModel.weightPermissions) }
+            }
+        }
+
         Spacer(Modifier.height(12.dp))
+    }
+}
+
+@Composable
+private fun ToggleRow(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onBackground,
+            modifier = Modifier.weight(1f).padding(end = 16.dp)
+        )
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }
 

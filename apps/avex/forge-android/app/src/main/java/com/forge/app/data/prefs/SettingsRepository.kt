@@ -150,6 +150,14 @@ class SettingsRepository @Inject constructor(
     suspend fun setUseKg(value: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.USE_KG] = value }
 
+    // ─── Health Connect bodyweight sync (HC-3) ────────────────────────────────
+
+    /** Mirror weigh-ins to Health Connect. Off by default — write-back is strictly opt-in. */
+    val hcWriteBodyweight: Flow<Boolean> = context.forgePreferences.data
+        .map { it[PreferenceKeys.HC_WRITE_BODYWEIGHT] ?: false }
+    suspend fun setHcWriteBodyweight(value: Boolean) =
+        context.forgePreferences.edit { it[PreferenceKeys.HC_WRITE_BODYWEIGHT] = value }
+
     // ─── Appearance (#35a) ────────────────────────────────────────────────────
 
     val amoledMode: Flow<Boolean> = context.forgePreferences.data

@@ -30,6 +30,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
@@ -117,8 +121,19 @@ private fun TrophyGridCell(
     val bg = MaterialTheme.colorScheme.background
     val onBackground = MaterialTheme.colorScheme.onBackground
 
+    // The cell is a tappable Canvas/icon with no text — TalkBack would land on a silent button.
+    val a11yLabel = "${cell.name}, " + when {
+        cell.unlocked -> "earned"
+        cell.progress > 0f -> "${(cell.progress * 100).toInt()} percent progress"
+        else -> "locked"
+    }
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Box(contentAlignment = Alignment.Center, modifier = Modifier.bounceClick { onToggle() }) {
+        Box(
+            contentAlignment = Alignment.Center,
+            modifier = Modifier
+                .bounceClick { onToggle() }
+                .semantics { contentDescription = a11yLabel; role = Role.Button }
+        ) {
             if (!cell.unlocked && cell.progress > 0f) {
                 Canvas(Modifier.size(42.dp)) {
                     drawArc(

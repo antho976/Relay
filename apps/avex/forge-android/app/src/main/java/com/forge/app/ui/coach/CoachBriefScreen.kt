@@ -1,6 +1,7 @@
 package com.forge.app.ui.coach
 
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.semantics.Role
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -209,11 +210,15 @@ private fun DecisionRow(d: com.forge.app.data.db.entities.CoachDecision, viewMod
             CoachRepository.STATUS_PROPOSED -> Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
                 Text(
                     "Apply →", style = MaterialTheme.typography.labelSmall, color = accent,
-                    modifier = Modifier.clickable { viewModel.apply(d.id) }.padding(vertical = 2.dp)
+                    modifier = Modifier
+                        .clickable(onClickLabel = "Apply this change", role = Role.Button) { viewModel.apply(d.id) }
+                        .padding(vertical = 2.dp)
                 )
                 Text(
                     "skip", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.7f),
-                    modifier = Modifier.clickable { viewModel.skip(d.id) }.padding(vertical = 2.dp)
+                    modifier = Modifier
+                        .clickable(onClickLabel = "Skip this change", role = Role.Button) { viewModel.skip(d.id) }
+                        .padding(vertical = 2.dp)
                 )
             }
             CoachRepository.STATUS_APPLIED -> Row(
@@ -231,7 +236,9 @@ private fun DecisionRow(d: com.forge.app.data.db.entities.CoachDecision, viewMod
                 }
                 if (d.undoData != null) Text(
                     "undo", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.7f),
-                    modifier = Modifier.clickable { viewModel.undo(d.id) }.padding(vertical = 2.dp)
+                    modifier = Modifier
+                        .clickable(onClickLabel = "Undo this change", role = Role.Button) { viewModel.undo(d.id) }
+                        .padding(vertical = 2.dp)
                 )
             }
             "reverted" -> Text("undone", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.7f))

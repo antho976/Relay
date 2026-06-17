@@ -1,5 +1,7 @@
 package com.forge.app.ui.overview.state
 
+import androidx.compose.runtime.Immutable
+
 /** One-shot milestone toast (#56). Shown once and persisted so it never re-fires. */
 data class MilestoneEvent(val id: String, val message: String)
 
@@ -56,6 +58,7 @@ data class CoachLearningHint(val sessionsLogged: Int, val sessionsToGo: Int)
  */
 data class FatigueHint(val score: Int, val threshold: Int, val topDriver: String?)
 
+@Immutable
 data class OverviewUiState(
     val workoutsThisWeek: Int = 0,
     /** The user's chosen days/week — the "of N" denominator, NOT a hardcoded 6 (multi-user). */

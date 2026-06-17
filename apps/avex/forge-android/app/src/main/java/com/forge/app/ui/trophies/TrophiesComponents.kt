@@ -27,6 +27,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.SpanStyle
@@ -106,7 +110,13 @@ internal fun TrophyRow(
     Row(
         // Tapping a row brings its icon to life (the same per-icon motion as the profile trophy case)
         // and keeps it playing — [active] stays true until the screen clears it.
-        modifier = modifier.fillMaxWidth().bounceClick { onToggle() }.padding(horizontal = 24.dp, vertical = 14.dp),
+        modifier = modifier.fillMaxWidth().bounceClick { onToggle() }
+            // Merge the icon+name+description into one button node and announce earned/locked state.
+            .semantics(mergeDescendants = true) {
+                role = Role.Button
+                stateDescription = if (unlocked) "Earned" else "Locked"
+            }
+            .padding(horizontal = 24.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(14.dp)
     ) {

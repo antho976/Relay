@@ -268,8 +268,8 @@ internal fun LazyListScope.volumeTab(state: StatsUiState, c: StatsColors) {
 
 // ─── Body ───────────────────────────────────────────────────────────────────
 
-internal fun LazyListScope.bodyTab(state: StatsUiState, c: StatsColors) {
-    item("bodyweight") { EntranceItem(0) { BodyweightCard(state.bodyweightPoints, c.onBg, c.muted, c.accent, c.outline) } }
+internal fun LazyListScope.bodyTab(state: StatsUiState, c: StatsColors, onLogWeight: () -> Unit = {}) {
+    item("bodyweight") { EntranceItem(0) { BodyweightCard(state.bodyweightPoints, c.onBg, c.muted, c.accent, c.outline, onLogWeight) } }
     item("standards") {
         EntranceItem(1) {
             StrengthStandardsCard(

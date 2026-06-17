@@ -1,0 +1,55 @@
+name: CI
+
+# Builds Forge and runs the JVM unit-test suite on every push/PR to main.
+# Activates automatically once this repo has a GitHub remote — no setup needed.
+#
+# Notes for this project specifically:
+#  • The Gradle project lives in forge-android/ (not the repo root) → `-p forge-android`.
+#  • There is no committed Gradle wrapper, so we provision Gradle via the official
+#    setup-gradle action (pinned to the same version used locally).
+#  • Release builds are intentionally left UNSIGNED in CI (no secrets), so we build
+#    the debug variant + assembleRelease(unsigned) to exercise R8 keep rules.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# A newer push to the same branch cancels the older in-flight run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.4.1"
+
+      - name: Unit tests
+        run: gradle -p forge-android testDebugUnitTest --no-daemon
+
+      - name: Assemble debug APK
+        run: gradle -p forge-android assembleDebug --no-daemon
+
+      - name: Assemble release (unsigned, exercises R8)
+        run: gradle -p forge-android assembleRelease --no-daemon
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: forge-debug-apk
+          path: forge-android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: warn

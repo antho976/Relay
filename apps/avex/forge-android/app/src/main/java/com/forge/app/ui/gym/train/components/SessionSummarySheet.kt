@@ -23,10 +23,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -41,6 +44,9 @@ import com.forge.app.ui.theme.ForgeLastGreen
 import com.forge.app.ui.theme.LocalForgeSettings
 import com.forge.app.ui.gym.train.state.SessionSummary
 import com.forge.app.ui.gym.train.state.UnlockedTrophyHighlight
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -69,6 +75,11 @@ fun SessionSummarySheet(
     val outline = MaterialTheme.colorScheme.outline
     val bg = MaterialTheme.colorScheme.background
     val useKg = LocalForgeSettings.current.useKg
+    val context = LocalContext.current
+    val accentArgb = MaterialTheme.colorScheme.primary.toArgb().toLong()
+    val scope = rememberCoroutineScope()
+    // Guards against a second tap kicking off a concurrent render while the first is still in flight.
+    var sharing by remember { mutableStateOf(false) }
 
     ModalBottomSheet(
         onDismissRequest = {},
@@ -235,11 +246,58 @@ fun SessionSummarySheet(
                     outline = outline
                 )
 
+                // Share a recap card (offline bitmap → system share sheet) — the organic "look what I did" moment.
+                HorizontalDivider(color = outline.copy(alpha = 0.2f))
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(enabled = !sharing) {
+                            // Render the ~4.7 MB bitmap off the main thread (it allocates, draws, PNG-
+                            // compresses and writes a file); only the share intent touches the UI thread.
+                            sharing = true
+                            scope.launch {
+                                val uri = withContext(Dispatchers.Default) {
+                                    SessionCardRenderer.render(
+                                        context = context,
+                                        title = summary.displayName,
+                                        dateLine = java.time.LocalDate.now()
+                                            .format(java.time.format.DateTimeFormatter.ofPattern("MMM d, yyyy")).uppercase(),
+                                        // formatVolume already includes the unit — don't append it again.
+                                        heroValue = formatVolume(summary.totalVolumeLb, useKg),
+                                        heroLabel = "VOLUME",
+                                        stats = buildList {
+                                            if (summary.prCount > 0) add("${summary.prCount}" to if (summary.prCount == 1) "PR" else "PRs")
+                                            add("${summary.setCount}" to "SETS")
+                                            if (summary.durationMinutes > 0) add("${summary.durationMinutes}" to "MIN")
+                                        },
+                                        footnote = when {
+                                            summary.isBestSession -> "Best ${summary.dayWord} ever"
+                                            summary.prCount > 0 -> "${summary.prCount} new ${if (summary.prCount == 1) "PR" else "PRs"}"
+                                            else -> null
+                                        },
+                                        accentArgb = accentArgb
+                                    )
+                                }
+                                uri?.let { SessionCardRenderer.share(context, it) }
+                                sharing = false
+                            }
+                        }
+                        .padding(vertical = 12.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        "Share card",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                        letterSpacing = 1.sp
+                    )
+                }
+
                 // Complete button — only way to dismiss
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 8.dp, bottom = 16.dp)
+                        .padding(top = 4.dp, bottom = 16.dp)
                         .clip(RoundedCornerShape(4.dp))
                         .border(0.5.dp, outline.copy(alpha = 0.4f), RoundedCornerShape(4.dp))
                         .bounceClick { onDismiss(selectedMood, selectedTags.toList(), journal) }

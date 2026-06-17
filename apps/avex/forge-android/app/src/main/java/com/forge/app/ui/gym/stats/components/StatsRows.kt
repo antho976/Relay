@@ -18,6 +18,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -46,7 +48,18 @@ internal fun RhythmRow(
     val todayDow = today.dayOfWeek.value - 1
     // Tiles fill Mon→Sun with a stagger, once, on first appearance.
     val reveal = rememberDrawProgress(weekActivity.count { it.sessionName != null || it.cardioType != null })
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+    // Collapse the seven silent tiles into one spoken summary instead of "M T W T F S S" with no state.
+    val dayNames = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+    val activeDays = (0..6).filter { i ->
+        val r = weekActivity.getOrNull(i)
+        r?.sessionName != null || r?.cardioType != null
+    }
+    val rhythmA11y = if (activeDays.isEmpty()) "This week's rhythm: nothing logged yet"
+    else "This week's rhythm: trained " + activeDays.joinToString(", ") { dayNames[it] }
+    Row(
+        modifier = Modifier.fillMaxWidth().clearAndSetSemantics { contentDescription = rhythmA11y },
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
         (0..6).forEach { i ->
             val row = weekActivity.getOrNull(i)
             val hasActivity = row?.sessionName != null || row?.cardioType != null

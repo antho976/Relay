@@ -57,7 +57,11 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            // R8 shrink + obfuscate + resource-shrink. Keep rules live in proguard-rules.pro;
+            // the persistence-critical bit there is keeping enum constant names, since Room/DataStore
+            // round-trip a lot of state by enum.name. Run a release APK on a device once after enabling.
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             // Sign the release only when a complete keystore is configured; otherwise it stays unsigned.
             if (hasReleaseKeystore) {

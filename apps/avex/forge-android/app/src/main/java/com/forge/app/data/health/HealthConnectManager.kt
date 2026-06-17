@@ -5,8 +5,11 @@ import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.RestingHeartRateRecord
 import androidx.health.connect.client.records.SleepSessionRecord
+import androidx.health.connect.client.records.WeightRecord
+import androidx.health.connect.client.records.metadata.Metadata
 import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.time.TimeRangeFilter
+import androidx.health.connect.client.units.Mass
 import com.forge.app.domain.adapt.HealthSnap
 import com.forge.app.domain.adapt.RestingHrSample
 import com.forge.app.domain.adapt.SleepNight
@@ -37,6 +40,17 @@ class HealthConnectManager @Inject constructor(
         HealthPermission.getReadPermission(RestingHeartRateRecord::class)
     )
 
+    /**
+     * Bodyweight permissions (HC-2/HC-3) — read so a smart-scale value can flow INTO Forge, write so
+     * a Forge weigh-in can flow BACK to Health Connect. Kept as a SEPARATE set from [permissions] so
+     * each integration is independently opt-in: connecting recovery never silently asks for weight,
+     * and vice-versa.
+     */
+    val weightPermissions: Set<String> = setOf(
+        HealthPermission.getReadPermission(WeightRecord::class),
+        HealthPermission.getWritePermission(WeightRecord::class)
+    )
+
     /** SDK_AVAILABLE / SDK_UNAVAILABLE / SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED. */
     fun sdkStatus(): Int = HealthConnectClient.getSdkStatus(context)
 
@@ -57,12 +71,76 @@ class HealthConnectManager @Inject constructor(
         return runCatching { HealthConnectClient.getOrCreate(context) }.getOrNull()?.also { cachedClient = it }
     }
 
-    /** Permissions the user has already granted (empty when HC is absent or unreadable). */
-    suspend fun grantedPermissions(): Set<String> =
-        runCatching { clientOrNull()?.permissionController?.getGrantedPermissions() }.getOrNull().orEmpty()
+    /** runCatching that still honours cooperative cancellation: a cancelled coroutine rethrows instead
+     *  of being swallowed as a soft "null/false" result, while genuine provider errors → null. Inline so
+     *  the suspend calls inside the block run in the caller's coroutine context. */
+    private inline fun <T> hcCatching(block: () -> T): T? =
+        try { block() }
+        catch (c: kotlinx.coroutines.CancellationException) { throw c }
+        catch (t: Throwable) { null }
+
+    /** Permissions the user has already granted (empty when HC is absent or unreadable). The
+     *  permission-controller call is a binder IPC, so it runs off the main thread. */
+    suspend fun grantedPermissions(): Set<String> = withContext(Dispatchers.IO) {
+        hcCatching { clientOrNull()?.permissionController?.getGrantedPermissions() }.orEmpty()
+    }
 
     /** True only when every recovery permission is granted. */
     suspend fun hasAllPermissions(): Boolean = grantedPermissions().containsAll(permissions)
+
+    /** True when Forge may READ bodyweight from Health Connect (HC-2). */
+    suspend fun canReadWeight(): Boolean =
+        grantedPermissions().contains(HealthPermission.getReadPermission(WeightRecord::class))
+
+    /** True when Forge may WRITE bodyweight back to Health Connect (HC-3). */
+    suspend fun canWriteWeight(): Boolean =
+        grantedPermissions().contains(HealthPermission.getWritePermission(WeightRecord::class))
+
+    /** A bodyweight reading mirrored out of Health Connect as plain Kotlin (lb + when it was taken). */
+    data class HcWeight(val weightLb: Double, val timeMs: Long)
+
+    /**
+     * The most recent [WeightRecord] before [nowMs], in lb — or null if HC is absent, the read
+     * permission isn't granted, there are no records, or the read throws. Reads a single
+     * descending-ordered row so a long weight history never pulls more than one record.
+     */
+    suspend fun latestWeight(nowMs: Long): HcWeight? = withContext(Dispatchers.IO) {
+        val client = clientOrNull() ?: return@withContext null
+        if (!canReadWeight()) return@withContext null
+        hcCatching {
+            client.readRecords(
+                ReadRecordsRequest(
+                    WeightRecord::class,
+                    timeRangeFilter = TimeRangeFilter.before(Instant.ofEpochMilli(nowMs)),
+                    ascendingOrder = false,
+                    pageSize = 1
+                )
+            ).records.firstOrNull()?.let { HcWeight(it.weight.inPounds, it.time.toEpochMilli()) }
+        }
+    }
+
+    /**
+     * Write a single bodyweight reading to Health Connect, returning whether it landed. Best-effort
+     * and fail-soft: no provider / no write permission / a provider error all return false without
+     * throwing, so a failed mirror never breaks the local log (the source of truth stays the DB).
+     */
+    suspend fun writeWeight(weightLb: Double, atMs: Long): Boolean = withContext(Dispatchers.IO) {
+        val client = clientOrNull() ?: return@withContext false
+        if (!canWriteWeight()) return@withContext false
+        hcCatching {
+            client.insertRecords(
+                listOf(
+                    WeightRecord(
+                        time = Instant.ofEpochMilli(atMs),
+                        zoneOffset = null,
+                        weight = Mass.pounds(weightLb),
+                        metadata = Metadata.manualEntry()
+                    )
+                )
+            )
+            true
+        } ?: false
+    }
 
     /**
      * Read sleep + resting-HR records in `[startMs, nowMs]` into a pure [HealthSnap]. Returns empty
@@ -72,7 +150,7 @@ class HealthConnectManager @Inject constructor(
     suspend fun readRecovery(startMs: Long, nowMs: Long): HealthSnap = withContext(Dispatchers.IO) {
         val client = clientOrNull() ?: return@withContext HealthSnap()
         if (!hasAllPermissions()) return@withContext HealthSnap()
-        runCatching {
+        hcCatching {
             val range = TimeRangeFilter.between(Instant.ofEpochMilli(startMs), Instant.ofEpochMilli(nowMs))
             val sleep = client.readRecords(ReadRecordsRequest(SleepSessionRecord::class, timeRangeFilter = range))
                 .records.mapNotNull {
@@ -92,7 +170,7 @@ class HealthConnectManager @Inject constructor(
                     if (bpm in MIN_BPM..MAX_BPM) RestingHrSample(timeMs = it.time.toEpochMilli(), bpm = bpm) else null
                 }
             HealthSnap(sleepNights = sleep, restingHr = hr)
-        }.getOrElse { HealthSnap() }
+        } ?: HealthSnap()
     }
 
     private companion object {
