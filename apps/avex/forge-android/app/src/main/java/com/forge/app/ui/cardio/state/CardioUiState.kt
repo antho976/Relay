@@ -9,6 +9,8 @@ import com.forge.app.data.db.entities.CardioEntry
 data class CardioUiState(
     val isLoading: Boolean = true,
     val weekMinutes: Int = 0,
+    /** Weekly cardio-minutes goal (Settings). 0 = no goal set → no progress bar. */
+    val weekTargetMin: Int = 0,
     /** Minutes per day for the current Mon–Sun week, index 0 = Monday. Future days = 0. */
     val weekDailyMinutes: List<Int> = emptyList(),
     val entries: List<CardioEntry> = emptyList(),

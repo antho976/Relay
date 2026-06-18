@@ -31,5 +31,13 @@ data class TrophyStatsSnapshot(
     val consistencyKingEarned: Boolean = false,
     val varietyPackEarned: Boolean = false,
     /** How many user-set exercise weight goals have been reached (Goals tie-in). */
-    val exerciseGoalsAchieved: Int = 0
+    val exerciseGoalsAchieved: Int = 0,
+    /** Cumulative lb moved across all finished, tracked sessions (lifetime tonnage trophies). */
+    val lifetimeTonnageLb: Double = 0.0,
+    /** Epoch-ms of the earliest finished session, or null if none yet (anniversary trophy). */
+    val firstSessionMs: Long? = null,
+    /** Non-rest cardio sessions logged (cardio trophies). */
+    val cardioSessions: Int = 0,
+    /** Total cardio distance in km (cardio trophies). */
+    val cardioDistanceKm: Double = 0.0
 )

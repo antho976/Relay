@@ -8,6 +8,13 @@ import com.forge.app.program.UnlockRule
 
 object TrophyEvaluator {
 
+    private const val DAY_MS = 24L * 60 * 60 * 1000
+
+    /** Whole days since the first finished session (0 when there is none yet). Single source for the
+     *  anniversary trophy's match/progress/remaining math, so the day-conversion lives in one place. */
+    private fun trainingDaysElapsed(s: TrophyStatsSnapshot): Int =
+        if (s.firstSessionMs != null) ((System.currentTimeMillis() - s.firstSessionMs) / DAY_MS).toInt() else 0
+
     fun unlockedByRule(snapshot: TrophyStatsSnapshot, catalogue: List<Trophy> = Trophies.all): Set<String> =
         catalogue.asSequence()
             .filter { isUnlocked(it.unlock, snapshot) }
@@ -36,6 +43,10 @@ object TrophyEvaluator {
         is UnlockRule.ConsistencyKingRule -> s.consistencyKingEarned
         is UnlockRule.VarietyPackRule -> s.varietyPackEarned
         is UnlockRule.ExerciseGoalsAchievedAtLeast -> s.exerciseGoalsAchieved >= rule.n
+        is UnlockRule.LifetimeTonnageAtLeast -> s.lifetimeTonnageLb >= rule.lb
+        is UnlockRule.TrainingAnniversaryRule -> trainingDaysElapsed(s) >= 365
+        is UnlockRule.CardioSessionsAtLeast -> s.cardioSessions >= rule.n
+        is UnlockRule.CardioDistanceAtLeastKm -> s.cardioDistanceKm >= rule.km
     }
 
     fun progressHint(rule: UnlockRule, s: TrophyStatsSnapshot, useKg: Boolean): String? = when (rule) {
@@ -60,6 +71,10 @@ object TrophyEvaluator {
         is UnlockRule.ConsistencyKingRule -> if (s.consistencyKingEarned) "Earned" else "No missed week in 3 months"
         is UnlockRule.VarietyPackRule -> if (s.varietyPackEarned) "Earned" else "Train all 4 days in one week"
         is UnlockRule.ExerciseGoalsAchievedAtLeast -> "${s.exerciseGoalsAchieved} / ${rule.n} goals"
+        is UnlockRule.LifetimeTonnageAtLeast -> "${toDisplayWeight(s.lifetimeTonnageLb, useKg).toLong()} / ${toDisplayWeight(rule.lb, useKg).toLong()} ${unitLabel(useKg)}"
+        is UnlockRule.TrainingAnniversaryRule -> "${trainingDaysElapsed(s)} / 365 days"
+        is UnlockRule.CardioSessionsAtLeast -> "${s.cardioSessions} / ${rule.n} sessions"
+        is UnlockRule.CardioDistanceAtLeastKm -> "${s.cardioDistanceKm.toInt()} / ${rule.km.toInt()} km"
     }
 
     fun progressFraction(rule: UnlockRule, s: TrophyStatsSnapshot): Float = when (rule) {
@@ -84,6 +99,10 @@ object TrophyEvaluator {
         is UnlockRule.ConsistencyKingRule -> if (s.consistencyKingEarned) 1f else 0f
         is UnlockRule.VarietyPackRule -> if (s.varietyPackEarned) 1f else 0f
         is UnlockRule.ExerciseGoalsAchievedAtLeast -> (s.exerciseGoalsAchieved.toFloat() / rule.n).coerceIn(0f, 1f)
+        is UnlockRule.LifetimeTonnageAtLeast -> (s.lifetimeTonnageLb / rule.lb).coerceIn(0.0, 1.0).toFloat()
+        is UnlockRule.TrainingAnniversaryRule -> (trainingDaysElapsed(s) / 365f).coerceIn(0f, 1f)
+        is UnlockRule.CardioSessionsAtLeast -> (s.cardioSessions.toFloat() / rule.n).coerceIn(0f, 1f)
+        is UnlockRule.CardioDistanceAtLeastKm -> (s.cardioDistanceKm / rule.km).coerceIn(0.0, 1.0).toFloat()
     }
 
     /** Returns (currentProgress, target) as integers for near-miss detection (#136). -1 = not applicable. */
@@ -101,6 +120,12 @@ object TrophyEvaluator {
         is UnlockRule.SundaysTrainedAtLeast -> s.sundaysTrainedCount to rule.n
         is UnlockRule.MaxSingleExerciseRepsAtLeast -> s.maxSingleExerciseReps to rule.n
         is UnlockRule.ExerciseGoalsAchievedAtLeast -> s.exerciseGoalsAchieved to rule.n
+        is UnlockRule.CardioSessionsAtLeast -> s.cardioSessions to rule.n
+        is UnlockRule.CardioDistanceAtLeastKm -> s.cardioDistanceKm.toInt() to rule.km.toInt()
+        // Tonnage (lb) and anniversary (days) are near-miss-eligible too, so the Overview "Up next"
+        // hook can surface them — their progressFraction/Hint already report progress.
+        is UnlockRule.LifetimeTonnageAtLeast -> s.lifetimeTonnageLb.toInt() to rule.lb.toInt()
+        is UnlockRule.TrainingAnniversaryRule -> trainingDaysElapsed(s) to 365
         else -> -1 to -1
     }
 
@@ -126,5 +151,12 @@ object TrophyEvaluator {
         is UnlockRule.ConsistencyKingRule -> null
         is UnlockRule.VarietyPackRule -> null
         is UnlockRule.ExerciseGoalsAchievedAtLeast -> "${rule.n - s.exerciseGoalsAchieved} more goal(s)"
+        is UnlockRule.LifetimeTonnageAtLeast -> "${toDisplayWeight((rule.lb - s.lifetimeTonnageLb).coerceAtLeast(0.0), useKg).toLong()} ${unitLabel(useKg)} to go"
+        is UnlockRule.TrainingAnniversaryRule -> {
+            val remaining = (365 - trainingDaysElapsed(s)).coerceAtLeast(0)
+            if (remaining == 0) null else "$remaining more days"
+        }
+        is UnlockRule.CardioSessionsAtLeast -> "${(rule.n - s.cardioSessions).coerceAtLeast(0)} more"
+        is UnlockRule.CardioDistanceAtLeastKm -> "${(rule.km - s.cardioDistanceKm).coerceAtLeast(0.0).toInt()} km to go"
     }
 }

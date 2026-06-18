@@ -154,6 +154,12 @@ class MainActivity : ComponentActivity() {
         // rememberSaveable state keeps it visible, since the flag is already gone.
         val restoreJustCompleted = savedInstanceState == null && consumeRestoreFlag()
 
+        // Widget deep-link: a home-screen widget tap carries the day to open (the next-up day, or the
+        // active session's day when one is in progress). Read it once on a fresh launch and hand it to
+        // the nav host, which opens it on top of Overview so Back returns home.
+        val widgetDayKey = if (savedInstanceState == null)
+            intent?.getStringExtra(com.forge.app.widget.EXTRA_START_DAY_KEY) else null
+
         // Hold the splash until prefs resolve, so the bare theme gradient (the null onboarding state)
         // never flashes before the first real screen (P1). A 2s backstop releases it even if the prefs
         // flow never emits (corrupt/stalled DataStore) — a brief gradient beats a permanent splash.
@@ -235,7 +241,7 @@ class MainActivity : ComponentActivity() {
                         when (onboardingDone) {
                             false -> OnboardingScreen(onFinished = {})
                             true -> {
-                                ForgeNavHost()
+                                ForgeNavHost(initialDayKey = widgetDayKey)
                                 NotifPermissionRationale()
                                 RestoreConfirmedDialog(restoreJustCompleted)
                             }

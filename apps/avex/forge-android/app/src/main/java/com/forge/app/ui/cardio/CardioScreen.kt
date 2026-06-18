@@ -149,6 +149,7 @@ private fun CardioListContent(
             item("hero") {
                 CardioHero(
                     weekMinutes = state.weekMinutes,
+                    weekTargetMin = state.weekTargetMin,
                     weekNum = weekNum,
                     weekLabel = weekLabel,
                     weekEntries = weekEntries,

@@ -25,7 +25,8 @@ class StatsViewModel @Inject constructor(
     statsRepo: StatsRepository,
     adaptationRepo: AdaptationRepository,
     settingsRepo: com.forge.app.data.prefs.SettingsRepository,
-    private val bodyweightRepo: com.forge.app.data.repo.BodyweightRepository
+    private val bodyweightRepo: com.forge.app.data.repo.BodyweightRepository,
+    private val coachRepo: com.forge.app.data.repo.CoachRepository
 ) : ViewModel() {
 
     /**
@@ -36,6 +37,8 @@ class StatsViewModel @Inject constructor(
      * inside StatsRepository's combine on every emission).
      */
     private val engineFlow = MutableStateFlow<AdaptationRepository.EngineStatsRead?>(null)
+
+    private val _coachWatch = MutableStateFlow<com.forge.app.data.repo.CoachWatch?>(null)
 
     /** Whether the Body-tab quick-log should offer "Import from Health Connect" (read granted). */
     private val _weightConnected = MutableStateFlow(false)
@@ -52,6 +55,13 @@ class StatsViewModel @Inject constructor(
         viewModelScope.launch {
             _weightConnected.value = runCatching { bodyweightRepo.canImportFromHealthConnect() }.getOrDefault(false)
         }
+        refreshCoachWatch()
+    }
+
+    /** Re-read the coach portrait (CoachWatch). Called at init and again when the Stats screen
+     *  reappears, so a coach pass that ran in the background while away isn't shown stale. */
+    fun refreshCoachWatch() = viewModelScope.launch {
+        _coachWatch.value = runCatching { coachRepo.coachLab() }.getOrNull()
     }
 
     /** Save a typed weigh-in (lb); the bodyweight trend updates reactively via observeRecent. */
@@ -78,8 +88,9 @@ class StatsViewModel @Inject constructor(
     val state: StateFlow<StatsUiState> = combine(
         statsRepo.observeGymStats(),
         engineFlow,
-        settingsRepo.userSex
-    ) { snapshot, engine, sex ->
+        settingsRepo.userSex,
+        _coachWatch
+    ) { snapshot, engine, sex, watch ->
         StatsUiState(
             isLoading = false,
             volumeByMuscle = snapshot.volumeByMuscle,
@@ -119,7 +130,8 @@ class StatsViewModel @Inject constructor(
             readinessPulse = engine?.fatigue?.let { buildReadinessPulse(it, engine.deloadScoreThreshold) },
             plateauFlags = engine?.plateaus.orEmpty().mapNotNull(::plateauFlagOf),
             balanceRatios = engine?.ratios.orEmpty().map(::balanceRatioUi),
-            userSex = sex
+            userSex = sex,
+            coachWatch = watch
         )
     }.catch {
         // A crash in any stats aggregation drops to a non-loading ERROR state instead of an

@@ -4,7 +4,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.forge.app.core.time.Clock
 import com.forge.app.data.db.entities.CardioEntry
+import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.data.repo.CardioRepository
+import com.forge.app.data.repo.TrophyRepository
 import com.forge.app.domain.cardio.CardioEffort
 import com.forge.app.domain.cardio.CardioRestReason
 import com.forge.app.domain.cardio.CardioType
@@ -37,6 +39,8 @@ import javax.inject.Inject
 @HiltViewModel
 class CardioViewModel @Inject constructor(
     private val cardioRepo: CardioRepository,
+    private val settingsRepo: SettingsRepository,
+    private val trophyRepo: TrophyRepository,
     private val clock: Clock
 ) : ViewModel() {
 
@@ -57,10 +61,13 @@ class CardioViewModel @Inject constructor(
         Triple(all, weekMin, weekEntries)
     }
 
-    val state: StateFlow<CardioUiState> = combine(dbFlow, transient) { (all, weekMin, weekEntries), tr ->
+    val state: StateFlow<CardioUiState> = combine(
+        dbFlow, transient, settingsRepo.cardioWeeklyTargetMin
+    ) { (all, weekMin, weekEntries), tr, target ->
         CardioUiState(
             isLoading = false,
             weekMinutes = weekMin ?: 0,
+            weekTargetMin = target,
             weekDailyMinutes = buildDailyMinutes(weekEntries),
             entries = all,
             sheetOpen = tr.sheetOpen,
@@ -124,6 +131,10 @@ class CardioViewModel @Inject constructor(
             )
             if (editingId != null) cardioRepo.update(entry) else cardioRepo.add(entry)
             transient.update { it.copy(sheetOpen = false, editing = null) }
+            // Cardio trophies (first run / 100 km / N sessions) evaluate here too, since cardio logging
+            // doesn't go through the workout-finish path that normally unlocks trophies — but off the
+            // critical path (it's a ~14-query snapshot) so the sheet closes immediately, not after it.
+            viewModelScope.launch { runCatching { trophyRepo.evaluateAndUnlockNew() } }
         }
     }
 

@@ -1,11 +1,7 @@
 package com.forge.app.service
 
-import android.app.NotificationChannel
 import android.app.NotificationManager
-import android.app.PendingIntent
 import android.content.Context
-import android.content.Intent
-import androidx.core.app.NotificationCompat
 import androidx.hilt.work.HiltWorker
 import androidx.work.BackoffPolicy
 import androidx.work.Constraints
@@ -14,70 +10,105 @@ import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
-import com.forge.app.MainActivity
-import com.forge.app.R
 import com.forge.app.data.prefs.SettingsRepository
+import com.forge.app.data.repo.CoachRepository
 import com.forge.app.data.repo.StatsRepository
+import com.forge.app.data.repo.VacationRepository
 import com.forge.app.domain.units.formatWeight
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
+import java.time.LocalDate
+import java.time.ZoneId
 import java.util.concurrent.TimeUnit
 
 /**
- * Fires once a week and posts a "Your week in numbers" notification (#31).
- * Scheduled on first app open. Re-scheduling is idempotent (KEEP policy).
+ * Fires once a week and carries the three weekly engagement nudges (#31 + #13):
+ *  - the "Your week in numbers" recap (when you trained),
+ *  - a "your coach has an update" push when a new Week Brief is ready and unseen,
+ *  - a gentle, non-guilt-y "come back" when a whole week passed with no sessions (suppressed on holiday).
+ *
+ * Weekly cadence keeps re-engagement from nagging. Scheduled on first app open; KEEP-idempotent.
+ * All three honour quiet hours; only the recap honours the "Weekly recap" per-type opt-out (the
+ * coach-brief and come-back nudges are separate features with their own channels).
  */
 @HiltWorker
 class WeeklyRecapWorker @AssistedInject constructor(
     @Assisted private val ctx: Context,
     @Assisted params: WorkerParameters,
     private val statsRepo: StatsRepository,
-    private val settingsRepo: SettingsRepository
+    private val settingsRepo: SettingsRepository,
+    private val coachRepo: CoachRepository,
+    private val vacationRepo: VacationRepository
 ) : CoroutineWorker(ctx, params) {
 
     override suspend fun doWork(): Result {
-        // Per-type opt-out (Settings → Notifications, N2). Disabled ⇒ nothing to post.
-        if (!settingsRepo.weeklyRecapEnabled.first()) return Result.success()
-        // Defer (retry) rather than silently drop the recap if we land in quiet hours.
+        // Quiet hours: defer (retry) the whole batch rather than dropping it. Each nudge below has
+        // its own opt-out: the coach-brief push and the come-back nudge are SEPARATE features with
+        // their own channels, so they are NOT gated by the weekly-recap toggle (that toggle, labelled
+        // "Weekly recap", controls only the "your week in numbers" recap). Users can still mute the
+        // coach / come-back channels individually in Android's per-channel notification settings.
         if (settingsRepo.isQuietNow()) return Result.retry()
-        val stats = statsRepo.observeWeeklyStats().firstOrNull() ?: return Result.success()
-        if (stats.workouts == 0) return Result.success() // nothing to recap
-        val useKg = settingsRepo.useKg.first()
 
-        ensureChannel(ctx)
         val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        val body = buildString {
-            append("${stats.workouts} workout${if (stats.workouts != 1) "s" else ""}")
-            if (stats.volumeLb > 0) append(" · ${formatWeight(stats.volumeLb, useKg)}")
-            if (stats.cardioMinutes > 0) append(" · ${stats.cardioMinutes} min cardio")
-            if (stats.streakDays > 0) append(" · ${stats.streakDays}-day streak")
+
+        // ── Coach-brief push (#13): notify when a NEW week brief is ready and unseen. Read-only —
+        // pendingBanner() compares the latest pass to lastSeenCoachWeekId, so a brief the user has
+        // already opened never re-pushes, and we don't run/regenerate the coach pass here.
+        runCatching { coachRepo.pendingBanner() }.getOrNull()?.let { banner ->
+            ForgeNotifications.ensureChannel(ctx, COACH_CHANNEL_ID, "Coach updates", "When your weekly coach brief is ready")
+            nm.notify(COACH_NOTIF_ID, ForgeNotifications.build(
+                ctx, COACH_CHANNEL_ID, "Your coach has an update", banner.text
+            ))
         }
-        // Tapping the recap opens the app (lands on Overview, the home/start destination) instead of
-        // doing nothing — the recap is a stats nudge, so it should at least bring the user back in.
-        val tap = PendingIntent.getActivity(
-            ctx, 0,
-            Intent(ctx, MainActivity::class.java).apply { flags = Intent.FLAG_ACTIVITY_SINGLE_TOP },
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        val notification = NotificationCompat.Builder(ctx, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_stat_forge)
-            .setContentTitle("Weekly recap")
-            .setContentText(body)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(body))
-            .setContentIntent(tap)
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-            .setAutoCancel(true)
-            .build()
-        nm.notify(NOTIF_ID, notification)
+
+        val stats = statsRepo.observeWeeklyStats().firstOrNull() ?: return Result.success()
+
+        if (stats.workouts == 0) {
+            // ── Re-engagement (#13): a whole week with no sessions = a lapse. Nudge gently — unless
+            // the user is on holiday, where a "come back" would be guilt-trippy, not helpful.
+            if (!isOnVacationToday()) {
+                ForgeNotifications.ensureChannel(ctx, REENGAGE_CHANNEL_ID, "Come-back nudges", "A gentle nudge after a week away")
+                nm.notify(REENGAGE_NOTIF_ID, ForgeNotifications.build(
+                    ctx, REENGAGE_CHANNEL_ID,
+                    "Ready when you are",
+                    "No pressure — your plan's right where you left it. Even one session this week keeps your momentum going."
+                ))
+            }
+            return Result.success()
+        }
+
+        // ── Weekly recap (#31): your week in numbers — gated by the per-type opt-out (N2).
+        if (settingsRepo.weeklyRecapEnabled.first()) {
+            val useKg = settingsRepo.useKg.first()
+            val body = buildString {
+                append("${stats.workouts} workout${if (stats.workouts != 1) "s" else ""}")
+                if (stats.volumeLb > 0) append(" · ${formatWeight(stats.volumeLb, useKg)}")
+                if (stats.cardioMinutes > 0) append(" · ${stats.cardioMinutes} min cardio")
+                if (stats.streakDays > 0) append(" · ${stats.streakDays}-day streak")
+            }
+            ForgeNotifications.ensureChannel(ctx, CHANNEL_ID, "Weekly recap", "Your weekly training summary")
+            nm.notify(NOTIF_ID, ForgeNotifications.build(ctx, CHANNEL_ID, "Weekly recap", body))
+        }
         return Result.success()
+    }
+
+    /** True if today's date falls inside any saved holiday range (yyyy-MM-dd compares lexicographically). */
+    private suspend fun isOnVacationToday(): Boolean {
+        val today = LocalDate.now(ZoneId.systemDefault()).toString() // yyyy-MM-dd
+        return vacationRepo.observeAll().firstOrNull().orEmpty()
+            .any { today >= it.startDate && today <= it.endDate }
     }
 
     companion object {
         private const val CHANNEL_ID = "forge_weekly_recap"
+        private const val COACH_CHANNEL_ID = "forge_coach_brief"
+        private const val REENGAGE_CHANNEL_ID = "forge_reengage"
         private const val WORK_NAME = "forge_weekly_recap"
         private const val NOTIF_ID = 2001
+        private const val COACH_NOTIF_ID = 2003
+        private const val REENGAGE_NOTIF_ID = 2004
 
         fun schedule(context: Context) {
             val constraints = Constraints.Builder()
@@ -93,16 +124,6 @@ class WeeklyRecapWorker @AssistedInject constructor(
                 WORK_NAME,
                 ExistingPeriodicWorkPolicy.KEEP,
                 request
-            )
-        }
-
-        private fun ensureChannel(context: Context) {
-            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            if (nm.getNotificationChannel(CHANNEL_ID) != null) return
-            nm.createNotificationChannel(
-                NotificationChannel(CHANNEL_ID, "Weekly recap", NotificationManager.IMPORTANCE_DEFAULT).apply {
-                    description = "Your weekly training summary"
-                }
             )
         }
     }

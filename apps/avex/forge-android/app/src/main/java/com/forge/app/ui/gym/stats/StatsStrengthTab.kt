@@ -19,6 +19,7 @@ import com.forge.app.ui.gym.stats.components.HallOfFameRow
 import com.forge.app.ui.gym.stats.components.PatternRadarCard
 import com.forge.app.ui.gym.stats.components.StrengthOverlayCard
 import com.forge.app.ui.gym.stats.components.TimeToPrCard
+import com.forge.app.ui.gym.stats.state.E1rmLift
 import com.forge.app.ui.gym.stats.state.StatsUiState
 
 /**
@@ -26,7 +27,7 @@ import com.forge.app.ui.gym.stats.state.StatsUiState
  * radar → rep maxes → overlay → all-time bests. Engine signals (plateau flags, PR
  * recency, pattern radar) ride the same StatsUiState as everything else.
  */
-internal fun LazyListScope.strengthTab(state: StatsUiState, c: StatsColors) {
+internal fun LazyListScope.strengthTab(state: StatsUiState, c: StatsColors, onLiftClick: (E1rmLift) -> Unit = {}, onShareTopLift: (() -> Unit)? = null) {
     // Cold start: zero weighted history → one intentional editorial screen, no gated crumbs.
     if (state.e1rmLifts.isEmpty() && state.hallOfFame.isEmpty()) {
         item("strength-cold") { EntranceItem(0) { StrengthColdStart(c.onBg, c.muted, c.outline) } }
@@ -38,12 +39,12 @@ internal fun LazyListScope.strengthTab(state: StatsUiState, c: StatsColors) {
 
     state.e1rmLifts.firstOrNull()?.let { top ->
         val i = idx++
-        item("e1rm-chart") { EntranceItem(i) { E1rmChartCard(top, c.onBg, c.muted, c.accent, c.outline) } }
+        item("e1rm-chart") { EntranceItem(i) { E1rmChartCard(top, c.onBg, c.muted, c.accent, c.outline, onShare = onShareTopLift) } }
     }
     if (state.e1rmLifts.isNotEmpty()) {
         val i = idx++
         item("big-lifts") {
-            EntranceItem(i) { E1rmCard(state.e1rmLifts, prDays, plateausById, c.onBg, c.muted, c.accent, c.outline) }
+            EntranceItem(i) { E1rmCard(state.e1rmLifts, prDays, plateausById, c.onBg, c.muted, c.accent, c.outline, onLiftClick = onLiftClick) }
         }
     }
     if (state.plateauFlags.isNotEmpty()) {

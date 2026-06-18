@@ -3,6 +3,7 @@ package com.forge.app.ui.gym.stats
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -14,7 +15,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -49,12 +54,19 @@ import com.forge.app.ui.theme.emphasized
  * last session's value ("was X"), the progression curve drawing in, and the projection.
  */
 @Composable
-internal fun E1rmChartCard(top: E1rmLift, onBg: Color, muted: Color, accent: Color, outline: Color) {
+internal fun E1rmChartCard(top: E1rmLift, onBg: Color, muted: Color, accent: Color, outline: Color, onShare: (() -> Unit)? = null) {
     val projected = top.monthlyPct?.takeIf { it != 0.0 }?.let { top.currentE1rm * (1 + it / 100.0) }
     val prevSession = top.history.getOrNull(top.history.size - 2)
     val useKg = LocalForgeSettings.current.useKg
     Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
-        Text("Where I'm going", style = MaterialTheme.typography.headlineSmall, color = onBg, fontStyle = FontStyle.Italic)
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("Where I'm going", style = MaterialTheme.typography.headlineSmall, color = onBg, fontStyle = FontStyle.Italic)
+            onShare?.let { share ->
+                IconButton(onClick = share) {
+                    Icon(imageVector = Icons.Default.Share, contentDescription = "Share e1RM stat", tint = muted)
+                }
+            }
+        }
         Spacer(Modifier.height(4.dp))
         Text("${top.exerciseName} — estimated one-rep max.", style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic)
         Spacer(Modifier.height(10.dp))
@@ -158,7 +170,8 @@ internal fun E1rmCard(
     onBg: Color,
     muted: Color,
     accent: Color,
-    outline: Color
+    outline: Color,
+    onLiftClick: (E1rmLift) -> Unit = {}
 ) {
     val useKg = LocalForgeSettings.current.useKg
     Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
@@ -175,7 +188,7 @@ internal fun E1rmCard(
         HorizontalDivider(color = outline.copy(alpha = 0.2f), modifier = Modifier.padding(top = 4.dp))
         lifts.forEach { lift ->
             val plateau = plateaus[lift.exerciseId]
-            Row(Modifier.fillMaxWidth().padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.fillMaxWidth().padding(vertical = 8.dp).clickable { onLiftClick(lift) }, verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(lift.exerciseName, style = MaterialTheme.typography.bodySmall, color = onBg)

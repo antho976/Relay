@@ -50,7 +50,13 @@ data class CoachBrief(
     /** Finished tracked sessions so far — drives the "still learning, N to go" subtitle (CO1). */
     val sessionsLogged: Int = 0,
     /** Sessions needed before the weekly pass starts calling adjustments. */
-    val minSessions: Int = 0
+    val minSessions: Int = 0,
+    /**
+     * Changes applied from the PREVIOUS brief (last week's pass) — shown as a "what changed"
+     * delta so the user can see whether a past change is now in effect. Empty for the very first
+     * brief or when nothing was applied last week.
+     */
+    val previousApplied: List<CoachDecision> = emptyList()
 ) {
     /** Sessions remaining before the coach activates; 0 once it's calling weekly adjustments. */
     val sessionsToGo: Int get() = (minSessions - sessionsLogged).coerceAtLeast(0)
@@ -533,6 +539,17 @@ class CoachRepository @Inject constructor(
                 )
             }.getOrNull()
         }
+        // Previous brief's applied changes — the "what changed" delta for the user. Reads the two most
+        // recent passes and takes decisions from the one BEFORE this week's pass that were actually applied
+        // (applied, folded, or reverted all crossed the apply line). Falls back silently on any error.
+        val previousApplied = runCatching {
+            val recent = coachDao.recentPasses(2)
+            val prevWeekId = recent.firstOrNull { it.weekId != pass.weekId }?.weekId
+            if (prevWeekId != null) {
+                coachDao.decisionsFor(prevWeekId)
+                    .filter { it.status == STATUS_APPLIED || it.status == STATUS_FOLDED || it.status == "reverted" }
+            } else emptyList()
+        }.getOrDefault(emptyList())
         return CoachBrief(
             pass, decisions, review,
             sessionsLogged = snapshot?.sessions?.size ?: 0,
@@ -540,7 +557,8 @@ class CoachRepository @Inject constructor(
             // so sessionsToGo is 0 and the Brief shows the neutral "watching and learning" line instead
             // of telling an established user "Still learning — 0 of N sessions logged" (a failed read is
             // not a fresh account). The "Last week" section is already hidden because review is null.
-            minSessions = if (snapshot != null) AutoCoachPlanner.MIN_SESSIONS else 0
+            minSessions = if (snapshot != null) AutoCoachPlanner.MIN_SESSIONS else 0,
+            previousApplied = previousApplied
         )
     }
 

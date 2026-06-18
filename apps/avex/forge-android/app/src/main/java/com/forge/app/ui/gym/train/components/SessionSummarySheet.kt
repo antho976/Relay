@@ -279,6 +279,16 @@ fun SessionSummarySheet(
                     outline = outline
                 )
 
+                // What's next — a first-time user doesn't know where the session goes or where records live (Cat 6).
+                HorizontalDivider(color = outline.copy(alpha = 0.2f))
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("WHAT'S NEXT", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
+                    Text(
+                        "Your session's saved to history. See your records in Gym → Stats → PRs, and the coach refines your plan as you log more.",
+                        style = MaterialTheme.typography.bodySmall, color = muted
+                    )
+                }
+
                 // Share a recap card (offline bitmap → system share sheet) — the organic "look what I did" moment.
                 HorizontalDivider(color = outline.copy(alpha = 0.2f))
                 Box(

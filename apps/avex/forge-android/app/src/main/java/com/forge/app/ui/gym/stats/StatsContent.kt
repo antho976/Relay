@@ -11,6 +11,7 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -18,6 +19,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import kotlin.math.abs
 import kotlinx.coroutines.launch
@@ -28,6 +31,10 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.temporal.WeekFields
 import java.util.Locale
+import com.forge.app.domain.units.toDisplayWeight
+import com.forge.app.domain.units.unitLabel
+import com.forge.app.ui.gym.stats.state.E1rmLift
+import com.forge.app.ui.theme.LocalForgeSettings
 
 /**
  * Gym → Stats tab. A segmented sub-nav (Snapshot · Strength · Volume · Trends) switches
@@ -46,7 +53,13 @@ fun StatsContent(
     val weightConnected by viewModel.weightConnected.collectAsStateWithLifecycle()
     val bodyweightMessage by viewModel.bodyweightMessage.collectAsStateWithLifecycle()
     var showWeightSheet by remember { mutableStateOf(false) }
+    var selectedLift by remember { mutableStateOf<E1rmLift?>(null) }
 
+    // Re-read the coach portrait whenever the screen (re)appears, so a coach pass that ran in the
+    // background while away isn't shown stale until process restart (it loads once at VM init too).
+    LaunchedEffect(Unit) { viewModel.refreshCoachWatch() }
+
+    val context = LocalContext.current
     val zone = ZoneId.systemDefault()
     val today = LocalDate.now(zone)
     val weekNum = today.get(WeekFields.ISO.weekOfWeekBasedYear())
@@ -63,6 +76,10 @@ fun StatsContent(
         accent = MaterialTheme.colorScheme.primary,
         outline = MaterialTheme.colorScheme.outline
     )
+    val useKg = LocalForgeSettings.current.useKg
+    // ARGB Int (widened to Long for the renderer) — NOT Color.value, whose ULong packs channels
+    // differently and truncates to ~0 (black/transparent) when the renderer does accentArgb.toInt().
+    val accentArgb = MaterialTheme.colorScheme.primary.toArgb().toLong()
 
     val weekCurrent = state.weekComparison?.current
     val weekPrev = state.weekComparison?.previous
@@ -104,7 +121,30 @@ fun StatsContent(
             ) {
                 when (tabs[page]) {
                     StatsTab.SNAPSHOT -> snapshotTab(state, today, weekNum, weekLabel, weekCurrent, weekPrev, weekSessions, c, onOpenNotes)
-                    StatsTab.STRENGTH -> strengthTab(state, c)
+                    StatsTab.STRENGTH -> strengthTab(
+                        state = state,
+                        c = c,
+                        onLiftClick = { selectedLift = it },
+                        onShareTopLift = {
+                            state.e1rmLifts.firstOrNull()?.let { top ->
+                                val value = toDisplayWeight(top.currentE1rm, useKg).toInt().toString()
+                                val unit = unitLabel(useKg).uppercase()
+                                val rate = top.monthlyPct?.let { p ->
+                                    "${if (p >= 0) "+" else ""}${"%.1f".format(p)}% / mo"
+                                }
+                                val uri = StatMetricCardRenderer.render(
+                                    context = context,
+                                    metricLabel = "ESTIMATED 1RM",
+                                    liftName = top.exerciseName,
+                                    heroValue = value,
+                                    heroUnit = unit,
+                                    rateLine = rate,
+                                    accentArgb = accentArgb
+                                )
+                                uri?.let { StatMetricCardRenderer.share(context, it) }
+                            }
+                        }
+                    )
                     StatsTab.VOLUME -> volumeTab(state, c)
                     StatsTab.BODY -> bodyTab(state, c, onLogWeight = {
                         // Fresh sheet: drop any prior "Saved."/import line and re-check HC permission so
@@ -117,6 +157,15 @@ fun StatsContent(
                 }
             }
         }
+    }
+
+    selectedLift?.let { lift ->
+        StatsLiftDetailSheet(
+            lift = lift,
+            hallRecord = state.hallOfFame.find { it.exerciseId == lift.exerciseId },
+            recentHistory = state.exerciseHistory[lift.exerciseId].orEmpty(),
+            onDismiss = { selectedLift = null }
+        )
     }
 
     if (showWeightSheet) {

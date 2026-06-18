@@ -39,10 +39,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.forge.app.ui.common.ConfettiOverlay
 import com.forge.app.ui.common.ForgeHapticType
 import com.forge.app.ui.common.forgeHaptic
 import com.forge.app.ui.gym.train.components.AddExerciseSheet
+import com.forge.app.ui.gym.train.components.PrCelebrationOverlay
 import com.forge.app.ui.gym.train.components.PlateCalculatorDialog
 import com.forge.app.ui.gym.train.components.RestTimerBubble
 import com.forge.app.ui.gym.train.components.RestTimerControlsDialog
@@ -75,10 +75,16 @@ fun DayScreen(
     var prevTotalSets = remember { mutableIntStateOf(-1) }
     var prevTotalPrs = remember { mutableIntStateOf(-1) }
     var showPrBurst by remember { mutableStateOf(false) }
+    var prBurstName by remember { mutableStateOf("") }
+    var prBurstPb by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(totalSets, totalPrSets) {
         when {
             prevTotalPrs.intValue >= 0 && totalPrSets > prevTotalPrs.intValue -> {
                 view.forgeHaptic(ForgeHapticType.PR_OR_FINISH, hapticStrength)
+                val prEx = state.exercises.firstOrNull { it.prSetIds.isNotEmpty() && it.bestPrSetId != null }
+                    ?: state.exercises.firstOrNull { it.prSetIds.isNotEmpty() }
+                prBurstName = prEx?.effectiveName ?: ""
+                prBurstPb = prEx?.allTimePbText
                 showPrBurst = true
                 // A4: announce to TalkBack (phone is often face-down mid-set). No-op without a screen reader.
                 view.announceForAccessibility("New personal record!")
@@ -156,7 +162,11 @@ fun DayScreen(
         Box(Modifier.fillMaxSize().padding(inner)) {
             DayContent(state = state, onEvent = viewModel::onEvent)
             if (showPrBurst) {
-                ConfettiOverlay(modifier = Modifier.fillMaxSize(), onComplete = { showPrBurst = false })
+                PrCelebrationOverlay(
+                    exerciseName = prBurstName,
+                    pbText = prBurstPb,
+                    onComplete = { showPrBurst = false }
+                )
             }
         }
     }

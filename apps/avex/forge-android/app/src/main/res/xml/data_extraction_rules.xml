@@ -15,11 +15,10 @@
         <include domain="file" path="datastore/" />
         <include domain="file" path="progress_photos/" />
         <include domain="file" path="avatar.jpg" />
-        <!-- Transient mid-restore staging files must never be cloud-backed. -->
-        <exclude domain="file" path="pending_restore.db" />
-        <exclude domain="file" path="pending_restore_prefs.pb" />
-        <exclude domain="file" path="pending_restore_photos" />
-        <exclude domain="file" path="pending_restore_avatar.jpg" />
+        <!-- Transient mid-restore staging files (pending_restore.db / _prefs.pb / _photos /
+             _avatar.jpg) are deliberately NOT listed above. Because this block uses explicit
+             <include> paths, anything not included is already excluded — so no <exclude> is needed,
+             and lint (FullBackupContent) rejects excluding a path that isn't under an <include>. -->
     </cloud-backup>
     <device-transfer>
         <include domain="database" path="forge.db" />
@@ -29,9 +28,6 @@
         <include domain="file" path="datastore/" />
         <include domain="file" path="progress_photos/" />
         <include domain="file" path="avatar.jpg" />
-        <exclude domain="file" path="pending_restore.db" />
-        <exclude domain="file" path="pending_restore_prefs.pb" />
-        <exclude domain="file" path="pending_restore_photos" />
-        <exclude domain="file" path="pending_restore_avatar.jpg" />
+        <!-- pending_restore* staging files are excluded by omission (see the cloud-backup note). -->
     </device-transfer>
 </data-extraction-rules>

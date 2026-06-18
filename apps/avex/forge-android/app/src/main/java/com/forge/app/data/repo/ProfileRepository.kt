@@ -117,6 +117,14 @@ class ProfileRepository @Inject constructor(
         // Focused streak read (two queries) rather than subscribing the whole weekly fan-out just
         // to pull one Int — see StatsRepository.currentStreakDays.
         val streakD = async { runCatching { statsRepo.currentStreakDays() }.getOrDefault(0) }
+        // Best e1RM over the 90-day window — one focused query rather than subscribing the full
+        // stats Flow. Null when no weighted sets exist yet (pre-baseline guard in StandingEngine).
+        val bestE1rmD = async {
+            runCatching {
+                val since90 = nowMs - 90L * 24 * 3600 * 1000
+                loggedSetDao.bestE1rmLbSince(since90)
+            }.getOrNull()
+        }
 
         val sessions = sessionsD.await()
         val unlockedIds = unlockedD.await()
@@ -147,7 +155,8 @@ class ProfileRepository @Inject constructor(
             StandingSnapshot(
                 sessionsPerWeek = recent.size / weeks90,
                 streakWeeks = currentStreakWeeks(sessions, zone, nowMs),
-                weeklyVolumeLb = recent.sumOf { it.totalVolumeLb ?: 0.0 } / weeks90
+                weeklyVolumeLb = recent.sumOf { it.totalVolumeLb ?: 0.0 } / weeks90,
+                bestE1rmLb = bestE1rmD.await()
             ),
             useKg
         )

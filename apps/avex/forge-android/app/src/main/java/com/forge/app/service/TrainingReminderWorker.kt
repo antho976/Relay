@@ -1,11 +1,7 @@
 package com.forge.app.service
 
-import android.app.NotificationChannel
 import android.app.NotificationManager
-import android.app.PendingIntent
 import android.content.Context
-import android.content.Intent
-import androidx.core.app.NotificationCompat
 import androidx.hilt.work.HiltWorker
 import androidx.work.BackoffPolicy
 import androidx.work.CoroutineWorker
@@ -13,8 +9,6 @@ import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
-import com.forge.app.MainActivity
-import com.forge.app.R
 import com.forge.app.data.db.dao.SessionDao
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.data.repo.StatsRepository
@@ -66,21 +60,8 @@ class TrainingReminderWorker @AssistedInject constructor(
             streakDays = streak
         ) ?: return Result.success()
 
-        ensureChannel(ctx)
-        val tap = PendingIntent.getActivity(
-            ctx, 0,
-            Intent(ctx, MainActivity::class.java).apply { flags = Intent.FLAG_ACTIVITY_SINGLE_TOP },
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        val notification = NotificationCompat.Builder(ctx, CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_stat_forge)
-            .setContentTitle(nudge.title)
-            .setContentText(nudge.body)
-            .setStyle(NotificationCompat.BigTextStyle().bigText(nudge.body))
-            .setContentIntent(tap)
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
-            .setAutoCancel(true)
-            .build()
+        ForgeNotifications.ensureChannel(ctx, CHANNEL_ID, CHANNEL_NAME, CHANNEL_DESC)
+        val notification = ForgeNotifications.build(ctx, CHANNEL_ID, nudge.title, nudge.body)
         (ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).notify(NOTIF_ID, notification)
         return Result.success()
     }
@@ -108,6 +89,8 @@ class TrainingReminderWorker @AssistedInject constructor(
 
     companion object {
         private const val CHANNEL_ID = "forge_training_reminder"
+        private const val CHANNEL_NAME = "Training reminders"
+        private const val CHANNEL_DESC = "A daily nudge to train on your scheduled days"
         private const val WORK_NAME = "forge_training_reminder"
         private const val NOTIF_ID = 2002
 
@@ -130,16 +113,6 @@ class TrainingReminderWorker @AssistedInject constructor(
             var next = now.withHour(hour.coerceIn(0, 23)).withMinute(0).withSecond(0).withNano(0)
             if (!next.isAfter(now)) next = next.plusDays(1)
             return Duration.between(now, next).toMinutes().coerceAtLeast(1)
-        }
-
-        private fun ensureChannel(context: Context) {
-            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            if (nm.getNotificationChannel(CHANNEL_ID) != null) return
-            nm.createNotificationChannel(
-                NotificationChannel(CHANNEL_ID, "Training reminders", NotificationManager.IMPORTANCE_DEFAULT).apply {
-                    description = "A daily nudge to train on your scheduled days"
-                }
-            )
         }
     }
 }

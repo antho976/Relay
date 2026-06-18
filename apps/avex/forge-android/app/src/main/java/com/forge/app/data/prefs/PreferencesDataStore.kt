@@ -184,4 +184,9 @@ object PreferenceKeys {
 
     /** ISO week id of the most recent Week Brief the user has seen — drives the "new report" banner. */
     val LAST_SEEN_COACH_WEEK_ID = stringPreferencesKey("last_seen_coach_week_id")
+
+    // ─── Rank-up celebration (#rank_up_celebration) ───────────────────────────
+    /** Ordinal of the RankTier the user last saw the profile at — used to detect a tier cross
+     *  and trigger the one-shot confetti/haptic celebration. -1 = never seen (first open). */
+    val LAST_SEEN_RANK_TIER_ORDINAL = intPreferencesKey("last_seen_rank_tier_ordinal")
 }

@@ -16,6 +16,11 @@ interface TrophyNearMissDao {
     @Query("SELECT * FROM trophy_near_miss ORDER BY recorded_at DESC LIMIT 50")
     fun observeRecent(): Flow<List<TrophyNearMiss>>
 
+    /** Drop near-miss rows for the given trophies — used to prune ones that have since unlocked,
+     *  so an already-earned trophy can't keep showing up as a near-miss / "Up next" nudge. */
+    @Query("DELETE FROM trophy_near_miss WHERE trophy_id IN (:trophyIds)")
+    suspend fun deleteForTrophies(trophyIds: Collection<String>)
+
     @Query("DELETE FROM trophy_near_miss")
     suspend fun deleteAll()
 }

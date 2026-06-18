@@ -46,6 +46,7 @@ import java.util.Locale
 @Composable
 internal fun CardioHero(
     weekMinutes: Int,
+    weekTargetMin: Int,
     weekNum: Int,
     weekLabel: String,
     weekEntries: List<CardioEntry>,
@@ -79,6 +80,32 @@ internal fun CardioHero(
         if (description.isNotEmpty()) {
             Spacer(Modifier.height(4.dp))
             Text(description, style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic)
+        }
+        // Weekly-goal progress (Cat 17) — only when a goal is set in Settings.
+        if (weekTargetMin > 0) {
+            Spacer(Modifier.height(10.dp))
+            val frac = (weekMinutes.toFloat() / weekTargetMin).coerceIn(0f, 1f)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(6.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(muted.copy(alpha = 0.2f))
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(frac)
+                        .height(6.dp)
+                        .clip(RoundedCornerShape(3.dp))
+                        .background(emphasized(onBg))
+                )
+            }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                if (weekMinutes >= weekTargetMin) "Weekly goal hit — $weekMinutes / $weekTargetMin min"
+                else "$weekMinutes / $weekTargetMin min this week",
+                style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp
+            )
         }
         Spacer(Modifier.height(16.dp))
     }

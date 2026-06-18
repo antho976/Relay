@@ -61,6 +61,7 @@ internal fun DataExportDialog(
             }
             val autoBackupSavedAt by viewModel.autoBackupSavedAt.collectAsState()
             val autoBackupFailed by viewModel.autoBackupFailed.collectAsState()
+            val noBackupWarning by viewModel.noBackupWarning.collectAsState()
             val photoCount by viewModel.photoCount.collectAsState()
             val photoLastTakenMs by viewModel.photoLastTakenMs.collectAsState()
             var confirmAutoRestore by remember { mutableStateOf(false) }
@@ -70,6 +71,13 @@ internal fun DataExportDialog(
                     "Your whole database in one file. Save it somewhere safe; restore replaces all current data and restarts the app.",
                     style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp
                 )
+                // No backup yet, but there's data worth protecting — nudge toward "Back up" (#5 P1).
+                if (noBackupWarning) {
+                    Text(
+                        "⚠ You haven't backed up yet — your training lives only on this phone. Back up now to be safe.",
+                        style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, fontSize = 10.sp
+                    )
+                }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     PillChip("Back up", selected = false) { onBackup(); onDismiss() }
                     PillChip("Restore", selected = false) { onRestore(); onDismiss() }

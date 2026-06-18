@@ -74,8 +74,9 @@ internal fun MainList(
                 .groupBy { it.page }
                 .entries
                 .sortedBy { it.key.ordinal }
+            val dialogMatches = DIALOG_ENTRIES.filter { q in it.name.lowercase() || q in it.tags }
 
-            if (grouped.isEmpty()) {
+            if (grouped.isEmpty() && dialogMatches.isEmpty()) {
                 item("empty") {
                     Text("No results", style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
@@ -86,6 +87,11 @@ internal fun MainList(
                 grouped.forEach { (page, items) ->
                     item("group-${page.name}") {
                         SearchPageGroup(page = page, items = items, onClick = { onOpenPage(page) })
+                    }
+                }
+                dialogMatches.forEach { entry ->
+                    item("dialog-${entry.name}") {
+                        SearchDialogGroup(entry = entry, onClick = onOpenDataDialog)
                     }
                 }
             }
@@ -109,6 +115,27 @@ internal fun SearchPageGroup(page: SettingsPage, items: List<SettingsItem>, onCl
             Text(item.name, style = MaterialTheme.typography.bodySmall, color = muted.copy(alpha = 0.75f),
                 fontStyle = FontStyle.Italic, modifier = Modifier.padding(top = 8.dp, start = 4.dp))
         }
+    }
+}
+
+/**
+ * Search result card for a [SettingsDialogEntry] — tapping it opens a dialog instead of
+ * navigating to a settings page. Visually matches [SearchPageGroup] so results feel consistent.
+ */
+@Composable
+internal fun SearchDialogGroup(entry: SettingsDialogEntry, onClick: () -> Unit) {
+    val onBg = MaterialTheme.colorScheme.onBackground
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val outline = MaterialTheme.colorScheme.outline
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(top = 20.dp, bottom = 8.dp)) {
+        Row(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text(entry.name.uppercase(), style = MaterialTheme.typography.labelSmall, color = onBg, letterSpacing = 1.5.sp)
+            Text("↗", style = MaterialTheme.typography.bodyMedium, color = muted)
+        }
+        HorizontalDivider(color = outline.copy(alpha = 0.25f))
+        Text(entry.hint, style = MaterialTheme.typography.bodySmall, color = muted.copy(alpha = 0.75f),
+            fontStyle = FontStyle.Italic, modifier = Modifier.padding(top = 8.dp, start = 4.dp))
     }
 }
 

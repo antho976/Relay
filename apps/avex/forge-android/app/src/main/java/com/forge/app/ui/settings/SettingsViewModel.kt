@@ -465,14 +465,30 @@ class SettingsViewModel @Inject constructor(
     private val _autoBackupFailed = kotlinx.coroutines.flow.MutableStateFlow(false)
     val autoBackupFailed: StateFlow<Boolean> = _autoBackupFailed.asStateFlow()
 
+    /** True when there's data worth protecting but no backup exists yet — drives a Settings nudge (#5 P1). */
+    private val _noBackupWarning = kotlinx.coroutines.flow.MutableStateFlow(false)
+    val noBackupWarning: StateFlow<Boolean> = _noBackupWarning.asStateFlow()
+
+    /** Summary of the live data a restore would overwrite, e.g. "12 sessions · 5 progress photos". */
+    private val _restoreImpact = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+    val restoreImpact: StateFlow<String?> = _restoreImpact.asStateFlow()
+
     /** Refresh the auto-backup date + failure state — call when the data dialog opens (the worker may have run since). */
     fun refreshAutoBackupInfo() = viewModelScope.launch {
-        // The two checks are File.exists()/lastModified() — keep them off the main thread.
-        val (savedAtMs, failed) = withContext(Dispatchers.IO) {
-            backupRepo.autoBackupSavedAtMs() to backupRepo.autoBackupFailed()
+        // All checks are File / DB reads — keep them off the main thread.
+        data class Info(val savedAtMs: Long?, val failed: Boolean, val noBackup: Boolean, val impact: String)
+        val info = withContext(Dispatchers.IO) {
+            Info(
+                backupRepo.autoBackupSavedAtMs(),
+                backupRepo.autoBackupFailed(),
+                backupRepo.shouldWarnNoBackup(),
+                backupRepo.restoreImpactSummary()
+            )
         }
-        _autoBackupSavedAt.value = savedAtMs?.let { formatMediumDate(it) }
-        _autoBackupFailed.value = failed
+        _autoBackupSavedAt.value = info.savedAtMs?.let { formatMediumDate(it) }
+        _autoBackupFailed.value = info.failed
+        _noBackupWarning.value = info.noBackup
+        _restoreImpact.value = info.impact
     }
 
     // ── Progress-photo info (tasks 3 + 4: factory-reset warning + data-dialog stake indicator) ──────
@@ -506,5 +522,18 @@ class SettingsViewModel @Inject constructor(
                     if (n == 0) "No crash logs yet — nothing to export." else "Exported $n crash log(s)."
             }
             .onFailure { _statusMessage.value = "Crash log export failed: ${it.message}" }
+    }
+
+    // ── In-app crash log viewer ────────────────────────────────────────────────
+    // null = not loaded yet (show "Loading…"); emptyList = loaded, no crashes (show the all-clear).
+    // Distinguishing the two avoids a false "No crashes recorded" flash before the IO read returns.
+    private val _crashLogs = MutableStateFlow<List<Pair<String, String>>?>(null)
+    val crashLogs: StateFlow<List<Pair<String, String>>?> = _crashLogs.asStateFlow()
+
+    /** Load the most recent crash logs from filesDir/crashes — call when the viewer opens. */
+    fun loadCrashLogs() = viewModelScope.launch {
+        _crashLogs.value = withContext(Dispatchers.IO) {
+            backupRepo.readRecentCrashLogs()
+        }
     }
 }

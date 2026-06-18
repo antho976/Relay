@@ -43,6 +43,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.data.repo.CoachBrief
 import com.forge.app.data.repo.CoachRepository
+import com.forge.app.data.repo.CoachWatch
 import com.forge.app.domain.units.formatVolumeCompact
 import com.forge.app.ui.gym.stats.components.statsEntrance
 import com.forge.app.ui.theme.LocalForgeSettings
@@ -101,6 +102,10 @@ fun CoachBriefScreen(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 textAlign = androidx.compose.ui.text.style.TextAlign.Center
                             )
+                            Spacer(Modifier.height(14.dp))
+                            // Item 5: plain-English gate list while still in the data-collection phase.
+                            // Shows the specific signals the coach needs beyond just session count.
+                            LearningGateList(cd)
                         }
                         // Threshold met (sessionsToGo == 0) but the weekly pass hasn't written a brief yet:
                         // don't tell someone who's already logged enough to "finish a few workouts" (CO1).
@@ -143,6 +148,69 @@ fun CoachBriefScreen(
     }
 }
 
+/**
+ * Item 5: plain-English list of what the coach still needs from the user while it's learning.
+ * Each gate item shows a check (done) or pending bullet so the user knows what's left.
+ * Only shown when sessionsToGo > 0 (i.e. we have a live CoachWatch to read signals from).
+ */
+@Composable
+private fun LearningGateList(cd: CoachWatch) {
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val onBg = MaterialTheme.colorScheme.onBackground
+
+    // Identify which recovery signals are already active from the CoachWatch signals list.
+    val hasMoods = cd.recoverySignals.firstOrNull { it.label == "Effort check-ins" }?.active == true
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Text(
+            "What I still need from you",
+            style = MaterialTheme.typography.labelMedium,
+            color = muted
+        )
+        Spacer(Modifier.height(2.dp))
+
+        // Gate 1: sessions — always shown since sessionsToGo > 0 guarantees this is incomplete
+        GateItem(
+            done = false,
+            text = "${cd.sessionsToGo} more session${if (cd.sessionsToGo == 1) "" else "s"} — I need a baseline to act on",
+            onBg = onBg, muted = muted
+        )
+        // Gate 2: mood/effort check-in — drives the recovery signal the coach reads every week.
+        // Sourced directly from CoachWatch.recoverySignals so the display matches the lab exactly.
+        GateItem(
+            done = hasMoods,
+            text = if (hasMoods) "Effort check-in logged — recovery signal active"
+                   else "Rate how a session felt (tap the smiley at session end)",
+            onBg = onBg, muted = muted
+        )
+        // Gate 3: bodyweight — not a hard gate but helps calibration; always shown as a nudge
+        // since we can't read the logged value from CoachWatch (no DB query here), so phrased
+        // as a "nice to have" rather than a blocking check.
+        GateItem(
+            done = false,
+            text = "Log a bodyweight when you get a chance (Profile → Quick log)",
+            onBg = onBg, muted = muted
+        )
+    }
+}
+
+@Composable
+private fun GateItem(done: Boolean, text: String, onBg: androidx.compose.ui.graphics.Color, muted: androidx.compose.ui.graphics.Color) {
+    val bullet = if (done) "✓" else "·"
+    val color = if (done) muted else onBg
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(bullet, style = MaterialTheme.typography.bodySmall, color = if (done) MaterialTheme.colorScheme.primary else muted)
+        Text(text, style = MaterialTheme.typography.bodySmall, color = color)
+    }
+}
+
 @Composable
 private fun BriefContent(
     brief: CoachBrief,
@@ -173,6 +241,9 @@ private fun BriefContent(
         Column(Modifier.statsEntrance(0)) {
             Text(brief.pass.weekId.uppercase(), style = MaterialTheme.typography.labelMedium, color = emphasized(muted))
             Spacer(Modifier.height(4.dp))
+            // Item 3: distinguish explicit header states — proposals waiting / pre-baseline countdown /
+            // "coach agrees the plan is working" (has prior applied changes and holding) / neutral steady.
+            // The old single "else" was ambiguous — "watching" and "agreeing plan is fine" feel different.
             Text(
                 when {
                     brief.pass.status == CoachRepository.STATUS_PROPOSED || brief.pass.status == CoachRepository.STATUS_APPLIED ->
@@ -181,6 +252,11 @@ private fun BriefContent(
                     brief.sessionsToGo > 0 ->
                         "Still learning — ${brief.sessionsLogged} of ${brief.minSessions} sessions logged. " +
                             "${brief.sessionsToGo} more and I'll start calling weekly adjustments."
+                    // Prior applied changes are in effect and the coach is holding: the plan reflects those
+                    // tweaks — this is an affirmative hold, not just silence.
+                    brief.previousApplied.isNotEmpty() ->
+                        "The coach agrees the plan is working — your applied changes are in effect. Nothing new this week."
+                    // Active and holding with no prior history: genuinely watching, no signal to act on yet.
                     else -> "The coach is watching and learning — anything it would change shows up here as a suggestion. Nothing changes unless you apply it."
                 },
                 style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic
@@ -203,6 +279,45 @@ private fun BriefContent(
                 BriefStatRow("PRs", "${r.prsLastWeek}")
                 if (r.trackedLifts > 0) BriefStatRow("Lifts", "${r.trackedLifts} tracked · ${r.stalledLifts} stalled")
                 BriefStatRow("Recovery", r.fatigueBand + (r.fatigueScore?.let { "  (fatigue $it)" } ?: ""))
+                // Sub-threshold fatigue tension (Cat 2): when fatigue is climbing but not yet a deload,
+                // surface it as a forward-looking nudge instead of a silent band label.
+                if (r.fatigueBand == "Building") {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "Fatigue is building — not a deload yet, but bank the gains with more sleep and easier days before it forces a down week.",
+                        style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic
+                    )
+                }
+            }
+        }
+
+        // ── What changed (Item 2) ──────────────────────────────────────────────
+        // Shows the changes applied from the PREVIOUS brief so the user can confirm they're in effect.
+        // Hidden when there's nothing applied yet (very first brief or all prior weeks were holds).
+        if (brief.previousApplied.isNotEmpty()) {
+            Spacer(Modifier.height(20.dp))
+            HorizontalDivider(color = outline.copy(alpha = 0.3f))
+            Spacer(Modifier.height(16.dp))
+            Column(Modifier.statsEntrance(1)) {
+                Text("WHAT CHANGED", style = MaterialTheme.typography.labelMedium, color = emphasized(muted))
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "From last brief — these changes are now in effect.",
+                    style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic
+                )
+                Spacer(Modifier.height(10.dp))
+                brief.previousApplied.forEach { d ->
+                    Column(Modifier.fillMaxWidth().padding(bottom = 10.dp)) {
+                        Text(d.summary, style = MaterialTheme.typography.bodyMedium, color = onBg)
+                        Spacer(Modifier.height(2.dp))
+                        val statusLabel = when (d.status) {
+                            CoachRepository.STATUS_FOLDED -> "absorbed into baseline ✓"
+                            "reverted" -> "undone"
+                            else -> "in effect ✓"
+                        }
+                        Text(statusLabel, style = MaterialTheme.typography.bodySmall, color = muted)
+                    }
+                }
             }
         }
 

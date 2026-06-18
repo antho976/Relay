@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -25,6 +26,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.AccountCircle
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -46,9 +48,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import com.forge.app.ui.common.FirstTouchTip
 import com.forge.app.ui.common.clickableLabeled
+import com.forge.app.ui.overview.state.MilestoneEvent
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -130,6 +134,19 @@ private fun DismissibleNotice(text: String, onBg: Color, muted: Color, onDismiss
     }
 }
 
+/** Top-bar icon with a ≥44dp tappable area + spoken label, while the glyph stays visually small. */
+@Composable
+private fun TopBarIconButton(icon: ImageVector, label: String, tint: Color, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .sizeIn(minWidth = 44.dp, minHeight = 44.dp)
+            .clickableLabeled(label, onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(20.dp))
+    }
+}
+
 @Composable
 fun OverviewScreen(
     onStartSession: (dayKey: String) -> Unit,
@@ -156,6 +173,10 @@ fun OverviewScreen(
     var showDayEdit by remember { mutableStateOf(false) }
     var showHistory by remember { mutableStateOf(false) }
     var showSampleDataConfirm by remember { mutableStateOf(false) }
+    var showHelp by remember { mutableStateOf(false) }
+    // A milestone "fires and vanishes" otherwise (it's marked shown immediately) — capture it into a
+    // transient banner so the user actually sees it (#Overview pendingMilestone).
+    var milestoneToast by remember { mutableStateOf<MilestoneEvent?>(null) }
 
     if (showSampleDataConfirm) {
         AlertDialog(
@@ -178,7 +199,14 @@ fun OverviewScreen(
     }
 
     LaunchedEffect(state.pendingMilestone) {
-        state.pendingMilestone?.let { event -> viewModel.onMilestoneShown(event.id) }
+        state.pendingMilestone?.let { event ->
+            milestoneToast = event
+            viewModel.onMilestoneShown(event.id) // persist so it won't recompute/re-fire
+        }
+    }
+    // Auto-dismiss the celebratory banner after a few seconds (it's a toast, not a task).
+    LaunchedEffect(milestoneToast) {
+        if (milestoneToast != null) { kotlinx.coroutines.delay(6000); milestoneToast = null }
     }
 
     // Content rises + fades in on open — a premium reveal instead of snapping in.
@@ -218,6 +246,22 @@ fun OverviewScreen(
         HistorySheet(
             onDismiss = { showHistory = false },
             onOpenSession = { id -> showHistory = false; onOpenSession(id) }
+        )
+    }
+
+    if (showHelp) {
+        AlertDialog(
+            onDismissRequest = { showHelp = false },
+            title = { Text("Getting around") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("• This screen shows your next workout, the week so far, recent sessions, and the coach.")
+                    Text("• Tap a day to start it; long-press a day card for options.")
+                    Text("• Your stats, PRs and rank live in the Gym → Stats tabs and your profile (top-right).")
+                    Text("• Everything's offline, on this phone. Settings (the gear) holds backup, units, the coach, and a full gestures guide.")
+                }
+            },
+            confirmButton = { TextButton(onClick = { showHelp = false }) { Text("Got it") } }
         )
     }
 
@@ -272,18 +316,29 @@ fun OverviewScreen(
                         Text(weekRangeText, style = MaterialTheme.typography.labelSmall,
                             fontSize = 9.sp, color = muted.copy(alpha = 0.8f))
                     }
-                    Spacer(Modifier.width(8.dp))
-                    Icon(
-                        Icons.Default.Settings, contentDescription = "Settings",
-                        tint = muted.copy(alpha = 0.7f),
-                        modifier = Modifier.size(16.dp).clickable(role = Role.Button) { onGoToSettings() }
-                    )
-                    Spacer(Modifier.width(10.dp))
-                    Icon(
-                        Icons.Default.AccountCircle, contentDescription = "You",
-                        tint = muted.copy(alpha = 0.7f),
-                        modifier = Modifier.size(18.dp).clickable(role = Role.Button) { onOpenProfile() }
-                    )
+                    Spacer(Modifier.width(2.dp))
+                    // ≥44dp touch targets (a11y) — the glyphs stay small, the tappable area doesn't.
+                    TopBarIconButton(Icons.Default.Info, "Getting around Forge", muted.copy(alpha = 0.7f)) { showHelp = true }
+                    TopBarIconButton(Icons.Default.Settings, "Settings", muted.copy(alpha = 0.7f)) { onGoToSettings() }
+                    TopBarIconButton(Icons.Default.AccountCircle, "You", muted.copy(alpha = 0.7f)) { onOpenProfile() }
+                }
+            }
+
+            // Milestone banner — the celebratory moment that used to fire and vanish silently.
+            milestoneToast?.let { ms ->
+                Spacer(Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(accent.copy(alpha = 0.14f))
+                        .clickableLabeled("Dismiss") { milestoneToast = null }
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text("✦", color = accent, style = MaterialTheme.typography.titleSmall)
+                    Text(ms.message, style = MaterialTheme.typography.bodyMedium, color = onBg, modifier = Modifier.weight(1f))
                 }
             }
 
@@ -305,6 +360,16 @@ fun OverviewScreen(
                     modifier = Modifier
                         .clickableLabeled("Load 8 weeks of sample data to explore the app") { showSampleDataConfirm = true }
                         .padding(start = 4.dp, top = 2.dp, bottom = 2.dp)
+                )
+            }
+
+            // First-week guidance (Cat 7): started but brand-new — set expectations for what fills in as
+            // they keep logging. Sits between the 0-session welcome and being established.
+            if (state.totalFinishedSessions in 1..4) {
+                Spacer(Modifier.height(16.dp))
+                FirstTouchTip(
+                    "Your first week.",
+                    "Keep logging — your Stats, PRs and rank fill in fast, and the coach starts making weekly calls once it's seen enough sessions. Tap ⓘ up top for a quick tour anytime."
                 )
             }
 
@@ -595,6 +660,20 @@ fun OverviewScreen(
                     onClick = onGoToStats, onBg = onBg, muted = muted, outline = outline, modifier = Modifier.weight(1f))
                 TrophiesTile(unlocked = state.trophiesUnlocked, total = Trophies.all.size,
                     onClick = onGoToTrophies, onBg = onBg, muted = muted, outline = outline, modifier = Modifier.weight(1f))
+            }
+
+            // "Up next" trophy — the locked trophy closest to unlocking (a near-miss retention hook, #136).
+            state.topNearMiss?.let { nudge ->
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "▲ NEXT TROPHY · $nudge",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = accent.copy(alpha = 0.9f),
+                    fontSize = 10.sp,
+                    modifier = Modifier
+                        .clickableLabeled("Trophy almost unlocked — $nudge") { onGoToTrophies() }
+                        .padding(vertical = 2.dp)
+                )
             }
 
             Spacer(Modifier.height(8.dp))

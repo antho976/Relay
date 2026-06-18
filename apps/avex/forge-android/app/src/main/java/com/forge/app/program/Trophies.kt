@@ -60,6 +60,17 @@ sealed interface UnlockRule {
     // ─── Goals tie-in ────────────────────────────────────────────────────────
     /** Reached at least [n] of the weight goals the user set on their lifts. */
     data class ExerciseGoalsAchievedAtLeast(val n: Int) : UnlockRule
+    // ─── Lifetime tonnage ─────────────────────────────────────────────────────
+    /** Accumulated lifetime tonnage (lb) across all finished, tracked sessions. */
+    data class LifetimeTonnageAtLeast(val lb: Double) : UnlockRule
+    // ─── Training anniversary ─────────────────────────────────────────────────
+    /** First finished session was at least 365 days ago. */
+    data object TrainingAnniversaryRule : UnlockRule
+    // ─── Cardio ───────────────────────────────────────────────────────────────
+    /** Logged at least [n] non-rest cardio sessions. */
+    data class CardioSessionsAtLeast(val n: Int) : UnlockRule
+    /** Accumulated at least [km] km of cardio distance. */
+    data class CardioDistanceAtLeastKm(val km: Double) : UnlockRule
 }
 
 /** Difficulty tier for a trophy — affects display and cumulative score (#150). */
@@ -432,6 +443,59 @@ object Trophies {
             id = "goals_5", name = "Goal Getter", description = "Reached 5 of your lift goals",
             category = TrophyCategory.STRENGTH, icon = TrophyIcon.CROWN,
             unlock = UnlockRule.ExerciseGoalsAchievedAtLeast(5), tier = TrophyTier.HARD
+        ),
+
+        // ─── Lifetime tonnage ─────────────────────────────────────────────────
+        Trophy(
+            id = "tonnage_100k", name = "100,000 Pound Club",
+            description = "Lifted 100,000+ lb total across all sessions",
+            category = TrophyCategory.STRENGTH, icon = TrophyIcon.BOLT,
+            unlock = UnlockRule.LifetimeTonnageAtLeast(100_000.0), tier = TrophyTier.EASY
+        ),
+        Trophy(
+            id = "tonnage_500k", name = "Half a Million",
+            description = "Lifted 500,000+ lb lifetime",
+            category = TrophyCategory.STRENGTH, icon = TrophyIcon.BOLT,
+            unlock = UnlockRule.LifetimeTonnageAtLeast(500_000.0), tier = TrophyTier.MEDIUM
+        ),
+        Trophy(
+            id = "tonnage_1m", name = "Million Pound Forge",
+            description = "Lifted 1,000,000+ lb lifetime",
+            category = TrophyCategory.STRENGTH, icon = TrophyIcon.CROWN,
+            unlock = UnlockRule.LifetimeTonnageAtLeast(1_000_000.0), tier = TrophyTier.HARD
+        ),
+        Trophy(
+            id = "tonnage_5m", name = "Iron Legend",
+            description = "Lifted 5,000,000+ lb lifetime",
+            category = TrophyCategory.STRENGTH, icon = TrophyIcon.CROWN,
+            unlock = UnlockRule.LifetimeTonnageAtLeast(5_000_000.0), tier = TrophyTier.LEGENDARY
+        ),
+
+        // ─── Training anniversary ─────────────────────────────────────────────
+        Trophy(
+            id = "training_anniversary", name = "One Year Strong",
+            description = "A full year since your first training session",
+            category = TrophyCategory.CONSISTENCY, icon = TrophyIcon.CALENDAR,
+            unlock = UnlockRule.TrainingAnniversaryRule, tier = TrophyTier.HARD
+        ),
+        // ─── Cardio (#cardio trophies) ────────────────────────────────────────────
+        Trophy(
+            id = "cardio_first", name = "First Steps",
+            description = "Logged your first cardio session",
+            category = TrophyCategory.FIRSTS, icon = TrophyIcon.HEART,
+            unlock = UnlockRule.CardioSessionsAtLeast(1), tier = TrophyTier.EASY
+        ),
+        Trophy(
+            id = "cardio_25", name = "Cardio Habit",
+            description = "Logged 25 cardio sessions",
+            category = TrophyCategory.CONSISTENCY, icon = TrophyIcon.HEART,
+            unlock = UnlockRule.CardioSessionsAtLeast(25), tier = TrophyTier.MEDIUM
+        ),
+        Trophy(
+            id = "cardio_100km", name = "Century Club",
+            description = "Covered 100 km of cardio distance",
+            category = TrophyCategory.CONSISTENCY, icon = TrophyIcon.BOLT,
+            unlock = UnlockRule.CardioDistanceAtLeastKm(100.0), tier = TrophyTier.HARD
         )
     )
 

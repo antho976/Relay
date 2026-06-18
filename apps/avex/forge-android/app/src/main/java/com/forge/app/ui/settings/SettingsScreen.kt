@@ -73,6 +73,18 @@ internal val ALL_ROWS = listOf(
 
 internal data class SettingsItem(val name: String, val tags: String, val page: SettingsPage)
 
+/** A synthetic search entry that triggers a dialog rather than navigating to a page. */
+internal data class SettingsDialogEntry(val name: String, val hint: String, val tags: String)
+
+/** Entries that match a search query and open a dialog instead of a settings page. */
+internal val DIALOG_ENTRIES = listOf(
+    SettingsDialogEntry(
+        name = "Export data",
+        hint = "Backup · restore · CSV · PDF",
+        tags = "data backup export restore csv pdf weekly json sessions full import"
+    )
+)
+
 internal val ALL_ITEMS = listOf(
     SettingsItem("AMOLED mode", "amoled black dark theme display", SettingsPage.Appearance),
     SettingsItem("Compact set logging", "compact logging display density", SettingsPage.Appearance),
@@ -121,6 +133,7 @@ fun SettingsScreen(
     val context = LocalContext.current
     val statusMessage by viewModel.statusMessage.collectAsStateWithLifecycle()
     val restoreSucceeded by viewModel.restoreSucceeded.collectAsStateWithLifecycle()
+    val restoreImpact by viewModel.restoreImpact.collectAsStateWithLifecycle()
     var pendingRestoreUri by remember { mutableStateOf<Uri?>(null) }
     val dateStamp = remember {
         java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.getDefault()).format(java.util.Date())
@@ -270,7 +283,7 @@ fun SettingsScreen(
             SettingsPage.Recovery -> RecoveryPage(Modifier.padding(inner))
             SettingsPage.ExercisePrefs -> ExercisePrefsPage(state, viewModel, Modifier.padding(inner))
             SettingsPage.Vacation -> VacationPage(viewModel, Modifier.padding(inner))
-            SettingsPage.About -> AboutPage(Modifier.padding(inner))
+            SettingsPage.About -> AboutPage(Modifier.padding(inner), viewModel)
         }
     }
 
@@ -297,7 +310,16 @@ fun SettingsScreen(
         AlertDialog(
             onDismissRequest = { pendingRestoreUri = null },
             title = { Text("Restore from backup?") },
-            text = { Text("This replaces ALL current data with the chosen backup, then restarts the app. It can't be undone — back up first if you're unsure.") },
+            text = {
+                val impact = restoreImpact
+                Text(
+                    buildString {
+                        append("This replaces ALL current data")
+                        if (!impact.isNullOrBlank()) append(" — your $impact")
+                        append(" — with the chosen backup, then restarts the app. It can't be undone; back up first if you're unsure.")
+                    }
+                )
+            },
             confirmButton = {
                 TextButton(onClick = { viewModel.restoreDatabase(uri); pendingRestoreUri = null }) {
                     Text("Restore & restart", color = MaterialTheme.colorScheme.error)

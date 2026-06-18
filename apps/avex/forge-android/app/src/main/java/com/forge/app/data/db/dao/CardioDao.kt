@@ -44,6 +44,14 @@ interface CardioDao {
     @Query("SELECT SUM(distance_km) FROM cardio_entry WHERE date >= :sinceEpochMs AND type != :excludeType AND distance_km IS NOT NULL")
     fun observeDistanceKmSince(sinceEpochMs: Long, excludeType: String = "rest"): Flow<Double?>
 
+    /** Count of non-rest cardio sessions ever (cardio trophies). */
+    @Query("SELECT COUNT(*) FROM cardio_entry WHERE type != :excludeType")
+    suspend fun totalSessions(excludeType: String = "rest"): Int
+
+    /** Total cardio distance (km) ever, excluding rest entries (cardio trophies). */
+    @Query("SELECT SUM(distance_km) FROM cardio_entry WHERE type != :excludeType AND distance_km IS NOT NULL")
+    suspend fun totalDistanceKm(excludeType: String = "rest"): Double?
+
     @Query("DELETE FROM cardio_entry")
     suspend fun deleteAll()
 }

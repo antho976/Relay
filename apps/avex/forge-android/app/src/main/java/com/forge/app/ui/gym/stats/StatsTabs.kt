@@ -202,6 +202,13 @@ internal fun LazyListScope.snapshotTab(
         }
         item("insights-bottom") { Spacer(Modifier.height(8.dp)) }
     }
+    state.coachWatch?.let { watch ->
+        item("coach-watch") {
+            EntranceItem(0) {
+                CoachWatchCard(watch = watch, onBg = c.onBg, muted = c.muted, accent = c.accent, outline = c.outline)
+            }
+        }
+    }
     // Notes search is otherwise unreachable (its callback was plumbed here but never rendered) —
     // surface it where it belongs, alongside the rest of the training read-out.
     item("notes-search") {

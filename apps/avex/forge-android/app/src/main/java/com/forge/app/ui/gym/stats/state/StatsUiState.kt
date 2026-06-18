@@ -91,7 +91,9 @@ data class StatsUiState(
     /** Median session length per ISO week (Trends duration trend). */
     val weeklyDurations: List<WeeklyDuration> = emptyList(),
     /** User's sex ("male" | "female" | "") — selects the bodyweight-relative strength bands. */
-    val userSex: String = ""
+    val userSex: String = "",
+    /** Coach transparency portrait for the Snapshot tab — null while loading or on failure. */
+    val coachWatch: com.forge.app.data.repo.CoachWatch? = null
 )
 
 /** One ISO week's total tonnage for the Volume trend bars. */

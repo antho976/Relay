@@ -130,6 +130,23 @@ interface LoggedSetDao {
     """)
     fun observeAllFinishedSetsWithSession(): Flow<List<SetWithExerciseAndSession>>
 
+    /**
+     * Best estimated 1-rep-max (lb, Epley) across working sets (non-assisted, non-skipped, tracked)
+     * since [sinceMs] — computed in SQL so the profile standing engine doesn't load every set into
+     * memory just to take a max. Mirrors [com.forge.app.domain.adapt.E1rm.epley]: reps ≤ 1 → the raw
+     * weight, else weight·(1 + reps/30). Null when no qualifying weighted set exists (pre-baseline).
+     */
+    @Query("""
+        SELECT MAX(CASE WHEN ls.reps <= 1 THEN ls.weight_lb ELSE ls.weight_lb * (1 + ls.reps / 30.0) END)
+        FROM logged_set ls
+        INNER JOIN logged_exercise le ON ls.logged_exercise_id = le.id
+        INNER JOIN session s ON le.session_id = s.id
+        WHERE s.finished_at IS NOT NULL AND s.started_at >= :sinceMs
+          AND s.is_untracked = 0 AND le.skipped = 0 AND ls.is_assisted = 0
+          AND ls.weight_lb IS NOT NULL AND ls.weight_lb > 0
+    """)
+    suspend fun bestE1rmLbSince(sinceMs: Long): Double?
+
     /** Max reps in any single logged set. */
     @Query("SELECT MAX(reps) FROM logged_set")
     suspend fun maxRepsAnySet(): Int?

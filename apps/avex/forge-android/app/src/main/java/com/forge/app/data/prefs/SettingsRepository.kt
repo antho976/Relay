@@ -539,6 +539,16 @@ class SettingsRepository @Inject constructor(
             context.forgePreferences.edit { prefs -> section.keys.forEach { prefs.remove(it) } }
     }
 
+    // ─── Rank-up celebration ──────────────────────────────────────────────────
+
+    /** Ordinal of the [com.forge.app.domain.rank.RankTier] the user last saw the profile at.
+     *  -1 = never opened (first ever profile open). Used to detect a tier upgrade and trigger
+     *  the one-shot confetti/haptic celebration. */
+    val lastSeenRankTierOrdinal: Flow<Int> = context.forgePreferences.data
+        .map { it[PreferenceKeys.LAST_SEEN_RANK_TIER_ORDINAL] ?: -1 }
+    suspend fun setLastSeenRankTierOrdinal(ordinal: Int) =
+        context.forgePreferences.edit { it[PreferenceKeys.LAST_SEEN_RANK_TIER_ORDINAL] = ordinal }
+
     /** Returns true if the current wall-clock time falls within the user's quiet hours window (#122). */
     suspend fun isQuietNow(): Boolean {
         val prefs = context.forgePreferences.data.firstOrNull() ?: return false

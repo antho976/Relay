@@ -311,6 +311,23 @@ class BackupRepository @Inject constructor(
     /** True when the most recent auto-backup attempt failed and none has succeeded since. */
     fun autoBackupFailed(): Boolean = File(context.filesDir, AUTO_BACKUP_FAILED_MARKER).exists()
 
+    /** True once any restorable backup exists — the silent weekly auto-slot OR a manual export (#5 P1). */
+    fun hasAnyBackup(): Boolean =
+        autoBackupSavedAtMs() != null || File(context.filesDir, MANUAL_BACKUP_MARKER).exists()
+
+    /** Nudge the user to back up when they have data worth protecting but no backup exists yet. */
+    suspend fun shouldWarnNoBackup(): Boolean = !hasAnyBackup() && sessionDao.finishedCount() > 0
+
+    /** Plain-English summary of the live data a restore would REPLACE — shown in the confirm dialog. */
+    suspend fun restoreImpactSummary(): String {
+        val sessions = sessionDao.finishedCount()
+        val photos = runCatching { photoRepo.photos().size }.getOrDefault(0)
+        return buildList {
+            add("$sessions session${if (sessions == 1) "" else "s"}")
+            if (photos > 0) add("$photos progress photo${if (photos == 1) "" else "s"}")
+        }.joinToString(" · ")
+    }
+
     // ─── Complete database backup & restore ───────────────────────────────────
     // Unlike the JSON exports above (lossy + app-private), these capture the *entire*
     // database file PLUS the DataStore preferences (settings + the whole program-generation
@@ -377,6 +394,9 @@ class BackupRepository @Inject constructor(
         // Only reached on success: a fresh manual backup clears any stale "auto-backup failed" notice
         // (the user now has a recent backup, which is exactly what that warning asks them to make).
         File(context.filesDir, AUTO_BACKUP_FAILED_MARKER).delete()
+        // Record that the user has made a real, user-controlled backup — drives the "no backup yet"
+        // nudge ([shouldWarnNoBackup]). The silent weekly auto-slot also counts (see [hasAnyBackup]).
+        runCatching { File(context.filesDir, MANUAL_BACKUP_MARKER).writeText("1") }
     }
 
     /**
@@ -584,6 +604,13 @@ class BackupRepository @Inject constructor(
                 a.copyTo(pendingAvatar, overwrite = true)
             }
 
+            // The restored dataset is a different set of data — it hasn't been independently backed up
+            // from this install, so drop the "user has backed up" latch. Otherwise the no-backup nudge
+            // ([shouldWarnNoBackup]) would stay permanently suppressed after restoring an old backup,
+            // leaving newly-accumulated data unprotected with no warning (#5 P1). The auto-backup slot,
+            // if present, still counts toward [hasAnyBackup].
+            runCatching { File(context.filesDir, MANUAL_BACKUP_MARKER).delete() }
+
             return@withContext RestoreOutcome.SUCCESS
         } catch (e: java.util.zip.ZipException) {
             // A truncated or malformed ZIP (e.g. a backup that got corrupted in an email / cloud
@@ -621,6 +648,34 @@ class BackupRepository @Inject constructor(
             file.path, null, android.database.sqlite.SQLiteDatabase.OPEN_READONLY
         ).use { it.version }
     }.getOrDefault(Int.MAX_VALUE)
+
+    /**
+     * Read the most recent crash log files from filesDir/crashes in-app (newest-first).
+     * Returns a list of (filename, fileText) pairs, capped at [limit] entries.
+     * Each file's text is truncated to 20 KB so the UI string stays sane.
+     */
+    suspend fun readRecentCrashLogs(limit: Int = 10): List<Pair<String, String>> = withContext(Dispatchers.IO) {
+        val dir = File(context.filesDir, "crashes")
+        val files = dir.listFiles()
+            ?.filter { it.isFile }
+            ?.sortedByDescending { it.lastModified() }
+            ?.take(limit)
+            ?: emptyList()
+        files.map { f ->
+            val text = runCatching {
+                f.inputStream().use { ins ->
+                    val bytes = ins.readBytes()
+                    val cap = 20 * 1024 // 20 KB
+                    if (bytes.size > cap) {
+                        String(bytes, 0, cap, Charsets.UTF_8) + "\n… [truncated]"
+                    } else {
+                        String(bytes, Charsets.UTF_8)
+                    }
+                }
+            }.getOrElse { "Could not read file: ${it.message}" }
+            f.name to text
+        }
+    }
 
     /**
      * Zip the crash logs (ForgeApp writes them to filesDir/crashes) into [uri].
@@ -677,6 +732,8 @@ class BackupRepository @Inject constructor(
         private const val AUTO_BACKUP_NAME = "forge_auto_backup.zip"
         /** Marker written when the auto-backup worker gives up (storage full / corrupt) — see [recordAutoBackupFailure]. */
         private const val AUTO_BACKUP_FAILED_MARKER = "auto_backup_failed"
+        /** Marker written after a successful user-initiated backup ([backupToUri]) — see [hasAnyBackup]. */
+        private const val MANUAL_BACKUP_MARKER = "manual_backup_done"
         /** Staged restored photos; ForgeApp.applyPendingRestore swaps this over progress_photos/ at boot. */
         private const val PENDING_PHOTOS_DIR = "pending_restore_photos"
         /** Backup-ZIP entry for the profile avatar — derived from AvatarRepository so a rename can't desync. */

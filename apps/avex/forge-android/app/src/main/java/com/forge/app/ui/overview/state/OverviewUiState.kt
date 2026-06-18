@@ -82,6 +82,8 @@ data class OverviewUiState(
     /** Combined gym + cardio, sorted newest first, capped at 2. */
     val recentItems: List<OverviewRecentItem> = emptyList(),
     val trophiesUnlocked: Int = 0,
+    /** "X to go · Trophy Name" for the locked trophy closest to unlocking, or null (#136 near-miss). */
+    val topNearMiss: String? = null,
     val cardioDistanceKm: Double = 0.0,
     /** Day key of an in-progress (unfinished) workout, if any — drives the resume banner + CTA. */
     val activeSessionDayKey: String? = null,

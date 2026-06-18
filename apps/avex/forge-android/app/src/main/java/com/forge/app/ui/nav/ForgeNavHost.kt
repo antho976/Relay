@@ -60,7 +60,7 @@ import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.trophies.TrophiesScreen
 
 @Composable
-fun ForgeNavHost() {
+fun ForgeNavHost(initialDayKey: String? = null) {
     val nav = rememberNavController()
     // App-wide "push" navigation (Material shared-axis X): a short directional slide + fade
     // rather than a full-width slide-and-fade — the eye travels less so it reads snappier.
@@ -81,6 +81,17 @@ fun ForgeNavHost() {
         label = "cold-start"
     )
     LaunchedEffect(Unit) { appeared = true }
+
+    // Widget deep-link: open the carried day on top of Overview (the start destination) so Back
+    // returns home. Cardio days route to the cardio screen; unknown/stale keys are ignored. Fires
+    // once — MainActivity only supplies a key on a fresh launch, not on a config-change recreate.
+    LaunchedEffect(initialDayKey) {
+        val key = initialDayKey ?: return@LaunchedEffect
+        when {
+            key.startsWith("cardio") -> nav.navigate(Routes.CARDIO)
+            key in com.forge.app.program.Program.dayKeys -> nav.navigate(Routes.gymDay(key))
+        }
+    }
 
     NavHost(
         navController = nav,

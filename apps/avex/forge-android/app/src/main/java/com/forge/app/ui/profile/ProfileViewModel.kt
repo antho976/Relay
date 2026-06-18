@@ -35,6 +35,10 @@ class ProfileViewModel @Inject constructor(
     private val _state = MutableStateFlow(ProfileUiState())
     val state: StateFlow<ProfileUiState> = _state.asStateFlow()
 
+    /** True on this profile open iff the user just crossed into a higher tier since last visit. */
+    private val _showRankUpCelebration = MutableStateFlow(false)
+    val showRankUpCelebration: StateFlow<Boolean> = _showRankUpCelebration.asStateFlow()
+
     init { load() }
 
     private fun load() = viewModelScope.launch {
@@ -46,6 +50,23 @@ class ProfileViewModel @Inject constructor(
         profileRepo.cached()?.let { _state.value = buildState(it, name, photos, hasAvatar, avatarStamp) }
         val data = profileRepo.load()
         _state.value = buildState(data, name, photos, hasAvatar, avatarStamp)
+
+        // ── Rank-up celebration detection ─────────────────────────────────────
+        // Compare the current tier to the last-seen tier ordinal. A higher ordinal = tier upgrade.
+        // -1 = first ever profile open → write current tier as baseline with no celebration (avoid
+        // surprising brand-new users who haven't earned anything yet).
+        data.rank?.let { rank ->
+            val currentOrdinal = rank.tier.ordinal
+            val lastOrdinal = settingsRepo.lastSeenRankTierOrdinal.first()
+            if (lastOrdinal == -1) {
+                // First ever open — seed the baseline, no celebration.
+                settingsRepo.setLastSeenRankTierOrdinal(currentOrdinal)
+            } else if (currentOrdinal > lastOrdinal) {
+                // Tier crossed upward — celebrate, then advance the stored baseline.
+                _showRankUpCelebration.value = true
+                settingsRepo.setLastSeenRankTierOrdinal(currentOrdinal)
+            }
+        }
     }
 
     private fun buildState(
@@ -78,6 +99,9 @@ class ProfileViewModel @Inject constructor(
         memory = data.memory,
         recaps = data.recaps
     )
+
+    /** Called by the UI after the one-shot celebration has played so it never replays on recompose. */
+    fun clearRankUpCelebration() { _showRankUpCelebration.value = false }
 
     fun fileFor(photo: ProgressPhoto) = photoRepo.fileFor(photo)
 

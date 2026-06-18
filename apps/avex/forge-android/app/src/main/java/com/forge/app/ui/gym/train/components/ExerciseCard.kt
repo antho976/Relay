@@ -16,6 +16,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import com.forge.app.ui.theme.emphasized
 import androidx.compose.material3.Text
+import com.forge.app.ui.common.clickableLabeled
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
@@ -141,14 +142,29 @@ fun ExerciseCard(
                 val isBodyweight = state.plan.unit == ExerciseUnit.BODYWEIGHT
                 val isPlates = state.plan.unit == ExerciseUnit.PLATES
 
-                // Exercise counter
+                // Exercise counter + a discoverable "options" affordance for the otherwise-hidden
+                // long-press quick-actions menu (skip / swap / rest timer) (Cat 6 discoverability).
                 if (totalExercises > 0) {
-                    Text(
-                        "EXERCISE ${"%02d".format(exerciseIndex + 1)} / ${"%02d".format(totalExercises)}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = muted,
-                        fontSize = 9.sp
-                    )
+                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "EXERCISE ${"%02d".format(exerciseIndex + 1)} / ${"%02d".format(totalExercises)}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = muted,
+                            fontSize = 9.sp,
+                            modifier = Modifier.weight(1f)
+                        )
+                        onLongPress?.let { openMenu ->
+                            Text(
+                                "⋯ options",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = muted,
+                                fontSize = 9.sp,
+                                modifier = Modifier
+                                    .clickableLabeled("Exercise options — skip, swap, or set the rest timer") { openMenu() }
+                                    .padding(horizontal = 6.dp, vertical = 4.dp)
+                            )
+                        }
+                    }
                     Spacer(Modifier.height(4.dp))
                 }
 
