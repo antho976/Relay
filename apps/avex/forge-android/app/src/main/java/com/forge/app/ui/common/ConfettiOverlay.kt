@@ -14,6 +14,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import com.forge.app.ui.theme.ForgeMotion
 import kotlin.math.sin
 import kotlin.random.Random
@@ -50,7 +51,10 @@ fun ConfettiOverlay(
         onComplete()
     }
 
-    Canvas(modifier = modifier) {
+    // Purely decorative: clear it from the a11y tree so the full-screen overlay never becomes a
+    // TalkBack focus stop over the summary. The achievement itself is announced by the summary
+    // content beneath (trophy rows, "best session", etc.), so a confetti node would be redundant.
+    Canvas(modifier = modifier.clearAndSetSemantics { }) {
         val p = progress.value           // draw-phase read → redraw without recompose
         val fall = p * p                 // gravity: vertical travel accelerates over time
         particles.forEach { q ->

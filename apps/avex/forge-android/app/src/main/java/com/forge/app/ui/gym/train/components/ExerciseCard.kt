@@ -199,6 +199,20 @@ fun ExerciseCard(
                     )
                 }
 
+                // Form cue — read-only tip from the exercise definition, shown small + muted.
+                // Suppressed when the slot is swapped: plan.formCue describes the base movement, not
+                // the swapped-in exercise, so it would be actively wrong coaching (#11).
+                val formCue = state.plan.formCue.takeUnless { state.isSwapped }
+                if (!formCue.isNullOrBlank()) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "ⓘ $formCue",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = muted.copy(alpha = 0.55f),
+                        fontStyle = FontStyle.Italic
+                    )
+                }
+
                 // Per-set volume is derived three ways below; memoize so the rest-timer's
                 // per-second ticks (which recompose this card) don't re-walk the set list.
                 val currentVolumes = remember(state.loggedSets) {
@@ -284,6 +298,9 @@ fun ExerciseCard(
                 // Input row for the next set
                 if (!state.skipped) {
                     val targetsMet = state.loggedSets.size >= state.targetSets
+                    // This session's last logged set powers the "↻ repeat" fill chip and the
+                    // long-press-to-repeat on LOG SET (re-logs its weight + reps).
+                    val lastLogged = state.loggedSets.lastOrNull()
                     Spacer(Modifier.height(8.dp))
                     SetInputRow(
                         prefillWeight = state.prefillWeight,
@@ -301,7 +318,9 @@ fun ExerciseCard(
                         repsPlaceholder = recommendedRepsOf(state.plan.reps),
                         onAdvance = onAdvance,
                         onSubmit = onLogSet,
-                        onAddSet = onAddSet
+                        onAddSet = onAddSet,
+                        repeatSet = lastLogged,
+                        onRepeatLastSet = lastLogged?.let { last -> { onLogSameAsLast(last.id) } }
                     )
                 }
 

@@ -43,6 +43,9 @@ fun formatVolumeCompact(volumeLb: Double, useKg: Boolean, withUnit: Boolean = tr
 /** The numeric value in the display unit, UNformatted — for driving animated counters / raw math. */
 fun toDisplayWeight(lb: Double, useKg: Boolean): Double = if (useKg) lb * KG_PER_LB else lb
 
+/** Inverse of [toDisplayWeight]: a value the user picked in their display unit, back to stored lb. */
+fun fromDisplayWeight(value: Double, useKg: Boolean): Double = if (useKg) value / KG_PER_LB else value
+
 /**
  * The numeric value in the display unit with NO unit suffix — for seeding editable weight fields.
  * The log/edit input fields hold a bare number in the display unit; conversion to lb happens on

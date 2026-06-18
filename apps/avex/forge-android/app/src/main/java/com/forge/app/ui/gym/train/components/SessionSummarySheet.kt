@@ -19,16 +19,21 @@ import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
+import com.forge.app.ui.gym.stats.components.statsEntrance
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -59,13 +64,16 @@ fun SessionSummarySheet(
         skipPartiallyExpanded = true,
         confirmValueChange = { it != SheetValue.Hidden }
     )
+    // Mood/tags are one-tap re-selections, so plain remember (reset on rotation) is fine; the journal
+    // is free text the user can't trivially recreate, so it's rememberSaveable to survive a rotation.
     var selectedMood by remember { mutableStateOf<Mood?>(null) }
     var selectedTags by remember { mutableStateOf<Set<String>>(emptySet()) }
-    var journal by remember { mutableStateOf("") }
+    var journal by rememberSaveable { mutableStateOf(summary.initialJournal) }
     // Finishing is an event: confetti for a trophy, a best-ever session, OR a clean sweep of the
-    // duel (every set beat last time).
+    // duel (every set beat last time). rememberSaveable so the burst doesn't replay on every rotation
+    // (and stays consistent with the trophy haptic, which also fires only once).
     val cleanSweep = summary.ghostComparable > 0 && summary.ghostBeats == summary.ghostComparable
-    var showTrophyConfetti by remember {
+    var showTrophyConfetti by rememberSaveable {
         mutableStateOf(summary.unlockedTrophies.isNotEmpty() || summary.isBestSession || cleanSweep)
     }
 
@@ -79,6 +87,16 @@ fun SessionSummarySheet(
     val scope = rememberCoroutineScope()
     // Guards against a second tap kicking off a concurrent render while the first is still in flight.
     var sharing by remember { mutableStateOf(false) }
+    // A trophy unlock is the peak moment — confirm it in the hand, exactly once. rememberSaveable so a
+    // config change (rotation) while the sheet is open doesn't re-fire the celebratory haptic.
+    val haptic = LocalHapticFeedback.current
+    var trophyHapticFired by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        if (!trophyHapticFired && summary.unlockedTrophies.isNotEmpty()) {
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            trophyHapticFired = true
+        }
+    }
 
     ModalBottomSheet(
         onDismissRequest = {},
@@ -116,10 +134,10 @@ fun SessionSummarySheet(
                     )
                 }
 
-                // Primary stats strip
+                // Primary stats strip — VOLUME + PRs roll up from 0 on open (the celebration numbers).
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-                    FlatStat(value = formatVolume(summary.totalVolumeLb, useKg), label = "VOLUME", onBg = onBg, muted = muted)
-                    FlatStat(value = "${summary.prCount}", label = "PRs", onBg = onBg, muted = muted)
+                    CountUpStat(value = summary.totalVolumeLb, label = "VOLUME", onBg = onBg, muted = muted) { formatVolume(it, useKg) }
+                    CountUpStat(value = summary.prCount.toDouble(), label = "PRs", onBg = onBg, muted = muted) { it.toInt().toString() }
                     FlatStat(value = "${summary.durationMinutes} min", label = "TIME", onBg = onBg, muted = muted)
                 }
 
@@ -177,6 +195,7 @@ fun SessionSummarySheet(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
+                            .statsEntrance(0)
                             .border(0.5.dp, (if (won) ForgeLastGreen else outline).copy(alpha = if (won) 0.6f else 0.3f), RoundedCornerShape(4.dp))
                             .padding(horizontal = 14.dp, vertical = 10.dp)
                     ) {
@@ -210,6 +229,18 @@ fun SessionSummarySheet(
                     }
                 }
 
+                // Coach's read — one session-specific line, derived from this session's own result.
+                summary.coachOpinion?.let { opinion ->
+                    HorizontalDivider(color = outline.copy(alpha = 0.2f))
+                    Column(
+                        modifier = Modifier.fillMaxWidth().statsEntrance(1),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text("COACH'S READ", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
+                        Text(opinion, style = MaterialTheme.typography.bodySmall, color = onBg)
+                    }
+                }
+
                 if (summary.highlights.isNotEmpty()) {
                     HorizontalDivider(color = outline.copy(alpha = 0.2f))
                     Text("EXERCISES", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
@@ -219,7 +250,10 @@ fun SessionSummarySheet(
                 if (summary.unlockedTrophies.isNotEmpty()) {
                     HorizontalDivider(color = outline.copy(alpha = 0.2f))
                     Text("TROPHIES UNLOCKED", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
-                    summary.unlockedTrophies.forEach { t -> TrophyUnlockRow(t, onBg = onBg, muted = muted, outline = outline) }
+                    // Each trophy row settles in on its own beat (staggered) rather than snapping in mid-confetti.
+                    summary.unlockedTrophies.forEachIndexed { i, t ->
+                        Box(Modifier.statsEntrance(i)) { TrophyUnlockRow(t, onBg = onBg, muted = muted, outline = outline) }
+                    }
                 }
 
                 HorizontalDivider(color = outline.copy(alpha = 0.2f))

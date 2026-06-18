@@ -1,19 +1,37 @@
 <?xml version="1.0" encoding="utf-8"?>
 <data-extraction-rules>
     <cloud-backup>
-        <include domain="database" path="." />
+        <!--
+            Include the main Room DB only — NOT the -wal or -shm sidecars. Restoring a live WAL
+            alongside a stale .db file causes Room to see an inconsistent database on first open.
+            The -wal and -shm files are ephemeral and must be left to Room to regenerate.
+        -->
+        <include domain="database" path="forge.db" />
+        <exclude domain="database" path="forge.db-wal" />
+        <exclude domain="database" path="forge.db-shm" />
         <include domain="sharedpref" path="." />
         <!-- DataStore prefs + progress photos live under files/ — include them so a cloud restore
              brings settings and physique photos back, not just the Room database. -->
         <include domain="file" path="datastore/" />
         <include domain="file" path="progress_photos/" />
         <include domain="file" path="avatar.jpg" />
+        <!-- Transient mid-restore staging files must never be cloud-backed. -->
+        <exclude domain="file" path="pending_restore.db" />
+        <exclude domain="file" path="pending_restore_prefs.pb" />
+        <exclude domain="file" path="pending_restore_photos" />
+        <exclude domain="file" path="pending_restore_avatar.jpg" />
     </cloud-backup>
     <device-transfer>
-        <include domain="database" path="." />
+        <include domain="database" path="forge.db" />
+        <exclude domain="database" path="forge.db-wal" />
+        <exclude domain="database" path="forge.db-shm" />
         <include domain="sharedpref" path="." />
         <include domain="file" path="datastore/" />
         <include domain="file" path="progress_photos/" />
         <include domain="file" path="avatar.jpg" />
+        <exclude domain="file" path="pending_restore.db" />
+        <exclude domain="file" path="pending_restore_prefs.pb" />
+        <exclude domain="file" path="pending_restore_photos" />
+        <exclude domain="file" path="pending_restore_avatar.jpg" />
     </device-transfer>
 </data-extraction-rules>

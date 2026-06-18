@@ -70,6 +70,7 @@ fun ProfileScreen(
     onOpenTrophies: () -> Unit,
     onOpenRecaps: () -> Unit,
     onOpenGoals: () -> Unit = {},
+    onOpenCoachBrief: () -> Unit = {},
     viewModel: ProfileViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -185,6 +186,17 @@ fun ProfileScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text("Set targets, track your lifts", style = MaterialTheme.typography.bodyMedium, color = onBg)
+                    Text("→", style = MaterialTheme.typography.bodyMedium, color = accent)
+                }
+            }
+
+            ProfileBlock("COACH", muted, accent, outline) {
+                Row(
+                    Modifier.fillMaxWidth().bounceClick { onOpenCoachBrief() },
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("Week brief · what it's tracking", style = MaterialTheme.typography.bodyMedium, color = onBg)
                     Text("→", style = MaterialTheme.typography.bodyMedium, color = accent)
                 }
             }

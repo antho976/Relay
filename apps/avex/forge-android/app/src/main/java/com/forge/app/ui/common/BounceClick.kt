@@ -6,6 +6,7 @@ import androidx.compose.animation.core.spring
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -34,11 +35,17 @@ fun Modifier.bounceClick(
         ),
         label = "bounce-scale"
     )
+    // The press-scale is invisible to a screen reader (a TalkBack double-tap never enters the pressed
+    // state visibly), so with touch exploration on a tap reads as "nothing happened". Fall back to a
+    // material ripple in that case; otherwise keep the clean, indication-free scale for sighted users.
+    // Sourced from one app-level observer ([ProvideTouchExploration]) so this is live without every
+    // bounceClick element registering its own AccessibilityManager listener.
+    val touchExploration = LocalTouchExplorationEnabled.current
     Modifier
         .graphicsLayer { scaleX = scale; scaleY = scale }
         .clickable(
             interactionSource = interactionSource,
-            indication = null,
+            indication = if (touchExploration) ripple() else null,
             enabled = enabled,
             onClick = onClick
         )

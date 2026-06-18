@@ -27,8 +27,12 @@ class AutoBackupWorker @AssistedInject constructor(
         Result.success()
     } catch (e: Exception) {
         // Bound the retries: a permanent failure (corrupt DB, no free storage) shouldn't
-        // keep retrying with backoff forever. Give up after a few attempts.
-        if (runAttemptCount >= MAX_ATTEMPTS) Result.failure() else Result.retry()
+        // keep retrying with backoff forever. Give up after a few attempts — and on giving up,
+        // record it so Settings can warn the user instead of silently losing their backup.
+        if (runAttemptCount >= MAX_ATTEMPTS) {
+            backupRepo.recordAutoBackupFailure()
+            Result.failure()
+        } else Result.retry()
     }
 
     companion object {

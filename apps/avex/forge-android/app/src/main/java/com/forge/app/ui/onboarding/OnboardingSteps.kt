@@ -30,6 +30,7 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.forge.app.domain.units.fromDisplayWeight
 import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.ui.theme.AccentEmphasis
 import com.forge.app.program.Equipment
@@ -203,7 +204,7 @@ internal fun StepBodyweight(input: String, useKg: Boolean, onInputChange: (Strin
 internal fun StepDays(days: Int, onChange: (Int) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Headline("Days per week")
-        Caption("Your split adapts to this — 3 = Push/Pull/Legs, 4 = Upper/Lower, 7 adds an arms day.")
+        Caption("Your split adapts to this — 3 = Push/Pull/Legs, 4 = Upper/Lower, 7 adds an arms day. It's also your weekly target on the home screen.")
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             (1..7).forEach { n -> OnboardingChip("$n", days == n) { onChange(n) } }
         }
@@ -234,13 +235,20 @@ internal fun StepEquipment(
 }
 
 @Composable
-internal fun StepPlateWeight(plateWeightLb: Double, onSet: (Double) -> Unit) {
+internal fun StepPlateWeight(plateWeightLb: Double, useKg: Boolean, onSet: (Double) -> Unit) {
+    // Plate denominations in the user's OWN unit — a kg lifter shouldn't have to translate lb plates
+    // in their head. The value is always stored in lb (onSet); kg chips convert on the way in via the
+    // shared converter so the factor can't drift.
+    val plates = if (useKg) listOf(1.25, 2.5, 5.0, 10.0, 15.0, 20.0, 25.0) else listOf(5.0, 10.0, 15.0, 20.0, 25.0, 45.0)
+    val unit = if (useKg) "kg" else "lb"
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Headline("Weight per plate")
-        Caption("Only matters if your machine is loaded by counting plates (not a numbered stack). This is what one of those plates weighs. Leave it at 15 if you're not sure — you can change it later.")
+        Caption("Only matters if your machine is loaded by counting plates (not a numbered stack). This is what one of those plates weighs. Not sure? Just leave the default — you can change it later.")
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf(5.0, 10.0, 15.0, 20.0, 25.0, 45.0).forEach { w ->
-                OnboardingChip("${w.toInt()} lb", plateWeightLb == w) { onSet(w) }
+            plates.forEach { value ->
+                val lb = fromDisplayWeight(value, useKg)
+                val label = if (value % 1.0 == 0.0) "${value.toInt()} $unit" else "$value $unit"
+                OnboardingChip(label, kotlin.math.abs(plateWeightLb - lb) < 0.05) { onSet(lb) }
             }
         }
     }

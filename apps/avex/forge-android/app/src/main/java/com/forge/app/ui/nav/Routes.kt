@@ -4,6 +4,7 @@ object Routes {
     const val OVERVIEW = "overview"
     const val GYM_TRAIN = "gym/train"
     const val GYM_STATS = "gym/stats"
+    const val GYM_PRS = "gym/prs"
     const val GYM_DAY = "gym/day/{dayKey}?skipWarmup={skipWarmup}"
     const val CARDIO = "cardio"
     const val TROPHIES = "trophies"

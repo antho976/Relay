@@ -62,7 +62,7 @@ private val TIMEZONE_OPTIONS = listOf(
 @Composable
 internal fun AppearancePage(state: SettingsUiState, vm: SettingsViewModel, modifier: Modifier = Modifier) {
     Column(modifier.fillMaxSize()) {
-        ToggleRow("AMOLED pure black", "True black replaces dark background", state.amoledMode, vm::setAmoledMode)
+        ToggleRow("AMOLED pure black", "Pure-black backgrounds — saves battery on OLED screens; on an LCD phone it just looks darker.", state.amoledMode, vm::setAmoledMode)
         SectionDivider()
         ToggleRow("Compact set logging", "Denser set rows for experienced users", state.compactSetLogging, vm::setCompactSetLogging)
         SectionDivider()
@@ -509,6 +509,28 @@ internal fun PrivacyPage(state: SettingsUiState, vm: SettingsViewModel, modifier
                     "permission, so nothing is ever uploaded or shared — use Export / Backup to keep your own copy.",
                 style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic
             )
+        }
+
+        SectionDivider()
+
+        // Export shortcut — privacy-aware users expect a data-export entry under Privacy.
+        // Reuses the existing exportFullBackup() action (exportFullDataJson → share sheet).
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickableLabeled("Export all my data as JSON") { vm.exportFullBackup() }
+                .padding(horizontal = 24.dp, vertical = 14.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text("Export all my data", style = MaterialTheme.typography.bodyMedium, color = onBg)
+                Text(
+                    "Human-readable JSON of every session, set & setting",
+                    style = MaterialTheme.typography.labelSmall, color = muted
+                )
+            }
+            Text("JSON →", style = MaterialTheme.typography.labelSmall, color = muted)
         }
     }
 }

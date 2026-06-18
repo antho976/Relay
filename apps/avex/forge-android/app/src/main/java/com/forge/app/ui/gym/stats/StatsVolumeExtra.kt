@@ -19,6 +19,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -178,12 +180,16 @@ internal fun TonnageTrendCard(weeks: List<WeeklyTonnage>, onBg: Color, muted: Co
     if (weeks.size < 2) return
     val maxV = weeks.maxOf { it.volumeLb }.coerceAtLeast(1.0)
     val progress = rememberDrawProgress(weeks.size)
+    val useKg = LocalForgeSettings.current.useKg
+    // Screen-reader text fallback — the bars are decorative Boxes, mute to TalkBack otherwise.
+    val chartDesc = "Weekly tonnage over ${weeks.size} weeks. This week " +
+        "${formatVolume(weeks.last().volumeLb, useKg)} ${unitLabel(useKg)}; peak ${formatVolume(maxV, useKg)} ${unitLabel(useKg)}."
     Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
         Text("The work, week by week", style = MaterialTheme.typography.headlineSmall, color = onBg, fontStyle = FontStyle.Italic)
         Spacer(Modifier.height(4.dp))
         Text("Total tonnage per week. Deload weeks ring hollow.", style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic)
         Spacer(Modifier.height(14.dp))
-        Row(Modifier.fillMaxWidth().height(96.dp), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.Bottom) {
+        Row(Modifier.fillMaxWidth().height(96.dp).semantics { contentDescription = chartDesc }, horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.Bottom) {
             weeks.forEachIndexed { i, w ->
                 val tile = staggeredProgress(progress, i, weeks.size)
                 val frac = (w.volumeLb / maxV).toFloat() * tile
@@ -205,7 +211,6 @@ internal fun TonnageTrendCard(weeks: List<WeeklyTonnage>, onBg: Color, muted: Co
             }
         }
         Spacer(Modifier.height(6.dp))
-        val useKg = LocalForgeSettings.current.useKg
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("${weeks.size} WKS AGO", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 8.sp)
             Text("THIS WEEK · ${formatVolume(weeks.last().volumeLb, useKg)} ${unitLabel(useKg).uppercase()}", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 8.sp)

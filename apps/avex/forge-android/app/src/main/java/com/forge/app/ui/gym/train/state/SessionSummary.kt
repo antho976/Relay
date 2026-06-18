@@ -38,7 +38,11 @@ data class SessionSummary(
     /** "Beat the ghost": sets that beat last session's same-position set. */
     val ghostBeats: Int = 0,
     /** Sets that had a last-session counterpart to be judged against (the duel denominator). */
-    val ghostComparable: Int = 0
+    val ghostComparable: Int = 0,
+    /** The coach's one-line read of this session (#19), or null for an empty session. */
+    val coachOpinion: String? = null,
+    /** Journal text already captured mid-session (top-bar note) — seeds the finish sheet's field. */
+    val initialJournal: String = ""
 )
 
 data class ExerciseHighlight(

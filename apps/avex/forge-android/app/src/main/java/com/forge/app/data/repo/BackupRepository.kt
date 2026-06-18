@@ -149,7 +149,7 @@ class BackupRepository @Inject constructor(
         val root = JSONObject().apply {
             put("exportVersion", 1)
             put("exportedAt", dateFmt.format(Instant.now().atZone(zone)))
-            put("appVersion", "tier6")
+            put("appVersion", com.forge.app.BuildConfig.VERSION_NAME)
 
             // User-facing preferences (the JSON export documents 'settings'). The whole-DB
             // VACUUM backup remains the authoritative restore source.
@@ -290,12 +290,26 @@ class BackupRepository @Inject constructor(
         }
         // Drop the stale lossy JSON slot from earlier builds so it can't mislead a future restore.
         File(context.filesDir, "forge_auto_backup.json").delete()
+        // A successful write clears any prior "last backup failed" marker.
+        File(context.filesDir, AUTO_BACKUP_FAILED_MARKER).delete()
         file
     }
 
     /** When the auto-backup slot was last written, or null if none exists yet (#86 restore affordance). */
     fun autoBackupSavedAtMs(): Long? =
         File(context.filesDir, AUTO_BACKUP_NAME).takeIf { it.exists() }?.lastModified()
+
+    /**
+     * The weekly auto-backup worker exhausted its retries (e.g. storage full): record it so Settings can
+     * surface a "last backup failed" notice rather than the user silently losing their periodic backup.
+     * Cleared automatically by the next successful [autoBackup].
+     */
+    fun recordAutoBackupFailure() {
+        runCatching { File(context.filesDir, AUTO_BACKUP_FAILED_MARKER).writeText("1") }
+    }
+
+    /** True when the most recent auto-backup attempt failed and none has succeeded since. */
+    fun autoBackupFailed(): Boolean = File(context.filesDir, AUTO_BACKUP_FAILED_MARKER).exists()
 
     // ─── Complete database backup & restore ───────────────────────────────────
     // Unlike the JSON exports above (lossy + app-private), these capture the *entire*
@@ -360,6 +374,9 @@ class BackupRepository @Inject constructor(
         } finally {
             snap.delete()
         }
+        // Only reached on success: a fresh manual backup clears any stale "auto-backup failed" notice
+        // (the user now has a recent backup, which is exactly what that warning asks them to make).
+        File(context.filesDir, AUTO_BACKUP_FAILED_MARKER).delete()
     }
 
     /**
@@ -581,14 +598,20 @@ class BackupRepository @Inject constructor(
         }
     }
 
-    /** Cheap sanity check that a candidate file is a SQLite DB containing our `session` table. */
+    /**
+     * Sanity check that a candidate file is a SQLite DB containing Forge's core tables.
+     * Checking only `session` let any SQLite DB from another app pass validation and get swapped in.
+     * We now require all three tables that every real Forge backup must contain — so picking the wrong
+     * app's DB fails with NOT_A_BACKUP / CORRUPT instead of silently replacing your data.
+     */
     private fun isForgeDatabase(file: File): Boolean = runCatching {
         android.database.sqlite.SQLiteDatabase.openDatabase(
             file.path, null, android.database.sqlite.SQLiteDatabase.OPEN_READONLY
         ).use { dbFile ->
             dbFile.rawQuery(
-                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='session'", null
-            ).use { c -> c.moveToFirst() && c.getInt(0) > 0 }
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN " +
+                    "('session','logged_exercise','logged_set')", null
+            ).use { c -> c.moveToFirst() && c.getInt(0) >= 3 }
         }
     }.getOrDefault(false)
 
@@ -652,6 +675,8 @@ class BackupRepository @Inject constructor(
         private const val PHOTOS_PREFIX = "progress_photos/"
         /** The weekly auto-backup slot, written by [autoBackup] and read by [restoreFromAutoBackup] (#86). */
         private const val AUTO_BACKUP_NAME = "forge_auto_backup.zip"
+        /** Marker written when the auto-backup worker gives up (storage full / corrupt) — see [recordAutoBackupFailure]. */
+        private const val AUTO_BACKUP_FAILED_MARKER = "auto_backup_failed"
         /** Staged restored photos; ForgeApp.applyPendingRestore swaps this over progress_photos/ at boot. */
         private const val PENDING_PHOTOS_DIR = "pending_restore_photos"
         /** Backup-ZIP entry for the profile avatar — derived from AvatarRepository so a rename can't desync. */

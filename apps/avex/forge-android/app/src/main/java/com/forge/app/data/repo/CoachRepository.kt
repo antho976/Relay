@@ -454,6 +454,9 @@ class CoachRepository @Inject constructor(
             val o = org.json.JSONObject(raw)
             return Triple(o.optString("name"), o.optString("unit"), o.optString("swapId").ifBlank { null })
         }
+        // A corrupt/empty legacy record ("" or "|" — possible after a failed restore or migration edge)
+        // splits to a blank name; surface it explicitly so the caller can avoid writing it into a slot.
+        if (raw.isBlank()) return Triple("", "", null)
         return raw.split("|").let {
             Triple(it[0], it.getOrElse(1) { "" }, it.getOrNull(2)?.ifBlank { null })
         }
@@ -475,7 +478,11 @@ class CoachRepository @Inject constructor(
                         // restoreSwap (not setSwap) force-sets the id, so a prior swap with no
                         // re-attribution id clears the coach's instead of inheriting it (#11).
                         val (name, unit, swapId) = decodeSwapUndo(prev)
-                        customizationRepo.restoreSwap(
+                        // A corrupt/blank undo record would otherwise restore a BLANK exercise name into
+                        // the slot (renders as an empty name on the session screen). Drop the coach overlay
+                        // entirely instead, so the slot falls back to the real base-program exercise (#11).
+                        if (name.isBlank()) customizationRepo.clearSwap(d.targetKey)
+                        else customizationRepo.restoreSwap(
                             d.targetKey, name, unit,
                             source = OverlaySource.USER,
                             swappedExerciseId = swapId

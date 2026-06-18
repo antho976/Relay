@@ -46,6 +46,8 @@ data class DayUiState(
     val sessionId: Long? = null,
     /** The session's REAL first-start time (for the date pill) — stable across resume sittings. */
     val sessionStartedAt: Long? = null,
+    /** Free-text session journal (#111), editable mid-session from the top bar and again at finish. */
+    val sessionJournal: String = "",
     /**
      * Anchor for the live ACTIVE-time readout: chosen so (now − anchor) = prior sittings + this
      * sitting so far. Differs from [sessionStartedAt] once a session spans multiple sittings.
@@ -269,6 +271,11 @@ data class ExerciseUiState(
     /** Display name preferring session-swap, then persistent-swap, then the static plan name. */
     val effectiveName: String
         get() = sessionSwapName ?: persistentSwapName ?: plan.name
+
+    /** True when a session or persistent swap is replacing the base exercise — the static
+     *  [plan]'s form cue then describes a different movement and must not be shown. */
+    val isSwapped: Boolean
+        get() = sessionSwapName != null || persistentSwapName != null
 }
 
 /** Slim per-session aggregate for one exercise (for the day-screen ledger strip). */

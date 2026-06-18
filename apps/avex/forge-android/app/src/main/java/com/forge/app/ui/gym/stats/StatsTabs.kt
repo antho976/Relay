@@ -1,13 +1,17 @@
 package com.forge.app.ui.gym.stats
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.runtime.getValue
 import com.forge.app.ui.common.clickableLabeled
+import com.forge.app.ui.theme.ForgeMotion
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -72,13 +76,16 @@ fun StatsTabBar(selected: StatsTab, onSelect: (StatsTab) -> Unit) {
     ) {
         StatsTab.entries.forEach { tab ->
             val isSel = tab == selected
+            // Crossfade the pill fill / border / text colour on selection instead of an instant swap,
+            // so tapping or settling the pager between tabs reads as a smooth move (reduced-motion safe).
+            val pillColor by animateColorAsState(if (isSel) onBg else Color.Transparent, ForgeMotion.standardTween(), label = "tab-pill")
+            val borderColor by animateColorAsState(if (isSel) Color.Transparent else outline.copy(alpha = 0.5f), ForgeMotion.standardTween(), label = "tab-border")
+            val textColor by animateColorAsState(if (isSel) bg else muted, ForgeMotion.standardTween(), label = "tab-text")
             Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(50))
-                    .then(
-                        if (isSel) Modifier.background(onBg)
-                        else Modifier.border(1.dp, outline.copy(alpha = 0.5f), RoundedCornerShape(50))
-                    )
+                    .background(pillColor)
+                    .border(1.dp, borderColor, RoundedCornerShape(50))
                     .clickable(onClickLabel = "View ${tab.label}") { onSelect(tab) }
                     // TalkBack announces "selected" + the Tab role, so the active stats view is clear.
                     // `this.selected` is qualified — the bare name collides with the `selected` param.
@@ -88,7 +95,7 @@ fun StatsTabBar(selected: StatsTab, onSelect: (StatsTab) -> Unit) {
                 Text(
                     tab.label,
                     style = MaterialTheme.typography.labelMedium,
-                    color = if (isSel) bg else muted,
+                    color = textColor,
                     fontWeight = if (isSel) FontWeight.SemiBold else FontWeight.Normal
                 )
             }
@@ -104,7 +111,9 @@ internal fun LazyListScope.sectionTitle(key: String, title: String, c: StatsColo
             style = MaterialTheme.typography.headlineSmall,
             color = c.onBg,
             fontStyle = FontStyle.Italic,
-            modifier = Modifier.padding(horizontal = 24.dp)
+            // Mark section titles as headings so a TalkBack user can jump between sections on this
+            // data-dense screen instead of swiping through every row (A11y heading structure).
+            modifier = Modifier.padding(horizontal = 24.dp).semantics { heading() }
         )
         Spacer(Modifier.height(12.dp))
     }

@@ -20,12 +20,14 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -33,6 +35,7 @@ import androidx.compose.ui.unit.sp
 import com.forge.app.domain.units.formatVolume
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.domain.units.unitLabel
+import com.forge.app.ui.gym.stats.components.rememberDrawProgress
 import com.forge.app.ui.gym.train.state.ExerciseSessionPoint
 import com.forge.app.ui.theme.LocalForgeSettings
 import java.time.Instant
@@ -85,6 +88,25 @@ fun ExerciseChartSheet(
                 fontSize = 9.sp,
                 letterSpacing = 1.sp
             )
+
+            // Personal bests — the headline numbers for this lift, from the same history.
+            // Memoized: these three passes only change when the history or unit does, so they
+            // don't re-walk the list on every recomposition of the sheet.
+            if (history.isNotEmpty()) {
+                val parts = remember(history, useKg) {
+                    val bestVolume = history.maxByOrNull { it.volumeLb }?.volumeLb
+                    val heaviest = history.mapNotNull { it.topWeightLb }.maxOrNull()
+                    buildList {
+                        bestVolume?.let { add("best ${formatVolume(it, useKg)}") }
+                        heaviest?.let { add("heaviest ${formatWeight(it, useKg)}") }
+                        add("${history.size} session${if (history.size == 1) "" else "s"}")
+                    }
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text("PERSONAL BESTS", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
+                    Text(parts.joinToString("  ·  "), style = MaterialTheme.typography.bodySmall, color = onBg)
+                }
+            }
 
             if (volumes.size >= 2) {
                 VolumeProjectionChart(
@@ -177,43 +199,49 @@ private fun VolumeProjectionChart(
     val range = (maxV - minV).coerceAtLeast(1.0)
     val totalPoints = combined.size
 
+    // Draw-in: sweep left-to-right on first open, keyed on the data identity.
+    val drawProgress = rememberDrawProgress(key = volumes)
+
     Canvas(modifier = modifier) {
         val stepX = size.width / (totalPoints - 1).coerceAtLeast(1)
         fun yFor(v: Double) = size.height - ((v - minV) / range * size.height).toFloat()
 
-        listOf(0.25f, 0.5f, 0.75f).forEach { frac ->
-            drawLine(
-                color = gridColor,
-                start = Offset(0f, size.height * frac),
-                end = Offset(size.width, size.height * frac),
-                strokeWidth = 1.dp.toPx(),
-                pathEffect = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 4.dp.toPx()))
+        // Clip the entire draw to the revealed fraction so grid, line, and dots all sweep in together.
+        clipRect(right = size.width * drawProgress) {
+            listOf(0.25f, 0.5f, 0.75f).forEach { frac ->
+                drawLine(
+                    color = gridColor,
+                    start = Offset(0f, size.height * frac),
+                    end = Offset(size.width, size.height * frac),
+                    strokeWidth = 1.dp.toPx(),
+                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 4.dp.toPx()))
+                )
+            }
+
+            // Solid actual line
+            val actualPath = Path()
+            volumes.forEachIndexed { i, v ->
+                val x = stepX * i
+                val y = yFor(v)
+                if (i == 0) actualPath.moveTo(x, y) else actualPath.lineTo(x, y)
+            }
+            drawPath(actualPath, color = lineColor, style = Stroke(width = 3.dp.toPx()))
+            volumes.forEachIndexed { i, v ->
+                drawCircle(lineColor, radius = 3.dp.toPx(), center = Offset(stepX * i, yFor(v)))
+            }
+
+            // Dashed projected continuation, starting from the last actual point
+            val projPath = Path()
+            val startIdx = volumes.size - 1
+            projPath.moveTo(stepX * startIdx, yFor(volumes.last()))
+            projected.forEachIndexed { i, v ->
+                projPath.lineTo(stepX * (startIdx + 1 + i), yFor(v))
+            }
+            drawPath(
+                projPath,
+                color = projectionColor,
+                style = Stroke(width = 2.5.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 8f)))
             )
         }
-
-        // Solid actual line
-        val actualPath = Path()
-        volumes.forEachIndexed { i, v ->
-            val x = stepX * i
-            val y = yFor(v)
-            if (i == 0) actualPath.moveTo(x, y) else actualPath.lineTo(x, y)
-        }
-        drawPath(actualPath, color = lineColor, style = Stroke(width = 3.dp.toPx()))
-        volumes.forEachIndexed { i, v ->
-            drawCircle(lineColor, radius = 3.dp.toPx(), center = Offset(stepX * i, yFor(v)))
-        }
-
-        // Dashed projected continuation, starting from the last actual point
-        val projPath = Path()
-        val startIdx = volumes.size - 1
-        projPath.moveTo(stepX * startIdx, yFor(volumes.last()))
-        projected.forEachIndexed { i, v ->
-            projPath.lineTo(stepX * (startIdx + 1 + i), yFor(v))
-        }
-        drawPath(
-            projPath,
-            color = projectionColor,
-            style = Stroke(width = 2.5.dp.toPx(), pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 8f)))
-        )
     }
 }

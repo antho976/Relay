@@ -28,7 +28,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -39,6 +41,9 @@ import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontStyle
@@ -78,6 +83,44 @@ fun RestTimerBubble(
         animationSpec = tween(durationMillis = 1000, easing = LinearEasing),
         label = "ring-fraction"
     )
+
+    // Final-10s urgency: the ring warms toward the error colour over the last ten seconds, and the
+    // bubble flashes + ticks once exactly at 0:10. Both collapse under reduced motion (ForgeMotion).
+    val warn = MaterialTheme.colorScheme.error
+    val urgency by animateFloatAsState(
+        targetValue = if (!state.isFinished && state.secondsRemaining in 1..10) 1f else 0f,
+        animationSpec = ForgeMotion.standardTween(ForgeMotion.DurationEmphasized),
+        label = "ring-urgency"
+    )
+    val ringColor = lerp(onBg.copy(alpha = 0.85f), warn, urgency)
+    val flash = remember { Animatable(0f) }
+    val haptic = LocalHapticFeedback.current
+    // Track the previous tick so the 10s warning fires ONLY on the descending transition into 0:10,
+    // never on first composition (a rest that simply starts at ≤10s, or a recompose while at 10).
+    var prevSeconds by remember { mutableStateOf<Int?>(null) }
+    LaunchedEffect(state.secondsRemaining) {
+        // Clear any flash stranded by a prior run that was cancelled mid-fade (e.g. the user added
+        // time within the 500ms window) — otherwise flash.value stays > 0 and draws indefinitely.
+        flash.snapTo(0f)
+        val prev = prevSeconds
+        prevSeconds = state.secondsRemaining
+        if (prev != null && prev > 10 && state.secondsRemaining == 10 &&
+            !state.isFinished && ForgeMotion.durationScale > 0f
+        ) {
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            flash.snapTo(0.55f)
+            flash.animateTo(0f, ForgeMotion.standardTween(500))
+        }
+    }
+    // "You're ready" haptic: fires ONCE on the false→true edge — track the prior value so a bubble
+    // mounted already-finished (recompose / config change) doesn't buzz on first composition.
+    var prevFinished by remember { mutableStateOf(state.isFinished) }
+    LaunchedEffect(state.isFinished) {
+        if (state.isFinished && !prevFinished) {
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+        }
+        prevFinished = state.isFinished
+    }
 
     // Springy pop-in each time the bubble appears (a rest begins).
     val appear = remember { Animatable(0f) }
@@ -123,20 +166,41 @@ fun RestTimerBubble(
             .drawBehind {
                 if (!isPaused && !state.isFinished) {
                     val sw = 3.dp.toPx()
+                    val inset = Offset(sw / 2f, sw / 2f)
+                    val arcSize = Size(size.width - sw, size.height - sw)
+                    // Faint full-circle track behind the depleting arc so the ring reads as a
+                    // countdown (shrinking arc on a track) rather than an arc appearing/vanishing.
                     drawArc(
-                        color = onBg.copy(alpha = 0.85f),
+                        color = onBg.copy(alpha = 0.15f),
+                        startAngle = -90f,
+                        sweepAngle = 360f,
+                        useCenter = false,
+                        topLeft = inset,
+                        size = arcSize,
+                        style = Stroke(width = sw, cap = StrokeCap.Round)
+                    )
+                    drawArc(
+                        color = ringColor,
                         startAngle = -90f,
                         sweepAngle = 360f * animFraction,
                         useCenter = false,
-                        topLeft = Offset(sw / 2f, sw / 2f),
-                        size = Size(size.width - sw, size.height - sw),
+                        topLeft = inset,
+                        size = arcSize,
                         style = Stroke(width = sw, cap = StrokeCap.Round)
                     )
+                    // One-shot brighten at the 10-second mark — the visual half of the warning.
+                    if (flash.value > 0f) drawCircle(color = onBg.copy(alpha = flash.value))
                 }
             }
             .combinedClickable(
-                onClick = onOpenControls,
-                onLongClick = onLongClick
+                onClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    onOpenControls()
+                },
+                onLongClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    onLongClick()
+                }
             )
             // Merge so TalkBack reads the spoken state ("Rest timer, 1 min 30s left") in place of "1:30".
             .semantics(mergeDescendants = true) { contentDescription = restA11y },
@@ -218,8 +282,10 @@ fun RestTimerControlsDialog(
 
             HorizontalDivider(color = outline.copy(alpha = 0.2f))
 
+            // −30s trims an over-long rest; the rest add time. addSeconds clamps at 0, so −30s
+            // with under 30s left simply ends the rest.
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf(60 to "+1 min", 120 to "+2 min", 300 to "+5 min").forEach { (s, label) ->
+                listOf(-30 to "−30s", 60 to "+1 min", 120 to "+2 min", 300 to "+5 min").forEach { (s, label) ->
                     Box(
                         modifier = Modifier
                             .border(1.dp, outline.copy(alpha = 0.4f), RoundedCornerShape(4.dp))

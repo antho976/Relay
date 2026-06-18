@@ -28,6 +28,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontStyle
@@ -166,10 +168,17 @@ internal fun StrengthStandardsCard(lifts: List<E1rmLift>, bodyweightLb: Double?,
         } else {
             rated.forEach { (lift, ratio) ->
                 val idx = tierIndex(ratio, sex)
-                Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                // Tier is otherwise conveyed ONLY by which bar segment is green — useless to a
+                // colour-blind user (~8% of men) and to TalkBack. Name it in text + a merged spoken node.
+                Column(
+                    Modifier.fillMaxWidth().padding(vertical = 8.dp)
+                        .semantics(mergeDescendants = true) {
+                            contentDescription = "${lift.exerciseName}, %.2f times bodyweight, ${TIER_FULL[idx]} tier".format(ratio)
+                        }
+                ) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text(lift.exerciseName, style = MaterialTheme.typography.bodyMedium, color = onBg)
-                        Text("%.2f× BW".format(ratio), style = MaterialTheme.typography.labelMedium, color = onBg, fontWeight = FontWeight.SemiBold)
+                        Text("%.2f× BW · ${TIER_FULL[idx]}".format(ratio), style = MaterialTheme.typography.labelMedium, color = onBg, fontWeight = FontWeight.SemiBold)
                     }
                     Spacer(Modifier.height(6.dp))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {

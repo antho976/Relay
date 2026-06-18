@@ -95,7 +95,17 @@ class ForgeWidget : GlanceAppWidget() {
                             )
                         }
                     } else {
-                        Text("No session data yet", style = TextStyle(color = ColorProvider(android.graphics.Color.LTGRAY)))
+                        Text(
+                            "Tap to start your first workout",
+                            style = TextStyle(
+                                fontWeight = FontWeight.Bold,
+                                color = ColorProvider(android.graphics.Color.WHITE)
+                            )
+                        )
+                        Text(
+                            "Your program is ready — open Forge to begin.",
+                            style = TextStyle(color = ColorProvider(android.graphics.Color.LTGRAY))
+                        )
                     }
                 }
             }

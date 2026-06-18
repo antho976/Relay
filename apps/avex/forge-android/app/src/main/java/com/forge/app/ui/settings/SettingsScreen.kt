@@ -109,6 +109,7 @@ fun SettingsScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val exportPath by viewModel.exportPath.collectAsStateWithLifecycle()
+    val photoCount by viewModel.photoCount.collectAsStateWithLifecycle()
 
     var currentPage by remember { mutableStateOf<SettingsPage?>(null) }
     var searchActive by remember { mutableStateOf(false) }
@@ -333,6 +334,13 @@ fun SettingsScreen(
     }
 
     confirmReset?.let { target ->
+        // Refresh photo count the moment the factory-reset dialog opens so the warning is accurate.
+        androidx.compose.runtime.LaunchedEffect(target) {
+            if (target == ResetTarget.FACTORY) viewModel.refreshPhotoInfo()
+        }
+        val photoWarning = if (target == ResetTarget.FACTORY && photoCount > 0) {
+            "This also permanently deletes your ${photoCountLabel(photoCount)}."
+        } else null
         ResetConfirmDialog(
             target = target,
             onConfirm = {
@@ -345,7 +353,8 @@ fun SettingsScreen(
                 }
                 confirmReset = null
             },
-            onDismiss = { confirmReset = null }
+            onDismiss = { confirmReset = null },
+            photoWarning = photoWarning
         )
     }
 }

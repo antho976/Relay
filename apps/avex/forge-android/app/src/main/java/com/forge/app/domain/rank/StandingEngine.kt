@@ -44,6 +44,10 @@ object StandingEngine {
 
     /** Piecewise-linear interpolation between anchors, clamped to [2, 99]. */
     private fun pct(anchors: List<Pair<Double, Int>>, v: Double): Int {
+        // A NaN input (e.g. a corrupt session that persisted a NaN volume) compares false against every
+        // range, so the loop would fall through to anchors.last() — a nonsensical "TOP 2%" best rank on
+        // the Profile screen. Treat garbage as the worst (bottom) anchor, never the best.
+        if (v.isNaN()) return anchors.first().second
         if (v <= anchors.first().first) return anchors.first().second
         if (v >= anchors.last().first) return anchors.last().second
         for (i in 0 until anchors.size - 1) {

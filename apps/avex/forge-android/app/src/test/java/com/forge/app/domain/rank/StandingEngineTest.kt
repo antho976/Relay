@@ -45,4 +45,14 @@ class StandingEngineTest {
         val s = StandingSnapshot(3.2, 8, 25_000.0)
         assertEquals(StandingEngine.standings(s, useKg = false), StandingEngine.standings(s, useKg = false))
     }
+
+    @Test fun `a NaN metric reads as the worst rank, never the best`() {
+        // A corrupt session that persisted a NaN volume must not render a nonsensical "TOP 2%" — NaN
+        // compares false against every anchor range, so without the guard it falls through to the best.
+        val m = StandingEngine.standings(StandingSnapshot(Double.NaN, 0, Double.NaN), useKg = false)
+        val consistency = m.first { it.key == "consistency" }
+        val volume = m.first { it.key == "volume" }
+        assertEquals("NaN consistency → bottom anchor (top 95%)", 95, consistency.topPercent)
+        assertEquals("NaN volume → bottom anchor (top 95%)", 95, volume.topPercent)
+    }
 }

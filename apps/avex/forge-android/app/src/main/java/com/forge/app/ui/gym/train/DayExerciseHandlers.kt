@@ -105,10 +105,14 @@ internal fun DayViewModel.handleExerciseEvent(event: DayUiEvent) {
             logSet(warning.exerciseId, warning.weightText, warning.reps, skipJumpCheck = true)
         }
         is DayUiEvent.DismissWeightJump -> _state.update { it.copy(pendingWeightJumpWarning = null) }
-        is DayUiEvent.UpdateJournal ->
+        is DayUiEvent.UpdateJournal -> {
+            // Keep the in-memory journal in sync so the top-bar editor and the finish sheet
+            // both seed from the same live text, then persist.
+            _state.update { it.copy(sessionJournal = event.text) }
             _state.value.sessionId?.let { id ->
                 viewModelScope.launch { workoutRepo.setJournal(id, event.text) }
             }
+        }
         is DayUiEvent.SetPinnedNote -> viewModelScope.launch {
             customizationRepo.setPinnedNote(event.exerciseId, event.note)
             refreshExercise(event.exerciseId)

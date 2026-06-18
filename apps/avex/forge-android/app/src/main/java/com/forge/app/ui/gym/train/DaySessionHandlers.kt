@@ -142,7 +142,17 @@ private fun DayViewModel.finishWorkout() {
             avgRestSeconds = avgRestSeconds,
             honestyPct = honestyPct,
             ghostBeats = _state.value.ghostBeats,
-            ghostComparable = _state.value.ghostComparable
+            ghostComparable = _state.value.ghostComparable,
+            coachOpinion = com.forge.app.domain.coach.SessionOpinion.of(
+                setCount = allSets.size,
+                prCount = prCount,
+                ghostBeats = _state.value.ghostBeats,
+                ghostComparable = _state.value.ghostComparable,
+                vsLastVolumeDelta = vsLastVolumeDelta,
+                isBestSession = isBestSession,
+                honestyPct = honestyPct
+            ),
+            initialJournal = _state.value.sessionJournal
         )
         _state.update { it.copy(isFinished = true, summary = summary) }
     }
@@ -176,7 +186,9 @@ private fun DayViewModel.dismissSummary(mood: com.forge.app.domain.mood.Mood?, t
         if (sessionId != null) {
             if (mood != null) workoutRepo.recordMood(sessionId, dayKey, mood.code)
             if (tags.isNotEmpty()) workoutRepo.setSessionTags(sessionId, tags)
-            if (journal.isNotBlank()) workoutRepo.setJournal(sessionId, journal)
+            // Persist unconditionally (including an empty string): the field is pre-seeded with any
+            // mid-session note, so a blank value here means the user deliberately cleared it (#111).
+            workoutRepo.setJournal(sessionId, journal)
         }
         _state.update { it.copy(summary = null) }
         _navigation.send(DayNavigationEffect.PopBack)
@@ -270,6 +282,7 @@ internal suspend fun DayViewModel.beginSessionForThisDay() {
         it.copy(
             sessionId = sessionId,
             sessionStartedAt = started.session.startedAt,
+            sessionJournal = started.session.journal,
             elapsedAnchorMs = now - priorActiveMs,
             displayName = resolvedName,
             isWarmupComplete = it.isWarmupComplete || skipWarmup || warmupAutoSkipped || resuming

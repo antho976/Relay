@@ -44,6 +44,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.data.repo.CoachBrief
 import com.forge.app.data.repo.CoachRepository
 import com.forge.app.domain.units.formatVolumeCompact
+import com.forge.app.ui.gym.stats.components.statsEntrance
 import com.forge.app.ui.theme.LocalForgeSettings
 import com.forge.app.ui.theme.emphasized
 
@@ -167,36 +168,42 @@ private fun BriefContent(
             Spacer(Modifier.height(8.dp))
             CoachIntroCard(onDismiss = onDismissIntro)
         }
-        Text(brief.pass.weekId.uppercase(), style = MaterialTheme.typography.labelMedium, color = emphasized(muted))
-        Spacer(Modifier.height(4.dp))
-        Text(
-            when {
-                brief.pass.status == CoachRepository.STATUS_PROPOSED || brief.pass.status == CoachRepository.STATUS_APPLIED ->
-                    "Proposals — nothing changes until you apply it. Every applied change can be undone."
-                // Pre-baseline: a concrete countdown so a quiet coach reads as "still gathering data" (CO1).
-                brief.sessionsToGo > 0 ->
-                    "Still learning — ${brief.sessionsLogged} of ${brief.minSessions} sessions logged. " +
-                        "${brief.sessionsToGo} more and I'll start calling weekly adjustments."
-                else -> "The coach is watching and learning — anything it would change shows up here as a suggestion. Nothing changes unless you apply it."
-            },
-            style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic
-        )
+        // Sections settle in on their own beat (staggered fade + slide) instead of snapping — a
+        // deliberate reveal for the coach's trust-building screen. statsEntrance is reduced-motion aware.
+        Column(Modifier.statsEntrance(0)) {
+            Text(brief.pass.weekId.uppercase(), style = MaterialTheme.typography.labelMedium, color = emphasized(muted))
+            Spacer(Modifier.height(4.dp))
+            Text(
+                when {
+                    brief.pass.status == CoachRepository.STATUS_PROPOSED || brief.pass.status == CoachRepository.STATUS_APPLIED ->
+                        "Proposals — nothing changes until you apply it. Every applied change can be undone."
+                    // Pre-baseline: a concrete countdown so a quiet coach reads as "still gathering data" (CO1).
+                    brief.sessionsToGo > 0 ->
+                        "Still learning — ${brief.sessionsLogged} of ${brief.minSessions} sessions logged. " +
+                            "${brief.sessionsToGo} more and I'll start calling weekly adjustments."
+                    else -> "The coach is watching and learning — anything it would change shows up here as a suggestion. Nothing changes unless you apply it."
+                },
+                style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic
+            )
+        }
 
         // ── Last week ─────────────────────────────────────────────────────────
         brief.review?.let { r ->
-            Spacer(Modifier.height(24.dp))
-            Text("Last week.", style = MaterialTheme.typography.headlineSmall, color = onBg)
-            Spacer(Modifier.height(12.dp))
-            BriefStatRow("Sessions", "${r.sessionsLastWeek} of ${r.sessionsTarget}")
-            BriefStatRow(
-                "Volume",
-                formatVolume(r.volumeLastWeekLb, useKg) + (r.volumeDeltaPct?.let { d ->
-                    "  (${if (d >= 0) "+" else ""}$d% vs prior)"
-                } ?: "")
-            )
-            BriefStatRow("PRs", "${r.prsLastWeek}")
-            if (r.trackedLifts > 0) BriefStatRow("Lifts", "${r.trackedLifts} tracked · ${r.stalledLifts} stalled")
-            BriefStatRow("Recovery", r.fatigueBand + (r.fatigueScore?.let { "  (fatigue $it)" } ?: ""))
+            Column(Modifier.statsEntrance(1)) {
+                Spacer(Modifier.height(24.dp))
+                Text("Last week.", style = MaterialTheme.typography.headlineSmall, color = onBg)
+                Spacer(Modifier.height(12.dp))
+                BriefStatRow("Sessions", "${r.sessionsLastWeek} of ${r.sessionsTarget}")
+                BriefStatRow(
+                    "Volume",
+                    formatVolume(r.volumeLastWeekLb, useKg) + (r.volumeDeltaPct?.let { d ->
+                        "  (${if (d >= 0) "+" else ""}$d% vs prior)"
+                    } ?: "")
+                )
+                BriefStatRow("PRs", "${r.prsLastWeek}")
+                if (r.trackedLifts > 0) BriefStatRow("Lifts", "${r.trackedLifts} tracked · ${r.stalledLifts} stalled")
+                BriefStatRow("Recovery", r.fatigueBand + (r.fatigueScore?.let { "  (fatigue $it)" } ?: ""))
+            }
         }
 
         // ── What I'd change ───────────────────────────────────────────────────
@@ -207,7 +214,10 @@ private fun BriefContent(
         Spacer(Modifier.height(10.dp))
         when (brief.pass.status) {
             CoachRepository.STATUS_PROPOSED, CoachRepository.STATUS_SHADOW -> {
-                brief.decisions.forEach { d -> DecisionRow(d, viewModel) }
+                // Each proposed change settles in on its own beat after the header/last-week sections.
+                brief.decisions.forEachIndexed { i, d ->
+                    Box(Modifier.statsEntrance(2 + i.coerceAtMost(6))) { DecisionRow(d, viewModel) }
+                }
                 val openCount = brief.decisions.count { it.status == CoachRepository.STATUS_PROPOSED }
                 if (openCount > 1) {
                     Spacer(Modifier.height(2.dp))

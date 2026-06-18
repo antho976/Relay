@@ -13,8 +13,10 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
 data class SettingsUiState(
@@ -77,6 +79,7 @@ class SettingsViewModel @Inject constructor(
     private val resetRepo: ResetRepository,
     private val backupRepo: com.forge.app.data.repo.BackupRepository,
     private val sampleDataSeeder: com.forge.app.data.repo.SampleDataSeeder,
+    private val photoRepo: com.forge.app.data.repo.ProgressPhotoRepository,
     private val pdfExport: com.forge.app.data.repo.PdfExportRepository,
     private val programRepository: com.forge.app.data.repo.ProgramRepository,
     private val vacationRepo: com.forge.app.data.repo.VacationRepository,
@@ -418,7 +421,12 @@ class SettingsViewModel @Inject constructor(
 
     fun backupDatabase(uri: android.net.Uri) = viewModelScope.launch {
         runCatching { backupRepo.backupToUri(uri) }
-            .onSuccess { _statusMessage.value = "Backup saved." }
+            .onSuccess {
+                _statusMessage.value = "Backup saved."
+                // backupToUri cleared the failure marker; reflect that in the StateFlow so any
+                // open "last auto-backup failed" notice disappears without reopening the dialog.
+                refreshAutoBackupInfo()
+            }
             .onFailure { _statusMessage.value = "Backup failed: ${it.message}" }
     }
 
@@ -453,11 +461,34 @@ class SettingsViewModel @Inject constructor(
     private val _autoBackupSavedAt = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
     val autoBackupSavedAt: StateFlow<String?> = _autoBackupSavedAt.asStateFlow()
 
-    /** Refresh the auto-backup date — call when the data dialog opens (the worker may have written since). */
-    fun refreshAutoBackupInfo() {
-        _autoBackupSavedAt.value = backupRepo.autoBackupSavedAtMs()?.let { ms ->
-            java.text.SimpleDateFormat("MMM d, yyyy", java.util.Locale.getDefault()).format(java.util.Date(ms))
+    /** True when the weekly auto-backup worker gave up (e.g. storage full) and none has succeeded since. */
+    private val _autoBackupFailed = kotlinx.coroutines.flow.MutableStateFlow(false)
+    val autoBackupFailed: StateFlow<Boolean> = _autoBackupFailed.asStateFlow()
+
+    /** Refresh the auto-backup date + failure state — call when the data dialog opens (the worker may have run since). */
+    fun refreshAutoBackupInfo() = viewModelScope.launch {
+        // The two checks are File.exists()/lastModified() — keep them off the main thread.
+        val (savedAtMs, failed) = withContext(Dispatchers.IO) {
+            backupRepo.autoBackupSavedAtMs() to backupRepo.autoBackupFailed()
         }
+        _autoBackupSavedAt.value = savedAtMs?.let { formatMediumDate(it) }
+        _autoBackupFailed.value = failed
+    }
+
+    // ── Progress-photo info (tasks 3 + 4: factory-reset warning + data-dialog stake indicator) ──────
+    /** Count of saved progress photos — loaded once per data-dialog open and on VM init. */
+    private val _photoCount = kotlinx.coroutines.flow.MutableStateFlow(0)
+    val photoCount: StateFlow<Int> = _photoCount.asStateFlow()
+
+    /** Timestamp (ms) of the most recently taken progress photo, or null when there are none. */
+    private val _photoLastTakenMs = kotlinx.coroutines.flow.MutableStateFlow<Long?>(null)
+    val photoLastTakenMs: StateFlow<Long?> = _photoLastTakenMs.asStateFlow()
+
+    /** Refresh progress-photo stats — call when the data dialog opens so the count is fresh. */
+    fun refreshPhotoInfo() = viewModelScope.launch {
+        val photos = runCatching { photoRepo.photos() }.getOrDefault(emptyList())
+        _photoCount.value = photos.size
+        _photoLastTakenMs.value = photos.maxOfOrNull { it.takenAtMs }
     }
 
     /** In-app restore from the weekly auto-backup slot — the recovery path for the local auto-backup (#86). */

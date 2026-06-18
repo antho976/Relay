@@ -43,6 +43,7 @@ class OverviewViewModel @Inject constructor(
     private val customizationRepo: CustomizationRepository,
     private val workoutRepo: WorkoutRepository,
     private val sessionDao: SessionDao,
+    private val sampleDataSeeder: com.forge.app.data.repo.SampleDataSeeder,
     private val adaptationRepo: com.forge.app.data.repo.AdaptationRepository,
     private val coachRepo: com.forge.app.data.repo.CoachRepository,
     private val programRepo: com.forge.app.data.repo.ProgramRepository,
@@ -182,6 +183,15 @@ class OverviewViewModel @Inject constructor(
 
     /** Dismiss the one-time orphan-session notice (E8). */
     fun dismissOrphanNotice() { _orphanNotice.value = null }
+
+    /**
+     * "Try demo data" opt-in (Cat 10): wire the otherwise-unreachable [SampleDataSeeder] to the
+     * zero-session welcome card so a new user can populate Stats/rank/coach in one tap. Guarded on an
+     * empty history so it can't double-seed; the Overview state refreshes itself via the DB flows.
+     */
+    fun loadSampleData() = viewModelScope.launch {
+        if (sessionDao.finishedCount() == 0) sampleDataSeeder.seed()
+    }
 
     // ─── Coach feed (adaptation engine) ───────────────────────────────────────
 

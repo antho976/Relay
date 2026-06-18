@@ -1,4 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
 <full-backup-content>
-    <!-- Offline single-user app: include the Room DB and DataStore prefs by default. -->
+    <!--
+        Exclude WAL and shm sidecar files: Android Auto Backup can snapshot these at any moment.
+        Restoring a live WAL alongside a stale main .db corrupts the Room database on next open.
+        Only the main .db is safe to back up (Room keeps it consistent). The pending_restore staging
+        files live in filesDir and must never be cloud-backed — they are transient mid-restore state.
+    -->
+    <exclude domain="database" path="forge.db-wal" />
+    <exclude domain="database" path="forge.db-shm" />
+    <exclude domain="file" path="pending_restore.db" />
+    <exclude domain="file" path="pending_restore_prefs.pb" />
+    <exclude domain="file" path="pending_restore_photos" />
+    <exclude domain="file" path="pending_restore_avatar.jpg" />
 </full-backup-content>

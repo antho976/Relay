@@ -8,6 +8,7 @@ import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
+import com.forge.app.domain.units.fromDisplayWeight
 import com.forge.app.domain.units.parseToLb
 import com.forge.app.ui.theme.ForgeMotion
 import androidx.compose.foundation.background
@@ -180,7 +181,9 @@ fun OnboardingScreen(
     var equipment by remember { mutableStateOf(emptySet<String>()) }
     // Non-null when a curated preset (e.g. Developer's) is picked — locks the exercise pool.
     var frozenIds by remember { mutableStateOf<Set<String>?>(null) }
-    var plateWeightLb by remember { mutableStateOf(15.0) }
+    // Locale-aware default (#2): a kg lifter's "not sure" default is a round kg plate (10 kg), an lb
+    // lifter's stays 15 lb. Stored in lb; the plate step shows it in the user's unit.
+    var plateWeightLb by remember { mutableStateOf(if (localeDefaultUseKg()) fromDisplayWeight(10.0, true) else 15.0) }
     var problemAreas by remember { mutableStateOf(emptySet<String>()) }
     var cadence by remember { mutableStateOf("") }
     var everyN by remember { mutableIntStateOf(4) }
@@ -278,7 +281,7 @@ fun OnboardingScreen(
                                         frozenIds = preset.frozenIds
                                     }
                                 )
-                                StepPlateWeight(plateWeightLb = plateWeightLb, onSet = { plateWeightLb = it })
+                                StepPlateWeight(plateWeightLb = plateWeightLb, useKg = useKg, onSet = { plateWeightLb = it })
                             }
                             3 -> {
                                 StepProblemAreas(

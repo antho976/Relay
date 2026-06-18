@@ -1,6 +1,7 @@
 @file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 package com.forge.app.ui.gym.train.components
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -15,6 +16,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -24,6 +26,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.forge.app.domain.units.formatVolume
 import com.forge.app.ui.common.bounceClick
+import com.forge.app.ui.gym.stats.components.CountUpText
+import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.theme.LocalForgeSettings
 import androidx.compose.ui.unit.sp
 import com.forge.app.domain.mood.Mood
@@ -35,6 +39,24 @@ import com.forge.app.ui.trophies.components.TrophyIconBadge
 internal fun FlatStat(value: String, label: String, onBg: Color, muted: Color) {
     Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
         Text(value, style = MaterialTheme.typography.bodyMedium, color = onBg, fontWeight = FontWeight.SemiBold)
+        Text(label, style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.6f), fontSize = 9.sp, letterSpacing = 0.5.sp)
+    }
+}
+
+/**
+ * Like [FlatStat] but the big number rolls up from 0 on first appearance (session-end celebration) —
+ * reuses the Stats motion kit's [CountUpText] so reduced motion collapses it to an instant value.
+ */
+@Composable
+internal fun CountUpStat(value: Double, label: String, onBg: Color, muted: Color, format: (Double) -> String) {
+    Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+        CountUpText(
+            value = value,
+            style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.SemiBold),
+            color = onBg,
+            fromValue = 0.0,
+            format = format
+        )
         Text(label, style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.6f), fontSize = 9.sp, letterSpacing = 0.5.sp)
     }
 }
@@ -61,16 +83,30 @@ internal fun MoodPrompt(selected: Mood?, onSelect: (Mood) -> Unit, onBg: Color, 
 
 @Composable
 internal fun MoodChip(mood: Mood, isSelected: Boolean, onClick: () -> Unit, onBg: Color, muted: Color, outline: Color, modifier: Modifier = Modifier) {
+    // Crossfade the selection colours instead of hard-swapping them — the picker is prominent on the
+    // summary, so the instant flip read cheap. Tweens collapse to instant under reduced motion.
+    val bgColor by animateColorAsState(
+        if (isSelected) onBg.copy(alpha = 0.08f) else Color.Transparent,
+        animationSpec = ForgeMotion.standardTween(), label = "mood-bg"
+    )
+    val borderColor by animateColorAsState(
+        if (isSelected) onBg else outline.copy(alpha = 0.35f),
+        animationSpec = ForgeMotion.standardTween(), label = "mood-border"
+    )
+    val textColor by animateColorAsState(
+        if (isSelected) onBg else muted.copy(alpha = 0.7f),
+        animationSpec = ForgeMotion.standardTween(), label = "mood-text"
+    )
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(4.dp))
-            .border(0.5.dp, if (isSelected) onBg else outline.copy(alpha = 0.35f), RoundedCornerShape(4.dp))
-            .background(if (isSelected) onBg.copy(alpha = 0.08f) else Color.Transparent)
+            .border(0.5.dp, borderColor, RoundedCornerShape(4.dp))
+            .background(bgColor)
             .bounceClick { onClick() }
             .padding(vertical = 8.dp),
         contentAlignment = Alignment.Center
     ) {
-        Text(mood.displayName, style = MaterialTheme.typography.labelSmall, color = if (isSelected) onBg else muted.copy(alpha = 0.7f), fontSize = 10.sp)
+        Text(mood.displayName, style = MaterialTheme.typography.labelSmall, color = textColor, fontSize = 10.sp)
     }
 }
 

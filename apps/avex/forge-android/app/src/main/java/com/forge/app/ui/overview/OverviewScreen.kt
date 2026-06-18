@@ -26,8 +26,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -136,6 +138,8 @@ fun OverviewScreen(
     onGoToCardio: () -> Unit,
     onGoToTrophies: () -> Unit,
     onGoToStats: () -> Unit = {},
+    onGoToPrs: () -> Unit = {},
+    onOpenNotes: () -> Unit = {},
     onGoToNutrition: () -> Unit = {},
     onGoToSettings: () -> Unit = {},
     onOpenCoachBrief: () -> Unit = {},
@@ -151,6 +155,27 @@ fun OverviewScreen(
     val summaryLines by viewModel.sessionExerciseLines.collectAsStateWithLifecycle()
     var showDayEdit by remember { mutableStateOf(false) }
     var showHistory by remember { mutableStateOf(false) }
+    var showSampleDataConfirm by remember { mutableStateOf(false) }
+
+    if (showSampleDataConfirm) {
+        AlertDialog(
+            onDismissRequest = { showSampleDataConfirm = false },
+            title = { Text("Load sample data?") },
+            text = {
+                Text(
+                    "Fills Forge with 8 weeks of realistic demo training so you can explore Stats, " +
+                        "your rank, and the coach before logging real workouts. You can wipe it anytime " +
+                        "from Settings → Reset → \"Reset session data\"."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { viewModel.loadSampleData(); showSampleDataConfirm = false }) { Text("Load") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSampleDataConfirm = false }) { Text("Cancel") }
+            }
+        )
+    }
 
     LaunchedEffect(state.pendingMilestone) {
         state.pendingMilestone?.let { event -> viewModel.onMilestoneShown(event.id) }
@@ -269,6 +294,17 @@ fun OverviewScreen(
                 FirstTouchTip(
                     "Welcome to Forge.",
                     "Your first workout is below — tap Start session to log it. Your stats, rank, and the coach all fill in as you train."
+                )
+                // Demo-data opt-in (Cat 10): one tap to populate the app so a new user can see what
+                // every screen looks like full, instead of a wall of zeros. Only here at zero sessions.
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Just exploring? Load 8 weeks of sample data →",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = accent,
+                    modifier = Modifier
+                        .clickableLabeled("Load 8 weeks of sample data to explore the app") { showSampleDataConfirm = true }
+                        .padding(start = 4.dp, top = 2.dp, bottom = 2.dp)
                 )
             }
 
@@ -399,8 +435,8 @@ fun OverviewScreen(
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("${state.workoutsThisWeek} of ${state.weeklyWorkoutTarget} target", style = MaterialTheme.typography.labelSmall, color = muted)
                     Text("·", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.5f))
-                    Text("view program →", style = MaterialTheme.typography.labelSmall,
-                        color = muted, fontSize = 10.sp,
+                    Text("view program →", style = MaterialTheme.typography.labelMedium,
+                        color = accent,
                         modifier = Modifier.clickableLabeled("View your program") { onViewProgram() }.padding(vertical = 2.dp))
                 }
             }
@@ -527,6 +563,26 @@ fun OverviewScreen(
 
             Spacer(Modifier.height(20.dp))
             HorizontalDivider(color = outline.copy(alpha = 0.3f))
+            Spacer(Modifier.height(12.dp))
+
+            // ── Quick links: PRs + Notes search ─────────────────────────────
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    "Personal records →",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = muted,
+                    modifier = Modifier.clickableLabeled("View personal records") { onGoToPrs() }.padding(vertical = 4.dp)
+                )
+                Text(
+                    "Search notes →",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = muted,
+                    modifier = Modifier.clickableLabeled("Search workout notes") { onOpenNotes() }.padding(vertical = 4.dp)
+                )
+            }
             Spacer(Modifier.height(12.dp))
 
             // ── Cardio · Stats · Trophies ────────────────────────────────────

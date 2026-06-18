@@ -1,9 +1,15 @@
 package com.forge.app.ui.gym.train.components
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -11,24 +17,28 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.TrendingDown
 import androidx.compose.material.icons.filled.TrendingUp
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -39,6 +49,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -48,6 +62,8 @@ import com.forge.app.data.db.entities.LoggedSet
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.domain.units.formatWeightDelta
 import com.forge.app.domain.units.unitLabel
+import com.forge.app.ui.common.clickableLabeled
+import com.forge.app.ui.common.rirLabel
 import com.forge.app.ui.common.rpeLabel
 import com.forge.app.domain.units.weightInputValue
 import com.forge.app.ui.theme.ForgeLastGreen
@@ -196,8 +212,41 @@ fun SetRow(
         else
             modifier.combinedClickable(onClick = { isEditing = true })
 
+        // Build a single spoken description so TalkBack reads the row as one unit rather than
+        // announcing each Text node separately: "Set 2, 50 kg, 10 reps[, RPE 8][, personal record]".
+        val rowDescription = buildString {
+            append("Set $setIndex")
+            if (displayWeight != null) append(", $displayWeight")
+            append(", ${set.reps} reps")
+            set.rpe?.let { append(", RPE ${rpeLabel(it)}, ${rirLabel(it)} in reserve") }
+            if (isPr) append(", personal record")
+        }
+
+        // Swipe the row left to delete this set — there's no other delete affordance. A custom
+        // a11y action covers TalkBack, which can't perform the swipe gesture.
+        val dismissState = rememberSwipeToDismissBoxState(
+            confirmValueChange = { v ->
+                // Trigger the delete but DON'T confirm the dismiss: the row stays put and is removed
+                // only when the set list actually drops it. If the delete fails, the row snaps back
+                // instead of vanishing while the set still lives in the DB.
+                if (v == SwipeToDismissBoxValue.EndToStart) onDelete()
+                false
+            }
+        )
+        SwipeToDismissBox(
+            state = dismissState,
+            modifier = Modifier.fillMaxWidth(),
+            enableDismissFromStartToEnd = false,
+            backgroundContent = {
+                SwipeDeleteBackground(active = dismissState.targetValue == SwipeToDismissBoxValue.EndToStart)
+            }
+        ) {
         Row(
             modifier = tapMod
+                .semantics(mergeDescendants = true) {
+                    contentDescription = rowDescription
+                    customActions = listOf(CustomAccessibilityAction("Delete set") { onDelete(); true })
+                }
                 .fillMaxWidth()
                 .graphicsLayer {
                     alpha = appear.value.coerceIn(0f, 1f)
@@ -254,7 +303,7 @@ fun SetRow(
                     Box(
                         modifier = Modifier
                             .border(0.5.dp, outline.copy(alpha = 0.4f), RoundedCornerShape(3.dp))
-                            .combinedClickable(onClick = { showRpePicker = true }, onLongClick = { onSetRpe(null) })
+                            .combinedClickable(onClick = { showRpePicker = !showRpePicker }, onLongClick = { onSetRpe(null) })
                             .padding(horizontal = 8.dp, vertical = 3.dp)
                     ) {
                         Text(
@@ -286,58 +335,122 @@ fun SetRow(
                 }
             }
         }
+        }
 
-        if (showRpePicker && onSetRpe != null) {
-            RpePickerDialog(
+        // System back closes the open picker instead of leaving the screen (the modal dialog this
+        // replaced dismissed on back-press; the inline panel must honor it too).
+        BackHandler(enabled = showRpePicker && onSetRpe != null) { showRpePicker = false }
+
+        // Inline effort picker — slides in directly under the row (replaces the modal dialog),
+        // showing each rating as both RPE and its reps-in-reserve equivalent.
+        AnimatedVisibility(
+            visible = showRpePicker && onSetRpe != null,
+            enter = expandVertically(ForgeMotion.enterTween()) + fadeIn(ForgeMotion.enterTween()),
+            exit = shrinkVertically(ForgeMotion.exitTween()) + fadeOut(ForgeMotion.exitTween())
+        ) {
+            InlineEffortPicker(
                 current = set.rpe,
-                onPick = { rpe -> onSetRpe(rpe); showRpePicker = false },
-                onClear = { onSetRpe(null); showRpePicker = false },
+                onPick = { rpe -> onSetRpe?.invoke(rpe); showRpePicker = false },
+                onClear = { onSetRpe?.invoke(null); showRpePicker = false },
                 onDismiss = { showRpePicker = false }
             )
         }
     }
 }
 
+/** Red trailing-edge background revealed while swiping a set row left to delete it. */
+@Composable
+private fun SwipeDeleteBackground(active: Boolean) {
+    Row(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.error.copy(alpha = if (active) 0.85f else 0.35f))
+            .padding(horizontal = 20.dp),
+        horizontalArrangement = Arrangement.End,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(Icons.Default.Delete, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
+    }
+}
+
+/**
+ * Inline effort picker — RPE 6→10 in 0.5 steps, each chip labelled with both the RPE and its
+ * reps-in-reserve equivalent so you can think in either. Replaces the old modal dialog; slides
+ * in under the set row.
+ */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun RpePickerDialog(
+private fun InlineEffortPicker(
     current: Double?,
     onPick: (Double) -> Unit,
     onClear: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val options = generateSequence(6.0) { it + 0.5 }.takeWhile { it <= 10.0 }.toList()
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("RPE — how hard was that set?") },
-        text = {
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                options.forEach { v ->
-                    val selected = current != null && kotlin.math.abs(current - v) < 0.01
-                    Box(
-                        modifier = Modifier
-                            .border(
-                                1.dp,
-                                if (selected) MaterialTheme.colorScheme.onSurface
-                                else MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
-                                RoundedCornerShape(4.dp)
-                            )
-                            .clickable { onPick(v) }
-                            .padding(horizontal = 14.dp, vertical = 10.dp)
-                    ) { Text(rpeLabel(v), style = MaterialTheme.typography.bodyMedium) }
-                }
-            }
-        },
-        confirmButton = {},
-        dismissButton = {
+    val onBg = MaterialTheme.colorScheme.onBackground
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val outline = MaterialTheme.colorScheme.outline
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(bottom = 6.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "EFFORT · RPE / REPS IN RESERVE",
+                style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp
+            )
+            // Always a visible dismiss: "clear" removes a set rating (and closes); "close" just
+            // collapses the picker when nothing's rated yet (so it's never stuck open).
             if (current != null) {
-                TextButton(onClick = onClear) { Text("Clear") }
+                Text(
+                    "clear",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = muted.copy(alpha = 0.7f),
+                    fontSize = 10.sp,
+                    modifier = Modifier
+                        .clickableLabeled("Clear effort rating") { onClear() }
+                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                )
             } else {
-                TextButton(onClick = onDismiss) { Text("Cancel") }
+                Text(
+                    "close",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = muted.copy(alpha = 0.7f),
+                    fontSize = 10.sp,
+                    modifier = Modifier
+                        .clickableLabeled("Close effort picker") { onDismiss() }
+                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                )
             }
         }
-    )
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            options.forEach { v ->
+                val selected = current != null && kotlin.math.abs(current - v) < 0.01
+                Column(
+                    modifier = Modifier
+                        .border(
+                            1.dp,
+                            if (selected) onBg else outline.copy(alpha = 0.4f),
+                            RoundedCornerShape(6.dp)
+                        )
+                        .clickableLabeled("RPE ${rpeLabel(v)}, ${rirLabel(v)} reps in reserve") { onPick(v) }
+                        .sizeIn(minWidth = 44.dp)
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(rpeLabel(v), style = MaterialTheme.typography.bodyLarge, color = if (selected) onBg else muted)
+                    Text(
+                        "${rirLabel(v)} RIR",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = muted.copy(alpha = 0.6f),
+                        fontSize = 8.sp
+                    )
+                }
+            }
+        }
+    }
 }

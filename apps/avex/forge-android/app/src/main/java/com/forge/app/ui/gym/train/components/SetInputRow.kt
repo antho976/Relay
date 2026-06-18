@@ -1,17 +1,26 @@
+@file:OptIn(
+    androidx.compose.foundation.ExperimentalFoundationApi::class,
+    androidx.compose.foundation.layout.ExperimentalLayoutApi::class
+)
+
 package com.forge.app.ui.gym.train.components
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -32,14 +41,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import com.forge.app.ui.common.clickableLabeled
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import java.util.Locale
 import com.forge.app.data.db.entities.LoggedSet
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.domain.units.parseToLb
@@ -81,6 +94,11 @@ fun SetInputRow(
     onAdvance: () -> Unit = {},
     onSubmit: (weightText: String, reps: Int) -> Unit,
     onAddSet: (() -> Unit)? = null,
+    /** This session's most recent logged set — powers the "↻ repeat" fill chip and the
+     *  long-press-to-repeat on LOG SET. Null until at least one set is logged this session. */
+    repeatSet: LoggedSet? = null,
+    /** Logs a duplicate of [repeatSet] immediately (long-press on LOG SET). Null disables it. */
+    onRepeatLastSet: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val useKg = LocalForgeSettings.current.useKg
@@ -97,6 +115,7 @@ fun SetInputRow(
     var weight by rememberSaveable(nextSetNumber) { mutableStateOf(seedWeight) }
     var reps by rememberSaveable(nextSetNumber) { mutableStateOf(seedReps) }
     val repsFocus = remember { FocusRequester() }
+    val haptic = LocalHapticFeedback.current
 
     fun onWeightChange(new: String) {
         // Typing "x"/"X" after a number (e.g. "45x") commits the weight and jumps to the
@@ -127,6 +146,21 @@ fun SetInputRow(
             onSubmit(weight.trim(), r)
         }
         // Fields re-seed from the next set's prior automatically (keyed on the set number) (#8).
+    }
+
+    // ── +/- steppers — nudge the field without opening the keyboard ──────────────
+    // Weight steps in the DISPLAY unit (kg/lb) or by half-plates on PLATES exercises; the field
+    // already holds a display-unit value, so we step the parsed number and re-format it.
+    fun stepWeight(delta: Double) {
+        val base = weight.toDoubleOrNull() ?: 0.0
+        val next = (base + delta).coerceAtLeast(0.0)
+        // Format/parse pinned to Locale.US so the field always uses a '.' decimal — a comma-decimal
+        // locale would otherwise write "2,5" and the next toDoubleOrNull() would fail (matches WeightFormatter).
+        weight = if (next % 1.0 == 0.0) next.toInt().toString() else String.format(Locale.US, "%.1f", next)
+    }
+    fun stepReps(delta: Int) {
+        val base = reps.toIntOrNull() ?: targetReps ?: repsPlaceholder ?: 0
+        reps = (base + delta).coerceAtLeast(0).toString()
     }
 
     val canSubmit = remember(weight, reps, isBodyweight) {
@@ -228,21 +262,57 @@ fun SetInputRow(
                                 if (isPlates) "${formatPlateCount(lb / plateLb)} pl" else formatWeight(lb, useKg)
                             } ?: prior.weightText
                             Text(
-                                // The ghost to beat — tap to autofill last time's numbers as your floor.
+                                // The ghost to beat — tap to autofill the weight only so the user
+                                // pushes for one extra rep rather than copying the exact same set.
                                 "beat $priorDisplay × ${prior.reps}",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = onBg.copy(alpha = 0.7f),
                                 fontSize = 9.sp,
                                 textAlign = TextAlign.End,
-                                modifier = Modifier.clickableLabeled(
-                                    "Autofill last session's weight and reps"
-                                ) {
-                                    weight = prior.weightLb?.let { lb ->
-                                        if (isPlates) formatPlateCount(lb / plateLb) else weightInputValue(lb, useKg)
-                                    } ?: prior.weightText
-                                    reps = prior.reps.toString()
-                                }
+                                modifier = Modifier
+                                    .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                                    .clickableLabeled(
+                                        "Autofill last session's weight"
+                                    ) {
+                                        weight = prior.weightLb?.let { lb ->
+                                            if (isPlates) formatPlateCount(lb / plateLb) else weightInputValue(lb, useKg)
+                                        } ?: prior.weightText
+                                        // Reps intentionally left for the user — aim for one more.
+                                    }
                             )
+                        }
+                    }
+                }
+
+                // ── Quick-adjust row — +/- steppers + tap-to-repeat-last-set chip ────
+                Spacer(Modifier.height(10.dp))
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    val weightStep = when { isPlates -> 0.5; useKg -> 2.5; else -> 5.0 }
+                    if (!isBodyweight) {
+                        StepperPill(
+                            label = when { isPlates -> "PL"; useKg -> "KG"; else -> "LB" },
+                            onMinus = { stepWeight(-weightStep) },
+                            onPlus = { stepWeight(weightStep) }
+                        )
+                    }
+                    StepperPill(label = "REPS", onMinus = { stepReps(-1) }, onPlus = { stepReps(1) })
+                    // Fill (don't log) both fields from this session's last set — for straight sets.
+                    repeatSet?.let { rs ->
+                        val wLabel = if (isBodyweight) "BW"
+                            else rs.weightLb?.let { lb ->
+                                if (isPlates) "${formatPlateCount(lb / plateLb)} pl" else formatWeight(lb, useKg)
+                            } ?: rs.weightText
+                        RepeatChip("↻ $wLabel × ${rs.reps}") {
+                            if (!isBodyweight) {
+                                weight = rs.weightLb?.let { lb ->
+                                    if (isPlates) formatPlateCount(lb / plateLb) else weightInputValue(lb, useKg)
+                                } ?: rs.weightText
+                            }
+                            reps = rs.reps.toString()
                         }
                     }
                 }
@@ -283,21 +353,51 @@ fun SetInputRow(
                     Text(advanceLabel, style = MaterialTheme.typography.labelLarge)
                 }
             } else {
-                // Tap the weight/reps fields to use the system keyboard; this logs the set.
-                Button(
-                    onClick = { submitSet() },
-                    enabled = canSubmit,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = ctaShape,
-                    contentPadding = PaddingValues(vertical = 16.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Color.White,
-                        contentColor = Color.Black,
-                        disabledContainerColor = Color.White.copy(alpha = 0.3f),
-                        disabledContentColor = Color.Black.copy(alpha = 0.5f)
-                    )
+                // Tap the weight/reps fields to use the system keyboard; tapping this logs the set.
+                // A Material Button can't take a long-press, so this is a styled Box with
+                // combinedClickable: tap = log the typed set, long-press = repeat your last set.
+                val canRepeat = onRepeatLastSet != null
+                // Three visual states: ready-to-log (solid), hold-to-repeat-only (mid, clearly still
+                // interactive — not the fully-dimmed look that reads as "disabled"), and inert.
+                // combinedClickable(enabled = …) carries the disabled state to TalkBack for the inert case.
+                val bgAlpha = when { canSubmit -> 1f; canRepeat -> 0.55f; else -> 0.3f }
+                val fgAlpha = when { canSubmit -> 1f; canRepeat -> 0.75f; else -> 0.5f }
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(ctaShape)
+                        .background(Color.White.copy(alpha = bgAlpha))
+                        .combinedClickable(
+                            enabled = canSubmit || canRepeat,
+                            onClickLabel = if (canSubmit) "Log set $nextSetNumber" else null,
+                            onLongClickLabel = if (canRepeat) "Repeat last set" else null,
+                            onLongClick = if (canRepeat) {
+                                {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    onRepeatLastSet?.invoke()
+                                }
+                            } else null,
+                            onClick = { if (canSubmit) submitSet() }
+                        )
+                        .padding(vertical = 16.dp),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Text("LOG SET $nextSetNumber", style = MaterialTheme.typography.labelLarge)
+                    Text(
+                        "LOG SET $nextSetNumber",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = Color.Black.copy(alpha = fgAlpha)
+                    )
+                }
+                if (canRepeat) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "Hold to repeat your last set",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = muted.copy(alpha = 0.7f),
+                        fontSize = 10.sp,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth()
+                    )
                 }
             }
         }
@@ -353,6 +453,54 @@ fun SetInputRow(
                 )
             }
         }
+    }
+}
+
+/** A compact rounded "−  LABEL  +" control that nudges a field without opening the keyboard.
+ *  Each arrow is a ≥44dp touch target with a spoken a11y label. */
+@Composable
+private fun StepperPill(
+    label: String,
+    onMinus: () -> Unit,
+    onPlus: () -> Unit
+) {
+    val onBg = MaterialTheme.colorScheme.onBackground
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val outline = MaterialTheme.colorScheme.outline
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.border(1.dp, outline.copy(alpha = 0.5f), RoundedCornerShape(50))
+    ) {
+        Box(
+            modifier = Modifier
+                .sizeIn(minWidth = 44.dp, minHeight = 40.dp)
+                .clickableLabeled("Decrease $label") { onMinus() },
+            contentAlignment = Alignment.Center
+        ) { Text("−", style = MaterialTheme.typography.titleMedium, color = onBg) }
+        Text(label, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
+        Box(
+            modifier = Modifier
+                .sizeIn(minWidth = 44.dp, minHeight = 40.dp)
+                .clickableLabeled("Increase $label") { onPlus() },
+            contentAlignment = Alignment.Center
+        ) { Text("+", style = MaterialTheme.typography.titleMedium, color = onBg) }
+    }
+}
+
+/** Tap to fill (not log) the input fields with this session's last set — fast straight sets. */
+@Composable
+private fun RepeatChip(label: String, onClick: () -> Unit) {
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val outline = MaterialTheme.colorScheme.outline
+    Box(
+        modifier = Modifier
+            .sizeIn(minHeight = 40.dp)
+            .border(1.dp, outline.copy(alpha = 0.5f), RoundedCornerShape(50))
+            .clickableLabeled("Fill last set: $label") { onClick() }
+            .padding(horizontal = 14.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(label, style = MaterialTheme.typography.labelMedium, color = muted)
     }
 }
 

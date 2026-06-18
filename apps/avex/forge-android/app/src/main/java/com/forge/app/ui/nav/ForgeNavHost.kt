@@ -119,6 +119,8 @@ fun ForgeNavHost() {
                 onGoToCardio = { nav.navigate(Routes.CARDIO) },
                 onGoToTrophies = { nav.navigate(Routes.TROPHIES) },
                 onGoToStats = { nav.navigate(Routes.GYM_STATS) },
+                onGoToPrs = { nav.navigate(Routes.GYM_PRS) },
+                onOpenNotes = { nav.navigate(Routes.NOTES_SEARCH) },
                 onGoToNutrition = { nav.navigate(Routes.NUTRITION) },
                 onGoToSettings = { nav.navigate(Routes.SETTINGS) },
                 onOpenCoachBrief = { nav.navigate(Routes.COACH_BRIEF) },
@@ -150,6 +152,16 @@ fun ForgeNavHost() {
                 onEditProgram = { dayKey -> nav.navigate(Routes.programEditor(dayKey)) },
                 onOpenCardio = { nav.navigate(Routes.CARDIO) },
                 initialTab = 1
+            )
+        }
+        composable(Routes.GYM_PRS) {
+            DayListScreen(
+                onBack = { nav.popBackStack() },
+                onOpenDay = { dayKey -> nav.navigate(Routes.gymDay(dayKey)) },
+                onOpenDayQuick = { dayKey -> nav.navigate(Routes.gymDay(dayKey, skipWarmup = true)) },
+                onEditProgram = { dayKey -> nav.navigate(Routes.programEditor(dayKey)) },
+                onOpenCardio = { nav.navigate(Routes.CARDIO) },
+                initialTab = 2
             )
         }
         composable(Routes.PROGRAM_VIEWER) {
@@ -221,7 +233,8 @@ fun ForgeNavHost() {
                 onBack = { nav.popBackStack() },
                 onOpenTrophies = { nav.navigate(Routes.TROPHIES) },
                 onOpenRecaps = { nav.navigate(Routes.RECAP) },
-                onOpenGoals = { nav.navigate(Routes.GOALS) }
+                onOpenGoals = { nav.navigate(Routes.GOALS) },
+                onOpenCoachBrief = { nav.navigate(Routes.COACH_BRIEF) }
             )
         }
         composable(Routes.GOALS) {

@@ -19,22 +19,28 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.EditNote
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -71,6 +77,16 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
 
     var restTimerSetterForId by remember { mutableStateOf<String?>(null) }
     var chartForExerciseId by remember { mutableStateOf<String?>(null) }
+    // rememberSaveable so a rotation while the note editor is open keeps it open (its text is saved too).
+    var showNoteEditor by rememberSaveable { mutableStateOf(false) }
+
+    if (showNoteEditor) {
+        SessionNoteDialog(
+            initial = state.sessionJournal,
+            onSave = { text -> onEvent(DayUiEvent.UpdateJournal(text)); showNoteEditor = false },
+            onDismiss = { showNoteEditor = false }
+        )
+    }
 
     chartForExerciseId?.let { exId ->
         val exercise = state.exercises.firstOrNull { it.plan.id == exId }
@@ -118,7 +134,7 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
 
     LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(vertical = 8.dp)) {
         if (!state.isWarmupComplete) {
-            item(key = "warmup") {
+            item(key = "warmup", contentType = "warmup") {
                 WarmupGate(
                     warmupItems = state.customWarmupItems ?: state.dayPlan.warmup,
                     checks = state.warmupChecks,
@@ -129,8 +145,13 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
                 )
             }
         } else {
-            item(key = "session-hero") {
-                SessionHero(state = state, onBack = { onEvent(DayUiEvent.RequestBack) }, onFinish = { onEvent(DayUiEvent.FinishWorkout) })
+            item(key = "session-hero", contentType = "session-hero") {
+                SessionHero(
+                    state = state,
+                    onBack = { onEvent(DayUiEvent.RequestBack) },
+                    onFinish = { onEvent(DayUiEvent.FinishWorkout) },
+                    onEditNote = { showNoteEditor = true }
+                )
             }
 
             // First-touch (D8/D10): a brand-new user opens to a list of names with no obvious action.
@@ -138,7 +159,7 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
             // for a genuinely new user — never for a returning user starting an all-new program. Auto-hides
             // after the first set of this session.
             if (!firstWorkoutDone && state.exercises.isNotEmpty() && state.exercises.all { it.loggedSets.isEmpty() }) {
-                item(key = "first-time-tip") {
+                item(key = "first-time-tip", contentType = "tip") {
                     FirstTouchTip(
                         "Your week starts here.",
                         "Tap an exercise to open it, then log each set with the weight and reps you hit. The coach starts learning from your very first session.",
@@ -150,7 +171,7 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
             // ── Suggested order (engine System 3) — pre-work only ────────────
             val ordering = state.orderingSuggestion
             if (ordering != null && state.exercises.all { it.loggedSets.isEmpty() }) {
-                item(key = "ordering-suggestion") {
+                item(key = "ordering-suggestion", contentType = "ordering") {
                     val muted = MaterialTheme.colorScheme.onSurfaceVariant
                     val accent = MaterialTheme.colorScheme.primary
                     val nameById = state.exercises.associate { it.plan.id to it.effectiveName }
@@ -198,7 +219,7 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
                     .map { it.index to it.value }
                 val nextEx = upcoming.firstOrNull()?.second
 
-                item(key = "current-exercise") {
+                item(key = "current-exercise", contentType = "exercise") {
                     // Shared-axis X keyed on the exercise id (not the whole state) so it only
                     // animates on an actual exercise switch — not on every set logged. The new
                     // exercise slides in from the direction of travel (right = later in the list).
@@ -281,7 +302,7 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
                     }
                 }
 
-                item(key = "up-next") {
+                item(key = "up-next", contentType = "up-next") {
                     Spacer(Modifier.height(14.dp))
                     UpNextBubble(
                         nextName = nextEx?.effectiveName,
@@ -302,7 +323,7 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
                     ex.plan.id != shownExercise.plan.id && (ex.skipped || ex.loggedSets.size >= ex.targetSets)
                 }
                 if (done.isNotEmpty()) {
-                    item(key = "done-header") {
+                    item(key = "done-header", contentType = "done-header") {
                         val outline = MaterialTheme.colorScheme.outline
                         HorizontalDivider(color = outline.copy(alpha = 0.2f))
                         Text(
@@ -315,7 +336,7 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
                     }
                     // Key by position, not exercise id — a day can legitimately hold the same exercise
                     // twice (a tiny equipment pool), and duplicate keys crash LazyColumn.
-                    items(done, key = { "done-${it.index}" }) { entry ->
+                    items(done, key = { "done-${it.index}" }, contentType = { "done-row" }) { entry ->
                         val ex = entry.value
                         CollapsedRow(
                             exerciseIndex = entry.index,
@@ -329,18 +350,43 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
                             color = MaterialTheme.colorScheme.outline.copy(alpha = 0.12f)
                         )
                     }
-                    item(key = "done-bottom") { Spacer(Modifier.height(16.dp)) }
+                    item(key = "done-bottom", contentType = "done-bottom") { Spacer(Modifier.height(16.dp)) }
                 }
             }
         }
     }
 }
 
+/** Mid-session journal editor opened from the top-bar note icon. Same Session.journal that the
+ *  finish sheet edits — capture a thought now, review or extend it at the end. */
 @Composable
-internal fun SessionHero(state: DayUiState, onBack: () -> Unit, onFinish: () -> Unit) {
+private fun SessionNoteDialog(initial: String, onSave: (String) -> Unit, onDismiss: () -> Unit) {
+    // rememberSaveable so in-progress text survives a rotation (the dialog is recreated on close, so
+    // a reopen still re-seeds from `initial`).
+    var text by rememberSaveable { mutableStateOf(initial) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Session note") },
+        text = {
+            OutlinedTextField(
+                value = text,
+                onValueChange = { text = it },
+                modifier = Modifier.fillMaxWidth(),
+                placeholder = { Text("Anything to remember about today's session…") },
+                minLines = 3
+            )
+        },
+        confirmButton = { TextButton(onClick = { onSave(text) }) { Text("Save") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}
+
+@Composable
+internal fun SessionHero(state: DayUiState, onBack: () -> Unit, onFinish: () -> Unit, onEditNote: () -> Unit = {}) {
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val outline = MaterialTheme.colorScheme.outline
+    val accent = MaterialTheme.colorScheme.primary
 
     val datePillText = remember(state.sessionStartedAt) {
         val ms = state.sessionStartedAt ?: System.currentTimeMillis()
@@ -369,7 +415,16 @@ internal fun SessionHero(state: DayUiState, onBack: () -> Unit, onFinish: () -> 
                     overflow = TextOverflow.Ellipsis
                 )
             }
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(4.dp))
+            // Quick session note — jot a thought mid-workout; tinted when the journal has content.
+            IconButton(onClick = onEditNote, modifier = Modifier.size(36.dp)) {
+                Icon(
+                    Icons.Filled.EditNote,
+                    contentDescription = if (state.sessionJournal.isBlank()) "Add session note" else "Edit session note",
+                    tint = if (state.sessionJournal.isNotBlank()) accent else muted
+                )
+            }
+            Spacer(Modifier.width(4.dp))
             Box(modifier = Modifier.border(1.dp, outline.copy(alpha = 0.4f), RoundedCornerShape(50)).padding(horizontal = 10.dp, vertical = 4.dp)) {
                 Text(datePillText, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, maxLines = 1)
             }

@@ -63,6 +63,12 @@ class ForgeApp : Application(), Configuration.Provider {
         val pendingPhotos = File(filesDir, "pending_restore_photos")
         val pendingAvatar = File(filesDir, "pending_restore_avatar.jpg")
         if (!pending.exists() && !pendingPrefs.exists() && !pendingPhotos.exists() && !pendingAvatar.exists()) return
+        // A backup always contains the DB, so a successful DB swap is the signal that "a restore landed";
+        // MainActivity reads the flag below to confirm it to the user on this launch. We only confirm
+        // "restored successfully" when EVERY staged component swapped — a failed sub-swap (kept for a
+        // retry on the next boot) must not be reported as a clean restore.
+        var applied = false
+        var anyFailed = false
         if (pending.exists()) {
             // DB swap also drops stale WAL/-shm sidecars so SQLite can't replay old frames over the
             // restored file. deleteOrThrow makes a surviving sidecar a failed swap (staged file kept).
@@ -70,11 +76,12 @@ class ForgeApp : Application(), Configuration.Provider {
             if (swapStagedFile(pending, live, afterSwap = {
                     deleteOrThrow(File(live.path + "-wal"))
                     deleteOrThrow(File(live.path + "-shm"))
-                })) pending.delete()
+                })) { pending.delete(); applied = true } else anyFailed = true
         }
         if (pendingPrefs.exists()) {
             // Must match preferencesDataStore(name = "forge_settings").
             if (swapStagedFile(pendingPrefs, File(filesDir, "datastore/forge_settings.preferences_pb"))) pendingPrefs.delete()
+            else anyFailed = true
         }
         if (pendingPhotos.isDirectory) {
             val swapped = runCatching {
@@ -94,12 +101,17 @@ class ForgeApp : Application(), Configuration.Provider {
                 oldPhotos.deleteRecursively()
             }.isSuccess
             // Only discard the staged folder once it's actually in place; otherwise keep it for retry.
-            if (swapped) pendingPhotos.deleteRecursively()
+            if (swapped) pendingPhotos.deleteRecursively() else anyFailed = true
         }
         if (pendingAvatar.exists()) {
             // Must match AvatarRepository.FILE_NAME.
             if (swapStagedFile(pendingAvatar, File(filesDir, "avatar.jpg"))) pendingAvatar.delete()
+            else anyFailed = true
         }
+        // One-shot flag so MainActivity can confirm the restore landed on this launch — the swap runs at
+        // boot before any UI exists, and the staging path restarts the process silently otherwise. Only
+        // written for a fully clean restore so we never claim "successfully" on a partial one.
+        if (applied && !anyFailed) runCatching { File(filesDir, RESTORE_DONE_FLAG).writeText("1") }
     }
 
     /**
@@ -173,4 +185,9 @@ class ForgeApp : Application(), Configuration.Provider {
 
     private fun isDebuggable(): Boolean =
         (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+
+    companion object {
+        /** One-shot marker written after a boot-time restore swap; read + cleared by MainActivity. */
+        const val RESTORE_DONE_FLAG = "restore_just_completed"
+    }
 }

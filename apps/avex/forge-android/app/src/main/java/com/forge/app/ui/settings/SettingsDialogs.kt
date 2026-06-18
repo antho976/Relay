@@ -54,9 +54,15 @@ internal fun DataExportDialog(
             Text("DATA", style = MaterialTheme.typography.labelSmall, color = muted, letterSpacing = 1.5.sp)
 
             // ── Backup & restore — the real safety net ───────────────────────────
-            // The auto-backup slot is refreshed on open (the weekly worker may have written since).
-            androidx.compose.runtime.LaunchedEffect(Unit) { viewModel.refreshAutoBackupInfo() }
+            // Refresh the auto-backup slot and progress-photo stats on open (both may have changed since).
+            androidx.compose.runtime.LaunchedEffect(Unit) {
+                viewModel.refreshAutoBackupInfo()
+                viewModel.refreshPhotoInfo()
+            }
             val autoBackupSavedAt by viewModel.autoBackupSavedAt.collectAsState()
+            val autoBackupFailed by viewModel.autoBackupFailed.collectAsState()
+            val photoCount by viewModel.photoCount.collectAsState()
+            val photoLastTakenMs by viewModel.photoLastTakenMs.collectAsState()
             var confirmAutoRestore by remember { mutableStateOf(false) }
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Backup & restore (.zip)", style = MaterialTheme.typography.bodyMedium, color = onBg)
@@ -76,6 +82,13 @@ internal fun DataExportDialog(
                         modifier = Modifier.clickableLabeled("Restore last auto-backup") { confirmAutoRestore = true }.padding(vertical = 2.dp)
                     )
                 }
+                // The weekly worker gave up (e.g. storage full) — say so instead of silently losing backups.
+                if (autoBackupFailed) {
+                    Text(
+                        "⚠ Last auto-backup failed — free up storage, then back up manually above.",
+                        style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error, fontSize = 10.sp
+                    )
+                }
             }
             if (confirmAutoRestore) {
                 AlertDialog(
@@ -90,6 +103,17 @@ internal fun DataExportDialog(
             }
 
             HorizontalDivider(color = outline.copy(alpha = 0.2f))
+
+            // ── Data stake indicator — what's at risk if this device is lost ─────
+            if (photoCount > 0) {
+                val lastTakenLabel = photoLastTakenMs?.let { formatShortDate(it) }
+                val photoLine = photoCountLabel(photoCount) + (lastTakenLabel?.let { " · last $it" } ?: "")
+                Text(
+                    photoLine,
+                    style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp
+                )
+                HorizontalDivider(color = outline.copy(alpha = 0.2f))
+            }
 
             // ── Quick export — one tap, format baked into each row ───────────────
             Text("Quick export", style = MaterialTheme.typography.bodyMedium, color = onBg)
@@ -132,7 +156,13 @@ private fun ExportRow(
 }
 
 @Composable
-internal fun ResetConfirmDialog(target: ResetTarget, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+internal fun ResetConfirmDialog(
+    target: ResetTarget,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+    /** Extra line shown below the main message — used to warn about progress photos on factory reset. */
+    photoWarning: String? = null
+) {
     // A factory reset is irreversible and wipes EVERYTHING — too dangerous behind a single tap on a
     // shared device. Gate it behind typing a word; lesser resets keep their one-tap confirm.
     val needsTyped = target == ResetTarget.FACTORY
@@ -145,6 +175,11 @@ internal fun ResetConfirmDialog(target: ResetTarget, onConfirm: () -> Unit, onDi
         text = {
             Column {
                 Text(target.message)
+                if (photoWarning != null) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(photoWarning, style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error)
+                }
                 if (needsTyped) {
                     Spacer(Modifier.height(16.dp))
                     OutlinedTextField(
