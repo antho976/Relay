@@ -230,7 +230,11 @@ class OverviewViewModel @Inject constructor(
         val feed = adaptationRepo.coachFeed()
         val recs = feed.recommendations
             .mapNotNull { it.toCoachItem() }
+            // Keep the engine's TOP 3 first (so a high-priority read-only nudge it ranked isn't bumped
+            // out by lower-ranked actions), THEN float the actionable ones to the top within those 3.
+            // Stable sort preserves the engine's order inside each group.
             .take(3)
+            .sortedByDescending { it.applyLabel != null }
         _coach.value = recs
         // CD-1: only nudge "still learning" when there's nothing actionable AND the weekly pass
         // hasn't activated yet (below MIN_SESSIONS). Cheap finished-count query, off the hot path.

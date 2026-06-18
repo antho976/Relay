@@ -53,6 +53,20 @@ internal fun LazyListScope.strengthTab(state: StatsUiState, c: StatsColors, onLi
     }
     if (state.recentPrs.isNotEmpty()) {
         sectionTitle("pr-title", "Records broken", c)
+        // Celebrate PRs set in the current ISO week (Monday-anchored, like the rest of the app).
+        val weekStartMs = com.forge.app.core.time.mondayStartMs(System.currentTimeMillis())
+        val prsThisWeek = state.recentPrs.count { it.date >= weekStartMs }
+        if (prsThisWeek > 0) {
+            item("pr-thisweek") {
+                EntranceItem(0) {
+                    Text(
+                        "▲ $prsThisWeek PR${if (prsThisWeek > 1) "s" else ""} this week",
+                        style = MaterialTheme.typography.labelLarge, color = c.accent,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 4.dp)
+                    )
+                }
+            }
+        }
         state.prRecency?.let { rec ->
             val i = idx++
             item("pr-drought") { EntranceItem(i) { PrDroughtHeader(rec.daysSinceLast, c.onBg, c.muted) } }

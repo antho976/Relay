@@ -47,9 +47,14 @@ class ProfileViewModel @Inject constructor(
         val hasAvatar = avatarRepo.exists()
         val avatarStamp = if (hasAvatar) avatarRepo.file.lastModified() else 0L
         // Instant first paint on re-entry: render the last-assembled data while the fresh fan-out runs (P3).
-        profileRepo.cached()?.let { _state.value = buildState(it, name, photos, hasAvatar, avatarStamp) }
+        val cached = profileRepo.cached()
+        _state.value = if (cached != null) buildState(cached, name, photos, hasAvatar, avatarStamp)
+            else _state.value.copy(name = name, photos = photos, hasAvatar = hasAvatar, avatarStamp = avatarStamp)
         val data = profileRepo.load()
-        _state.value = buildState(data, name, photos, hasAvatar, avatarStamp)
+        // Merge the fresh fan-out but keep the user-editable fields from current state, so a rename /
+        // photo-note / avatar change made while the (slow) fan-out ran isn't reverted by the pre-load
+        // snapshot — the edit fns persist then update _state, so reading them back here is correct.
+        _state.value = buildState(data, _state.value.name, _state.value.photos, _state.value.hasAvatar, _state.value.avatarStamp)
 
         // ── Rank-up celebration detection ─────────────────────────────────────
         // Compare the current tier to the last-seen tier ordinal. A higher ordinal = tier upgrade.
@@ -85,6 +90,7 @@ class ProfileViewModel @Inject constructor(
         totalVolumeLb = data.totalVolumeLb,
         totalPrs = data.totalPrs,
         streakDays = data.streakDays,
+        longestStreakDays = data.longestStreakDays,
         standings = data.standings,
         topLift = data.topLift,
         mostLoggedDay = data.mostLoggedDay,
@@ -102,6 +108,23 @@ class ProfileViewModel @Inject constructor(
 
     /** Called by the UI after the one-shot celebration has played so it never replays on recompose. */
     fun clearRankUpCelebration() { _showRankUpCelebration.value = false }
+
+    /** Inline rename from the profile header — persists to prefs and reflects immediately. */
+    fun setUserName(name: String) = viewModelScope.launch {
+        val trimmed = name.trim()
+        settingsRepo.setUserName(trimmed)
+        _state.value = _state.value.copy(name = trimmed)
+    }
+
+    /** Save a caption for a progress photo (edited in the viewer dialog). */
+    fun setPhotoNote(photo: ProgressPhoto, note: String) = viewModelScope.launch {
+        val trimmed = note.trim()
+        photoRepo.setNote(photo, trimmed)
+        // Patch the one edited caption in place rather than re-reading + re-decoding the whole index.
+        _state.value = _state.value.copy(
+            photos = _state.value.photos.map { if (it.fileName == photo.fileName) it.copy(note = trimmed) else it }
+        )
+    }
 
     fun fileFor(photo: ProgressPhoto) = photoRepo.fileFor(photo)
 

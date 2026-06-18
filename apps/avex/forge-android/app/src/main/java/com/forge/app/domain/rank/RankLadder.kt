@@ -28,9 +28,13 @@ data class RankInfo(
     val xpForRank: Long,       // span of the current rank (0 once maxed)
     val xpToNextTier: Long,    // XP remaining to reach the next tier (0 in Supernova)
     val nextTierName: String?, // null at Supernova
+    /** The immediate next sub-rank's label (e.g. "Flare V" or "Nova I"); null once maxed. */
+    val nextRankName: String?,
+    /** XP remaining to reach the next sub-rank (0 once maxed) — closer milestone than the next tier. */
+    val xpToNextRank: Long,
     val isMax: Boolean
 ) {
-    val roman: String get() = ROMAN[subRank - 1]
+    val roman: String get() = romanFor(subRank)
 
     /** "Flare IV" — the user-facing rank label. */
     val displayName: String get() = "${tier.display} $roman"
@@ -41,6 +45,8 @@ data class RankInfo(
 
     companion object {
         private val ROMAN = listOf("I", "II", "III", "IV", "V")
+        /** Roman numeral for a 1-based sub-rank (1..5) — the single source for rank labels. */
+        fun romanFor(subRank: Int): String = ROMAN[subRank - 1]
     }
 }
 
@@ -97,6 +103,14 @@ object RankLadder {
         val nextTierName = RankTier.entries.getOrNull(nextTierIndex)?.display
         val xpToNextTier = if (nextTierName == null) 0L else (TIER_FLOOR[nextTierIndex] - xp).coerceAtLeast(0)
 
+        // The immediate next sub-rank — a closer, more motivating milestone than the next tier.
+        // Single source of the ladder structure so the UI never re-derives it.
+        val nextRankName = if (isMax) null else {
+            val ng = g + 1
+            "${RankTier.entries[ng / SUB_RANKS_PER_TIER].display} ${RankInfo.romanFor(ng % SUB_RANKS_PER_TIER + 1)}"
+        }
+        val xpToNextRank = if (isMax) 0L else (floorFor(g + 1) - xp).coerceAtLeast(0)
+
         return RankInfo(
             tier = tier,
             subRank = g % SUB_RANKS_PER_TIER + 1,
@@ -106,6 +120,8 @@ object RankLadder {
             xpForRank = xpForRank,
             xpToNextTier = xpToNextTier,
             nextTierName = nextTierName,
+            nextRankName = nextRankName,
+            xpToNextRank = xpToNextRank,
             isMax = isMax
         )
     }

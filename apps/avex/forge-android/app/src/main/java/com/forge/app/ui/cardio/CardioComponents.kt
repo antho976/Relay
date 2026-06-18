@@ -37,6 +37,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.domain.cardio.CardioType
+import com.forge.app.ui.cardio.state.CardioDayCell
+import com.forge.app.domain.cardio.pacePerKm
+import kotlin.math.abs
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -50,6 +53,10 @@ internal fun CardioHero(
     weekNum: Int,
     weekLabel: String,
     weekEntries: List<CardioEntry>,
+    weekDistanceKm: Double,
+    lastWeekMinutes: Int,
+    lastWeekDistanceKm: Double,
+    cardioStreakDays: Int,
     zone: ZoneId,
     onBg: Color,
     muted: Color
@@ -80,6 +87,37 @@ internal fun CardioHero(
         if (description.isNotEmpty()) {
             Spacer(Modifier.height(4.dp))
             Text(description, style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic)
+        }
+        // Distance + average pace for the week.
+        if (weekDistanceKm > 0) {
+            Spacer(Modifier.height(4.dp))
+            val dist = String.format(Locale.US, "%.1f", weekDistanceKm)
+            val pace = pacePerKm(weekMinutes, weekDistanceKm)
+            Text(
+                "$dist km this week" + (pace?.let { " · $it /km avg" } ?: ""),
+                style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic
+            )
+        }
+        // This-week-vs-last-week trend (minutes + distance).
+        if (lastWeekMinutes > 0 || lastWeekDistanceKm > 0) {
+            Spacer(Modifier.height(4.dp))
+            val minDelta = weekMinutes - lastWeekMinutes
+            val distDelta = weekDistanceKm - lastWeekDistanceKm
+            val arrow = if (minDelta >= 0) "▲" else "▼"
+            val distPart = if (lastWeekDistanceKm > 0 || weekDistanceKm > 0)
+                " · ${if (distDelta >= 0) "+" else "−"}${String.format(Locale.US, "%.1f", abs(distDelta))} km" else ""
+            Text(
+                "$arrow ${abs(minDelta)} min$distPart vs last week",
+                style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp
+            )
+        }
+        // Cardio streak — consecutive days with an active session.
+        if (cardioStreakDays >= 2) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "$cardioStreakDays-day cardio streak",
+                style = MaterialTheme.typography.labelSmall, color = emphasized(onBg), fontSize = 9.sp, fontWeight = FontWeight.SemiBold
+            )
         }
         // Weekly-goal progress (Cat 17) — only when a goal is set in Settings.
         if (weekTargetMin > 0) {
@@ -113,30 +151,34 @@ internal fun CardioHero(
 
 @Composable
 internal fun WeekBoxRow(
-    dailyMinutes: List<Int>,
+    days: List<CardioDayCell>,
     todayDow: Int,
     onBg: Color,
     muted: Color,
     outline: Color
 ) {
     val dayLetters = listOf("M", "T", "W", "T", "F", "S", "S")
-    val maxMin = (dailyMinutes.maxOrNull() ?: 0).coerceAtLeast(1)
+    val maxMin = (days.maxOfOrNull { it.minutes } ?: 0).coerceAtLeast(1)
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.Bottom
     ) {
         dayLetters.forEachIndexed { i, letter ->
-            val mins = dailyMinutes.getOrElse(i) { 0 }
+            val cell = days.getOrNull(i)
+            val mins = cell?.minutes ?: 0
             val isToday = i == todayDow
             val hasActivity = mins > 0
+            // A rest day reads distinctly from an untrained day (rest is a logged choice, not a gap).
+            val isRest = !hasActivity && (cell?.isRest ?: false)
             Column(
                 modifier = Modifier.weight(1f),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                if (hasActivity) {
-                    Text("${mins}m", fontSize = 9.sp, color = onBg, fontWeight = FontWeight.SemiBold)
+                when {
+                    hasActivity -> Text("${mins}m", fontSize = 9.sp, color = onBg, fontWeight = FontWeight.SemiBold)
+                    isRest -> Text("rest", fontSize = 8.sp, color = muted)
                 }
                 // Proportional bar in a fixed 48dp track — clearly readable, white-on-dark.
                 Box(
@@ -144,14 +186,18 @@ internal fun WeekBoxRow(
                     contentAlignment = Alignment.BottomCenter
                 ) {
                     val frac = (mins.toFloat() / maxMin).coerceIn(0f, 1f)
-                    val barHeight = if (hasActivity) (8 + 40 * frac).dp else 4.dp
+                    val barHeight = when {
+                        hasActivity -> (8 + 40 * frac).dp
+                        isRest -> 12.dp
+                        else -> 4.dp
+                    }
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(barHeight)
                             .clip(RoundedCornerShape(4.dp))
                             .then(
-                                if (isToday && !hasActivity) {
+                                if (isToday && !hasActivity && !isRest) {
                                     Modifier.drawBehind {
                                         drawRoundRect(
                                             color = onBg.copy(alpha = 0.6f),
@@ -166,6 +212,7 @@ internal fun WeekBoxRow(
                                     Modifier.background(
                                         when {
                                             hasActivity -> onBg
+                                            isRest -> muted.copy(alpha = 0.5f)
                                             else -> outline.copy(alpha = 0.35f)
                                         }
                                     )

@@ -95,7 +95,7 @@ internal fun buildOverviewUiState(
     }
     val recentItems = (gymItems + cardioItems)
         .sortedByDescending { it.first }
-        .take(2)
+        .take(3)
         .map { it.second }
 
     val zone2 = ZoneId.systemDefault()
@@ -113,6 +113,8 @@ internal fun buildOverviewUiState(
         cardioWeeklyTargetMin = cardioTargetMin,
         totalFinishedSessions = stats.totalFinishedSessions,
         streakDays = stats.streakDays,
+        daysSinceLastSession = stats.daysSinceLastSession,
+        bestSessionThisWeekLb = stats.bestSessionThisWeekLb,
         pendingMilestone = computePendingMilestone(stats, shown, useKg),
         onThisDayMemory = memory,
         plannedNextDay = plannedDay,

@@ -189,4 +189,7 @@ object PreferenceKeys {
     /** Ordinal of the RankTier the user last saw the profile at — used to detect a tier cross
      *  and trigger the one-shot confetti/haptic celebration. -1 = never seen (first open). */
     val LAST_SEEN_RANK_TIER_ORDINAL = intPreferencesKey("last_seen_rank_tier_ordinal")
+
+    /** Last Stats sub-tab index the user settled on (0–4). Reopening Stats deep-links here (S4). */
+    val LAST_STATS_TAB = intPreferencesKey("last_stats_tab")
 }

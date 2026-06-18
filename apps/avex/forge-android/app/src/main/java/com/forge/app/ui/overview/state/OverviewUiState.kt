@@ -68,6 +68,10 @@ data class OverviewUiState(
     val cardioWeeklyTargetMin: Int = 0,
     val totalFinishedSessions: Int = 0,
     val streakDays: Int = 0,
+    /** Days since the last finished session (vacation-aware); null when no sessions yet. Drives the comeback nudge. */
+    val daysSinceLastSession: Int? = null,
+    /** Highest single-session volume (lb) logged in the current ISO week; null/0 when none. */
+    val bestSessionThisWeekLb: Double? = null,
     val pendingMilestone: MilestoneEvent? = null,
     val onThisDayMemory: OnThisDayMemory? = null,
     val plannedNextDay: String = "",
@@ -79,7 +83,7 @@ data class OverviewUiState(
     val cardioWeekDays: Set<Int> = emptySet(),
     /** Custom name for the next-up day set by the user, or null if using the program default. */
     val customDayName: String? = null,
-    /** Combined gym + cardio, sorted newest first, capped at 2. */
+    /** Combined gym + cardio, sorted newest first, capped at 3. */
     val recentItems: List<OverviewRecentItem> = emptyList(),
     val trophiesUnlocked: Int = 0,
     /** "X to go · Trophy Name" for the locked trophy closest to unlocking, or null (#136 near-miss). */

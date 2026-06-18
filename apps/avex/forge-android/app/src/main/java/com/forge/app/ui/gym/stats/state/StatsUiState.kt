@@ -54,8 +54,10 @@ data class StatsUiState(
     val repMaxes: RepMaxSet? = null,
     /** Working sets per muscle this ISO week vs the productive range (Phase 2). */
     val weeklySetsByMuscle: List<MuscleSetCount> = emptyList(),
-    /** Distribution of logged sets across rep ranges (Phase 2). */
+    /** Distribution of logged sets across rep ranges (Phase 2). All-time. */
     val repRangeDist: RepRangeDist? = null,
+    /** Same distribution over the last 8 weeks — the recent-vs-all-time scope toggle on the card. */
+    val repRangeDistRecent: RepRangeDist? = null,
     /** Count of sets at each RPE value + overall average (Phase 3). */
     val rpeDistribution: List<RpeBucket> = emptyList(),
     val avgRpe: Double? = null,

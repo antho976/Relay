@@ -53,6 +53,9 @@ import androidx.compose.ui.window.PopupProperties
 import com.forge.app.data.repo.TrophyCell
 import com.forge.app.ui.common.InlineEmptyHint
 import com.forge.app.ui.common.bounceClick
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /** Fixed popup width so the card centers exactly over the tapped trophy (and the caret aligns). */
 private val POPUP_WIDTH = 200.dp
@@ -203,10 +206,13 @@ private fun TrophyPopup(
                 Text(cell.description, style = MaterialTheme.typography.bodySmall, color = muted, fontSize = 11.sp)
                 Spacer(Modifier.height(8.dp))
                 if (cell.unlocked) {
+                    val unlockedLabel = cell.unlockedAt?.let {
+                        "Unlocked " + SimpleDateFormat("MMM d, yyyy", Locale.getDefault()).format(Date(it))
+                    } ?: "Unlocked"
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(Icons.Filled.Check, contentDescription = null, tint = accent, modifier = Modifier.size(12.dp))
                         Spacer(Modifier.width(4.dp))
-                        Text("Unlocked", style = MaterialTheme.typography.labelSmall, color = accent, fontSize = 10.sp)
+                        Text(unlockedLabel, style = MaterialTheme.typography.labelSmall, color = accent, fontSize = 10.sp)
                     }
                 } else {
                     Box(Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(50)).background(outline.copy(alpha = 0.25f))) {

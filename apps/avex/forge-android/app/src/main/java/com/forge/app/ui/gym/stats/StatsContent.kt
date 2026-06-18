@@ -16,7 +16,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
@@ -92,6 +94,20 @@ fun StatsContent(
     val pagerState = rememberPagerState(pageCount = { tabs.size })
     val scope = rememberCoroutineScope()
     val selectedTab = tabs[pagerState.currentPage]
+
+    // Deep-link to the last sub-tab the user viewed (S4): scroll once the stored value loads, THEN
+    // start persisting page changes — ordered so the initial page-0 emission can't clobber the save.
+    val lastTab by viewModel.lastStatsTab.collectAsStateWithLifecycle()
+    var restoredTab by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(lastTab) {
+        if (!restoredTab && lastTab >= 0) {
+            if (lastTab in tabs.indices) pagerState.scrollToPage(lastTab)
+            restoredTab = true
+        }
+    }
+    LaunchedEffect(restoredTab) {
+        if (restoredTab) snapshotFlow { pagerState.currentPage }.collect { viewModel.saveStatsTab(it) }
+    }
 
     Column(modifier = modifier.fillMaxSize()) {
         if (state.loadError) {

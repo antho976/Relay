@@ -4,6 +4,12 @@ import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
@@ -102,7 +108,11 @@ internal val ALL_ITEMS = listOf(
     SettingsItem("Notifications", "notifications enable disable notify", SettingsPage.Notifications),
     SettingsItem("Available equipment", "equipment barbell dumbbell cable machine body weight", SettingsPage.Equipment),
     SettingsItem("Privacy mode", "privacy mode blur screenshot screen", SettingsPage.Privacy),
-)
+) + com.forge.app.program.Equipment.entries.map { equip ->
+    // Each piece of equipment is searchable by name, so a query like "kettlebell" surfaces it
+    // (tagged to the Equipment page) instead of only the generic "Available equipment" row.
+    SettingsItem(equip.display, "equipment ${equip.name.lowercase()} ${equip.display.lowercase()}", SettingsPage.Equipment)
+}
 
 enum class ResetTarget(val label: String, val message: String) {
     SESSIONS("Reset session data", "Deletes all sessions, sets, and exercises logged. Cannot be undone."),
@@ -262,28 +272,39 @@ fun SettingsScreen(
         },
         containerColor = Color.Transparent
     ) { inner ->
-        when (val page = currentPage) {
-            null -> MainList(
-                state = state,
-                displayRows = displayRows,
-                searchQuery = searchQuery,
-                modifier = Modifier.fillMaxSize().padding(inner),
-                onOpenPage = { currentPage = it },
-                onOpenCoachBrief = onOpenCoachBrief,
-                onOpenDataDialog = { showDataDialog = true },
-                onResetTarget = { confirmReset = it }
-            )
-            SettingsPage.Appearance -> AppearancePage(state, viewModel, Modifier.padding(inner))
-            SettingsPage.Format -> FormatPage(state, viewModel, Modifier.padding(inner))
-            SettingsPage.Session -> SessionPage(state, viewModel, Modifier.padding(inner))
-            SettingsPage.Notifications -> NotificationsPage(state, viewModel, Modifier.padding(inner))
-            SettingsPage.Equipment -> EquipmentPage(state, viewModel, Modifier.padding(inner))
-            SettingsPage.Privacy -> PrivacyPage(state, viewModel, Modifier.padding(inner))
-            SettingsPage.Program -> ProgramPage(state, viewModel, Modifier.padding(inner), onOpenCoachBrief)
-            SettingsPage.Recovery -> RecoveryPage(Modifier.padding(inner))
-            SettingsPage.ExercisePrefs -> ExercisePrefsPage(state, viewModel, Modifier.padding(inner))
-            SettingsPage.Vacation -> VacationPage(viewModel, Modifier.padding(inner))
-            SettingsPage.About -> AboutPage(Modifier.padding(inner), viewModel)
+        AnimatedContent(
+            targetState = currentPage,
+            transitionSpec = {
+                // Opening a sub-page slides in from the right; backing out slides from the left.
+                val dir = if (targetState != null) 1 else -1
+                (slideInHorizontally { dir * it / 4 } + fadeIn()) togetherWith
+                    (slideOutHorizontally { -dir * it / 4 } + fadeOut())
+            },
+            label = "settings-page"
+        ) { page ->
+            when (page) {
+                null -> MainList(
+                    state = state,
+                    displayRows = displayRows,
+                    searchQuery = searchQuery,
+                    modifier = Modifier.fillMaxSize().padding(inner),
+                    onOpenPage = { currentPage = it },
+                    onOpenCoachBrief = onOpenCoachBrief,
+                    onOpenDataDialog = { showDataDialog = true },
+                    onResetTarget = { confirmReset = it }
+                )
+                SettingsPage.Appearance -> AppearancePage(state, viewModel, Modifier.padding(inner))
+                SettingsPage.Format -> FormatPage(state, viewModel, Modifier.padding(inner))
+                SettingsPage.Session -> SessionPage(state, viewModel, Modifier.padding(inner))
+                SettingsPage.Notifications -> NotificationsPage(state, viewModel, Modifier.padding(inner))
+                SettingsPage.Equipment -> EquipmentPage(state, viewModel, Modifier.padding(inner))
+                SettingsPage.Privacy -> PrivacyPage(state, viewModel, Modifier.padding(inner))
+                SettingsPage.Program -> ProgramPage(state, viewModel, Modifier.padding(inner), onOpenCoachBrief)
+                SettingsPage.Recovery -> RecoveryPage(Modifier.padding(inner))
+                SettingsPage.ExercisePrefs -> ExercisePrefsPage(state, viewModel, Modifier.padding(inner))
+                SettingsPage.Vacation -> VacationPage(viewModel, Modifier.padding(inner))
+                SettingsPage.About -> AboutPage(Modifier.padding(inner), viewModel)
+            }
         }
     }
 

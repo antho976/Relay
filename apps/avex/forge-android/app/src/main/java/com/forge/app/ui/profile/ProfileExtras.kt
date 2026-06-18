@@ -18,6 +18,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -52,8 +56,11 @@ internal fun MirrorTestSection(
             style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic, fontSize = 11.sp
         )
         Spacer(Modifier.height(12.dp))
+        var expanded by remember { mutableStateOf(false) }
+        // Cap at the 6 most recent so the grid stays compact; "See all" reveals the rest inline.
+        val shown = if (expanded) photos else photos.take(6)
         // Cell 0 is the add tile; the rest are dated thumbnails.
-        val cells = listOf<ProgressPhoto?>(null) + photos
+        val cells = listOf<ProgressPhoto?>(null) + shown
         cells.chunked(3).forEach { row ->
             Row(Modifier.fillMaxWidth().padding(bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 row.forEach { photo ->
@@ -85,6 +92,13 @@ internal fun MirrorTestSection(
                 }
                 repeat(3 - row.size) { Box(Modifier.weight(1f)) }
             }
+        }
+        if (photos.size > 6) {
+            Text(
+                if (expanded) "Show less" else "See all ${photos.size} photos",
+                style = MaterialTheme.typography.labelSmall, color = accent, fontSize = 10.sp,
+                modifier = Modifier.bounceClick { expanded = !expanded }.padding(start = 2.dp, top = 4.dp, bottom = 4.dp)
+            )
         }
     }
 }

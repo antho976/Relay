@@ -86,12 +86,26 @@ internal fun FormatPage(state: SettingsUiState, vm: SettingsViewModel, modifier:
         modifier = modifier.fillMaxSize(),
         contentPadding = PaddingValues(bottom = 56.dp)
     ) {
+        item("intro") {
+            Text(
+                "Units, date & time formats, week start, your timezone — and the basis for your strength standards.",
+                style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic,
+                modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp)
+            )
+        }
         item("weight") {
             ChipSection(
                 "Weight unit",
                 listOf("lb" to "lb", "kg" to "kg"),
                 if (state.useKg) "kg" else "lb"
             ) { vm.setUseKg(it == "kg") }
+            // Live preview — updates the moment the unit is switched.
+            Text(
+                "Everything shows in ${if (state.useKg) "kilograms" else "pounds"} — e.g. ${com.forge.app.domain.units.formatWeight(135.0, state.useKg)}.",
+                style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic,
+                modifier = Modifier.padding(horizontal = 24.dp)
+            )
+            Spacer(Modifier.height(8.dp))
             SectionDivider()
         }
         item("sex") {
@@ -365,6 +379,9 @@ internal fun NotificationsPage(state: SettingsUiState, vm: SettingsViewModel, mo
 internal fun EquipmentPage(state: SettingsUiState, vm: SettingsViewModel, modifier: Modifier = Modifier) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val onBg = MaterialTheme.colorScheme.onBackground
+    val accent = MaterialTheme.colorScheme.primary
+    // Becomes true once equipment is touched this visit, so the regenerate prompt only nags after a change.
+    var equipmentEdited by remember { mutableStateOf(false) }
     Column(modifier.fillMaxSize()) {
         Spacer(Modifier.height(16.dp))
         Text(
@@ -384,7 +401,7 @@ internal fun EquipmentPage(state: SettingsUiState, vm: SettingsViewModel, modifi
             com.forge.app.program.equipmentPresets.forEach { preset ->
                 val selected = state.availableEquipment == preset.equipment &&
                     state.frozenExerciseIds == preset.frozenIds
-                PillChip(preset.label, selected) { vm.selectEquipmentPreset(preset) }
+                PillChip(preset.label, selected) { vm.selectEquipmentPreset(preset); equipmentEdited = true }
             }
         }
         if (state.frozenExerciseIds != null) {
@@ -408,20 +425,24 @@ internal fun EquipmentPage(state: SettingsUiState, vm: SettingsViewModel, modifi
                     val current = state.availableEquipment.toMutableSet()
                     if (selected) current.remove(equip.name) else current.add(equip.name)
                     vm.setAvailableEquipment(current)
+                    equipmentEdited = true
                 }
             }
         }
         Spacer(Modifier.height(20.dp))
         Text(
-            "Changed your equipment? Regenerate so the program matches what you've got.",
+            if (equipmentEdited) "You changed your equipment — regenerate so your program only uses what you've got."
+            else "Changed your equipment? Regenerate so the program matches what you've got.",
             style = MaterialTheme.typography.bodySmall,
-            color = muted,
+            color = if (equipmentEdited) accent else muted,
             fontStyle = FontStyle.Italic,
             modifier = Modifier.padding(horizontal = 24.dp)
         )
         Spacer(Modifier.height(10.dp))
         FlowRow(modifier = Modifier.padding(horizontal = 24.dp)) {
-            PillChip("Regenerate for this equipment", selected = false) { vm.generateProgram(state.daysPerWeek) }
+            PillChip("Regenerate for this equipment", selected = equipmentEdited) {
+                vm.generateProgram(state.daysPerWeek); equipmentEdited = false
+            }
         }
         Spacer(Modifier.height(24.dp))
 

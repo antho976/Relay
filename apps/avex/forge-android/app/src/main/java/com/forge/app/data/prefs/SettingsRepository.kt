@@ -450,6 +450,8 @@ class SettingsRepository @Inject constructor(
         .map { it[PreferenceKeys.ONBOARDING_DONE] ?: false }
     val userName: Flow<String> = context.forgePreferences.data
         .map { it[PreferenceKeys.USER_NAME] ?: "" }
+    suspend fun setUserName(name: String) =
+        context.forgePreferences.edit { it[PreferenceKeys.USER_NAME] = name }
     val userGoal: Flow<String> = context.forgePreferences.data
         .map { it[PreferenceKeys.USER_GOAL] ?: "" }
     suspend fun setUserGoal(goal: String) =
@@ -548,6 +550,12 @@ class SettingsRepository @Inject constructor(
         .map { it[PreferenceKeys.LAST_SEEN_RANK_TIER_ORDINAL] ?: -1 }
     suspend fun setLastSeenRankTierOrdinal(ordinal: Int) =
         context.forgePreferences.edit { it[PreferenceKeys.LAST_SEEN_RANK_TIER_ORDINAL] = ordinal }
+
+    /** Last Stats sub-tab index the user settled on (default 0 = Snapshot). Reopening Stats deep-links here (S4). */
+    val lastStatsTab: Flow<Int> = context.forgePreferences.data
+        .map { it[PreferenceKeys.LAST_STATS_TAB] ?: 0 }
+    suspend fun setLastStatsTab(index: Int) =
+        context.forgePreferences.edit { it[PreferenceKeys.LAST_STATS_TAB] = index }
 
     /** Returns true if the current wall-clock time falls within the user's quiet hours window (#122). */
     suspend fun isQuietNow(): Boolean {

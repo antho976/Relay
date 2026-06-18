@@ -78,7 +78,8 @@ internal fun LedgerSection(
     xp: Long,
     muted: Color,
     accent: Color,
-    outline: Color
+    outline: Color,
+    longestStreakDays: Int = 0
 ) {
     val useKg = LocalForgeSettings.current.useKg
     ProfileBlock("THE LEDGER · ALL TIME", muted, accent, outline) {
@@ -94,6 +95,13 @@ internal fun LedgerSection(
                 LifetimeStat(formatVolume(volumeLb, useKg), "LIFETIME ${unitLabel(useKg).uppercase()}")
                 LifetimeStat("$prs", "PRs")
                 LifetimeStat("$xp", "XP")
+            }
+            if (longestStreakDays > 1) {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "Longest streak ever · $longestStreakDays days",
+                    style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic
+                )
             }
         }
     }
@@ -121,8 +129,11 @@ internal fun StandingSection(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text(m.label.uppercase(), style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp,
-                    modifier = Modifier.width(96.dp))
+                Column(modifier = Modifier.width(96.dp)) {
+                    Text(m.label.uppercase(), style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp)
+                    // Your actual value behind the percentile, so the bar isn't an abstract figure.
+                    Text(m.valueText, style = MaterialTheme.typography.labelSmall, color = onBg, fontSize = 9.sp)
+                }
                 // Fill = how far above the bottom of the pack you are (lower topPercent = fuller).
                 val frac = ((100 - m.topPercent) / 100f).coerceIn(0f, 1f)
                 val w by animateFloatAsState(
@@ -143,7 +154,8 @@ internal fun StandingSection(
         }
         Spacer(Modifier.height(6.dp))
         Text(
-            "These percentiles are modelled estimates, not a live leaderboard. Your data never leaves your device.",
+            "Estimated from your sessions per week, weekly volume, streak and best lift over the last 90 days — " +
+                "modelled, not a live leaderboard. Your data never leaves your device.",
             style = MaterialTheme.typography.bodySmall, color = muted.copy(alpha = 0.7f),
             fontStyle = FontStyle.Italic, fontSize = 10.sp
         )

@@ -10,6 +10,25 @@ enum class TrophyFilter(val label: String) {
     LOCKED("Locked")
 }
 
+/** Sort order applied within each category section (#149). Default = catalog order. */
+enum class TrophySort(val label: String) {
+    DEFAULT("Default"),
+    TIER("Tier"),
+    DATE("Recent")
+}
+
+/** Reorders the displays inside each section by [order], keeping the category grouping. */
+fun List<TrophySection>.applySort(order: TrophySort): List<TrophySection> = when (order) {
+    TrophySort.DEFAULT -> this
+    TrophySort.TIER -> map { s ->
+        s.copy(displays = s.displays.sortedWith(compareByDescending<TrophyDisplay> { it.trophy.tier.points }.thenBy { it.trophy.name }))
+    }
+    TrophySort.DATE -> map { s ->
+        // Unlocked first (most recent on top); locked trophies fall to the bottom, by name.
+        s.copy(displays = s.displays.sortedWith(compareByDescending<TrophyDisplay> { it.unlockedAt ?: Long.MIN_VALUE }.thenBy { it.trophy.name }))
+    }
+}
+
 /**
  * Catalog screen state. Trophies are pre-grouped by [TrophyCategory] in the order
  * they appear in [com.forge.app.program.Trophies.all] — UI just renders the sections

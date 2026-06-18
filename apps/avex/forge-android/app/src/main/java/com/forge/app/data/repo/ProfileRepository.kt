@@ -54,7 +54,9 @@ data class TrophyCell(
     val description: String,
     val progressLabel: String?,
     /** Tier-pip count so same-icon cells stay visually distinct (see [Trophies.variantFor]). */
-    val variant: Int = 0
+    val variant: Int = 0,
+    /** When this trophy was earned (epoch ms); null for locked cells. Surfaced in the inspect popup. */
+    val unlockedAt: Long? = null
 )
 
 /** One "On the record" row (a month- or year-in-review summary). */
@@ -69,6 +71,7 @@ data class ProfileData(
     val totalVolumeLb: Double,
     val totalPrs: Int,
     val streakDays: Int,
+    val longestStreakDays: Int,
     val sinceLabel: String,
     val topLift: SignatureLift?,
     val mostLoggedDay: String?,
@@ -110,7 +113,7 @@ class ProfileRepository @Inject constructor(
         // Fire the independent DAO reads concurrently — the trophy snapshot's 13+ queries are the
         // long pole, so overlapping it with the rest is the main win for profile-open latency (#8).
         val sessionsD = async { sessionDao.allFinished().filter { !it.isUntracked } }
-        val unlockedD = async { trophyRepo.unlockedIds() }
+        val unlockedDatesD = async { trophyRepo.unlockedDatesById() }
         val snapshotD = async { runCatching { trophyRepo.snapshot() }.getOrNull() }
         val topLiftD = async { loggedSetDao.topLift() }
         val memoryD = async { runCatching { statsRepo.findOnThisDayMemory() }.getOrNull() }
@@ -127,7 +130,8 @@ class ProfileRepository @Inject constructor(
         }
 
         val sessions = sessionsD.await()
-        val unlockedIds = unlockedD.await()
+        val unlockedDates = unlockedDatesD.await()
+        val unlockedIds = unlockedDates.keys
         val trophyPoints = Trophies.all.filter { it.id in unlockedIds }.sumOf { it.tier.points }
         // Hoisted once — these full-list sums feed both the XP snapshot and the ProfileData below.
         val totalVolumeLb = sessions.sumOf { it.totalVolumeLb ?: 0.0 }
@@ -177,7 +181,7 @@ class ProfileRepository @Inject constructor(
 
         // ── Trophy case ───────────────────────────────────────────────────────────
         val snapshot = snapshotD.await()
-        val trophyGrid = curatedTrophyGrid(unlockedIds, snapshot, useKg)
+        val trophyGrid = curatedTrophyGrid(unlockedIds, unlockedDates, snapshot, useKg)
         val closestTrophy = snapshot?.let { snap ->
             Trophies.all.filter { it.id !in unlockedIds }
                 .mapNotNull { t -> TrophyEvaluator.progressFraction(t.unlock, snap)?.let { t to it } }
@@ -194,6 +198,7 @@ class ProfileRepository @Inject constructor(
             totalVolumeLb = totalVolumeLb,
             totalPrs = totalPrs,
             streakDays = streakD.await(),
+            longestStreakDays = snapshot?.maxStreakEver ?: 0,
             sinceLabel = sessions.minOfOrNull { it.startedAt }
                 ?.let { Instant.ofEpochMilli(it).atZone(zone).format(SINCE_FMT).uppercase() } ?: "",
             topLift = topLift,
@@ -248,12 +253,12 @@ class ProfileRepository @Inject constructor(
      * the [HARDEST_DONE] hardest unlocked trophies (by tier points), then locked trophies ranked by
      * progress (almost-complete first, 0%-progress fillers after) up to [TROPHY_HIGHLIGHTS] cells.
      */
-    private fun curatedTrophyGrid(unlockedIds: Set<String>, snapshot: TrophyStatsSnapshot?, useKg: Boolean): List<TrophyCell> {
+    private fun curatedTrophyGrid(unlockedIds: Set<String>, unlockedDates: Map<String, Long>, snapshot: TrophyStatsSnapshot?, useKg: Boolean): List<TrophyCell> {
         val hardestDone = Trophies.all
             .filter { it.id in unlockedIds }
             .sortedWith(compareByDescending<Trophy> { it.tier.points }.thenBy { it.name })
             .take(HARDEST_DONE)
-            .map { TrophyCell(it.icon, unlocked = true, progress = 1f, name = it.name, description = it.description, progressLabel = null, variant = Trophies.variantFor(it.id)) }
+            .map { TrophyCell(it.icon, unlocked = true, progress = 1f, name = it.name, description = it.description, progressLabel = null, variant = Trophies.variantFor(it.id), unlockedAt = unlockedDates[it.id]) }
 
         val locked = Trophies.all
             .filter { it.id !in unlockedIds }

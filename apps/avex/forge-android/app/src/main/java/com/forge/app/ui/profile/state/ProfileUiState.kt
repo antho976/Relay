@@ -27,6 +27,7 @@ data class ProfileUiState(
     val totalVolumeLb: Double = 0.0,
     val totalPrs: Int = 0,
     val streakDays: Int = 0,
+    val longestStreakDays: Int = 0,
 
     // Standing (estimated vs typical lifters, 90 days)
     val standings: List<StandingMetric> = emptyList(),

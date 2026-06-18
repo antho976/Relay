@@ -23,6 +23,9 @@ interface UnlockedTrophyDao {
     @Query("SELECT trophy_id FROM unlocked_trophy")
     suspend fun unlockedIds(): List<String>
 
+    @Query("SELECT * FROM unlocked_trophy")
+    suspend fun all(): List<UnlockedTrophy>
+
     @Query("DELETE FROM unlocked_trophy")
     suspend fun deleteAll()
 }

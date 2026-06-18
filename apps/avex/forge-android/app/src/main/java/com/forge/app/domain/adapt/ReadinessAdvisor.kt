@@ -97,6 +97,16 @@ object ReadinessAdvisor {
             recentCardio.any { it.restReason == "sore" } -> { percent -= 2; parts += "sore recently" }
         }
 
+        // Acute cardio load (beyond the sore/sick flags): a big block of active cardio in the last day
+        // competes with lifting recovery, so shave a point. restReason == null ⇒ an active (non-rest) row.
+        val cardioLoadMin = cardio
+            .filter { it.date >= nowMs - DAY_MS && it.restReason == null }
+            .sumOf { it.durationMin }
+        if (cardioLoadMin >= t.readinessCardioLoadMinutes) {
+            percent -= t.readinessCardioLoadPenalty
+            parts += "heavy cardio in the last day"
+        }
+
         val clamped = percent.coerceIn(-t.readinessMaxPercent, t.readinessMaxPercent)
         if (clamped == 0) return null
         return Recommendation.ReadinessScale(

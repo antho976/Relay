@@ -48,6 +48,7 @@ import com.forge.app.ui.profile.AnimatedTrophyBadge
 import com.forge.app.ui.trophies.state.TrophiesUiState
 import com.forge.app.ui.trophies.state.TrophyDisplay
 import com.forge.app.ui.trophies.state.TrophyFilter
+import com.forge.app.ui.trophies.state.TrophySort
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -63,7 +64,7 @@ internal fun HeroSection(state: TrophiesUiState, nextLocked: TrophyDisplay?, onB
             .padding(horizontal = 24.dp)
             .padding(top = 8.dp, bottom = 16.dp)
     ) {
-        Text("${state.totalCount} IN ALL · ${state.unlockedCount} EARNED", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
+        Text("${state.totalCount} IN ALL · ${state.unlockedCount} EARNED · ${state.cumulativeScore} PTS", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
         Spacer(Modifier.height(14.dp))
         Box(modifier = Modifier.fillMaxWidth().height(3.dp).clip(RoundedCornerShape(50)).background(outline.copy(alpha = 0.2f))) {
             Box(modifier = Modifier.fillMaxWidth(animFrac).fillMaxHeight().clip(RoundedCornerShape(50)).background(accent))
@@ -138,7 +139,10 @@ internal fun TrophyRow(
             }
         }
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(display.trophy.name, style = MaterialTheme.typography.bodyMedium, color = nameColor)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(display.trophy.name, style = MaterialTheme.typography.bodyMedium, color = nameColor, modifier = Modifier.weight(1f, fill = false))
+                TierBadge(display.trophy.tier, dimmed = !unlocked)
+            }
             Text(display.trophy.description, style = MaterialTheme.typography.bodySmall, color = descColor, fontStyle = FontStyle.Italic, fontSize = 11.sp)
             val frac = display.progressFraction
             if (!display.isUnlocked && frac != null && frac > 0f) {
@@ -175,5 +179,44 @@ internal fun FilterChips(selected: TrophyFilter, onSelect: (TrophyFilter) -> Uni
                 accent = accent, onBg = onBg, muted = muted, outline = outline
             )
         }
+    }
+}
+
+@Composable
+internal fun SortChips(selected: TrophySort, onSelect: (TrophySort) -> Unit, onBg: Color, muted: Color, outline: Color) {
+    val accent = MaterialTheme.colorScheme.primary
+    Row(
+        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 24.dp).padding(bottom = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text("SORT", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.7f), fontSize = 9.sp, letterSpacing = 1.sp)
+        TrophySort.entries.forEach { sort ->
+            SegmentPill(
+                text = sort.label,
+                selected = sort == selected,
+                onClick = { onSelect(sort) },
+                accent = accent, onBg = onBg, muted = muted, outline = outline
+            )
+        }
+    }
+}
+
+/** Small pill tagging a trophy's difficulty tier in the tier's colour (dimmed when still locked). */
+@Composable
+private fun TierBadge(tier: com.forge.app.program.TrophyTier, dimmed: Boolean) {
+    val color = Color(tier.color)
+    Box(
+        Modifier
+            .clip(RoundedCornerShape(50))
+            .background(color.copy(alpha = if (dimmed) 0.10f else 0.18f))
+            .padding(horizontal = 6.dp, vertical = 1.dp)
+    ) {
+        Text(
+            tier.display.uppercase(),
+            style = MaterialTheme.typography.labelSmall,
+            color = if (dimmed) color.copy(alpha = 0.6f) else color,
+            fontSize = 8.sp, letterSpacing = 0.5.sp
+        )
     }
 }

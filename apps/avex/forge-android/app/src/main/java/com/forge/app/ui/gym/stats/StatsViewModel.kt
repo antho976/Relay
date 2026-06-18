@@ -24,7 +24,7 @@ import javax.inject.Inject
 class StatsViewModel @Inject constructor(
     statsRepo: StatsRepository,
     adaptationRepo: AdaptationRepository,
-    settingsRepo: com.forge.app.data.prefs.SettingsRepository,
+    private val settingsRepo: com.forge.app.data.prefs.SettingsRepository,
     private val bodyweightRepo: com.forge.app.data.repo.BodyweightRepository,
     private val coachRepo: com.forge.app.data.repo.CoachRepository
 ) : ViewModel() {
@@ -79,6 +79,13 @@ class StatsViewModel @Inject constructor(
 
     fun clearBodyweightMessage() { _bodyweightMessage.value = null }
 
+    /** Last Stats sub-tab the user settled on, persisted so reopening Stats lands there (S4).
+     *  -1 = not yet loaded, so the screen only deep-links once a real stored value arrives. */
+    val lastStatsTab: StateFlow<Int> =
+        settingsRepo.lastStatsTab.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), -1)
+
+    fun saveStatsTab(index: Int) = viewModelScope.launch { settingsRepo.setLastStatsTab(index) }
+
     /** Re-check HC read permission (e.g. right before showing the quick-log sheet) so a grant made in
      *  Settings after this screen opened surfaces the import option without recreating the ViewModel. */
     fun refreshWeightConnected() = viewModelScope.launch {
@@ -113,6 +120,7 @@ class StatsViewModel @Inject constructor(
             repMaxes = snapshot.repMaxes,
             weeklySetsByMuscle = snapshot.weeklySetsByMuscle,
             repRangeDist = snapshot.repRangeDist,
+            repRangeDistRecent = snapshot.repRangeDistRecent,
             rpeDistribution = snapshot.rpeDistribution,
             avgRpe = snapshot.avgRpe,
             bodyweightPoints = snapshot.bodyweightPoints,

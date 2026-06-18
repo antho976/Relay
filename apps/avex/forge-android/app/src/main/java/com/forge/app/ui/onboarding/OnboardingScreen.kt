@@ -305,6 +305,16 @@ fun OnboardingScreen(
                 2 -> daysPerWeek in 1..7 && equipment.isNotEmpty()
                 else -> true
             }
+            // Explain why "Next" is held on the gym page — the generator can't build a plan with no
+            // equipment selected, so this guards the skip rather than leaving the button silently greyed.
+            if (page == 2 && equipment.isEmpty()) {
+                Text(
+                    "Pick at least one — Forge can't build your plan without knowing what you can train with.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(8.dp))
+            }
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,

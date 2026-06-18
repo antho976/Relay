@@ -52,6 +52,7 @@ import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.domain.cardio.CardioEffort
 import com.forge.app.domain.cardio.CardioRestReason
 import com.forge.app.domain.cardio.CardioType
+import com.forge.app.domain.cardio.pacePerKm
 import java.text.SimpleDateFormat
 import java.time.Instant
 import java.time.ZoneId
@@ -200,6 +201,11 @@ fun CardioLogSheet(
                             keyboardType = KeyboardType.Decimal,
                             onBg = onBg, muted = muted, accent = accent, outline = outline
                         )
+                        // Live pace readout once both duration + distance are entered.
+                        pacePerKm(durationInt, distanceDouble)?.let { pace ->
+                            Spacer(Modifier.height(8.dp))
+                            Text("Pace · $pace /km", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp)
+                        }
                     }
                 }
 

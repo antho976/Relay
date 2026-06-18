@@ -1,6 +1,8 @@
 package com.forge.app.ui.profile
 
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.animateIntAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -185,10 +187,25 @@ internal fun RankSection(
             }
         }
 
+        // Apex treatment: at Supernova V there's no "next", so the to-next line gives way to a badge.
+        if (rank.isMax) {
+            Spacer(Modifier.height(12.dp))
+            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Text(
+                    "★ ${rank.displayName.uppercase()} · MAX RANK ★",
+                    style = MaterialTheme.typography.labelSmall, color = tierColor,
+                    fontSize = 9.sp, letterSpacing = 2.sp, fontWeight = FontWeight.Bold,
+                    modifier = Modifier.clip(RoundedCornerShape(50)).background(tierColor.copy(alpha = 0.15f)).padding(horizontal = 14.dp, vertical = 4.dp)
+                )
+            }
+        }
+
         Spacer(Modifier.height(10.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Text("HOW XP WORKS →", style = MaterialTheme.typography.labelSmall, color = accent, fontSize = 9.sp)
-            val tail = if (rank.isMax) "MAX RANK" else "${rank.xpToNextTier} TO ${rank.nextTierName?.uppercase()}"
+            // Next milestone = the immediate next sub-rank (closer + more motivating than the far-off
+            // tier). Sourced from RankInfo so the UI never re-derives the ladder structure.
+            val tail = if (rank.isMax) "MAX RANK" else "${rank.xpToNextRank} TO ${rank.nextRankName?.uppercase()}"
             Text("${rank.xpTotal} XP · $tail", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
         }
     }
@@ -223,13 +240,21 @@ internal fun RankInfoSheet(
             if (xp.sources.isEmpty()) {
                 Text("Log your first workout to start earning XP.", style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic)
             }
+            // Each source row counts up from 0 the first time the sheet opens.
+            var playXp by remember { mutableStateOf(false) }
+            LaunchedEffect(Unit) { playXp = true }
             xp.sources.forEach { s ->
                 Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text(s.label, style = MaterialTheme.typography.bodyMedium, color = onBg)
                         Text(s.detail, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp)
                     }
-                    Text("+${s.xp}", style = MaterialTheme.typography.bodyMedium, color = accent, fontWeight = FontWeight.SemiBold)
+                    val animatedXp by animateIntAsState(
+                        targetValue = if (playXp) s.xp.toInt() else 0,
+                        animationSpec = tween(ForgeMotion.scaledDuration(ForgeMotion.DurationEmphasized)),
+                        label = "xp-source"
+                    )
+                    Text("+$animatedXp", style = MaterialTheme.typography.bodyMedium, color = accent, fontWeight = FontWeight.SemiBold)
                 }
             }
 

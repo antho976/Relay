@@ -31,6 +31,7 @@ import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.domain.cardio.CardioEffort
 import com.forge.app.domain.cardio.CardioRestReason
 import com.forge.app.domain.cardio.CardioType
+import com.forge.app.domain.cardio.pacePerKm
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -147,6 +148,7 @@ private fun buildDetail(entry: CardioEntry, type: CardioType): String {
         // Pin to Locale.US so the '.' separator matches what the log form parses (it only
         // accepts '.'); a comma-decimal device locale would otherwise render "5,0 km".
         entry.distanceKm?.let { add("${String.format(java.util.Locale.US, "%.1f", it)} km") }
+        pacePerKm(entry.durationMin, entry.distanceKm)?.let { add("$it /km") }
     }
     return parts.joinToString(" · ")
 }

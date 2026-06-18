@@ -86,6 +86,8 @@ class StatsRepository @Inject constructor(
         val streakDays: Int = 0,
         val daysSinceLastSession: Int? = null,
         val firstFinishedSessionMs: Long? = null,
+        /** Highest single-session volume (lb) in the current ISO week; null when none logged yet. */
+        val bestSessionThisWeekLb: Double? = null,
         /** 0=Mon..6=Sun indices that had a finished gym session in the current ISO week. */
         val weekDaysTrained: Set<Int> = emptySet(),
         /** Next gym day key in the rotation (Upper A → Lower A → Upper B → Lower B). */
@@ -116,10 +118,12 @@ class StatsRepository @Inject constructor(
             val (recentSessions, scheduleMode, schedule) = recentModeSchedule
             val todayDate = LocalDate.now(zone)
             val finishedAts = recentSessions.mapNotNull { it.finishedAt }
+            // Sessions finished in the current ISO week — shared by the lit-day dots AND the
+            // best-session tile so they filter the list once, not twice.
+            val thisWeekSessions = recentSessions.filter { it.finishedAt != null && it.finishedAt!! >= weekStartMs }
             // Dots use the SAME (subscription-time) week anchor as the workout/volume/cardio counts
             // above, so the count and the lit dots can never describe different weeks within a view.
-            val weekDaysTrained = recentSessions
-                .filter { it.finishedAt != null && it.finishedAt >= weekStartMs }
+            val weekDaysTrained = thisWeekSessions
                 .map {
                     // Bucket by the same timestamp the week filter uses (finishedAt), so a session
                     // that started before midnight but finished this week lands on the right day.
@@ -137,6 +141,8 @@ class StatsRepository @Inject constructor(
                 dayKeys = Program.dayKeys, lastFinishedDayKey = lastFinished?.dayKey,
                 trainedTodayKeys = trainedTodayKeys
             ) ?: (Program.dayKeys.firstOrNull() ?: Program.UPPER_A)
+            // Best single session this ISO week — the heaviest tonnage day, for the StatsTile.
+            val bestSessionThisWeekLb = thisWeekSessions.mapNotNull { it.totalVolumeLb }.maxOrNull()
             // streakDays is finalized below, once the vacation ranges are known (#135).
             WeeklyStats(
                 workouts = workouts,
@@ -145,6 +151,7 @@ class StatsRepository @Inject constructor(
                 totalFinishedSessions = totalFinished,
                 streakDays = 0,
                 daysSinceLastSession = computeDaysSinceLast(finishedAts),
+                bestSessionThisWeekLb = bestSessionThisWeekLb,
                 weekDaysTrained = weekDaysTrained,
                 nextUpDayKey = nextUpDayKey,
                 recentGymSessions = recentSessions.filter { it.finishedAt != null }.take(5)
@@ -338,6 +345,8 @@ class StatsRepository @Inject constructor(
         val repMaxes: RepMaxSet? = null,
         val weeklySetsByMuscle: List<MuscleSetCount> = emptyList(),
         val repRangeDist: RepRangeDist? = null,
+        /** Rep-range mix over the last 8 weeks (recent tendency); pairs with the all-time [repRangeDist]. */
+        val repRangeDistRecent: RepRangeDist? = null,
         val rpeDistribution: List<RpeBucket> = emptyList(),
         val avgRpe: Double? = null,
         /** Dated bodyweight points, oldest → newest. */
@@ -436,6 +445,7 @@ class StatsRepository @Inject constructor(
                 repMaxes = buildRepMaxes(allSets),
                 weeklySetsByMuscle = buildWeeklySetsByMuscle(volumeSets),
                 repRangeDist = buildRepRangeDist(allSets),
+                repRangeDistRecent = buildRepRangeDist(allSets.filter { it.sessionStartedAt >= eightWeeksMs }),
                 rpeDistribution = buildRpeDistribution(allSets),
                 avgRpe = allSets.mapNotNull { it.rpe }.takeIf { it.isNotEmpty() }?.average(),
                 consistencyStreakWeeks = computeConsistencyStreak(

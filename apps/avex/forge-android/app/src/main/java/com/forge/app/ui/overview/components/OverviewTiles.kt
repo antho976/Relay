@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -98,11 +99,15 @@ fun StatsTile(
     onBg: Color,
     muted: Color,
     outline: Color,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** This-week's heaviest single session, preformatted (e.g. "5.2k lb"); null = none yet. */
+    bestSessionLabel: String? = null
 ) {
     Box(
+        // heightIn (not a fixed height) so the optional best-session/streak lines never clip,
+        // including at large font scales.
         modifier = modifier
-            .height(108.dp)
+            .heightIn(min = 108.dp)
             .border(BorderStroke(0.5.dp, outline.copy(alpha = 0.35f)), RoundedCornerShape(10.dp))
             .clip(RoundedCornerShape(10.dp))
             .clickable { onClick() }
@@ -116,6 +121,10 @@ fun StatsTile(
             if (streakDays > 0) {
                 Spacer(Modifier.height(2.dp))
                 Text("$streakDays day streak", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
+            }
+            bestSessionLabel?.let {
+                Spacer(Modifier.height(2.dp))
+                Text("top session $it", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
             }
         }
         Text("→", style = MaterialTheme.typography.bodySmall, color = muted.copy(alpha = 0.5f), modifier = Modifier.align(Alignment.TopEnd))

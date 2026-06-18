@@ -37,6 +37,7 @@ import com.forge.app.ui.gym.stats.state.ReadinessPulse
 import com.forge.app.ui.theme.ForgeLastGreen
 import com.forge.app.ui.theme.ForgeWarning
 import com.forge.app.ui.theme.LocalForgeSettings
+import java.time.LocalDate
 
 /** "MOMENTUM · VS LAST WEEK" — a 2×2 grid of this-week values with deltas vs last week. */
 @Composable
@@ -44,8 +45,15 @@ internal fun MomentumGrid(current: PeriodStats?, previous: PeriodStats?, onBg: C
     val cur = current ?: PeriodStats(0, 0.0, 0, 0)
     val prev = previous ?: PeriodStats(0, 0.0, 0, 0)
     val useKg = LocalForgeSettings.current.useKg
+    // Mon/Tue: "this week" is only 1–2 days deep against last week's full 7, so flag the comparison
+    // as partial rather than letting it read as a real drop.
+    val isEarlyWeek = LocalDate.now(java.time.ZoneId.systemDefault()).dayOfWeek.value <= 2
     Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
-        Text("MOMENTUM · VS LAST WEEK", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
+        Text("MOMENTUM · ${if (isEarlyWeek) "WEEK SO FAR" else "VS LAST WEEK"}", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
+        if (isEarlyWeek) {
+            Spacer(Modifier.height(2.dp))
+            Text("Early in the week — last week was a full 7 days", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.75f), fontSize = 8.sp)
+        }
         Spacer(Modifier.height(10.dp))
         Column(
             Modifier.fillMaxWidth().border(0.5.dp, outline.copy(alpha = 0.35f), RoundedCornerShape(12.dp)).padding(16.dp)

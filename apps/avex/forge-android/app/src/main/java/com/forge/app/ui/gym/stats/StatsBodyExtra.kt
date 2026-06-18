@@ -38,6 +38,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.forge.app.domain.units.formatWeight
 import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.domain.units.weightInputValue
@@ -133,6 +134,8 @@ private val TIER_CUTOFFS_MALE = listOf(0.4, 0.7, 1.1, 1.5) // entry ratio for No
 private val TIER_CUTOFFS_FEMALE = listOf(0.3, 0.5, 0.8, 1.1)
 private val TIER_SHORT = listOf("UNTR", "NOVI", "INTE", "ADVA", "ELIT")
 private val TIER_FULL = listOf("Untrained", "Novice", "Intermediate", "Advanced", "Elite")
+/** A lift needs at least this many sessions behind its e1RM before its tier is shown (vs "calibrating"). */
+private const val MIN_SESSIONS_FOR_TIER = 3
 
 private fun tierCutoffs(sex: String): List<Double> =
     if (sex == "female") TIER_CUTOFFS_FEMALE else TIER_CUTOFFS_MALE
@@ -147,8 +150,13 @@ private fun tierIndex(ratio: Double, sex: String): Int {
 @Composable
 internal fun StrengthStandardsCard(lifts: List<E1rmLift>, bodyweightLb: Double?, sex: String, onBg: Color, muted: Color, accent: Color, outline: Color) {
     val grey = muted.copy(alpha = 0.25f)
-    val rated = if (bodyweightLb != null && bodyweightLb > 0)
-        lifts.filter { it.currentE1rm > 0 }.take(5).map { it to it.currentE1rm / bodyweightLb } else emptyList()
+    val useKg = LocalForgeSettings.current.useKg
+    val bw = bodyweightLb ?: 0.0
+    val hasBodyweight = bw > 0
+    // A tier only locks in once a lift has a few sessions behind its e1RM — one fluke set shouldn't
+    // read as "Advanced". With bodyweight but too little history per lift, we show a calibrating state.
+    val eligible = if (hasBodyweight) lifts.filter { it.currentE1rm > 0 } else emptyList()
+    val rated = eligible.filter { it.history.size >= MIN_SESSIONS_FOR_TIER }.take(5).map { it to it.currentE1rm / bw }
     val avgIdx = if (rated.isNotEmpty()) rated.map { tierIndex(it.second, sex) }.average().roundToInt().coerceIn(0, 4) else 0
 
     Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
@@ -163,8 +171,10 @@ internal fun StrengthStandardsCard(lifts: List<E1rmLift>, bodyweightLb: Double?,
         Spacer(Modifier.height(4.dp))
         Text("Lifts as a multiple of bodyweight, on the strength scale.", style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic)
         Spacer(Modifier.height(14.dp))
-        if (rated.isEmpty()) {
+        if (!hasBodyweight) {
             Text("Log your bodyweight to see where you stand.", style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic)
+        } else if (rated.isEmpty()) {
+            Text("Still calibrating — a few more sessions of your main lifts and your tier locks in.", style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic)
         } else {
             rated.forEach { (lift, ratio) ->
                 val idx = tierIndex(ratio, sex)
@@ -203,8 +213,11 @@ internal fun StrengthStandardsCard(lifts: List<E1rmLift>, bodyweightLb: Double?,
                     Spacer(Modifier.height(16.dp))
                     Text("What's next", style = MaterialTheme.typography.headlineSmall, color = onBg, fontStyle = FontStyle.Italic)
                     Spacer(Modifier.height(8.dp))
+                    // The next-tier cutoff is bodyweight-relative; multiply by the user's bodyweight
+                    // so they also see the concrete e1RM target in their unit, not just a ratio.
+                    val targetLb = tierCutoffs(sex)[idx] * (bodyweightLb ?: 0.0)
                     Text(
-                        "Push ${lowest.first.exerciseName} from %.2f× to %.2f× BW to reach ${TIER_FULL[idx + 1]}.".format(lowest.second, tierCutoffs(sex)[idx]),
+                        "Push ${lowest.first.exerciseName} from %.2f× to %.2f× BW (≈ ${formatWeight(targetLb, useKg)}) to reach ${TIER_FULL[idx + 1]}.".format(lowest.second, tierCutoffs(sex)[idx]),
                         style = MaterialTheme.typography.bodySmall, color = onBg
                     )
                 }

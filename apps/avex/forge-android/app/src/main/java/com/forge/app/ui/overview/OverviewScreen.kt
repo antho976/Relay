@@ -1,5 +1,10 @@
 package com.forge.app.ui.overview
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateIntAsState
 import androidx.compose.animation.core.tween
@@ -53,6 +58,7 @@ import androidx.compose.ui.semantics.Role
 import com.forge.app.ui.common.FirstTouchTip
 import com.forge.app.ui.common.clickableLabeled
 import com.forge.app.ui.overview.state.MilestoneEvent
+import com.forge.app.ui.overview.state.OnThisDayMemory
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -363,6 +369,26 @@ fun OverviewScreen(
                 )
             }
 
+            // Program preview (Cat 7): before the first session, show the whole week the generator built
+            // — a new user sees the full plan, not just today. Drops away once any session is logged.
+            if (state.totalFinishedSessions == 0 && Program.days.isNotEmpty()) {
+                Spacer(Modifier.height(20.dp))
+                Text("YOUR WEEK · ${Program.days.size} DAYS", style = MaterialTheme.typography.labelSmall,
+                    color = emphasized(muted), fontSize = 9.sp, letterSpacing = 1.sp)
+                Spacer(Modifier.height(8.dp))
+                Program.days.forEach { day ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(day.defaultName, style = MaterialTheme.typography.bodyMedium, color = onBg)
+                        Text("${day.exercises.size} exercises", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp)
+                    }
+                    HorizontalDivider(color = outline.copy(alpha = 0.15f))
+                }
+            }
+
             // First-week guidance (Cat 7): started but brand-new — set expectations for what fills in as
             // they keep logging. Sits between the 0-session welcome and being established.
             if (state.totalFinishedSessions in 1..4) {
@@ -387,8 +413,10 @@ fun OverviewScreen(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Column(Modifier.weight(1f)) {
-                        Text("NEW BRIEF", style = MaterialTheme.typography.labelSmall, color = accent, fontSize = 10.sp)
-                        Text(banner.text, style = MaterialTheme.typography.bodyMedium, color = onBg)
+                        Text("COACH BRIEF", style = MaterialTheme.typography.labelSmall, color = accent, fontSize = 10.sp)
+                        // banner.text is the brief's one-line summary (summaryFor) — drop its redundant
+                        // "Coach · " prefix so it reads as a clean preview line under the eyebrow.
+                        Text(banner.text.removePrefix("Coach · "), style = MaterialTheme.typography.bodyMedium, color = onBg)
                     }
                     Text("→", style = MaterialTheme.typography.bodyLarge, color = accent)
                     Icon(
@@ -407,25 +435,59 @@ fun OverviewScreen(
                 DismissibleNotice(notice, onBg, muted) { viewModel.dismissOrphanNotice() }
             }
 
-            // ── Resume reminder: an unfinished workout is waiting ────────────
-            state.activeSessionDayKey?.let { activeKey ->
-                Spacer(Modifier.height(16.dp))
-                val activeName = Program.days.firstOrNull { it.key == activeKey }?.defaultName ?: "Workout"
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(accent.copy(alpha = 0.12f))
-                        .clickableLabeled("Resume your workout") { viewModel.onSessionStarting(); onStartSession(activeKey) }
-                        .padding(horizontal = 14.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Column {
-                        Text("IN PROGRESS", style = MaterialTheme.typography.labelSmall, color = accent, fontSize = 10.sp)
-                        Text("$activeName · tap to resume", style = MaterialTheme.typography.bodyMedium, color = onBg)
+            // ── Resume reminder: an unfinished workout is waiting (slides + fades in) ──
+            val resumeBannerKey = state.activeSessionDayKey
+            // Hold the last real key so the row keeps its name through the exit fade after a finish.
+            var lastResumeKey by remember { mutableStateOf<String?>(null) }
+            if (resumeBannerKey != null) lastResumeKey = resumeBannerKey
+            AnimatedVisibility(
+                visible = resumeBannerKey != null,
+                enter = fadeIn(tween(300)) + slideInVertically(tween(300)) { it / 3 },
+                exit = fadeOut(tween(200)) + slideOutVertically(tween(200)) { it / 3 }
+            ) {
+                val activeKey = (resumeBannerKey ?: lastResumeKey).orEmpty()
+                Column {
+                    Spacer(Modifier.height(16.dp))
+                    val activeName = Program.days.firstOrNull { it.key == activeKey }?.defaultName ?: "Workout"
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(accent.copy(alpha = 0.12f))
+                            // Gate on the LIVE key, not the held one: during the exit fade after a
+                            // finish, resumeBannerKey is null, so a stray tap can't re-enter the
+                            // just-completed session.
+                            .clickableLabeled("Resume your workout") {
+                                resumeBannerKey?.let { viewModel.onSessionStarting(); onStartSession(it) }
+                            }
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column {
+                            Text("IN PROGRESS", style = MaterialTheme.typography.labelSmall, color = accent, fontSize = 10.sp)
+                            Text("$activeName · tap to resume", style = MaterialTheme.typography.bodyMedium, color = onBg)
+                        }
+                        Text("→", style = MaterialTheme.typography.bodyLarge, color = accent)
                     }
-                    Text("→", style = MaterialTheme.typography.bodyLarge, color = accent)
+                }
+            }
+
+            // ── Comeback nudge: a multi-day gap since the last session (>4d) ──
+            state.daysSinceLastSession?.let { gap ->
+                if (gap > 4 && state.activeSessionDayKey == null) {
+                    Spacer(Modifier.height(16.dp))
+                    Column(
+                        Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(accent.copy(alpha = 0.10f))
+                            .padding(horizontal = 14.dp, vertical = 12.dp)
+                    ) {
+                        Text("WELCOME BACK", style = MaterialTheme.typography.labelSmall, color = accent, fontSize = 10.sp)
+                        Text("It's been $gap days — start light today and rebuild momentum.",
+                            style = MaterialTheme.typography.bodyMedium, color = onBg)
+                    }
                 }
             }
 
@@ -626,6 +688,12 @@ fun OverviewScreen(
                 }
             }
 
+            // ── On this day: a session from N months ago near today's date (#106) ──
+            state.onThisDayMemory?.let { memory ->
+                Spacer(Modifier.height(16.dp))
+                OnThisDayCard(memory = memory, onBg = onBg, muted = muted, accent = accent, outline = outline)
+            }
+
             Spacer(Modifier.height(20.dp))
             HorizontalDivider(color = outline.copy(alpha = 0.3f))
             Spacer(Modifier.height(12.dp))
@@ -657,6 +725,8 @@ fun OverviewScreen(
             Spacer(Modifier.height(8.dp))
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 StatsTile(totalSessions = state.totalFinishedSessions, streakDays = state.streakDays,
+                    bestSessionLabel = state.bestSessionThisWeekLb?.takeIf { it > 0 }
+                        ?.let { com.forge.app.domain.units.formatVolumeCompact(it, useKg) },
                     onClick = onGoToStats, onBg = onBg, muted = muted, outline = outline, modifier = Modifier.weight(1f))
                 TrophiesTile(unlocked = state.trophiesUnlocked, total = Trophies.all.size,
                     onClick = onGoToTrophies, onBg = onBg, muted = muted, outline = outline, modifier = Modifier.weight(1f))
@@ -685,5 +755,36 @@ fun OverviewScreen(
 
             Spacer(Modifier.height(24.dp))
         }
+    }
+}
+
+/**
+ * "On this day" nostalgia card (#106) — surfaces a session from 1/3/6/12 months ago that lands near
+ * today's date. Display-only; tapping through to the session is a separate roadmap item.
+ */
+@Composable
+private fun OnThisDayCard(
+    memory: OnThisDayMemory,
+    onBg: Color,
+    muted: Color,
+    accent: Color,
+    outline: Color
+) {
+    val useKg = LocalForgeSettings.current.useKg
+    val agoLabel = com.forge.app.ui.common.monthsAgoPhrase(memory.monthsAgo).uppercase()
+    val vol = com.forge.app.domain.units.formatVolumeCompact(memory.totalVolumeLb, useKg)
+    val prText = if (memory.prCount > 0) " · ${memory.prCount} PR${if (memory.prCount > 1) "s" else ""}" else ""
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .border(1.dp, outline.copy(alpha = 0.4f), RoundedCornerShape(10.dp))
+            .padding(horizontal = 14.dp, vertical = 12.dp)
+    ) {
+        Text("ON THIS DAY · $agoLabel", style = MaterialTheme.typography.labelSmall,
+            color = accent, fontSize = 10.sp)
+        Spacer(Modifier.height(2.dp))
+        Text("You trained ${memory.dayName} — $vol moved$prText",
+            style = MaterialTheme.typography.bodyMedium, color = onBg)
     }
 }

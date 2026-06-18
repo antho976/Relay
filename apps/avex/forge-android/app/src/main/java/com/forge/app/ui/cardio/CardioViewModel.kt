@@ -10,17 +10,20 @@ import com.forge.app.data.repo.TrophyRepository
 import com.forge.app.domain.cardio.CardioEffort
 import com.forge.app.domain.cardio.CardioRestReason
 import com.forge.app.domain.cardio.CardioType
+import com.forge.app.ui.cardio.state.CardioDayCell
 import com.forge.app.ui.cardio.state.CardioUiState
 import java.time.DayOfWeek
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -47,29 +50,46 @@ class CardioViewModel @Inject constructor(
     private val transient = MutableStateFlow(TransientState())
     // Start of the current ISO week (Monday) — matches the "this week" label and the Mon–Sun bars
     // (was a rolling now-minus-7-days window). Captured once at construction.
-    private val weekStartMs: Long = run {
-        val zone = ZoneId.systemDefault()
-        Instant.ofEpochMilli(clock.nowMs()).atZone(zone).toLocalDate()
-            .with(DayOfWeek.MONDAY).atStartOfDay(zone).toInstant().toEpochMilli()
-    }
+    private val weekStartMs: Long = com.forge.app.core.time.mondayStartMs(clock.nowMs())
 
-    private val dbFlow = combine(
+    // All DB-derived aggregates (streak, weekly/last-week totals, the Mon–Sun cells) are computed
+    // here off the DB flow and on Dispatchers.Default — NOT in the combine with `transient` below,
+    // so toggling the sheet (a pure UI event) never re-runs the full-history streak/day passes, and
+    // none of it runs on the main thread.
+    private val derivedFlow = combine(
         cardioRepo.observeAll(),
         cardioRepo.observeMinutesSince(weekStartMs),
         cardioRepo.observeSince(weekStartMs)
     ) { all, weekMin, weekEntries ->
-        Triple(all, weekMin, weekEntries)
-    }
+        val zone = ZoneId.systemDefault()
+        // Last ISO week's active entries (from the full history) for the hero's trend line.
+        val lastWeek = all.filter {
+            it.date in (weekStartMs - WEEK_MS) until weekStartMs && it.type != CardioType.REST.code
+        }
+        CardioDerived(
+            all = all,
+            weekMinutes = weekMin ?: 0,
+            weekDistanceKm = weekEntries.filter { it.type != CardioType.REST.code }.sumOf { it.distanceKm ?: 0.0 },
+            lastWeekMinutes = lastWeek.sumOf { it.durationMin },
+            lastWeekDistanceKm = lastWeek.sumOf { it.distanceKm ?: 0.0 },
+            cardioStreakDays = computeCardioStreak(all, zone),
+            weekDays = buildWeekDays(weekEntries)
+        )
+    }.flowOn(Dispatchers.Default)
 
     val state: StateFlow<CardioUiState> = combine(
-        dbFlow, transient, settingsRepo.cardioWeeklyTargetMin
-    ) { (all, weekMin, weekEntries), tr, target ->
+        derivedFlow, transient, settingsRepo.cardioWeeklyTargetMin
+    ) { d, tr, target ->
         CardioUiState(
             isLoading = false,
-            weekMinutes = weekMin ?: 0,
+            weekMinutes = d.weekMinutes,
             weekTargetMin = target,
-            weekDailyMinutes = buildDailyMinutes(weekEntries),
-            entries = all,
+            weekDistanceKm = d.weekDistanceKm,
+            lastWeekMinutes = d.lastWeekMinutes,
+            lastWeekDistanceKm = d.lastWeekDistanceKm,
+            cardioStreakDays = d.cardioStreakDays,
+            weekDays = d.weekDays,
+            entries = d.all,
             sheetOpen = tr.sheetOpen,
             editing = tr.editing,
             pendingDeleteId = tr.pendingDeleteId
@@ -144,27 +164,57 @@ class CardioViewModel @Inject constructor(
         val pendingDeleteId: Long? = null
     )
 
+    /** DB-derived aggregates, computed off the DB flow on a background dispatcher. */
+    private data class CardioDerived(
+        val all: List<CardioEntry>,
+        val weekMinutes: Int,
+        val weekDistanceKm: Double,
+        val lastWeekMinutes: Int,
+        val lastWeekDistanceKm: Double,
+        val cardioStreakDays: Int,
+        val weekDays: List<CardioDayCell>
+    )
+
     companion object {
         private const val WEEK_MS: Long = 7L * 24 * 60 * 60 * 1000
 
-        /** Returns 7 minute totals [Mon, Tue, Wed, Thu, Fri, Sat, Sun] for the current week. */
-        fun buildDailyMinutes(entries: List<CardioEntry>): List<Int> {
+        /** Mon–Sun cells for the current week: active minutes + whether a rest day was logged.
+         *  One pass over the entries per day; future days are empty. */
+        fun buildWeekDays(entries: List<CardioEntry>): List<CardioDayCell> {
             val zone = ZoneId.systemDefault()
             val today = LocalDate.now(zone)
             val monday = today.with(DayOfWeek.MONDAY)
             return (0..6).map { dayOffset ->
                 val day = monday.plusDays(dayOffset.toLong())
                 if (day.isAfter(today)) {
-                    0
+                    CardioDayCell()
                 } else {
-                    entries
-                        .filter { e ->
-                            e.type != CardioType.REST.code &&
-                                Instant.ofEpochMilli(e.date).atZone(zone).toLocalDate() == day
-                        }
-                        .sumOf { it.durationMin }
+                    val dayEntries = entries.filter {
+                        Instant.ofEpochMilli(it.date).atZone(zone).toLocalDate() == day
+                    }
+                    val minutes = dayEntries.filter { it.type != CardioType.REST.code }.sumOf { it.durationMin }
+                    // A rest day reads distinctly only when nothing active was also logged that day.
+                    val isRest = minutes == 0 && dayEntries.any { it.type == CardioType.REST.code }
+                    CardioDayCell(minutes = minutes, isRest = isRest)
                 }
             }
+        }
+
+        /** Consecutive calendar days, ending today or yesterday, with an active (non-rest) session. */
+        fun computeCardioStreak(entries: List<CardioEntry>, zone: ZoneId): Int {
+            val days = entries
+                .filter { it.type != CardioType.REST.code }
+                .mapTo(sortedSetOf()) { Instant.ofEpochMilli(it.date).atZone(zone).toLocalDate() }
+            if (days.isEmpty()) return 0
+            val today = LocalDate.now(zone)
+            var cursor = when {
+                today in days -> today
+                today.minusDays(1) in days -> today.minusDays(1)
+                else -> return 0
+            }
+            var count = 0
+            while (cursor in days) { count++; cursor = cursor.minusDays(1) }
+            return count
         }
     }
 }

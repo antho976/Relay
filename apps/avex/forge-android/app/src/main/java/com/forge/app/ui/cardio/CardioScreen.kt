@@ -153,6 +153,10 @@ private fun CardioListContent(
                     weekNum = weekNum,
                     weekLabel = weekLabel,
                     weekEntries = weekEntries,
+                    weekDistanceKm = state.weekDistanceKm,
+                    lastWeekMinutes = state.lastWeekMinutes,
+                    lastWeekDistanceKm = state.lastWeekDistanceKm,
+                    cardioStreakDays = state.cardioStreakDays,
                     zone = zone,
                     onBg = onBg,
                     muted = muted
@@ -161,7 +165,7 @@ private fun CardioListContent(
 
             item("week-row") {
                 WeekBoxRow(
-                    dailyMinutes = state.weekDailyMinutes,
+                    days = state.weekDays,
                     todayDow = todayDow,
                     onBg = onBg,
                     muted = muted,
@@ -203,7 +207,8 @@ private fun CardioListContent(
                     EmptyState(
                         emoji = "🏃",
                         title = "No cardio yet.",
-                        subtitle = "Tap \"Log today\" above to add a run, walk, or any session.",
+                        subtitle = "Tap \"Log today\" above to add a run, walk, or any session." +
+                            (if (state.weekTargetMin > 0) " Your weekly goal: ${state.weekTargetMin} min." else ""),
                         modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
                     )
                 }

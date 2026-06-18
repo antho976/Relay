@@ -239,6 +239,11 @@ internal fun LazyListScope.snapshotTab(
 internal fun LazyListScope.volumeTab(state: StatsUiState, c: StatsColors) {
     var idx = 0
     val volumeLbByMuscle = state.volumeByMuscle.associate { it.muscle to it.volumeLb }
+    // Hero tonnage for the current week, anchored above the muscle bars (shows from week one).
+    if ((state.weeklyTonnage.lastOrNull()?.volumeLb ?: 0.0) > 0) {
+        val i = idx++
+        item("tonnage-hero") { EntranceItem(i) { WeeklyTonnageHero(state.weeklyTonnage, c.onBg, c.muted) } }
+    }
     val hasTargets = state.plannedSetsByMuscle.isNotEmpty() || state.weeklySetsByMuscle.isNotEmpty()
     if (hasTargets) {
         // Renders the full plan even at zero data — the cold start shows targets, not a gap.
@@ -261,10 +266,10 @@ internal fun LazyListScope.volumeTab(state: StatsUiState, c: StatsColors) {
         val i = idx++
         item("tonnage") { EntranceItem(i) { TonnageTrendCard(state.weeklyTonnage, c.onBg, c.muted, c.accent, c.outline) } }
     }
-    state.repRangeDist?.let { rr ->
-        if (rr.total > 0) {
-            val i = idx++
-            item("rep-range") { EntranceItem(i) { RepRangeCard(rr, c.onBg, c.muted, c.accent, c.outline) } }
+    if ((state.repRangeDist?.total ?: 0) > 0) {
+        val i = idx++
+        item("rep-range") {
+            EntranceItem(i) { RepRangeCard(state.repRangeDistRecent, state.repRangeDist, c.onBg, c.muted, c.accent, c.outline) }
         }
     }
     if (state.dayTypeBestVsAvg.isNotEmpty()) {

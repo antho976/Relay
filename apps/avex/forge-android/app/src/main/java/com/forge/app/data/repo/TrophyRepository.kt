@@ -45,6 +45,9 @@ class TrophyRepository @Inject constructor(
     fun observeUnlockedIds(): Flow<List<String>> = unlockedDao.observeUnlockedIds()
     suspend fun unlockedIds(): Set<String> = unlockedDao.unlockedIds().toSet()
 
+    /** trophyId → when it was unlocked (epoch ms), for surfacing the earned date. */
+    suspend fun unlockedDatesById(): Map<String, Long> = unlockedDao.all().associate { it.trophyId to it.unlockedAt }
+
     suspend fun unlock(trophyId: String) {
         unlockedDao.unlock(UnlockedTrophy(trophyId = trophyId, unlockedAt = clock.nowMs()))
     }

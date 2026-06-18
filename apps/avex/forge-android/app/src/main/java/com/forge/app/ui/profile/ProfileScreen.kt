@@ -13,9 +13,19 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -83,6 +93,8 @@ fun ProfileScreen(
     val showRankUpCelebration by viewModel.showRankUpCelebration.collectAsStateWithLifecycle()
     var viewing by remember { mutableStateOf<ProgressPhoto?>(null) }
     var showXpInfo by remember { mutableStateOf(false) }
+    var editingName by remember { mutableStateOf(false) }
+    var nameInput by remember { mutableStateOf("") }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val haptic = LocalHapticFeedback.current
@@ -105,6 +117,13 @@ fun ProfileScreen(
     val outline = MaterialTheme.colorScheme.outline
 
     Box(Modifier.fillMaxSize()) {
+        // Soft rank-tier wash bleeding down from the top bar — ties the screen to the current tier.
+        state.rank?.let { r ->
+            Box(
+                Modifier.fillMaxWidth().height(140.dp)
+                    .background(Brush.verticalGradient(listOf(r.tier.color().copy(alpha = 0.13f), Color.Transparent)))
+            )
+        }
         Scaffold(
             topBar = {
                 TopAppBar(
@@ -150,7 +169,35 @@ fun ProfileScreen(
                         style = MaterialTheme.typography.labelSmall, color = emphasized(muted), fontSize = 9.sp
                     )
                     Spacer(Modifier.height(6.dp))
-                    Text(state.name.ifBlank { "Athlete" } + ".", style = MaterialTheme.typography.displaySmall, color = emphasized(onBg))
+                    if (editingName) {
+                        val nameFocus = remember { FocusRequester() }
+                        LaunchedEffect(Unit) { nameFocus.requestFocus() }
+                        // Commit on Done OR on focus loss (tap-away / keyboard dismiss / leaving the
+                        // screen) so a typed name is never silently lost. Blank input is ignored — it
+                        // would otherwise wipe the name to the "Athlete" placeholder.
+                        fun commitName() {
+                            val trimmed = nameInput.trim()
+                            if (trimmed.isNotEmpty() && trimmed != state.name) viewModel.setUserName(trimmed)
+                            editingName = false
+                        }
+                        BasicTextField(
+                            value = nameInput,
+                            onValueChange = { nameInput = it.take(30) },
+                            singleLine = true,
+                            textStyle = MaterialTheme.typography.displaySmall.copy(color = emphasized(onBg)),
+                            cursorBrush = SolidColor(accent),
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                            keyboardActions = KeyboardActions(onDone = { commitName() }),
+                            modifier = Modifier.fillMaxWidth().focusRequester(nameFocus)
+                                .onFocusChanged { if (!it.isFocused && editingName) commitName() }
+                        )
+                    } else {
+                        Text(
+                            state.name.ifBlank { "Athlete" } + ".",
+                            style = MaterialTheme.typography.displaySmall, color = emphasized(onBg),
+                            modifier = Modifier.bounceClick { nameInput = state.name; editingName = true }
+                        )
+                    }
                     state.rank?.let { r ->
                         Spacer(Modifier.height(2.dp))
                         val streak = if (state.streakDays >= 2) " · ${state.streakDays}-day streak, still alive." else ""
@@ -176,32 +223,33 @@ fun ProfileScreen(
                 // internal emblem scale/alpha. The two animations compound tastefully.
                 state.rank?.let { r ->
                     Spacer(Modifier.height(20.dp))
-                    Box(Modifier.statsEntrance(1)) {
+                    Column(Modifier.statsEntrance(1)) {
                         RankSection(r, muted, accent, outline, onInfo = { showXpInfo = true })
                     }
                 }
 
                 // ── Sections (indices 2 onwards, top-to-bottom) ──────────────────
-                // StandingSection has its own bar animations — still wrap it for the block entrance.
-                Box(Modifier.statsEntrance(2)) {
-                    LedgerSection(state.totalSessions, state.totalVolumeLb, state.totalPrs, state.rank?.xpTotal ?: 0L, muted, accent, outline)
+                // These sections (via ProfileBlock) emit several stacked siblings — divider, label,
+                // body — so each entrance wrapper MUST be a Column, not a Box. A Box would pile the
+                // siblings at the same top-start corner and they'd overlap.
+                Column(Modifier.statsEntrance(2)) {
+                    LedgerSection(state.totalSessions, state.totalVolumeLb, state.totalPrs, state.rank?.xpTotal ?: 0L, muted, accent, outline, state.longestStreakDays)
                 }
-                Box(Modifier.statsEntrance(3)) {
+                Column(Modifier.statsEntrance(3)) {
                     StandingSection(state.standings, onBg, muted, accent, outline)
                 }
-                Box(Modifier.statsEntrance(4)) {
+                Column(Modifier.statsEntrance(4)) {
                     SignatureSection(state.topLift, state.mostLoggedDay, state.usualHour, onBg, muted, accent, outline)
                 }
-                Box(Modifier.statsEntrance(5)) {
+                Column(Modifier.statsEntrance(5)) {
                     MirrorTestSection(state.photos, viewModel::fileFor, onAdd = { pickPhoto() }, onView = { viewing = it }, onBg, muted, accent, outline)
                 }
 
                 state.memory?.let { m ->
-                    Box(Modifier.statsEntrance(6)) {
+                    Column(Modifier.statsEntrance(6)) {
                         ProfileBlock("ON THIS DAY", muted, accent, outline) {
                             val useKg = LocalForgeSettings.current.useKg
-                            val ago = if (m.monthsAgo % 12 == 0) "${m.monthsAgo / 12} year${if (m.monthsAgo == 12) "" else "s"} ago"
-                            else "${m.monthsAgo} months ago"
+                            val ago = com.forge.app.ui.common.monthsAgoPhrase(m.monthsAgo)
                             Text(
                                 "$ago you trained ${m.dayName} — ${formatVolume(m.totalVolumeLb, useKg)} ${unitLabel(useKg)}" +
                                     if (m.prCount > 0) " · ${m.prCount} PR${if (m.prCount == 1) "" else "s"}" else "",
@@ -211,11 +259,11 @@ fun ProfileScreen(
                     }
                 }
 
-                Box(Modifier.statsEntrance(7)) {
+                Column(Modifier.statsEntrance(7)) {
                     TrophyCaseSection(state.trophyGrid, state.trophyUnlocked, state.trophyTotal, state.closestTrophy, onOpenTrophies, onBg, muted, accent, outline)
                 }
 
-                Box(Modifier.statsEntrance(8)) {
+                Column(Modifier.statsEntrance(8)) {
                     ProfileBlock("GOALS", muted, accent, outline) {
                         Row(
                             Modifier.fillMaxWidth().bounceClick { onOpenGoals() },
@@ -228,7 +276,7 @@ fun ProfileScreen(
                     }
                 }
 
-                Box(Modifier.statsEntrance(9)) {
+                Column(Modifier.statsEntrance(9)) {
                     ProfileBlock("COACH", muted, accent, outline) {
                         Row(
                             Modifier.fillMaxWidth().bounceClick { onOpenCoachBrief() },
@@ -241,7 +289,7 @@ fun ProfileScreen(
                     }
                 }
 
-                Box(Modifier.statsEntrance(10)) {
+                Column(Modifier.statsEntrance(10)) {
                     OnTheRecordSection(state.recaps, onOpenRecaps, onBg, muted, accent, outline)
                 }
 
@@ -265,6 +313,8 @@ fun ProfileScreen(
         PhotoViewerDialog(
             file = viewModel.fileFor(photo),
             takenAtMs = photo.takenAtMs,
+            note = photo.note,
+            onSaveNote = { viewModel.setPhotoNote(photo, it) },
             onDelete = { viewModel.deletePhoto(photo); viewing = null },
             onDismiss = { viewing = null }
         )
@@ -278,15 +328,45 @@ fun ProfileScreen(
 }
 
 @Composable
-private fun PhotoViewerDialog(file: File, takenAtMs: Long, onDelete: () -> Unit, onDismiss: () -> Unit) {
-    Dialog(onDismissRequest = onDismiss) {
+private fun PhotoViewerDialog(
+    file: File,
+    takenAtMs: Long,
+    note: String,
+    onSaveNote: (String) -> Unit,
+    onDelete: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val onBg = MaterialTheme.colorScheme.onBackground
+    val accent = MaterialTheme.colorScheme.primary
+    var noteInput by remember(note) { mutableStateOf(note) }
+    // Persist the caption when the viewer closes, only if it actually changed.
+    fun commit() { if (noteInput.trim() != note) onSaveNote(noteInput.trim()); onDismiss() }
+    Dialog(onDismissRequest = { commit() }) {
         Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))) {
             ProgressPhotoImage(file, Modifier.fillMaxWidth().aspectRatio(0.8f).clip(RoundedCornerShape(12.dp)), reqPx = 1200)
+            Spacer(Modifier.height(10.dp))
+            BasicTextField(
+                value = noteInput,
+                onValueChange = { noteInput = it.take(140) },
+                textStyle = MaterialTheme.typography.bodySmall.copy(color = onBg),
+                cursorBrush = SolidColor(accent),
+                decorationBox = { inner ->
+                    Box {
+                        if (noteInput.isEmpty()) Text(
+                            "Add a note…",
+                            style = MaterialTheme.typography.bodySmall, color = muted.copy(alpha = 0.5f), fontStyle = FontStyle.Italic
+                        )
+                        inner()
+                    }
+                },
+                modifier = Modifier.fillMaxWidth()
+            )
             Spacer(Modifier.height(10.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     SimpleDateFormat("MMM d, yyyy", Locale.getDefault()).format(Date(takenAtMs)),
-                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant
+                    style = MaterialTheme.typography.labelSmall, color = muted
                 )
                 Text(
                     "delete", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error,

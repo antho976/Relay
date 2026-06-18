@@ -109,6 +109,10 @@ data class AdaptThresholds(
     val readinessMoodWindowDays: Int = 14,
     /** The scale is bounded to ±this percent — autoregulation nudges, never lurches. */
     val readinessMaxPercent: Int = 5,
+    /** Active (non-rest) cardio minutes in the last day past which it reads as a recovery cost. */
+    val readinessCardioLoadMinutes: Int = 60,
+    /** Percent shaved off readiness when [readinessCardioLoadMinutes] is exceeded in the last day. */
+    val readinessCardioLoadPenalty: Int = 1,
 
     // ── Insights (System 4) ────────────────────────────────────────────────────
     /** Time-of-day rule: total sets before the pattern is worth stating. */

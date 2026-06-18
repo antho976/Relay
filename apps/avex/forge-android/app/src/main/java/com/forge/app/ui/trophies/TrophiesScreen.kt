@@ -37,6 +37,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.ui.theme.emphasized
 import com.forge.app.ui.trophies.state.TrophiesUiState
+import com.forge.app.ui.trophies.state.TrophySort
+import com.forge.app.ui.trophies.state.applySort
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -48,6 +50,7 @@ fun TrophiesScreen(
     // Trophies whose icon is currently animating. Tapping a row toggles its id here; the set is
     // screen-scoped, so navigating away clears it — the animation "plays until you leave the page".
     var activated by remember { mutableStateOf(setOf<String>()) }
+    var sort by remember { mutableStateOf(TrophySort.DEFAULT) }
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val outline = MaterialTheme.colorScheme.outline
@@ -97,6 +100,7 @@ fun TrophiesScreen(
             // Respect the active filter so "up next" reflects what's actually shown.
             state.filteredSections.flatMap { it.displays }.firstOrNull { !it.isUnlocked }
         }
+        val shownSections = remember(state.filteredSections, sort) { state.filteredSections.applySort(sort) }
 
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(inner),
@@ -122,7 +126,11 @@ fun TrophiesScreen(
                 )
             }
 
-            state.filteredSections.forEach { section ->
+            item("sort") {
+                SortChips(selected = sort, onSelect = { sort = it }, onBg = onBg, muted = muted, outline = outline)
+            }
+
+            shownSections.forEach { section ->
                 item("h-${section.category.code}") {
                     Column(Modifier.padding(horizontal = 24.dp)) {
                         Spacer(Modifier.height(24.dp))

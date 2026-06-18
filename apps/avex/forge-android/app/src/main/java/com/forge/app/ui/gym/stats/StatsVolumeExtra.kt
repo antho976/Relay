@@ -16,6 +16,10 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -25,6 +29,7 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.domain.units.unitLabel
+import com.forge.app.ui.common.SegmentPill
 import com.forge.app.ui.theme.LocalForgeSettings
 import com.forge.app.program.MuscleGroup
 import com.forge.app.ui.gym.stats.components.formatVolume
@@ -175,6 +180,20 @@ internal fun BalanceRatiosSection(ratios: List<BalanceRatioUi>, onBg: Color, mut
 }
 
 /** "The work, week by week" — tonnage bars growing in with a stagger; deload weeks ring hollow. */
+/** A single hero number — this week's total tonnage — anchored above the per-muscle bars. Shows from
+ *  the very first logged week (unlike [TonnageTrendCard], which needs ≥2 weeks to draw a trend). */
+@Composable
+internal fun WeeklyTonnageHero(weeks: List<WeeklyTonnage>, onBg: Color, muted: Color) {
+    val latest = weeks.lastOrNull() ?: return
+    val useKg = LocalForgeSettings.current.useKg
+    Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
+        Text("THIS WEEK'S TONNAGE", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
+        Spacer(Modifier.height(4.dp))
+        Text(formatVolume(latest.volumeLb, useKg), style = MaterialTheme.typography.displaySmall, color = onBg)
+        Spacer(Modifier.height(20.dp))
+    }
+}
+
 @Composable
 internal fun TonnageTrendCard(weeks: List<WeeklyTonnage>, onBg: Color, muted: Color, accent: Color, outline: Color) {
     if (weeks.size < 2) return
@@ -221,12 +240,28 @@ internal fun TonnageTrendCard(weeks: List<WeeklyTonnage>, onBg: Color, muted: Co
     }
 }
 
-/** Segmented bar of set counts across strength / hypertrophy / endurance rep ranges. */
+/** Segmented bar of set counts across strength / hypertrophy / endurance rep ranges, with a
+ *  recent-(8wk)-vs-all-time scope toggle. Defaults to recent (current tendency); falls back to
+ *  all-time when the recent window has no sets. */
 @Composable
-internal fun RepRangeCard(dist: RepRangeDist, onBg: Color, muted: Color, accent: Color, outline: Color) {
+internal fun RepRangeCard(recent: RepRangeDist?, allTime: RepRangeDist?, onBg: Color, muted: Color, accent: Color, outline: Color) {
+    // rememberSaveable so an 'ALL' selection survives the card scrolling out of the LazyColumn.
+    var allTimeScope by rememberSaveable { mutableStateOf(false) }
+    val recentHasData = (recent?.total ?: 0) > 0
+    val showAllTime = allTimeScope || !recentHasData
+    val dist = (if (showAllTime) allTime else recent) ?: allTime ?: return
     if (dist.total == 0) return
     Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
-        Text("REP RANGE MIX", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text("REP RANGE MIX", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
+            // Toggle shows only when there's both a recent window and an all-time set to switch between.
+            if (recentHasData && (allTime?.total ?: 0) > 0) {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    SegmentPill("8 WK", !showAllTime, { allTimeScope = false }, accent, onBg, muted, outline, fontSize = 9.sp)
+                    SegmentPill("ALL", showAllTime, { allTimeScope = true }, accent, onBg, muted, outline, fontSize = 9.sp)
+                }
+            }
+        }
         Spacer(Modifier.height(10.dp))
         Row(Modifier.fillMaxWidth().height(12.dp).background(outline.copy(alpha = 0.15f), RoundedCornerShape(6.dp))) {
             if (dist.strength > 0) Box(Modifier.weight(dist.strength.toFloat()).height(12.dp).background(accent))
