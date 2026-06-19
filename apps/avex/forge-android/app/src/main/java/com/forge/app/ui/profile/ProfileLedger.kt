@@ -197,6 +197,27 @@ internal fun SignatureSection(
     }
 }
 
+/** All-time cardio totals — only rendered once at least one non-rest session has been logged. */
+@Composable
+internal fun CardioTotalsSection(
+    sessions: Int,
+    minutes: Int,
+    distanceKm: Double,
+    muted: Color,
+    accent: Color,
+    outline: Color
+) {
+    val timeLabel = if (minutes >= 60) "${minutes / 60}h ${minutes % 60}m" else "$minutes min"
+    val distLabel = if (distanceKm > 0) String.format(java.util.Locale.US, "%.1f km", distanceKm) else "—"
+    ProfileBlock("CARDIO", muted, accent, outline) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            LifetimeStat("$sessions", "SESSIONS")
+            LifetimeStat(timeLabel, "TIME")
+            LifetimeStat(distLabel, "DISTANCE")
+        }
+    }
+}
+
 @Composable
 private fun SignatureCell(value: String, label: String, onBg: Color, muted: Color, modifier: Modifier = Modifier) {
     Column(modifier.padding(end = 8.dp)) {

@@ -2,6 +2,7 @@ package com.forge.app.data.repo
 
 import androidx.room.withTransaction
 import com.forge.app.core.time.Clock
+import com.forge.app.data.db.dao.BodyweightDao
 import com.forge.app.data.db.dao.LoggedExerciseDao
 import com.forge.app.data.db.dao.LoggedSetDao
 import com.forge.app.data.db.dao.MoodDao
@@ -18,7 +19,9 @@ import com.forge.app.data.db.entities.SessionBreak
 import com.forge.app.data.db.entities.SessionSegment
 import com.forge.app.data.db.entities.SuggestionOutcome
 import com.forge.app.data.db.types.EffortRating
+import com.forge.app.data.health.HealthConnectManager
 import com.forge.app.data.prefs.SettingsRepository
+import com.forge.app.domain.health.ActiveCalorieEstimator
 import com.forge.app.domain.volume.VolumeCalculator
 import com.forge.app.program.Equipment
 import com.forge.app.program.GenerationParams
@@ -69,6 +72,8 @@ class WorkoutRepository @Inject constructor(
     private val restEventDao: RestEventDao,
     private val suggestionOutcomeDao: SuggestionOutcomeDao,
     private val sessionSegmentDao: com.forge.app.data.db.dao.SessionSegmentDao,
+    private val bodyweightDao: BodyweightDao,
+    private val health: HealthConnectManager,
     private val clock: Clock,
     private val settingsRepo: SettingsRepository,
     private val programRepository: ProgramRepository,
@@ -146,7 +151,24 @@ class WorkoutRepository @Inject constructor(
             )
         )
         maybeRotateProgram()
+        maybeWriteActiveCalories(session, finishedAtMs = now, activeSeconds = activeSeconds)
         return activeSeconds
+    }
+
+    /**
+     * HC-4: mirror this finished session's estimated active calories to Health Connect — gated on the
+     * opt-in pref AND the granted write permission (the cheap pref is checked first, so a disconnected
+     * user never touches HC), and fail-soft so a miss can't affect the finish. Skips silently when
+     * there's no logged bodyweight (the MET estimate needs it) or the session had no active time.
+     */
+    private suspend fun maybeWriteActiveCalories(session: Session, finishedAtMs: Long, activeSeconds: Int) {
+        if (!settingsRepo.hcWriteCalories.first()) return
+        if (!health.canWriteActiveCalories()) return
+        val weightLb = bodyweightDao.latest()?.weightLb ?: return
+        // Pass fractional minutes (/ 60.0) so a sub-minute remainder isn't truncated away — Int
+        // division dropped up to ~1 min per session and skipped sessions under a full minute entirely.
+        val kcal = ActiveCalorieEstimator.estimate(activeSeconds / 60.0, weightLb, session.intensity) ?: return
+        health.writeActiveCalories(kcal, session.startedAt, finishedAtMs)
     }
 
     // ─── Session segments (per-sitting active timing) ──────────────────────────

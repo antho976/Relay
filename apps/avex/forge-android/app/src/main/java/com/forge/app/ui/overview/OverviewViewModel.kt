@@ -2,6 +2,7 @@ package com.forge.app.ui.overview
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.forge.app.core.time.Clock
 import com.forge.app.data.db.dao.SessionDao
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.data.repo.CardioRepository
@@ -49,7 +50,8 @@ class OverviewViewModel @Inject constructor(
     private val adaptationRepo: com.forge.app.data.repo.AdaptationRepository,
     private val coachRepo: com.forge.app.data.repo.CoachRepository,
     private val programRepo: com.forge.app.data.repo.ProgramRepository,
-    private val programChangeGuard: com.forge.app.ui.common.ProgramChangeGuard
+    private val programChangeGuard: com.forge.app.ui.common.ProgramChangeGuard,
+    private val clock: Clock
 ) : ViewModel() {
 
     private val _onThisDayMemory = MutableStateFlow<OnThisDayMemory?>(null)
@@ -61,6 +63,9 @@ class OverviewViewModel @Inject constructor(
     /** Sub-threshold fatigue nudge (Tier 3) — null unless the active coach is quiet but fatigue builds. */
     private val _coachFatigue = MutableStateFlow<com.forge.app.ui.overview.state.FatigueHint?>(null)
 
+    /** Recovery snapshot (HC) — null unless resting HR is elevated vs the user's own baseline. */
+    private val _recoveryAlert = MutableStateFlow<com.forge.app.ui.overview.state.RecoveryAlert?>(null)
+
     /** "New report ready" banner (auto-coach) — null when this week's brief has been seen. */
     private val _coachBanner = MutableStateFlow<com.forge.app.data.repo.CoachBanner?>(null)
     val coachBanner: StateFlow<com.forge.app.data.repo.CoachBanner?> = _coachBanner
@@ -69,7 +74,7 @@ class OverviewViewModel @Inject constructor(
     private val _orphanNotice = MutableStateFlow<String?>(null)
     val orphanNotice: StateFlow<String?> = _orphanNotice
 
-    private val weekStartMs = System.currentTimeMillis() - 7L * 24 * 60 * 60 * 1000
+    private val weekStartMs = clock.nowMs() - 7L * 24 * 60 * 60 * 1000
 
     val state: StateFlow<OverviewUiState> = combine(
         statsRepo.observeWeeklyStats(),
@@ -106,6 +111,7 @@ class OverviewViewModel @Inject constructor(
             trophiesUnlocked = unlockedIds.size,
             distanceKm = distanceKm,
             dayVolStats = dayVolStats,
+            nowMs = clock.nowMs(),
             cardioTargetMin = cardioTarget,
             useKg = useKg
         )
@@ -123,6 +129,8 @@ class OverviewViewModel @Inject constructor(
         s.copy(coachLearning = hint)
     }.combine(_coachFatigue) { s, f ->
         s.copy(coachFatigue = f)
+    }.combine(_recoveryAlert) { s, alert ->
+        s.copy(recoveryAlert = alert)
     }.combine(settingsRepo.daysPerWeek) { s, days ->
         // The "of N target" denominator is the actual number of training days in the generated program
         // (the real weekly schedule), not a hardcoded 6 and not the raw days/week preference — the two
@@ -247,6 +255,11 @@ class OverviewViewModel @Inject constructor(
                 com.forge.app.ui.overview.state.FatigueHint(it.score, feed.fatigueThreshold, it.drivers.firstOrNull())
             }
         } else null
+        // Recovery snapshot (HC): independent of the coach gates — an elevated resting HR is worth
+        // surfacing on its own whether or not there's actionable advice this open.
+        _recoveryAlert.value = feed.restingHrSpike?.let {
+            com.forge.app.ui.overview.state.RecoveryAlert(it.windowBpm, it.baselineBpm, it.deltaBpm)
+        }
     }
 
     /**

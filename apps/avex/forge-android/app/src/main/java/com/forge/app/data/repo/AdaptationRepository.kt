@@ -19,6 +19,7 @@ import com.forge.app.domain.adapt.RatioCounts
 import com.forge.app.domain.adapt.ReadinessAdvisor
 import com.forge.app.domain.adapt.Recommendation
 import com.forge.app.domain.adapt.RecommendationArbiter
+import com.forge.app.domain.adapt.RestingHrTrend
 import com.forge.app.domain.adapt.SnapshotAssembler
 import com.forge.app.program.Equipment
 import com.forge.app.program.ExerciseLibrary
@@ -205,7 +206,9 @@ class AdaptationRepository @Inject constructor(
         val recommendations: List<Recommendation>,
         /** Fatigue that's building but hasn't crossed the deload line yet, or null. */
         val fatigueBuilding: DeloadAdvisor.FatigueAssessment?,
-        val fatigueThreshold: Int
+        val fatigueThreshold: Int,
+        /** Resting HR meaningfully above the user's own baseline (Health Connect), or null. */
+        val restingHrSpike: RestingHrTrend.Readout? = null
     )
 
     suspend fun coachFeed(): CoachFeed {
@@ -219,7 +222,10 @@ class AdaptationRepository @Inject constructor(
         // shared threshold so the Overview nudge and the planner can't describe different ranges.
         val building = DeloadAdvisor.fatigue(s, t)
             ?.takeIf { it.score in (t.deloadScoreThreshold - t.consolidateBandPoints) until t.deloadScoreThreshold }
-        return CoachFeed(arbitrated, building, t.deloadScoreThreshold)
+        // Off-app recovery snapshot: resting HR up vs the user's own baseline (gated; empty when HC
+        // is unconnected). Surfaced separately from the fatigue score for its own Overview card.
+        val restingHrSpike = RestingHrTrend.spike(s.health.restingHr, s.nowMs, t)
+        return CoachFeed(arbitrated, building, t.deloadScoreThreshold, restingHrSpike)
     }
 
     /** Just the actionable recommendations (kept for callers that don't need the fatigue read). */

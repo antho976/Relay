@@ -13,6 +13,7 @@ import androidx.work.WorkerParameters
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.data.repo.CoachRepository
 import com.forge.app.data.repo.StatsRepository
+import com.forge.app.data.repo.TrophyRepository
 import com.forge.app.data.repo.VacationRepository
 import com.forge.app.domain.units.formatWeight
 import dagger.assisted.Assisted
@@ -40,6 +41,7 @@ class WeeklyRecapWorker @AssistedInject constructor(
     private val statsRepo: StatsRepository,
     private val settingsRepo: SettingsRepository,
     private val coachRepo: CoachRepository,
+    private val trophyRepo: TrophyRepository,
     private val vacationRepo: VacationRepository
 ) : CoroutineWorker(ctx, params) {
 
@@ -82,14 +84,26 @@ class WeeklyRecapWorker @AssistedInject constructor(
         // ── Weekly recap (#31): your week in numbers — gated by the per-type opt-out (N2).
         if (settingsRepo.weeklyRecapEnabled.first()) {
             val useKg = settingsRepo.useKg.first()
+            // A full-week streak milestone turns the recap into a small celebration via its title — so
+            // when it does, the streak is dropped from the body line to avoid stating it twice.
+            val isStreakMilestone = stats.streakDays >= 7 && stats.streakDays % 7 == 0
             val body = buildString {
                 append("${stats.workouts} workout${if (stats.workouts != 1) "s" else ""}")
                 if (stats.volumeLb > 0) append(" · ${formatWeight(stats.volumeLb, useKg)}")
                 if (stats.cardioMinutes > 0) append(" · ${stats.cardioMinutes} min cardio")
-                if (stats.streakDays > 0) append(" · ${stats.streakDays}-day streak")
+                if (stats.streakDays > 0 && !isStreakMilestone) append(" · ${stats.streakDays}-day streak")
+                // Retention hooks: the closest trophy you're chasing, and a memory from this date.
+                trophyRepo.observeNearMisses().firstOrNull()?.firstOrNull()?.let { nmiss ->
+                    append(" · Almost: ${nmiss.trophyName} (${nmiss.progress}/${nmiss.target})")
+                }
+                runCatching { statsRepo.findOnThisDayMemory() }.getOrNull()?.let { mem ->
+                    val ago = if (mem.monthsAgo % 12 == 0) "${mem.monthsAgo / 12}yr" else "${mem.monthsAgo}mo"
+                    append(" · On this day ($ago ago): ${mem.dayName}")
+                }
             }
+            val title = if (isStreakMilestone) "${stats.streakDays}-day streak!" else "Weekly recap"
             ForgeNotifications.ensureChannel(ctx, CHANNEL_ID, "Weekly recap", "Your weekly training summary")
-            nm.notify(NOTIF_ID, ForgeNotifications.build(ctx, CHANNEL_ID, "Weekly recap", body))
+            nm.notify(NOTIF_ID, ForgeNotifications.build(ctx, CHANNEL_ID, title, body))
         }
         return Result.success()
     }
@@ -114,7 +128,9 @@ class WeeklyRecapWorker @AssistedInject constructor(
             val constraints = Constraints.Builder()
                 .setRequiresBatteryNotLow(true)
                 .build()
-            val request = PeriodicWorkRequestBuilder<WeeklyRecapWorker>(7, TimeUnit.DAYS)
+            // Flex window: let WorkManager fire anywhere in the last 6h of each 7-day period so it can
+            // batch with other jobs / pick a low-power moment, instead of pinning the exact 7-day mark.
+            val request = PeriodicWorkRequestBuilder<WeeklyRecapWorker>(7, TimeUnit.DAYS, 6, TimeUnit.HOURS)
                 .setConstraints(constraints)
                 // Quiet-hours / transient failures return Result.retry(); back off instead of
                 // hammering the default ~30s-then-immediate cadence.

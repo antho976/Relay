@@ -5,15 +5,20 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.pdf.PdfDocument
+import com.forge.app.data.db.dao.BodyweightDao
+import com.forge.app.data.db.dao.CardioDao
 import com.forge.app.data.db.dao.LoggedExerciseDao
 import com.forge.app.data.db.dao.LoggedSetDao
 import com.forge.app.data.db.dao.SessionDao
 import com.forge.app.data.db.entities.durationMinutes
+import com.forge.app.domain.cardio.CardioType
+import com.forge.app.domain.cardio.cardioDetailParts
 import com.forge.app.domain.units.formatVolume
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.program.Program
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
+import java.time.DayOfWeek
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -32,6 +37,8 @@ class PdfExportRepository @Inject constructor(
     private val loggedExerciseDao: LoggedExerciseDao,
     private val loggedSetDao: LoggedSetDao,
     private val moodDao: com.forge.app.data.db.dao.MoodDao,
+    private val cardioDao: CardioDao,
+    private val bodyweightDao: BodyweightDao,
     private val settingsRepo: com.forge.app.data.prefs.SettingsRepository
 ) {
     private val zone = ZoneId.systemDefault()
@@ -131,6 +138,52 @@ class PdfExportRepository @Inject constructor(
                 if (y > 800f) return@forEach
                 canvas.drawText(line, margin, y, bodyPaint)
                 y += 13f
+            }
+        }
+
+        // Cardio logged the same week as this session — standalone entries (not joined to the
+        // session), included so the report covers everything trained that week, with all fields.
+        val sessionDate = Instant.ofEpochMilli(session.startedAt).atZone(zone).toLocalDate()
+        val weekStart = sessionDate.with(DayOfWeek.MONDAY)
+        val weekStartMs = weekStart.atStartOfDay(zone).toInstant().toEpochMilli()
+        val weekEndMs = weekStart.plusDays(7).atStartOfDay(zone).toInstant().toEpochMilli()
+        // Bounded range query (oldest-first, rest excluded) — touches only this week's rows instead of
+        // loading the whole history-since-week-start into memory just to filter it down.
+        val weekCardio = cardioDao.between(weekStartMs, weekEndMs)
+        if (weekCardio.isNotEmpty()) {
+            if (y < 770f) {
+                val bodyweightLb = bodyweightDao.latest()?.weightLb
+                y += 6f
+                canvas.drawText("Cardio this week", margin, y, headerPaint)
+                y += 16f
+                var drawnCardio = 0
+                for (c in weekCardio) {
+                    if (y > 800f) break
+                    val type = CardioType.fromCode(c.type)
+                    val parts = cardioDetailParts(c, type, bodyweightLb, includeEffort = true)
+                    canvas.drawText("  ${type.displayName}: ${parts.joinToString(" · ")}", margin + 8, y, bodyPaint)
+                    y += 13f
+                    if (!c.note.isNullOrBlank() && y < 805f) {
+                        canvas.drawText("    note: ${c.note}", margin + 8, y, mutedPaint)
+                        y += 13f
+                    }
+                    drawnCardio++
+                }
+                // Same one-page honesty as the exercise list: name what didn't fit rather than dropping it.
+                val omittedCardio = weekCardio.size - drawnCardio
+                if (omittedCardio > 0) {
+                    canvas.drawText(
+                        "… $omittedCardio more cardio entr${if (omittedCardio == 1) "y" else "ies"} not shown (one-page limit)",
+                        margin, minOf(y, 806f), mutedPaint
+                    )
+                }
+            } else {
+                // No room for the section at all — acknowledge the week's cardio so the report doesn't
+                // silently read as "no cardio this week".
+                canvas.drawText(
+                    "Cardio this week: ${weekCardio.size} entr${if (weekCardio.size == 1) "y" else "ies"} (see app — one-page limit)",
+                    margin, minOf(y, 806f), mutedPaint
+                )
             }
         }
 

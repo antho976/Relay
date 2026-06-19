@@ -33,39 +33,50 @@ internal fun LazyListScope.trendsTab(state: StatsUiState, c: StatsColors) {
         any = true
         val i = idx++
         item("consistency") { EntranceItem(i) { ConsistencyHeatmapCard(state.weeklySessionCounts, 3, c.onBg, c.muted, c.accent, c.outline) } }
+        trendNote("consistency-note", "Each square is a week — brighter means more sessions. Streaks and the gaps that break them, at a glance.", c)
     }
     state.trainingTimes?.let { times ->
         if (times.sessionsByDayOfWeek.any { it > 0 }) {
             any = true
             val i = idx++
             item("when-you-train") { EntranceItem(i) { WhenYouTrainCard(times, c.onBg, c.muted, c.accent, c.outline) } }
+            trendNote("when-you-train-note", "The days and times you actually train most — your real routine, not the one you planned.", c)
         }
     }
     if (state.effortDistribution.count { it.total > 0 } >= 2) {
         any = true
         val i = idx++
         item("effort-dist") { EntranceItem(i) { EffortDistributionCard(state.effortDistribution, c.onBg, c.muted, c.accent, c.outline) } }
+        trendNote("effort-dist-note", "How your sessions split from easy to brutal. Weeks stacked toward the hard end hint at building fatigue.", c)
     }
     if (state.weeklyDurations.size >= 2) {
         any = true
         val i = idx++
         val calibration = state.insights.firstOrNull { it.title == INSIGHT_ESTIMATE_TITLE }
         item("duration") { EntranceItem(i) { DurationTrendCard(state.weeklyDurations, calibration, c.onBg, c.muted, c.accent, c.outline) } }
+        trendNote("duration-note", "Median session length per week. Sessions creeping longer without more work done can mean lower focus or rising fatigue.", c)
     }
     if (state.avgRpePerSession.size >= 2) {
         any = true
         val i = idx++
         item("rpe-trend") { EntranceItem(i) { RpeTrendCard(state.avgRpePerSession, state.avgRpe, c.onBg, c.muted, c.accent, c.outline) } }
+        trendNote("rpe-trend-note", "Average effort per session over time. Effort drifting up while strength stays flat is an early fatigue signal.", c)
     }
     if (state.rpeDistribution.isNotEmpty()) {
         any = true
         val i = idx++
         item("rpe-dist") { EntranceItem(i) { RpeCard(state.rpeDistribution, state.avgRpe, c.onBg, c.muted, c.accent, c.outline) } }
+        trendNote("rpe-dist-note", "How many sets you logged at each effort level. Most muscle and strength work lives around RPE 7–9.", c)
     }
-    if (state.prsByDayOfWeek.any { it > 0 }) { any = true; cardItem("pr-dow") { PrDayOfWeekCard(state.prsByDayOfWeek) } }
+    if (state.prsByDayOfWeek.any { it > 0 }) {
+        any = true
+        cardItem("pr-dow") { PrDayOfWeekCard(state.prsByDayOfWeek) }
+        trendNote("pr-dow-note", "Which weekdays your personal records land on — usually your best-rested days.", c)
+    }
     if (state.moodOverTime.size >= 3) {
         any = true
         cardItem("mood") { EffortOverTimeCard(state.moodOverTime) }
+        trendNote("mood-note", "Your logged mood across sessions. Read it next to volume to see what lifts or drains your energy.", c)
         state.insights.firstOrNull { it.title == INSIGHT_MOOD_TITLE }?.let { flag ->
             item("mood-link") {
                 Text(
@@ -101,5 +112,19 @@ internal fun LazyListScope.trendsTab(state: StatsUiState, c: StatsColors) {
                 locked.forEach { Text("·  $it", style = MaterialTheme.typography.bodySmall, color = c.muted.copy(alpha = 0.8f), fontSize = 11.sp) }
             }
         }
+    }
+}
+
+/** A one-line, muted caption under a Trends chart explaining what the chart shows. */
+private fun LazyListScope.trendNote(key: String, text: String, c: StatsColors) {
+    item(key) {
+        Text(
+            text,
+            style = MaterialTheme.typography.bodySmall,
+            color = c.muted.copy(alpha = 0.7f),
+            fontStyle = FontStyle.Italic,
+            fontSize = 11.sp,
+            modifier = Modifier.padding(horizontal = 24.dp).padding(top = 2.dp, bottom = 8.dp)
+        )
     }
 }

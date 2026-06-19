@@ -71,6 +71,7 @@ import com.forge.app.ui.theme.LocalForgeSettings
 import com.forge.app.program.Program
 import com.forge.app.program.Trophies
 import com.forge.app.ui.common.InlineEmptyHint
+import com.forge.app.ui.gym.stats.components.statsEntrance
 import com.forge.app.ui.overview.components.CardioTile
 import com.forge.app.ui.overview.components.OverviewStat
 import com.forge.app.ui.overview.components.RecentRow
@@ -491,6 +492,44 @@ fun OverviewScreen(
                 }
             }
 
+            // ── Recovery snapshot: resting HR elevated vs your baseline (Health Connect) ──
+            state.recoveryAlert?.let { alert ->
+                Spacer(Modifier.height(16.dp))
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(accent.copy(alpha = 0.10f))
+                        .padding(horizontal = 14.dp, vertical = 12.dp)
+                ) {
+                    Text("RECOVERY", style = MaterialTheme.typography.labelSmall, color = accent, fontSize = 10.sp)
+                    Text(
+                        "Resting HR is ${alert.deltaBpm} bpm above your baseline " +
+                            "(${alert.restingBpm} vs ${alert.baselineBpm}) — a sign you're not fully recovered. " +
+                            "An easier day and an earlier night will help.",
+                        style = MaterialTheme.typography.bodyMedium, color = onBg
+                    )
+                }
+            }
+
+            // ── Cardio-load nudge: a big cardio block in the last day or two ──
+            if (state.heavyCardioRecent && state.activeSessionDayKey == null) {
+                Spacer(Modifier.height(16.dp))
+                Column(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(accent.copy(alpha = 0.10f))
+                        .padding(horizontal = 14.dp, vertical = 12.dp)
+                ) {
+                    Text("RECENT CARDIO", style = MaterialTheme.typography.labelSmall, color = accent, fontSize = 10.sp)
+                    Text(
+                        "You put in a solid cardio block recently — keep today's heavy lifts a touch submaximal, or fuel up well before you go after them.",
+                        style = MaterialTheme.typography.bodyMedium, color = onBg
+                    )
+                }
+            }
+
             Spacer(Modifier.height(20.dp))
 
             // ── Next workout ─────────────────────────────────────────────────
@@ -608,8 +647,10 @@ fun OverviewScreen(
                 Spacer(Modifier.height(16.dp))
                 Text("COACH", style = MaterialTheme.typography.labelMedium, color = emphasized(muted))
                 Spacer(Modifier.height(10.dp))
-                state.coach.forEach { item ->
-                    Column(Modifier.fillMaxWidth().padding(bottom = 14.dp)) {
+                // Each coach card cascades in (fade + settle-up), so the section reveals as a
+                // sequence rather than one block. Reduced-motion-safe via the shared motion kit.
+                state.coach.forEachIndexed { index, item ->
+                    Column(Modifier.fillMaxWidth().statsEntrance(index).padding(bottom = 14.dp)) {
                         Text(item.title, style = MaterialTheme.typography.bodyMedium, color = onBg)
                         Spacer(Modifier.height(2.dp))
                         Text(item.body, style = MaterialTheme.typography.bodySmall, color = muted)
@@ -719,6 +760,18 @@ fun OverviewScreen(
             Spacer(Modifier.height(12.dp))
 
             // ── Cardio · Stats · Trophies ────────────────────────────────────
+            // "Today I moved?" — a gentle prompt to log cardio on a day that has none yet.
+            if (todayDow !in state.cardioWeekDays) {
+                Text(
+                    "Moved today? Log a walk, run or ride →",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = accent,
+                    modifier = Modifier
+                        .clickableLabeled("Log today's cardio") { onGoToCardio() }
+                        .padding(vertical = 4.dp)
+                )
+                Spacer(Modifier.height(6.dp))
+            }
             CardioTile(cardioWeekDays = state.cardioWeekDays, totalMin = state.cardioMinutesThisWeek,
                 totalKm = state.cardioDistanceKm, onClick = onGoToCardio,
                 onBg = onBg, muted = muted, outline = outline)

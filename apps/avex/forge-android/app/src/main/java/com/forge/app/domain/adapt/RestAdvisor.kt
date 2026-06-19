@@ -110,7 +110,11 @@ object RestAdvisor {
             seconds = roundTo(base * factor, t.restRoundSeconds)
             val pct = ((factor - 1) * 100).roundToInt()
             if (abs(pct) >= 1 && seconds != base) {
-                parts += if (pct < 0) "−${-pct}% to match your usual rest" else "+$pct% to match your usual rest"
+                // Surface how much evidence the adjustment rests on, so the tuning reads as learned,
+                // not arbitrary.
+                val n = tuning.sampleCounts[role] ?: 0
+                val pctPart = if (pct < 0) "−${-pct}% to match your usual rest" else "+$pct% to match your usual rest"
+                parts += "$pctPart (from $n rest${if (n == 1) "" else "s"} logged)"
             }
         }
         if (lastEffort == EffortRating.BRUTAL) {

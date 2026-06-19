@@ -103,7 +103,10 @@ class ProfileViewModel @Inject constructor(
         trophyGrid = data.trophyGrid,
         closestTrophy = data.closestTrophy,
         memory = data.memory,
-        recaps = data.recaps
+        recaps = data.recaps,
+        cardioSessions = data.cardioSessions,
+        cardioMinutes = data.cardioMinutes,
+        cardioDistanceKm = data.cardioDistanceKm
     )
 
     /** Called by the UI after the one-shot celebration has played so it never replays on recompose. */

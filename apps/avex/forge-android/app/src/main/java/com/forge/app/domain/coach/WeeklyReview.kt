@@ -4,7 +4,9 @@ import com.forge.app.domain.adapt.AdaptThresholds
 import com.forge.app.domain.adapt.AdaptationSnapshot
 import com.forge.app.domain.adapt.DeloadAdvisor
 import com.forge.app.domain.adapt.ProgressionAdvisor
+import com.forge.app.domain.cardio.CardioType
 import com.forge.app.domain.session.SessionType
+import kotlin.math.roundToInt
 
 /** The "Last week" half of the Week Brief — numbers a coach would open with. */
 data class WeeklyReviewData(
@@ -20,7 +22,14 @@ data class WeeklyReviewData(
     /** "Fresh" | "Building" | "Deload soon" | "No read yet" — same bands as the Stats pulse. */
     val fatigueBand: String,
     /** The single most useful cue for the coming week. */
-    val focusLine: String
+    val focusLine: String,
+    /** Resting heart rate from Health Connect, averaged over the same recent window the Overview
+     *  recovery card uses (so the two agree); null when no samples fall in that window. */
+    val restingHrBpm: Int? = null,
+    /** True when Health Connect recovery signals (sleep / resting HR) were available for this read. */
+    val usedHealthSignals: Boolean = false,
+    /** Active (non-rest) cardio minutes logged last week — surfaced in the Brief's "Last week". */
+    val cardioMinutesLastWeek: Int = 0
 ) {
     /** Volume change vs the prior week in percent, null when there's no prior baseline. */
     val volumeDeltaPct: Int?
@@ -80,6 +89,20 @@ object WeeklyReview {
             else -> "Fresh"
         }
 
+        // Off-app recovery signals (Health Connect, additive). Average resting HR over the SAME recent
+        // window RestingHrTrend.spike uses for the Overview recovery card, so the Brief and the Overview
+        // can't show a different bpm for the same data (averaging the full synced history diluted a
+        // current spike). usedHealth flags that any HC signal was present so the Brief can say so.
+        val hrWindowStart = s.nowMs - t.deloadWindowDays * DAY_MS
+        val recentRestingHr = s.health.restingHr.filter { it.timeMs >= hrWindowStart }.map { it.bpm }
+        val avgRestingHr = if (recentRestingHr.isEmpty()) null else recentRestingHr.average().roundToInt()
+        val usedHealth = s.health.restingHr.isNotEmpty() || s.health.sleepNights.isNotEmpty()
+
+        // Active cardio minutes logged in the same "last week" window (rest-day entries excluded).
+        val cardioMinutesLastWeek = s.cardio
+            .filter { it.date in lastWeekStart until weekStartMs && it.type != CardioType.REST.code }
+            .sumOf { it.durationMin }
+
         val focus = when {
             hasDeloadShadow -> "Recovery is the work this week — go lighter, sleep more, and let the numbers reset."
             stalled > 0 -> "Chase the top of your rep ranges on the stalled lifts — finishing the range is what restarts progress."
@@ -96,7 +119,10 @@ object WeeklyReview {
             stalledLifts = stalled,
             fatigueScore = fatigue?.score,
             fatigueBand = band,
-            focusLine = focus
+            focusLine = focus,
+            restingHrBpm = avgRestingHr,
+            usedHealthSignals = usedHealth,
+            cardioMinutesLastWeek = cardioMinutesLastWeek
         )
     }
 

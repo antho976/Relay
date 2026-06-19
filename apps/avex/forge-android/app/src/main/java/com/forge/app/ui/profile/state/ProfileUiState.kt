@@ -52,5 +52,10 @@ data class ProfileUiState(
 
     // Memory + recaps
     val memory: OnThisDayMemory? = null,
-    val recaps: List<RecapRowData> = emptyList()
+    val recaps: List<RecapRowData> = emptyList(),
+
+    // All-time cardio totals
+    val cardioSessions: Int = 0,
+    val cardioMinutes: Int = 0,
+    val cardioDistanceKm: Double = 0.0
 )

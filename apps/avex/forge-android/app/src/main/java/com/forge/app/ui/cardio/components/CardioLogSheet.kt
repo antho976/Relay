@@ -49,6 +49,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.data.db.entities.CardioEntry
+import com.forge.app.domain.cardio.CardioCalorieEstimator
 import com.forge.app.domain.cardio.CardioEffort
 import com.forge.app.domain.cardio.CardioRestReason
 import com.forge.app.domain.cardio.CardioType
@@ -71,9 +72,13 @@ fun CardioLogSheet(
         effort: CardioEffort?,
         restReason: CardioRestReason?,
         note: String?,
-        dateMs: Long
+        dateMs: Long,
+        intervalCount: Int?,
+        hrZone: String?
     ) -> Unit,
-    editing: CardioEntry? = null
+    editing: CardioEntry? = null,
+    /** Latest logged bodyweight (lb) — scales the live calorie estimate; null hides it. */
+    bodyweightLb: Double? = null
 ) {
     // Keyed on the edited entry's id so the form re-seeds if the sheet is ever reused for a different
     // entry without leaving composition — fields can't carry over from the previously-opened entry.
@@ -84,11 +89,14 @@ fun CardioLogSheet(
     var effort by remember(editKey) { mutableStateOf(editing?.let { CardioEffort.fromCode(it.effort) }) }
     var restReason by remember(editKey) { mutableStateOf(editing?.let { CardioRestReason.fromCode(it.restReason) }) }
     var note by remember(editKey) { mutableStateOf(editing?.note ?: "") }
+    var intervalText by remember(editKey) { mutableStateOf(editing?.intervalCount?.takeIf { it > 0 }?.toString() ?: "") }
+    var hrZone by remember(editKey) { mutableStateOf(editing?.hrZone) }
     var dateMs by remember(editKey) { mutableStateOf(editing?.date ?: System.currentTimeMillis()) }
     var showDatePicker by remember { mutableStateOf(false) }
 
     val durationInt = durationText.toIntOrNull() ?: 0
     val distanceDouble = distanceText.toDoubleOrNull()
+    val intervalInt = intervalText.toIntOrNull()
     val canSubmit = if (type.isRest) restReason != null else durationInt > 0
 
     val onBg = MaterialTheme.colorScheme.onBackground
@@ -188,6 +196,12 @@ fun CardioLogSheet(
                             keyboardType = KeyboardType.Number,
                             onBg = onBg, muted = muted, accent = accent, outline = outline
                         )
+                        // Live calorie estimate once a duration is entered (uses the chosen effort below,
+                        // moderate until picked). Hidden when there's no logged bodyweight to scale by.
+                        CardioCalorieEstimator.estimate(type, durationInt, effort, bodyweightLb)?.let { kcal ->
+                            Spacer(Modifier.height(8.dp))
+                            Text("≈ $kcal kcal", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp)
+                        }
                     }
                 }
 
@@ -217,6 +231,38 @@ fun CardioLogSheet(
                                     label = e.displayName.uppercase(),
                                     selected = effort == e,
                                     onClick = { effort = if (effort == e) null else e },
+                                    onBg = onBg, bg = bg, muted = muted, outline = outline
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Interval count — only meaningful for HIIT / interval work.
+                if (type == CardioType.HIIT) {
+                    item("intervals") {
+                        FormSection(label = "How many intervals?", optional = true, muted = muted, onBg = onBg, outline = outline) {
+                            NumberInputRow(
+                                value = intervalText,
+                                onValueChange = { intervalText = it.filter(Char::isDigit).take(3) },
+                                placeholder = "8",
+                                unit = "intervals",
+                                keyboardType = KeyboardType.Number,
+                                onBg = onBg, muted = muted, accent = accent, outline = outline
+                            )
+                        }
+                    }
+                }
+
+                item("hr-zone") {
+                    FormSection(label = "HR zone?", optional = true, muted = muted, onBg = onBg, outline = outline) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            (1..5).forEach { z ->
+                                val code = z.toString()
+                                PillChip(
+                                    label = "Z$z",
+                                    selected = hrZone == code,
+                                    onClick = { hrZone = if (hrZone == code) null else code },
                                     onBg = onBg, bg = bg, muted = muted, outline = outline
                                 )
                             }
@@ -286,7 +332,9 @@ fun CardioLogSheet(
                                 if (type.isRest) null else effort,
                                 if (type.isRest) restReason else null,
                                 note.ifBlank { null },
-                                dateMs
+                                dateMs,
+                                if (type == CardioType.HIIT) intervalInt else null,
+                                if (type.isRest) null else hrZone
                             )
                         },
                         enabled = canSubmit,

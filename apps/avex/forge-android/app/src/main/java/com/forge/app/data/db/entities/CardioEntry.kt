@@ -14,6 +14,7 @@ import androidx.room.PrimaryKey
  * Type values used by the prototype: "run" | "walk" | "treadmill" | "rest" | "other"
  * Effort:                            "easy" | "moderate" | "hard"
  * Rest reason:                       "planned" | "sore" | "sick" | "busy"
+ * HR zone:                           "1".."5" (manual training-zone tag), or null
  */
 @Entity(tableName = "cardio_entry")
 data class CardioEntry(
@@ -24,5 +25,9 @@ data class CardioEntry(
     @ColumnInfo(name = "distance_km") val distanceKm: Double? = null,
     @ColumnInfo(name = "effort") val effort: String? = null,
     @ColumnInfo(name = "rest_reason") val restReason: String? = null,
-    @ColumnInfo(name = "note") val note: String? = null
+    @ColumnInfo(name = "note") val note: String? = null,
+    /** Number of intervals for a HIIT / interval session; null for steady-state work (DB v23). */
+    @ColumnInfo(name = "interval_count") val intervalCount: Int? = null,
+    /** Manually-logged HR training zone ("1".."5"), or null when not tracked (DB v23). */
+    @ColumnInfo(name = "hr_zone") val hrZone: String? = null
 )

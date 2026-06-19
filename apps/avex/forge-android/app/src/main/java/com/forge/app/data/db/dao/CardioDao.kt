@@ -36,6 +36,10 @@ interface CardioDao {
     @Query("SELECT * FROM cardio_entry WHERE date >= :since ORDER BY date DESC")
     suspend fun since(since: Long): List<CardioEntry>
 
+    /** Non-rest entries in [start, end), oldest-first — a single week's slice for the PDF report. */
+    @Query("SELECT * FROM cardio_entry WHERE date >= :start AND date < :end AND type != :excludeType ORDER BY date")
+    suspend fun between(start: Long, end: Long, excludeType: String = "rest"): List<CardioEntry>
+
     /** Cardio minutes since [sinceEpochMs], excluding rest-day entries. */
     @Query("SELECT SUM(duration_min) FROM cardio_entry WHERE date >= :sinceEpochMs AND type != :excludeType")
     fun observeMinutesSince(sinceEpochMs: Long, excludeType: String = "rest"): Flow<Int?>
@@ -51,6 +55,10 @@ interface CardioDao {
     /** Total cardio distance (km) ever, excluding rest entries (cardio trophies). */
     @Query("SELECT SUM(distance_km) FROM cardio_entry WHERE type != :excludeType AND distance_km IS NOT NULL")
     suspend fun totalDistanceKm(excludeType: String = "rest"): Double?
+
+    /** Total active cardio minutes ever, excluding rest entries (profile all-time totals). */
+    @Query("SELECT SUM(duration_min) FROM cardio_entry WHERE type != :excludeType")
+    suspend fun totalMinutes(excludeType: String = "rest"): Int?
 
     @Query("DELETE FROM cardio_entry")
     suspend fun deleteAll()

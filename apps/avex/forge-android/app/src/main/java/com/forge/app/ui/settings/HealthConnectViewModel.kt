@@ -38,6 +38,10 @@ class HealthConnectViewModel @Inject constructor(
         val weightGranted: Boolean = false,
         /** Write-back opt-in: mirror each weigh-in to Health Connect (HC-3). */
         val writeBodyweight: Boolean = false,
+        /** Active-calorie WRITE permission is granted — Forge may write session calories (HC-4). */
+        val calorieGranted: Boolean = false,
+        /** Write opt-in: mirror each finished session's estimated active calories to HC (HC-4). */
+        val writeCalories: Boolean = false,
         /** Transient one-tap-import result line, cleared on the next refresh. */
         val importMessage: String? = null
     )
@@ -51,20 +55,27 @@ class HealthConnectViewModel @Inject constructor(
     /** Permissions the bodyweight launcher should request (read + write WeightRecord). */
     val weightPermissions: Set<String> get() = manager.weightPermissions
 
+    /** Permissions the calorie launcher should request (write ActiveCaloriesBurned). */
+    val caloriePermissions: Set<String> get() = manager.caloriePermissions
+
     init { refresh() }
 
     fun refresh() = viewModelScope.launch {
         val available = manager.isAvailable
         val granted = if (available) manager.hasAllPermissions() else false
         val weightGranted = if (available) manager.canReadWeight() else false
+        val calorieGranted = if (available) manager.canWriteActiveCalories() else false
         val writeBodyweight = settingsRepo.hcWriteBodyweight.first()
+        val writeCalories = settingsRepo.hcWriteCalories.first()
         _state.value = _state.value.copy(
             loading = false,
             available = available,
             needsUpdate = manager.needsUpdate,
             granted = granted,
             weightGranted = weightGranted,
-            writeBodyweight = writeBodyweight
+            writeBodyweight = writeBodyweight,
+            calorieGranted = calorieGranted,
+            writeCalories = writeCalories
             // importMessage preserved (copy, not a fresh UiState) so a just-shown import result line
             // isn't wiped by a lifecycle-driven refresh before the user can read it.
         )
@@ -73,6 +84,11 @@ class HealthConnectViewModel @Inject constructor(
     fun setWriteBodyweight(value: Boolean) = viewModelScope.launch {
         settingsRepo.setHcWriteBodyweight(value)
         _state.value = _state.value.copy(writeBodyweight = value)
+    }
+
+    fun setWriteCalories(value: Boolean) = viewModelScope.launch {
+        settingsRepo.setHcWriteCalories(value)
+        _state.value = _state.value.copy(writeCalories = value)
     }
 
     fun importNow() = viewModelScope.launch {

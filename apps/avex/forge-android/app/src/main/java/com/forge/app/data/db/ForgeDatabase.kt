@@ -53,7 +53,9 @@ import com.forge.app.data.db.entities.SessionBreak
 import com.forge.app.data.db.entities.VacationPeriod
 
 /**
- * Schema is v22 (v22 added `logged_exercise.slot_id` + `exercise_customization.swapped_exercise_id`
+ * Schema is v23 (v23 added `cardio_entry.interval_count` + `cardio_entry.hr_zone` for cardio depth —
+ * HIIT interval counts + manual HR-zone tags;
+ * v22 added `logged_exercise.slot_id` + `exercise_customization.swapped_exercise_id`
  * for swap re-attribution, so a swapped entry's `exercise_id` becomes the real exercise performed and
  * its PRs/stats attribute correctly; v21 added the `source` origin tag to program_customization +
  * exercise_customization for the auto-coach lock/undo fix; v20 added session_segment +
@@ -99,7 +101,7 @@ import com.forge.app.data.db.entities.VacationPeriod
         SuggestionOutcome::class,
         SessionSegment::class
     ],
-    version = 22,
+    version = 23,
     exportSchema = true
 )
 @TypeConverters(Converters::class)

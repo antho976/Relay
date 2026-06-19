@@ -158,6 +158,12 @@ class SettingsRepository @Inject constructor(
     suspend fun setHcWriteBodyweight(value: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.HC_WRITE_BODYWEIGHT] = value }
 
+    /** Write each finished session's estimated active calories to Health Connect (HC-4). Opt-in, off by default. */
+    val hcWriteCalories: Flow<Boolean> = context.forgePreferences.data
+        .map { it[PreferenceKeys.HC_WRITE_CALORIES] ?: false }
+    suspend fun setHcWriteCalories(value: Boolean) =
+        context.forgePreferences.edit { it[PreferenceKeys.HC_WRITE_CALORIES] = value }
+
     // ─── Appearance (#35a) ────────────────────────────────────────────────────
 
     val amoledMode: Flow<Boolean> = context.forgePreferences.data

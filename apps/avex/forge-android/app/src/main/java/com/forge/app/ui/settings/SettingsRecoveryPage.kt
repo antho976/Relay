@@ -53,6 +53,9 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
     val weightLauncher = rememberLauncherForActivityResult(
         contract = PermissionController.createRequestPermissionResultContract()
     ) { viewModel.refresh() }
+    val calorieLauncher = rememberLauncherForActivityResult(
+        contract = PermissionController.createRequestPermissionResultContract()
+    ) { viewModel.refresh() }
 
     Column(
         modifier = modifier
@@ -129,6 +132,29 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
             } else {
                 StatusLine("Bodyweight isn't connected yet.", muted)
                 ActionButton("Connect bodyweight") { weightLauncher.launch(viewModel.weightPermissions) }
+            }
+
+            // ─── Workout calories (HC-4) — write a session's estimated burn out to HC ─────────────
+            Spacer(Modifier.height(20.dp))
+            SectionDivider()
+            Column(Modifier.padding(start = 24.dp, end = 24.dp, top = 16.dp, bottom = 4.dp)) {
+                Text("WORKOUT CALORIES", style = MaterialTheme.typography.headlineSmall, color = emphasized(onBg))
+            }
+            Paragraph(
+                "Forge can write each finished session's estimated active calories to Health Connect, so " +
+                    "your daily energy total there includes your lifting. It's an estimate from session " +
+                    "length, your intensity, and your latest logged bodyweight — Forge has no heart-rate stream."
+            )
+            if (state.calorieGranted) {
+                StatusLine("Connected — Forge can write your session calories.", emphasized(onBg))
+                ToggleRow(
+                    label = "Write my session calories to Health Connect",
+                    checked = state.writeCalories,
+                    onCheckedChange = { viewModel.setWriteCalories(it) }
+                )
+            } else {
+                StatusLine("Calorie sync isn't connected yet.", muted)
+                ActionButton("Connect calories") { calorieLauncher.launch(viewModel.caloriePermissions) }
             }
         }
 

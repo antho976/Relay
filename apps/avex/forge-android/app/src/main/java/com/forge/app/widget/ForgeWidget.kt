@@ -26,12 +26,18 @@ import com.forge.app.MainActivity
 import com.forge.app.data.db.dao.SessionDao
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.data.repo.ProgramRepository
+import com.forge.app.data.repo.StatsRepository
 import com.forge.app.program.Program
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
 import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.components.SingletonComponent
 import kotlinx.coroutines.flow.first
+import androidx.compose.ui.graphics.toArgb
+import com.forge.app.ui.theme.AccentNavy
+import com.forge.app.ui.theme.PearlBackground
+import com.forge.app.ui.theme.PearlMuted
+import com.forge.app.ui.theme.PearlOnBg
 
 /** Intent extra key carrying the next-up dayKey. MainActivity/ForgeNavHost can read this
  *  in a future pass to navigate directly to the day screen; for now it rides along unused. */
@@ -110,12 +116,34 @@ class ForgeWidget : GlanceAppWidget() {
             else -> Bundle.EMPTY
         }
 
+        // Theme-matched colours: honour the user's AMOLED + accent choices (the same Pearl palette the
+        // app uses) instead of a hardcoded black + Material purple, so the widget reads as one app.
+        val amoled = settings.amoledMode.first()
+        val accentArgb = settings.accentColorHex.first().takeIf { it.isNotBlank() }
+            ?.let { runCatching { android.graphics.Color.parseColor(it) }.getOrNull() }
+            ?: AccentNavy.toArgb()
+        val bgArgb = if (amoled) android.graphics.Color.BLACK else PearlBackground.toArgb()
+        val onBgArgb = PearlOnBg.toArgb()
+        val mutedArgb = PearlMuted.toArgb()
+
+        // This-week dot row from `finished`; streak reuses the app's vacation-aware computation
+        // (bridges holidays + the one rest-day grace) so the widget can't contradict the in-app number
+        // a hand-rolled walk over finished dates would have ignored vacation bridging.
+        val finishedDates = finished.mapNotNull { it.finishedAt }
+            .map { java.time.Instant.ofEpochMilli(it).atZone(zone).toLocalDate() }
+            .toSortedSet()
+        val streak = entryPoint.statsRepository().currentStreakDays()
+        val monday = today.with(java.time.DayOfWeek.MONDAY)
+        val weekDots = (0..6).joinToString(" ") { off ->
+            if (monday.plusDays(off.toLong()) in finishedDates) "●" else "○"
+        }
+
         provideContent {
             GlanceTheme {
                 Column(
                     modifier = GlanceModifier
                         .fillMaxSize()
-                        .background(ColorProvider(android.graphics.Color.BLACK))
+                        .background(ColorProvider(bgArgb))
                         .padding(horizontal = 12, vertical = 8)
                         // Item 1: whole-widget tap target — launches MainActivity with EXTRA_START_DAY_KEY
                         // (the next-up day, or the active session's day). MainActivity reads it and the
@@ -127,7 +155,7 @@ class ForgeWidget : GlanceAppWidget() {
                         "FORGE",
                         style = TextStyle(
                             fontWeight = FontWeight.Bold,
-                            color = ColorProvider(android.graphics.Color.parseColor("#6650A4"))
+                            color = ColorProvider(accentArgb)
                         )
                     )
                     if (activeSession != null) {
@@ -136,7 +164,7 @@ class ForgeWidget : GlanceAppWidget() {
                             "WORKOUT IN PROGRESS",
                             style = TextStyle(
                                 fontWeight = FontWeight.Bold,
-                                color = ColorProvider(android.graphics.Color.parseColor("#6650A4"))
+                                color = ColorProvider(accentArgb)
                             )
                         )
                         val label = activeDayPlan?.defaultName?.uppercase() ?: activeSession.dayKey.uppercase()
@@ -144,29 +172,29 @@ class ForgeWidget : GlanceAppWidget() {
                             label,
                             style = TextStyle(
                                 fontWeight = FontWeight.Bold,
-                                color = ColorProvider(android.graphics.Color.WHITE)
+                                color = ColorProvider(onBgArgb)
                             )
                         )
                         Text(
                             "Tap to resume",
-                            style = TextStyle(color = ColorProvider(android.graphics.Color.LTGRAY))
+                            style = TextStyle(color = ColorProvider(mutedArgb))
                         )
                     } else if (nextDayPlan != null) {
                         Text(
                             nextDayPlan.defaultName.uppercase(),
                             style = TextStyle(
                                 fontWeight = FontWeight.Bold,
-                                color = ColorProvider(android.graphics.Color.WHITE)
+                                color = ColorProvider(onBgArgb)
                             )
                         )
                         Text(
                             "${nextDayPlan.exercises.size} exercises · ${nextDayPlan.word}",
-                            style = TextStyle(color = ColorProvider(android.graphics.Color.LTGRAY))
+                            style = TextStyle(color = ColorProvider(mutedArgb))
                         )
                         nextDayPlan.exercises.take(3).forEach { ex ->
                             Text(
                                 "· ${ex.name}",
-                                style = TextStyle(color = ColorProvider(android.graphics.Color.LTGRAY))
+                                style = TextStyle(color = ColorProvider(mutedArgb))
                             )
                         }
                     } else {
@@ -174,13 +202,23 @@ class ForgeWidget : GlanceAppWidget() {
                             "Tap to start your first workout",
                             style = TextStyle(
                                 fontWeight = FontWeight.Bold,
-                                color = ColorProvider(android.graphics.Color.WHITE)
+                                color = ColorProvider(onBgArgb)
                             )
                         )
                         Text(
                             "Your program is ready — open Forge to begin.",
-                            style = TextStyle(color = ColorProvider(android.graphics.Color.LTGRAY))
+                            style = TextStyle(color = ColorProvider(mutedArgb))
                         )
+                    }
+                    // Streak + this-week dots (Cat 21) — once there's any finished session to count.
+                    if (finished.isNotEmpty()) {
+                        if (streak >= 1) {
+                            Text(
+                                "$streak-day streak",
+                                style = TextStyle(fontWeight = FontWeight.Bold, color = ColorProvider(accentArgb))
+                            )
+                        }
+                        Text(weekDots, style = TextStyle(color = ColorProvider(mutedArgb)))
                     }
                 }
             }
@@ -202,4 +240,5 @@ interface WidgetEntryPoint {
     fun sessionDao(): SessionDao
     fun programRepository(): ProgramRepository
     fun settingsRepository(): SettingsRepository
+    fun statsRepository(): StatsRepository
 }

@@ -143,9 +143,17 @@ internal fun rowSubtitle(page: SettingsPage, s: SettingsUiState): String = when 
     SettingsPage.Appearance -> "AMOLED ${if (s.amoledMode) "on" else "off"} · compact ${if (s.compactSetLogging) "on" else "off"}"
     SettingsPage.Format -> "${if (s.useKg) "kg" else "lb"} · ${dateShort(s.dateFormat)} · ${if (s.timeFormat24h) "24h" else "12h"} · ${tzShort(s.timezone)}"
     SettingsPage.Session -> "Haptic: ${s.hapticStrength}"
-    SettingsPage.Notifications -> if (s.quietHoursEnabled)
-        "Quiet ${s.quietHoursStart.toString().padStart(2, '0')}:00–${s.quietHoursEnd.toString().padStart(2, '0')}:00"
-    else "Off"
+    SettingsPage.Notifications -> {
+        // Live preview of which notification types are on (was just quiet-hours / "Off").
+        val on = buildList {
+            if (s.trainingReminderEnabled) add("reminders")
+            if (s.weeklyRecapEnabled) add("recap")
+            if (s.restTimerAlertEnabled) add("timer")
+        }.joinToString(" · ").ifEmpty { "Off" }
+        if (s.quietHoursEnabled)
+            "$on · quiet ${s.quietHoursStart.toString().padStart(2, '0')}:00–${s.quietHoursEnd.toString().padStart(2, '0')}:00"
+        else on
+    }
     SettingsPage.Equipment -> if (s.availableEquipment.isEmpty()) "All equipment" else "${s.availableEquipment.size} selected"
     SettingsPage.Privacy -> if (s.privacyMode) "Screenshots blocked" else "Off"
     SettingsPage.Program -> "${s.daysPerWeek} days/week · auto-generate"

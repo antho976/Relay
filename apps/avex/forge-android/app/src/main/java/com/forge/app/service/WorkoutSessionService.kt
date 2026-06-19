@@ -116,7 +116,11 @@ class WorkoutSessionService : Service() {
             serviceScope.launch {
                 bridge.timerDone.collect {
                     // N2: respect the per-type opt-out (buzz + notify when the app is backgrounded).
-                    if (restTimerAlertEnabled) postTimerDoneNotification()
+                    if (restTimerAlertEnabled) {
+                        // Quiet hours: still buzz (you're mid-workout and want the cue) but skip the
+                        // heads-up notification so the phone stays visually silent.
+                        if (settingsRepo.isQuietNow()) vibratePhone() else postTimerDoneNotification()
+                    }
                 }
             }
 

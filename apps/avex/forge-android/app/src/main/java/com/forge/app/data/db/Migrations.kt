@@ -216,6 +216,18 @@ val MIGRATION_21_22 = object : Migration(21, 22) {
     }
 }
 
+/**
+ * v22 → v23: cardio depth. `cardio_entry` gains `interval_count` (the interval count of a HIIT /
+ * interval session) and `hr_zone` (a manually-logged HR training-zone tag). Both additive nullable
+ * columns — pre-existing rows read null (steady-state, no zone).
+ */
+val MIGRATION_22_23 = object : Migration(22, 23) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `cardio_entry` ADD COLUMN `interval_count` INTEGER")
+        db.execSQL("ALTER TABLE `cardio_entry` ADD COLUMN `hr_zone` TEXT")
+    }
+}
+
 /** All migrations, in order. Register every new one here. */
 val ALL_MIGRATIONS: Array<Migration> = arrayOf(
     MIGRATION_12_13,
@@ -227,5 +239,6 @@ val ALL_MIGRATIONS: Array<Migration> = arrayOf(
     MIGRATION_18_19,
     MIGRATION_19_20,
     MIGRATION_20_21,
-    MIGRATION_21_22
+    MIGRATION_21_22,
+    MIGRATION_22_23
 )

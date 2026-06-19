@@ -1,5 +1,6 @@
 package com.forge.app.ui.coach
 
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -11,9 +12,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
 import com.forge.app.ui.theme.ForgeMotion
 
@@ -44,9 +50,25 @@ fun TrustProgressBar(
     val track = androidx.compose.material3.MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)
     val segmentGap = androidx.compose.material3.MaterialTheme.colorScheme.background
 
+    // Milestone pop: the bar gives a one-shot vertical pulse the moment a type's trust is earned
+    // (full). Fires only on the false→true edge — prevEarned seeds to the current value so a bar that's
+    // already earned when the screen (re)opens doesn't pop, and re-entering composition (scroll / nav
+    // back) doesn't replay it. Reduced-motion collapses it (guarded on durationScale).
+    val pulse = remember { Animatable(1f) }
+    var prevEarned by remember { mutableStateOf(earned) }
+    LaunchedEffect(earned) {
+        if (earned && !prevEarned && ForgeMotion.durationScale > 0f) {
+            pulse.snapTo(1f)
+            pulse.animateTo(1.6f, ForgeMotion.standardTween(160))
+            pulse.animateTo(1f, ForgeMotion.standardTween(420))
+        }
+        prevEarned = earned
+    }
+
     Box(
         modifier
             .height(8.dp)
+            .graphicsLayer { scaleY = pulse.value }
             .clip(RoundedCornerShape(4.dp))
             .background(track)
     ) {

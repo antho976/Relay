@@ -37,6 +37,7 @@ internal fun buildOverviewUiState(
     trophiesUnlocked: Int,
     distanceKm: Double,
     dayVolStats: Map<String, SessionDao.DayVolumeStats>,
+    nowMs: Long,
     cardioTargetMin: Int = 0,
     useKg: Boolean = false
 ): OverviewUiState {
@@ -105,6 +106,7 @@ internal fun buildOverviewUiState(
         val d = Instant.ofEpochMilli(entry.date).atZone(zone2).toLocalDate()
         if (!d.isBefore(isoWeekStart) && !d.isAfter(todayLocal)) d.dayOfWeek.value - 1 else null
     }.toSet()
+    val heavyCardioRecent = com.forge.app.domain.cardio.CardioLoadNudge.recentlyHeavy(recentCardio, nowMs)
 
     return OverviewUiState(
         workoutsThisWeek = stats.workouts,
@@ -126,7 +128,8 @@ internal fun buildOverviewUiState(
         cardioWeekDays = cardioWeekDays,
         recentItems = recentItems,
         trophiesUnlocked = trophiesUnlocked,
-        cardioDistanceKm = distanceKm
+        cardioDistanceKm = distanceKm,
+        heavyCardioRecent = heavyCardioRecent
     )
 }
 

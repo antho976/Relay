@@ -53,6 +53,9 @@ object PreferenceKeys {
     /** When ON (and the WeightRecord write permission is granted), Forge mirrors each weigh-in to
      *  Health Connect. Off by default — write-back is strictly opt-in. */
     val HC_WRITE_BODYWEIGHT = booleanPreferencesKey("hc_write_bodyweight")
+    /** When ON (and the ActiveCaloriesBurned write permission is granted), Forge writes each finished
+     *  session's estimated active calories to Health Connect (HC-4). Off by default — strictly opt-in. */
+    val HC_WRITE_CALORIES = booleanPreferencesKey("hc_write_calories")
 
     // ─── Appearance (#35a) ────────────────────────────────────────────────────
     val AMOLED_MODE = booleanPreferencesKey("amoled_mode")

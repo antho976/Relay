@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.forge.app.core.time.Clock
 import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.data.prefs.SettingsRepository
+import com.forge.app.data.repo.BodyweightRepository
 import com.forge.app.data.repo.CardioRepository
 import com.forge.app.data.repo.TrophyRepository
 import com.forge.app.domain.cardio.CardioEffort
@@ -44,6 +45,7 @@ class CardioViewModel @Inject constructor(
     private val cardioRepo: CardioRepository,
     private val settingsRepo: SettingsRepository,
     private val trophyRepo: TrophyRepository,
+    private val bodyweightRepo: BodyweightRepository,
     private val clock: Clock
 ) : ViewModel() {
 
@@ -77,9 +79,12 @@ class CardioViewModel @Inject constructor(
         )
     }.flowOn(Dispatchers.Default)
 
+    // Latest logged bodyweight, reactive — scales the calorie estimate on the log sheet + history rows.
+    private val bodyweightLbFlow = bodyweightRepo.observeRecent(1).map { it.firstOrNull()?.weightLb }
+
     val state: StateFlow<CardioUiState> = combine(
-        derivedFlow, transient, settingsRepo.cardioWeeklyTargetMin
-    ) { d, tr, target ->
+        derivedFlow, transient, settingsRepo.cardioWeeklyTargetMin, bodyweightLbFlow
+    ) { d, tr, target, bodyweightLb ->
         CardioUiState(
             isLoading = false,
             weekMinutes = d.weekMinutes,
@@ -90,6 +95,7 @@ class CardioViewModel @Inject constructor(
             cardioStreakDays = d.cardioStreakDays,
             weekDays = d.weekDays,
             entries = d.all,
+            bodyweightLb = bodyweightLb,
             sheetOpen = tr.sheetOpen,
             editing = tr.editing,
             pendingDeleteId = tr.pendingDeleteId
@@ -135,7 +141,9 @@ class CardioViewModel @Inject constructor(
         effort: CardioEffort?,
         restReason: CardioRestReason?,
         note: String?,
-        dateMs: Long
+        dateMs: Long,
+        intervalCount: Int?,
+        hrZone: String?
     ) {
         val editingId = transient.value.editing?.id
         viewModelScope.launch {
@@ -147,7 +155,10 @@ class CardioViewModel @Inject constructor(
                 distanceKm = if (type.isRest) null else distanceKm,
                 effort = if (type.isRest) null else effort?.code,
                 restReason = if (type.isRest) restReason?.code else null,
-                note = note?.takeIf { it.isNotBlank() }
+                note = note?.takeIf { it.isNotBlank() },
+                // Interval count only applies to HIIT; HR zone to any active session. Cleared for rest.
+                intervalCount = if (type == CardioType.HIIT) intervalCount?.takeIf { it > 0 } else null,
+                hrZone = if (type.isRest) null else hrZone
             )
             if (editingId != null) cardioRepo.update(entry) else cardioRepo.add(entry)
             transient.update { it.copy(sheetOpen = false, editing = null) }

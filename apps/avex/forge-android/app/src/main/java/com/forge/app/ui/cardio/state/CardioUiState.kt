@@ -25,6 +25,8 @@ data class CardioUiState(
     /** Per-day Mon–Sun cells (index 0 = Monday); future days are empty. Drives the week row. */
     val weekDays: List<CardioDayCell> = emptyList(),
     val entries: List<CardioEntry> = emptyList(),
+    /** Latest logged bodyweight (lb), or null — scales the per-entry calorie estimate. */
+    val bodyweightLb: Double? = null,
     val sheetOpen: Boolean = false,
     /** Non-null when the open sheet is editing an existing entry (vs logging a new one). */
     val editing: CardioEntry? = null,

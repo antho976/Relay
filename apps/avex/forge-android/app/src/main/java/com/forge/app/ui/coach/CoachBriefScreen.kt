@@ -277,8 +277,12 @@ private fun BriefContent(
                     } ?: "")
                 )
                 BriefStatRow("PRs", "${r.prsLastWeek}")
+                if (r.cardioMinutesLastWeek > 0) BriefStatRow("Cardio", "${r.cardioMinutesLastWeek} min")
                 if (r.trackedLifts > 0) BriefStatRow("Lifts", "${r.trackedLifts} tracked · ${r.stalledLifts} stalled")
                 BriefStatRow("Recovery", r.fatigueBand + (r.fatigueScore?.let { "  (fatigue $it)" } ?: ""))
+                // Resting HR from Health Connect, when synced — an off-app recovery read the on-app
+                // signals can't see. Only shown when HC actually returned samples this week.
+                r.restingHrBpm?.let { BriefStatRow("Resting HR", "$it bpm") }
                 // Sub-threshold fatigue tension (Cat 2): when fatigue is climbing but not yet a deload,
                 // surface it as a forward-looking nudge instead of a silent band label.
                 if (r.fatigueBand == "Building") {
@@ -287,6 +291,12 @@ private fun BriefContent(
                         "Fatigue is building — not a deload yet, but bank the gains with more sleep and easier days before it forces a down week.",
                         style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic
                     )
+                }
+                // HC sync badge: signals that off-app recovery data (sleep / resting HR) fed this
+                // week's read, so a coach call backed by Health Connect reads as grounded, not guessed.
+                if (r.usedHealthSignals) {
+                    Spacer(Modifier.height(10.dp))
+                    HcSyncBadge()
                 }
             }
         }
@@ -401,6 +411,21 @@ private fun BriefContent(
     }
 }
 
+/** Small pill marking that Health Connect recovery signals fed this week's brief. */
+@Composable
+private fun HcSyncBadge() {
+    val accent = MaterialTheme.colorScheme.primary
+    Text(
+        "✦ Health Connect signals used",
+        style = MaterialTheme.typography.labelSmall,
+        color = accent,
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(accent.copy(alpha = 0.12f))
+            .padding(horizontal = 10.dp, vertical = 4.dp)
+    )
+}
+
 @Composable
 private fun DecisionRow(d: com.forge.app.data.db.entities.CoachDecision, viewModel: CoachBriefViewModel) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
@@ -453,7 +478,11 @@ private fun DecisionRow(d: com.forge.app.data.db.entities.CoachDecision, viewMod
             // A regenerate has baked this accepted change into the program itself — it lives in the
             // baseline now, not as a reversible overlay, so there's nothing left to undo.
             CoachRepository.STATUS_FOLDED -> Text("absorbed ✓", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.7f))
-            else -> {} // shadow rows (Phase 1 history): display only
+            // Shadow rows are observations the coach logged without acting — label them so they don't
+            // read as a pending/applied change with a missing action.
+            CoachRepository.STATUS_SHADOW -> Text("observation only", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.6f))
+            // hold / error / any status added later: show nothing rather than mislabel it "observation only".
+            else -> {}
         }
     }
 }

@@ -241,12 +241,17 @@ fun ProfileScreen(
                 Column(Modifier.statsEntrance(4)) {
                     SignatureSection(state.topLift, state.mostLoggedDay, state.usualHour, onBg, muted, accent, outline)
                 }
-                Column(Modifier.statsEntrance(5)) {
+                if (state.cardioSessions > 0) {
+                    Column(Modifier.statsEntrance(5)) {
+                        CardioTotalsSection(state.cardioSessions, state.cardioMinutes, state.cardioDistanceKm, muted, accent, outline)
+                    }
+                }
+                Column(Modifier.statsEntrance(6)) {
                     MirrorTestSection(state.photos, viewModel::fileFor, onAdd = { pickPhoto() }, onView = { viewing = it }, onBg, muted, accent, outline)
                 }
 
                 state.memory?.let { m ->
-                    Column(Modifier.statsEntrance(6)) {
+                    Column(Modifier.statsEntrance(7)) {
                         ProfileBlock("ON THIS DAY", muted, accent, outline) {
                             val useKg = LocalForgeSettings.current.useKg
                             val ago = com.forge.app.ui.common.monthsAgoPhrase(m.monthsAgo)
@@ -259,7 +264,7 @@ fun ProfileScreen(
                     }
                 }
 
-                Column(Modifier.statsEntrance(7)) {
+                Column(Modifier.statsEntrance(8)) {
                     TrophyCaseSection(state.trophyGrid, state.trophyUnlocked, state.trophyTotal, state.closestTrophy, onOpenTrophies, onBg, muted, accent, outline)
                 }
 

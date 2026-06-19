@@ -3,12 +3,14 @@ package com.forge.app.data.health
 import android.content.Context
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.permission.HealthPermission
+import androidx.health.connect.client.records.ActiveCaloriesBurnedRecord
 import androidx.health.connect.client.records.RestingHeartRateRecord
 import androidx.health.connect.client.records.SleepSessionRecord
 import androidx.health.connect.client.records.WeightRecord
 import androidx.health.connect.client.records.metadata.Metadata
 import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.time.TimeRangeFilter
+import androidx.health.connect.client.units.Energy
 import androidx.health.connect.client.units.Mass
 import com.forge.app.domain.adapt.HealthSnap
 import com.forge.app.domain.adapt.RestingHrSample
@@ -49,6 +51,15 @@ class HealthConnectManager @Inject constructor(
     val weightPermissions: Set<String> = setOf(
         HealthPermission.getReadPermission(WeightRecord::class),
         HealthPermission.getWritePermission(WeightRecord::class)
+    )
+
+    /**
+     * Active-calorie permission (HC-4) — write only, so a Forge session can flow OUT to Health
+     * Connect's daily energy total. Its own set, like [weightPermissions]: enabling calorie sync
+     * never silently asks for sleep/HR or weight, and vice-versa.
+     */
+    val caloriePermissions: Set<String> = setOf(
+        HealthPermission.getWritePermission(ActiveCaloriesBurnedRecord::class)
     )
 
     /** SDK_AVAILABLE / SDK_UNAVAILABLE / SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED. */
@@ -134,6 +145,37 @@ class HealthConnectManager @Inject constructor(
                         time = Instant.ofEpochMilli(atMs),
                         zoneOffset = null,
                         weight = Mass.pounds(weightLb),
+                        metadata = Metadata.manualEntry()
+                    )
+                )
+            )
+            true
+        } ?: false
+    }
+
+    /** True when Forge may WRITE active calories to Health Connect (HC-4). */
+    suspend fun canWriteActiveCalories(): Boolean =
+        grantedPermissions().contains(HealthPermission.getWritePermission(ActiveCaloriesBurnedRecord::class))
+
+    /**
+     * Write one finished session's estimated active calories to Health Connect over `[startMs, endMs]`,
+     * returning whether it landed. Best-effort and fail-soft like [writeWeight]: no provider / no write
+     * permission / a provider error all return false without throwing, so a failed mirror never breaks
+     * the local finish. The span is clamped to be strictly positive — HC rejects a zero/negative range.
+     */
+    suspend fun writeActiveCalories(kcal: Double, startMs: Long, endMs: Long): Boolean = withContext(Dispatchers.IO) {
+        val client = clientOrNull() ?: return@withContext false
+        if (!canWriteActiveCalories()) return@withContext false
+        val safeEnd = maxOf(endMs, startMs + 1)
+        hcCatching {
+            client.insertRecords(
+                listOf(
+                    ActiveCaloriesBurnedRecord(
+                        startTime = Instant.ofEpochMilli(startMs),
+                        startZoneOffset = null,
+                        endTime = Instant.ofEpochMilli(safeEnd),
+                        endZoneOffset = null,
+                        energy = Energy.kilocalories(kcal),
                         metadata = Metadata.manualEntry()
                     )
                 )

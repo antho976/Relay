@@ -2,6 +2,7 @@ package com.forge.app.domain.cardio
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.DirectionsBike
+import androidx.compose.material.icons.filled.Bolt
 import androidx.compose.material.icons.filled.DirectionsRun
 import androidx.compose.material.icons.filled.DirectionsWalk
 import androidx.compose.material.icons.filled.FitnessCenter
@@ -33,6 +34,7 @@ enum class CardioType(
     ROW("row", "Row", Icons.Filled.Rowing),
     HIKE("hike", "Hike", Icons.Filled.Hiking),
     ELLIPTICAL("elliptical", "Elliptical", Icons.Filled.FitnessCenter),
+    HIIT("hiit", "HIIT", Icons.Filled.Bolt),
     YOGA("yoga", "Yoga", Icons.Filled.Spa),
     REST("rest", "Rest Day", Icons.Filled.Hotel),
     OTHER("other", "Other", Icons.Filled.MoreHoriz);

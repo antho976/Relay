@@ -157,12 +157,25 @@ class MigrationTest {
     }
 
     @Test
-    fun migrateFullChain12To22_runsEveryStepInOrder() {
+    fun migrate22To23_addsCardioDepthColumns() {
+        helper.createDatabase(dbName, 22).close()
+        val db = helper.runMigrationsAndValidate(dbName, 23, true, MIGRATION_22_23)
+
+        db.query("PRAGMA table_info(`cardio_entry`)").use { cursor ->
+            val cols = mutableSetOf<String>()
+            while (cursor.moveToNext()) cols += cursor.getString(cursor.getColumnIndexOrThrow("name"))
+            assertEquals("cardio_entry.interval_count should exist after 22→23", true, "interval_count" in cols)
+            assertEquals("cardio_entry.hr_zone should exist after 22→23", true, "hr_zone" in cols)
+        }
+    }
+
+    @Test
+    fun migrateFullChain12To23_runsEveryStepInOrder() {
         // The pairwise tests above each validate one hop. This runs the WHOLE locked chain in a
         // single pass — a real v12 install upgrading straight to today's schema — so a gap or an
         // out-of-order/incompatible step between any two versions is caught, not just each hop alone.
         helper.createDatabase(dbName, 12).close()
-        helper.runMigrationsAndValidate(dbName, 22, true, *ALL_MIGRATIONS)
+        helper.runMigrationsAndValidate(dbName, 23, true, *ALL_MIGRATIONS)
     }
 
     @Test

@@ -3,6 +3,7 @@ package com.forge.app.ui.gym.train.components
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -430,8 +431,12 @@ private fun InlineEffortPicker(
         ) {
             options.forEach { v ->
                 val selected = current != null && kotlin.math.abs(current - v) < 0.01
+                // Tapping a rating pops the chip with a spring overshoot — a tactile "got it" that
+                // confirms the pick as the panel collapses. Reduced-motion-safe (bouncy() → snap()).
+                val pop by animateFloatAsState(if (selected) 1.08f else 1f, ForgeMotion.bouncy(), label = "rpe-pop")
                 Column(
                     modifier = Modifier
+                        .graphicsLayer { scaleX = pop; scaleY = pop }
                         .border(
                             1.dp,
                             if (selected) onBg else outline.copy(alpha = 0.4f),

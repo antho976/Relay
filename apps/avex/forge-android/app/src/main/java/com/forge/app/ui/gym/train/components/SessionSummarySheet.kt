@@ -49,6 +49,7 @@ import com.forge.app.ui.theme.LocalForgeSettings
 import com.forge.app.ui.gym.train.state.SessionSummary
 import com.forge.app.ui.gym.train.state.UnlockedTrophyHighlight
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -95,6 +96,21 @@ fun SessionSummarySheet(
         if (!trophyHapticFired && summary.unlockedTrophies.isNotEmpty()) {
             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
             trophyHapticFired = true
+        }
+    }
+    // A clean sweep (every comparable set beat last time) earns its own signature in the hand: a
+    // three-tap burst, distinct from the single long-press of a PR/finish. Skipped when a trophy
+    // already fired its haptic (don't stack two celebrations) and when the user turned haptics off.
+    // rememberSaveable so it fires once, not on every rotation.
+    val hapticStrength = LocalForgeSettings.current.hapticStrength
+    var cleanSweepHapticFired by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        if (!cleanSweepHapticFired && cleanSweep && summary.unlockedTrophies.isEmpty() && hapticStrength != "off") {
+            repeat(3) {
+                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                delay(90)
+            }
+            cleanSweepHapticFired = true
         }
     }
 

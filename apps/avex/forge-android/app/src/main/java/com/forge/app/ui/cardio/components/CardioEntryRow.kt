@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
@@ -31,7 +32,7 @@ import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.domain.cardio.CardioEffort
 import com.forge.app.domain.cardio.CardioRestReason
 import com.forge.app.domain.cardio.CardioType
-import com.forge.app.domain.cardio.pacePerKm
+import com.forge.app.domain.cardio.cardioDetailParts
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -44,6 +45,7 @@ import java.util.Locale
 fun CardioEntryRow(
     entry: CardioEntry,
     today: LocalDate,
+    bodyweightLb: Double? = null,
     onRequestDelete: () -> Unit,
     onEdit: () -> Unit = {},
     modifier: Modifier = Modifier
@@ -54,7 +56,7 @@ fun CardioEntryRow(
 
     val zone = ZoneId.systemDefault()
     val dayLabel = remember(entry.date, today) { entryDayLabel(entry.date, today, zone) }
-    val detail = buildDetail(entry, type)
+    val detail = buildDetail(entry, type, bodyweightLb)
     val effortLabel = CardioEffort.fromCode(entry.effort)?.displayName?.uppercase() ?: ""
 
     val dismissState = rememberSwipeToDismissBoxState(
@@ -98,7 +100,14 @@ fun CardioEntryRow(
                 style = MaterialTheme.typography.labelSmall,
                 color = muted,
                 fontSize = 9.sp,
-                modifier = Modifier.width(64.dp).padding(top = 2.dp)
+                modifier = Modifier.width(56.dp).padding(top = 2.dp)
+            )
+            // Activity glyph — a quick visual tag for the type (Run/Cycle/Swim/Rest…).
+            Icon(
+                type.icon,
+                contentDescription = null,
+                tint = muted.copy(alpha = 0.8f),
+                modifier = Modifier.size(18.dp).padding(top = 1.dp)
             )
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(type.displayName, style = MaterialTheme.typography.bodyMedium, color = onBg)
@@ -141,14 +150,8 @@ private fun entryDayLabel(dateMs: Long, today: LocalDate, zone: ZoneId): String 
     }
 }
 
-private fun buildDetail(entry: CardioEntry, type: CardioType): String {
+private fun buildDetail(entry: CardioEntry, type: CardioType, bodyweightLb: Double?): String {
     if (type.isRest) return CardioRestReason.fromCode(entry.restReason)?.displayName ?: "Rest day"
-    val parts = buildList {
-        if (entry.durationMin > 0) add("${entry.durationMin} min")
-        // Pin to Locale.US so the '.' separator matches what the log form parses (it only
-        // accepts '.'); a comma-decimal device locale would otherwise render "5,0 km".
-        entry.distanceKm?.let { add("${String.format(java.util.Locale.US, "%.1f", it)} km") }
-        pacePerKm(entry.durationMin, entry.distanceKm)?.let { add("$it /km") }
-    }
-    return parts.joinToString(" · ")
+    // Shared chip list (the PDF export builds the same one) — effort is shown in its own column here.
+    return cardioDetailParts(entry, type, bodyweightLb).joinToString(" · ")
 }

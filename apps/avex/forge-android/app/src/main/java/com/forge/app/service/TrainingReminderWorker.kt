@@ -43,6 +43,8 @@ class TrainingReminderWorker @AssistedInject constructor(
     override suspend fun doWork(): Result {
         if (!settingsRepo.trainingReminderEnabled.first()) return Result.success()
         if (settingsRepo.isQuietNow()) return Result.success() // skip; it fires again tomorrow
+        // Don't nudge "train today" while a workout is literally in progress — they're already here.
+        if (sessionDao.getActiveSession() != null) return Result.success()
 
         val zone = ZoneId.systemDefault()
         val today = LocalDate.now(zone)

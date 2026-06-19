@@ -58,7 +58,8 @@ fun CardioScreen(
         CardioLogSheet(
             onDismiss = viewModel::closeSheet,
             onSave = viewModel::saveEntry,
-            editing = state.editing
+            editing = state.editing,
+            bodyweightLb = state.bodyweightLb
         )
     } else {
         CardioListContent(
@@ -173,6 +174,18 @@ private fun CardioListContent(
                 )
             }
 
+            item("month-chart") {
+                Spacer(Modifier.height(8.dp))
+                com.forge.app.ui.cardio.components.CardioMonthChart(
+                    entries = state.entries,
+                    zone = zone,
+                    onBg = onBg,
+                    muted = muted,
+                    accent = MaterialTheme.colorScheme.primary,
+                    outline = outline
+                )
+            }
+
             item("log-action") {
                 LogTodayRow(onOpenLog = onOpenLog, onBg = onBg, muted = muted, outline = outline)
                 Spacer(Modifier.height(12.dp))
@@ -193,6 +206,7 @@ private fun CardioListContent(
                     CardioEntryRow(
                         entry = entry,
                         today = today,
+                        bodyweightLb = state.bodyweightLb,
                         onRequestDelete = { onRequestDelete(entry.id) },
                         onEdit = { onEdit(entry.id) },
                         modifier = forgeItemMotion()

@@ -1,6 +1,7 @@
 package com.forge.app.data.repo
 
 import com.forge.app.core.time.Clock
+import com.forge.app.data.db.dao.CardioDao
 import com.forge.app.data.db.dao.LoggedSetDao
 import com.forge.app.data.db.dao.SessionDao
 import com.forge.app.data.db.entities.Session
@@ -81,7 +82,11 @@ data class ProfileData(
     val trophyGrid: List<TrophyCell>,
     val closestTrophy: String?,
     val memory: OnThisDayMemory?,
-    val recaps: List<RecapRowData>
+    val recaps: List<RecapRowData>,
+    /** All-time cardio: non-rest sessions, active minutes, distance (km). */
+    val cardioSessions: Int = 0,
+    val cardioMinutes: Int = 0,
+    val cardioDistanceKm: Double = 0.0
 )
 
 /**
@@ -95,6 +100,7 @@ data class ProfileData(
 class ProfileRepository @Inject constructor(
     private val sessionDao: SessionDao,
     private val loggedSetDao: LoggedSetDao,
+    private val cardioDao: CardioDao,
     private val trophyRepo: TrophyRepository,
     private val statsRepo: StatsRepository,
     private val settingsRepo: SettingsRepository,
@@ -128,6 +134,10 @@ class ProfileRepository @Inject constructor(
                 loggedSetDao.bestE1rmLbSince(since90)
             }.getOrNull()
         }
+        // All-time cardio totals (non-rest), for the profile's CARDIO block.
+        val cardioSessionsD = async { runCatching { cardioDao.totalSessions() }.getOrDefault(0) }
+        val cardioMinutesD = async { runCatching { cardioDao.totalMinutes() }.getOrNull() ?: 0 }
+        val cardioDistanceD = async { runCatching { cardioDao.totalDistanceKm() }.getOrNull() ?: 0.0 }
 
         val sessions = sessionsD.await()
         val unlockedDates = unlockedDatesD.await()
@@ -209,7 +219,10 @@ class ProfileRepository @Inject constructor(
             trophyGrid = trophyGrid,
             closestTrophy = closestTrophy,
             memory = memoryD.await(),
-            recaps = buildRecaps(sessions, zone, nowMs, useKg)
+            recaps = buildRecaps(sessions, zone, nowMs, useKg),
+            cardioSessions = cardioSessionsD.await(),
+            cardioMinutes = cardioMinutesD.await(),
+            cardioDistanceKm = cardioDistanceD.await()
         )
         }.also { lastData = it }
     }
