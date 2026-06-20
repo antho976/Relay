@@ -408,6 +408,10 @@ class SettingsViewModel @Inject constructor(
         val file = backupRepo.exportPrsCsv()
         _exportPath.value = file.absolutePath
     }
+    fun exportBodyweightCsv() = viewModelScope.launch {
+        val file = backupRepo.exportBodyweightCsv()
+        _exportPath.value = file.absolutePath
+    }
     fun clearExportPath() { _exportPath.value = null }
 
     // ── Complete DB backup & restore (the real safety net) ─────────────────────
@@ -473,22 +477,34 @@ class SettingsViewModel @Inject constructor(
     private val _restoreImpact = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
     val restoreImpact: StateFlow<String?> = _restoreImpact.asStateFlow()
 
+    /** On-disk database size, human-readable ("2.4 MB") — the Data dialog readout. */
+    private val _dbSizeLabel = kotlinx.coroutines.flow.MutableStateFlow("")
+    val dbSizeLabel: StateFlow<String> = _dbSizeLabel.asStateFlow()
+
+    private fun formatBytes(bytes: Long): String = when {
+        bytes >= 1_048_576 -> "%.1f MB".format(bytes / 1_048_576.0)
+        bytes >= 1024 -> "%.0f KB".format(bytes / 1024.0)
+        else -> "$bytes B"
+    }
+
     /** Refresh the auto-backup date + failure state — call when the data dialog opens (the worker may have run since). */
     fun refreshAutoBackupInfo() = viewModelScope.launch {
         // All checks are File / DB reads — keep them off the main thread.
-        data class Info(val savedAtMs: Long?, val failed: Boolean, val noBackup: Boolean, val impact: String)
+        data class Info(val savedAtMs: Long?, val failed: Boolean, val noBackup: Boolean, val impact: String, val dbSize: Long)
         val info = withContext(Dispatchers.IO) {
             Info(
                 backupRepo.autoBackupSavedAtMs(),
                 backupRepo.autoBackupFailed(),
                 backupRepo.shouldWarnNoBackup(),
-                backupRepo.restoreImpactSummary()
+                backupRepo.restoreImpactSummary(),
+                backupRepo.dbSizeBytes()
             )
         }
         _autoBackupSavedAt.value = info.savedAtMs?.let { formatMediumDate(it) }
         _autoBackupFailed.value = info.failed
         _noBackupWarning.value = info.noBackup
         _restoreImpact.value = info.impact
+        _dbSizeLabel.value = formatBytes(info.dbSize)
     }
 
     // ── Progress-photo info (tasks 3 + 4: factory-reset warning + data-dialog stake indicator) ──────

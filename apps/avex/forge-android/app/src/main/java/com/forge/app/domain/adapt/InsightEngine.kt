@@ -1,7 +1,6 @@
 package com.forge.app.domain.adapt
 
 import com.forge.app.data.db.entities.durationMinutes
-import com.forge.app.domain.mood.Mood
 import com.forge.app.program.DayPlan
 import com.forge.app.program.Difficulty
 import com.forge.app.program.ExercisePlan
@@ -70,7 +69,6 @@ object InsightEngine {
             mostSkipped(s, slots, t),
             repeatedSessionSwaps(s, slots, t),
             recoverySignalsBuilding(s, t),
-            moodVolumeLink(s, t),
             estimateCalibration(s, t),
             sweetSpotRepRange(s, slots, t),
             laggingLift(s, slots, boutE1rms, t),
@@ -247,26 +245,6 @@ object InsightEngine {
         return insight(
             "recovery", "Recovery signals building",
             "Not deload territory yet, but: ${f.drivers.joinToString(" · ")}.", "🪫"
-        )
-    }
-
-    // ── Mood × volume link ─────────────────────────────────────────────────────
-
-    private fun moodVolumeLink(s: AdaptationSnapshot, t: AdaptThresholds): Recommendation.Insight? {
-        val volumeBySession = s.sessions.associate { it.id to (it.totalVolumeLb ?: 0.0) }
-        val pairs = s.moods.mapNotNull { m ->
-            val vol = m.sessionId?.let(volumeBySession::get)?.takeIf { it > 0 } ?: return@mapNotNull null
-            Mood.fromCode(m.mood)?.let { it to vol }
-        }
-        if (pairs.size < t.insightMoodPairs) return null
-        val goodVols = pairs.filter { it.first == Mood.GOOD || it.first == Mood.STRONG }.map { it.second }
-        val lowVols = pairs.filter { it.first == Mood.OFF || it.first == Mood.DRAINED }.map { it.second }
-        if (goodVols.size < 3 || lowVols.size < 3) return null
-        val gap = goodVols.average() / lowVols.average() - 1
-        if (gap < t.insightMoodVolumeDiff) return null
-        return insight(
-            "moodvolume", "Mood moves your volume",
-            "Sessions you rated good/strong average ${(gap * 100).roundToInt()}% more volume than off/drained ones — recovery is performance.", "💪"
         )
     }
 

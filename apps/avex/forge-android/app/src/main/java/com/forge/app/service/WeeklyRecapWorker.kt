@@ -42,7 +42,8 @@ class WeeklyRecapWorker @AssistedInject constructor(
     private val settingsRepo: SettingsRepository,
     private val coachRepo: CoachRepository,
     private val trophyRepo: TrophyRepository,
-    private val vacationRepo: VacationRepository
+    private val vacationRepo: VacationRepository,
+    private val adaptationRepo: com.forge.app.data.repo.AdaptationRepository
 ) : CoroutineWorker(ctx, params) {
 
     override suspend fun doWork(): Result {
@@ -64,6 +65,18 @@ class WeeklyRecapWorker @AssistedInject constructor(
                 ctx, COACH_CHANNEL_ID, "Your coach has an update", banner.text
             ))
         }
+
+        // ── Deload suggestion: when accumulated fatigue crosses the deload line (DeloadAdvisor, which
+        // already self-suppresses right after a deload). Its own channel so it's independently mutable;
+        // a fixed id so it never stacks week-over-week. Uses the focused deloadSuggestion() — one
+        // snapshot, no plateau-ladder/arbitration fan-out — so the weekly worker stays inside its window.
+        runCatching { adaptationRepo.deloadSuggestion() }.getOrNull()
+            ?.let { rec ->
+                ForgeNotifications.ensureChannel(ctx, DELOAD_CHANNEL_ID, "Deload suggestions", "When your fatigue suggests a lighter week")
+                nm.notify(DELOAD_NOTIF_ID, ForgeNotifications.build(
+                    ctx, DELOAD_CHANNEL_ID, "Time for a deload week", rec.reason
+                ))
+            }
 
         val stats = statsRepo.observeWeeklyStats().firstOrNull() ?: return Result.success()
 
@@ -119,10 +132,12 @@ class WeeklyRecapWorker @AssistedInject constructor(
         private const val CHANNEL_ID = "forge_weekly_recap"
         private const val COACH_CHANNEL_ID = "forge_coach_brief"
         private const val REENGAGE_CHANNEL_ID = "forge_reengage"
+        private const val DELOAD_CHANNEL_ID = "forge_deload"
         private const val WORK_NAME = "forge_weekly_recap"
         private const val NOTIF_ID = 2001
         private const val COACH_NOTIF_ID = 2003
         private const val REENGAGE_NOTIF_ID = 2004
+        private const val DELOAD_NOTIF_ID = 2005
 
         fun schedule(context: Context) {
             val constraints = Constraints.Builder()

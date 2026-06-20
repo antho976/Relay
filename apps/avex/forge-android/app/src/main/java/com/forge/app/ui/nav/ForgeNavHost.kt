@@ -39,7 +39,6 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
-import com.forge.app.ui.cardio.CardioScreen
 import com.forge.app.ui.coach.CoachBriefScreen
 import com.forge.app.ui.coach.CoachLabScreen
 import com.forge.app.ui.coach.CoachTimelineScreen
@@ -51,8 +50,7 @@ import com.forge.app.ui.gym.train.DayListScreen
 import com.forge.app.ui.gym.train.ProgramViewerScreen
 import com.forge.app.ui.gym.train.DayScreen
 import com.forge.app.ui.goals.GoalsScreen
-import com.forge.app.ui.overview.OverviewScreen
-import com.forge.app.ui.profile.ProfileScreen
+import com.forge.app.ui.profile.MirrorTestScreen
 import com.forge.app.ui.programeditor.ProgramEditorScreen
 import com.forge.app.ui.recap.RecapScreen
 import com.forge.app.ui.settings.SettingsScreen
@@ -72,7 +70,9 @@ fun ForgeNavHost(initialDayKey: String? = null) {
     val dur = ForgeMotion.DurationEmphasized
     val slide: (Int) -> Int = { it / 6 }       // horizontal distance — modest, not full width
     val rise: (Int) -> Int = { it / 4 }        // vertical distance for modal mode screens
-    val modalRoutes = setOf(Routes.GYM_DAY, Routes.RECAP, Routes.PROGRAM_EDITOR, Routes.COACH_BRIEF, Routes.PROFILE)
+    // The five hubs (Cardio/Stats/Overview/Coach/Profile) are pages of HubScreen's pager, reached by
+    // swipe — they aren't nav destinations. Only the deep "mode" screens remain, and they RISE as modals.
+    val modalRoutes = setOf(Routes.GYM_DAY, Routes.RECAP, Routes.PROGRAM_EDITOR, Routes.COACH_BRIEF)
     // One-shot fade so the first screen eases in on cold launch instead of snapping on.
     var appeared by remember { mutableStateOf(false) }
     val rootAlpha by animateFloatAsState(
@@ -82,16 +82,17 @@ fun ForgeNavHost(initialDayKey: String? = null) {
     )
     LaunchedEffect(Unit) { appeared = true }
 
-    // Widget deep-link: open the carried day on top of Overview (the start destination) so Back
-    // returns home. Cardio days route to the cardio screen; unknown/stale keys are ignored. Fires
-    // once — MainActivity only supplies a key on a fresh launch, not on a config-change recreate.
+    // Widget deep-link: a gym day opens on top of the hub (Back returns home). A cardio day instead
+    // selects the hub's Cardio page via initialHubPage below — there's no separate cardio destination.
+    // Fires once — MainActivity only supplies a key on a fresh launch, not a config-change recreate.
     LaunchedEffect(initialDayKey) {
         val key = initialDayKey ?: return@LaunchedEffect
-        when {
-            key.startsWith("cardio") -> nav.navigate(Routes.CARDIO)
-            key in com.forge.app.program.Program.dayKeys -> nav.navigate(Routes.gymDay(key))
-        }
+        if (key in com.forge.app.program.Program.dayKeys) nav.navigate(Routes.gymDay(key))
     }
+    val initialHubPage = if (initialDayKey?.startsWith("cardio") == true) BottomTab.CARDIO.ordinal else BottomTab.HOME.ordinal
+    // A deep screen (e.g. PRs → "open cardio") can request a hub tab: set this and pop back to the
+    // hub, which animates to the page then clears it via onPendingConsumed.
+    var pendingHubPage by remember { mutableStateOf<Int?>(null) }
 
     NavHost(
         navController = nav,
@@ -123,46 +124,12 @@ fun ForgeNavHost(initialDayKey: String? = null) {
         }
     ) {
         composable(Routes.OVERVIEW) {
-            OverviewScreen(
-                onStartSession = { dayKey -> if (dayKey.startsWith("cardio")) nav.navigate(Routes.CARDIO) else nav.navigate(Routes.gymDay(dayKey)) },
-                onStartSessionSkipWarmup = { dayKey -> if (dayKey.startsWith("cardio")) nav.navigate(Routes.CARDIO) else nav.navigate(Routes.gymDay(dayKey, skipWarmup = true)) },
-                onViewProgram = { nav.navigate(Routes.PROGRAM_VIEWER) },
-                onGoToCardio = { nav.navigate(Routes.CARDIO) },
-                onGoToTrophies = { nav.navigate(Routes.TROPHIES) },
-                onGoToStats = { nav.navigate(Routes.GYM_STATS) },
-                onGoToPrs = { nav.navigate(Routes.GYM_PRS) },
-                onOpenNotes = { nav.navigate(Routes.NOTES_SEARCH) },
-                onGoToNutrition = { nav.navigate(Routes.NUTRITION) },
-                onGoToSettings = { nav.navigate(Routes.SETTINGS) },
-                onOpenCoachBrief = { nav.navigate(Routes.COACH_BRIEF) },
-                onOpenCoachLab = { nav.navigate(Routes.COACH_LAB) },
-                onOpenProfile = { nav.navigate(Routes.PROFILE) },
-                onOpenSession = { sessionId -> nav.navigate(Routes.sessionDetail(sessionId)) }
-            )
-        }
-        composable(Routes.GYM_TRAIN) {
-            DayListScreen(
-                onBack = { nav.popBackStack() },
-                onOpenDay = { dayKey -> nav.navigate(Routes.gymDay(dayKey)) },
-                onOpenDayQuick = { dayKey -> nav.navigate(Routes.gymDay(dayKey, skipWarmup = true)) },
-                onOpenHistory = { nav.navigate(Routes.SESSION_HISTORY) },
-                onOpenNotes = { nav.navigate(Routes.NOTES_SEARCH) },
-                onOpenRecap = { nav.navigate(Routes.RECAP) },
-                onEditProgram = { dayKey -> nav.navigate(Routes.programEditor(dayKey)) },
-                onOpenCardio = { nav.navigate(Routes.CARDIO) }
-            )
-        }
-        composable(Routes.GYM_STATS) {
-            DayListScreen(
-                onBack = { nav.popBackStack() },
-                onOpenDay = { dayKey -> nav.navigate(Routes.gymDay(dayKey)) },
-                onOpenDayQuick = { dayKey -> nav.navigate(Routes.gymDay(dayKey, skipWarmup = true)) },
-                onOpenHistory = { nav.navigate(Routes.SESSION_HISTORY) },
-                onOpenNotes = { nav.navigate(Routes.NOTES_SEARCH) },
-                onOpenRecap = { nav.navigate(Routes.RECAP) },
-                onEditProgram = { dayKey -> nav.navigate(Routes.programEditor(dayKey)) },
-                onOpenCardio = { nav.navigate(Routes.CARDIO) },
-                initialTab = 1
+            // The swipeable home: Overview · Cardio · Stats · Profile as pager pages under the bar.
+            HubScreen(
+                nav = nav,
+                initialPage = initialHubPage,
+                pendingPage = pendingHubPage,
+                onPendingConsumed = { pendingHubPage = null }
             )
         }
         composable(Routes.GYM_PRS) {
@@ -171,8 +138,10 @@ fun ForgeNavHost(initialDayKey: String? = null) {
                 onOpenDay = { dayKey -> nav.navigate(Routes.gymDay(dayKey)) },
                 onOpenDayQuick = { dayKey -> nav.navigate(Routes.gymDay(dayKey, skipWarmup = true)) },
                 onEditProgram = { dayKey -> nav.navigate(Routes.programEditor(dayKey)) },
-                onOpenCardio = { nav.navigate(Routes.CARDIO) },
-                initialTab = 2
+                // PRs is a deep screen; "open cardio" returns to the hub and selects the Cardio page.
+                onOpenCardio = { pendingHubPage = BottomTab.CARDIO.ordinal; nav.popBackStack(Routes.OVERVIEW, false) },
+                initialTab = 2,
+                title = "PRs"
             )
         }
         composable(Routes.PROGRAM_VIEWER) {
@@ -209,9 +178,6 @@ fun ForgeNavHost(initialDayKey: String? = null) {
             val dayKey = entry.arguments?.getString(Routes.ARG_DAY_KEY).orEmpty()
             DayScreen(dayKey = dayKey, onBack = { nav.popBackStack() })
         }
-        composable(Routes.CARDIO) {
-            CardioScreen(onBack = { nav.popBackStack() })
-        }
         composable(Routes.TROPHIES) {
             TrophiesScreen(onBack = { nav.popBackStack() })
         }
@@ -239,17 +205,11 @@ fun ForgeNavHost(initialDayKey: String? = null) {
         composable(Routes.COACH_TIMELINE) {
             CoachTimelineScreen(onBack = { nav.popBackStack() })
         }
-        composable(Routes.PROFILE) {
-            ProfileScreen(
-                onBack = { nav.popBackStack() },
-                onOpenTrophies = { nav.navigate(Routes.TROPHIES) },
-                onOpenRecaps = { nav.navigate(Routes.RECAP) },
-                onOpenGoals = { nav.navigate(Routes.GOALS) },
-                onOpenCoachBrief = { nav.navigate(Routes.COACH_BRIEF) }
-            )
-        }
         composable(Routes.GOALS) {
             GoalsScreen(onBack = { nav.popBackStack() })
+        }
+        composable(Routes.MIRROR_TEST) {
+            MirrorTestScreen(onBack = { nav.popBackStack() })
         }
         composable(
             route = Routes.PROGRAM_EDITOR,

@@ -2,7 +2,6 @@ package com.forge.app.domain.adapt
 
 import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.data.db.entities.LoggedSet
-import com.forge.app.data.db.entities.MoodEntry
 import com.forge.app.data.db.entities.Session
 import com.forge.app.data.db.types.EffortRating
 import org.junit.Assert.assertEquals
@@ -51,14 +50,6 @@ class DeloadAdvisorTest {
     private fun brutalWindowBouts(): List<ExerciseBout> =
         (0 until 6).map { bout(startDay = 48 + it * 2, effort = EffortRating.BRUTAL) }
 
-    private fun lowMoods(): List<MoodEntry> = listOf(
-        MoodEntry(1, null, "upper-a", "drained", (now - 1 * day)),
-        MoodEntry(2, null, "upper-a", "off", (now - 3 * day)),
-        MoodEntry(3, null, "upper-a", "drained", (now - 5 * day)),
-        MoodEntry(4, null, "upper-a", "good", (now - 7 * day)),
-        MoodEntry(5, null, "upper-a", "fine", (now - 9 * day))
-    )
-
     private fun soreCardio() = listOf(
         CardioEntry(1, date = now - 2 * day, type = "rest", durationMin = 0, restReason = "sore")
     )
@@ -66,12 +57,11 @@ class DeloadAdvisorTest {
     private fun snapshot(
         sessions: List<Session> = baseSessions(),
         history: Map<String, List<ExerciseBout>> = mapOf("ua1" to brutalWindowBouts()),
-        moods: List<MoodEntry> = emptyList(),
         cardio: List<CardioEntry> = emptyList(),
         health: HealthSnap = HealthSnap()
     ) = AdaptationSnapshot(
         nowMs = now, program = emptyList(), sessions = sessions,
-        exerciseHistory = history, moods = moods, cardio = cardio, prefs = PrefsSnap(), health = health
+        exerciseHistory = history, cardio = cardio, prefs = PrefsSnap(), health = health
     )
 
     /** Calm, single-set bouts that fire NO driver on their own — a clean stage for one recovery signal. */
@@ -91,28 +81,30 @@ class DeloadAdvisorTest {
     @Test
     fun coldStart_tooFewSessions_staysSilent() {
         val few = baseSessions().take(7)
-        assertNull(DeloadAdvisor.evaluate(snapshot(sessions = few, moods = lowMoods(), cardio = soreCardio())))
+        assertNull(DeloadAdvisor.evaluate(snapshot(sessions = few, cardio = soreCardio())))
     }
 
     @Test
     fun coldStart_historyShorterThanOneWindow_staysSilent() {
         // 8 sessions but all inside the last 14 days — no prior window to trend against.
         val recentOnly = (0 until 8).map { session(it + 1L, startDay = 47 + it, volume = 1000.0) }
-        assertNull(DeloadAdvisor.evaluate(snapshot(sessions = recentOnly, moods = lowMoods(), cardio = soreCardio())))
+        assertNull(DeloadAdvisor.evaluate(snapshot(sessions = recentOnly, cardio = soreCardio())))
     }
 
     // ── Happy path ─────────────────────────────────────────────────────────────
 
     @Test
-    fun effortInflationPlusLowMoodPlusSoreness_firesAtMediumWithNamedDrivers() {
-        // +2 effort inflation, +2 low mood, +1 sore = 5 — exactly the threshold.
-        val rec = DeloadAdvisor.evaluate(snapshot(moods = lowMoods(), cardio = soreCardio()))
+    fun effortInflationPlusSleepDebtPlusSoreness_firesAtMediumWithNamedDrivers() {
+        // +2 effort inflation, +2 sleep debt (HC), +1 sore = 5 — exactly the threshold.
+        val rec = DeloadAdvisor.evaluate(
+            snapshot(cardio = soreCardio(), health = HealthSnap(sleepNights = nights(6, 360)))
+        )
         assertNotNull(rec)
         assertEquals(5, rec!!.score)
         assertEquals(Confidence.MEDIUM, rec.confidence)
         assertEquals(3, rec.drivers.size)
         assertTrue(rec.reason.contains("hard/brutal at flat volume"))
-        assertTrue(rec.reason.contains("mood low in 3 of the last 5"))
+        assertTrue(rec.reason.contains("sleep"))
         assertTrue(rec.reason.contains("soreness"))
     }
 
@@ -126,8 +118,8 @@ class DeloadAdvisorTest {
         val rec = DeloadAdvisor.evaluate(
             snapshot(
                 history = mapOf("ua1" to brutalWindowBouts(), "ua2" to regressing(), "ua3" to regressing()),
-                moods = lowMoods(),
-                cardio = soreCardio()
+                cardio = soreCardio(),
+                health = HealthSnap(sleepNights = nights(6, 360))
             )
         )
         assertNotNull(rec)
@@ -141,7 +133,7 @@ class DeloadAdvisorTest {
     @Test
     fun recentDeload_mutesTheAdvisorEvenWithFatigueSignals() {
         val withDeload = baseSessions() + session(9, startDay = 56, sessionType = "deload")
-        assertNull(DeloadAdvisor.evaluate(snapshot(sessions = withDeload, moods = lowMoods(), cardio = soreCardio())))
+        assertNull(DeloadAdvisor.evaluate(snapshot(sessions = withDeload, cardio = soreCardio())))
     }
 
     @Test
@@ -152,7 +144,7 @@ class DeloadAdvisorTest {
         val snap = AdaptationSnapshot(
             nowMs = now, program = emptyList(), sessions = baseSessions(),
             exerciseHistory = mapOf("ua1" to brutalWindowBouts()),
-            moods = lowMoods(), cardio = soreCardio(),
+            cardio = soreCardio(),
             prefs = PrefsSnap(lastDeloadAppliedMs = now - 2 * day)
         )
         assertNull(DeloadAdvisor.evaluate(snap))
@@ -160,13 +152,12 @@ class DeloadAdvisorTest {
 
     @Test
     fun conflictingSignals_trainingGoingWell_calendarAloneNeverFires() {
-        // Effort fine, mood good, no soreness — only time has passed. Score stays below
-        // threshold: a date is not fatigue.
+        // Effort fine, no soreness — only time has passed. Score stays below threshold: a date
+        // is not fatigue.
         val happyBouts = (0 until 6).map { bout(startDay = 48 + it * 2, effort = EffortRating.JUST_RIGHT) }
-        val goodMoods = (1..5).map { MoodEntry(it.toLong(), null, "upper-a", "good", now - it * day) }
         // Spread history beyond 8 weeks so the "overdue" driver alone is in play.
         val longHistory = (0 until 8).map { session(it + 1L, startDay = 1 + it * 7, volume = 1000.0) }
-        val rec = DeloadAdvisor.evaluate(snapshot(sessions = longHistory, history = mapOf("ua1" to happyBouts), moods = goodMoods))
+        val rec = DeloadAdvisor.evaluate(snapshot(sessions = longHistory, history = mapOf("ua1" to happyBouts)))
         assertNull(rec)
     }
 
@@ -176,9 +167,11 @@ class DeloadAdvisorTest {
             CardioEntry(1, date = now - 2 * day, type = "rest", durationMin = 0, restReason = "sore"),
             CardioEntry(2, date = now - 3 * day, type = "rest", durationMin = 0, restReason = "sick")
         )
-        val rec = DeloadAdvisor.evaluate(snapshot(moods = lowMoods(), cardio = sickCardio))
+        val rec = DeloadAdvisor.evaluate(
+            snapshot(cardio = sickCardio, health = HealthSnap(sleepNights = nights(6, 360)))
+        )
         assertNotNull(rec)
-        assertEquals(6, rec!!.score) // 2 + 2 + 2 (sick), the sore +1 must not stack
+        assertEquals(6, rec!!.score) // 2 effort + 2 sleep + 2 sick, the sore +1 must not stack
         assertTrue(rec.reason.contains("sick"))
     }
 
@@ -259,7 +252,7 @@ class DeloadAdvisorTest {
 
     @Test
     fun sameSnapshotProducesTheSameSuggestion() {
-        val snap = snapshot(moods = lowMoods(), cardio = soreCardio())
+        val snap = snapshot(cardio = soreCardio(), health = HealthSnap(sleepNights = nights(6, 360)))
         assertEquals(DeloadAdvisor.evaluate(snap), DeloadAdvisor.evaluate(snap))
     }
 }

@@ -66,6 +66,12 @@ internal fun DayViewModel.handleSessionEvent(event: DayUiEvent) {
 /** Apply the engine's suggested order via the same in-memory mechanism as manual reordering. */
 private fun DayViewModel.applyOrderingSuggestion() {
     val suggestion = _state.value.orderingSuggestion ?: return
+    applyOrderedExercises(suggestion)
+}
+
+/** Reorder the in-memory exercise list to [suggestion]'s order (the program itself is never touched).
+ *  Shared by the explicit "Apply →" tap and the silent auto-apply for non-custom days (task 3). */
+internal fun DayViewModel.applyOrderedExercises(suggestion: com.forge.app.domain.adapt.Recommendation.SessionOrder) {
     val byId = _state.value.exercises.associateBy { it.plan.id }
     val suggested = suggestion.orderedExerciseIds.toSet()
     val reordered = suggestion.orderedExerciseIds.mapNotNull { byId[it] } +
@@ -106,6 +112,8 @@ private fun DayViewModel.finishWorkout() {
         val volumePerMin = if (durationMin > 0) totalVolumeLb / durationMin else 0.0
         val densityScore = if (durationMin > 0) totalVolumeLb / durationMin else null
         val avgRestSeconds = computeAvgRestSeconds(workoutRepo.allSetsForSession(sessionId))
+        // Lifetime PR count AFTER this session (its PRs are already persisted) — drives the milestone push.
+        val lifetimePrCount = runCatching { workoutRepo.lifetimePrCount() }.getOrDefault(0)
 
         val exercises = _state.value.exercises
         val plannedTotal = exercises.filter { !it.skipped }.sumOf { it.plan.sets }
@@ -152,7 +160,8 @@ private fun DayViewModel.finishWorkout() {
                 isBestSession = isBestSession,
                 honestyPct = honestyPct
             ),
-            initialJournal = _state.value.sessionJournal
+            initialJournal = _state.value.sessionJournal,
+            lifetimePrCount = lifetimePrCount
         )
         _state.update { it.copy(isFinished = true, summary = summary) }
     }

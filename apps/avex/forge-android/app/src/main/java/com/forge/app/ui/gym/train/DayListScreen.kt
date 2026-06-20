@@ -53,7 +53,9 @@ import com.forge.app.ui.gym.train.components.DayCard
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DayListScreen(
-    onBack: () -> Unit,
+    // Null when this is a hub pager page (the bottom bar + system-back handle navigation) so no
+    // redundant back arrow shows; a real callback when pushed as a deep route (e.g. PRs).
+    onBack: (() -> Unit)? = null,
     onOpenDay: (String) -> Unit,
     onOpenDayQuick: (String) -> Unit,
     onOpenHistory: () -> Unit = {},
@@ -62,14 +64,16 @@ fun DayListScreen(
     onEditProgram: (String) -> Unit = {},
     onOpenCardio: () -> Unit = {},
     initialTab: Int = 0,
+    /** Top-bar heading — "Stats" / "PRs" when hosting those sub-screens, "GYM" by default. */
+    title: String = "GYM",
     viewModel: DayListViewModel = hiltViewModel()
 ) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("GYM", style = MaterialTheme.typography.headlineLarge) },
+                title = { Text(title, style = MaterialTheme.typography.headlineLarge) },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    if (onBack != null) IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
                 },

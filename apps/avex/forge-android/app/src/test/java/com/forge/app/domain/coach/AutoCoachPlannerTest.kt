@@ -2,14 +2,15 @@ package com.forge.app.domain.coach
 
 import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.data.db.entities.LoggedSet
-import com.forge.app.data.db.entities.MoodEntry
 import com.forge.app.data.db.entities.Session
 import com.forge.app.data.db.types.EffortRating
 import com.forge.app.domain.adapt.AdaptationSnapshot
 import com.forge.app.domain.adapt.ExerciseBout
+import com.forge.app.domain.adapt.HealthSnap
 import com.forge.app.domain.adapt.PrefsSnap
 import com.forge.app.domain.adapt.ProgramDaySnap
 import com.forge.app.domain.adapt.ProgramSlotSnap
+import com.forge.app.domain.adapt.SleepNight
 import com.forge.app.program.ExerciseUnit
 import com.forge.app.program.MuscleGroup
 import org.junit.Assert.assertEquals
@@ -73,17 +74,20 @@ class AutoCoachPlannerTest {
         history: Map<String, List<ExerciseBout>>,
         sessions: List<Session> = baseSessions(),
         slots: List<ProgramSlotSnap> = history.keys.map { slot(it) },
-        moods: List<MoodEntry> = emptyList(),
-        cardio: List<CardioEntry> = emptyList()
+        cardio: List<CardioEntry> = emptyList(),
+        health: HealthSnap = HealthSnap()
     ) = AdaptationSnapshot(
         nowMs = now,
         program = listOf(ProgramDaySnap("upper-a", "Upper A", slots)),
         sessions = sessions,
         exerciseHistory = history,
-        moods = moods,
         cardio = cardio,
-        prefs = PrefsSnap()
+        prefs = PrefsSnap(),
+        health = health
     )
+
+    /** Six short nights (6h ≤ the 6.5h ceiling) inside the deload window → the sleep-debt driver (+2). */
+    private fun shortNights() = (0 until 6).map { SleepNight(endedAtMs = now - (1 + it) * day, durationMin = 360) }
 
     private fun beginner(target: Int = 0) = CoachPassInputs("beginner", sessionsTarget = target)
 
@@ -118,18 +122,13 @@ class AutoCoachPlannerTest {
 
     @Test
     fun deloadSupersedesEverything_singleDeloadDecision() {
-        // DeloadAdvisor needs ≥5 points: effort inflation (+2), low moods (+2), sore cardio (+1).
+        // DeloadAdvisor needs ≥5 points: effort inflation (+2), sleep debt (+2), sore cardio (+1).
         val brutal = (0..8).map { i ->
             bout(startDay = 48 + i, weight = 45.0, effort = EffortRating.BRUTAL)
         }
-        val moods = listOf(
-            MoodEntry(1, null, "upper-a", "drained", now - 1 * day),
-            MoodEntry(2, null, "upper-a", "off", now - 3 * day),
-            MoodEntry(3, null, "upper-a", "drained", now - 5 * day)
-        )
         val cardio = listOf(CardioEntry(1, date = now - 2 * day, type = "rest", durationMin = 0, restReason = "sore"))
         val r = AutoCoachPlanner.evaluate(
-            snapshot(mapOf("ua1" to brutal), moods = moods, cardio = cardio), beginner()
+            snapshot(mapOf("ua1" to brutal), cardio = cardio, health = HealthSnap(sleepNights = shortNights())), beginner()
         )
         assertEquals(CoachPassStatus.SHADOW, r.status)
         assertEquals(listOf("deload"), r.decisions.map { it.type })
@@ -179,17 +178,12 @@ class AutoCoachPlannerTest {
 
     @Test
     fun buildingFatigue_holdsWithConsolidationGuidance() {
-        // Fatigue at 3/5 (low moods +2, sore cardio +1) — below the deload line but climbing.
+        // Fatigue at 3/5 (sleep debt +2, sore cardio +1) — below the deload line but climbing.
         // Lifts are progressing and target is 0 (no volume_up), so the pass is otherwise quiet:
         // the smart call is a consolidation week, not a generic "plan is working" hold.
-        val moods = listOf(
-            MoodEntry(1, null, "upper-a", "drained", now - 1 * day),
-            MoodEntry(2, null, "upper-a", "off", now - 3 * day),
-            MoodEntry(3, null, "upper-a", "drained", now - 5 * day)
-        )
         val cardio = listOf(CardioEntry(1, date = now - 2 * day, type = "rest", durationMin = 0, restReason = "sore"))
         val r = AutoCoachPlanner.evaluate(
-            snapshot(mapOf("ua1" to progressingBouts(8)), moods = moods, cardio = cardio), beginner()
+            snapshot(mapOf("ua1" to progressingBouts(8)), cardio = cardio, health = HealthSnap(sleepNights = shortNights())), beginner()
         )
         assertEquals(CoachPassStatus.HOLD, r.status)
         assertTrue("reason should propose a consolidation week: ${r.holdReason}", "consolidation" in r.holdReason!!)

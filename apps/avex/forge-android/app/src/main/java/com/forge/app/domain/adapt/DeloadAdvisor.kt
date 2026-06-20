@@ -1,7 +1,6 @@
 package com.forge.app.domain.adapt
 
 import com.forge.app.data.db.types.EffortRating
-import com.forge.app.domain.mood.Mood
 import com.forge.app.domain.session.SessionType
 import kotlin.math.roundToInt
 
@@ -16,7 +15,6 @@ import kotlin.math.roundToInt
  *  - effort inflation (+2): HARD/BRUTAL share of rated bouts high while volume is flat/down
  *  - intra-session rep drop-off (+1): reps falling off steeply from first to last set
  *  - e1RM regression (+2): ≥ N lifts below the prior month's strength
- *  - low mood (+2): DRAINED/OFF in ≥ N of the last 5 mood entries
  *  - cardio rest reasons (+2 sick / +1 sore): the body is already asking for recovery
  *  - sleep debt (+2): averaging below the nightly target over ≥ N nights (Health Connect)
  *  - elevated resting HR (+2): window resting HR ≥ N bpm above the prior month (Health Connect)
@@ -35,7 +33,6 @@ object DeloadAdvisor {
     private const val POINTS_EFFORT_INFLATION = 2
     private const val POINTS_REP_DROPOFF = 1
     private const val POINTS_E1RM_REGRESSION = 2
-    private const val POINTS_LOW_MOOD = 2
     private const val POINTS_SICK = 2
     private const val POINTS_SORE = 1
     private const val POINTS_OVERDUE = 1
@@ -121,16 +118,6 @@ object DeloadAdvisor {
         }
         if (regressing >= t.deloadRegressionLifts) {
             drivers += POINTS_E1RM_REGRESSION to "$regressing lifts below last month's strength"
-        }
-
-        // ── Mood trend (leading recovery indicator) ────────────────────────────────
-        val recentMoods = s.moods
-            .filter { it.recordedAt >= s.nowMs - t.deloadWindowDays * DAY_MS }
-            .sortedByDescending { it.recordedAt }
-            .take(5)
-        val lowMoods = recentMoods.count { Mood.fromCode(it.mood) in setOf(Mood.DRAINED, Mood.OFF) }
-        if (lowMoods >= t.deloadLowMoodCount) {
-            drivers += POINTS_LOW_MOOD to "mood low in $lowMoods of the last ${recentMoods.size} check-ins"
         }
 
         // ── Cardio rest reasons: the body already asked for recovery ──────────────

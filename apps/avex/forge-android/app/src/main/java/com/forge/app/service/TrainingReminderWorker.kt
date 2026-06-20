@@ -56,10 +56,18 @@ class TrainingReminderWorker @AssistedInject constructor(
         // Focused two-query streak read — not the full weekly-stats flow — inside the worker's window.
         val streak = runCatching { statsRepo.currentStreakDays() }.getOrDefault(0)
 
+        // A scheduled rest day = weekday mode with today's slot deliberately blank (a real program is
+        // loaded). Sequence mode has no fixed rest days, so the gentle rest note only applies here.
+        val isRestDay = dayName == null &&
+            Program.dayKeys.isNotEmpty() &&
+            settingsRepo.scheduleMode.first() == WeeklySchedule.MODE_WEEKDAY &&
+            settingsRepo.weeklySchedule.first().getOrNull(today.dayOfWeek.value - 1).isNullOrBlank()
+
         val nudge = TrainingReminder.build(
             trainedToday = finishedToday.isNotEmpty(),
             dayName = dayName,
-            streakDays = streak
+            streakDays = streak,
+            isScheduledRestDay = isRestDay
         ) ?: return Result.success()
 
         ForgeNotifications.ensureChannel(ctx, CHANNEL_ID, CHANNEL_NAME, CHANNEL_DESC)

@@ -42,7 +42,9 @@ data class SessionSummary(
     /** The coach's one-line read of this session (#19), or null for an empty session. */
     val coachOpinion: String? = null,
     /** Journal text already captured mid-session (top-bar note) — seeds the finish sheet's field. */
-    val initialJournal: String = ""
+    val initialJournal: String = "",
+    /** Lifetime PR count after this session — drives the PR-milestone notification. */
+    val lifetimePrCount: Int = 0
 )
 
 data class ExerciseHighlight(

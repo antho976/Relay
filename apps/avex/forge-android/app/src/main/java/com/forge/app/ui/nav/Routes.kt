@@ -19,6 +19,7 @@ object Routes {
     const val COACH_TIMELINE = "coach-timeline"
     const val PROFILE = "profile"
     const val GOALS = "goals"
+    const val MIRROR_TEST = "mirror-test"
     const val PROGRAM_EDITOR = "program-editor/{dayKey}"
     const val PROGRAM_VIEWER = "program-viewer"
 

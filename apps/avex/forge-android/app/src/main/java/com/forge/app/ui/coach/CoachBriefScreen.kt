@@ -57,7 +57,8 @@ import com.forge.app.ui.theme.emphasized
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CoachBriefScreen(
-    onBack: () -> Unit,
+    // Null when shown as a hub pager page (no redundant back arrow); a real callback as a modal route.
+    onBack: (() -> Unit)? = null,
     onOpenCoachLab: () -> Unit = {},
     viewModel: CoachBriefViewModel = hiltViewModel()
 ) {
@@ -68,7 +69,7 @@ fun CoachBriefScreen(
             TopAppBar(
                 title = { Text("Week brief.", style = MaterialTheme.typography.headlineMedium) },
                 navigationIcon = {
-                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+                    if (onBack != null) IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
             )

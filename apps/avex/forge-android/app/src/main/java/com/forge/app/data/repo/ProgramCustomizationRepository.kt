@@ -83,6 +83,17 @@ class ProgramCustomizationRepository @Inject constructor(
         editablePlanForDay(dayKey).filterNot { it.removed }.map { it.plan }
 
     /**
+     * Whether the user has curated this day's exercise ORDER or composition — an explicit reorder,
+     * an added exercise, or a removed one. Pure rep/set tweaks (incl. coach-applied) don't count.
+     * The pre-session ordering advisor uses this: a default order is optimised silently, a curated
+     * one is only ever changed with the user's say-so.
+     */
+    suspend fun isOrderCustomized(dayKey: String): Boolean =
+        dao.forDay(dayKey).any {
+            it.orderOverride != UNSET_ORDER || it.removed || it.exerciseId.startsWith("custom_")
+        }
+
+    /**
      * Override rep range for an exercise (#90). [source] tags the writer ([OverlaySource]); the
      * coach passes COACH so its overlay never coach-locks the slot, and a later user edit flips it
      * back to USER (which does lock) — see the coach-lock scan in CoachRepository (seam findings 5/6).

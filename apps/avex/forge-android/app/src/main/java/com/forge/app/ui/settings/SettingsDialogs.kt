@@ -64,6 +64,7 @@ internal fun DataExportDialog(
             val noBackupWarning by viewModel.noBackupWarning.collectAsState()
             val photoCount by viewModel.photoCount.collectAsState()
             val photoLastTakenMs by viewModel.photoLastTakenMs.collectAsState()
+            val dbSize by viewModel.dbSizeLabel.collectAsState()
             var confirmAutoRestore by remember { mutableStateOf(false) }
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("Backup & restore (.zip)", style = MaterialTheme.typography.bodyMedium, color = onBg)
@@ -112,22 +113,23 @@ internal fun DataExportDialog(
 
             HorizontalDivider(color = outline.copy(alpha = 0.2f))
 
-            // ── Data stake indicator — what's at risk if this device is lost ─────
-            if (photoCount > 0) {
-                val lastTakenLabel = photoLastTakenMs?.let { formatShortDate(it) }
-                val photoLine = photoCountLabel(photoCount) + (lastTakenLabel?.let { " · last $it" } ?: "")
-                Text(
-                    photoLine,
-                    style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp
-                )
-                HorizontalDivider(color = outline.copy(alpha = 0.2f))
+            // ── Data stake indicator — DB size + what's at risk if this device is lost ─────
+            val stakeLine = buildString {
+                append("Database · ${dbSize.ifBlank { "—" }}")
+                if (photoCount > 0) {
+                    append(" · ${photoCountLabel(photoCount)}")
+                    photoLastTakenMs?.let { append(" · last ${formatShortDate(it)}") }
+                }
             }
+            Text(stakeLine, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp)
+            HorizontalDivider(color = outline.copy(alpha = 0.2f))
 
             // ── Quick export — one tap, format baked into each row ───────────────
             Text("Quick export", style = MaterialTheme.typography.bodyMedium, color = onBg)
             ExportRow("This week", "JSON", "summary for AI analysis", onBg, muted) { viewModel.exportWeeklyJson(); onDismiss() }
             ExportRow("All sessions", "CSV", "spreadsheet of every session", onBg, muted) { viewModel.exportSessionsCsv(); onDismiss() }
             ExportRow("All PRs", "CSV", "your best lift per exercise", onBg, muted) { viewModel.exportPrsCsv(); onDismiss() }
+            ExportRow("Bodyweight", "CSV", "every weigh-in", onBg, muted) { viewModel.exportBodyweightCsv(); onDismiss() }
             ExportRow("Last session", "PDF", "printable session sheet", onBg, muted) { viewModel.exportLastSessionPdf(); onDismiss() }
             ExportRow("Crash logs", "ZIP", "diagnostics if something broke", onBg, muted) { onExportCrashLogs(); onDismiss() }
 

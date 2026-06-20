@@ -28,6 +28,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import com.forge.app.Features
 import com.forge.app.domain.units.formatVolumeCompact
 import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.domain.units.unitLabel
@@ -43,7 +44,10 @@ import com.forge.app.data.repo.SignatureLift
 import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.theme.emphasized
 
-/** Shared section scaffold: hairline divider + small-caps label (+ optional accent action) + body. */
+/**
+ * Shared section scaffold: hairline divider + small-caps label (+ optional accent action) + body.
+ * [compact] tightens the vertical rhythm (used by the denser Ledger / Signature blocks).
+ */
 @Composable
 internal fun ProfileBlock(
     label: String,
@@ -52,11 +56,12 @@ internal fun ProfileBlock(
     outline: Color,
     action: String? = null,
     onAction: (() -> Unit)? = null,
+    compact: Boolean = false,
     content: @Composable ColumnScope.() -> Unit
 ) {
-    Spacer(Modifier.height(22.dp))
+    Spacer(Modifier.height(if (compact) 14.dp else 22.dp))
     HorizontalDivider(color = outline.copy(alpha = 0.3f))
-    Spacer(Modifier.height(14.dp))
+    Spacer(Modifier.height(if (compact) 8.dp else 14.dp))
     Row(
         Modifier.fillMaxWidth().then(if (onAction != null) Modifier.clickable { onAction() } else Modifier),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -65,11 +70,11 @@ internal fun ProfileBlock(
         Text(label, style = MaterialTheme.typography.labelMedium, color = emphasized(muted))
         if (action != null) Text(action, style = MaterialTheme.typography.labelSmall, color = accent)
     }
-    Spacer(Modifier.height(12.dp))
+    Spacer(Modifier.height(if (compact) 8.dp else 12.dp))
     Column(content = content)
 }
 
-/** THE LEDGER · ALL TIME — four lifetime tallies. */
+/** THE LEDGER · ALL TIME — lifetime tallies (XP cell only when gamification is enabled). */
 @Composable
 internal fun LedgerSection(
     sessions: Int,
@@ -82,19 +87,22 @@ internal fun LedgerSection(
     longestStreakDays: Int = 0
 ) {
     val useKg = LocalForgeSettings.current.useKg
-    ProfileBlock("THE LEDGER · ALL TIME", muted, accent, outline) {
+    ProfileBlock("THE LEDGER · ALL TIME", muted, accent, outline, compact = true) {
         if (sessions == 0) {
-            // Four bare zeros on a stranger's first open read as "empty/broken" — name what fills them.
+            // Bare zeros on a stranger's first open read as "empty/broken" — name what fills them.
             InlineEmptyHint(
-                "Finish your first workout — your lifetime workouts, volume, PRs, and XP start tallying here.",
+                if (Features.SHOW_GAMIFICATION)
+                    "Finish your first workout — your lifetime workouts, volume, PRs, and XP start tallying here."
+                else
+                    "Finish your first workout — your lifetime workouts, volume and PRs start tallying here.",
                 muted
             )
         } else {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                LifetimeStat("$sessions", "WORKOUTS")
-                LifetimeStat(formatVolume(volumeLb, useKg), "LIFETIME ${unitLabel(useKg).uppercase()}")
-                LifetimeStat("$prs", "PRs")
-                LifetimeStat("$xp", "XP")
+                LifetimeStat("$sessions", "WORKOUTS", compact = true)
+                LifetimeStat(formatVolume(volumeLb, useKg), "LIFETIME ${unitLabel(useKg).uppercase()}", compact = true)
+                LifetimeStat("$prs", "PRs", compact = true)
+                if (Features.SHOW_GAMIFICATION) LifetimeStat("$xp", "XP", compact = true)
             }
             if (longestStreakDays > 1) {
                 Spacer(Modifier.height(10.dp))
@@ -174,7 +182,7 @@ internal fun SignatureSection(
     outline: Color
 ) {
     val useKg = LocalForgeSettings.current.useKg
-    ProfileBlock("SIGNATURE", muted, accent, outline) {
+    ProfileBlock("SIGNATURE", muted, accent, outline, compact = true) {
         if (topLift == null && mostLoggedDay == null && usualHour == null) {
             // Three "—" cells look like a rendering error to a stranger — explain what they become.
             InlineEmptyHint(
@@ -221,21 +229,26 @@ internal fun CardioTotalsSection(
 @Composable
 private fun SignatureCell(value: String, label: String, onBg: Color, muted: Color, modifier: Modifier = Modifier) {
     Column(modifier.padding(end = 8.dp)) {
-        Text(value, style = MaterialTheme.typography.titleMedium, color = emphasized(onBg), maxLines = 2)
-        Spacer(Modifier.height(4.dp))
+        Text(value, style = MaterialTheme.typography.titleSmall, color = emphasized(onBg), maxLines = 2)
+        Spacer(Modifier.height(3.dp))
         Text(label, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 8.sp)
     }
 }
 
 @Composable
 private fun SignatureDivider(outline: Color) {
-    Box(Modifier.width(1.dp).height(34.dp).padding(end = 8.dp).background(outline.copy(alpha = 0.3f)))
+    Box(Modifier.width(1.dp).height(28.dp).padding(end = 8.dp).background(outline.copy(alpha = 0.3f)))
 }
 
+/** A lifetime tally cell. [compact] drops the value to titleSmall for the denser Ledger row. */
 @Composable
-internal fun LifetimeStat(value: String, label: String) {
+internal fun LifetimeStat(value: String, label: String, compact: Boolean = false) {
     Column(horizontalAlignment = Alignment.Start) {
-        Text(value, style = MaterialTheme.typography.titleMedium, color = emphasized(MaterialTheme.colorScheme.onBackground))
+        Text(
+            value,
+            style = if (compact) MaterialTheme.typography.titleSmall else MaterialTheme.typography.titleMedium,
+            color = emphasized(MaterialTheme.colorScheme.onBackground)
+        )
         Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 8.sp)
     }
 }

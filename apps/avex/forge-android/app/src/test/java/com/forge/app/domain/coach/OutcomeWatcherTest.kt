@@ -3,12 +3,13 @@ package com.forge.app.domain.coach
 import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.data.db.entities.CoachDecision
 import com.forge.app.data.db.entities.LoggedSet
-import com.forge.app.data.db.entities.MoodEntry
 import com.forge.app.data.db.entities.Session
 import com.forge.app.data.db.types.EffortRating
 import com.forge.app.domain.adapt.AdaptationSnapshot
 import com.forge.app.domain.adapt.ExerciseBout
+import com.forge.app.domain.adapt.HealthSnap
 import com.forge.app.domain.adapt.PrefsSnap
+import com.forge.app.domain.adapt.SleepNight
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -58,12 +59,15 @@ class OutcomeWatcherTest {
 
     private fun snapshot(
         history: Map<String, List<ExerciseBout>> = emptyMap(),
-        moods: List<MoodEntry> = emptyList(),
-        cardio: List<CardioEntry> = emptyList()
+        cardio: List<CardioEntry> = emptyList(),
+        health: HealthSnap = HealthSnap()
     ) = AdaptationSnapshot(
         nowMs = now, program = emptyList(), sessions = sessions(),
-        exerciseHistory = history, moods = moods, cardio = cardio, prefs = PrefsSnap()
+        exerciseHistory = history, cardio = cardio, prefs = PrefsSnap(), health = health
     )
+
+    /** Six short nights (6h ≤ the 6.5h ceiling) inside the deload window → the sleep-debt driver (+2). */
+    private fun shortNights() = (0 until 6).map { SleepNight(endedAtMs = now - (1 + it) * day, durationMin = 360) }
 
     @Test
     fun insideWindow_noSkips_noVerdictYet() {
@@ -128,17 +132,12 @@ class OutcomeWatcherTest {
 
     @Test
     fun volumeUp_failsWhenFatigueSpikes() {
-        // Effort inflation (+2) + low moods (+2) + sore cardio (+1) = deload territory.
+        // Effort inflation (+2) + sleep debt (+2) + sore cardio (+1) = deload territory.
         val brutal = (0..8).map { bout(48 + it, effort = EffortRating.BRUTAL) }
-        val moods = listOf(
-            MoodEntry(1, null, "upper-a", "drained", now - 1 * day),
-            MoodEntry(2, null, "upper-a", "off", now - 3 * day),
-            MoodEntry(3, null, "upper-a", "drained", now - 5 * day)
-        )
         val cardio = listOf(CardioEntry(1, date = now - 2 * day, type = "rest", durationMin = 0, restReason = "sore"))
         val verdicts = OutcomeWatcher.evaluate(
             listOf(decision(type = "volume_up", undoData = "0")),
-            snapshot(mapOf("ua1" to brutal), moods = moods, cardio = cardio)
+            snapshot(mapOf("ua1" to brutal), cardio = cardio, health = HealthSnap(sleepNights = shortNights()))
         )
         assertEquals("failed", verdicts.single().outcome)
     }

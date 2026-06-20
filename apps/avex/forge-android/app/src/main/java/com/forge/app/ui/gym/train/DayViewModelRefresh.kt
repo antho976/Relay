@@ -168,7 +168,14 @@ internal suspend fun DayViewModel.computeOrderingSuggestion() {
         .mapNotNull { com.forge.app.program.MuscleGroup.fromCode(it) }.toSet()
     val suggestion = com.forge.app.domain.adapt.OrderingAdvisor.suggestOrder(dayKey, items, priority)
         ?.takeIf { it.id !in adaptationRepo.mutedAdviceIds() }
-    if (suggestion != null) _state.update { it.copy(orderingSuggestion = suggestion) }
+        ?: return
+    // Task 3: if the user curated this day's order, ASK before changing it (surface the prompt).
+    // If it's the default generated order, just apply the better order silently — no prompt.
+    if (programCustomRepo.isOrderCustomized(dayKey)) {
+        _state.update { it.copy(orderingSuggestion = suggestion) }
+    } else {
+        applyOrderedExercises(suggestion)
+    }
 }
 
 internal fun DayViewModel.startSessionService(dayName: String) {

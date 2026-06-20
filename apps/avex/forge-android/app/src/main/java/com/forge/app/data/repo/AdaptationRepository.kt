@@ -182,14 +182,13 @@ class AdaptationRepository @Inject constructor(
 
     /**
      * Today's readiness scale (System 6), or null below the data gates / at net zero.
-     * Deliberately lighter than [snapshot] — three small queries, no whole-history set
+     * Deliberately lighter than [snapshot] — two small queries, no whole-history set
      * fan-out — so the day screen can load it at session open.
      */
     suspend fun readinessScale(): Recommendation.ReadinessScale? {
         val now = clock.nowMs()
         return ReadinessAdvisor.evaluate(
             sessions = sessionDao.allFinished().filter { !it.isUntracked },
-            moods = moodDao.since(now - signalWindowMs),
             cardio = cardioDao.since(now - signalWindowMs),
             nowMs = now,
             zoneId = java.time.ZoneId.systemDefault(),
@@ -230,6 +229,13 @@ class AdaptationRepository @Inject constructor(
 
     /** Just the actionable recommendations (kept for callers that don't need the fatigue read). */
     suspend fun coachRecommendations(): List<Recommendation> = coachFeed().recommendations
+
+    /**
+     * Just the deload call off ONE snapshot — for the weekly worker, which only needs this and
+     * shouldn't pay for the plateau ladder + arbitration [coachFeed] builds for the Overview.
+     * (DeloadAdvisor still runs ProgressionAdvisor once internally for its plateau driver.)
+     */
+    suspend fun deloadSuggestion(): Recommendation.DeloadSuggestion? = DeloadAdvisor.evaluate(snapshot())
 
     /**
      * Everything the Stats page reads from the engine, off ONE snapshot fan-out: the fatigue

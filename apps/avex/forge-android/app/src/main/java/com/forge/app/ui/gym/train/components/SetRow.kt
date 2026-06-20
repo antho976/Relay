@@ -29,7 +29,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.TrendingDown
 import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material3.Icon
@@ -359,19 +358,19 @@ fun SetRow(
     }
 }
 
-/** Red trailing-edge background revealed while swiping a set row left to delete it. */
+/**
+ * Trailing-edge reveal shown ONLY while actively swiping a set row left to delete it. At rest it is
+ * fully transparent, so the row keeps the normal surface color over the app's gradient — no
+ * persistent red wash and no trash-can affordance (the swipe gesture is taught via onboarding
+ * instead). The red appears once the swipe crosses the delete threshold, as commit feedback.
+ */
 @Composable
 private fun SwipeDeleteBackground(active: Boolean) {
-    Row(
+    Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(MaterialTheme.colorScheme.error.copy(alpha = if (active) 0.85f else 0.35f))
-            .padding(horizontal = 20.dp),
-        horizontalArrangement = Arrangement.End,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(Icons.Default.Delete, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
-    }
+            .background(if (active) MaterialTheme.colorScheme.error.copy(alpha = 0.85f) else Color.Transparent)
+    )
 }
 
 /**

@@ -16,7 +16,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import com.forge.app.ui.theme.emphasized
 import androidx.compose.material3.Text
-import com.forge.app.ui.common.clickableLabeled
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
@@ -110,8 +109,14 @@ fun ExerciseCard(
     val outline = MaterialTheme.colorScheme.outline
 
     val cardAlpha = if (state.skipped) 0.45f else 1f
+    // onLongClickLabel keeps the quick-actions menu discoverable for TalkBack now that the visible
+    // "⋯ options" affordance is gone — the gesture is announced even though there's no chrome for it.
     val longPressModifier = if (onLongPress != null)
-        Modifier.combinedClickable(onClick = {}, onLongClick = onLongPress)
+        Modifier.combinedClickable(
+            onClick = {},
+            onLongClickLabel = "Exercise options — skip, swap, or set the rest timer",
+            onLongClick = onLongPress
+        )
     else Modifier
 
     Column(
@@ -142,29 +147,16 @@ fun ExerciseCard(
                 val isBodyweight = state.plan.unit == ExerciseUnit.BODYWEIGHT
                 val isPlates = state.plan.unit == ExerciseUnit.PLATES
 
-                // Exercise counter + a discoverable "options" affordance for the otherwise-hidden
-                // long-press quick-actions menu (skip / swap / rest timer) (Cat 6 discoverability).
+                // Exercise counter. The "⋯ options" button was removed (its actions — swap via the
+                // name, skip/rate via the footer, rest timer via the timer bubble — are all reachable
+                // directly); the quick-actions menu still opens on a long-press of the card.
                 if (totalExercises > 0) {
-                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            "EXERCISE ${"%02d".format(exerciseIndex + 1)} / ${"%02d".format(totalExercises)}",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = muted,
-                            fontSize = 9.sp,
-                            modifier = Modifier.weight(1f)
-                        )
-                        onLongPress?.let { openMenu ->
-                            Text(
-                                "⋯ options",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = muted,
-                                fontSize = 9.sp,
-                                modifier = Modifier
-                                    .clickableLabeled("Exercise options — skip, swap, or set the rest timer") { openMenu() }
-                                    .padding(horizontal = 6.dp, vertical = 4.dp)
-                            )
-                        }
-                    }
+                    Text(
+                        "EXERCISE ${"%02d".format(exerciseIndex + 1)} / ${"%02d".format(totalExercises)}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = muted,
+                        fontSize = 9.sp
+                    )
                     Spacer(Modifier.height(4.dp))
                 }
 
@@ -307,15 +299,20 @@ fun ExerciseCard(
                     HorizontalDivider(color = outline.copy(alpha = 0.12f))
                 }
 
-                // The live rest timer is rendered by DayContent (off state.restTimer directly) so it
-                // updates the instant a set is logged — rendering it here, inside AnimatedContent,
-                // lagged it a full set behind.
+                // Live rest timer — sits directly below the last logged set and above the next-set
+                // input row (so it always reads "rest, then enter the next set"), the instant a set is
+                // logged. Driven off restTimerState (top-level DayUiState.restTimer).
+                if (restTimerState != null) {
+                    Spacer(Modifier.height(10.dp))
+                    InlineRestTimer(timer = restTimerState, onTap = onOpenRestTimerSetter, onSkip = onSkipRest)
+                    Spacer(Modifier.height(4.dp))
+                }
 
                 // Input row for the next set
                 if (!state.skipped) {
                     val targetsMet = state.loggedSets.size >= state.targetSets
-                    // This session's last logged set powers the "↻ repeat" fill chip and the
-                    // long-press-to-repeat on LOG SET (re-logs its weight + reps).
+                    // This session's last logged set powers long-press-to-repeat on LOG SET
+                    // (re-logs its weight + reps).
                     val lastLogged = state.loggedSets.lastOrNull()
                     Spacer(Modifier.height(8.dp))
                     SetInputRow(
@@ -335,17 +332,8 @@ fun ExerciseCard(
                         onAdvance = onAdvance,
                         onSubmit = onLogSet,
                         onAddSet = onAddSet,
-                        repeatSet = lastLogged,
                         onRepeatLastSet = lastLogged?.let { last -> { onLogSameAsLast(last.id) } }
                     )
-                }
-
-                // Live rest timer — sits right under the set log (not buried below the footer
-                // controls). Driven off restTimerState (top-level DayUiState.restTimer), so it
-                // appears the instant a set is logged even though it lives inside the card.
-                if (restTimerState != null) {
-                    Spacer(Modifier.height(10.dp))
-                    InlineRestTimer(timer = restTimerState, onTap = onOpenRestTimerSetter, onSkip = onSkipRest)
                 }
 
                 Spacer(Modifier.height(10.dp))

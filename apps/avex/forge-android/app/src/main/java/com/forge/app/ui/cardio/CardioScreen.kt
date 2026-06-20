@@ -49,7 +49,8 @@ import java.util.Locale
 
 @Composable
 fun CardioScreen(
-    onBack: () -> Unit,
+    // Null when shown as a hub pager page (no redundant back arrow); a real callback as a deep route.
+    onBack: (() -> Unit)? = null,
     viewModel: CardioViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -86,7 +87,7 @@ fun CardioScreen(
 @Composable
 private fun CardioListContent(
     state: CardioUiState,
-    onBack: () -> Unit,
+    onBack: (() -> Unit)?,
     onOpenLog: () -> Unit,
     onRequestDelete: (Long) -> Unit,
     onEdit: (Long) -> Unit
@@ -125,7 +126,7 @@ private fun CardioListContent(
                     }
                 },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    if (onBack != null) IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = muted)
                     }
                 },

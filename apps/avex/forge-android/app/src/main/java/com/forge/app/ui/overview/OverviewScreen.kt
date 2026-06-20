@@ -30,13 +30,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.AccountCircle
-import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -48,6 +44,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -55,7 +52,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
-import com.forge.app.ui.common.FirstTouchTip
+import com.forge.app.Features
 import com.forge.app.ui.common.clickableLabeled
 import com.forge.app.ui.overview.state.MilestoneEvent
 import com.forge.app.ui.overview.state.OnThisDayMemory
@@ -72,16 +69,11 @@ import com.forge.app.program.Program
 import com.forge.app.program.Trophies
 import com.forge.app.ui.common.InlineEmptyHint
 import com.forge.app.ui.gym.stats.components.statsEntrance
-import com.forge.app.ui.overview.components.CardioTile
 import com.forge.app.ui.overview.components.OverviewStat
 import com.forge.app.ui.overview.components.RecentRow
-import com.forge.app.ui.overview.components.StatsTile
 import com.forge.app.ui.overview.components.TrophiesTile
 import com.forge.app.ui.overview.components.WeekDayBox
 import java.time.LocalDate
-import java.time.format.TextStyle
-import java.time.temporal.WeekFields
-import java.util.Locale
 
 /**
  * A dismissible info strip (e.g. the auto-resolved orphan-session notice, E8). The close affordance
@@ -161,7 +153,6 @@ fun OverviewScreen(
     onViewProgram: () -> Unit,
     onGoToCardio: () -> Unit,
     onGoToTrophies: () -> Unit,
-    onGoToStats: () -> Unit = {},
     onGoToPrs: () -> Unit = {},
     onOpenNotes: () -> Unit = {},
     onGoToNutrition: () -> Unit = {},
@@ -179,31 +170,9 @@ fun OverviewScreen(
     val summaryLines by viewModel.sessionExerciseLines.collectAsStateWithLifecycle()
     var showDayEdit by remember { mutableStateOf(false) }
     var showHistory by remember { mutableStateOf(false) }
-    var showSampleDataConfirm by remember { mutableStateOf(false) }
-    var showHelp by remember { mutableStateOf(false) }
     // A milestone "fires and vanishes" otherwise (it's marked shown immediately) — capture it into a
     // transient banner so the user actually sees it (#Overview pendingMilestone).
     var milestoneToast by remember { mutableStateOf<MilestoneEvent?>(null) }
-
-    if (showSampleDataConfirm) {
-        AlertDialog(
-            onDismissRequest = { showSampleDataConfirm = false },
-            title = { Text("Load sample data?") },
-            text = {
-                Text(
-                    "Fills Forge with 8 weeks of realistic demo training so you can explore Stats, " +
-                        "your rank, and the coach before logging real workouts. You can wipe it anytime " +
-                        "from Settings → Reset → \"Reset session data\"."
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = { viewModel.loadSampleData(); showSampleDataConfirm = false }) { Text("Load") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showSampleDataConfirm = false }) { Text("Cancel") }
-            }
-        )
-    }
 
     LaunchedEffect(state.pendingMilestone) {
         state.pendingMilestone?.let { event ->
@@ -216,23 +185,21 @@ fun OverviewScreen(
         if (milestoneToast != null) { kotlinx.coroutines.delay(6000); milestoneToast = null }
     }
 
-    // Content rises + fades in on open — a premium reveal instead of snapping in.
-    val entry = remember { Animatable(0f) }
-    LaunchedEffect(Unit) { entry.animateTo(1f, animationSpec = tween(450)) }
+    // Rise + fade entrance, but ONLY on the first show after a cold launch — not every time you
+    // swipe back to Home (Home is a pager page that gets disposed/recomposed as you swipe away and
+    // back). The "played" flag is rememberSaveable so it survives the page leaving the viewport and
+    // returning; after the first play, Home settles in like any other swipable page.
+    var entrancePlayed by rememberSaveable { mutableStateOf(false) }
+    val entry = remember { Animatable(if (entrancePlayed) 1f else 0f) }
+    LaunchedEffect(Unit) {
+        if (!entrancePlayed) {
+            entry.animateTo(1f, animationSpec = tween(450))
+            entrancePlayed = true
+        }
+    }
 
     val today = LocalDate.now()
     val todayDow = today.dayOfWeek.value - 1
-    val weekNumber = today.get(WeekFields.ISO.weekOfWeekBasedYear())
-    val dayName = today.dayOfWeek.getDisplayName(TextStyle.SHORT, Locale.getDefault()).uppercase()
-    val weekStart = today.minusDays((today.dayOfWeek.value - 1).toLong())
-    val weekEnd = weekStart.plusDays(6)
-    val weekRangeText = buildString {
-        append(weekStart.month.getDisplayName(TextStyle.SHORT, Locale.getDefault()))
-        append(" ${weekStart.dayOfMonth}")
-        append(" – ")
-        append(weekEnd.month.getDisplayName(TextStyle.SHORT, Locale.getDefault()))
-        append(" ${weekEnd.dayOfMonth}")
-    }
 
     val nextDay = Program.days.firstOrNull { it.key == state.nextUpDayKey }
 
@@ -253,22 +220,6 @@ fun OverviewScreen(
         HistorySheet(
             onDismiss = { showHistory = false },
             onOpenSession = { id -> showHistory = false; onOpenSession(id) }
-        )
-    }
-
-    if (showHelp) {
-        AlertDialog(
-            onDismissRequest = { showHelp = false },
-            title = { Text("Getting around") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("• This screen shows your next workout, the week so far, recent sessions, and the coach.")
-                    Text("• Tap a day to start it; long-press a day card for options.")
-                    Text("• Your stats, PRs and rank live in the Gym → Stats tabs and your profile (top-right).")
-                    Text("• Everything's offline, on this phone. Settings (the gear) holds backup, units, the coach, and a full gestures guide.")
-                }
-            },
-            confirmButton = { TextButton(onClick = { showHelp = false }) { Text("Got it") } }
         )
     }
 
@@ -317,17 +268,9 @@ fun OverviewScreen(
                         fontStyle = FontStyle.Italic, color = onBg)
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(horizontalAlignment = Alignment.End) {
-                        Text("$dayName · WK $weekNumber", style = MaterialTheme.typography.labelSmall,
-                            fontSize = 13.sp, color = muted)
-                        Text(weekRangeText, style = MaterialTheme.typography.labelSmall,
-                            fontSize = 9.sp, color = muted.copy(alpha = 0.8f))
-                    }
-                    Spacer(Modifier.width(2.dp))
-                    // ≥44dp touch targets (a11y) — the glyphs stay small, the tappable area doesn't.
-                    TopBarIconButton(Icons.Default.Info, "Getting around Forge", muted.copy(alpha = 0.7f)) { showHelp = true }
+                    // ≥44dp touch target (a11y) — the glyph stays small, the tappable area doesn't.
+                    // Cardio, Stats and Profile now live in the bottom bar; Settings stays here.
                     TopBarIconButton(Icons.Default.Settings, "Settings", muted.copy(alpha = 0.7f)) { onGoToSettings() }
-                    TopBarIconButton(Icons.Default.AccountCircle, "You", muted.copy(alpha = 0.7f)) { onOpenProfile() }
                 }
             }
 
@@ -347,57 +290,6 @@ fun OverviewScreen(
                     Text("✦", color = accent, style = MaterialTheme.typography.titleSmall)
                     Text(ms.message, style = MaterialTheme.typography.bodyMedium, color = onBg, modifier = Modifier.weight(1f))
                 }
-            }
-
-            // First-touch (D9): a brand-new user shouldn't open to a wall of zeros — lead with a welcome.
-            // Gated on the persistent flag too, so it never re-appears for a returning user (e.g. after a wipe).
-            if (state.totalFinishedSessions == 0 && !LocalForgeSettings.current.firstWorkoutDone) {
-                Spacer(Modifier.height(16.dp))
-                FirstTouchTip(
-                    "Welcome to Forge.",
-                    "Your first workout is below — tap Start session to log it. Your stats, rank, and the coach all fill in as you train."
-                )
-                // Demo-data opt-in (Cat 10): one tap to populate the app so a new user can see what
-                // every screen looks like full, instead of a wall of zeros. Only here at zero sessions.
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    "Just exploring? Load 8 weeks of sample data →",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = accent,
-                    modifier = Modifier
-                        .clickableLabeled("Load 8 weeks of sample data to explore the app") { showSampleDataConfirm = true }
-                        .padding(start = 4.dp, top = 2.dp, bottom = 2.dp)
-                )
-            }
-
-            // Program preview (Cat 7): before the first session, show the whole week the generator built
-            // — a new user sees the full plan, not just today. Drops away once any session is logged.
-            if (state.totalFinishedSessions == 0 && Program.days.isNotEmpty()) {
-                Spacer(Modifier.height(20.dp))
-                Text("YOUR WEEK · ${Program.days.size} DAYS", style = MaterialTheme.typography.labelSmall,
-                    color = emphasized(muted), fontSize = 9.sp, letterSpacing = 1.sp)
-                Spacer(Modifier.height(8.dp))
-                Program.days.forEach { day ->
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(day.defaultName, style = MaterialTheme.typography.bodyMedium, color = onBg)
-                        Text("${day.exercises.size} exercises", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp)
-                    }
-                    HorizontalDivider(color = outline.copy(alpha = 0.15f))
-                }
-            }
-
-            // First-week guidance (Cat 7): started but brand-new — set expectations for what fills in as
-            // they keep logging. Sits between the 0-session welcome and being established.
-            if (state.totalFinishedSessions in 1..4) {
-                Spacer(Modifier.height(16.dp))
-                FirstTouchTip(
-                    "Your first week.",
-                    "Keep logging — your Stats, PRs and rank fill in fast, and the coach starts making weekly calls once it's seen enough sessions. Tap ⓘ up top for a quick tour anytime."
-                )
             }
 
             // ── Coach: a new Week Brief is ready (dismissible; lives in Settings too) ──
@@ -739,54 +631,20 @@ fun OverviewScreen(
             HorizontalDivider(color = outline.copy(alpha = 0.3f))
             Spacer(Modifier.height(12.dp))
 
-            // ── Quick links: PRs + Notes search ─────────────────────────────
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(
-                    "Personal records →",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = muted,
-                    modifier = Modifier.clickableLabeled("View personal records") { onGoToPrs() }.padding(vertical = 4.dp)
-                )
-                Text(
-                    "Search notes →",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = muted,
-                    modifier = Modifier.clickableLabeled("Search workout notes") { onOpenNotes() }.padding(vertical = 4.dp)
-                )
-            }
-            Spacer(Modifier.height(12.dp))
-
-            // ── Cardio · Stats · Trophies ────────────────────────────────────
-            // "Today I moved?" — a gentle prompt to log cardio on a day that has none yet.
-            if (todayDow !in state.cardioWeekDays) {
-                Text(
-                    "Moved today? Log a walk, run or ride →",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = accent,
-                    modifier = Modifier
-                        .clickableLabeled("Log today's cardio") { onGoToCardio() }
-                        .padding(vertical = 4.dp)
-                )
-                Spacer(Modifier.height(6.dp))
-            }
-            CardioTile(cardioWeekDays = state.cardioWeekDays, totalMin = state.cardioMinutesThisWeek,
-                totalKm = state.cardioDistanceKm, onClick = onGoToCardio,
-                onBg = onBg, muted = muted, outline = outline)
-            Spacer(Modifier.height(8.dp))
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                StatsTile(totalSessions = state.totalFinishedSessions, streakDays = state.streakDays,
-                    bestSessionLabel = state.bestSessionThisWeekLb?.takeIf { it > 0 }
-                        ?.let { com.forge.app.domain.units.formatVolumeCompact(it, useKg) },
-                    onClick = onGoToStats, onBg = onBg, muted = muted, outline = outline, modifier = Modifier.weight(1f))
+            // ── Trophies (gamification only) ─────────────────────────────────
+            // "Personal records", "Search notes", and the cardio "Moved today?" nudge have been
+            // pulled from the home page (UI only). Their handlers stay wired — onGoToPrs /
+            // onOpenNotes / onGoToCardio and all backing state are untouched — so these surfaces
+            // can be re-added without re-plumbing.
+            // Trophies (gamification) are parked behind Features.SHOW_GAMIFICATION.
+            if (Features.SHOW_GAMIFICATION) {
                 TrophiesTile(unlocked = state.trophiesUnlocked, total = Trophies.all.size,
-                    onClick = onGoToTrophies, onBg = onBg, muted = muted, outline = outline, modifier = Modifier.weight(1f))
+                    onClick = onGoToTrophies, onBg = onBg, muted = muted, outline = outline,
+                    modifier = Modifier.fillMaxWidth())
             }
 
             // "Up next" trophy — the locked trophy closest to unlocking (a near-miss retention hook, #136).
-            state.topNearMiss?.let { nudge ->
+            if (Features.SHOW_GAMIFICATION) state.topNearMiss?.let { nudge ->
                 Spacer(Modifier.height(6.dp))
                 Text(
                     "▲ NEXT TROPHY · $nudge",

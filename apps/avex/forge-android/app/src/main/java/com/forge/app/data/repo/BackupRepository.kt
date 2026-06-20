@@ -275,6 +275,24 @@ class BackupRepository @Inject constructor(
         return file
     }
 
+    /** Every bodyweight weigh-in as CSV (Cat 11). One row per entry, newest first. */
+    suspend fun exportBodyweightCsv(): File {
+        val entries = db.bodyweightDao().all()
+        val sb = StringBuilder()
+        sb.appendLine("date,weightLb")
+        entries.forEach { e -> sb.appendLine("${e.dateKey},${e.weightLb}") }
+        val file = File(context.filesDir, "forge_bodyweight.csv")
+        file.writeText(sb.toString())
+        return file
+    }
+
+    /** Total on-disk database size (main file + WAL + SHM), in bytes — the Data dialog readout. */
+    fun dbSizeBytes(): Long {
+        val base = context.getDatabasePath(DB_NAME)
+        return listOf(base.path, "${base.path}-wal", "${base.path}-shm")
+            .sumOf { p -> File(p).takeIf { it.exists() }?.length() ?: 0L }
+    }
+
     /**
      * Auto-backup: runs silently, overwrites the weekly auto-backup slot (#86). Writes a real,
      * RESTORABLE ZIP (DB + prefs + progress photos) — the same format as [backupToUri] — instead of

@@ -13,9 +13,26 @@ class TrainingReminderTest {
     }
 
     @Test
-    fun restDay_staysQuiet() {
+    fun noScheduleOrProgram_staysQuiet() {
+        // dayName null and NOT a scheduled rest day (no program / sequence mode) → stay silent.
         assertNull(TrainingReminder.build(trainedToday = false, dayName = null, streakDays = 5))
         assertNull(TrainingReminder.build(trainedToday = false, dayName = "", streakDays = 5))
+    }
+
+    @Test
+    fun scheduledRestDay_offersAGentleRecoveryNote() {
+        val n = TrainingReminder.build(
+            trainedToday = false, dayName = null, streakDays = 5, isScheduledRestDay = true
+        )
+        assertEquals("Rest day", n!!.title)
+        assertTrue(n.body.contains("recovery", ignoreCase = true))
+    }
+
+    @Test
+    fun restDayFlagIgnoredOnceTrainedToday() {
+        assertNull(TrainingReminder.build(
+            trainedToday = true, dayName = null, streakDays = 5, isScheduledRestDay = true
+        ))
     }
 
     @Test

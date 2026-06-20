@@ -5,9 +5,12 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -15,17 +18,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import kotlin.math.abs
-import kotlinx.coroutines.launch
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import java.time.LocalDate
@@ -87,26 +86,24 @@ fun StatsContent(
     val weekPrev = state.weekComparison?.previous
     val weekSessions = weekCurrent?.sessions ?: 0
 
-    // A pager (not a tap-only switch) so tabs can be swiped, with free physics-based page
-    // transitions. The tab bar's sliding pill tracks the settled page; tapping a tab scrolls
-    // the pager to it.
+    // Tap-only sub-tabs: the hub-level HorizontalPager owns left/right swipe now, so a nested pager
+    // here would fight it (see HubScreen). Content crossfades between tabs instead of sliding.
     val tabs = StatsTab.entries
-    val pagerState = rememberPagerState(pageCount = { tabs.size })
-    val scope = rememberCoroutineScope()
-    val selectedTab = tabs[pagerState.currentPage]
+    var selectedIndex by rememberSaveable { mutableStateOf(0) }
+    val selectedTab = tabs[selectedIndex]
 
-    // Deep-link to the last sub-tab the user viewed (S4): scroll once the stored value loads, THEN
-    // start persisting page changes — ordered so the initial page-0 emission can't clobber the save.
+    // Deep-link to the last sub-tab the user viewed (S4): restore once the stored value loads, THEN
+    // start persisting changes — ordered so the initial tab-0 emission can't clobber the save.
     val lastTab by viewModel.lastStatsTab.collectAsStateWithLifecycle()
     var restoredTab by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(lastTab) {
         if (!restoredTab && lastTab >= 0) {
-            if (lastTab in tabs.indices) pagerState.scrollToPage(lastTab)
+            if (lastTab in tabs.indices) selectedIndex = lastTab
             restoredTab = true
         }
     }
     LaunchedEffect(restoredTab) {
-        if (restoredTab) snapshotFlow { pagerState.currentPage }.collect { viewModel.saveStatsTab(it) }
+        if (restoredTab) snapshotFlow { selectedIndex }.collect { viewModel.saveStatsTab(it) }
     }
 
     Column(modifier = modifier.fillMaxSize()) {
@@ -120,22 +117,19 @@ fun StatsContent(
         }
         StatsTabBar(
             selected = selectedTab,
-            onSelect = { tab -> scope.launch { pagerState.animateScrollToPage(tab.ordinal) } }
+            onSelect = { tab -> selectedIndex = tab.ordinal }
         )
-        HorizontalPager(state = pagerState, modifier = Modifier.weight(1f)) { page ->
+        AnimatedContent(
+            targetState = selectedTab,
+            modifier = Modifier.weight(1f),
+            transitionSpec = { fadeIn(tween(200)) togetherWith fadeOut(tween(200)) },
+            label = "stats-subtab"
+        ) { tab ->
             LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    // Mild fade tied to page offset so settling between tabs reads as a
-                    // crossfade while the pager keeps its physics. Pure offset math — no
-                    // running animation, so reduced motion needs no special case.
-                    .graphicsLayer {
-                        val offset = (pagerState.currentPage - page) + pagerState.currentPageOffsetFraction
-                        alpha = 1f - abs(offset).coerceIn(0f, 1f) * 0.35f
-                    },
+                modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(bottom = 56.dp)
             ) {
-                when (tabs[page]) {
+                when (tab) {
                     StatsTab.SNAPSHOT -> snapshotTab(state, today, weekNum, weekLabel, weekCurrent, weekPrev, weekSessions, c, onOpenNotes)
                     StatsTab.STRENGTH -> strengthTab(
                         state = state,

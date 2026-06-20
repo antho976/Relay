@@ -94,10 +94,8 @@ fun SetInputRow(
     onAdvance: () -> Unit = {},
     onSubmit: (weightText: String, reps: Int) -> Unit,
     onAddSet: (() -> Unit)? = null,
-    /** This session's most recent logged set — powers the "↻ repeat" fill chip and the
-     *  long-press-to-repeat on LOG SET. Null until at least one set is logged this session. */
-    repeatSet: LoggedSet? = null,
-    /** Logs a duplicate of [repeatSet] immediately (long-press on LOG SET). Null disables it. */
+    /** Logs a duplicate of this session's last set immediately (long-press on LOG SET). Null until
+     *  at least one set is logged this session; null disables the gesture. */
     onRepeatLastSet: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
@@ -284,7 +282,7 @@ fun SetInputRow(
                     }
                 }
 
-                // ── Quick-adjust row — +/- steppers + tap-to-repeat-last-set chip ────
+                // ── Quick-adjust row — +/- steppers (repeat-last-set is hold-LOG-SET) ────
                 Spacer(Modifier.height(10.dp))
                 FlowRow(
                     modifier = Modifier.fillMaxWidth(),
@@ -300,21 +298,6 @@ fun SetInputRow(
                         )
                     }
                     StepperPill(label = "REPS", onMinus = { stepReps(-1) }, onPlus = { stepReps(1) })
-                    // Fill (don't log) both fields from this session's last set — for straight sets.
-                    repeatSet?.let { rs ->
-                        val wLabel = if (isBodyweight) "BW"
-                            else rs.weightLb?.let { lb ->
-                                if (isPlates) "${formatPlateCount(lb / plateLb)} pl" else formatWeight(lb, useKg)
-                            } ?: rs.weightText
-                        RepeatChip("↻ $wLabel × ${rs.reps}") {
-                            if (!isBodyweight) {
-                                weight = rs.weightLb?.let { lb ->
-                                    if (isPlates) formatPlateCount(lb / plateLb) else weightInputValue(lb, useKg)
-                                } ?: rs.weightText
-                            }
-                            reps = rs.reps.toString()
-                        }
-                    }
                 }
 
                 Spacer(Modifier.height(12.dp))
@@ -484,23 +467,6 @@ private fun StepperPill(
                 .clickableLabeled("Increase $label") { onPlus() },
             contentAlignment = Alignment.Center
         ) { Text("+", style = MaterialTheme.typography.titleMedium, color = onBg) }
-    }
-}
-
-/** Tap to fill (not log) the input fields with this session's last set — fast straight sets. */
-@Composable
-private fun RepeatChip(label: String, onClick: () -> Unit) {
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val outline = MaterialTheme.colorScheme.outline
-    Box(
-        modifier = Modifier
-            .sizeIn(minHeight = 40.dp)
-            .border(1.dp, outline.copy(alpha = 0.5f), RoundedCornerShape(50))
-            .clickableLabeled("Fill last set: $label") { onClick() }
-            .padding(horizontal = 14.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(label, style = MaterialTheme.typography.labelMedium, color = muted)
     }
 }
 

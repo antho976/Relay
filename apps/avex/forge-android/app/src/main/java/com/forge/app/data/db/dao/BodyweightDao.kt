@@ -19,6 +19,10 @@ interface BodyweightDao {
     @Query("SELECT * FROM bodyweight_entry ORDER BY date_key DESC, recorded_at DESC LIMIT 1")
     suspend fun latest(): BodyweightEntry?
 
+    /** Every weigh-in, newest first — for the bodyweight CSV export. */
+    @Query("SELECT * FROM bodyweight_entry ORDER BY date_key DESC, recorded_at DESC")
+    suspend fun all(): List<BodyweightEntry>
+
     @Query("DELETE FROM bodyweight_entry WHERE id = :id")
     suspend fun delete(id: Long)
 

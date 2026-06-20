@@ -16,7 +16,6 @@ import com.forge.app.domain.rank.XpEngine
 import com.forge.app.domain.rank.XpSnapshot
 import com.forge.app.domain.trophy.TrophyEvaluator
 import com.forge.app.domain.trophy.TrophyStatsSnapshot
-import com.forge.app.domain.units.formatVolumeCompact
 import com.forge.app.program.Program
 import com.forge.app.program.Trophy
 import com.forge.app.program.TrophyIcon
@@ -30,10 +29,8 @@ import kotlinx.coroutines.withContext
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
-import java.time.YearMonth
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
-import java.time.format.TextStyle
 import java.time.temporal.IsoFields
 import java.util.Locale
 import javax.inject.Inject
@@ -60,9 +57,6 @@ data class TrophyCell(
     val unlockedAt: Long? = null
 )
 
-/** One "On the record" row (a month- or year-in-review summary). */
-data class RecapRowData(val title: String, val subtitle: String, val isYear: Boolean)
-
 /** Everything the profile screen needs, assembled off the main thread in one fan-out. */
 data class ProfileData(
     val rank: RankInfo,
@@ -82,7 +76,6 @@ data class ProfileData(
     val trophyGrid: List<TrophyCell>,
     val closestTrophy: String?,
     val memory: OnThisDayMemory?,
-    val recaps: List<RecapRowData>,
     /** All-time cardio: non-rest sessions, active minutes, distance (km). */
     val cardioSessions: Int = 0,
     val cardioMinutes: Int = 0,
@@ -91,8 +84,8 @@ data class ProfileData(
 
 /**
  * Assembles the profile "You" hub: lifetime XP + rank (via [XpEngine] / [RankLadder]), the
- * offline standing estimate ([StandingEngine]), the signature lifts, the trophy-case grid and the
- * month/year recaps — all derived from existing finished-session data, so there is no new schema.
+ * offline standing estimate ([StandingEngine]), the signature lifts and the trophy-case grid —
+ * all derived from existing finished-session data, so there is no new schema.
  * Pure engines stay in `domain/rank`; this layer only does I/O + assembly (the AdaptationRepository
  * pattern). Loaded once per profile open.
  */
@@ -219,7 +212,6 @@ class ProfileRepository @Inject constructor(
             trophyGrid = trophyGrid,
             closestTrophy = closestTrophy,
             memory = memoryD.await(),
-            recaps = buildRecaps(sessions, zone, nowMs, useKg),
             cardioSessions = cardioSessionsD.await(),
             cardioMinutes = cardioMinutesD.await(),
             cardioDistanceKm = cardioDistanceD.await()
@@ -228,38 +220,6 @@ class ProfileRepository @Inject constructor(
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────────
-
-    private fun buildRecaps(sessions: List<Session>, zone: ZoneId, nowMs: Long, useKg: Boolean): List<RecapRowData> {
-        if (sessions.isEmpty()) return emptyList()
-        val now = Instant.ofEpochMilli(nowMs).atZone(zone)
-        val thisMonth = YearMonth.from(now)
-        return buildList {
-            var m = thisMonth.minusMonths(1)
-            var added = 0
-            while (added < 2 && m.isAfter(thisMonth.minusMonths(7))) {
-                val inMonth = sessions.filter { YearMonth.from(Instant.ofEpochMilli(it.startedAt).atZone(zone)) == m }
-                if (inMonth.isNotEmpty()) {
-                    add(
-                        RecapRowData(
-                            title = "${m.month.getDisplayName(TextStyle.FULL, Locale.getDefault())} in review",
-                            subtitle = recapLine(inMonth, useKg),
-                            isYear = false
-                        )
-                    )
-                    added++
-                }
-                m = m.minusMonths(1)
-            }
-            val inYear = sessions.filter { Instant.ofEpochMilli(it.startedAt).atZone(zone).year == now.year }
-            if (inYear.isNotEmpty()) add(RecapRowData("${now.year}, so far", recapLine(inYear, useKg), isYear = true))
-        }
-    }
-
-    private fun recapLine(s: List<Session>, useKg: Boolean): String {
-        val vol = s.sumOf { it.totalVolumeLb ?: 0.0 }
-        val prs = s.sumOf { it.prCount }
-        return "${s.size} sessions · ${formatVolumeCompact(vol, useKg)} · $prs PRs"
-    }
 
     /**
      * The profile's curated trophy-case highlight (NOT the full catalog — that's one tap away):

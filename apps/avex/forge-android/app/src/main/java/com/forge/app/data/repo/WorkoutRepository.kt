@@ -171,6 +171,9 @@ class WorkoutRepository @Inject constructor(
         health.writeActiveCalories(kcal, session.startedAt, finishedAtMs)
     }
 
+    /** Lifetime count of PR sets across all logged exercises — feeds the PR-milestone notification. */
+    suspend fun lifetimePrCount(): Int = loggedExerciseDao.prCount()
+
     // ─── Session segments (per-sitting active timing) ──────────────────────────
 
     /** The session row, for callers that need its real start time / fields. */

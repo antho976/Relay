@@ -38,10 +38,13 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.forge.app.Features
 import com.forge.app.domain.mood.Mood
 import com.forge.app.domain.units.formatVolume
 import com.forge.app.domain.units.toDisplayWeight
+import com.forge.app.domain.notify.PrMilestone
 import com.forge.app.domain.units.unitLabel
+import com.forge.app.service.ForgeNotifications
 import com.forge.app.ui.common.ConfettiOverlay
 import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.theme.ForgeLastGreen
@@ -65,17 +68,17 @@ fun SessionSummarySheet(
         skipPartiallyExpanded = true,
         confirmValueChange = { it != SheetValue.Hidden }
     )
-    // Mood/tags are one-tap re-selections, so plain remember (reset on rotation) is fine; the journal
-    // is free text the user can't trivially recreate, so it's rememberSaveable to survive a rotation.
-    var selectedMood by remember { mutableStateOf<Mood?>(null) }
+    // Tags are one-tap re-selections, so plain remember (reset on rotation) is fine.
     var selectedTags by remember { mutableStateOf<Set<String>>(emptySet()) }
-    var journal by rememberSaveable { mutableStateOf(summary.initialJournal) }
+    // Trophies are parked behind Features.SHOW_GAMIFICATION — the unlock logic still runs (trophies
+    // persist), but the summary neither lists them nor fires their celebration while it's off.
+    val showTrophies = Features.SHOW_GAMIFICATION && summary.unlockedTrophies.isNotEmpty()
     // Finishing is an event: confetti for a trophy, a best-ever session, OR a clean sweep of the
     // duel (every set beat last time). rememberSaveable so the burst doesn't replay on every rotation
     // (and stays consistent with the trophy haptic, which also fires only once).
     val cleanSweep = summary.ghostComparable > 0 && summary.ghostBeats == summary.ghostComparable
     var showTrophyConfetti by rememberSaveable {
-        mutableStateOf(summary.unlockedTrophies.isNotEmpty() || summary.isBestSession || cleanSweep)
+        mutableStateOf(showTrophies || summary.isBestSession || cleanSweep)
     }
 
     val onBg = MaterialTheme.colorScheme.onBackground
@@ -93,7 +96,7 @@ fun SessionSummarySheet(
     val haptic = LocalHapticFeedback.current
     var trophyHapticFired by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(Unit) {
-        if (!trophyHapticFired && summary.unlockedTrophies.isNotEmpty()) {
+        if (!trophyHapticFired && showTrophies) {
             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
             trophyHapticFired = true
         }
@@ -105,12 +108,24 @@ fun SessionSummarySheet(
     val hapticStrength = LocalForgeSettings.current.hapticStrength
     var cleanSweepHapticFired by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(Unit) {
-        if (!cleanSweepHapticFired && cleanSweep && summary.unlockedTrophies.isEmpty() && hapticStrength != "off") {
+        if (!cleanSweepHapticFired && cleanSweep && !showTrophies && hapticStrength != "off") {
             repeat(3) {
                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                 delay(90)
             }
             cleanSweepHapticFired = true
+        }
+    }
+    // PR-milestone push (#13): when this session pushed the lifetime PR count across a round number,
+    // drop a celebratory notification in the shade — a record the user can come back to or share. Own
+    // channel (independently mutable); fired once, only on a genuine milestone (rare, so never noisy).
+    var prMilestoneFired by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        if (!prMilestoneFired) {
+            PrMilestone.check(summary.lifetimePrCount, summary.prCount)?.let { nudge ->
+                ForgeNotifications.postPrMilestone(context, nudge.title, nudge.body)
+            }
+            prMilestoneFired = true
         }
     }
 
@@ -263,7 +278,7 @@ fun SessionSummarySheet(
                     summary.highlights.forEach { h -> HighlightRow(h, onBg = onBg, muted = muted) }
                 }
 
-                if (summary.unlockedTrophies.isNotEmpty()) {
+                if (showTrophies) {
                     HorizontalDivider(color = outline.copy(alpha = 0.2f))
                     Text("TROPHIES UNLOCKED", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
                     // Each trophy row settles in on its own beat (staggered) rather than snapping in mid-confetti.
@@ -272,17 +287,9 @@ fun SessionSummarySheet(
                     }
                 }
 
-                HorizontalDivider(color = outline.copy(alpha = 0.2f))
-                MoodPrompt(
-                    selected = selectedMood,
-                    onSelect = { mood -> selectedMood = if (selectedMood == mood) null else mood },
-                    onBg = onBg,
-                    muted = muted,
-                    outline = outline
-                )
-
-                HorizontalDivider(color = outline.copy(alpha = 0.2f))
-                JournalField(value = journal, onValueChange = { journal = it }, muted = muted)
+                // Per-day "how did this feel?" and the session journal are intentionally not here:
+                // effort is rated per exercise, and the journal is edited from the training screen's
+                // note icon (its value flows straight through on COMPLETE).
 
                 HorizontalDivider(color = outline.copy(alpha = 0.2f))
                 TagPicker(
@@ -359,7 +366,7 @@ fun SessionSummarySheet(
                         .padding(top = 4.dp, bottom = 16.dp)
                         .clip(RoundedCornerShape(4.dp))
                         .border(0.5.dp, outline.copy(alpha = 0.4f), RoundedCornerShape(4.dp))
-                        .bounceClick { onDismiss(selectedMood, selectedTags.toList(), journal) }
+                        .bounceClick { onDismiss(null, selectedTags.toList(), summary.initialJournal) }
                         .padding(vertical = 16.dp),
                     contentAlignment = Alignment.Center
                 ) {

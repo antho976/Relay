@@ -54,4 +54,23 @@ internal object ForgeNotifications {
         .setPriority(NotificationCompat.PRIORITY_DEFAULT)
         .setAutoCancel(true)
         .build()
+
+    /**
+     * Post the PR-milestone celebration — the one engagement notification fired from the UI (when a
+     * finished session crosses a lifetime-PR milestone). The channel + id live here alongside the
+     * worker notifications so the id space can't drift or collide, and posting is wrapped so a missing
+     * POST_NOTIFICATIONS permission (Android silently drops) or a manager hiccup can't crash the
+     * caller's composition.
+     */
+    fun postPrMilestone(context: Context, title: String, body: String) {
+        runCatching {
+            ensureChannel(context, PR_MILESTONE_CHANNEL_ID, "PR milestones", "When you reach a personal-record milestone")
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.notify(PR_MILESTONE_NOTIF_ID, build(context, PR_MILESTONE_CHANNEL_ID, title, body))
+        }
+    }
+
+    // Notification ids live in the 200x band (recap 2001 · coach 2003 · re-engage 2004 · deload 2005).
+    private const val PR_MILESTONE_CHANNEL_ID = "forge_pr_milestone"
+    private const val PR_MILESTONE_NOTIF_ID = 2006
 }

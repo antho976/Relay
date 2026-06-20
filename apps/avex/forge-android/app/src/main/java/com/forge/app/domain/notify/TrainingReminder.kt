@@ -6,7 +6,8 @@ package com.forge.app.domain.notify
  * to say, so the wording + the "don't nag" rules stay unit-testable with no Android types.
  *
  * One notification carries both jobs: a plain "train today" nudge, upgraded to a streak-protection
- * message when a streak is on the line — so the user never gets two reminders in a day.
+ * message when a streak is on the line — so the user never gets two reminders in a day. On a
+ * scheduled rest day it offers a gentle "recover well" note instead of going silent.
  */
 object TrainingReminder {
 
@@ -17,13 +18,29 @@ object TrainingReminder {
 
     /**
      * @param trainedToday already logged a session today — never nudge.
-     * @param dayName the workout scheduled for today, or null on a rest day / no schedule — never nudge.
+     * @param dayName the workout scheduled for today, or null on a rest day / no schedule.
      * @param streakDays current streak; ≥ [STREAK_AT_RISK_MIN] upgrades the copy to protect it.
+     * @param isScheduledRestDay today is an explicit rest day in the weekly schedule — when there's
+     *   no [dayName], turn the silence into a gentle recovery note rather than nothing.
      * @return the notification to post, or null to stay quiet.
      */
-    fun build(trainedToday: Boolean, dayName: String?, streakDays: Int): Nudge? {
+    fun build(
+        trainedToday: Boolean,
+        dayName: String?,
+        streakDays: Int,
+        isScheduledRestDay: Boolean = false
+    ): Nudge? {
         if (trainedToday) return null
-        if (dayName.isNullOrBlank()) return null
+        if (dayName.isNullOrBlank()) {
+            // A planned rest day is a feature, not an absence — affirm it instead of nagging or
+            // staying silent. Anything else (no program / no schedule) stays quiet, as before.
+            return if (isScheduledRestDay)
+                Nudge(
+                    title = "Rest day",
+                    body = "No workout scheduled today — recovery is where the gains land. Sleep, eat well, come back fresh."
+                )
+            else null
+        }
         return if (streakDays >= STREAK_AT_RISK_MIN)
             Nudge(
                 title = "Don't break your streak",

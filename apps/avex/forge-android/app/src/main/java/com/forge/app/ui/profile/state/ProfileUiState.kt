@@ -1,7 +1,7 @@
 package com.forge.app.ui.profile.state
 
+import com.forge.app.data.repo.GoalRepository
 import com.forge.app.data.repo.ProgressPhoto
-import com.forge.app.data.repo.RecapRowData
 import com.forge.app.data.repo.SignatureLift
 import com.forge.app.data.repo.TrophyCell
 import com.forge.app.domain.rank.RankInfo
@@ -37,6 +37,9 @@ data class ProfileUiState(
     val mostLoggedDay: String? = null,
     val usualHour: String? = null,
 
+    // Goals (all set goals, achieved-first then closest-first; the Profile previews the top few)
+    val goals: List<GoalRepository.GoalProgress> = emptyList(),
+
     // The mirror test (progress photos)
     val photos: List<ProgressPhoto> = emptyList(),
 
@@ -50,9 +53,8 @@ data class ProfileUiState(
     val trophyGrid: List<TrophyCell> = emptyList(),
     val closestTrophy: String? = null,
 
-    // Memory + recaps
+    // Memory
     val memory: OnThisDayMemory? = null,
-    val recaps: List<RecapRowData> = emptyList(),
 
     // All-time cardio totals
     val cardioSessions: Int = 0,

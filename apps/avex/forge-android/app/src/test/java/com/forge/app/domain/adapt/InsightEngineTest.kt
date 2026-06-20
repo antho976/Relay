@@ -2,7 +2,6 @@ package com.forge.app.domain.adapt
 
 import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.data.db.entities.LoggedSet
-import com.forge.app.data.db.entities.MoodEntry
 import com.forge.app.data.db.entities.Session
 import com.forge.app.data.db.types.EffortRating
 import com.forge.app.program.ExerciseUnit
@@ -57,12 +56,12 @@ class InsightEngineTest {
         slots: List<ProgramSlotSnap> = listOf(slot()),
         history: Map<String, List<ExerciseBout>> = emptyMap(),
         sessions: List<Session> = emptyList(),
-        moods: List<MoodEntry> = emptyList(),
-        cardio: List<CardioEntry> = emptyList()
+        cardio: List<CardioEntry> = emptyList(),
+        health: HealthSnap = HealthSnap()
     ) = AdaptationSnapshot(
         nowMs = now, program = listOf(ProgramDaySnap("upper-a", "Upper A", slots)),
-        sessions = sessions, exerciseHistory = history, moods = moods, cardio = cardio,
-        prefs = PrefsSnap()
+        sessions = sessions, exerciseHistory = history, cardio = cardio,
+        prefs = PrefsSnap(), health = health
     )
 
     private fun keyOf(insights: List<Recommendation.Insight>, key: String) =
@@ -196,33 +195,15 @@ class InsightEngineTest {
         )
         assertNotNull(keyOf(sub, "recovery"))
 
-        // Add low moods (+2 → score 5): the deload call owns it — the insight must yield.
-        val lowMoods = listOf(
-            MoodEntry(1, null, "upper-a", "drained", now - 1 * day),
-            MoodEntry(2, null, "upper-a", "off", now - 3 * day),
-            MoodEntry(3, null, "upper-a", "drained", now - 5 * day)
-        )
+        // Add sleep debt (+2 → score 5): the deload call owns it — the insight must yield.
+        val shortNights = (0 until 6).map { SleepNight(endedAtMs = now - (1 + it) * day, durationMin = 360) }
         val firing = InsightEngine.evaluate(
-            snapshot(history = mapOf("ua1" to brutalBouts), sessions = sessions(), cardio = sore, moods = lowMoods)
+            snapshot(
+                history = mapOf("ua1" to brutalBouts), sessions = sessions(), cardio = sore,
+                health = HealthSnap(sleepNights = shortNights)
+            )
         )
         assertNull(keyOf(firing, "recovery"))
-    }
-
-    // ── Mood × volume link ─────────────────────────────────────────────────────
-
-    @Test
-    fun moodVolumeLink_reportsTheGap() {
-        val sessions = (0 until 10).map { i ->
-            val vol = if (i < 6) 2000.0 else 1000.0
-            Session(i + 1L, "upper-a", (60 + i * 3) * day, (60 + i * 3) * day + hour, totalVolumeLb = vol)
-        }
-        val moods = (0 until 10).map { i ->
-            MoodEntry(i + 1L, sessionId = i + 1L, dayKey = "upper-a",
-                mood = if (i < 6) "good" else "drained", recordedAt = (60 + i * 3) * day)
-        }
-        val insight = keyOf(InsightEngine.evaluate(snapshot(sessions = sessions, moods = moods)), "moodvolume")
-        assertNotNull(insight)
-        assertTrue(insight!!.body.contains("100%"))
     }
 
     // ── Session-estimate calibration ───────────────────────────────────────────

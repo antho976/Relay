@@ -75,8 +75,6 @@ data class AdaptThresholds(
     /** e1RM regression: window best below this fraction of the prior month's best, on ≥ N lifts. */
     val deloadRegressionFraction: Double = 0.95,
     val deloadRegressionLifts: Int = 2,
-    /** Low-mood driver: DRAINED/OFF in ≥ N of the last 5 mood entries. */
-    val deloadLowMoodCount: Int = 3,
     /** Sleep-debt driver (Health Connect): nights needed in-window, and the avg-minutes ceiling
      *  (390 = 6.5 h) at/below which short sleep reads as a recovery drag. */
     val deloadMinSleepNights: Int = 5,
@@ -103,10 +101,8 @@ data class AdaptThresholds(
     val repShiftRegressFraction: Double = 0.97,
 
     // ── Readiness (System 6: daily autoregulation) ─────────────────────────────
-    /** Data gate: below this many sessions / recent moods the scale stays neutral (silent). */
+    /** Data gate: below this many sessions the scale stays neutral (silent). */
     val readinessMinSessions: Int = 3,
-    val readinessMinMoods: Int = 3,
-    val readinessMoodWindowDays: Int = 14,
     /** The scale is bounded to ±this percent — autoregulation nudges, never lurches. */
     val readinessMaxPercent: Int = 5,
     /** Active (non-rest) cardio minutes in the last day past which it reads as a recovery cost. */
@@ -134,9 +130,6 @@ data class AdaptThresholds(
     val insightAdherenceWindow: Int = 5,
     val insightSkipCount: Int = 3,
     val insightSwapCount: Int = 3,
-    /** Mood×volume link: paired sessions needed and the volume gap worth reporting. */
-    val insightMoodPairs: Int = 10,
-    val insightMoodVolumeDiff: Double = 0.20,
     /** Session-estimate calibration: sessions per day type, and the drift (min) worth surfacing. */
     val insightEstimateMinSessions: Int = 4,
     val insightEstimateDriftMinutes: Int = 15,

@@ -61,6 +61,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.forge.app.Features
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.ui.theme.LocalForgeSettings
 import com.forge.app.data.repo.ProgressPhoto
@@ -75,18 +76,18 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * The "You" hub: rank ladder + earned XP, an offline standing estimate, signature lifts, the
- * private mirror-test photos, the trophy case and the month/year recaps. All local — no account,
- * no server. See [ProfileViewModel] / `data/repo/ProfileRepository` / `domain/rank`.
+ * The "You" hub: rank ladder + earned XP, an offline standing estimate, signature lifts, goals,
+ * the private mirror-test photos and the trophy case. All local — no account, no server.
+ * See [ProfileViewModel] / `data/repo/ProfileRepository` / `domain/rank`.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProfileScreen(
-    onBack: () -> Unit,
+    // Null when shown as a hub pager page (no redundant back arrow); a real callback as a deep route.
+    onBack: (() -> Unit)? = null,
     onOpenTrophies: () -> Unit,
-    onOpenRecaps: () -> Unit,
     onOpenGoals: () -> Unit = {},
-    onOpenCoachBrief: () -> Unit = {},
+    onOpenPhotoGallery: () -> Unit = {},
     viewModel: ProfileViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -100,8 +101,9 @@ fun ProfileScreen(
     val haptic = LocalHapticFeedback.current
 
     // One-shot rank-up haptic — fires as soon as the celebration flag goes true, then clears.
+    // Suppressed while the gamification layer is parked (Features.SHOW_GAMIFICATION).
     LaunchedEffect(showRankUpCelebration) {
-        if (showRankUpCelebration) {
+        if (Features.SHOW_GAMIFICATION && showRankUpCelebration) {
             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
         }
     }
@@ -118,7 +120,8 @@ fun ProfileScreen(
 
     Box(Modifier.fillMaxSize()) {
         // Soft rank-tier wash bleeding down from the top bar — ties the screen to the current tier.
-        state.rank?.let { r ->
+        // Parked with the rest of the rank UI behind Features.SHOW_GAMIFICATION.
+        if (Features.SHOW_GAMIFICATION) state.rank?.let { r ->
             Box(
                 Modifier.fillMaxWidth().height(140.dp)
                     .background(Brush.verticalGradient(listOf(r.tier.color().copy(alpha = 0.13f), Color.Transparent)))
@@ -129,10 +132,10 @@ fun ProfileScreen(
                 TopAppBar(
                     title = { Text("Profile.", style = MaterialTheme.typography.headlineMedium) },
                     navigationIcon = {
-                        IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+                        if (onBack != null) IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
                     },
                     actions = {
-                        state.rank?.let { r ->
+                        if (Features.SHOW_GAMIFICATION) state.rank?.let { r ->
                             IconButton(onClick = {
                                 scope.launch {
                                     val uri = withContext(Dispatchers.Default) {
@@ -162,13 +165,8 @@ fun ProfileScreen(
                 Modifier.fillMaxSize().padding(inner).verticalScroll(rememberScrollState()).padding(horizontal = 24.dp)
             ) {
                 // ── Header (entrance index 0) ────────────────────────────────────
-                // The header block (label + name + rank line) enters together as the first item.
+                // The header block (name + "since" line + rank line) enters together as the first item.
                 Column(Modifier.statsEntrance(0)) {
-                    Text(
-                        "ATHLETE PROFILE" + if (state.sinceLabel.isNotBlank()) " · SINCE ${state.sinceLabel}" else "",
-                        style = MaterialTheme.typography.labelSmall, color = emphasized(muted), fontSize = 9.sp
-                    )
-                    Spacer(Modifier.height(6.dp))
                     if (editingName) {
                         val nameFocus = remember { FocusRequester() }
                         LaunchedEffect(Unit) { nameFocus.requestFocus() }
@@ -198,11 +196,26 @@ fun ProfileScreen(
                             modifier = Modifier.bounceClick { nameInput = state.name; editingName = true }
                         )
                     }
-                    state.rank?.let { r ->
+                    // Member-since line, now directly under the name.
+                    if (state.sinceLabel.isNotBlank()) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "SINCE ${state.sinceLabel}",
+                            style = MaterialTheme.typography.labelSmall, color = emphasized(muted), fontSize = 9.sp
+                        )
+                    }
+                    // Rank line parked behind Features.SHOW_GAMIFICATION; a streak line stands in for it.
+                    if (Features.SHOW_GAMIFICATION) state.rank?.let { r ->
                         Spacer(Modifier.height(2.dp))
                         val streak = if (state.streakDays >= 2) " · ${state.streakDays}-day streak, still alive." else ""
                         Text(
                             "Rank ${r.roman} — ${r.tier.display}$streak",
+                            style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic
+                        )
+                    } else if (state.streakDays >= 2) {
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            "${state.streakDays}-day streak, still alive.",
                             style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic
                         )
                     }
@@ -214,14 +227,14 @@ fun ProfileScreen(
                     Spacer(Modifier.height(20.dp))
                     FirstTouchTip(
                         "Your profile starts with your first set.",
-                        "Log a workout and this page fills in — you'll earn XP, climb the rank ladder, and unlock your standing, signature lifts and trophies."
+                        "Log a workout and this page fills in — your lifetime totals, signature lifts, goals and progress photos."
                     )
                 }
 
                 // ── Rank track (index 1 — already has its own internal enter animation) ──
                 // Wrapped in statsEntrance so the whole block slides in, complementing the
                 // internal emblem scale/alpha. The two animations compound tastefully.
-                state.rank?.let { r ->
+                if (Features.SHOW_GAMIFICATION) state.rank?.let { r ->
                     Spacer(Modifier.height(20.dp))
                     Column(Modifier.statsEntrance(1)) {
                         RankSection(r, muted, accent, outline, onInfo = { showXpInfo = true })
@@ -235,8 +248,10 @@ fun ProfileScreen(
                 Column(Modifier.statsEntrance(2)) {
                     LedgerSection(state.totalSessions, state.totalVolumeLb, state.totalPrs, state.rank?.xpTotal ?: 0L, muted, accent, outline, state.longestStreakDays)
                 }
-                Column(Modifier.statsEntrance(3)) {
-                    StandingSection(state.standings, onBg, muted, accent, outline)
+                if (Features.SHOW_GAMIFICATION) {
+                    Column(Modifier.statsEntrance(3)) {
+                        StandingSection(state.standings, onBg, muted, accent, outline)
+                    }
                 }
                 Column(Modifier.statsEntrance(4)) {
                     SignatureSection(state.topLift, state.mostLoggedDay, state.usualHour, onBg, muted, accent, outline)
@@ -246,12 +261,17 @@ fun ProfileScreen(
                         CardioTotalsSection(state.cardioSessions, state.cardioMinutes, state.cardioDistanceKm, muted, accent, outline)
                     }
                 }
+                // Goals sit above the mirror test, previewing the top few with progress.
                 Column(Modifier.statsEntrance(6)) {
-                    MirrorTestSection(state.photos, viewModel::fileFor, onAdd = { pickPhoto() }, onView = { viewing = it }, onBg, muted, accent, outline)
+                    GoalsPreviewSection(state.goals, onOpenGoals, onBg, muted, accent, outline)
+                }
+
+                Column(Modifier.statsEntrance(7)) {
+                    MirrorTestSection(state.photos, viewModel::fileFor, onAdd = { pickPhoto() }, onView = { viewing = it }, onViewAll = onOpenPhotoGallery, onBg, muted, accent, outline)
                 }
 
                 state.memory?.let { m ->
-                    Column(Modifier.statsEntrance(7)) {
+                    Column(Modifier.statsEntrance(8)) {
                         ProfileBlock("ON THIS DAY", muted, accent, outline) {
                             val useKg = LocalForgeSettings.current.useKg
                             val ago = com.forge.app.ui.common.monthsAgoPhrase(m.monthsAgo)
@@ -264,38 +284,10 @@ fun ProfileScreen(
                     }
                 }
 
-                Column(Modifier.statsEntrance(8)) {
-                    TrophyCaseSection(state.trophyGrid, state.trophyUnlocked, state.trophyTotal, state.closestTrophy, onOpenTrophies, onBg, muted, accent, outline)
-                }
-
-                Column(Modifier.statsEntrance(8)) {
-                    ProfileBlock("GOALS", muted, accent, outline) {
-                        Row(
-                            Modifier.fillMaxWidth().bounceClick { onOpenGoals() },
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text("Set targets, track your lifts", style = MaterialTheme.typography.bodyMedium, color = onBg)
-                            Text("→", style = MaterialTheme.typography.bodyMedium, color = accent)
-                        }
+                if (Features.SHOW_GAMIFICATION) {
+                    Column(Modifier.statsEntrance(9)) {
+                        TrophyCaseSection(state.trophyGrid, state.trophyUnlocked, state.trophyTotal, state.closestTrophy, onOpenTrophies, onBg, muted, accent, outline)
                     }
-                }
-
-                Column(Modifier.statsEntrance(9)) {
-                    ProfileBlock("COACH", muted, accent, outline) {
-                        Row(
-                            Modifier.fillMaxWidth().bounceClick { onOpenCoachBrief() },
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text("Week brief · what it's tracking", style = MaterialTheme.typography.bodyMedium, color = onBg)
-                            Text("→", style = MaterialTheme.typography.bodyMedium, color = accent)
-                        }
-                    }
-                }
-
-                Column(Modifier.statsEntrance(10)) {
-                    OnTheRecordSection(state.recaps, onOpenRecaps, onBg, muted, accent, outline)
                 }
 
                 Spacer(Modifier.height(40.dp))
@@ -306,7 +298,7 @@ fun ProfileScreen(
         // One-shot confetti burst on the first profile open after the user crosses into a new tier.
         // Drawn above the Scaffold so it covers the whole screen — touches pass through (Canvas has
         // no pointer-input). Clears itself after the animation completes via onComplete.
-        if (showRankUpCelebration) {
+        if (Features.SHOW_GAMIFICATION && showRankUpCelebration) {
             ConfettiOverlay(
                 modifier = Modifier.fillMaxSize(),
                 onComplete = { viewModel.clearRankUpCelebration() }

@@ -4,6 +4,7 @@ import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.forge.app.data.prefs.SettingsRepository
+import com.forge.app.data.repo.GoalRepository
 import com.forge.app.data.repo.ProfileData
 import com.forge.app.data.repo.ProfileRepository
 import com.forge.app.data.repo.AvatarRepository
@@ -29,7 +30,8 @@ class ProfileViewModel @Inject constructor(
     private val profileRepo: ProfileRepository,
     private val settingsRepo: SettingsRepository,
     private val photoRepo: ProgressPhotoRepository,
-    private val avatarRepo: AvatarRepository
+    private val avatarRepo: AvatarRepository,
+    private val goalRepo: GoalRepository
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(ProfileUiState())
@@ -46,15 +48,17 @@ class ProfileViewModel @Inject constructor(
         val photos = photoRepo.photos()
         val hasAvatar = avatarRepo.exists()
         val avatarStamp = if (hasAvatar) avatarRepo.file.lastModified() else 0L
+        // All set goals (sorted achieved-first / closest-first); the Profile previews the top few.
+        val goals = runCatching { goalRepo.goalsWithProgress() }.getOrDefault(emptyList())
         // Instant first paint on re-entry: render the last-assembled data while the fresh fan-out runs (P3).
         val cached = profileRepo.cached()
-        _state.value = if (cached != null) buildState(cached, name, photos, hasAvatar, avatarStamp)
-            else _state.value.copy(name = name, photos = photos, hasAvatar = hasAvatar, avatarStamp = avatarStamp)
+        _state.value = if (cached != null) buildState(cached, name, photos, hasAvatar, avatarStamp, goals)
+            else _state.value.copy(name = name, photos = photos, hasAvatar = hasAvatar, avatarStamp = avatarStamp, goals = goals)
         val data = profileRepo.load()
         // Merge the fresh fan-out but keep the user-editable fields from current state, so a rename /
         // photo-note / avatar change made while the (slow) fan-out ran isn't reverted by the pre-load
         // snapshot — the edit fns persist then update _state, so reading them back here is correct.
-        _state.value = buildState(data, _state.value.name, _state.value.photos, _state.value.hasAvatar, _state.value.avatarStamp)
+        _state.value = buildState(data, _state.value.name, _state.value.photos, _state.value.hasAvatar, _state.value.avatarStamp, goals)
 
         // ── Rank-up celebration detection ─────────────────────────────────────
         // Compare the current tier to the last-seen tier ordinal. A higher ordinal = tier upgrade.
@@ -79,7 +83,8 @@ class ProfileViewModel @Inject constructor(
         name: String,
         photos: List<ProgressPhoto>,
         hasAvatar: Boolean,
-        avatarStamp: Long
+        avatarStamp: Long,
+        goals: List<GoalRepository.GoalProgress>
     ) = ProfileUiState(
         loading = false,
         name = name,
@@ -95,6 +100,7 @@ class ProfileViewModel @Inject constructor(
         topLift = data.topLift,
         mostLoggedDay = data.mostLoggedDay,
         usualHour = data.usualHour,
+        goals = goals,
         photos = photos,
         hasAvatar = hasAvatar,
         avatarStamp = avatarStamp,
@@ -103,7 +109,6 @@ class ProfileViewModel @Inject constructor(
         trophyGrid = data.trophyGrid,
         closestTrophy = data.closestTrophy,
         memory = data.memory,
-        recaps = data.recaps,
         cardioSessions = data.cardioSessions,
         cardioMinutes = data.cardioMinutes,
         cardioDistanceKm = data.cardioDistanceKm
