@@ -132,18 +132,6 @@ fun ForgeNavHost(initialDayKey: String? = null) {
                 onPendingConsumed = { pendingHubPage = null }
             )
         }
-        composable(Routes.GYM_PRS) {
-            DayListScreen(
-                onBack = { nav.popBackStack() },
-                onOpenDay = { dayKey -> nav.navigate(Routes.gymDay(dayKey)) },
-                onOpenDayQuick = { dayKey -> nav.navigate(Routes.gymDay(dayKey, skipWarmup = true)) },
-                onEditProgram = { dayKey -> nav.navigate(Routes.programEditor(dayKey)) },
-                // PRs is a deep screen; "open cardio" returns to the hub and selects the Cardio page.
-                onOpenCardio = { pendingHubPage = BottomTab.CARDIO.ordinal; nav.popBackStack(Routes.OVERVIEW, false) },
-                initialTab = 2,
-                title = "PRs"
-            )
-        }
         composable(Routes.PROGRAM_VIEWER) {
             ProgramViewerScreen(onBack = { nav.popBackStack() })
         }

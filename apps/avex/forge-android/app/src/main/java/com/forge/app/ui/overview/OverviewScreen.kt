@@ -79,28 +79,6 @@ import java.time.LocalDate
  * A dismissible info strip (e.g. the auto-resolved orphan-session notice, E8). The close affordance
  * is a 48 dp touch target — the [Icon] itself stays 16 dp, but its hit area meets the a11y minimum.
  */
-/** The shared "COACH" home-section scaffold (divider + label + a tappable headline/body). At most one
- *  of three states fills it — learning countdown, fatigue nudge, or persistent entry — so they share
- *  one treatment and can't drift apart. Emits into the calling column in order. */
-@Composable
-private fun CoachHomeBlock(headline: String, body: String, clickLabel: String, onClick: () -> Unit) {
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val onBg = MaterialTheme.colorScheme.onBackground
-    val outline = MaterialTheme.colorScheme.outline
-    Spacer(Modifier.height(20.dp))
-    HorizontalDivider(color = outline.copy(alpha = 0.3f))
-    Spacer(Modifier.height(16.dp))
-    Text("COACH", style = MaterialTheme.typography.labelMedium, color = emphasized(muted))
-    Spacer(Modifier.height(10.dp))
-    Column(
-        Modifier.fillMaxWidth().clickableLabeled(clickLabel) { onClick() }.padding(vertical = 2.dp)
-    ) {
-        Text(headline, style = MaterialTheme.typography.bodyMedium, color = onBg)
-        Spacer(Modifier.height(2.dp))
-        Text(body, style = MaterialTheme.typography.bodySmall, color = muted)
-    }
-}
-
 @Composable
 private fun DismissibleNotice(text: String, onBg: Color, muted: Color, onDismiss: () -> Unit) {
     Spacer(Modifier.height(16.dp))
@@ -146,6 +124,28 @@ private fun TopBarIconButton(icon: ImageVector, label: String, tint: Color, onCl
     }
 }
 
+/** The shared "COACH" home-section scaffold (divider + label + a tappable headline/body). At most one
+ *  of three states fills it — learning countdown, fatigue nudge, or persistent entry — so they share
+ *  one treatment and can't drift apart. Emits into the calling column in order. */
+@Composable
+private fun CoachHomeBlock(headline: String, body: String, clickLabel: String, onClick: () -> Unit) {
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val onBg = MaterialTheme.colorScheme.onBackground
+    val outline = MaterialTheme.colorScheme.outline
+    Spacer(Modifier.height(20.dp))
+    HorizontalDivider(color = outline.copy(alpha = 0.3f))
+    Spacer(Modifier.height(16.dp))
+    Text("COACH", style = MaterialTheme.typography.labelMedium, color = emphasized(muted))
+    Spacer(Modifier.height(10.dp))
+    Column(
+        Modifier.fillMaxWidth().clickableLabeled(clickLabel) { onClick() }.padding(vertical = 2.dp)
+    ) {
+        Text(headline, style = MaterialTheme.typography.bodyMedium, color = onBg)
+        Spacer(Modifier.height(2.dp))
+        Text(body, style = MaterialTheme.typography.bodySmall, color = muted)
+    }
+}
+
 @Composable
 fun OverviewScreen(
     onStartSession: (dayKey: String) -> Unit,
@@ -153,7 +153,6 @@ fun OverviewScreen(
     onViewProgram: () -> Unit,
     onGoToCardio: () -> Unit,
     onGoToTrophies: () -> Unit,
-    onGoToPrs: () -> Unit = {},
     onOpenNotes: () -> Unit = {},
     onGoToNutrition: () -> Unit = {},
     onGoToSettings: () -> Unit = {},
@@ -632,10 +631,9 @@ fun OverviewScreen(
             Spacer(Modifier.height(12.dp))
 
             // ── Trophies (gamification only) ─────────────────────────────────
-            // "Personal records", "Search notes", and the cardio "Moved today?" nudge have been
-            // pulled from the home page (UI only). Their handlers stay wired — onGoToPrs /
-            // onOpenNotes / onGoToCardio and all backing state are untouched — so these surfaces
-            // can be re-added without re-plumbing.
+            // "Search notes" and the cardio "Moved today?" nudge have been pulled from the home
+            // page (UI only). Their handlers (onOpenNotes / onGoToCardio) stay wired and all backing
+            // state is untouched — so these surfaces can be re-added without re-plumbing.
             // Trophies (gamification) are parked behind Features.SHOW_GAMIFICATION.
             if (Features.SHOW_GAMIFICATION) {
                 TrophiesTile(unlocked = state.trophiesUnlocked, total = Trophies.all.size,

@@ -95,7 +95,6 @@ fun HubScreen(
                     onViewProgram = { nav.navigate(Routes.PROGRAM_VIEWER) },
                     onGoToCardio = { goTo(BottomTab.CARDIO.ordinal) },
                     onGoToTrophies = { nav.navigate(Routes.TROPHIES) },
-                    onGoToPrs = { nav.navigate(Routes.GYM_PRS) },
                     onOpenNotes = { nav.navigate(Routes.NOTES_SEARCH) },
                     onGoToNutrition = { nav.navigate(Routes.NUTRITION) },
                     onGoToSettings = { nav.navigate(Routes.SETTINGS) },

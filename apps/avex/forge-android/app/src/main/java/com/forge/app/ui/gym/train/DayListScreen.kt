@@ -41,7 +41,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.forge.app.ui.gym.stats.PrsContent
 import com.forge.app.ui.gym.stats.StatsContent
 import com.forge.app.ui.gym.train.components.DayCard
 
@@ -83,11 +82,13 @@ fun DayListScreen(
         containerColor = Color.Transparent
     ) { inner ->
         Box(Modifier.fillMaxSize().padding(inner)) {
-            // No Train/Stats/PRs tab row — each is its own screen reached from Overview
+            // No Train/Stats tab row — each is its own screen reached from Overview
             // (Gym tile → Train, Stats tile → Stats). Content is chosen by the route.
             when (initialTab) {
-                1 -> StatsContent(modifier = Modifier.fillMaxSize(), onOpenHistory = onOpenHistory, onOpenNotes = onOpenNotes, onOpenRecap = onOpenRecap)
-                2 -> PrsContent(modifier = Modifier.fillMaxSize())
+                // onOpenHistory/onOpenNotes/onOpenRecap stay wired into DayListScreen (and HubScreen)
+                // so the history/notes/recap routes keep an entry point, but the rebuilt Stats screen
+                // no longer surfaces them, so they aren't forwarded here.
+                1 -> StatsContent(modifier = Modifier.fillMaxSize())
                 else -> TrainTab(
                     onOpenDay = onOpenDay,
                     onOpenDayQuick = onOpenDayQuick,

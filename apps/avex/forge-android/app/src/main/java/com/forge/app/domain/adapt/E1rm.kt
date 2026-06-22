@@ -15,6 +15,14 @@ object E1rm {
 
     fun epley(weightLb: Double, reps: Int): Double =
         if (reps <= 1) weightLb else weightLb * (1 + reps / 30.0)
+
+    /**
+     * Inverse of [epley]: the weight liftable for [reps] reps given an estimated 1RM — used to draw the
+     * fitted strength curve from an e1RM. reps ≤ 1 returns the e1RM itself (the projected single),
+     * mirroring [epley]'s reps ≤ 1 branch so the two never diverge.
+     */
+    fun epleyInverse(e1rmLb: Double, reps: Int): Double =
+        if (reps <= 1) e1rmLb else e1rmLb / (1 + reps / 30.0)
 }
 
 // ── Shared "best working e1RM" helpers ─────────────────────────────────────────

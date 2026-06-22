@@ -4,11 +4,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.forge.app.data.repo.AdaptationRepository
 import com.forge.app.data.repo.StatsRepository
-import com.forge.app.ui.gym.stats.state.InsightFlag
 import com.forge.app.ui.gym.stats.state.StatsUiState
 import com.forge.app.ui.gym.stats.state.balanceRatioUi
 import com.forge.app.ui.gym.stats.state.buildReadinessPulse
-import com.forge.app.ui.gym.stats.state.plateauFlagOf
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -25,8 +23,7 @@ class StatsViewModel @Inject constructor(
     statsRepo: StatsRepository,
     adaptationRepo: AdaptationRepository,
     private val settingsRepo: com.forge.app.data.prefs.SettingsRepository,
-    private val bodyweightRepo: com.forge.app.data.repo.BodyweightRepository,
-    private val coachRepo: com.forge.app.data.repo.CoachRepository
+    private val bodyweightRepo: com.forge.app.data.repo.BodyweightRepository
 ) : ViewModel() {
 
     /**
@@ -37,8 +34,6 @@ class StatsViewModel @Inject constructor(
      * inside StatsRepository's combine on every emission).
      */
     private val engineFlow = MutableStateFlow<AdaptationRepository.EngineStatsRead?>(null)
-
-    private val _coachWatch = MutableStateFlow<com.forge.app.data.repo.CoachWatch?>(null)
 
     /** Whether the Body-tab quick-log should offer "Import from Health Connect" (read granted). */
     private val _weightConnected = MutableStateFlow(false)
@@ -55,13 +50,6 @@ class StatsViewModel @Inject constructor(
         viewModelScope.launch {
             _weightConnected.value = runCatching { bodyweightRepo.canImportFromHealthConnect() }.getOrDefault(false)
         }
-        refreshCoachWatch()
-    }
-
-    /** Re-read the coach portrait (CoachWatch). Called at init and again when the Stats screen
-     *  reappears, so a coach pass that ran in the background while away isn't shown stale. */
-    fun refreshCoachWatch() = viewModelScope.launch {
-        _coachWatch.value = runCatching { coachRepo.coachLab() }.getOrNull()
     }
 
     /** Save a typed weigh-in (lb); the bodyweight trend updates reactively via observeRecent. */
@@ -95,51 +83,26 @@ class StatsViewModel @Inject constructor(
     val state: StateFlow<StatsUiState> = combine(
         statsRepo.observeGymStats(),
         engineFlow,
-        settingsRepo.userSex,
-        _coachWatch
-    ) { snapshot, engine, sex, watch ->
+        settingsRepo.userSex
+    ) { snapshot, engine, sex ->
         StatsUiState(
             isLoading = false,
-            volumeByMuscle = snapshot.volumeByMuscle,
             recentPrs = snapshot.recentPrs,
-            hallOfFame = snapshot.hallOfFame,
-            exerciseHistory = snapshot.exerciseHistory,
-            exerciseFrequency = snapshot.exerciseFrequency,
-            timeToPr = snapshot.timeToPr,
-            effortDistribution = snapshot.effortDistribution,
-            prsByDayOfWeek = snapshot.prsByDayOfWeek,
-            dayTypeBestVsAvg = snapshot.dayTypeBestVsAvg,
-            weekComparison = snapshot.weekComparison,
-            prSessionTimestamps = snapshot.prSessionTimestamps,
-            insights = engine?.insights.orEmpty().map { InsightFlag(it.icon, it.title, it.body) },
-            lifetimeMetrics = snapshot.lifetimeMetrics,
-            moodOverTime = snapshot.moodOverTime,
-            weekActivity = snapshot.weekActivity,
-            thisWeekCardioMin = snapshot.thisWeekCardioMin,
             e1rmLifts = snapshot.e1rmLifts,
-            repMaxes = snapshot.repMaxes,
+            strengthCurves = snapshot.strengthCurves,
             weeklySetsByMuscle = snapshot.weeklySetsByMuscle,
-            repRangeDist = snapshot.repRangeDist,
-            repRangeDistRecent = snapshot.repRangeDistRecent,
-            rpeDistribution = snapshot.rpeDistribution,
-            avgRpe = snapshot.avgRpe,
-            bodyweightPoints = snapshot.bodyweightPoints,
-            consistencyStreakWeeks = snapshot.consistencyStreakWeeks,
-            progressiveOverloadPct = snapshot.progressiveOverloadPct,
-            avgRpePerSession = snapshot.avgRpePerSession,
-            weeklySessionCounts = snapshot.weeklySessionCounts,
-            overload = snapshot.overload,
-            prRecency = snapshot.prRecency,
-            patternRadar = snapshot.patternRadar,
             plannedSetsByMuscle = snapshot.plannedSetsByMuscle,
             weeklyTonnage = snapshot.weeklyTonnage,
-            trainingTimes = snapshot.trainingTimes,
-            weeklyDurations = snapshot.weeklyDurations,
-            readinessPulse = engine?.fatigue?.let { buildReadinessPulse(it, engine.deloadScoreThreshold) },
-            plateauFlags = engine?.plateaus.orEmpty().mapNotNull(::plateauFlagOf),
             balanceRatios = engine?.ratios.orEmpty().map(::balanceRatioUi),
+            bodyweightPoints = snapshot.bodyweightPoints,
             userSex = sex,
-            coachWatch = watch
+            readinessPulse = engine?.fatigue?.let { buildReadinessPulse(it, engine.deloadScoreThreshold) },
+            readinessThreshold = engine?.deloadScoreThreshold,
+            dailyActivity = snapshot.dailyActivity,
+            rpeDistribution = snapshot.rpeDistribution,
+            avgRpe = snapshot.avgRpe,
+            trainingTimes = snapshot.trainingTimes,
+            prsByDayOfWeek = snapshot.prsByDayOfWeek
         )
     }.catch {
         // A crash in any stats aggregation drops to a non-loading ERROR state instead of an

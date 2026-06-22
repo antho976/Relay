@@ -196,7 +196,7 @@ private fun LearningGateList(cd: CoachWatch) {
         // as a "nice to have" rather than a blocking check.
         GateItem(
             done = false,
-            text = "Log a bodyweight when you get a chance (Profile → Quick log)",
+            text = "Log a bodyweight when you get a chance (Stats → Body → Log weight)",
             onBg = onBg, muted = muted
         )
     }

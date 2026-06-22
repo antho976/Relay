@@ -16,86 +16,46 @@ data class WeekActivityRow(
     val cardioDistanceKm: Double? = null
 )
 
+/**
+ * State for the rebuilt Gym → Stats screen. Trimmed to exactly what the four tabs render
+ * (Strength / Volume / Body / Trends) — fields the old long-scroll screen carried but no current
+ * chart reads were dropped along with their repository computation (see [StatsRepository.GymStats]).
+ */
 data class StatsUiState(
     val isLoading: Boolean = true,
     /** True when a stats aggregation threw — the screen shows an error message, not a silent empty. */
     val loadError: Boolean = false,
-    val volumeByMuscle: List<MuscleVolume> = emptyList(),
+    /** PRs on a time axis + the most-recent spelled out (Strength tab). */
     val recentPrs: List<PrEntry> = emptyList(),
-    val hallOfFame: List<PrRecord> = emptyList(),
-    val exerciseHistory: Map<String, List<HistoryPoint>> = emptyMap(),
-    /** Sessions per exercise in past 8 weeks (#73). */
-    val exerciseFrequency: List<ExerciseFrequency> = emptyList(),
-    /** Avg days between PRs per exercise — only exercises with 2+ PRs (#74). */
-    val timeToPr: List<TimeToPrEntry> = emptyList(),
-    /** Weekly effort distribution: EASY/JUST_RIGHT/HARD/BRUTAL counts per week (#75). */
-    val effortDistribution: List<WeeklyEffortCounts> = emptyList(),
-    /** PR count by day of week (Mon–Sun, index 0=Mon) (#85). */
-    val prsByDayOfWeek: List<Int> = List(7) { 0 },
-    /** Best vs average volume per day type (#132). */
-    val dayTypeBestVsAvg: List<DayTypeVolumeStats> = emptyList(),
-    /** This week vs last week comparison (#34). */
-    val weekComparison: PeriodComparison? = null,
-    /** PR session timestamps (#128) — feeds PR recency. */
-    val prSessionTimestamps: List<Long> = emptyList(),
-    /** Mood over time for effort chart (#95). */
-    val moodOverTime: List<com.forge.app.data.db.dao.SessionDao.MoodOverTime> = emptyList(),
-    /** Behavioral insight flags (#41, #80). */
-    val insights: List<InsightFlag> = emptyList(),
-    /** Lifetime session metrics (#40). */
-    val lifetimeMetrics: LifetimeMetrics? = null,
-    /** Mon–Sun rows for "What I did this week" editorial section. Always 7 entries. */
-    val weekActivity: List<WeekActivityRow> = emptyList(),
-    /** Cardio minutes this ISO week (excludes rest-type entries). */
-    val thisWeekCardioMin: Int = 0,
-    /** Estimated 1RM per main lift — current value + per-session history (Phase 1b). */
+    /** Estimated 1RM per main lift — current value + per-session history (Strength tab). */
     val e1rmLifts: List<E1rmLift> = emptyList(),
-    /** Best weight at each rep count for the most-trained lift (Phase 1b). */
-    val repMaxes: RepMaxSet? = null,
-    /** Working sets per muscle this ISO week vs the productive range (Phase 2). */
+    /** Per-exercise load-rep scatter + e1RM for the strength curve (Strength tab). */
+    val strengthCurves: List<StrengthCurve> = emptyList(),
+    /** Working sets per muscle this ISO week (Volume tab). */
     val weeklySetsByMuscle: List<MuscleSetCount> = emptyList(),
-    /** Distribution of logged sets across rep ranges (Phase 2). All-time. */
-    val repRangeDist: RepRangeDist? = null,
-    /** Same distribution over the last 8 weeks — the recent-vs-all-time scope toggle on the card. */
-    val repRangeDistRecent: RepRangeDist? = null,
-    /** Count of sets at each RPE value + overall average (Phase 3). */
-    val rpeDistribution: List<RpeBucket> = emptyList(),
-    val avgRpe: Double? = null,
-    /** Dated bodyweight points, oldest → newest — feeds the Body tab's time-axis trend. */
-    val bodyweightPoints: List<BodyweightPoint> = emptyList(),
-    /** Consecutive recent weeks meeting the session target (Snapshot). */
-    val consistencyStreakWeeks: Int = 0,
-    /** Avg estimated-1RM growth per month across lifts, as a percent (Snapshot). */
-    val progressiveOverloadPct: Double? = null,
-    /** Average RPE per session, oldest → newest (Trends RPE line). */
-    val avgRpePerSession: List<Double> = emptyList(),
-    /** Session count per ISO week for the last ~12 weeks, oldest → newest (Trends consistency). */
-    val weeklySessionCounts: List<Int> = emptyList(),
-    /** Weekly avg e1RM across tracked lifts — the concrete "progressive overload" series (Snapshot). */
-    val overload: OverloadSummary? = null,
-    /** Days since the most recent PR, overall + per lift (Strength). */
-    val prRecency: PrRecency? = null,
-    /** Movement-pattern radar: recent best vs all-time best e1RM per pattern (Strength). */
-    val patternRadar: List<PatternAxis> = emptyList(),
-    // Engine read — loaded once per Stats open via AdaptationRepository.engineStatsRead().
-    /** Fatigue pulse (System 5). Null until the engine read lands or while data gates fail. */
-    val readinessPulse: ReadinessPulse? = null,
-    /** Plateau ladder flags (System 1) keyed to lifts on the Strength tab. */
-    val plateauFlags: List<PlateauFlagUi> = emptyList(),
-    /** Always-on push/pull + quad/ham balance bars (System 4 counting). */
-    val balanceRatios: List<BalanceRatioUi> = emptyList(),
-    /** Planned weekly sets per muscle from the active program (VolumeTargets). */
+    /** Planned weekly sets per muscle from the active program (Volume tab). */
     val plannedSetsByMuscle: Map<MuscleGroup, Int> = emptyMap(),
     /** Tonnage per ISO week, deload weeks marked (Volume trend). */
     val weeklyTonnage: List<WeeklyTonnage> = emptyList(),
-    /** Sessions per day of week + best training hour (Trends "When you train"). */
-    val trainingTimes: TrainingTimes? = null,
-    /** Median session length per ISO week (Trends duration trend). */
-    val weeklyDurations: List<WeeklyDuration> = emptyList(),
-    /** User's sex ("male" | "female" | "") — selects the bodyweight-relative strength bands. */
+    /** Always-on push/pull + quad/ham balance bars (Volume tab, System 4 counting). */
+    val balanceRatios: List<BalanceRatioUi> = emptyList(),
+    /** Dated bodyweight points, oldest → newest — feeds the Body tab's time-axis trend. */
+    val bodyweightPoints: List<BodyweightPoint> = emptyList(),
+    /** User's sex ("male" | "female" | "") — selects the bodyweight-relative strength bands (Body tab). */
     val userSex: String = "",
-    /** Coach transparency portrait for the Snapshot tab — null while loading or on failure. */
-    val coachWatch: com.forge.app.data.repo.CoachWatch? = null
+    /** Fatigue pulse (System 5). Null until the engine read lands or while data gates fail (Body tab). */
+    val readinessPulse: ReadinessPulse? = null,
+    /** The learned deload score threshold — draws the threshold line + bands on the fatigue gauge (Body tab). */
+    val readinessThreshold: Int? = null,
+    /** Per-day training load for the adherence calendar + Banister form curves (Trends tab). */
+    val dailyActivity: List<DayLoad> = emptyList(),
+    /** Count of sets at each RPE value + overall average (Trends tab). */
+    val rpeDistribution: List<RpeBucket> = emptyList(),
+    val avgRpe: Double? = null,
+    /** Sessions per day of week + best training hour (Trends tab). */
+    val trainingTimes: TrainingTimes? = null,
+    /** PR count by day of week (Mon–Sun, index 0=Mon) (Trends tab). */
+    val prsByDayOfWeek: List<Int> = List(7) { 0 }
 )
 
 /** One ISO week's total tonnage for the Volume trend bars. */
