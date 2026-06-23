@@ -665,6 +665,16 @@ class CoachRepository @Inject constructor(
     suspend fun pendingBanner(): CoachBanner? {
         val pass = ensureWeeklyPass()
         if (pass.weekId == settings.lastSeenCoachWeekId.first()) return null
+        // Stay silent while the coach is still pre-baseline (the first ~week after onboarding). The
+        // brief is only a "still learning — N of M sessions" countdown then, so announcing it as
+        // "holding steady this week" — on Overview AND as a push — is misleading. Only a HOLD pass can
+        // be pre-baseline (a proposal clears MIN_SESSIONS by construction), so we skip the count read
+        // otherwise; ensureWeeklyPass just warmed the snapshot cache on the non-vacation path, so the
+        // read is cheap there. A failed read defaults to "established" (fail-open), matching briefFor.
+        if (pass.status == STATUS_HOLD &&
+            runCatching { adaptationRepository.snapshotCached().sessions.size }
+                .getOrDefault(AutoCoachPlanner.MIN_SESSIONS) < AutoCoachPlanner.MIN_SESSIONS
+        ) return null
         return CoachBanner(pass.weekId, summaryFor(pass))
     }
 

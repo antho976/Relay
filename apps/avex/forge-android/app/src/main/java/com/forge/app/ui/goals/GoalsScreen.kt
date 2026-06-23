@@ -98,7 +98,6 @@ fun GoalsScreen(
 
                 if (state.goals.isEmpty()) {
                     EmptyState(
-                        emoji = "🎯",
                         title = "No goals yet.",
                         subtitle = "Add one below — or set a goal on any exercise during a workout."
                     )

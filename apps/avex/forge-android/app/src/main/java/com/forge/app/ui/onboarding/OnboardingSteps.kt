@@ -38,9 +38,9 @@ import kotlin.math.roundToInt
 
 /** Goal options with a one-line explanation of what each one changes (it only reshapes rep ranges). */
 private val GOAL_DETAILS = listOf(
-    Triple("build_muscle", "Build muscle", "Moderate reps (≈8–12). Balanced for size — the default."),
-    Triple("get_stronger", "Get stronger", "Heavier, lower reps (≈4–6 on the big lifts). Strength first."),
-    Triple("lose_weight", "Lose weight", "Higher reps (≈12–20) with more conditioning."),
+    Triple("build_muscle", "Build muscle", "Moderate reps, around 8 to 12. Balanced for size and the default pick."),
+    Triple("get_stronger", "Get stronger", "Heavier, lower reps, around 4 to 6 on the big lifts. Strength first."),
+    Triple("lose_weight", "Lose weight", "Higher reps, around 12 to 20, with more conditioning."),
     Triple("general_fitness", "General fitness", "Balanced moderate reps for all-round training.")
 )
 
@@ -68,14 +68,14 @@ private val SEX_DETAILS = listOf(
 private val PLAN_MODE_DETAILS = listOf(
     Triple("generated", "Build me a plan", "Forge picks your exercises from your gear and goal. Recommended."),
     Triple("custom", "I'll make my own", "Skip the questions and build your own plan in the editor."),
-    Triple("freestyle", "Go with the flow", "No fixed plan — just log what you did at the gym, whenever you want.")
+    Triple("freestyle", "Go with the flow", "No fixed plan. Just log what you did at the gym, whenever you want.")
 )
 
 @Composable
 internal fun StepPlanMode(selected: String, onSelect: (String) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Headline("How do you want to train?")
-        Caption("You can change this later in Settings — nothing here is permanent.")
+        Caption("You can change this later in Settings. Nothing here is permanent.")
         PLAN_MODE_DETAILS.forEach { (key, label, desc) -> SelectableRow(label, selected == key, desc) { onSelect(key) } }
     }
 }
@@ -119,7 +119,7 @@ internal fun StepName(name: String, onNameChange: (String) -> Unit) {
         Text("FORGE", style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
         Headline("What do you go by?")
-        Caption("Optional — leave it blank and tap Next to skip. Used only for the greeting.")
+        Caption("Optional. Leave it blank and tap Next to skip. Used only for the greeting.")
         OutlinedTextField(
             value = name, onValueChange = onNameChange,
             modifier = Modifier.fillMaxWidth(),
@@ -154,7 +154,7 @@ internal fun StepUnits(useKg: Boolean, onToggle: (Boolean) -> Unit) {
 internal fun StepGoal(selected: String, onSelect: (String) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Headline("What's your main goal?")
-        Caption("Same exercises, different loading — this only changes your rep ranges. Switch it anytime.")
+        Caption("Same exercises, different loading. This only changes your rep ranges. Switch it anytime.")
         GOAL_DETAILS.forEach { (key, label, desc) -> SelectableRow(label, selected == key, desc) { onSelect(key) } }
     }
 }
@@ -187,7 +187,7 @@ internal fun StepBodyweight(input: String, useKg: Boolean, onInputChange: (Strin
     val maxDisp = toDisplayWeight(MAX_BODYWEIGHT_LB, useKg).roundToInt()
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Headline("Starting bodyweight")
-        Caption("Optional — used for relative strength comparisons.")
+        Caption("Optional. Used for relative strength comparisons.")
         OutlinedTextField(
             value = input, onValueChange = onInputChange,
             modifier = Modifier.fillMaxWidth(),
@@ -207,7 +207,7 @@ internal fun StepBodyweight(input: String, useKg: Boolean, onInputChange: (Strin
 internal fun StepDays(days: Int, onChange: (Int) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Headline("Days per week")
-        Caption("Your split adapts to this — 3 = Push/Pull/Legs, 4 = Upper/Lower, 7 adds an arms day. It's also your weekly target on the home screen.")
+        Caption("Your split adapts to this. 3 = Push/Pull/Legs, 4 = Upper/Lower, 7 adds an arms day. It's also your weekly target on the home screen.")
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             (1..7).forEach { n -> OnboardingChip("$n", days == n) { onChange(n) } }
         }
@@ -246,7 +246,7 @@ internal fun StepPlateWeight(plateWeightLb: Double, useKg: Boolean, onSet: (Doub
     val unit = if (useKg) "kg" else "lb"
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Headline("Weight per plate")
-        Caption("Only matters if your machine is loaded by counting plates (not a numbered stack). This is what one of those plates weighs. Not sure? Just leave the default — you can change it later.")
+        Caption("Only matters if your machine is loaded by counting plates (not a numbered stack). This is what one of those plates weighs. Not sure? Just leave the default. You can change it later.")
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             plates.forEach { value ->
                 val lb = fromDisplayWeight(value, useKg)
@@ -261,7 +261,7 @@ internal fun StepPlateWeight(plateWeightLb: Double, useKg: Boolean, onSet: (Doub
 internal fun StepProblemAreas(selected: Set<String>, onToggle: (String) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Headline("Any problem areas?")
-        Caption("Flag a sore joint and the generator steers around movements that stress it. Optional.")
+        Caption("Got a sore joint, an old injury, or something still healing? Flag it and the generator builds your plan around it, easing off movements that stress that area. Optional.")
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             ProblemArea.entries.forEach { a -> OnboardingChip(a.displayName, a.code in selected) { onToggle(a.code) } }
         }
@@ -272,7 +272,7 @@ internal fun StepProblemAreas(selected: Set<String>, onToggle: (String) -> Unit)
 internal fun StepCadence(cadence: String, everyN: Int, onSet: (String, Int) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Headline("Auto-refresh your plan?")
-        Caption("Re-roll your exercises automatically after this many workouts — same split, fresh moves. Change it anytime.")
+        Caption("Re-roll your exercises automatically after this many workouts. Same split, fresh moves. Change it anytime.")
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             OnboardingChip("Never", cadence == "never") { onSet("never", everyN) }
             listOf(4, 8, 12).forEach { n ->

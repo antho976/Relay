@@ -1,6 +1,5 @@
 package com.forge.app.ui.cardio.components
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,20 +14,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.DatePicker
-import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -39,12 +32,10 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontStyle
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -55,9 +46,6 @@ import com.forge.app.domain.cardio.CardioRestReason
 import com.forge.app.domain.cardio.CardioType
 import com.forge.app.domain.cardio.pacePerKm
 import java.text.SimpleDateFormat
-import java.time.Instant
-import java.time.ZoneId
-import java.time.ZoneOffset
 import java.util.Date
 import java.util.Locale
 
@@ -78,7 +66,9 @@ fun CardioLogSheet(
     ) -> Unit,
     editing: CardioEntry? = null,
     /** Latest logged bodyweight (lb) — scales the live calorie estimate; null hides it. */
-    bodyweightLb: Double? = null
+    bodyweightLb: Double? = null,
+    /** Tapping the Forge wordmark — defaults to "go Home"; the cardio tab overrides it to close first. */
+    onHome: () -> Unit = com.forge.app.ui.common.LocalGoHome.current
 ) {
     // Keyed on the edited entry's id so the form re-seeds if the sheet is ever reused for a different
     // entry without leaving composition — fields can't carry over from the previously-opened entry.
@@ -93,6 +83,11 @@ fun CardioLogSheet(
     var hrZone by remember(editKey) { mutableStateOf(editing?.hrZone) }
     var dateMs by remember(editKey) { mutableStateOf(editing?.date ?: System.currentTimeMillis()) }
     var showDatePicker by remember { mutableStateOf(false) }
+    // Optional details (effort / HR zone / intervals) start tucked away — opened by default only when
+    // editing an entry that already has one of them, so they're never silently hidden.
+    var moreOpen by remember(editKey) {
+        mutableStateOf(editing != null && (editing.effort != null || editing.hrZone != null || (editing.intervalCount ?: 0) > 0))
+    }
 
     val durationInt = durationText.toIntOrNull() ?: 0
     val distanceDouble = distanceText.toDoubleOrNull()
@@ -108,25 +103,14 @@ fun CardioLogSheet(
     val dateHeader = run {
         val d = Date(dateMs)
         val day = SimpleDateFormat("EEE", Locale.getDefault()).format(d).uppercase().take(3)
-        val date = SimpleDateFormat("MMM d", Locale.getDefault()).format(d).uppercase()
+        val date = SimpleDateFormat("MMM d, yyyy", Locale.getDefault()).format(d).uppercase()
         "$day · $date"
-    }
-    val fullDateLabel = remember(dateMs) {
-        SimpleDateFormat("EEE, MMM d, yyyy", Locale.getDefault()).format(Date(dateMs))
     }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Text("•", style = MaterialTheme.typography.bodyMedium, color = muted)
-                        Text("Forge", style = MaterialTheme.typography.bodyMedium, color = onBg, fontStyle = FontStyle.Italic)
-                    }
-                },
+                title = { com.forge.app.ui.common.ForgeWordmark(onClick = onHome) },
                 navigationIcon = {
                     IconButton(onClick = onDismiss) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = muted)
@@ -151,127 +135,78 @@ fun CardioLogSheet(
             contentPadding = PaddingValues(bottom = 48.dp)
         ) {
             item("hero") {
-                CardioLogHeroItem(dateHeader = dateHeader, muted = muted, onBg = onBg, outline = outline)
+                CardioLogHeroItem(
+                    dateHeader = dateHeader,
+                    muted = muted, onBg = onBg, outline = outline,
+                    onPickDate = { showDatePicker = true }
+                )
             }
 
             item("type") {
-                FormSection(label = "What kind?", optional = false, muted = muted, onBg = onBg, outline = outline) {
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        CardioType.entries.forEach { t ->
-                            PillChip(
-                                label = t.code.uppercase(),
-                                selected = type == t,
-                                onClick = { type = t },
-                                onBg = onBg, bg = bg, muted = muted, outline = outline
-                            )
-                        }
-                    }
-                }
-            }
-
-            item("when") {
-                FormSection(label = "When?", optional = false, muted = muted, onBg = onBg, outline = outline) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth().clickable { showDatePicker = true }.padding(vertical = 4.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(fullDateLabel, style = MaterialTheme.typography.bodyMedium, color = onBg)
-                        Text("change", style = MaterialTheme.typography.labelSmall, color = accent)
-                    }
+                FormSection(label = "Activity", optional = false, muted = muted, onBg = onBg, outline = outline) {
+                    ActivityDropdown(
+                        selected = type,
+                        onSelect = { type = it },
+                        onBg = onBg, muted = muted, outline = outline
+                    )
                 }
             }
 
             if (!type.isRest) {
-                item("duration") {
-                    FormSection(label = "For how long?", optional = false, muted = muted, onBg = onBg, outline = outline) {
-                        NumberInputRow(
-                            value = durationText,
-                            onValueChange = { durationText = it.filter(Char::isDigit).take(4) },
-                            placeholder = "30",
-                            unit = "minutes",
-                            keyboardType = KeyboardType.Number,
-                            onBg = onBg, muted = muted, accent = accent, outline = outline
-                        )
-                        // Live calorie estimate once a duration is entered (uses the chosen effort below,
-                        // moderate until picked). Hidden when there's no logged bodyweight to scale by.
-                        CardioCalorieEstimator.estimate(type, durationInt, effort, bodyweightLb)?.let { kcal ->
-                            Spacer(Modifier.height(8.dp))
-                            Text("≈ $kcal kcal", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp)
-                        }
-                    }
-                }
-
-                item("distance") {
-                    FormSection(label = "How far?", optional = true, muted = muted, onBg = onBg, outline = outline) {
-                        NumberInputRow(
-                            value = distanceText,
-                            onValueChange = { distanceText = sanitizeDecimal(it) },
-                            placeholder = "0",
-                            unit = "kilometres",
-                            keyboardType = KeyboardType.Decimal,
-                            onBg = onBg, muted = muted, accent = accent, outline = outline
-                        )
-                        // Live pace readout once both duration + distance are entered.
-                        pacePerKm(durationInt, distanceDouble)?.let { pace ->
-                            Spacer(Modifier.height(8.dp))
-                            Text("Pace · $pace /km", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp)
-                        }
-                    }
-                }
-
-                item("effort") {
-                    FormSection(label = "How hard?", optional = true, muted = muted, onBg = onBg, outline = outline) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            CardioEffort.entries.forEach { e ->
-                                PillChip(
-                                    label = e.displayName.uppercase(),
-                                    selected = effort == e,
-                                    onClick = { effort = if (effort == e) null else e },
-                                    onBg = onBg, bg = bg, muted = muted, outline = outline
-                                )
-                            }
-                        }
-                    }
-                }
-
-                // Interval count — only meaningful for HIIT / interval work.
-                if (type == CardioType.HIIT) {
-                    item("intervals") {
-                        FormSection(label = "How many intervals?", optional = true, muted = muted, onBg = onBg, outline = outline) {
-                            NumberInputRow(
-                                value = intervalText,
-                                onValueChange = { intervalText = it.filter(Char::isDigit).take(3) },
-                                placeholder = "8",
-                                unit = "intervals",
+                // Duration (required) + distance (optional) sit side-by-side on one compact row, with
+                // the live calorie + pace readouts underneath — far shorter than two full sections.
+                item("metrics") {
+                    Column(Modifier.padding(horizontal = 24.dp)) {
+                        Spacer(Modifier.height(12.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+                            CompactNumberField(
+                                caption = "Duration",
+                                value = durationText,
+                                onValueChange = { durationText = it.filter(Char::isDigit).take(4) },
+                                placeholder = "30",
+                                unit = "min",
                                 keyboardType = KeyboardType.Number,
-                                onBg = onBg, muted = muted, accent = accent, outline = outline
+                                onBg = onBg, muted = muted, accent = accent, outline = outline,
+                                modifier = Modifier.weight(1f)
+                            )
+                            CompactNumberField(
+                                caption = "Distance",
+                                value = distanceText,
+                                onValueChange = { distanceText = sanitizeDecimal(it) },
+                                placeholder = "0",
+                                unit = "km",
+                                keyboardType = KeyboardType.Decimal,
+                                onBg = onBg, muted = muted, accent = accent, outline = outline,
+                                modifier = Modifier.weight(1f)
                             )
                         }
+                        // Live readouts: calorie estimate (needs bodyweight) and pace (needs both fields).
+                        val kcal = CardioCalorieEstimator.estimate(type, durationInt, effort, bodyweightLb)
+                        val pace = pacePerKm(durationInt, distanceDouble)
+                        if (kcal != null || pace != null) {
+                            Spacer(Modifier.height(8.dp))
+                            val parts = listOfNotNull(kcal?.let { "≈ $it kcal" }, pace?.let { "$it /km" })
+                            Text(parts.joinToString("  ·  "), style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp)
+                        }
+                        Spacer(Modifier.height(10.dp))
+                        HorizontalDivider(color = outline.copy(alpha = 0.15f))
                     }
                 }
 
-                item("hr-zone") {
-                    FormSection(label = "HR zone?", optional = true, muted = muted, onBg = onBg, outline = outline) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            (1..5).forEach { z ->
-                                val code = z.toString()
-                                PillChip(
-                                    label = "Z$z",
-                                    selected = hrZone == code,
-                                    onClick = { hrZone = if (hrZone == code) null else code },
-                                    onBg = onBg, bg = bg, muted = muted, outline = outline
-                                )
-                            }
-                        }
-                    }
-                }
+                // Optional details (effort / HR zone / intervals), collapsed behind a "More" expander.
+                cardioMoreItems(
+                    moreOpen = moreOpen,
+                    onToggleMore = { moreOpen = !moreOpen },
+                    type = type,
+                    effort = effort, onEffort = { effort = it },
+                    hrZone = hrZone, onHrZone = { hrZone = it },
+                    intervalText = intervalText,
+                    onIntervalChange = { intervalText = it.filter(Char::isDigit).take(3) },
+                    onBg = onBg, bg = bg, muted = muted, accent = accent, outline = outline
+                )
             } else {
                 item("rest-reason") {
-                    FormSection(label = "What kind of rest?", optional = false, muted = muted, onBg = onBg, outline = outline) {
+                    FormSection(label = "Rest", optional = false, muted = muted, onBg = onBg, outline = outline) {
                         FlowRow(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalArrangement = Arrangement.spacedBy(8.dp)
@@ -290,7 +225,7 @@ fun CardioLogSheet(
             }
 
             item("note") {
-                FormSection(label = "How did it feel?", optional = true, muted = muted, onBg = onBg, outline = outline) {
+                FormSection(label = "Note", optional = true, muted = muted, onBg = onBg, outline = outline) {
                     BasicTextField(
                         value = note,
                         onValueChange = { note = it.take(300) },
@@ -316,84 +251,35 @@ fun CardioLogSheet(
                 }
             }
 
-            item("actions") {
-                Spacer(Modifier.height(8.dp))
-                Row(
-                    modifier = Modifier.padding(horizontal = 24.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(20.dp)
-                ) {
-                    OutlinedButton(
-                        onClick = {
-                            onSave(
-                                type,
-                                if (type.isRest) 0 else durationInt,
-                                if (type.isRest) null else distanceDouble,
-                                if (type.isRest) null else effort,
-                                if (type.isRest) restReason else null,
-                                note.ifBlank { null },
-                                dateMs,
-                                if (type == CardioType.HIIT) intervalInt else null,
-                                if (type.isRest) null else hrZone
-                            )
-                        },
-                        enabled = canSubmit,
-                        shape = RoundedCornerShape(50),
-                        border = androidx.compose.foundation.BorderStroke(
-                            width = 1.5.dp,
-                            color = if (canSubmit) onBg else onBg.copy(alpha = 0.3f)
-                        ),
-                        colors = ButtonDefaults.outlinedButtonColors(
-                            contentColor = onBg,
-                            disabledContentColor = onBg.copy(alpha = 0.4f)
-                        ),
-                        contentPadding = PaddingValues(horizontal = 24.dp, vertical = 14.dp)
-                    ) {
-                        Text(
-                            when {
-                                editing != null -> "Save changes →"
-                                type.isRest -> "Save rest day →"
-                                else -> "Save entry →"
-                            },
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
-                    TextButton(onClick = onDismiss) {
-                        Text("cancel", style = MaterialTheme.typography.bodySmall, color = muted)
-                    }
-                }
-                Spacer(Modifier.height(16.dp))
-            }
+            cardioSaveActionsItem(
+                editing = editing != null,
+                type = type,
+                canSubmit = canSubmit,
+                onSubmit = {
+                    onSave(
+                        type,
+                        if (type.isRest) 0 else durationInt,
+                        if (type.isRest) null else distanceDouble,
+                        if (type.isRest) null else effort,
+                        if (type.isRest) restReason else null,
+                        note.ifBlank { null },
+                        dateMs,
+                        if (type == CardioType.HIIT) intervalInt else null,
+                        if (type.isRest) null else hrZone
+                    )
+                },
+                onCancel = onDismiss,
+                onBg = onBg, muted = muted
+            )
         }
     }
 
     if (showDatePicker) {
-        val dpState = rememberDatePickerState(initialSelectedDateMillis = dateMs)
-        DatePickerDialog(
-            onDismissRequest = { showDatePicker = false },
-            confirmButton = {
-                TextButton(onClick = {
-                    dpState.selectedDateMillis?.let { picked -> dateMs = combineDay(picked, dateMs) }
-                    showDatePicker = false
-                }) { Text("OK") }
-            },
-            dismissButton = { TextButton(onClick = { showDatePicker = false }) { Text("Cancel") } }
-        ) {
-            DatePicker(state = dpState)
-        }
+        CardioDatePickerDialog(
+            dateMs = dateMs,
+            onPicked = { dateMs = it },
+            onDismiss = { showDatePicker = false }
+        )
     }
-}
-
-/**
- * The date picker returns a UTC-midnight millis for the chosen day; keep the time-of-day from
- * [keepTimeFromMs] (the entry's original time, or "now" for a new entry) so backdating only moves
- * the calendar day, not the clock.
- */
-private fun combineDay(pickedUtcMidnightMs: Long, keepTimeFromMs: Long): Long {
-    val zone = ZoneId.systemDefault()
-    val day = Instant.ofEpochMilli(pickedUtcMidnightMs).atZone(ZoneOffset.UTC).toLocalDate()
-    val time = Instant.ofEpochMilli(keepTimeFromMs).atZone(zone).toLocalTime()
-    return day.atTime(time).atZone(zone).toInstant().toEpochMilli()
 }
 

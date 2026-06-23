@@ -96,7 +96,9 @@ fun HubScreen(
         ) { page ->
             // Pages are keyed off the visible tab list so they always line up with the bar.
             when (tabs.getOrElse(page) { BottomTab.HOME }) {
-                BottomTab.CARDIO -> CardioScreen()
+                BottomTab.CARDIO -> CardioScreen(
+                    onOpenHistory = { nav.navigate(Routes.SESSION_HISTORY) }
+                )
                 BottomTab.STATS -> DayListScreen(
                     onOpenDay = { dayKey -> nav.navigate(Routes.gymDay(dayKey)) },
                     onOpenDayQuick = { dayKey -> nav.navigate(Routes.gymDay(dayKey, skipWarmup = true)) },
@@ -127,6 +129,9 @@ fun HubScreen(
                     onOpenCoachLab = { nav.navigate(Routes.COACH_LAB) },
                     onOpenProfile = { goToTab(BottomTab.PROFILE) },
                     onOpenSession = { sessionId -> nav.navigate(Routes.sessionDetail(sessionId)) },
+                    // "View all" opens the real searchable History destination (a proper back-stack
+                    // entry) rather than a bottom sheet, so Back from a session returns to the list.
+                    onViewAllHistory = { nav.navigate(Routes.SESSION_HISTORY) },
                     onLogFreestyle = { nav.navigate(Routes.FREESTYLE_LOG) },
                     onBuildPlan = { nav.navigate(Routes.programBuilder()) }
                 )

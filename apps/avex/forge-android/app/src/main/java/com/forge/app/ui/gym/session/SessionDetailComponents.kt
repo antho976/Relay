@@ -2,6 +2,7 @@ package com.forge.app.ui.gym.session
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,12 +17,17 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.data.db.types.EffortRating
@@ -97,6 +103,10 @@ internal fun ExerciseCard(
     accent: Color,
     outline: Color
 ) {
+    val useKg = LocalForgeSettings.current.useKg
+    // Collapsed by default so the page reads light; the chart + summary carry the gist, the full
+    // set table is one tap away.
+    var expanded by rememberSaveable(ex.name) { mutableStateOf(false) }
     Column(
         modifier = Modifier.fillMaxWidth()
             .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp))
@@ -108,7 +118,15 @@ internal fun ExerciseCard(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(ex.name, style = MaterialTheme.typography.bodyLarge, color = onBg, modifier = Modifier.weight(1f))
+            Text(
+                ex.name, style = MaterialTheme.typography.bodyLarge, color = onBg,
+                maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f)
+            )
+            // A new best e1RM lights up like a PR; otherwise it's a quiet reference chip.
+            ex.e1rmLb?.let { e ->
+                if (ex.e1rmIsBest) Chip("e1RM ${formatWeight(e, useKg)}", accent, accent.copy(alpha = 0.15f))
+                else Chip("e1RM ${formatWeight(e, useKg)}", muted, outline.copy(alpha = 0.12f))
+            }
             if (ex.isPr) Chip("PR", accent, accent.copy(alpha = 0.15f))
             ex.effort?.let { Chip(it.displayName, effortColor(it), effortColor(it).copy(alpha = 0.15f)) }
         }
@@ -116,11 +134,30 @@ internal fun ExerciseCard(
             Text("“${ex.note}”", style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic, fontSize = 11.sp)
         }
 
-        SetTable(ex.sets, onBg, muted, accent, outline)
+        // One-line gist of the set table while it's collapsed.
+        Text(exerciseSummary(ex, useKg), style = MaterialTheme.typography.bodySmall, color = muted)
 
         // The per-exercise graph (bars or line) in the page's chosen metric.
         PerExerciseSetChart(ex, metric, style, accent, muted, outline)
+
+        Text(
+            if (expanded) "Hide sets ▴" else "Show all ${ex.sets.size} ${if (ex.sets.size == 1) "set" else "sets"} ▾",
+            style = MaterialTheme.typography.labelMedium,
+            color = accent,
+            modifier = Modifier.clickable { expanded = !expanded }
+        )
+        if (expanded) SetTable(ex.sets, onBg, muted, accent, outline)
     }
+}
+
+/** "Top 135 × 8 · 4 sets · 4,320 lb" — the collapsed-card gist. */
+private fun exerciseSummary(ex: ExerciseDetail, useKg: Boolean): String {
+    val top = ex.sets.firstOrNull { it.isTopSet } ?: ex.sets.maxByOrNull { it.weightLb ?: 0.0 }
+    return buildList {
+        top?.let { add("Top ${weightLabel(it, useKg)} × ${it.reps}") }
+        add("${ex.sets.size} ${if (ex.sets.size == 1) "set" else "sets"}")
+        if (ex.volumeLb > 0) add(formatVolume(ex.volumeLb, useKg))
+    }.joinToString(" · ")
 }
 
 @Composable

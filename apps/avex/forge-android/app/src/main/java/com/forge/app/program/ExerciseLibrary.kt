@@ -901,56 +901,77 @@ object ExerciseLibrary {
      * contraindications; everything else is unflagged. A movement can stress more than one area.
      */
     private val contraindications: Map<String, Set<ProblemArea>> = mapOf(
-        // Knee-loading
-        "goblet-squat" to setOf(ProblemArea.KNEES),
-        "db-squat" to setOf(ProblemArea.KNEES),
-        "db-bulgarian-split-squat" to setOf(ProblemArea.KNEES),
-        "db-reverse-lunge" to setOf(ProblemArea.KNEES),
-        "db-step-up" to setOf(ProblemArea.KNEES),
-        "db-walking-lunge" to setOf(ProblemArea.KNEES),
+        // ── Squat pattern — knees (flexion under load), hips (deep flexion), ankles (dorsiflexion).
+        //    Back-loaded barbell squats add lower back + neck (bar across the traps).
+        "goblet-squat" to setOf(ProblemArea.KNEES, ProblemArea.HIPS, ProblemArea.ANKLES),
+        "db-squat" to setOf(ProblemArea.KNEES, ProblemArea.HIPS, ProblemArea.ANKLES),
+        "front-squat" to setOf(ProblemArea.KNEES, ProblemArea.HIPS, ProblemArea.ANKLES),
+        "leg-press" to setOf(ProblemArea.KNEES, ProblemArea.HIPS),
+        "hack-squat" to setOf(ProblemArea.KNEES, ProblemArea.HIPS, ProblemArea.ANKLES),
+        "smith-squat" to setOf(ProblemArea.KNEES, ProblemArea.HIPS, ProblemArea.ANKLES),
+        "kb-goblet-squat" to setOf(ProblemArea.KNEES, ProblemArea.HIPS, ProblemArea.ANKLES),
+        "bw-squat" to setOf(ProblemArea.KNEES, ProblemArea.HIPS, ProblemArea.ANKLES),
+        "back-squat" to setOf(ProblemArea.KNEES, ProblemArea.HIPS, ProblemArea.ANKLES, ProblemArea.LOWER_BACK, ProblemArea.NECK),
+        "pause-squat" to setOf(ProblemArea.KNEES, ProblemArea.HIPS, ProblemArea.ANKLES, ProblemArea.LOWER_BACK, ProblemArea.NECK),
+        // ── Lunge pattern — knees + hips, plus ankles (single-leg balance / deep dorsiflexion).
+        "db-bulgarian-split-squat" to setOf(ProblemArea.KNEES, ProblemArea.HIPS, ProblemArea.ANKLES),
+        "db-reverse-lunge" to setOf(ProblemArea.KNEES, ProblemArea.HIPS, ProblemArea.ANKLES),
+        "db-walking-lunge" to setOf(ProblemArea.KNEES, ProblemArea.HIPS, ProblemArea.ANKLES),
+        "db-step-up" to setOf(ProblemArea.KNEES, ProblemArea.HIPS, ProblemArea.ANKLES),
+        "bw-reverse-lunge" to setOf(ProblemArea.KNEES, ProblemArea.HIPS, ProblemArea.ANKLES),
+        // ── Knee isolation.
         "leg-extension" to setOf(ProblemArea.KNEES),
-        // Shoulder-stressing (overhead / dips / front delt / upright row / loaded stretch)
-        "db-overhead-press" to setOf(ProblemArea.SHOULDERS),
+        // ── Hip hinges — lower back + hips (hip-dominant load). Single-leg RDL adds ankles (balance).
+        "db-romanian-deadlift" to setOf(ProblemArea.LOWER_BACK, ProblemArea.HIPS),
+        "db-stiff-leg-deadlift" to setOf(ProblemArea.LOWER_BACK, ProblemArea.HIPS),
+        "db-single-leg-rdl" to setOf(ProblemArea.LOWER_BACK, ProblemArea.HIPS, ProblemArea.ANKLES),
+        "barbell-rdl" to setOf(ProblemArea.LOWER_BACK, ProblemArea.HIPS),
+        "conventional-deadlift" to setOf(ProblemArea.LOWER_BACK, ProblemArea.HIPS),
+        "trap-bar-deadlift" to setOf(ProblemArea.LOWER_BACK, ProblemArea.HIPS),
+        "kb-swing" to setOf(ProblemArea.LOWER_BACK, ProblemArea.HIPS),
+        "bw-good-morning" to setOf(ProblemArea.LOWER_BACK, ProblemArea.HIPS),
+        // ── Bent-over rows — lower back.
+        "db-row" to setOf(ProblemArea.LOWER_BACK),
+        "barbell-row" to setOf(ProblemArea.LOWER_BACK),
+        // ── Direct hip-joint loading — heavy thrust + abduction/adduction machines.
+        "barbell-hip-thrust" to setOf(ProblemArea.HIPS),
+        "mwm-inner-thigh" to setOf(ProblemArea.HIPS),
+        "mwm-outer-leg-kick" to setOf(ProblemArea.HIPS),
+        // ── Overhead / shoulder-stressing presses & raises — loaded overhead work adds neck.
+        "db-overhead-press" to setOf(ProblemArea.SHOULDERS, ProblemArea.NECK),
+        "barbell-overhead-press" to setOf(ProblemArea.SHOULDERS, ProblemArea.NECK),
+        "machine-shoulder-press" to setOf(ProblemArea.SHOULDERS, ProblemArea.NECK),
+        "smith-shoulder-press" to setOf(ProblemArea.SHOULDERS, ProblemArea.NECK),
+        "kb-press" to setOf(ProblemArea.SHOULDERS, ProblemArea.NECK),
+        "mwm-upright-row" to setOf(ProblemArea.SHOULDERS, ProblemArea.NECK),
         "db-fly" to setOf(ProblemArea.SHOULDERS),
         "db-pullover" to setOf(ProblemArea.SHOULDERS),
         "db-front-raise" to setOf(ProblemArea.SHOULDERS),
         "mwm-front-delt-raise" to setOf(ProblemArea.SHOULDERS),
-        "mwm-upright-row" to setOf(ProblemArea.SHOULDERS),
-        "bench-dip" to setOf(ProblemArea.SHOULDERS, ProblemArea.WRISTS),
-        // Spinal-loading hip hinges / bent-over
-        "db-romanian-deadlift" to setOf(ProblemArea.LOWER_BACK),
-        "db-stiff-leg-deadlift" to setOf(ProblemArea.LOWER_BACK),
-        "db-single-leg-rdl" to setOf(ProblemArea.LOWER_BACK),
-        "db-row" to setOf(ProblemArea.LOWER_BACK),
-        // Wrist-loading (bodyweight on hands)
-        "push-up" to setOf(ProblemArea.WRISTS),
-        "diamond-push-up" to setOf(ProblemArea.WRISTS),
-        "plank" to setOf(ProblemArea.WRISTS),
-        // Bodyweight fallbacks
-        "bw-pike-push-up" to setOf(ProblemArea.SHOULDERS, ProblemArea.WRISTS),
-        "bw-squat" to setOf(ProblemArea.KNEES),
-        "bw-reverse-lunge" to setOf(ProblemArea.KNEES),
-        "bw-good-morning" to setOf(ProblemArea.LOWER_BACK),
-        // Generalized library (2026-06-11)
-        "back-squat" to setOf(ProblemArea.KNEES, ProblemArea.LOWER_BACK),
-        "front-squat" to setOf(ProblemArea.KNEES),
-        "pause-squat" to setOf(ProblemArea.KNEES, ProblemArea.LOWER_BACK),
-        "leg-press" to setOf(ProblemArea.KNEES),
-        "hack-squat" to setOf(ProblemArea.KNEES),
-        "smith-squat" to setOf(ProblemArea.KNEES),
-        "kb-goblet-squat" to setOf(ProblemArea.KNEES),
-        "barbell-overhead-press" to setOf(ProblemArea.SHOULDERS),
-        "machine-shoulder-press" to setOf(ProblemArea.SHOULDERS),
-        "smith-shoulder-press" to setOf(ProblemArea.SHOULDERS),
-        "kb-press" to setOf(ProblemArea.SHOULDERS),
         "pec-deck" to setOf(ProblemArea.SHOULDERS),
         "cable-fly" to setOf(ProblemArea.SHOULDERS),
-        "dip-machine" to setOf(ProblemArea.SHOULDERS),
-        "barbell-row" to setOf(ProblemArea.LOWER_BACK),
-        "barbell-rdl" to setOf(ProblemArea.LOWER_BACK),
-        "conventional-deadlift" to setOf(ProblemArea.LOWER_BACK),
-        "trap-bar-deadlift" to setOf(ProblemArea.LOWER_BACK),
-        "kb-swing" to setOf(ProblemArea.LOWER_BACK)
+        // ── Dips / close-grip presses — shoulders and/or elbows (loaded lockout).
+        "bench-dip" to setOf(ProblemArea.SHOULDERS, ProblemArea.WRISTS, ProblemArea.ELBOWS),
+        "dip-machine" to setOf(ProblemArea.SHOULDERS, ProblemArea.ELBOWS),
+        "close-grip-bench-press" to setOf(ProblemArea.ELBOWS),
+        "close-grip-db-press" to setOf(ProblemArea.ELBOWS),
+        // ── Elbow-stressing arm work — loaded skull crushers / overhead ext / straight-bar & preacher curls.
+        //    (Gentler picks — DB/hammer/cable curls, pushdowns — stay unflagged so the plan can steer to them.)
+        "db-skull-crusher" to setOf(ProblemArea.ELBOWS),
+        "ez-bar-skullcrusher" to setOf(ProblemArea.ELBOWS),
+        "db-overhead-tricep-ext" to setOf(ProblemArea.ELBOWS),
+        "barbell-curl" to setOf(ProblemArea.ELBOWS),
+        "preacher-curl" to setOf(ProblemArea.ELBOWS),
+        // ── Wrist-loading (bodyweight on the hands). Diamond push-up also loads the elbows.
+        "push-up" to setOf(ProblemArea.WRISTS),
+        "diamond-push-up" to setOf(ProblemArea.WRISTS, ProblemArea.ELBOWS),
+        "plank" to setOf(ProblemArea.WRISTS),
+        "bw-pike-push-up" to setOf(ProblemArea.SHOULDERS, ProblemArea.WRISTS),
+        // ── Loaded calf work — ankles (plantarflexion under a deep stretch).
+        "standing-calf-raise" to setOf(ProblemArea.ANKLES),
+        "seated-calf-raise" to setOf(ProblemArea.ANKLES),
+        "single-leg-calf-raise" to setOf(ProblemArea.ANKLES),
+        "calf-raise-machine" to setOf(ProblemArea.ANKLES)
     )
 
     fun contraindicationsOf(def: ExerciseDef): Set<ProblemArea> =

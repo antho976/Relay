@@ -25,126 +25,52 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.PathEffect
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.forge.app.data.db.entities.CardioEntry
-import com.forge.app.domain.cardio.CardioType
+import com.forge.app.ui.cardio.components.BarGeom
+import com.forge.app.ui.cardio.components.VerticalBarRow
 import com.forge.app.ui.cardio.state.CardioDayCell
-import com.forge.app.domain.cardio.pacePerKm
-import kotlin.math.abs
-import java.time.Instant
-import java.time.LocalDate
-import java.time.ZoneId
-import java.time.format.TextStyle
-import java.util.Locale
 
+/**
+ * A slim, glanceable week summary — week range + a one-line sessions/minutes tally with a "stats →"
+ * affordance. No big headline; the full per-week breakdown (graphs, numbers, day bars) lives behind
+ * the tap, in the swipeable stats overlay. The whole block is the tap target.
+ */
 @Composable
 internal fun CardioHero(
+    weekDays: Int,
     weekMinutes: Int,
-    weekTargetMin: Int,
     weekNum: Int,
     weekLabel: String,
-    weekEntries: List<CardioEntry>,
-    weekDistanceKm: Double,
-    lastWeekMinutes: Int,
-    lastWeekDistanceKm: Double,
-    cardioStreakDays: Int,
-    zone: ZoneId,
     onBg: Color,
-    muted: Color
+    muted: Color,
+    onOpenDetail: () -> Unit
 ) {
-    val description = remember(weekEntries) { buildWeekDescription(weekEntries, zone) }
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .clickable(onClick = onOpenDetail)
             .padding(horizontal = 24.dp)
-            .padding(top = 8.dp, bottom = 8.dp)
+            .padding(top = 12.dp, bottom = 10.dp)
     ) {
         Text("WEEK $weekNum · $weekLabel", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
         Spacer(Modifier.height(8.dp))
-        Row(verticalAlignment = Alignment.Bottom) {
-            Text(
-                if (weekMinutes > 0) "$weekMinutes" else "—",
-                style = MaterialTheme.typography.displayLarge,
-                color = onBg
-            )
-            Text(
-                " minutes.",
-                style = MaterialTheme.typography.headlineSmall,
-                color = onBg,
-                fontStyle = FontStyle.Italic,
-                modifier = Modifier.padding(start = 4.dp, bottom = 6.dp)
-            )
-        }
-        if (description.isNotEmpty()) {
-            Spacer(Modifier.height(4.dp))
-            Text(description, style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic)
-        }
-        // Distance + average pace for the week.
-        if (weekDistanceKm > 0) {
-            Spacer(Modifier.height(4.dp))
-            val dist = String.format(Locale.US, "%.1f", weekDistanceKm)
-            val pace = pacePerKm(weekMinutes, weekDistanceKm)
-            Text(
-                "$dist km this week" + (pace?.let { " · $it /km avg" } ?: ""),
-                style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic
-            )
-        }
-        // This-week-vs-last-week trend (minutes + distance).
-        if (lastWeekMinutes > 0 || lastWeekDistanceKm > 0) {
-            Spacer(Modifier.height(4.dp))
-            val minDelta = weekMinutes - lastWeekMinutes
-            val distDelta = weekDistanceKm - lastWeekDistanceKm
-            val arrow = if (minDelta >= 0) "▲" else "▼"
-            val distPart = if (lastWeekDistanceKm > 0 || weekDistanceKm > 0)
-                " · ${if (distDelta >= 0) "+" else "−"}${String.format(Locale.US, "%.1f", abs(distDelta))} km" else ""
-            Text(
-                "$arrow ${abs(minDelta)} min$distPart vs last week",
-                style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp
-            )
-        }
-        // Cardio streak — consecutive days with an active session.
-        if (cardioStreakDays >= 2) {
-            Spacer(Modifier.height(4.dp))
-            Text(
-                "$cardioStreakDays-day cardio streak",
-                style = MaterialTheme.typography.labelSmall, color = onBg, fontSize = 9.sp, fontWeight = FontWeight.SemiBold
-            )
-        }
-        // Weekly-goal progress (Cat 17) — only when a goal is set in Settings.
-        if (weekTargetMin > 0) {
-            Spacer(Modifier.height(10.dp))
-            val frac = (weekMinutes.toFloat() / weekTargetMin).coerceIn(0f, 1f)
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(6.dp)
-                    .clip(RoundedCornerShape(3.dp))
-                    .background(muted.copy(alpha = 0.2f))
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth(frac)
-                        .height(6.dp)
-                        .clip(RoundedCornerShape(3.dp))
-                        .background(onBg)
-                )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            val summary = if (weekDays > 0) {
+                val d = if (weekDays == 1) "day" else "days"
+                "$weekDays $d · $weekMinutes min"
+            } else {
+                "Nothing logged yet this week"
             }
-            Spacer(Modifier.height(4.dp))
-            Text(
-                if (weekMinutes >= weekTargetMin) "Weekly goal hit — $weekMinutes / $weekTargetMin min"
-                else "$weekMinutes / $weekTargetMin min this week",
-                style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp
-            )
+            Text(summary, style = MaterialTheme.typography.bodyLarge, color = onBg)
+            Text("stats →", style = MaterialTheme.typography.labelMedium, color = onBg.copy(alpha = 0.75f))
         }
-        Spacer(Modifier.height(16.dp))
     }
 }
 
@@ -154,80 +80,48 @@ internal fun WeekBoxRow(
     todayDow: Int,
     onBg: Color,
     muted: Color,
-    outline: Color
+    outline: Color,
+    onClick: () -> Unit
 ) {
     val dayLetters = listOf("M", "T", "W", "T", "F", "S", "S")
     val maxMin = (days.maxOfOrNull { it.minutes } ?: 0).coerceAtLeast(1)
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-        verticalAlignment = Alignment.Bottom
-    ) {
-        dayLetters.forEachIndexed { i, letter ->
-            val cell = days.getOrNull(i)
-            val mins = cell?.minutes ?: 0
-            val isToday = i == todayDow
-            val hasActivity = mins > 0
-            // A rest day reads distinctly from an untrained day (rest is a logged choice, not a gap).
-            val isRest = !hasActivity && (cell?.isRest ?: false)
-            Column(
-                modifier = Modifier.weight(1f),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                when {
-                    hasActivity -> Text("${mins}m", fontSize = 9.sp, color = onBg, fontWeight = FontWeight.SemiBold)
-                    isRest -> Text("rest", fontSize = 8.sp, color = muted)
-                }
-                // Proportional bar in a fixed 48dp track — clearly readable, white-on-dark.
-                Box(
-                    modifier = Modifier.fillMaxWidth().height(48.dp),
-                    contentAlignment = Alignment.BottomCenter
-                ) {
-                    val frac = (mins.toFloat() / maxMin).coerceIn(0f, 1f)
-                    val barHeight = when {
-                        hasActivity -> (8 + 40 * frac).dp
-                        isRest -> 12.dp
-                        else -> 4.dp
-                    }
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(barHeight)
-                            .clip(RoundedCornerShape(4.dp))
-                            .then(
-                                if (isToday && !hasActivity && !isRest) {
-                                    Modifier.drawBehind {
-                                        drawRoundRect(
-                                            color = onBg.copy(alpha = 0.6f),
-                                            style = Stroke(
-                                                width = 1.5.dp.toPx(),
-                                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(5f, 4f), 0f)
-                                            ),
-                                            cornerRadius = CornerRadius(4.dp.toPx())
-                                        )
-                                    }
-                                } else {
-                                    Modifier.background(
-                                        when {
-                                            hasActivity -> onBg
-                                            isRest -> muted.copy(alpha = 0.5f)
-                                            else -> outline.copy(alpha = 0.35f)
-                                        }
-                                    )
-                                }
-                            )
-                    )
-                }
-                Text(
-                    letter,
-                    fontSize = 9.sp,
-                    color = if (isToday) onBg else muted,
-                    fontWeight = if (isToday) FontWeight.Bold else FontWeight.Normal
-                )
-            }
-        }
+    // (minutes, hasActivity, isRest) for a day. A rest day reads distinctly from an untrained one.
+    fun cellAt(i: Int): Triple<Int, Boolean, Boolean> {
+        val cell = days.getOrNull(i)
+        val mins = cell?.minutes ?: 0
+        val hasActivity = mins > 0
+        return Triple(mins, hasActivity, !hasActivity && (cell?.isRest ?: false))
     }
+    VerticalBarRow(
+        count = 7,
+        trackHeight = 48.dp,
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 24.dp),
+        bar = { i ->
+            val (mins, hasActivity, isRest) = cellAt(i)
+            val frac = (mins.toFloat() / maxMin).coerceIn(0f, 1f)
+            when {
+                hasActivity -> BarGeom(height = (8 + 40 * frac).dp, fill = onBg)
+                isRest -> BarGeom(height = 12.dp, fill = muted.copy(alpha = 0.5f))
+                i == todayDow -> BarGeom(height = 4.dp, dashedOutline = onBg.copy(alpha = 0.6f))
+                else -> BarGeom(height = 4.dp, fill = outline.copy(alpha = 0.35f))
+            }
+        },
+        top = { i ->
+            val (mins, hasActivity, isRest) = cellAt(i)
+            when {
+                hasActivity -> Text("${mins}m", fontSize = 9.sp, color = onBg, fontWeight = FontWeight.SemiBold)
+                isRest -> Text("rest", fontSize = 8.sp, color = muted)
+            }
+        },
+        bottom = { i ->
+            Text(
+                dayLetters[i],
+                fontSize = 9.sp,
+                color = if (i == todayDow) onBg else muted,
+                fontWeight = if (i == todayDow) FontWeight.Bold else FontWeight.Normal
+            )
+        }
+    )
     Spacer(Modifier.height(8.dp))
 }
 
@@ -258,18 +152,4 @@ internal fun LogTodayRow(onOpenLog: () -> Unit, onBg: Color, muted: Color, outli
         Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, tint = onBg, modifier = Modifier.size(16.dp))
     }
     Spacer(Modifier.height(8.dp))
-}
-
-internal fun buildWeekDescription(entries: List<CardioEntry>, zone: ZoneId): String {
-    if (entries.isEmpty()) return ""
-    if (entries.size == 1) {
-        val e = entries.first()
-        val typeName = CardioType.fromCode(e.type).displayName.lowercase()
-        val dayName = Instant.ofEpochMilli(e.date)
-            .atZone(zone).dayOfWeek
-            .getDisplayName(TextStyle.FULL, Locale.getDefault())
-            .lowercase()
-        return "One $typeName on $dayName."
-    }
-    return "${entries.size} sessions this week."
 }

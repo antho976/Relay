@@ -374,33 +374,33 @@ class ProgramRepository @Inject constructor(
     private companion object {
         // Generic per-archetype warm-ups for generated days that don't reuse a seed key (Cluster C2).
         val WARMUP_PUSH = listOf(
+            "Jumping jacks — 20 reps",
             "Arm circles — 10 forward, 10 back",
-            "Push-ups — 10 slow reps",
-            "Band/empty-hand shoulder press — 15 reps",
-            "Scapular wall slides — 10 reps"
+            "Shoulder rolls — 10 each direction",
+            "Push-ups — 10 slow reps"
         )
         val WARMUP_PULL = listOf(
-            "Dead hangs or scapular pulls — 20 seconds",
-            "Cat-cow stretches — 10 reps",
-            "Band pull-aparts — 15 reps",
-            "Light face pulls — 15 reps"
+            "Jumping jacks — 20 reps",
+            "Arm circles — 10 forward, 10 back",
+            "Shoulder rolls — 10 each direction",
+            "Standing torso twists — 10 each side"
         )
         val WARMUP_LEGS = listOf(
+            "Jumping jacks — 20 reps",
             "Bodyweight squats — 15 reps slow",
-            "Leg swings — 10 each leg, front and side",
             "Walking lunges — 10 steps",
-            "Glute bridges — 15 reps"
-        )
-        val WARMUP_FULL = listOf(
-            "Bodyweight squats — 15 reps",
-            "Push-ups — 10 reps",
-            "Arm circles — 10 forward, 10 back",
             "Leg swings — 10 each leg"
         )
+        val WARMUP_FULL = listOf(
+            "Jumping jacks — 20 reps",
+            "Bodyweight squats — 15 reps",
+            "Push-ups — 10 reps",
+            "Arm circles — 10 forward, 10 back"
+        )
         val WARMUP_ARMS = listOf(
+            "Jumping jacks — 20 reps",
             "Arm circles — 10 forward, 10 back",
-            "Band pull-aparts — 15 reps",
-            "Light curls with empty hands — 15 reps",
+            "Shoulder rolls — 10 each direction",
             "Wrist circles — 10 each direction"
         )
     }

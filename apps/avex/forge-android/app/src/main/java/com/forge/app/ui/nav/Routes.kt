@@ -11,6 +11,7 @@ object Routes {
     const val SETTINGS = "settings"
     const val SESSION_HISTORY = "gym/session-history"
     const val SESSION_DETAIL = "gym/session-detail/{sessionId}"
+    const val CARDIO_SESSION = "cardio/session/{cardioId}"
     const val NOTES_SEARCH = "gym/notes-search"
     const val RECAP = "recap"
     const val COACH_BRIEF = "coach-brief"
@@ -32,9 +33,12 @@ object Routes {
     const val ARG_DAY_KEY = "dayKey"
     const val ARG_SKIP_WARMUP = "skipWarmup"
     const val ARG_SESSION_ID = "sessionId"
+    const val ARG_CARDIO_ID = "cardioId"
 
     fun gymDay(dayKey: String, skipWarmup: Boolean = false) =
         "gym/day/$dayKey?skipWarmup=$skipWarmup"
 
     fun sessionDetail(sessionId: Long) = "gym/session-detail/$sessionId"
+
+    fun cardioSession(cardioId: Long) = "cardio/session/$cardioId"
 }

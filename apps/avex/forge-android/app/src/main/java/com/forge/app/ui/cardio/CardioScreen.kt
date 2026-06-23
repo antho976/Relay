@@ -1,11 +1,12 @@
 package com.forge.app.ui.cardio
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
@@ -24,6 +25,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -34,9 +36,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.forge.app.domain.cardio.CardioType
+import com.forge.app.ui.cardio.components.CardioEmptyState
 import com.forge.app.ui.cardio.components.CardioEntryRow
-import com.forge.app.ui.common.EmptyState
+import com.forge.app.ui.cardio.components.CardioSessionDetailSheet
+import com.forge.app.ui.cardio.components.CardioWatchBanner
+import com.forge.app.ui.cardio.components.CardioWeekDetailSheet
 import com.forge.app.ui.common.forgeItemMotion
 import com.forge.app.ui.cardio.components.CardioLogSheet
 import com.forge.app.ui.cardio.state.CardioUiState
@@ -46,28 +50,86 @@ import java.time.format.DateTimeFormatter
 import java.time.temporal.WeekFields
 import java.util.Locale
 
+/** Most-recent entries shown inline; the rest sit behind "See all" (the full history is still one tap away). */
+private const val HISTORY_PREVIEW = 5
+
 @Composable
 fun CardioScreen(
     // Null when shown as a hub pager page (no redundant back arrow); a real callback as a deep route.
     onBack: (() -> Unit)? = null,
+    // When set, the "See all" row opens the unified History page (where cardio + workouts merge);
+    // null falls back to expanding the list inline.
+    onOpenHistory: (() -> Unit)? = null,
     viewModel: CardioViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val goHome = com.forge.app.ui.common.LocalGoHome.current
 
-    if (state.sheetOpen) {
-        CardioLogSheet(
+    val zone = ZoneId.systemDefault()
+    val today = LocalDate.now(zone)
+    val weekNum = today.get(WeekFields.ISO.weekOfWeekBasedYear())
+    val isoWeekStart = today.minusDays(today.dayOfWeek.value.toLong() - 1)
+    val isoWeekEnd = isoWeekStart.plusDays(6)
+    val weekLabel = remember(weekNum) {
+        val fmt = DateTimeFormatter.ofPattern("MMM d", Locale.getDefault())
+        "${isoWeekStart.format(fmt).uppercase()} — ${isoWeekEnd.format(fmt).uppercase()}"
+    }
+    val isoWeekStartMs = remember(isoWeekStart) {
+        isoWeekStart.atStartOfDay(zone).toInstant().toEpochMilli()
+    }
+    val todayDow = today.dayOfWeek.value - 1
+
+    // The session whose detail overlay is open (if any) — auto-closed if that entry vanishes (deleted).
+    val sessionEntry = state.sessionDetailId?.let { id -> state.entries.firstOrNull { it.id == id } }
+    LaunchedEffect(state.sessionDetailId, sessionEntry) {
+        if (state.sessionDetailId != null && sessionEntry == null) viewModel.closeSessionDetail()
+    }
+
+    when {
+        state.sheetOpen -> CardioLogSheet(
             onDismiss = viewModel::closeSheet,
             onSave = viewModel::saveEntry,
             editing = state.editing,
-            bodyweightLb = state.bodyweightLb
+            bodyweightLb = state.bodyweightLb,
+            onHome = { viewModel.closeSheet(); goHome() }
         )
-    } else {
-        CardioListContent(
+        sessionEntry != null -> CardioSessionDetailSheet(
+            entry = sessionEntry,
+            bodyweightLb = state.bodyweightLb,
+            route = null, // Health Connect route read is a deferred follow-up.
+            onEdit = { viewModel.editEntry(sessionEntry.id) },
+            onDelete = { viewModel.requestDelete(sessionEntry.id) },
+            onBack = viewModel::closeSessionDetail,
+            onHome = { viewModel.closeSessionDetail(); goHome() }
+        )
+        state.detailOpen -> CardioWeekDetailSheet(
+            allEntries = state.entries,
+            currentWeekStartMs = isoWeekStartMs,
+            weekTargetMin = state.weekTargetMin,
+            cardioStreakDays = state.cardioStreakDays,
+            bodyweightLb = state.bodyweightLb,
+            wearable = null, // Health Connect steps read is a deferred follow-up.
+            todayDow = todayDow,
+            zone = zone,
+            onOpenSession = viewModel::openSessionDetail,
+            onBack = viewModel::closeDetail,
+            onHome = { viewModel.closeDetail(); goHome() }
+        )
+        else -> CardioListContent(
             state = state,
+            weekNum = weekNum,
+            weekLabel = weekLabel,
+            today = today,
+            todayDow = todayDow,
+            weekDays = state.cardioDaysThisWeek,
             onBack = onBack,
             onOpenLog = viewModel::openSheet,
+            onOpenDetail = viewModel::openDetail,
+            onOpenSession = viewModel::openSessionDetail,
             onRequestDelete = viewModel::requestDelete,
-            onEdit = viewModel::editEntry
+            onSeeAll = onOpenHistory ?: viewModel::toggleHistoryExpanded,
+            seeAllExpands = onOpenHistory == null,
+            onDismissHint = viewModel::dismissWearableHint
         )
     }
 
@@ -86,44 +148,33 @@ fun CardioScreen(
 @Composable
 private fun CardioListContent(
     state: CardioUiState,
+    weekNum: Int,
+    weekLabel: String,
+    today: LocalDate,
+    todayDow: Int,
+    weekDays: Int,
     onBack: (() -> Unit)?,
     onOpenLog: () -> Unit,
+    onOpenDetail: () -> Unit,
+    onOpenSession: (Long) -> Unit,
     onRequestDelete: (Long) -> Unit,
-    onEdit: (Long) -> Unit
+    onSeeAll: () -> Unit,
+    seeAllExpands: Boolean,
+    onDismissHint: () -> Unit
 ) {
-    val zone = ZoneId.systemDefault()
-    val today = LocalDate.now(zone)
-    val weekNum = today.get(WeekFields.ISO.weekOfWeekBasedYear())
-    val isoWeekStart = today.minusDays(today.dayOfWeek.value.toLong() - 1)
-    val isoWeekEnd = isoWeekStart.plusDays(6)
-    val weekLabel = remember(weekNum) {
-        val fmt = DateTimeFormatter.ofPattern("MMM d", Locale.getDefault())
-        "${isoWeekStart.format(fmt).uppercase()} — ${isoWeekEnd.format(fmt).uppercase()}"
-    }
-    val todayDow = today.dayOfWeek.value - 1
-    val isoWeekStartMs = remember(isoWeekStart) {
-        isoWeekStart.atStartOfDay(zone).toInstant().toEpochMilli()
-    }
-    val weekEntries = remember(state.entries, isoWeekStartMs) {
-        state.entries.filter { it.date >= isoWeekStartMs && it.type != CardioType.REST.code }
-    }
-
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val outline = MaterialTheme.colorScheme.outline
 
+    val isEmpty = state.entries.isEmpty() && !state.isLoading
+    // The connect-a-wearable hint only rides along once there's content (the first-run empty state has
+    // its own copy), and only until the user dismisses it for good.
+    val showWearableHint = !isEmpty && !state.wearableHintDismissed
+
     Scaffold(
         topBar = {
             TopAppBar(
-                title = {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Text("•", style = MaterialTheme.typography.bodyMedium, color = muted)
-                        Text("Forge", style = MaterialTheme.typography.bodyMedium, color = onBg, fontStyle = FontStyle.Italic)
-                    }
-                },
+                title = { com.forge.app.ui.common.ForgeWordmark() },
                 navigationIcon = {
                     if (onBack != null) IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = muted)
@@ -147,20 +198,33 @@ private fun CardioListContent(
             modifier = Modifier.fillMaxSize().padding(inner),
             contentPadding = PaddingValues(bottom = 56.dp)
         ) {
+            if (showWearableHint) {
+                item("watch-hint") {
+                    CardioWatchBanner(onDismiss = onDismissHint, onBg = onBg, muted = muted, outline = outline)
+                }
+            }
+
+            if (isEmpty) {
+                // Dedicated first-run — its own intro + CTA, no empty hero/week scaffolding behind it.
+                item("empty") {
+                    CardioEmptyState(
+                        onOpenLog = onOpenLog,
+                        weekTargetMin = state.weekTargetMin,
+                        onBg = onBg, muted = muted, outline = outline
+                    )
+                }
+                return@LazyColumn
+            }
+
             item("hero") {
                 CardioHero(
+                    weekDays = weekDays,
                     weekMinutes = state.weekMinutes,
-                    weekTargetMin = state.weekTargetMin,
                     weekNum = weekNum,
                     weekLabel = weekLabel,
-                    weekEntries = weekEntries,
-                    weekDistanceKm = state.weekDistanceKm,
-                    lastWeekMinutes = state.lastWeekMinutes,
-                    lastWeekDistanceKm = state.lastWeekDistanceKm,
-                    cardioStreakDays = state.cardioStreakDays,
-                    zone = zone,
                     onBg = onBg,
-                    muted = muted
+                    muted = muted,
+                    onOpenDetail = onOpenDetail
                 )
             }
 
@@ -170,60 +234,52 @@ private fun CardioListContent(
                     todayDow = todayDow,
                     onBg = onBg,
                     muted = muted,
-                    outline = outline
-                )
-            }
-
-            item("month-chart") {
-                Spacer(Modifier.height(8.dp))
-                com.forge.app.ui.cardio.components.CardioMonthChart(
-                    entries = state.entries,
-                    zone = zone,
-                    onBg = onBg,
-                    muted = muted,
-                    accent = MaterialTheme.colorScheme.primary,
-                    outline = outline
+                    outline = outline,
+                    onClick = onOpenDetail
                 )
             }
 
             item("log-action") {
+                Spacer(Modifier.height(8.dp))
                 LogTodayRow(onOpenLog = onOpenLog, onBg = onBg, muted = muted, outline = outline)
                 Spacer(Modifier.height(12.dp))
             }
 
-            if (state.entries.isNotEmpty()) {
-                item("history-title") {
-                    Text(
-                        "What I did",
-                        style = MaterialTheme.typography.headlineSmall,
-                        color = onBg,
-                        fontStyle = FontStyle.Italic,
-                        modifier = Modifier.padding(horizontal = 24.dp)
-                    )
-                    Spacer(Modifier.height(12.dp))
-                }
-                items(state.entries, key = { it.id }) { entry ->
-                    CardioEntryRow(
-                        entry = entry,
-                        today = today,
-                        bodyweightLb = state.bodyweightLb,
-                        onRequestDelete = { onRequestDelete(entry.id) },
-                        onEdit = { onEdit(entry.id) },
-                        modifier = forgeItemMotion()
-                    )
-                    HorizontalDivider(
-                        modifier = Modifier.padding(horizontal = 24.dp),
-                        color = outline.copy(alpha = 0.18f)
-                    )
-                }
-            } else if (!state.isLoading) {
-                item("empty") {
-                    EmptyState(
-                        emoji = "🏃",
-                        title = "No cardio yet.",
-                        subtitle = "Tap \"Log today\" above to add a run, walk, or any session." +
-                            (if (state.weekTargetMin > 0) " Your weekly goal: ${state.weekTargetMin} min." else ""),
-                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
+            item("history-title") {
+                Text(
+                    "What I did",
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = onBg,
+                    fontStyle = FontStyle.Italic,
+                    modifier = Modifier.padding(horizontal = 24.dp)
+                )
+                Spacer(Modifier.height(12.dp))
+            }
+            // When "See all" routes to History (the merged page), the home list stays capped at 5;
+            // only the inline-expand fallback grows the list in place.
+            val shown = if (seeAllExpands && state.historyExpanded) state.entries else state.entries.take(HISTORY_PREVIEW)
+            items(shown, key = { it.id }) { entry ->
+                CardioEntryRow(
+                    entry = entry,
+                    today = today,
+                    onRequestDelete = { onRequestDelete(entry.id) },
+                    onClick = { onOpenSession(entry.id) },
+                    modifier = forgeItemMotion()
+                )
+                HorizontalDivider(
+                    modifier = Modifier.padding(horizontal = 24.dp),
+                    color = outline.copy(alpha = 0.18f)
+                )
+            }
+            if (state.entries.size > HISTORY_PREVIEW) {
+                item("see-all") {
+                    SeeAllRow(
+                        expands = seeAllExpands,
+                        expanded = state.historyExpanded,
+                        total = state.entries.size,
+                        onClick = onSeeAll,
+                        onBg = onBg,
+                        muted = muted
                     )
                 }
             }
@@ -231,3 +287,35 @@ private fun CardioListContent(
     }
 }
 
+@Composable
+private fun SeeAllRow(
+    expands: Boolean,
+    expanded: Boolean,
+    total: Int,
+    onClick: () -> Unit,
+    onBg: Color,
+    muted: Color
+) {
+    // Inline-expand mode toggles "Show less"/"See all"; navigate mode always reads "See all … →".
+    val label = when {
+        !expands -> "See all $total sessions"
+        expanded -> "Show less"
+        else -> "See all $total sessions"
+    }
+    val trailing = when {
+        !expands -> "→"
+        expanded -> "↑"
+        else -> "→"
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 24.dp, vertical = 16.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, style = MaterialTheme.typography.bodyMedium, color = onBg)
+        Text(trailing, style = MaterialTheme.typography.bodyMedium, color = muted)
+    }
+}

@@ -64,13 +64,11 @@ fun NotesSearchScreen(
 
             when {
                 state.query.isBlank() -> EmptyState(
-                    emoji = "📝",
                     title = "Search your notes.",
                     subtitle = "Type something to search across all your exercise notes.",
                     modifier = Modifier.padding(16.dp)
                 )
                 state.results.isEmpty() -> EmptyState(
-                    emoji = "🔍",
                     title = "No notes found.",
                     subtitle = "Try a different search term.",
                     modifier = Modifier.padding(16.dp)

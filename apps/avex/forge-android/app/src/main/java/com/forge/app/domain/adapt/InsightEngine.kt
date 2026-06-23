@@ -107,7 +107,7 @@ object InsightEngine {
         val byHour = bouts.groupBy { Instant.ofEpochMilli(it.sessionStartedAt).atZone(s.zoneId).hour }
             .mapValues { (_, b) -> b.sumOf { it.sets.size } }
         val best = byHour.maxByOrNull { it.value } ?: return null
-        return insight("timeofday", "Best time to train", "You log the most sets in the ${timeOfDayLabel(best.key)} (${best.key}:00).", "⏰")
+        return insight("timeofday", "Best time to train", "You log the most sets in the ${timeOfDayLabel(best.key)} (${best.key}:00).")
     }
 
     // ── Ported: most improved (#41) ────────────────────────────────────────────
@@ -131,7 +131,7 @@ object InsightEngine {
             Triple(name, ((last - first) / first * 100).toInt(), exerciseId)
         }.maxByOrNull { it.second } ?: return null
         if (best.second <= t.insightImprovedMinPct) return null
-        return insight("improved", "Most improved", "${best.first} is up ~${best.second}% in 3 months.", "📈")
+        return insight("improved", "Most improved", "${best.first} is up ~${best.second}% in 3 months.")
     }
 
     // ── Ported: weekly muscle dominance ────────────────────────────────────────
@@ -157,7 +157,7 @@ object InsightEngine {
         if (dominant.value / total <= t.insightBalanceDominantShare) return null
         return insight(
             "dominance", "Muscle balance",
-            "${dominant.key.displayName} is over ${(t.insightBalanceDominantShare * 100).roundToInt()}% of this week's volume — consider balancing.", "⚖️"
+            "${dominant.key.displayName} is over ${(t.insightBalanceDominantShare * 100).roundToInt()}% of this week's volume — consider balancing."
         )
     }
 
@@ -196,7 +196,7 @@ object InsightEngine {
         val skew = if (rc.setsA.toDouble() / rc.setsB > rc.healthyHigh) rc.labelA else rc.labelB
         return insight(
             rc.key, title,
-            "Last ${t.insightRatioWindowDays} days: ${rc.setsA} ${rc.labelA} sets vs ${rc.setsB} ${rc.labelB} — leaning $skew-heavy.", "⚖️"
+            "Last ${t.insightRatioWindowDays} days: ${rc.setsA} ${rc.labelA} sets vs ${rc.setsB} ${rc.labelB} — leaning $skew-heavy."
         )
     }
 
@@ -215,7 +215,7 @@ object InsightEngine {
         }.maxByOrNull { it.second } ?: return null
         return insight(
             "skip.${worst.first}", "Often skipped",
-            "${worst.first} was skipped ${worst.second} of the last ${worst.third} times — swap it for something you'll actually do, or drop it.", "🚪"
+            "${worst.first} was skipped ${worst.second} of the last ${worst.third} times — swap it for something you'll actually do, or drop it."
         )
     }
 
@@ -233,7 +233,7 @@ object InsightEngine {
         }.maxByOrNull { it.third } ?: return null
         return insight(
             "swap.${worst.first}", "Make the swap permanent?",
-            "You've swapped ${worst.first} (usually to ${worst.second}) in ${worst.third} of your last ${t.insightAdherenceWindow} sessions — set it as a persistent swap, or dislike the original.", "🔁"
+            "You've swapped ${worst.first} (usually to ${worst.second}) in ${worst.third} of your last ${t.insightAdherenceWindow} sessions — set it as a persistent swap, or dislike the original."
         )
     }
 
@@ -244,7 +244,7 @@ object InsightEngine {
         if (f.score >= t.deloadScoreThreshold || f.score < t.deloadScoreThreshold - 2) return null
         return insight(
             "recovery", "Recovery signals building",
-            "Not deload territory yet, but: ${f.drivers.joinToString(" · ")}.", "🪫"
+            "Not deload territory yet, but: ${f.drivers.joinToString(" · ")}."
         )
     }
 
@@ -266,7 +266,7 @@ object InsightEngine {
         if (abs(worst.second - worst.third) < t.insightEstimateDriftMinutes) return null
         return insight(
             "estimate.${worst.first}", "Estimate vs reality",
-            "${worst.first} actually runs ~${worst.second} min (estimated ~${worst.third}).", "⏱️"
+            "${worst.first} actually runs ~${worst.second} min (estimated ~${worst.third})."
         )
     }
 
@@ -325,7 +325,7 @@ object InsightEngine {
         }.maxByOrNull { it.total } ?: return null
         return insight(
             "sweetspot.${best.name}", "Your strongest rep range",
-            "${best.name} hits its highest estimated 1RM at ${best.label} reps — that's your strength sweet spot.", "🎯"
+            "${best.name} hits its highest estimated 1RM at ${best.label} reps — that's your strength sweet spot."
         )
     }
 
@@ -374,7 +374,7 @@ object InsightEngine {
         return insight(
             "lagging.${laggard.second}", "A lift falling behind",
             "On ${muscle.displayName}: ${grower.second} is climbing (+${grower.third}%) but ${laggard.second} has stalled " +
-                "($lagSign${laggard.third}%) — give it some focus.", "🐢"
+                "($lagSign${laggard.third}%) — give it some focus."
         )
     }
 
@@ -413,7 +413,7 @@ object InsightEngine {
         val pct = (gap * 100).roundToInt()
         val tail = if (strongerAm) "earlier in the day — put the hard sessions in the morning."
         else "later in the day — save the hard sessions for the afternoon."
-        return insight("timeofdayperf", "When you're strongest", "Your estimated 1RMs run ~$pct% higher when you train $tail", "💪")
+        return insight("timeofdayperf", "When you're strongest", "Your estimated 1RMs run ~$pct% higher when you train $tail")
     }
 
     // ── Tier 5 · volume tolerance (A1): does more weekly volume grow strength? ──
@@ -471,10 +471,10 @@ object InsightEngine {
         if (abs(highAvg - lowAvg) < t.insightVolumeDeltaGapLb) return null
         return if (highAvg > lowAvg) insight(
             "volumeresponse.${muscle.code}", "Responds to volume",
-            "${muscle.displayName}: your higher-volume weeks (above ~$splitSets sets) added strength faster — it's responding to more volume, so there's room to push it.", "📊"
+            "${muscle.displayName}: your higher-volume weeks (above ~$splitSets sets) added strength faster — it's responding to more volume, so there's room to push it."
         ) else insight(
             "volumeresponse.${muscle.code}", "Near its volume ceiling",
-            "${muscle.displayName}: past ~$splitSets sets/week your strength stopped moving — you may be near its volume ceiling, so extra sets aren't paying off.", "📊"
+            "${muscle.displayName}: past ~$splitSets sets/week your strength stopped moving — you may be near its volume ceiling, so extra sets aren't paying off."
         )
     }
 
@@ -509,13 +509,13 @@ object InsightEngine {
         val pct = (gap * 100).roundToInt()
         return if (restedBetter) insight(
             "restresponse", "Your recovery window",
-            "You move ~$pct% more volume with ${t.insightRestSplitDays}+ days' rest before a session than with less — your body rewards the extra recovery.", "🛌"
+            "You move ~$pct% more volume with ${t.insightRestSplitDays}+ days' rest before a session than with less — your body rewards the extra recovery."
         ) else insight(
             "restresponse", "Your recovery window",
-            "You actually move ~$pct% more volume training more often (under ${t.insightRestSplitDays} days' rest) than when you wait longer — you recover fast.", "🛌"
+            "You actually move ~$pct% more volume training more often (under ${t.insightRestSplitDays} days' rest) than when you wait longer — you recover fast."
         )
     }
 
-    private fun insight(key: String, title: String, body: String, icon: String) =
-        Recommendation.Insight(key = key, title = title, body = body, icon = icon, confidence = Confidence.MEDIUM)
+    private fun insight(key: String, title: String, body: String) =
+        Recommendation.Insight(key = key, title = title, body = body, confidence = Confidence.MEDIUM)
 }

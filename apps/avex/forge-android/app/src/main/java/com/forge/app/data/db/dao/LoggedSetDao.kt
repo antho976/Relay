@@ -54,6 +54,35 @@ interface LoggedSetDao {
     )
 
     /**
+     * Per-rep-count max weight for a SET of exercises across every PRIOR session's non-assisted
+     * weighted sets — "prior" = a session that STARTED before [beforeStartedAt]. The session-detail
+     * page flags an e1RM as a new best by comparing against this, so an old session reflects what was
+     * a best AT THE TIME (the started_at filter), not all-time. One query covers the whole session's
+     * exercises (vs one query per exercise). Returns nothing for an empty [exerciseIds].
+     */
+    @Query("""
+        SELECT le.exercise_id AS exercise_id, s.reps AS reps, MAX(s.weight_lb) AS weight_lb
+        FROM logged_set s
+        INNER JOIN logged_exercise le ON s.logged_exercise_id = le.id
+        INNER JOIN session sess ON le.session_id = sess.id
+        WHERE le.exercise_id IN (:exerciseIds)
+          AND sess.started_at < :beforeStartedAt
+          AND s.weight_lb IS NOT NULL
+          AND s.is_assisted = 0
+        GROUP BY le.exercise_id, s.reps
+    """)
+    suspend fun repMaxFrontierBeforeSession(
+        exerciseIds: List<String>,
+        beforeStartedAt: Long
+    ): List<ExerciseRepMaxRow>
+
+    data class ExerciseRepMaxRow(
+        @androidx.room.ColumnInfo(name = "exercise_id") val exerciseId: String,
+        @androidx.room.ColumnInfo(name = "reps") val reps: Int,
+        @androidx.room.ColumnInfo(name = "weight_lb") val weightLb: Double
+    )
+
+    /**
      * True when the exercise has ANY prior set (incl. bodyweight/assisted) outside
      * [excludeLoggedExerciseId] — the "first-ever time" gate for PR flagging, which the
      * weighted-only frontier can't answer on its own.

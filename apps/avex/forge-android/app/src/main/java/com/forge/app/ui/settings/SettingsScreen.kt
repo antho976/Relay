@@ -181,13 +181,7 @@ fun SettingsScreen(
                 title = {
                     when {
                         currentPage != null -> {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Text("•", style = MaterialTheme.typography.bodyMedium, color = muted)
-                                Text("Forge", style = MaterialTheme.typography.bodyMedium, color = onBg, fontStyle = FontStyle.Italic)
-                            }
+                            com.forge.app.ui.common.ForgeWordmark()
                         }
                         searchActive -> {
                             BasicTextField(
@@ -215,13 +209,7 @@ fun SettingsScreen(
                             )
                         }
                         else -> {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Text("•", style = MaterialTheme.typography.bodyMedium, color = muted)
-                                Text("Forge", style = MaterialTheme.typography.bodyMedium, color = onBg, fontStyle = FontStyle.Italic)
-                            }
+                            com.forge.app.ui.common.ForgeWordmark()
                         }
                     }
                 },

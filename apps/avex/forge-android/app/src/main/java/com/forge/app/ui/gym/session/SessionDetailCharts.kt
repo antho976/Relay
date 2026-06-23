@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -22,6 +23,7 @@ import androidx.compose.ui.unit.sp
 import com.forge.app.domain.units.formatVolume
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.ui.common.SegmentPill
+import com.forge.app.ui.common.rpeLabel
 import com.forge.app.ui.gym.session.state.ExerciseDetail
 import com.forge.app.ui.gym.session.state.SessionChartStyle
 import com.forge.app.ui.gym.session.state.SessionMetric
@@ -35,6 +37,7 @@ internal fun formatMetricValue(value: Double, metric: SessionMetric, useKg: Bool
     SessionMetric.WEIGHT -> formatWeight(value, useKg)
     SessionMetric.VOLUME -> formatVolume(value, useKg)
     SessionMetric.REPS -> "${value.toInt()}"
+    SessionMetric.RPE -> "RPE ${rpeLabel(value)}"
 }
 
 // ─── Page controls ────────────────────────────────────────────────────────────
@@ -51,10 +54,11 @@ internal fun MetricStyleControls(
     accent: Color,
     outline: Color
 ) {
-    Row(
+    // Stacked onto two lines: 4 metric pills (incl. RPE) + 2 style pills won't fit one row on a
+    // narrow phone. Metric chooses what every chart plots; Style chooses bars vs line.
+    Column(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
+        verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         SegmentRow(
             items = SessionMetric.entries,
@@ -96,19 +100,28 @@ private fun <T> SegmentRow(
     }
 }
 
-// ─── Session overview: chosen metric per exercise (horizontal bars) ─────────────
+// ─── Session overview: chosen metric per exercise (bars or line) ────────────────
 
+/**
+ * Per-exercise comparison for the chosen metric. The page [SessionChartStyle] toggle drives it just
+ * like the per-exercise charts: BARS = labelled horizontal bars (good for reading each value), LINE
+ * = a left-to-right sparkline of the same values with a peak callout (the session's "shape").
+ */
 @Composable
 internal fun MetricByExerciseChart(
     exercises: List<ExerciseDetail>,
     metric: SessionMetric,
+    style: SessionChartStyle,
     onBg: Color,
     muted: Color,
     accent: Color,
     outline: Color
 ) {
     val useKg = LocalForgeSettings.current.useKg
-    val values = exercises.map { it.metricValue(metric) }   // computed once; reused for max + each bar
+    // RPE is only meaningful for exercises that actually logged one — a 0 would read as "trained at
+    // RPE 0" rather than "no data", so drop them (matches PerExerciseSetChart's per-set handling).
+    val shown = if (metric == SessionMetric.RPE) exercises.filter { it.avgRpe > 0.0 } else exercises
+    val values = shown.map { it.metricValue(metric) }   // computed once; reused for max + each bar
     val rawMax = values.maxOrNull() ?: 0.0
     // The Weight metric is meaningless for a bodyweight-only session — say so instead of empty bars.
     if (rawMax <= 0.0) {
@@ -118,21 +131,41 @@ internal fun MetricByExerciseChart(
         )
         return
     }
+    // A line needs ≥2 points; a one-exercise session always reads as bars.
+    if (style == SessionChartStyle.LINE && values.size >= 2) {
+        MetricByExerciseLine(shown, values, metric, useKg, accent, muted, onBg)
+    } else {
+        MetricByExerciseBars(shown, values, rawMax, metric, useKg, onBg, muted, accent, outline)
+    }
+}
+
+@Composable
+private fun MetricByExerciseBars(
+    exercises: List<ExerciseDetail>,
+    values: List<Double>,
+    rawMax: Double,
+    metric: SessionMetric,
+    useKg: Boolean,
+    onBg: Color,
+    muted: Color,
+    accent: Color,
+    outline: Color
+) {
     val progress = rememberDrawProgress(metric)
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         exercises.forEachIndexed { i, ex ->
             val value = values[i]
             val frac = (value / rawMax).toFloat() * staggeredProgress(progress, i, exercises.size)
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Text(ex.name, style = MaterialTheme.typography.bodySmall, color = onBg, fontSize = 12.sp)
+                    Text(ex.name, style = MaterialTheme.typography.bodyMedium, color = onBg)
                     Text(
                         formatMetricValue(value, metric, useKg),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = muted, fontSize = 10.sp
+                        style = MaterialTheme.typography.labelMedium,
+                        color = muted
                     )
                 }
                 Box(
@@ -149,6 +182,36 @@ internal fun MetricByExerciseChart(
     }
 }
 
+@Composable
+private fun MetricByExerciseLine(
+    exercises: List<ExerciseDetail>,
+    values: List<Double>,
+    metric: SessionMetric,
+    useKg: Boolean,
+    accent: Color,
+    muted: Color,
+    onBg: Color
+) {
+    val lo = values.min()
+    val hi = values.max()
+    val pad = if (hi - lo < 1e-6) 1.0 else 0.0
+    val peakIdx = values.indexOf(hi)
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Sparkline(
+            values = values,
+            lineColor = accent,
+            minValue = lo - pad,
+            maxValue = hi + pad,
+            modifier = Modifier.fillMaxWidth().height(72.dp),
+            progress = rememberDrawProgress(metric)
+        )
+        Text(
+            "Peak · ${exercises[peakIdx].name} (${formatMetricValue(hi, metric, useKg)}) — left→right is exercise order",
+            style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp
+        )
+    }
+}
+
 // ─── Per-exercise: chosen metric per set (bars or line) ─────────────────────────
 
 @Composable
@@ -160,9 +223,12 @@ internal fun PerExerciseSetChart(
     muted: Color,
     outline: Color
 ) {
-    val values = ex.sets.map { it.metricValue(metric) }
+    // RPE is only meaningful on the sets that logged one — drop the rest so unrated sets don't read
+    // as a 0 trough. Every other metric maps one value per set.
+    val values = if (metric == SessionMetric.RPE) ex.sets.mapNotNull { it.rpe }
+    else ex.sets.map { it.metricValue(metric) }
     // Nothing to plot (e.g. a bodyweight exercise under the Weight metric) — show why, don't vanish.
-    if (values.none { it > 0.0 }) {
+    if (values.isEmpty() || values.none { it > 0.0 }) {
         Text(
             "No ${metric.label.lowercase()} logged for this exercise.",
             style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.6f),
@@ -172,7 +238,8 @@ internal fun PerExerciseSetChart(
     }
 
     when {
-        style == SessionChartStyle.LINE && values.size >= 2 -> {
+        style != SessionChartStyle.LINE -> SetBars(values, metric, accent)
+        values.size >= 2 -> {
             val lo = values.min()
             val hi = values.max()
             // A flat series (every set at the same weight) would otherwise glue the line to the
@@ -187,7 +254,17 @@ internal fun PerExerciseSetChart(
                 progress = rememberDrawProgress(metric)
             )
         }
-        else -> SetBars(values, metric, accent)
+        // A single-set exercise can't draw a line — show one endpoint dot so Line mode stays
+        // visually uniform instead of silently flipping back to a bar.
+        else -> SinglePointMark(accent)
+    }
+}
+
+/** One centred dot — the Line-mode stand-in for an exercise with a single logged set. */
+@Composable
+private fun SinglePointMark(accent: Color) {
+    Box(modifier = Modifier.fillMaxWidth().height(56.dp), contentAlignment = Alignment.Center) {
+        Box(modifier = Modifier.size(8.dp).clip(RoundedCornerShape(50)).background(accent))
     }
 }
 

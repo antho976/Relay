@@ -61,15 +61,7 @@ fun SessionDetailScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Text("•", style = MaterialTheme.typography.bodyMedium, color = muted)
-                        Text("Forge", style = MaterialTheme.typography.bodyMedium, color = onBg, fontStyle = FontStyle.Italic)
-                    }
-                },
+                title = { com.forge.app.ui.common.ForgeWordmark() },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = muted)
@@ -111,11 +103,20 @@ fun SessionDetailScreen(
             ) {
                 item("header") { Box(Modifier.statsEntrance(0)) { SessionHeader(data, onBg, muted, outline) } }
                 item("summary") { Box(Modifier.statsEntrance(1)) { SummaryStrip(data, onBg, muted) } }
+                if (data.muscleSplit.isNotEmpty()) {
+                    item("muscles") {
+                        Box(Modifier.statsEntrance(2)) {
+                            StatCard(title = "MUSCLES WORKED") {
+                                MusclesWorkedCard(data.muscleSplit, onBg, muted, accent, outline)
+                            }
+                        }
+                    }
+                }
                 if (data.exercises.isEmpty()) {
                     // Session exists but every exercise was skipped or logged no sets — keep its header
                     // + summary and just note there's nothing to chart.
                     item("empty") {
-                        Box(Modifier.statsEntrance(2)) {
+                        Box(Modifier.statsEntrance(3)) {
                             Text(
                                 "No exercises logged for this session.",
                                 style = MaterialTheme.typography.bodySmall,
@@ -126,19 +127,19 @@ fun SessionDetailScreen(
                     }
                 } else {
                     item("controls") {
-                        Box(Modifier.statsEntrance(2)) {
+                        Box(Modifier.statsEntrance(3)) {
                             MetricStyleControls(metric, style, { metric = it }, { style = it }, onBg, muted, accent, outline)
                         }
                     }
                     item("overview") {
-                        Box(Modifier.statsEntrance(3)) {
+                        Box(Modifier.statsEntrance(4)) {
                             StatCard(title = "${metric.label.uppercase()} PER EXERCISE") {
-                                MetricByExerciseChart(data.exercises, metric, onBg, muted, accent, outline)
+                                MetricByExerciseChart(data.exercises, metric, style, onBg, muted, accent, outline)
                             }
                         }
                     }
                     itemsIndexed(data.exercises, key = { i, ex -> "${ex.name}#$i" }) { i, ex ->
-                        Box(Modifier.statsEntrance(4 + i)) {
+                        Box(Modifier.statsEntrance(5 + i)) {
                             ExerciseCard(ex, metric, style, onBg, muted, accent, outline)
                         }
                     }

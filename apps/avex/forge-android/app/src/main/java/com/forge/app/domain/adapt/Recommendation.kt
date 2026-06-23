@@ -150,7 +150,6 @@ sealed interface Recommendation {
         val key: String,
         val title: String,
         val body: String,
-        val icon: String,
         override val confidence: Confidence
     ) : Recommendation {
         override val id: String get() = "insight.$key"

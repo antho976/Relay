@@ -189,7 +189,7 @@ fun OnboardingScreen(
                                 StepSex(selected = sex, onSelect = { sex = it })
                                 StepUnits(useKg = useKg, onToggle = { useKg = it })
                                 Text(
-                                    "Everything stays on your phone — no account, no sign-up. Forge has no internet access, so it can't send your data anywhere.",
+                                    "Everything stays on your phone. No account, no sign-up. Forge has no internet access, so it can't send your data anywhere.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -240,7 +240,7 @@ fun OnboardingScreen(
             // equipment selected, so this guards the skip rather than leaving the button silently greyed.
             if (page == PAGE_GYM && equipment.isEmpty()) {
                 Text(
-                    "Pick at least one — Forge can't build your plan without knowing what you can train with.",
+                    "Pick at least one. Forge can't build your plan without knowing what you can train with.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -285,7 +285,7 @@ fun OnboardingScreen(
                 title = { Text("Skip setup?") },
                 text = {
                     Text(
-                        "You'll start with a basic bodyweight program and default settings — no plan " +
+                        "You'll start with a basic bodyweight program and default settings, with no plan " +
                             "tailored to your gym or goals. You can set your equipment and goal, and " +
                             "generate a personalized program, any time in Settings → Program."
                     )
@@ -315,7 +315,7 @@ fun OnboardingScreen(
                 text = {
                     Text(
                         "The coach quietly watches your training and suggests small tweaks each week. " +
-                            "It's optional — if you'd rather just train and log, leave it off. You can turn " +
+                            "It's optional. If you'd rather just train and log, leave it off. You can turn " +
                             "it on or off anytime in Settings → Program."
                     )
                 },

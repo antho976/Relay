@@ -58,20 +58,7 @@ fun TrophiesScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Text("•", style = MaterialTheme.typography.bodyMedium, color = muted)
-                        Text(
-                            "Forge",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = onBg,
-                            fontStyle = FontStyle.Italic
-                        )
-                    }
-                },
+                title = { com.forge.app.ui.common.ForgeWordmark() },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(

@@ -175,6 +175,10 @@ object PreferenceKeys {
     /** Weekly cardio goal in minutes. 0 = no goal. */
     val CARDIO_WEEKLY_TARGET_MIN = intPreferencesKey("cardio_weekly_target_min")
 
+    /** Set true once the user dismisses the "connect a watch/ring" hint on the cardio screen, so it
+     *  never reappears. Lives in DataStore so it survives a DB wipe/restore. */
+    val CARDIO_WEARABLE_HINT_DISMISSED = booleanPreferencesKey("cardio_wearable_hint_dismissed")
+
     /** Default rest between sets (seconds), per movement type — the base the RestAdvisor builds on.
      *  Absent ⇒ the canonical 180 (compound) / 90 (isolation). */
     val REST_COMPOUND_SECONDS = intPreferencesKey("rest_compound_seconds")

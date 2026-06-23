@@ -6,6 +6,8 @@ import com.forge.app.data.db.dao.LoggedExerciseDao
 import com.forge.app.data.db.dao.LoggedSetDao
 import com.forge.app.data.db.dao.SessionDao
 import com.forge.app.data.db.projections.SetWithExerciseId
+import com.forge.app.domain.adapt.E1rm
+import com.forge.app.domain.adapt.bestWorkingE1rm
 import com.forge.app.program.Program
 import com.forge.app.data.db.entities.Session
 import com.forge.app.data.db.entities.durationMinutes
@@ -260,6 +262,15 @@ class StatsRepository @Inject constructor(
         val exercises = loggedExerciseDao.forSession(sessionId)
         val setsByExId = loggedSetDao.allForSession(sessionId).groupBy { it.loggedExerciseId }
 
+        // Prior-best e1RM per exercise: ONE query for the whole session, restricted to sessions that
+        // STARTED before this one — so an old session reflects what was a best AT THE TIME (not all-time),
+        // and so we don't fire a frontier query per exercise (was an N+1).
+        val priorFrontier = run {
+            val targetIds = exercises.filterNot { it.skipped }.map { it.exerciseId }.distinct()
+            if (targetIds.isEmpty()) emptyMap()
+            else loggedSetDao.repMaxFrontierBeforeSession(targetIds, session.startedAt).groupBy { it.exerciseId }
+        }
+
         val exerciseDetails = exercises.mapNotNull { ex ->
             if (ex.skipped) return@mapNotNull null
             val sets = (setsByExId[ex.id] ?: emptyList()).sortedBy { it.setIndex }
@@ -285,6 +296,11 @@ class StatsRepository @Inject constructor(
                     dropAnnotation = s.dropAnnotation
                 )
             }
+            // Best working e1RM this session, flagged as a new best when it tops every PRIOR session's
+            // best for the same exercise (prior frontier batched above, restricted to earlier sessions).
+            val e1rm = bestWorkingE1rm(sets)
+            val priorBestE1rm = priorFrontier[ex.exerciseId]
+                ?.maxOfOrNull { E1rm.epley(it.weightLb, it.reps) }
             ExerciseDetail(
                 name = name,
                 isPr = ex.wasPr,
@@ -294,9 +310,19 @@ class StatsRepository @Inject constructor(
                 topWeightLb = topWeight,
                 totalReps = setDetails.sumOf { it.reps },
                 volumeLb = setDetails.sumOf { it.volumeLb },
+                e1rmLb = e1rm,
+                e1rmIsBest = e1rm != null && (priorBestE1rm == null || e1rm > priorBestE1rm + 1e-6),
                 sets = setDetails
             )
         }
+
+        // Muscle split: fold each exercise's WORKING-set count (assisted sets excluded, matching the
+        // "working sets" label) onto the muscle its library entry maps to.
+        val muscleSplit = buildSessionMuscleSplit(
+            exercises
+                .filterNot { it.skipped }
+                .mapNotNull { ex -> (setsByExId[ex.id]?.count { !it.isAssisted } ?: 0).takeIf { it > 0 }?.let { ex.exerciseId to it } }
+        )
 
         val allRpe = exerciseDetails.flatMap { it.sets }.mapNotNull { it.rpe }
         val durationMin = session.durationMinutes()
@@ -316,6 +342,7 @@ class StatsRepository @Inject constructor(
             deload = session.deloadMarkedHere,
             journal = session.journal,
             avgRpe = if (allRpe.isEmpty()) null else allRpe.average(),
+            muscleSplit = muscleSplit,
             exercises = exerciseDetails
         )
     }

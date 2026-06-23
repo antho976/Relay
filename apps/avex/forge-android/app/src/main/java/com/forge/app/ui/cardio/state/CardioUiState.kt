@@ -13,13 +13,10 @@ data class CardioDayCell(val minutes: Int = 0, val isRest: Boolean = false)
 data class CardioUiState(
     val isLoading: Boolean = true,
     val weekMinutes: Int = 0,
+    /** Distinct calendar days this ISO week with an active (non-rest) session — the hero headline. */
+    val cardioDaysThisWeek: Int = 0,
     /** Weekly cardio-minutes goal (Settings). 0 = no goal set → no progress bar. */
     val weekTargetMin: Int = 0,
-    /** Total active (non-rest) distance this ISO week, km. */
-    val weekDistanceKm: Double = 0.0,
-    /** Last ISO week's active minutes + distance, for the hero trend line. */
-    val lastWeekMinutes: Int = 0,
-    val lastWeekDistanceKm: Double = 0.0,
     /** Consecutive days (ending today or yesterday) with an active cardio session. */
     val cardioStreakDays: Int = 0,
     /** Per-day Mon–Sun cells (index 0 = Monday); future days are empty. Drives the week row. */
@@ -30,5 +27,13 @@ data class CardioUiState(
     val sheetOpen: Boolean = false,
     /** Non-null when the open sheet is editing an existing entry (vs logging a new one). */
     val editing: CardioEntry? = null,
-    val pendingDeleteId: Long? = null
+    val pendingDeleteId: Long? = null,
+    /** The swipeable week-stats overlay (per-week bars, graphs, numbers). */
+    val detailOpen: Boolean = false,
+    /** Non-null → the per-session stats overlay is open for this entry id. */
+    val sessionDetailId: Long? = null,
+    /** False → the main list shows only the 5 most-recent entries; true → the full history. */
+    val historyExpanded: Boolean = false,
+    /** True once the user permanently dismisses the "connect a watch/ring" hint banner. */
+    val wearableHintDismissed: Boolean = false
 )

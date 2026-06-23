@@ -2,9 +2,9 @@ package com.forge.app.domain.cardio
 
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.DirectionsBike
+import androidx.compose.material.icons.automirrored.filled.DirectionsRun
+import androidx.compose.material.icons.automirrored.filled.DirectionsWalk
 import androidx.compose.material.icons.filled.Bolt
-import androidx.compose.material.icons.filled.DirectionsRun
-import androidx.compose.material.icons.filled.DirectionsWalk
 import androidx.compose.material.icons.filled.FitnessCenter
 import androidx.compose.material.icons.filled.Hiking
 import androidx.compose.material.icons.filled.Hotel
@@ -12,7 +12,6 @@ import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.Pool
 import androidx.compose.material.icons.filled.Rowing
 import androidx.compose.material.icons.filled.SelfImprovement
-import androidx.compose.material.icons.filled.Spa
 import androidx.compose.ui.graphics.vector.ImageVector
 
 /**
@@ -26,16 +25,17 @@ enum class CardioType(
     val displayName: String,
     val icon: ImageVector
 ) {
-    RUN("run", "Run", Icons.Filled.DirectionsRun),
-    WALK("walk", "Walk", Icons.Filled.DirectionsWalk),
-    TREADMILL("treadmill", "Treadmill", Icons.Filled.SelfImprovement),
+    RUN("run", "Run", Icons.AutoMirrored.Filled.DirectionsRun),
+    WALK("walk", "Walk", Icons.AutoMirrored.Filled.DirectionsWalk),
+    // Treadmill = indoor running (the meditation glyph it used to have now goes to Yoga, where it fits).
+    TREADMILL("treadmill", "Treadmill", Icons.AutoMirrored.Filled.DirectionsRun),
     CYCLE("cycle", "Cycle", Icons.AutoMirrored.Filled.DirectionsBike),
     SWIM("swim", "Swim", Icons.Filled.Pool),
     ROW("row", "Row", Icons.Filled.Rowing),
     HIKE("hike", "Hike", Icons.Filled.Hiking),
     ELLIPTICAL("elliptical", "Elliptical", Icons.Filled.FitnessCenter),
     HIIT("hiit", "HIIT", Icons.Filled.Bolt),
-    YOGA("yoga", "Yoga", Icons.Filled.Spa),
+    YOGA("yoga", "Yoga", Icons.Filled.SelfImprovement),
     REST("rest", "Rest Day", Icons.Filled.Hotel),
     OTHER("other", "Other", Icons.Filled.MoreHoriz);
 

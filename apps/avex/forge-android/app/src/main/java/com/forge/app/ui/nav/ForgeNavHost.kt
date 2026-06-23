@@ -24,6 +24,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -99,6 +100,14 @@ fun ForgeNavHost(initialDayKey: String? = null) {
     // hub, which animates to the page then clears it via onPendingConsumed.
     var pendingHubPage by remember { mutableStateOf<Int?>(null) }
 
+    // Tapping the Forge wordmark anywhere returns Home in one tap: pop every deep route back to the
+    // hub and select Home. No-op-safe when already on the hub (popBackStack just returns false).
+    val goHome: () -> Unit = {
+        pendingHubPage = BottomTab.HOME.ordinal
+        nav.popBackStack(Routes.OVERVIEW, false)
+    }
+
+    CompositionLocalProvider(com.forge.app.ui.common.LocalGoHome provides goHome) {
     NavHost(
         navController = nav,
         startDestination = Routes.OVERVIEW,
@@ -158,7 +167,8 @@ fun ForgeNavHost(initialDayKey: String? = null) {
         composable(Routes.SESSION_HISTORY) {
             SessionHistoryScreen(
                 onBack = { nav.popBackStack() },
-                onOpenSession = { sessionId -> nav.navigate(Routes.sessionDetail(sessionId)) }
+                onOpenSession = { sessionId -> nav.navigate(Routes.sessionDetail(sessionId)) },
+                onOpenCardio = { cardioId -> nav.navigate(Routes.cardioSession(cardioId)) }
             )
         }
         composable(
@@ -166,6 +176,12 @@ fun ForgeNavHost(initialDayKey: String? = null) {
             arguments = listOf(navArgument(Routes.ARG_SESSION_ID) { type = NavType.LongType })
         ) {
             SessionDetailScreen(onBack = { nav.popBackStack() })
+        }
+        composable(
+            route = Routes.CARDIO_SESSION,
+            arguments = listOf(navArgument(Routes.ARG_CARDIO_ID) { type = NavType.LongType })
+        ) {
+            com.forge.app.ui.cardio.CardioSessionDetailScreen(onBack = { nav.popBackStack() })
         }
         composable(Routes.NOTES_SEARCH) {
             NotesSearchScreen(onBack = { nav.popBackStack() })
@@ -226,6 +242,7 @@ fun ForgeNavHost(initialDayKey: String? = null) {
                 onBack = { nav.popBackStack() }
             )
         }
+    }
     }
 
     // App-wide guard: intercepts any program change that would discard an in-progress workout,

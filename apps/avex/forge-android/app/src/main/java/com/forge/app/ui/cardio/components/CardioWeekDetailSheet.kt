@@ -1,0 +1,183 @@
+package com.forge.app.ui.cardio.components
+
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ChevronLeft
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.forge.app.data.db.entities.CardioEntry
+import com.forge.app.domain.cardio.CardioType
+import com.forge.app.domain.cardio.CardioWearableDay
+import com.forge.app.domain.cardio.cardioWeekAggregate
+import kotlinx.coroutines.launch
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.temporal.ChronoUnit
+import java.util.Locale
+
+/**
+ * The stats overlay — one week per page, swipe left/right to walk through earlier weeks. The current
+ * week sits at the last page (rightmost); swiping back (finger left→right) flips to older weeks, like
+ * a calendar. Each page is a [CardioWeekStatsPage] computed on the fly from the in-memory entry list,
+ * so no extra DB reads are needed to browse history.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun CardioWeekDetailSheet(
+    allEntries: List<CardioEntry>,
+    currentWeekStartMs: Long,
+    weekTargetMin: Int,
+    cardioStreakDays: Int,
+    bodyweightLb: Double?,
+    /** Watch-derived steps/route; null until the Health Connect read is wired in. */
+    wearable: CardioWearableDay?,
+    todayDow: Int,
+    zone: ZoneId,
+    onOpenSession: (Long) -> Unit,
+    onBack: () -> Unit,
+    /** Tapping the Forge wordmark — defaults to "go Home"; the cardio tab overrides it to close first. */
+    onHome: () -> Unit = com.forge.app.ui.common.LocalGoHome.current
+) {
+    val onBg = MaterialTheme.colorScheme.onBackground
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val outline = MaterialTheme.colorScheme.outline
+    val accent = MaterialTheme.colorScheme.primary
+
+    val currentMonday = remember(currentWeekStartMs) {
+        Instant.ofEpochMilli(currentWeekStartMs).atZone(zone).toLocalDate()
+    }
+    // How many weeks of history to page through — from the oldest entry's week up to this week.
+    val pageCount = remember(allEntries, currentMonday) {
+        val oldest = allEntries.minByOrNull { it.date } ?: return@remember 1
+        val oldestMonday = Instant.ofEpochMilli(oldest.date).atZone(zone).toLocalDate()
+            .with(java.time.DayOfWeek.MONDAY)
+        (ChronoUnit.WEEKS.between(oldestMonday, currentMonday).toInt().coerceAtLeast(0)) + 1
+    }
+    val pagerState = rememberPagerState(initialPage = pageCount - 1, pageCount = { pageCount })
+    val scope = rememberCoroutineScope()
+
+    // If older entries arrive while the overlay is open, pageCount grows and older weeks are prepended
+    // (lower indices) — which would silently shift the visible page to a different calendar week. Shift
+    // the current page by the delta so the SAME week stays in view (currentMonday is fixed, so growth
+    // only ever adds older weeks at the front).
+    var lastPageCount by remember { mutableIntStateOf(pageCount) }
+    LaunchedEffect(pageCount) {
+        if (pageCount != lastPageCount) {
+            val target = (pagerState.currentPage + (pageCount - lastPageCount)).coerceIn(0, pageCount - 1)
+            pagerState.scrollToPage(target)
+            lastPageCount = pageCount
+        }
+    }
+
+    // Page index → weeks-ago: the last page is the current week (0 weeks ago).
+    fun weeksAgoFor(page: Int) = pageCount - 1 - page
+    fun weekStartFor(page: Int): LocalDate = currentMonday.minusWeeks(weeksAgoFor(page).toLong())
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = { com.forge.app.ui.common.ForgeWordmark(onClick = onHome) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = muted)
+                    }
+                },
+                actions = {
+                    Text("STATS", style = MaterialTheme.typography.labelSmall, letterSpacing = 2.sp, color = muted, modifier = Modifier.padding(end = 16.dp))
+                },
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
+            )
+        },
+        containerColor = Color.Transparent
+    ) { inner ->
+        Column(Modifier.fillMaxSize().padding(inner)) {
+            // Week navigator header — reflects the settled/target page, with tappable chevrons.
+            val headerPage = pagerState.targetPage
+            val headerStart = weekStartFor(headerPage)
+            val canGoOlder = headerPage > 0
+            val canGoNewer = headerPage < pageCount - 1
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                IconButton(onClick = { if (canGoOlder) scope.launch { pagerState.animateScrollToPage(headerPage - 1) } }, enabled = canGoOlder) {
+                    Icon(Icons.Filled.ChevronLeft, contentDescription = "Earlier week", tint = if (canGoOlder) onBg else outline.copy(alpha = 0.4f))
+                }
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(relativeWeekLabel(headerStart, currentMonday), style = MaterialTheme.typography.titleMedium, color = onBg)
+                    Text(weekRangeLabel(headerStart), style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
+                }
+                IconButton(onClick = { if (canGoNewer) scope.launch { pagerState.animateScrollToPage(headerPage + 1) } }, enabled = canGoNewer) {
+                    Icon(Icons.Filled.ChevronRight, contentDescription = "Later week", tint = if (canGoNewer) onBg else outline.copy(alpha = 0.4f))
+                }
+            }
+
+            HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
+                val weekStart = weekStartFor(page)
+                val weekStartMs = weekStart.atStartOfDay(zone).toInstant().toEpochMilli()
+                val weekEndMs = weekStart.plusDays(7).atStartOfDay(zone).toInstant().toEpochMilli()
+                val agg = remember(allEntries, weekStartMs) { cardioWeekAggregate(allEntries, weekStartMs, zone) }
+                val weekEntries = remember(allEntries, weekStartMs) {
+                    allEntries.filter { it.date in weekStartMs until weekEndMs && it.type != CardioType.REST.code }
+                }
+                CardioWeekStatsPage(
+                    agg = agg,
+                    weekEntries = weekEntries,
+                    isCurrentWeek = weeksAgoFor(page) == 0,
+                    todayDow = todayDow,
+                    weekTargetMin = weekTargetMin,
+                    cardioStreakDays = cardioStreakDays,
+                    wearable = if (weeksAgoFor(page) == 0) wearable else null,
+                    bodyweightLb = bodyweightLb,
+                    zone = zone,
+                    onOpenSession = onOpenSession,
+                    onBg = onBg, muted = muted, outline = outline, accent = accent
+                )
+            }
+        }
+    }
+}
+
+private fun relativeWeekLabel(weekStart: LocalDate, currentMonday: LocalDate): String =
+    when (ChronoUnit.WEEKS.between(weekStart, currentMonday)) {
+        0L -> "This week"
+        1L -> "Last week"
+        else -> "Week ${weekStart.get(java.time.temporal.WeekFields.ISO.weekOfWeekBasedYear())}"
+    }
+
+private fun weekRangeLabel(weekStart: LocalDate): String {
+    val fmt = DateTimeFormatter.ofPattern("MMM d", Locale.getDefault())
+    return "${weekStart.format(fmt)} — ${weekStart.plusDays(6).format(fmt)}".uppercase()
+}

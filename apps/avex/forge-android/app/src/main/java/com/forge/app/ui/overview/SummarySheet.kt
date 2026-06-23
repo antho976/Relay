@@ -1,17 +1,12 @@
 package com.forge.app.ui.overview
 
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -19,125 +14,22 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.hilt.navigation.compose.hiltViewModel
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.data.repo.StatsRepository
 import com.forge.app.domain.units.formatVolume
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.ui.theme.LocalForgeSettings
 import java.time.Instant
-import java.time.YearMonth
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-fun HistorySheet(
-    onDismiss: () -> Unit,
-    onOpenSession: (Long) -> Unit,
-    vm: HistoryViewModel = hiltViewModel()
-) {
-    val entries by vm.entries.collectAsStateWithLifecycle()
-    val selectedEntry by vm.selectedEntry.collectAsStateWithLifecycle()
-    val exerciseLines by vm.sessionExerciseLines.collectAsStateWithLifecycle()
-
-    val onBg = MaterialTheme.colorScheme.onBackground
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val outline = MaterialTheme.colorScheme.outline
-    val bg = MaterialTheme.colorScheme.background
-
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        containerColor = bg
-    ) {
-        val zone = ZoneId.systemDefault()
-        val grouped = entries
-            .groupBy { YearMonth.from(Instant.ofEpochMilli(it.timestampMs).atZone(zone).toLocalDate()) }
-            .entries
-            .sortedByDescending { it.key }
-
-        if (entries.isEmpty()) {
-            Column(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 32.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text("HISTORY", style = MaterialTheme.typography.labelSmall,
-                    letterSpacing = 1.5.sp, color = muted, fontSize = 10.sp)
-                Spacer(Modifier.height(24.dp))
-                Text("no sessions yet.", style = MaterialTheme.typography.bodySmall,
-                    color = muted, fontStyle = FontStyle.Italic)
-                Spacer(Modifier.height(48.dp))
-            }
-        } else {
-            LazyColumn(contentPadding = PaddingValues(bottom = 48.dp)) {
-                item {
-                    Text(
-                        "HISTORY",
-                        style = MaterialTheme.typography.labelSmall,
-                        letterSpacing = 1.5.sp,
-                        color = muted,
-                        fontSize = 10.sp,
-                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
-                    )
-                }
-                grouped.forEach { (month, monthEntries) ->
-                    item(key = "hdr_$month") {
-                        Text(
-                            month.format(DateTimeFormatter.ofPattern("MMMM yyyy", Locale.getDefault())).uppercase(),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = muted.copy(alpha = 0.45f),
-                            fontSize = 9.sp,
-                            letterSpacing = 1.sp,
-                            modifier = Modifier.padding(horizontal = 24.dp, vertical = 6.dp)
-                        )
-                    }
-                    items(monthEntries, key = { "${it.isGym}_${it.id}" }) { entry ->
-                        HistoryRow(
-                            entry = entry, muted = muted, onBg = onBg, outline = outline,
-                            // Gym sessions open the full detail page; cardio keeps the lightweight summary sheet.
-                            onClick = { if (entry.isGym) onOpenSession(entry.id) else vm.selectEntry(entry) }
-                        )
-                        HorizontalDivider(
-                            modifier = Modifier.padding(horizontal = 24.dp),
-                            color = outline.copy(alpha = 0.1f)
-                        )
-                    }
-                }
-            }
-        }
-    }
-
-    if (selectedEntry != null) {
-        val entry = selectedEntry!!
-        SummarySheet(
-            title = entry.title,
-            dateMs = entry.timestampMs,
-            tag = entry.tag,
-            durationMin = entry.durationMin,
-            volumeLb = entry.volumeLb,
-            prCount = entry.prCount,
-            vsAvgPct = entry.vsAvgPct,
-            isBest = entry.isBest,
-            isGym = entry.isGym,
-            distanceKm = entry.distanceKm,
-            exerciseLines = exerciseLines,
-            onDismiss = { vm.clearSelectedEntry() }
-        )
-    }
-}
-
-
-// ─── Shared summary sheet (used from OverviewScreen + HistorySheet) ───────────
+// ─── Shared summary sheet (opened from OverviewScreen for a tapped recent item) ───────────
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -243,4 +135,3 @@ fun SummarySheet(
         }
     }
 }
-

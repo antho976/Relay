@@ -20,15 +20,13 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 
 /**
- * Reusable empty-state card. [emoji] is the big visual anchor; [title] is punchy;
- * [subtitle] adds context. Used on first launch before any data exists (#29 #66).
+ * Reusable empty-state card. [title] is punchy; [subtitle] adds context.
+ * Used on first launch before any data exists (#29 #66).
  */
 @Composable
 fun EmptyState(
-    emoji: String,
     title: String,
     subtitle: String,
     modifier: Modifier = Modifier
@@ -43,7 +41,6 @@ fun EmptyState(
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Text(emoji, fontSize = 40.sp)
             Text(
                 title,
                 style = MaterialTheme.typography.titleMedium,

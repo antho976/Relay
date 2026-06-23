@@ -153,10 +153,10 @@ object Program {
             word = "PUSH",
             accentHex = "#E85D4A",
             warmup = listOf(
+                "Jumping jacks — 20 reps",
                 "Arm circles — 10 forward, 10 back",
-                "Push-ups — 10 slow reps",
-                "Light shoulder press with empty hands — 15 reps",
-                "Scapular wall slides — 10 reps"
+                "Shoulder rolls — 10 each direction",
+                "Push-ups — 10 slow reps"
             ),
             exercises = listOf(
                 ExercisePlan("ua1", "DB Bench Press", 3, "8-10", ExerciseUnit.DUMBBELL, MuscleGroup.CHEST, Difficulty.BEGINNER, "1-2 reps shy of failure"),
@@ -174,10 +174,10 @@ object Program {
             word = "QUADS",
             accentHex = "#D4A017",
             warmup = listOf(
+                "Jumping jacks — 20 reps",
                 "Bodyweight squats — 15 reps slow",
-                "Leg swings — 10 each leg, forward and side",
                 "Walking lunges — 10 steps",
-                "Hip circles — 10 each direction"
+                "Leg swings — 10 each leg"
             ),
             exercises = listOf(
                 ExercisePlan("la1", "Goblet Squat", 4, "10-12", ExerciseUnit.DUMBBELL, MuscleGroup.QUADS, Difficulty.BEGINNER, "Heaviest DB you have"),
@@ -195,10 +195,10 @@ object Program {
             word = "PULL",
             accentHex = "#5B9279",
             warmup = listOf(
-                "Dead hangs from bar — 20 seconds",
-                "Scapular pull-ups — 10 reps",
-                "Cat-cow stretches — 10 reps",
-                "Light face pulls on the machine — 15 reps"
+                "Jumping jacks — 20 reps",
+                "Arm circles — 10 forward, 10 back",
+                "Shoulder rolls — 10 each direction",
+                "Standing torso twists — 10 each side"
             ),
             exercises = listOf(
                 ExercisePlan("ub1", "DB Row (1-arm)", 4, "8-12", ExerciseUnit.DUMBBELL, MuscleGroup.BACK, Difficulty.BEGINNER, "Mid-back thickness"),
@@ -217,10 +217,10 @@ object Program {
             word = "HAMS",
             accentHex = "#7B6CB5",
             warmup = listOf(
-                "Bodyweight squats — 15 reps",
+                "Jumping jacks — 20 reps",
                 "Glute bridges — 15 reps",
-                "Leg swings — 10 each leg",
-                "Walking knee hugs — 10 each leg"
+                "Bodyweight squats — 15 reps",
+                "Leg swings — 10 each leg"
             ),
             exercises = listOf(
                 ExercisePlan("lb1", "DB Bulgarian Split Squat", 4, "8-10/leg", ExerciseUnit.DUMBBELL, MuscleGroup.QUADS, Difficulty.ADVANCED, "Brutal but it works"),

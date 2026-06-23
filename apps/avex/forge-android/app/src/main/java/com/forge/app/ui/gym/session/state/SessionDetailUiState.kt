@@ -1,12 +1,14 @@
 package com.forge.app.ui.gym.session.state
 
 import com.forge.app.data.db.types.EffortRating
+import com.forge.app.ui.gym.stats.state.MuscleSetCount
 
 /** The metric the detail-page charts plot. Drives both the session overview and per-exercise charts. */
 enum class SessionMetric(val label: String) {
     WEIGHT("Weight"),
     VOLUME("Volume"),
-    REPS("Reps")
+    REPS("Reps"),
+    RPE("RPE")
 }
 
 /** How the per-exercise set charts render — switchable from the page controls. */
@@ -36,6 +38,7 @@ data class SetDetail(
         SessionMetric.WEIGHT -> weightLb ?: 0.0
         SessionMetric.VOLUME -> volumeLb
         SessionMetric.REPS -> reps.toDouble()
+        SessionMetric.RPE -> rpe ?: 0.0
     }
 }
 
@@ -49,13 +52,21 @@ data class ExerciseDetail(
     val topWeightLb: Double?,
     val totalReps: Int,
     val volumeLb: Double,
+    /** Best working e1RM (Epley) for this exercise in this session; null when no weighted working set. */
+    val e1rmLb: Double?,
+    /** True when [e1rmLb] beats every prior session's best working e1RM for this exercise. */
+    val e1rmIsBest: Boolean,
     val sets: List<SetDetail>
 ) {
-    /** The per-exercise rollup for the session overview chart (top weight / total volume / total reps). */
+    /** Avg RPE across the sets that logged one (0 when none) — the overview's per-exercise RPE rollup. */
+    val avgRpe: Double get() = sets.mapNotNull { it.rpe }.let { if (it.isEmpty()) 0.0 else it.average() }
+
+    /** The per-exercise rollup for the session overview chart (top weight / total volume / total reps / avg RPE). */
     fun metricValue(metric: SessionMetric): Double = when (metric) {
         SessionMetric.WEIGHT -> topWeightLb ?: 0.0
         SessionMetric.VOLUME -> volumeLb
         SessionMetric.REPS -> totalReps.toDouble()
+        SessionMetric.RPE -> avgRpe
     }
 }
 
@@ -78,6 +89,8 @@ data class SessionDetailData(
     val deload: Boolean,
     val journal: String,
     val avgRpe: Double?,
+    /** Working-set count per muscle group worked in this session, busiest first. */
+    val muscleSplit: List<MuscleSetCount>,
     val exercises: List<ExerciseDetail>
 )
 

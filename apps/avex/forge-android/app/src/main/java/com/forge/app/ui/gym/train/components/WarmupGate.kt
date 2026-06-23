@@ -55,15 +55,29 @@ fun WarmupGate(
             .fillMaxWidth()
             .padding(horizontal = 24.dp, vertical = 12.dp)
     ) {
-        Text(
-            "WARMUP",
-            style = MaterialTheme.typography.labelSmall,
-            color = muted,
-            letterSpacing = 1.5.sp
-        )
+        // Header: section label + live "done / total" progress so the user sees the gate filling up.
+        val total = warmupItems.size
+        val done = warmupItems.indices.count { checks.getOrElse(it) { false } }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                "WARMUP",
+                style = MaterialTheme.typography.labelSmall,
+                color = muted,
+                letterSpacing = 1.5.sp
+            )
+            Text(
+                "$done / $total",
+                style = MaterialTheme.typography.labelSmall,
+                color = if (total > 0 && done == total) onBg else muted
+            )
+        }
         Spacer(Modifier.height(4.dp))
         Text(
-            "Complete everything before you start.",
+            "Loosen up — check each off before you start.",
             style = MaterialTheme.typography.bodySmall,
             color = muted,
             fontStyle = FontStyle.Italic
@@ -84,43 +98,58 @@ fun WarmupGate(
             HorizontalDivider(color = outline.copy(alpha = 0.15f))
         }
 
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(20.dp))
 
+        // Skip just this session — a subtle outlined pill on its own centred row. Pulled out of the
+        // old single SpaceBetween row, where it collided with the two persistent-skip links on a phone.
+        Box(
+            modifier = Modifier
+                .align(Alignment.CenterHorizontally)
+                .clip(RoundedCornerShape(50))
+                .border(1.dp, outline, RoundedCornerShape(50))
+                .clickable(onClick = onSkip)
+                .padding(horizontal = 22.dp, vertical = 9.dp)
+        ) {
+            Text(
+                "Skip warmup",
+                style = MaterialTheme.typography.labelMedium,
+                color = onBg
+            )
+        }
+
+        Spacer(Modifier.height(14.dp))
+
+        // Persistent skips — turn warmups off for the rest of today / the rest of this week. Centred
+        // with a separator dot so the two labels breathe instead of running into each other.
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            horizontalArrangement = Arrangement.Center,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                Text(
-                    "No warmup today",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = muted,
-                    fontSize = 11.sp,
-                    modifier = Modifier.clickable(onClick = onDisableToday)
-                )
-                Text(
-                    "No warmup this week",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = muted,
-                    fontSize = 11.sp,
-                    modifier = Modifier.clickable(onClick = onDisableWeek)
-                )
-            }
-            Box(
+            Text(
+                "No warmup today",
+                style = MaterialTheme.typography.labelSmall,
+                color = muted,
+                fontSize = 11.sp,
                 modifier = Modifier
-                    .clip(RoundedCornerShape(50))
-                    .border(1.dp, muted, RoundedCornerShape(50))
-                    .clickable(onClick = onSkip)
-                    .padding(horizontal = 14.dp, vertical = 6.dp)
-            ) {
-                Text(
-                    "Skip warmup",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = onBg,
-                    fontSize = 11.sp
-                )
-            }
+                    .clickable(onClick = onDisableToday)
+                    .padding(vertical = 6.dp, horizontal = 6.dp)
+            )
+            Text(
+                "·",
+                style = MaterialTheme.typography.labelSmall,
+                color = muted.copy(alpha = 0.5f),
+                fontSize = 11.sp
+            )
+            Text(
+                "No warmup this week",
+                style = MaterialTheme.typography.labelSmall,
+                color = muted,
+                fontSize = 11.sp,
+                modifier = Modifier
+                    .clickable(onClick = onDisableWeek)
+                    .padding(vertical = 6.dp, horizontal = 6.dp)
+            )
         }
     }
 }

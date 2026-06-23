@@ -72,15 +72,20 @@ enum class MovementPattern {
 }
 
 /**
- * A joint/area a user can flag as a problem (program-unlock Phase 3). Movements that stress a flagged
- * area are strongly down-weighted in generation so the plan steers around it (soft, not a hard ban —
- * if it's the only option for a muscle it can still appear). [code] is the persisted value.
+ * A joint/area a user can flag as a problem — a sore joint OR an injury (program-unlock Phase 3).
+ * Movements that stress a flagged area are strongly down-weighted in generation so the plan steers
+ * around it (soft, not a hard ban — if it's the only option for a muscle it can still appear).
+ * [code] is the persisted value; entries are ordered top-to-bottom anatomically for the chip UI.
  */
 enum class ProblemArea(val code: String, val displayName: String) {
-    KNEES("knees", "Knees"),
+    NECK("neck", "Neck"),
     SHOULDERS("shoulders", "Shoulders"),
+    ELBOWS("elbows", "Elbows"),
+    WRISTS("wrists", "Wrists"),
     LOWER_BACK("lower_back", "Lower back"),
-    WRISTS("wrists", "Wrists");
+    HIPS("hips", "Hips"),
+    KNEES("knees", "Knees"),
+    ANKLES("ankles", "Ankles");
 
     companion object {
         fun fromCode(code: String): ProblemArea? = entries.firstOrNull { it.code == code }

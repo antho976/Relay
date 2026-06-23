@@ -178,4 +178,23 @@ interface LoggedExerciseDao {
         @androidx.room.ColumnInfo(name = "note") val note: String?,
         @androidx.room.ColumnInfo(name = "session_started_at") val sessionStartedAt: Long
     )
+
+    /**
+     * (session, exercise) pairs across every finished session — lets the History screen search by
+     * exercise name. Skipped entries are excluded (you didn't do them); the caller resolves each id
+     * to a display name via [com.forge.app.program.Program.exerciseDisplayName].
+     */
+    @Query("""
+        SELECT le.session_id AS session_id, le.exercise_id AS exercise_id, le.swapped_name AS swapped_name
+        FROM logged_exercise le
+        INNER JOIN session s ON le.session_id = s.id
+        WHERE s.finished_at IS NOT NULL AND le.skipped = 0
+    """)
+    fun observeSessionExerciseIds(): Flow<List<SessionExerciseRow>>
+
+    data class SessionExerciseRow(
+        @androidx.room.ColumnInfo(name = "session_id") val sessionId: Long,
+        @androidx.room.ColumnInfo(name = "exercise_id") val exerciseId: String,
+        @androidx.room.ColumnInfo(name = "swapped_name") val swappedName: String?
+    )
 }

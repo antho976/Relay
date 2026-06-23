@@ -64,16 +64,10 @@ class CardioViewModel @Inject constructor(
         cardioRepo.observeSince(weekStartMs)
     ) { all, weekMin, weekEntries ->
         val zone = ZoneId.systemDefault()
-        // Last ISO week's active entries (from the full history) for the hero's trend line.
-        val lastWeek = all.filter {
-            it.date in (weekStartMs - WEEK_MS) until weekStartMs && it.type != CardioType.REST.code
-        }
         CardioDerived(
             all = all,
             weekMinutes = weekMin ?: 0,
-            weekDistanceKm = weekEntries.filter { it.type != CardioType.REST.code }.sumOf { it.distanceKm ?: 0.0 },
-            lastWeekMinutes = lastWeek.sumOf { it.durationMin },
-            lastWeekDistanceKm = lastWeek.sumOf { it.distanceKm ?: 0.0 },
+            cardioDaysThisWeek = countActiveDays(weekEntries, zone),
             cardioStreakDays = computeCardioStreak(all, zone),
             weekDays = buildWeekDays(weekEntries)
         )
@@ -83,22 +77,25 @@ class CardioViewModel @Inject constructor(
     private val bodyweightLbFlow = bodyweightRepo.observeRecent(1).map { it.firstOrNull()?.weightLb }
 
     val state: StateFlow<CardioUiState> = combine(
-        derivedFlow, transient, settingsRepo.cardioWeeklyTargetMin, bodyweightLbFlow
-    ) { d, tr, target, bodyweightLb ->
+        derivedFlow, transient, settingsRepo.cardioWeeklyTargetMin, bodyweightLbFlow,
+        settingsRepo.cardioWearableHintDismissed
+    ) { d, tr, target, bodyweightLb, hintDismissed ->
         CardioUiState(
             isLoading = false,
             weekMinutes = d.weekMinutes,
+            cardioDaysThisWeek = d.cardioDaysThisWeek,
             weekTargetMin = target,
-            weekDistanceKm = d.weekDistanceKm,
-            lastWeekMinutes = d.lastWeekMinutes,
-            lastWeekDistanceKm = d.lastWeekDistanceKm,
             cardioStreakDays = d.cardioStreakDays,
             weekDays = d.weekDays,
             entries = d.all,
             bodyweightLb = bodyweightLb,
             sheetOpen = tr.sheetOpen,
             editing = tr.editing,
-            pendingDeleteId = tr.pendingDeleteId
+            pendingDeleteId = tr.pendingDeleteId,
+            detailOpen = tr.detailOpen,
+            sessionDetailId = tr.sessionDetailId,
+            historyExpanded = tr.historyExpanded,
+            wearableHintDismissed = hintDismissed
         )
     }.stateIn(
         scope = viewModelScope,
@@ -116,6 +113,20 @@ class CardioViewModel @Inject constructor(
     }
 
     fun closeSheet() = transient.update { it.copy(sheetOpen = false, editing = null) }
+
+    /** Open / close the swipeable week-stats overlay. */
+    fun openDetail() = transient.update { it.copy(detailOpen = true) }
+    fun closeDetail() = transient.update { it.copy(detailOpen = false) }
+
+    /** Open / close the per-session stats overlay for a logged entry. */
+    fun openSessionDetail(id: Long) = transient.update { it.copy(sessionDetailId = id) }
+    fun closeSessionDetail() = transient.update { it.copy(sessionDetailId = null) }
+
+    /** Permanently dismiss the "connect a watch/ring" hint banner. */
+    fun dismissWearableHint() = viewModelScope.launch { settingsRepo.setCardioWearableHintDismissed() }
+
+    /** Reveal the full history below the 5 most-recent entries on the main list (or collapse it). */
+    fun toggleHistoryExpanded() = transient.update { it.copy(historyExpanded = !it.historyExpanded) }
 
     fun requestDelete(id: Long) = transient.update { it.copy(pendingDeleteId = id) }
     fun cancelDelete() = transient.update { it.copy(pendingDeleteId = null) }
@@ -172,23 +183,22 @@ class CardioViewModel @Inject constructor(
     private data class TransientState(
         val sheetOpen: Boolean = false,
         val editing: CardioEntry? = null,
-        val pendingDeleteId: Long? = null
+        val pendingDeleteId: Long? = null,
+        val detailOpen: Boolean = false,
+        val sessionDetailId: Long? = null,
+        val historyExpanded: Boolean = false
     )
 
     /** DB-derived aggregates, computed off the DB flow on a background dispatcher. */
     private data class CardioDerived(
         val all: List<CardioEntry>,
         val weekMinutes: Int,
-        val weekDistanceKm: Double,
-        val lastWeekMinutes: Int,
-        val lastWeekDistanceKm: Double,
+        val cardioDaysThisWeek: Int,
         val cardioStreakDays: Int,
         val weekDays: List<CardioDayCell>
     )
 
     companion object {
-        private const val WEEK_MS: Long = 7L * 24 * 60 * 60 * 1000
-
         /** Mon–Sun cells for the current week: active minutes + whether a rest day was logged.
          *  One pass over the entries per day; future days are empty. */
         fun buildWeekDays(entries: List<CardioEntry>): List<CardioDayCell> {
@@ -210,6 +220,15 @@ class CardioViewModel @Inject constructor(
                 }
             }
         }
+
+        /** Distinct calendar days among [weekEntries] that carry an active (non-rest) session.
+         *  Two runs on the same day count once; rest-only days don't count. Drives the hero headline. */
+        fun countActiveDays(weekEntries: List<CardioEntry>, zone: ZoneId): Int =
+            weekEntries
+                .asSequence()
+                .filter { it.type != CardioType.REST.code }
+                .mapTo(mutableSetOf()) { Instant.ofEpochMilli(it.date).atZone(zone).toLocalDate() }
+                .size
 
         /** Consecutive calendar days, ending today or yesterday, with an active (non-rest) session. */
         fun computeCardioStreak(entries: List<CardioEntry>, zone: ZoneId): Int {

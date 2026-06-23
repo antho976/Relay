@@ -235,7 +235,7 @@ private fun EmphasisSection(state: SettingsUiState, vm: SettingsViewModel) {
             }
         }
     }
-    ProgramBlock("Problem areas", "Flag a sore joint and the generator steers around movements that stress it.") {
+    ProgramBlock("Problem areas", "Flag a sore joint or an injury and the generator steers around movements that stress it.") {
         ChipFlow {
             com.forge.app.program.ProblemArea.entries.forEach { a ->
                 PillChip(a.displayName, a.code in state.problemAreas) { vm.toggleProblemArea(a.code) }

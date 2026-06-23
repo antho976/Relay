@@ -77,8 +77,7 @@ fun RecapScreen(
             // Monthly recap card (#32)
             state.monthRecap?.let { recap ->
                 RecapCard(
-                    title = "THIS MONTH · ${recap.month.month.name.lowercase().replaceFirstChar { it.uppercase() }} ${recap.month.year}",
-                    emoji = "📅"
+                    title = "THIS MONTH · ${recap.month.month.name.lowercase().replaceFirstChar { it.uppercase() }} ${recap.month.year}"
                 ) {
                     BigStat("${recap.sessionCount}", "workouts")
                     BigStat(formatRecapVolume(recap.totalVolumeLb, useKg), "total volume")
@@ -94,8 +93,7 @@ fun RecapScreen(
             // Year-over-year recap card (#33)
             state.yearRecap?.let { recap ->
                 RecapCard(
-                    title = "${recap.year} IN REVIEW",
-                    emoji = "🏆"
+                    title = "${recap.year} IN REVIEW"
                 ) {
                     BigStat("${recap.sessionCount}", "workouts")
                     BigStat(formatRecapVolume(recap.totalVolumeLb, useKg), "total volume")
@@ -140,7 +138,7 @@ private fun RecapSkeleton(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun RecapCard(title: String, emoji: String, content: @Composable () -> Unit) {
+private fun RecapCard(title: String, content: @Composable () -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -148,11 +146,8 @@ private fun RecapCard(title: String, emoji: String, content: @Composable () -> U
             .padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(emoji, style = MaterialTheme.typography.headlineMedium)
-            Text(title, style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Black)
-        }
+        Text(title, style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Black)
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             content()
         }

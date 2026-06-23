@@ -38,6 +38,25 @@ internal fun buildWeeklySetsByMuscle(
         .sortedByDescending { it.sets }
 }
 
+/**
+ * Sets-per-muscle for a SINGLE session's detail page — folds each exercise's set count onto the
+ * muscle group its [Program.exercise] maps to. Exercises with no library match (stale/removed ids)
+ * are skipped. Mirrors [buildWeeklySetsByMuscle] so the two read identically.
+ *
+ * @param perExercise (exerciseId, setCount) for each non-skipped exercise that logged sets.
+ */
+internal fun buildSessionMuscleSplit(
+    perExercise: List<Pair<String, Int>>
+): List<MuscleSetCount> {
+    val byMuscle = mutableMapOf<com.forge.app.program.MuscleGroup, Int>()
+    perExercise.forEach { (exerciseId, sets) ->
+        val plan = Program.exercise(exerciseId) ?: return@forEach
+        byMuscle.merge(plan.muscle, sets, Int::plus)
+    }
+    return byMuscle.map { (m, n) -> MuscleSetCount(muscle = m, sets = n) }
+        .sortedByDescending { it.sets }
+}
+
 internal fun buildVolumeDeloadTrend(
     rows: List<com.forge.app.data.db.dao.SessionDao.SessionVolumeDeloadRow>
 ): List<VolumeDeloadPoint> {

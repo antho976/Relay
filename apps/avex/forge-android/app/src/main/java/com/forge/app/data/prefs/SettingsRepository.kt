@@ -387,6 +387,12 @@ class SettingsRepository @Inject constructor(
     suspend fun setCardioWeeklyTargetMin(min: Int) =
         context.forgePreferences.edit { it[PreferenceKeys.CARDIO_WEEKLY_TARGET_MIN] = min.coerceAtLeast(0) }
 
+    /** Whether the user has dismissed the "connect a watch/ring" hint for good (cardio screen). */
+    val cardioWearableHintDismissed: Flow<Boolean> = context.forgePreferences.data
+        .map { it[PreferenceKeys.CARDIO_WEARABLE_HINT_DISMISSED] ?: false }
+    suspend fun setCardioWearableHintDismissed() =
+        context.forgePreferences.edit { it[PreferenceKeys.CARDIO_WEARABLE_HINT_DISMISSED] = true }
+
     // ─── Plate weight (machine/cable plate-loaded exercises) ──────────────────
     /** Weight of one plate in lb. Plate-loaded exercises are entered/shown as a plate count. */
     val plateWeightLb: Flow<Double> = context.forgePreferences.data

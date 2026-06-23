@@ -160,6 +160,7 @@ fun OverviewScreen(
     onOpenCoachLab: () -> Unit = {},
     onOpenProfile: () -> Unit = {},
     onOpenSession: (Long) -> Unit = {},
+    onViewAllHistory: () -> Unit = {},
     onLogFreestyle: () -> Unit = {},
     onBuildPlan: () -> Unit = {},
     viewModel: OverviewViewModel = hiltViewModel()
@@ -173,7 +174,6 @@ fun OverviewScreen(
     val selectedItem by viewModel.selectedItem.collectAsStateWithLifecycle()
     val summaryLines by viewModel.sessionExerciseLines.collectAsStateWithLifecycle()
     var showDayEdit by remember { mutableStateOf(false) }
-    var showHistory by remember { mutableStateOf(false) }
     // A milestone "fires and vanishes" otherwise (it's marked shown immediately) — capture it into a
     // transient banner so the user actually sees it (#Overview pendingMilestone).
     var milestoneToast by remember { mutableStateOf<MilestoneEvent?>(null) }
@@ -217,13 +217,6 @@ fun OverviewScreen(
             initialDayKey = state.nextUpDayKey,
             onSelectAsToday = { dayKey -> viewModel.setPlanNextDay(dayKey) },
             onDismiss = { showDayEdit = false }
-        )
-    }
-
-    if (showHistory) {
-        HistorySheet(
-            onDismiss = { showHistory = false },
-            onOpenSession = { id -> showHistory = false; onOpenSession(id) }
         )
     }
 
@@ -409,7 +402,10 @@ fun OverviewScreen(
             }
 
             // ── Cardio-load nudge: a big cardio block in the last day or two ──
-            if (state.heavyCardioRecent && state.activeSessionDayKey == null) {
+            // Dismissible for the session (rememberSaveable) — a closed nudge re-appears next launch
+            // only while the heavy-cardio window still holds, not forever.
+            var cardioNudgeDismissed by rememberSaveable { mutableStateOf(false) }
+            if (state.heavyCardioRecent && state.activeSessionDayKey == null && !cardioNudgeDismissed) {
                 Spacer(Modifier.height(16.dp))
                 Column(
                     Modifier
@@ -418,7 +414,18 @@ fun OverviewScreen(
                         .background(accent.copy(alpha = 0.10f))
                         .padding(horizontal = 14.dp, vertical = 12.dp)
                 ) {
-                    Text("RECENT CARDIO", style = MaterialTheme.typography.labelSmall, color = accent, fontSize = 10.sp)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("RECENT CARDIO", style = MaterialTheme.typography.labelSmall, color = accent, fontSize = 10.sp)
+                        Icon(
+                            Icons.Default.Close, contentDescription = "Dismiss",
+                            tint = muted.copy(alpha = 0.7f),
+                            modifier = Modifier.size(16.dp).clickableLabeled("Dismiss") { cardioNudgeDismissed = true }
+                        )
+                    }
                     Text(
                         "You put in a solid cardio block recently — keep today's heavy lifts a touch submaximal, or fuel up well before you go after them.",
                         style = MaterialTheme.typography.bodyMedium, color = onBg
@@ -560,17 +567,6 @@ fun OverviewScreen(
                         isToday = i == todayDow, outlineColor = outline, modifier = Modifier.weight(1f))
                 }
             }
-            // Streak hook — the chain you don't want to break. Encouraging, not guilt-y
-            // (the underlying streak is vacation-aware + gap-bridged, so rest never punishes you).
-            if (state.streakDays >= 2) {
-                Spacer(Modifier.height(10.dp))
-                Text(
-                    "🔥 ${state.streakDays}-day streak — keep it alive",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = accent
-                )
-            }
-
             Spacer(Modifier.height(16.dp))
 
             val useKg = LocalForgeSettings.current.useKg
@@ -662,7 +658,7 @@ fun OverviewScreen(
                 Text("RECENT", style = MaterialTheme.typography.labelMedium, color = muted)
                 Text("view all →", style = MaterialTheme.typography.labelSmall,
                     color = muted, fontSize = 10.sp,
-                    modifier = Modifier.clickableLabeled("View all sessions") { showHistory = true }.padding(vertical = 2.dp))
+                    modifier = Modifier.clickableLabeled("View all sessions") { onViewAllHistory() }.padding(vertical = 2.dp))
             }
             Spacer(Modifier.height(10.dp))
             if (state.recentItems.isEmpty()) {

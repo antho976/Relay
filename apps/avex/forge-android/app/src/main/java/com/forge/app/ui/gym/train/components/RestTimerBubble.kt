@@ -35,8 +35,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -67,6 +69,9 @@ fun RestTimerBubble(
 ) {
     val onBg = MaterialTheme.colorScheme.onBackground
     val accent = MaterialTheme.colorScheme.primary
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val surface = MaterialTheme.colorScheme.surface
+    val surfaceVar = MaterialTheme.colorScheme.surfaceVariant
     val isPaused = state.isPaused && !state.isFinished
     val fraction = if (state.totalSeconds > 0)
         (state.secondsRemaining.toFloat() / state.totalSeconds).coerceIn(0f, 1f) else 0f
@@ -92,7 +97,9 @@ fun RestTimerBubble(
         animationSpec = ForgeMotion.standardTween(ForgeMotion.DurationEmphasized),
         label = "ring-urgency"
     )
-    val ringColor = lerp(onBg.copy(alpha = 0.85f), warn, urgency)
+    // The depleting arc is now the hero, so it carries the accent (not a muted on-background) and
+    // still warms toward the error colour over the final ten seconds.
+    val ringColor = lerp(accent, warn, urgency)
     val flash = remember { Animatable(0f) }
     val haptic = LocalHapticFeedback.current
     // Track the previous tick so the 10s warning fires ONLY on the descending transition into 0:10,
@@ -140,38 +147,36 @@ fun RestTimerBubble(
     Box(
         modifier = modifier
             .graphicsLayer { scaleX = scale; scaleY = scale }
-            .size(60.dp)
+            .size(64.dp)
+            // Soft cast shadow so the bubble reads as a physical object floating over the content
+            // rather than a flat sticker. clip = false keeps the shadow outside the disc bounds.
+            .shadow(elevation = 12.dp, shape = CircleShape, clip = false)
             .clip(CircleShape)
-            .then(
-                if (isPaused) {
-                    Modifier.drawBehind {
-                        val effect = PathEffect.dashPathEffect(floatArrayOf(6f, 5f), 0f)
-                        drawCircle(
-                            color = onBg.copy(alpha = 0.5f),
-                            style = Stroke(
-                                width = 1.dp.toPx(),
-                                pathEffect = effect
-                            ),
-                            radius = size.minDimension / 2f - 0.5.dp.toPx()
-                        )
-                    }
-                } else {
-                    // Filled with the user's accent so the timer is the most prominent
-                    // accent presence in the app — visible on every rest.
-                    Modifier.background(accent)
-                }
-            )
-            // Countdown ring: a depleting arc around the filled bubble so remaining rest
-            // reads at a glance without parsing the number.
+            // Dark "instrument" face: a subtle top-lit gradient gives the disc depth instead of a
+            // single flat colour. The accent now lives in the ring, not the whole fill.
+            .background(Brush.verticalGradient(listOf(surfaceVar, surface)))
+            // Hairline rim to separate the disc from the background gradient at any accent.
+            .border(width = 1.dp, color = onBg.copy(alpha = 0.08f), shape = CircleShape)
+            // Countdown ring: a depleting accent arc on a faint track — the hero of the design.
             .drawBehind {
-                if (!isPaused && !state.isFinished) {
-                    val sw = 3.dp.toPx()
-                    val inset = Offset(sw / 2f, sw / 2f)
-                    val arcSize = Size(size.width - sw, size.height - sw)
-                    // Faint full-circle track behind the depleting arc so the ring reads as a
-                    // countdown (shrinking arc on a track) rather than an arc appearing/vanishing.
-                    drawArc(
-                        color = onBg.copy(alpha = 0.15f),
+                val sw = 4.dp.toPx()
+                val inset = Offset(sw / 2f + 1.dp.toPx(), sw / 2f + 1.dp.toPx())
+                val arcSize = Size(size.width - sw - 2.dp.toPx(), size.height - sw - 2.dp.toPx())
+                // Faint full-circle track so remaining rest reads as a shrinking arc on a track
+                // rather than an arc appearing/vanishing.
+                drawArc(
+                    color = onBg.copy(alpha = 0.10f),
+                    startAngle = -90f,
+                    sweepAngle = 360f,
+                    useCenter = false,
+                    topLeft = inset,
+                    size = arcSize,
+                    style = Stroke(width = sw, cap = StrokeCap.Round)
+                )
+                when {
+                    // Completed: a full accent ring crowns the ✓.
+                    state.isFinished -> drawArc(
+                        color = accent,
                         startAngle = -90f,
                         sweepAngle = 360f,
                         useCenter = false,
@@ -179,7 +184,21 @@ fun RestTimerBubble(
                         size = arcSize,
                         style = Stroke(width = sw, cap = StrokeCap.Round)
                     )
-                    drawArc(
+                    // Paused: the remaining arc goes dashed and dim so the held state reads instantly.
+                    isPaused -> drawArc(
+                        color = accent.copy(alpha = 0.45f),
+                        startAngle = -90f,
+                        sweepAngle = 360f * animFraction,
+                        useCenter = false,
+                        topLeft = inset,
+                        size = arcSize,
+                        style = Stroke(
+                            width = sw,
+                            cap = StrokeCap.Round,
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 8f), 0f)
+                        )
+                    )
+                    else -> drawArc(
                         color = ringColor,
                         startAngle = -90f,
                         sweepAngle = 360f * animFraction,
@@ -188,9 +207,10 @@ fun RestTimerBubble(
                         size = arcSize,
                         style = Stroke(width = sw, cap = StrokeCap.Round)
                     )
-                    // One-shot brighten at the 10-second mark — the visual half of the warning.
-                    if (flash.value > 0f) drawCircle(color = onBg.copy(alpha = flash.value))
                 }
+                // One-shot brighten at the 10-second mark — the visual half of the warning. Softer
+                // now that it lands on a dark face rather than a saturated fill.
+                if (flash.value > 0f) drawCircle(color = onBg.copy(alpha = flash.value * 0.4f))
             }
             .combinedClickable(
                 onClick = {
@@ -207,14 +227,30 @@ fun RestTimerBubble(
         contentAlignment = Alignment.Center
     ) {
         if (state.isFinished) {
-            Text("✓", style = MaterialTheme.typography.titleLarge, color = onBg)
-        } else {
             Text(
-                formatTime(state.secondsRemaining),
-                style = MaterialTheme.typography.titleMedium,
-                color = if (!isPaused) onBg else onBg.copy(alpha = 0.7f),
-                fontWeight = FontWeight.SemiBold
+                "✓",
+                style = MaterialTheme.typography.titleLarge,
+                color = accent,
+                fontWeight = FontWeight.Bold
             )
+        } else {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(
+                    formatTime(state.secondsRemaining),
+                    // Tabular figures keep the digits from jittering as the seconds count down.
+                    style = MaterialTheme.typography.titleMedium.copy(fontFeatureSettings = "tnum"),
+                    color = if (!isPaused) onBg else onBg.copy(alpha = 0.6f),
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    if (isPaused) "PAUSED" else "REST",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = muted,
+                    fontSize = 8.sp,
+                    letterSpacing = 1.5.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            }
         }
     }
 }
