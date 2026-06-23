@@ -42,6 +42,8 @@ import androidx.navigation.navArgument
 import com.forge.app.ui.coach.CoachBriefScreen
 import com.forge.app.ui.coach.CoachLabScreen
 import com.forge.app.ui.coach.CoachTimelineScreen
+import com.forge.app.ui.gym.freestyle.FreestyleLogScreen
+import com.forge.app.ui.programbuilder.ProgramBuilderScreen
 import com.forge.app.ui.common.ProgramChangeGuardHost
 import com.forge.app.ui.gym.history.SessionHistoryScreen
 import com.forge.app.ui.gym.session.SessionDetailScreen
@@ -72,7 +74,7 @@ fun ForgeNavHost(initialDayKey: String? = null) {
     val rise: (Int) -> Int = { it / 4 }        // vertical distance for modal mode screens
     // The five hubs (Cardio/Stats/Overview/Coach/Profile) are pages of HubScreen's pager, reached by
     // swipe — they aren't nav destinations. Only the deep "mode" screens remain, and they RISE as modals.
-    val modalRoutes = setOf(Routes.GYM_DAY, Routes.RECAP, Routes.PROGRAM_EDITOR, Routes.COACH_BRIEF)
+    val modalRoutes = setOf(Routes.GYM_DAY, Routes.RECAP, Routes.PROGRAM_EDITOR, Routes.PROGRAM_BUILDER, Routes.COACH_BRIEF, Routes.FREESTYLE_LOG)
     // One-shot fade so the first screen eases in on cold launch instead of snapping on.
     var appeared by remember { mutableStateOf(false) }
     val rootAlpha by animateFloatAsState(
@@ -90,6 +92,9 @@ fun ForgeNavHost(initialDayKey: String? = null) {
         if (key in com.forge.app.program.Program.dayKeys) nav.navigate(Routes.gymDay(key))
     }
     val initialHubPage = if (initialDayKey?.startsWith("cardio") == true) BottomTab.CARDIO.ordinal else BottomTab.HOME.ordinal
+
+    // "I'll make my own" lands on Home, which shows the "No plan yet · Build a plan" state (its program
+    // was cleared in onboarding), rather than jumping straight into the builder.
     // A deep screen (e.g. PRs → "open cardio") can request a hub tab: set this and pop back to the
     // hub, which animates to the page then clears it via onPendingConsumed.
     var pendingHubPage by remember { mutableStateOf<Int?>(null) }
@@ -135,6 +140,18 @@ fun ForgeNavHost(initialDayKey: String? = null) {
         composable(Routes.PROGRAM_VIEWER) {
             ProgramViewerScreen(onBack = { nav.popBackStack() })
         }
+        composable(Routes.FREESTYLE_LOG) {
+            FreestyleLogScreen(onBack = { nav.popBackStack() })
+        }
+        composable(
+            route = Routes.PROGRAM_BUILDER,
+            arguments = listOf(navArgument(Routes.ARG_BLANK) { type = NavType.BoolType; defaultValue = false })
+        ) { entry ->
+            ProgramBuilderScreen(
+                blank = entry.arguments?.getBoolean(Routes.ARG_BLANK) ?: false,
+                onClose = { nav.popBackStack() }
+            )
+        }
         composable(Routes.NUTRITION) {
             NutritionPlaceholderScreen(onBack = { nav.popBackStack() })
         }
@@ -172,7 +189,8 @@ fun ForgeNavHost(initialDayKey: String? = null) {
         composable(Routes.SETTINGS) {
             SettingsScreen(
                 onBack = { nav.popBackStack() },
-                onOpenCoachBrief = { nav.navigate(Routes.COACH_BRIEF) }
+                onOpenCoachBrief = { nav.navigate(Routes.COACH_BRIEF) },
+                onOpenBuilder = { nav.navigate(Routes.programBuilder()) }
             )
         }
         composable(Routes.RECAP) {

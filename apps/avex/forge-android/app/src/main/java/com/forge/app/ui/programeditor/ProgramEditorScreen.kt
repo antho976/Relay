@@ -1,13 +1,17 @@
 package com.forge.app.ui.programeditor
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import com.forge.app.ui.common.forgeItemMotion
@@ -17,6 +21,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -27,6 +32,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.ui.draw.clip
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -129,6 +135,13 @@ class ProgramEditorViewModel @Inject constructor(
         repo.addCustomExercise(_dayKey.value, name, muscle)
     }
 
+    /** Add a real library movement (machines included) to this day, carrying its name + muscle +
+     *  default sets/reps. Same overlay path as a custom add — no schema change. */
+    fun addFromLibrary(defId: String) = viewModelScope.launch {
+        val def = com.forge.app.program.ExerciseLibrary.byId(defId) ?: return@launch
+        repo.addCustomExercise(_dayKey.value, def.name, def.muscle, def.defaultSets, def.defaultReps)
+    }
+
     fun resetDay() = viewModelScope.launch { repo.resetDay(_dayKey.value) }
 }
 
@@ -145,46 +158,95 @@ fun ProgramEditorScreen(
     LaunchedEffect(dayKey) { viewModel.setDay(dayKey) }
 
     var showAddDialog by remember { mutableStateOf(false) }
+    var showAddPicker by remember { mutableStateOf(false) }
     var editRepsFor by remember { mutableStateOf<ProgramExerciseItem?>(null) }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("EDIT PROGRAM · ${state.dayName}") },
+                title = {
+                    Column {
+                        Text("EDIT PROGRAM", style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(state.dayName, style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground)
+                    }
+                },
                 navigationIcon = {
-                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) }
+                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
                 },
                 actions = {
-                    TextButton(onClick = viewModel::resetDay) { Text("Reset") }
+                    TextButton(onClick = onBack) { Text("Done", fontWeight = FontWeight.SemiBold) }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
             )
         },
-        floatingActionButton = {
-            androidx.compose.material3.FloatingActionButton(onClick = { showAddDialog = true }) {
-                Icon(Icons.Default.Add, "Add exercise")
+        // Sticky "add exercise" — the primary action lives at the bottom, the way routine editors do.
+        bottomBar = {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Button(onClick = { showAddPicker = true }, modifier = Modifier.fillMaxWidth()) {
+                    Icon(Icons.Default.Add, null)
+                    Spacer(Modifier.width(8.dp))
+                    Text("Add exercise")
+                }
+                TextButton(onClick = { showAddDialog = true }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Add a custom exercise", style = MaterialTheme.typography.bodySmall)
+                }
             }
         },
         containerColor = Color.Transparent
     ) { inner ->
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(inner),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
+            // Day switcher — edit every day of the plan without leaving the editor.
+            if (Program.days.size > 1) {
+                item {
+                    @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+                    androidx.compose.foundation.layout.FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Program.days.forEach { d ->
+                            androidx.compose.material3.FilterChip(
+                                selected = d.key == state.dayKey,
+                                onClick = { viewModel.setDay(d.key) },
+                                label = { Text(d.defaultName) }
+                            )
+                        }
+                    }
+                }
+            }
             item {
-                Text("Tap reps to edit. Long-press to delete.",
+                Text(
+                    "Tap an exercise to change its sets and reps. Tap the trash to remove it.",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
             items(state.exercises, key = { it.id }) { ex ->
                 ExerciseEditorRow(
                     item = ex,
-                    onEditReps = { editRepsFor = ex },
+                    onEdit = { editRepsFor = ex },
                     onRemove = { viewModel.removeExercise(ex.id) },
                     onRestore = { viewModel.restoreExercise(ex.id) },
                     modifier = forgeItemMotion()
                 )
+            }
+            item {
+                TextButton(
+                    onClick = viewModel::resetDay,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Reset this day to default",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
         }
     }
@@ -203,6 +265,17 @@ fun ProgramEditorScreen(
         )
     }
 
+    if (showAddPicker) {
+        com.forge.app.ui.common.ExerciseLibraryPicker(
+            exclude = state.exercises.map { it.id }.toSet(),
+            onDismiss = { showAddPicker = false },
+            onConfirm = { picked ->
+                picked.forEach { viewModel.addFromLibrary(it) }
+                showAddPicker = false
+            }
+        )
+    }
+
     if (showAddDialog) {
         AddExerciseDialog(
             onDismiss = { showAddDialog = false },
@@ -217,38 +290,43 @@ fun ProgramEditorScreen(
 @Composable
 private fun ExerciseEditorRow(
     item: ProgramExerciseItem,
-    onEditReps: () -> Unit,
+    onEdit: () -> Unit,
     onRemove: () -> Unit,
     onRestore: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val alpha = if (item.removed) 0.4f else 1f
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(10.dp))
-            .padding(12.dp),
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+            // The whole card is the edit target (matches routine editors); removed rows aren't tappable.
+            .clickable(enabled = !item.removed) { onEdit() }
+            .padding(14.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        val alpha = if (item.removed) 0.4f else 1f
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 item.name,
-                style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.bodyLarge,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = alpha),
                 textDecoration = if (item.removed) TextDecoration.LineThrough else null
             )
-            Text("${item.muscle} · ${item.sets} sets · ${item.reps}" + if (item.removed) " · removed" else "",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = alpha))
+            Spacer(Modifier.height(2.dp))
+            Text(
+                "${item.muscle} · ${item.sets} sets · ${item.reps}" + if (item.removed) " · removed" else "",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = alpha)
+            )
         }
         if (item.removed) {
             TextButton(onClick = onRestore) { Text("Restore") }
         } else {
-            TextButton(onClick = onEditReps) { Text("Edit") }
             IconButton(onClick = onRemove) {
-                Icon(Icons.Default.Delete, null, tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f))
+                Icon(Icons.Default.Delete, "Remove ${item.name}", tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f))
             }
         }
     }

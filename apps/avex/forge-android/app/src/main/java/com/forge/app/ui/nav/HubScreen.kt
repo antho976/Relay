@@ -10,9 +10,14 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import com.forge.app.ui.cardio.CardioScreen
 import com.forge.app.ui.coach.CoachBriefScreen
@@ -27,6 +32,9 @@ import kotlinx.coroutines.launch
  * left/right to glide between hubs (the bar highlight follows the settled page); tapping a bar item
  * animates to that page.
  *
+ * The Coach tab is removed when the user has disabled the coach (onboarding / Settings). Coach sits
+ * after Home, so removing it leaves Cardio/Stats/Home at the same indices — only Profile shifts.
+ *
  * Deep screens (a live session, settings, the coach, PRs, the program editor, …) are pushed onto
  * [nav] *on top of* this hub and bring their own back arrow — they are NOT pages here, so the bar
  * disappears with them.
@@ -40,28 +48,42 @@ fun HubScreen(
     initialPage: Int = BottomTab.HOME.ordinal,
     pendingPage: Int? = null,
     onPendingConsumed: () -> Unit = {},
+    viewModel: HubViewModel = hiltViewModel(),
 ) {
-    val pagerState = rememberPagerState(initialPage = initialPage, pageCount = { BottomTab.entries.size })
+    val coachEnabled by viewModel.coachEnabled.collectAsStateWithLifecycle()
+    val tabs = remember(coachEnabled) {
+        if (coachEnabled) BottomTab.entries.toList() else BottomTab.entries.filterNot { it == BottomTab.COACH }
+    }
+    // Re-create the pager when the tab set changes (coach toggled), so a settled currentPage can't be
+    // left pointing past the now-shorter list — which would otherwise strand the user on a stale page.
+    val pagerState = key(coachEnabled) {
+        rememberPagerState(
+            initialPage = initialPage.coerceIn(0, tabs.lastIndex),
+            pageCount = { tabs.size }
+        )
+    }
     val scope = rememberCoroutineScope()
-    fun goTo(page: Int) { scope.launch { pagerState.animateScrollToPage(page) } }
+    fun goTo(page: Int) { scope.launch { pagerState.animateScrollToPage(page.coerceIn(0, tabs.lastIndex)) } }
+    fun goToTab(tab: BottomTab) { tabs.indexOf(tab).takeIf { it >= 0 }?.let { goTo(it) } }
+    val homeIndex = tabs.indexOf(BottomTab.HOME)
 
     // External tab requests (deep screen → tab, or a cardio widget launch).
     LaunchedEffect(pendingPage) {
         if (pendingPage != null) {
-            pagerState.animateScrollToPage(pendingPage)
+            pagerState.animateScrollToPage(pendingPage.coerceIn(0, tabs.lastIndex))
             onPendingConsumed()
         }
     }
 
     // Back from any non-Home hub returns to Home; on Home it falls through to the system (exit).
-    BackHandler(enabled = pagerState.currentPage != BottomTab.HOME.ordinal) { goTo(BottomTab.HOME.ordinal) }
+    BackHandler(enabled = pagerState.currentPage != homeIndex) { goTo(homeIndex) }
 
     Scaffold(
         containerColor = Color.Transparent,
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         // targetPage (not currentPage) so the highlight tracks the destination the instant a swipe or
         // tap commits, rather than snapping only once the page settles.
-        bottomBar = { ForgeBottomBar(selectedIndex = pagerState.targetPage, onSelect = { goTo(it) }) }
+        bottomBar = { ForgeBottomBar(tabs = tabs, selectedIndex = pagerState.targetPage, onSelect = { goTo(it) }) }
     ) { innerPadding ->
         HorizontalPager(
             state = pagerState,
@@ -72,10 +94,8 @@ fun HubScreen(
                 .padding(innerPadding)
                 .consumeWindowInsets(innerPadding)
         ) { page ->
-            // Pages are keyed off the BottomTab order so they always line up with the bar (Home centered).
-            // No onBack on hub pages: the bottom bar + system-back (BackHandler above) handle navigation,
-            // so a per-page back arrow would be redundant chrome.
-            when (BottomTab.entries[page]) {
+            // Pages are keyed off the visible tab list so they always line up with the bar.
+            when (tabs.getOrElse(page) { BottomTab.HOME }) {
                 BottomTab.CARDIO -> CardioScreen()
                 BottomTab.STATS -> DayListScreen(
                     onOpenDay = { dayKey -> nav.navigate(Routes.gymDay(dayKey)) },
@@ -83,26 +103,32 @@ fun HubScreen(
                     onOpenHistory = { nav.navigate(Routes.SESSION_HISTORY) },
                     onOpenNotes = { nav.navigate(Routes.NOTES_SEARCH) },
                     onOpenRecap = { nav.navigate(Routes.RECAP) },
+                    // Long-press "Edit program for this day" → the per-day editor for that day (whole-plan
+                    // restructuring lives on the "Edit plan" / "Build a plan" buttons → the builder).
                     onEditProgram = { dayKey -> nav.navigate(Routes.programEditor(dayKey)) },
-                    onOpenCardio = { goTo(BottomTab.CARDIO.ordinal) },
+                    onOpenCardio = { goToTab(BottomTab.CARDIO) },
+                    onLogFreestyle = { nav.navigate(Routes.FREESTYLE_LOG) },
+                    onBuildPlan = { nav.navigate(Routes.programBuilder()) },
                     initialTab = 1,
                     title = "Stats"
                 )
                 BottomTab.HOME -> OverviewScreen(
                     // A cardio "day" is logged on the Cardio page, so its start CTA swipes there.
-                    onStartSession = { dayKey -> if (dayKey.startsWith("cardio")) goTo(BottomTab.CARDIO.ordinal) else nav.navigate(Routes.gymDay(dayKey)) },
-                    onStartSessionSkipWarmup = { dayKey -> if (dayKey.startsWith("cardio")) goTo(BottomTab.CARDIO.ordinal) else nav.navigate(Routes.gymDay(dayKey, skipWarmup = true)) },
+                    onStartSession = { dayKey -> if (dayKey.startsWith("cardio")) goToTab(BottomTab.CARDIO) else nav.navigate(Routes.gymDay(dayKey)) },
+                    onStartSessionSkipWarmup = { dayKey -> if (dayKey.startsWith("cardio")) goToTab(BottomTab.CARDIO) else nav.navigate(Routes.gymDay(dayKey, skipWarmup = true)) },
                     onViewProgram = { nav.navigate(Routes.PROGRAM_VIEWER) },
-                    onGoToCardio = { goTo(BottomTab.CARDIO.ordinal) },
+                    onGoToCardio = { goToTab(BottomTab.CARDIO) },
                     onGoToTrophies = { nav.navigate(Routes.TROPHIES) },
                     onOpenNotes = { nav.navigate(Routes.NOTES_SEARCH) },
                     onGoToNutrition = { nav.navigate(Routes.NUTRITION) },
                     onGoToSettings = { nav.navigate(Routes.SETTINGS) },
-                    // Coach is now its own hub page — swipe to it rather than pushing the modal brief.
-                    onOpenCoachBrief = { goTo(BottomTab.COACH.ordinal) },
+                    // Coach is its own hub page when enabled — swipe to it rather than pushing the modal brief.
+                    onOpenCoachBrief = { goToTab(BottomTab.COACH) },
                     onOpenCoachLab = { nav.navigate(Routes.COACH_LAB) },
-                    onOpenProfile = { goTo(BottomTab.PROFILE.ordinal) },
-                    onOpenSession = { sessionId -> nav.navigate(Routes.sessionDetail(sessionId)) }
+                    onOpenProfile = { goToTab(BottomTab.PROFILE) },
+                    onOpenSession = { sessionId -> nav.navigate(Routes.sessionDetail(sessionId)) },
+                    onLogFreestyle = { nav.navigate(Routes.FREESTYLE_LOG) },
+                    onBuildPlan = { nav.navigate(Routes.programBuilder()) }
                 )
                 BottomTab.COACH -> CoachBriefScreen(
                     onOpenCoachLab = { nav.navigate(Routes.COACH_LAB) }

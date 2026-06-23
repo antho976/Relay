@@ -40,7 +40,6 @@ import com.forge.app.data.repo.CoachRepository
 import com.forge.app.data.repo.CoachTimeline
 import com.forge.app.domain.coach.CoachOutcome
 import com.forge.app.domain.coach.TypeTrust
-import com.forge.app.ui.theme.emphasized
 
 /**
  * "Coach learning timeline" (Tier 6): how the coach has grown — the trust it's earned per change
@@ -179,7 +178,7 @@ private fun MilestoneRow(m: CoachMilestone, onBg: Color, muted: Color) {
 private fun WeekBlock(week: CoachRepository.CoachHistoryEntry, now: Long, onBg: Color, muted: Color) {
     Text(
         "${week.pass.weekId.uppercase()} · ${week.pass.status.uppercase()}",
-        style = MaterialTheme.typography.labelMedium, color = emphasized(muted),
+        style = MaterialTheme.typography.labelMedium, color = muted,
         modifier = Modifier.padding(top = 14.dp, bottom = 2.dp)
     )
     if (week.decisions.isEmpty()) {
@@ -203,7 +202,7 @@ private fun Section(title: String, outline: Color, muted: Color) {
     Spacer(Modifier.height(20.dp))
     HorizontalDivider(color = outline.copy(alpha = 0.3f))
     Spacer(Modifier.height(16.dp))
-    Text(title, style = MaterialTheme.typography.labelMedium, color = emphasized(muted))
+    Text(title, style = MaterialTheme.typography.labelMedium, color = muted)
     Spacer(Modifier.height(8.dp))
 }
 

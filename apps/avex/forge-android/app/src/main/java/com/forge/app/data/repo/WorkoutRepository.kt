@@ -22,6 +22,7 @@ import com.forge.app.data.db.types.EffortRating
 import com.forge.app.data.health.HealthConnectManager
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.domain.health.ActiveCalorieEstimator
+import com.forge.app.domain.pr.PrDetector
 import com.forge.app.domain.volume.VolumeCalculator
 import com.forge.app.program.Equipment
 import com.forge.app.program.GenerationParams
@@ -34,13 +35,12 @@ import javax.inject.Singleton
 /**
  * Result of [WorkoutRepository.startOrResumeSession].
  *
- * @param created the row was inserted by this call — no segments or logged work can exist yet.
- * @param hasLoggedWork the resumed session already has logged exercises (mid-workout resume).
+ * @param created true when the row was inserted by this call (fresh start); false when an existing
+ *   active session was resumed. Callers skip the warmup gate on resume (created == false).
  */
 data class StartedSession(
     val session: Session,
-    val created: Boolean,
-    val hasLoggedWork: Boolean
+    val created: Boolean
 )
 
 /**
@@ -107,11 +107,7 @@ class WorkoutRepository @Inject constructor(
             // (seed keys only, on a cold start) can't mis-classify a perfectly valid live session.
             val isZombie = Program.isLoaded && active.dayKey !in Program.dayKeys
             if (!isZombie) {
-                return StartedSession(
-                    session = active,
-                    created = false,
-                    hasLoggedWork = loggedExerciseDao.forSession(active.id).isNotEmpty()
-                )
+                return StartedSession(session = active, created = false)
             }
             resolveOrphanSession(Program.dayKeys.toSet())
         }
@@ -123,7 +119,47 @@ class WorkoutRepository @Inject constructor(
             dayKey = dayKey, startedAt = clock.nowMs(), finishedAt = null, deloadMarkedHere = inDeloadWeek
         )
         val id = sessionDao.insert(session)
-        return StartedSession(session.copy(id = id), created = true, hasLoggedWork = false)
+        return StartedSession(session.copy(id = id), created = true)
+    }
+
+    /**
+     * Create a fresh freestyle ("go with the flow") session and return its id. Unlike
+     * [startOrResumeSession] this never resumes an existing active session — a freestyle log is a
+     * self-contained, log-after-the-fact workout that the caller fills and finishes in one go. Keyed
+     * by [Program.FREESTYLE_DAY_KEY], which resolves to "Open workout" on display surfaces.
+     *
+     * [startedAt] is when the user opened the logger; since a freestyle log opens no active sitting
+     * segment, [finishSession] falls back to wall-clock (finish − [startedAt]) for the duration — so
+     * passing the open time records the real time spent logging instead of ~0.
+     */
+    suspend fun createFreestyleSession(startedAt: Long = clock.nowMs()): Long {
+        val session = Session(
+            dayKey = Program.FREESTYLE_DAY_KEY, startedAt = startedAt, finishedAt = null
+        )
+        return sessionDao.insert(session)
+    }
+
+    /**
+     * Freestyle logging persists sets directly via [logSet], bypassing the live day screen's PR pass,
+     * so flag [LoggedExercise.wasPr] here the same way the day screen does: compare each just-logged
+     * set for [loggedExerciseId] against the all-time rep-max frontier for [exerciseId] (excluding this
+     * entry) via [PrDetector], running it forward so later sets also beat earlier ones. Persists wasPr
+     * and returns whether this exercise set a PR — so the caller can tally the session's prCount and
+     * the lift feeds the lifetime PR count / PRs list like any other workout.
+     */
+    suspend fun flagPrForLoggedExercise(loggedExerciseId: Long, exerciseId: String): Boolean {
+        // The frontier (per-rep max weight, excluding this entry) substitutes exactly for full history
+        // in PrDetector, which reads only weightLb/reps/isAssisted — same wrapping the day screen uses.
+        val running = repMaxFrontierForExercise(exerciseId, loggedExerciseId).map { row ->
+            LoggedSet(loggedExerciseId = 0L, setIndex = 0, weightText = "", weightLb = row.weightLb, reps = row.reps, completedAt = 0L)
+        }.toMutableList()
+        var wasPr = false
+        setsFor(loggedExerciseId).sortedBy { it.setIndex }.forEach { s ->
+            if (!s.isAssisted && PrDetector.isPr(running, s.weightLb, s.reps)) wasPr = true
+            running.add(s)
+        }
+        if (wasPr) loggedExerciseDao.get(loggedExerciseId)?.let { loggedExerciseDao.update(it.copy(wasPr = true)) }
+        return wasPr
     }
 
     /**

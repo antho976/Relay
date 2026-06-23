@@ -18,7 +18,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import com.forge.app.ui.theme.emphasized
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -39,8 +38,8 @@ internal fun CardioLogHeroItem(dateHeader: String, muted: Color, onBg: Color, ou
         Text(dateHeader, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
         Spacer(Modifier.height(6.dp))
         Row(verticalAlignment = Alignment.Bottom) {
-            Text("Today I ", style = MaterialTheme.typography.displayMedium, color = emphasized(onBg))
-            Text("moved.", style = MaterialTheme.typography.displayMedium, color = emphasized(onBg), fontStyle = FontStyle.Italic)
+            Text("Today I ", style = MaterialTheme.typography.displayMedium, color = onBg)
+            Text("moved.", style = MaterialTheme.typography.displayMedium, color = onBg, fontStyle = FontStyle.Italic)
         }
         Spacer(Modifier.height(16.dp))
         HorizontalDivider(color = outline.copy(alpha = 0.25f))
@@ -59,7 +58,7 @@ internal fun FormSection(
     Column(Modifier.padding(horizontal = 24.dp)) {
         Spacer(Modifier.height(20.dp))
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(label, style = MaterialTheme.typography.headlineSmall, color = emphasized(onBg), fontStyle = FontStyle.Italic)
+            Text(label, style = MaterialTheme.typography.headlineSmall, color = onBg, fontStyle = FontStyle.Italic)
             if (optional) {
                 Text("OPTIONAL", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.5f), fontSize = 9.sp, letterSpacing = 1.sp)
             }

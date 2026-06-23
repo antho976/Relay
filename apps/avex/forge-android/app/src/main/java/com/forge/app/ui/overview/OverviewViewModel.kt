@@ -32,6 +32,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
@@ -73,6 +74,24 @@ class OverviewViewModel @Inject constructor(
     /** One-time notice after a zombie/orphan active session was auto-resolved at open (E8). */
     private val _orphanNotice = MutableStateFlow<String?>(null)
     val orphanNotice: StateFlow<String?> = _orphanNotice
+
+    /** "Go with the flow" — when on, the home leads with freestyle logging instead of a next-up day. */
+    val freestyleMode: StateFlow<Boolean> =
+        settingsRepo.freestyleMode.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5_000), false)
+
+    /** Whether the coach is surfaced on the home — off hides all coach banners/cards (declined in onboarding). */
+    val coachEnabled: StateFlow<Boolean> =
+        settingsRepo.coachEnabled.stateIn(viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5_000), true)
+
+    /** True when there is no program at all (build-your-own, not yet built) — home offers "build a plan".
+     *  Seeds from the already-loaded facade so a no-plan user never flashes the "Start session" branch
+     *  (with an empty day key) before the first revision tick arrives. */
+    val programEmpty: StateFlow<Boolean> =
+        programRepo.revision.map { com.forge.app.program.Program.days.isEmpty() }
+            .stateIn(
+                viewModelScope, kotlinx.coroutines.flow.SharingStarted.WhileSubscribed(5_000),
+                com.forge.app.program.Program.days.isEmpty()
+            )
 
     private val weekStartMs = clock.nowMs() - 7L * 24 * 60 * 60 * 1000
 

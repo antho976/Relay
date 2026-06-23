@@ -300,7 +300,7 @@ class StatsRepository @Inject constructor(
 
         val allRpe = exerciseDetails.flatMap { it.sets }.mapNotNull { it.rpe }
         val durationMin = session.durationMinutes()
-        val title = Program.days.firstOrNull { it.key == session.dayKey }?.defaultName ?: session.dayKey
+        val title = Program.dayDisplayName(session.dayKey)
 
         return SessionDetailData(
             sessionId = session.id,
@@ -407,7 +407,7 @@ class StatsRepository @Inject constructor(
                 fromMs = targetMs - windowMs, // ±3 days around the target date (was forward-only)
                 toMs = targetMs + windowMs
             ) ?: continue
-            val dayName = Program.days.firstOrNull { it.key == session.dayKey }?.defaultName ?: session.dayKey
+            val dayName = Program.dayDisplayName(session.dayKey)
             return OnThisDayMemory(
                 monthsAgo = months,
                 dayName = dayName,

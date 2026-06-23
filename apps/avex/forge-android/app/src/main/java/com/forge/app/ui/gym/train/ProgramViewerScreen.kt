@@ -44,7 +44,6 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.ui.gym.train.state.DayListItem
-import com.forge.app.ui.theme.emphasized
 
 /**
  * Read-only view of the whole program (reached from "view program" on the overview): each day as a
@@ -140,7 +139,7 @@ private fun ProgramViewerDayCard(item: DayListItem, expanded: Boolean, onToggle:
                 Text(
                     item.plan.word.ifBlank { item.displayName }.uppercase(),
                     style = MaterialTheme.typography.headlineLarge,
-                    color = if (item.isNextUp) accent else emphasized(onBg),
+                    color = if (item.isNextUp) accent else onBg,
                     fontWeight = FontWeight.Black
                 )
                 Text(

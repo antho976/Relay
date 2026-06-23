@@ -36,15 +36,13 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.ui.common.clickableLabeled
-import com.forge.app.ui.theme.AccentEmphasis
-import com.forge.app.ui.theme.emphasized
 
 @Composable
 internal fun SectionLabel(title: String) {
     Text(
         title,
         style = MaterialTheme.typography.labelSmall,
-        color = emphasized(MaterialTheme.colorScheme.onSurfaceVariant),
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
         letterSpacing = 1.5.sp,
         modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 20.dp, bottom = 8.dp)
     )
@@ -148,41 +146,6 @@ internal fun SubSectionLabel(text: String) {
         letterSpacing = 1.sp,
         modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 20.dp, bottom = 6.dp)
     )
-}
-
-@Composable
-internal fun AccentEmphasisRow(current: String, onSelect: (String) -> Unit) {
-    val onBg = MaterialTheme.colorScheme.onBackground
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val accent = MaterialTheme.colorScheme.primary
-    Column(
-        modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        Text("Accent emphasis", style = MaterialTheme.typography.bodyMedium, color = onBg)
-        Text(
-            "Color important text — big numbers, titles, names — with your accent.",
-            style = MaterialTheme.typography.bodySmall, color = muted
-        )
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            AccentEmphasis.options.forEach { (key, label) ->
-                val selected = current.equals(key, ignoreCase = true) || (current.isBlank() && key == "off")
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .border(1.dp, if (selected) accent else muted.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
-                        .background(if (selected) accent.copy(alpha = 0.15f) else Color.Transparent)
-                        .clickable { onSelect(key) }
-                        .padding(horizontal = 16.dp, vertical = 8.dp)
-                ) {
-                    Text(label, style = MaterialTheme.typography.bodySmall, color = if (selected) accent else muted)
-                }
-            }
-        }
-    }
 }
 
 @Composable

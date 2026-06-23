@@ -50,7 +50,6 @@ data class SettingsUiState(
     /** Heaviest dumbbell owned (lb); null = no ceiling (auto-coach Phase 0). */
     val maxDbWeightLb: Double? = null,
     val accentColorHex: String = "",
-    val accentEmphasis: String = "off",
     val timezone: String = java.util.TimeZone.getDefault().id,
     val daysPerWeek: Int = 4,
     val liked: Set<String> = emptySet(),
@@ -69,6 +68,10 @@ data class SettingsUiState(
     val programEmphasis: String = "balanced",
     /** Coach mode (auto-coach Phase 4): "suggest" | "auto" (earned auto-apply). */
     val coachMode: String = "suggest",
+    /** "Go with the flow": no fixed plan; the home leads with freestyle logging instead of day cards. */
+    val freestyleMode: Boolean = false,
+    /** Whether the Coach feature is surfaced (tab + banners). Off hides it until re-enabled. */
+    val coachEnabled: Boolean = true,
     /** Current program's weekly sets per muscle (display name → sets), busiest first (Phase 6). */
     val weeklyVolume: List<Pair<String, Int>> = emptyList()
 )
@@ -194,8 +197,6 @@ class SettingsViewModel @Inject constructor(
         s.copy(coachMode = v)
     }.combine(settingsRepo.accentColorHex) { s, v ->
         s.copy(accentColorHex = v)
-    }.combine(settingsRepo.accentEmphasis) { s, v ->
-        s.copy(accentEmphasis = v)
     }.combine(settingsRepo.timezone) { s, v ->
         s.copy(timezone = v)
     }.combine(settingsRepo.daysPerWeek) { s, v ->
@@ -228,6 +229,10 @@ class SettingsViewModel @Inject constructor(
         s.copy(pinnedExercises = v)
     }.combine(settingsRepo.programEmphasis) { s, v ->
         s.copy(programEmphasis = v)
+    }.combine(settingsRepo.freestyleMode) { s, v ->
+        s.copy(freestyleMode = v)
+    }.combine(settingsRepo.coachEnabled) { s, v ->
+        s.copy(coachEnabled = v)
     }.combine(programRepository.revision) { s, _ ->
         s.copy(weeklyVolume = computeWeeklyVolume())
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsUiState())
@@ -296,6 +301,10 @@ class SettingsViewModel @Inject constructor(
     }
     fun setPlateWeightLb(lb: Double) = viewModelScope.launch { settingsRepo.setPlateWeightLb(lb) }
     fun setDaysPerWeek(n: Int) = viewModelScope.launch { settingsRepo.setDaysPerWeek(n) }
+    /** Toggle "go with the flow" (no fixed plan; home leads with freestyle logging). */
+    fun setFreestyleMode(v: Boolean) = viewModelScope.launch { settingsRepo.setFreestyleMode(v) }
+    /** Show/hide the Coach feature (tab + banners). */
+    fun setCoachEnabled(v: Boolean) = viewModelScope.launch { settingsRepo.setCoachEnabled(v) }
     /** Weekly cardio-minutes goal for the cardio tab (no effect on the lifting plan). */
     fun setCardioWeeklyTargetMin(min: Int) = viewModelScope.launch { settingsRepo.setCardioWeeklyTargetMin(min) }
     /** All generation inputs read from prefs — keeps the three generate paths in sync (Phase 2 / 3). */
@@ -382,7 +391,6 @@ class SettingsViewModel @Inject constructor(
         }
     }
     fun setAccentColorHex(hex: String) = viewModelScope.launch { settingsRepo.setAccentColorHex(hex) }
-    fun setAccentEmphasis(level: String) = viewModelScope.launch { settingsRepo.setAccentEmphasis(level) }
     fun setTimezone(id: String) = viewModelScope.launch { settingsRepo.setTimezone(id) }
     fun exportLastSessionPdf() = viewModelScope.launch {
         val file = pdfExport.exportLastSessionPdf()

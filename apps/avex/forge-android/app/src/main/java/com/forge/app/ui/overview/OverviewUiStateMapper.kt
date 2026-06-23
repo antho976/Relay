@@ -62,7 +62,7 @@ internal fun buildOverviewUiState(
             session.totalVolumeLb >= volStats.maxVolume
         Pair(session.startedAt, OverviewRecentItem(
             dayLabel = relativeDay(session.startedAt),
-            title = day?.defaultName ?: session.dayKey,
+            title = Program.dayDisplayName(session.dayKey),
             subtitle = sub,
             tag = day?.word ?: "",
             id = session.id,

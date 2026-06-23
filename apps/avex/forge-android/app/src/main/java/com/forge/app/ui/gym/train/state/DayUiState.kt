@@ -35,8 +35,9 @@ data class WeightJumpWarning(
  * UI state for the active workout screen.
  *
  * Warmup state is intentionally in-memory (resets if the VM is recreated). Acceptable
- * for the project's no-cloud, single-user scope — re-checking four boxes on resume
- * is cheaper than a schema bump.
+ * for the project's no-cloud, single-user scope: resuming an existing session skips the
+ * warmup gate outright (see beginSessionForThisDay), so the lost in-memory state never
+ * forces a re-check — cheaper than persisting it with a schema bump.
  */
 @Immutable
 data class DayUiState(

@@ -51,7 +51,6 @@ import com.forge.app.domain.units.unitLabel
 import com.forge.app.domain.units.weightInputValue
 import com.forge.app.ui.common.EmptyState
 import com.forge.app.ui.theme.LocalForgeSettings
-import com.forge.app.ui.theme.emphasized
 
 /** A goal being added (currentTargetLb = null) or edited (existing target). */
 private data class Editing(val exerciseId: String, val name: String, val currentTargetLb: Double?)
@@ -159,7 +158,7 @@ private fun GoalRow(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(g.name, style = MaterialTheme.typography.bodyLarge, color = emphasized(onBg))
+            Text(g.name, style = MaterialTheme.typography.bodyLarge, color = onBg)
             if (g.achieved) {
                 Text("reached ✓", style = MaterialTheme.typography.labelMedium, color = accent)
             } else {

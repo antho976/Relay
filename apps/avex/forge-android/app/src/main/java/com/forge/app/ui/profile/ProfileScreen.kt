@@ -69,7 +69,6 @@ import com.forge.app.ui.common.ConfettiOverlay
 import com.forge.app.ui.common.FirstTouchTip
 import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.gym.stats.components.statsEntrance
-import com.forge.app.ui.theme.emphasized
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -182,7 +181,7 @@ fun ProfileScreen(
                             value = nameInput,
                             onValueChange = { nameInput = it.take(30) },
                             singleLine = true,
-                            textStyle = MaterialTheme.typography.displaySmall.copy(color = emphasized(onBg)),
+                            textStyle = MaterialTheme.typography.displaySmall.copy(color = onBg),
                             cursorBrush = SolidColor(accent),
                             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                             keyboardActions = KeyboardActions(onDone = { commitName() }),
@@ -192,7 +191,7 @@ fun ProfileScreen(
                     } else {
                         Text(
                             state.name.ifBlank { "Athlete" } + ".",
-                            style = MaterialTheme.typography.displaySmall, color = emphasized(onBg),
+                            style = MaterialTheme.typography.displaySmall, color = onBg,
                             modifier = Modifier.bounceClick { nameInput = state.name; editingName = true }
                         )
                     }
@@ -201,7 +200,7 @@ fun ProfileScreen(
                         Spacer(Modifier.height(4.dp))
                         Text(
                             "SINCE ${state.sinceLabel}",
-                            style = MaterialTheme.typography.labelSmall, color = emphasized(muted), fontSize = 9.sp
+                            style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp
                         )
                     }
                     // Rank line parked behind Features.SHOW_GAMIFICATION; a streak line stands in for it.

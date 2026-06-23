@@ -56,7 +56,7 @@ class HistoryViewModel @Inject constructor(
                 id = s.id,
                 timestampMs = s.startedAt,
                 isGym = true,
-                title = day?.defaultName ?: s.dayKey,
+                title = Program.dayDisplayName(s.dayKey),
                 subtitle = listOfNotNull(
                     day?.exercises?.size?.let { "$it ex" },
                     durationMin?.let { "$it min" }

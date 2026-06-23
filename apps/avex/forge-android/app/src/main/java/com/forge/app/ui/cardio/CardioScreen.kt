@@ -18,7 +18,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import com.forge.app.ui.theme.emphasized
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -197,7 +196,7 @@ private fun CardioListContent(
                     Text(
                         "What I did",
                         style = MaterialTheme.typography.headlineSmall,
-                        color = emphasized(onBg),
+                        color = onBg,
                         fontStyle = FontStyle.Italic,
                         modifier = Modifier.padding(horizontal = 24.dp)
                     )

@@ -19,7 +19,6 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import com.forge.app.ui.theme.emphasized
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -74,7 +73,7 @@ internal fun CardioHero(
             Text(
                 if (weekMinutes > 0) "$weekMinutes" else "—",
                 style = MaterialTheme.typography.displayLarge,
-                color = emphasized(onBg)
+                color = onBg
             )
             Text(
                 " minutes.",
@@ -116,7 +115,7 @@ internal fun CardioHero(
             Spacer(Modifier.height(4.dp))
             Text(
                 "$cardioStreakDays-day cardio streak",
-                style = MaterialTheme.typography.labelSmall, color = emphasized(onBg), fontSize = 9.sp, fontWeight = FontWeight.SemiBold
+                style = MaterialTheme.typography.labelSmall, color = onBg, fontSize = 9.sp, fontWeight = FontWeight.SemiBold
             )
         }
         // Weekly-goal progress (Cat 17) — only when a goal is set in Settings.
@@ -135,7 +134,7 @@ internal fun CardioHero(
                         .fillMaxWidth(frac)
                         .height(6.dp)
                         .clip(RoundedCornerShape(3.dp))
-                        .background(emphasized(onBg))
+                        .background(onBg)
                 )
             }
             Spacer(Modifier.height(4.dp))

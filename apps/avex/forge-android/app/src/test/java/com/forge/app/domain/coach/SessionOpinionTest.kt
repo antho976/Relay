@@ -57,6 +57,6 @@ class SessionOpinionTest {
 
     @Test fun `high completion has no caveat`() {
         val o = opinion(prCount = 1, honestyPct = 95)!!
-        assertEquals("1 new PR — you found another gear today.", o)
+        assertEquals("1 new PR today. You found another gear.", o)
     }
 }

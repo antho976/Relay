@@ -61,8 +61,6 @@ object PreferenceKeys {
     val AMOLED_MODE = booleanPreferencesKey("amoled_mode")
     /** Stored hex string e.g. "#EF4444". Empty = use default. Reserved for UI pass. */
     val ACCENT_COLOR_HEX = stringPreferencesKey("accent_color_hex")
-    /** Accent emphasis for important text: "off" | "subtle" | "medium" | "strong". Default off. */
-    val ACCENT_EMPHASIS = stringPreferencesKey("accent_emphasis")
     /** Font choice key. Reserved for UI pass. */
     val FONT_CHOICE = stringPreferencesKey("font_choice")
 
@@ -123,10 +121,19 @@ object PreferenceKeys {
     val USER_NAME = stringPreferencesKey("user_name")
     /** Onboarding completed flag — distinct from WELCOMED which just tracks splash. */
     val ONBOARDING_DONE = booleanPreferencesKey("onboarding_done")
+    /** Set true the first (and only) time the default split is auto-seeded, so a deliberately empty
+     *  plan (build-your-own / cleared) is never silently re-seeded on a later relaunch. */
+    val PROGRAM_SEEDED = booleanPreferencesKey("program_seeded")
     /** User's initial goal: "build_muscle" | "lose_weight" | "get_stronger" | "general_fitness" */
     val USER_GOAL = stringPreferencesKey("user_goal")
     /** User's sex for bodyweight-relative strength standards: "male" | "female" | "" (unspecified). */
     val USER_SEX = stringPreferencesKey("user_sex")
+    /** "Go with the flow" — no fixed program; the home leads with freestyle logging instead of day
+     *  cards. A seed program still exists under the hood; this only changes what the UI surfaces. */
+    val FREESTYLE_MODE = booleanPreferencesKey("freestyle_mode")
+    /** Whether the Coach feature is surfaced at all (tab + banners). Off → coach hidden until the user
+     *  re-enables it in Settings. Declined during onboarding for the no-plan / make-your-own modes. */
+    val COACH_ENABLED = booleanPreferencesKey("coach_enabled")
 
     // ─── Program generation (program-unlock) ──────────────────────────────────
     /** Training days/week the program targets — drives the split template (3-day ≠ 7-day). */

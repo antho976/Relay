@@ -1,12 +1,12 @@
 package com.forge.app.ui.gym.train.state
 
-import com.forge.app.program.TrophyIcon
+import com.forge.app.program.MuscleGroup
 
 /**
  * Snapshot computed at the moment the workout is finished. Lives only for as long
  * as the summary sheet is visible — not stored. The data that *is* persisted
- * (Session.totalVolumeLb, Session.prCount, individual LoggedExercise.wasPr,
- * UnlockedTrophy rows) is separate and lives in Room.
+ * (Session.totalVolumeLb, Session.prCount, individual LoggedExercise.wasPr) is
+ * separate and lives in Room.
  */
 data class SessionSummary(
     val displayName: String,
@@ -17,31 +17,17 @@ data class SessionSummary(
     val setCount: Int,
     val exercisesLogged: Int,
     val exercisesSkipped: Int,
+    /** Per-exercise recap rows — name, sets, volume, PR flag (logged, non-skipped only). */
     val highlights: List<ExerciseHighlight>,
-    val unlockedTrophies: List<UnlockedTrophyHighlight> = emptyList(),
-    /** Volume delta vs last session on the same day (positive = improvement). Null if no prior session (#52). */
-    val vsLastVolumeDelta: Double? = null,
-    /** Set count delta vs last session on the same day. Null if no prior session (#52). */
-    val vsLastSetsDelta: Int? = null,
-    /** True if this session's volume is the all-time best for this day (#53). */
-    val isBestSession: Boolean = false,
-    /** Sets logged per minute — 0.0 if duration unknown (#83). */
-    val setsPerMin: Double = 0.0,
-    /** Volume (lb) per minute — 0.0 if duration unknown (#83). */
-    val volumePerMin: Double = 0.0,
-    /** Volume ÷ duration — the workout density score (#127). Null if duration is 0. */
-    val densityScore: Double? = null,
-    /** Average rest between consecutive sets within each exercise, in seconds. Null if < 2 sets (#82). */
-    val avgRestSeconds: Int? = null,
-    /** Planned sets logged / total planned sets × 100. Null if no planned exercises (#133). */
-    val honestyPct: Int? = null,
-    /** "Beat the ghost": sets that beat last session's same-position set. */
-    val ghostBeats: Int = 0,
-    /** Sets that had a last-session counterpart to be judged against (the duel denominator). */
-    val ghostComparable: Int = 0,
+    /** Working sets per muscle group THIS session — tints the recap's body map. */
+    val setsByMuscle: Map<MuscleGroup, Int> = emptyMap(),
+    /** Logged sets carrying an RPE value — the coach's per-set effort signal (data-capture nudge). */
+    val setsWithRpe: Int = 0,
+    /** Logged (non-skipped) exercises carrying a "how hard it felt" rating (data-capture nudge). */
+    val exercisesRated: Int = 0,
     /** The coach's one-line read of this session (#19), or null for an empty session. */
     val coachOpinion: String? = null,
-    /** Journal text already captured mid-session (top-bar note) — seeds the finish sheet's field. */
+    /** Journal text already captured mid-session (top-bar note) — flows straight through on COMPLETE. */
     val initialJournal: String = "",
     /** Lifetime PR count after this session — drives the PR-milestone notification. */
     val lifetimePrCount: Int = 0
@@ -52,12 +38,4 @@ data class ExerciseHighlight(
     val setsLogged: Int,
     val volumeLb: Double,
     val isPr: Boolean
-)
-
-/** Just enough to render a row in the summary sheet — the full Trophy lives in the program package. */
-data class UnlockedTrophyHighlight(
-    val id: String,
-    val name: String,
-    val description: String,
-    val icon: TrophyIcon
 )

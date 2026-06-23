@@ -3,8 +3,7 @@ package com.forge.app.ui.onboarding
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
@@ -23,10 +22,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -39,102 +37,23 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
-import androidx.lifecycle.ViewModel
-import androidx.lifecycle.viewModelScope
-import com.forge.app.data.prefs.SettingsRepository
-import com.forge.app.data.repo.BodyweightRepository
 import com.forge.app.program.Equipment
-import com.forge.app.program.GeneratedDay
-import com.forge.app.program.GenerationParams
-import com.forge.app.program.ProblemArea
-import com.forge.app.program.ProgramGenerator
-import dagger.hilt.android.lifecycle.HiltViewModel
-import kotlinx.coroutines.launch
 import kotlin.random.Random
-import javax.inject.Inject
 
-@HiltViewModel
-class OnboardingViewModel @Inject constructor(
-    private val settingsRepo: SettingsRepository,
-    private val bodyweightRepo: BodyweightRepository,
-    private val programRepository: com.forge.app.data.repo.ProgramRepository
-) : ViewModel() {
+// Page indices. The plan-mode step (1) gates the rest: only "generated" continues through the
+// plan-building pages (2-5); "custom"/"freestyle" finish right after picking a mode.
+private const val PAGE_ABOUT = 0
+private const val PAGE_PLAN_MODE = 1
+private const val PAGE_GOALS = 2
+private const val PAGE_GYM = 3
+private const val PAGE_TUNING = 4
+private const val PAGE_PREVIEW = 5
 
-    /** Pure, side-effect-free week for the preview step — the same [seed] is persisted on finish. */
-    fun buildPreview(
-        daysPerWeek: Int, equipment: Set<String>, goal: String, experience: String,
-        problemAreas: Set<String>, frozenIds: Set<String>?, seed: Long
-    ): List<GeneratedDay> = ProgramGenerator.generate(
-        GenerationParams(
-            daysPerWeek = daysPerWeek, goal = goal, experience = experience,
-            problemAreas = problemAreas.mapNotNull { ProblemArea.fromCode(it) }.toSet(),
-            frozenIds = frozenIds
-        ),
-        equipment.mapNotNull { runCatching { Equipment.valueOf(it) }.getOrNull() }.toSet(),
-        emptySet(), emptySet(), seed = seed
-    )
-
-    fun complete(
-        name: String,
-        useKg: Boolean,
-        goal: String,
-        bodyweightLb: Double?,
-        daysPerWeek: Int = 4,
-        equipment: Set<String> = emptySet(),
-        cadence: String = "never",
-        everyN: Int = 4,
-        experience: String = "intermediate",
-        problemAreas: Set<String> = emptySet(),
-        seed: Long = System.nanoTime(),
-        generate: Boolean = true,
-        accentEmphasis: String = "off",
-        plateWeightLb: Double = 15.0,
-        frozenIds: Set<String>? = null,
-        sex: String = ""
-    ) {
-        viewModelScope.launch {
-            bodyweightLb?.let { bodyweightRepo.log(it) }
-            settingsRepo.setAccentEmphasis(accentEmphasis)
-            settingsRepo.setPlateWeightLb(plateWeightLb)
-            settingsRepo.setUserSex(sex)
-            if (generate) {
-                settingsRepo.setDaysPerWeek(daysPerWeek)
-                settingsRepo.setAvailableEquipment(equipment)
-                settingsRepo.setFrozenExerciseIds(frozenIds)
-                settingsRepo.setRotationCadence(cadence)
-                if (cadence == "every_n") settingsRepo.setRotationEveryN(everyN)
-                settingsRepo.setProgramExperience(experience)
-                settingsRepo.setUserGoal(goal)
-                problemAreas.forEach { settingsRepo.toggleProblemArea(it, true) }
-                // Persist exactly the week shown in the preview (same seed + inputs).
-                programRepository.generate(
-                    GenerationParams(
-                        daysPerWeek = daysPerWeek, goal = goal, experience = experience,
-                        problemAreas = problemAreas.mapNotNull { ProblemArea.fromCode(it) }.toSet(),
-                        frozenIds = frozenIds
-                    ),
-                    equipment.mapNotNull { runCatching { Equipment.valueOf(it) }.getOrNull() }.toSet(),
-                    emptySet(), emptySet(), seed = seed
-                )
-            }
-            // Set ONBOARDING_DONE last — it flips the UI from onboarding to home, so the freshly
-            // generated program is already live when the home screen first composes.
-            settingsRepo.completeOnboarding(name, useKg, goal, bodyweightLb)
-        }
-    }
-}
-
-/** Onboarding pages (0-indexed); the last is the live preview. Related steps are grouped per page. */
-private const val PAGE_COUNT = 6
-private const val LAST_PAGE = PAGE_COUNT - 1
-
-/** Step names for the page indicator — so a new user can see where they are and what's left,
- *  instead of guessing from anonymous dots. One per page, in order. */
+/** Step names for the progress label — indexed by page. Only 0-1 are reached off the generated path. */
 private val ONBOARDING_STEP_NAMES = listOf(
-    "About you", "Your goal", "Your gym", "Fine-tuning", "Style", "Your plan"
+    "About you", "Your plan", "Goals", "Your gym", "Fine-tuning", "Your week"
 )
 
 /** Most of the world lifts in kg; the US (and Liberia / Myanmar) use lb. Seed the onboarding unit
@@ -163,19 +82,26 @@ internal fun parseSaneBodyweightLb(input: String, useKg: Boolean): Double? {
     return if (lb in MIN_BODYWEIGHT_LB..MAX_BODYWEIGHT_LB) lb else null
 }
 
+/**
+ * @param onFinished invoked with the chosen plan mode ([PLAN_GENERATED] / [PLAN_CUSTOM] /
+ *   [PLAN_FREESTYLE]) so the host can route the first screen (e.g. custom → editor, freestyle → home).
+ */
 @Composable
 fun OnboardingScreen(
-    onFinished: () -> Unit,
+    onFinished: (String) -> Unit,
     viewModel: OnboardingViewModel = hiltViewModel()
 ) {
     var page by remember { mutableIntStateOf(0) }
+    // Plan source: generated / custom (self-built) / freestyle (no plan, log freely).
+    var planMode by remember { mutableStateOf("") }
     var name by remember { mutableStateOf("") }
     var useKg by remember { mutableStateOf(localeDefaultUseKg()) }
     // Program-shaping choices start UNSELECTED — the user actively picks them; nothing is pre-highlighted.
     var goal by remember { mutableStateOf("") }
     var experience by remember { mutableStateOf("") }
     var bodyweightInput by remember { mutableStateOf("") }
-    // Sex is optional and drives only the Stats strength standards — null until the user picks.
+    // Sex is optional and drives only the Stats strength standards — null until the user picks
+    // (an explicit "Prefer not to say" stores "").
     var sex by remember { mutableStateOf<String?>(null) }
     var daysPerWeek by remember { mutableIntStateOf(0) }
     var equipment by remember { mutableStateOf(emptySet<String>()) }
@@ -187,49 +113,55 @@ fun OnboardingScreen(
     var problemAreas by remember { mutableStateOf(emptySet<String>()) }
     var cadence by remember { mutableStateOf("") }
     var everyN by remember { mutableIntStateOf(4) }
-    var accentEmphasis by remember { mutableStateOf("off") }
     var previewSeed by remember { mutableLongStateOf(Random.nextLong()) }
     var showSkipConfirm by remember { mutableStateOf(false) }
+    // Coach opt-in is asked only on the no-plan / make-your-own paths (the generated path keeps it on).
+    var showCoachAsk by remember { mutableStateOf(false) }
+
+    // Only the generated path walks the plan-building pages; the others end on the plan-mode step.
+    val isGenerated = planMode == PLAN_GENERATED
+    val lastPage = if (isGenerated) PAGE_PREVIEW else PAGE_PLAN_MODE
+    val pageCount = lastPage + 1
 
     // Pure preview — recomputed whenever an input or the re-roll seed changes (shown on the last page).
     val previewDays = remember(previewSeed, daysPerWeek, equipment, frozenIds, goal, experience, problemAreas) {
         viewModel.buildPreview(daysPerWeek, equipment, goal, experience, problemAreas, frozenIds, previewSeed)
     }
 
+    fun finish(coachEnabled: Boolean = true) {
+        val bwLb = parseSaneBodyweightLb(bodyweightInput, useKg)
+        viewModel.complete(
+            planMode = planMode, name = name.trim(), useKg = useKg, sex = sex ?: "", bodyweightLb = bwLb,
+            goal = goal, daysPerWeek = daysPerWeek, equipment = equipment,
+            cadence = cadence.ifEmpty { "never" }, everyN = everyN, experience = experience,
+            problemAreas = problemAreas, seed = previewSeed,
+            plateWeightLb = plateWeightLb, frozenIds = frozenIds, coachEnabled = coachEnabled
+        )
+        onFinished(planMode)
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
-            .padding(horizontal = 24.dp, vertical = 48.dp)
+            .padding(horizontal = 24.dp, vertical = 32.dp)
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
-            // Page indicator
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                repeat(PAGE_COUNT) { i ->
-                    val active = i == page
-                    val dotWidth by animateDpAsState(if (active) 20.dp else 8.dp, label = "dotWidth")
-                    val dotColor by animateColorAsState(
-                        if (active) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.outline.copy(alpha = 0.4f),
-                        label = "dotColor"
-                    )
-                    Box(
-                        Modifier
-                            .size(width = dotWidth, height = 8.dp)
-                            .clip(CircleShape)
-                            .background(dotColor)
-                    )
-                }
-            }
-            Spacer(Modifier.height(10.dp))
+            // Slim progress bar + small step label.
+            val progress by animateFloatAsState((page + 1).toFloat() / pageCount, label = "progress")
+            LinearProgressIndicator(
+                progress = { progress },
+                modifier = Modifier.fillMaxWidth().height(4.dp),
+                trackColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)
+            )
+            Spacer(Modifier.height(8.dp))
             Text(
-                "Step ${page + 1} of $PAGE_COUNT · ${ONBOARDING_STEP_NAMES.getOrElse(page) { "" }}",
+                ONBOARDING_STEP_NAMES.getOrElse(page) { "" },
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            Spacer(Modifier.height(24.dp))
+            Spacer(Modifier.height(16.dp))
 
-            // Page content — each page groups related steps in a scrolling column.
             AnimatedContent(
                 targetState = page,
                 modifier = Modifier.weight(1f),
@@ -241,17 +173,17 @@ fun OnboardingScreen(
                 label = "onboarding_page"
             ) { p ->
                 // The preview page scrolls itself — render it directly. Wrapping it in another
-                // verticalScroll would nest two same-axis scrollables and crash Compose (the inner one
-                // gets an infinite-height measure). Every other page needs the scroll wrapper.
-                if (p == LAST_PAGE) {
+                // verticalScroll would nest two same-axis scrollables and crash Compose. Every other
+                // page needs the scroll wrapper.
+                if (p == PAGE_PREVIEW) {
                     StepPreview(days = previewDays, onRegenerate = { previewSeed = Random.nextLong() })
                 } else {
                     Column(
                         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
-                        verticalArrangement = Arrangement.spacedBy(28.dp)
+                        verticalArrangement = Arrangement.spacedBy(20.dp)
                     ) {
                         when (p) {
-                            0 -> {
+                            PAGE_ABOUT -> {
                                 StepName(name = name, onNameChange = { name = it })
                                 StepBodyweight(input = bodyweightInput, useKg = useKg, onInputChange = { bodyweightInput = it })
                                 StepSex(selected = sex, onSelect = { sex = it })
@@ -262,11 +194,12 @@ fun OnboardingScreen(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
-                            1 -> {
+                            PAGE_PLAN_MODE -> StepPlanMode(selected = planMode, onSelect = { planMode = it })
+                            PAGE_GOALS -> {
                                 StepGoal(selected = goal, onSelect = { goal = it })
                                 StepExperience(selected = experience, onSelect = { experience = it })
                             }
-                            2 -> {
+                            PAGE_GYM -> {
                                 StepDays(days = daysPerWeek, onChange = { daysPerWeek = it })
                                 StepEquipment(
                                     selected = equipment,
@@ -283,31 +216,29 @@ fun OnboardingScreen(
                                 )
                                 StepPlateWeight(plateWeightLb = plateWeightLb, useKg = useKg, onSet = { plateWeightLb = it })
                             }
-                            3 -> {
+                            PAGE_TUNING -> {
                                 StepProblemAreas(
                                     selected = problemAreas,
                                     onToggle = { code -> problemAreas = if (code in problemAreas) problemAreas - code else problemAreas + code }
                                 )
                                 StepCadence(cadence = cadence, everyN = everyN, onSet = { c, n -> cadence = c; everyN = n })
                             }
-                            4 -> StepEmphasis(selected = accentEmphasis, onSelect = { accentEmphasis = it })
                         }
                     }
                 }
             }
 
-            // Gate "Next" on the pages whose choices the generator needs: a typed bodyweight must be a
-            // positive number; goal + experience must be picked; days + equipment must be chosen (an
-            // empty equipment set otherwise means "full gym" to the generator).
+            // Gate "Next" on the pages whose choices the generator needs.
             val canAdvance = when (page) {
-                0 -> bodyweightInput.isBlank() || parseSaneBodyweightLb(bodyweightInput, useKg) != null
-                1 -> goal.isNotEmpty() && experience.isNotEmpty()
-                2 -> daysPerWeek in 1..7 && equipment.isNotEmpty()
+                PAGE_ABOUT -> bodyweightInput.isBlank() || parseSaneBodyweightLb(bodyweightInput, useKg) != null
+                PAGE_PLAN_MODE -> planMode.isNotEmpty()
+                PAGE_GOALS -> goal.isNotEmpty() && experience.isNotEmpty()
+                PAGE_GYM -> daysPerWeek in 1..7 && equipment.isNotEmpty()
                 else -> true
             }
             // Explain why "Next" is held on the gym page — the generator can't build a plan with no
             // equipment selected, so this guards the skip rather than leaving the button silently greyed.
-            if (page == 2 && equipment.isEmpty()) {
+            if (page == PAGE_GYM && equipment.isEmpty()) {
                 Text(
                     "Pick at least one — Forge can't build your plan without knowing what you can train with.",
                     style = MaterialTheme.typography.bodySmall,
@@ -328,21 +259,22 @@ fun OnboardingScreen(
                 Button(
                     enabled = canAdvance,
                     onClick = {
-                        if (page < LAST_PAGE) {
-                            page++
-                        } else {
-                            val bwLb = parseSaneBodyweightLb(bodyweightInput, useKg)
-                            viewModel.complete(
-                                name.trim(), useKg, goal, bwLb,
-                                daysPerWeek, equipment, cadence.ifEmpty { "never" }, everyN, experience, problemAreas,
-                                previewSeed, accentEmphasis = accentEmphasis, plateWeightLb = plateWeightLb,
-                                frozenIds = frozenIds, sex = sex ?: ""
-                            )
-                            onFinished()
+                        when {
+                            page < lastPage -> page++
+                            // No-plan / make-your-own: ask about the coach before finishing.
+                            planMode == PLAN_CUSTOM || planMode == PLAN_FREESTYLE -> showCoachAsk = true
+                            else -> finish()
                         }
                     }
                 ) {
-                    Text(if (page < LAST_PAGE) "Next" else "Let's go")
+                    Text(
+                        when {
+                            page < lastPage -> "Next"
+                            planMode == PLAN_CUSTOM -> "Build my plan"
+                            planMode == PLAN_FREESTYLE -> "Start logging"
+                            else -> "Let's go"
+                        }
+                    )
                 }
             }
         }
@@ -363,16 +295,39 @@ fun OnboardingScreen(
                         showSkipConfirm = false
                         val bwLb = parseSaneBodyweightLb(bodyweightInput, useKg)
                         viewModel.complete(
-                            name.trim(), useKg, "build_muscle", bwLb,
-                            daysPerWeek = 4,
-                            equipment = setOf(Equipment.BODYWEIGHT_ONLY.name),
-                            experience = "intermediate", generate = true, sex = sex ?: ""
+                            planMode = PLAN_GENERATED, name = name.trim(), useKg = useKg, sex = sex ?: "",
+                            bodyweightLb = bwLb, goal = "build_muscle", daysPerWeek = 4,
+                            equipment = setOf(Equipment.BODYWEIGHT_ONLY.name), experience = "intermediate"
                         )
-                        onFinished()
+                        onFinished(PLAN_GENERATED)
                     }) { Text("Skip anyway") }
                 },
                 dismissButton = {
                     TextButton(onClick = { showSkipConfirm = false }) { Text("Keep setting up") }
+                }
+            )
+        }
+
+        if (showCoachAsk) {
+            AlertDialog(
+                onDismissRequest = { showCoachAsk = false },
+                title = { Text("Want a coach?") },
+                text = {
+                    Text(
+                        "The coach quietly watches your training and suggests small tweaks each week. " +
+                            "It's optional — if you'd rather just train and log, leave it off. You can turn " +
+                            "it on or off anytime in Settings → Program."
+                    )
+                },
+                confirmButton = {
+                    TextButton(onClick = { showCoachAsk = false; finish(coachEnabled = true) }) {
+                        Text("Yes, use the coach")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showCoachAsk = false; finish(coachEnabled = false) }) {
+                        Text("No coach")
+                    }
                 }
             )
         }

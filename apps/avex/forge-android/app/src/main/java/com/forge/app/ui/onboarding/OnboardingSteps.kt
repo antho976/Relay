@@ -2,9 +2,7 @@
 package com.forge.app.ui.onboarding
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
@@ -24,15 +22,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.forge.app.domain.units.fromDisplayWeight
 import com.forge.app.domain.units.toDisplayWeight
-import com.forge.app.ui.theme.AccentEmphasis
 import com.forge.app.program.Equipment
 import com.forge.app.program.EquipmentPreset
 import com.forge.app.program.ExerciseLibrary
@@ -49,36 +44,80 @@ private val GOAL_DETAILS = listOf(
     Triple("general_fitness", "General fitness", "Balanced moderate reps for all-round training.")
 )
 
-/** Experience in plain language, mapped to the generator's level keys. */
+/**
+ * Experience in plain language, mapped to the generator's level keys. The bands are non-overlapping
+ * so the choice is unambiguous (the old "0–6 months" / "a few months in" pair overlapped).
+ */
 private val EXPERIENCE_DETAILS = listOf(
-    Triple("beginner", "I just started", "0–6 months in. A bit less volume, and no advanced lifts yet."),
-    Triple("intermediate", "A few months in", "Comfortable with the basics. Standard volume."),
-    Triple("advanced", "A few years in", "Experienced lifter. A touch more volume.")
+    Triple("beginner", "New to lifting", "Under 6 months. A bit less volume, and no advanced lifts yet."),
+    Triple("intermediate", "Got the basics down", "About 6 months to 2 years. Standard volume."),
+    Triple("advanced", "Experienced", "2+ years of consistent training. A touch more volume.")
 )
 
-/** Sex — only scales the bodyweight-relative strength standards on the Stats tab. Optional. */
+/**
+ * Sex — only scales the bodyweight-relative strength standards on the Stats tab. Fully optional, so
+ * an explicit "Prefer not to say" (stored as "") lets the user opt out instead of just skipping.
+ */
 private val SEX_DETAILS = listOf(
     Triple("male", "Male", null),
-    Triple("female", "Female", null)
+    Triple("female", "Female", null),
+    Triple("", "Prefer not to say", null)
+)
+
+/** Plan source — generated, self-built in the editor, or no plan at all (freestyle logging). */
+private val PLAN_MODE_DETAILS = listOf(
+    Triple("generated", "Build me a plan", "Forge picks your exercises from your gear and goal. Recommended."),
+    Triple("custom", "I'll make my own", "Skip the questions and build your own plan in the editor."),
+    Triple("freestyle", "Go with the flow", "No fixed plan — just log what you did at the gym, whenever you want.")
 )
 
 @Composable
-private fun Headline(text: String) {
-    Text(text, style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Black,
-        lineHeight = 38.sp, color = MaterialTheme.colorScheme.onBackground)
+internal fun StepPlanMode(selected: String, onSelect: (String) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Headline("How do you want to train?")
+        Caption("You can change this later in Settings — nothing here is permanent.")
+        PLAN_MODE_DETAILS.forEach { (key, label, desc) -> SelectableRow(label, selected == key, desc) { onSelect(key) } }
+    }
 }
 
+/** Final step of the generated path: the live generated week with a re-roll. The exact week shown is
+ *  what gets saved (edits live in the Program Editor, not here). */
 @Composable
-private fun Caption(text: String) {
-    Text(text, style = MaterialTheme.typography.bodyMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant)
+internal fun StepPreview(days: List<GeneratedDay>, onRegenerate: () -> Unit) {
+    Column(
+        modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Headline("Here's your week")
+        Caption("Built from your answers. Tap re-roll for a different set of moves, or start training. You can fine-tune it anytime in the editor.")
+        OnboardingChip("↻ Re-roll", selected = false, onClick = onRegenerate)
+        Spacer(Modifier.height(4.dp))
+        days.forEach { day ->
+            Column(
+                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)).padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    "${day.name} · ${day.exercises.size} exercises",
+                    style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                val names = day.exercises.joinToString(" · ") { ex ->
+                    ExerciseLibrary.byId(ex.libId)?.name ?: ex.libId
+                }.ifBlank { "Cardio" }
+                Text(names, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
 }
 
 @Composable
 internal fun StepName(name: String, onNameChange: (String) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-        Text("FORGE", style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Black)
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text("FORGE", style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
         Headline("What do you go by?")
         Caption("Optional — leave it blank and tap Next to skip. Used only for the greeting.")
         OutlinedTextField(
@@ -92,50 +131,14 @@ internal fun StepName(name: String, onNameChange: (String) -> Unit) {
 }
 
 @Composable
-internal fun StepEmphasis(selected: String, onSelect: (String) -> Unit) {
-    val accent = MaterialTheme.colorScheme.primary
-    val onBg = MaterialTheme.colorScheme.onBackground
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val level = AccentEmphasis.from(selected)
-    // Live preview of the picked level applied to a sample stat block.
-    val previewColor = when (level) {
-        AccentEmphasis.OFF -> onBg
-        AccentEmphasis.SUBTLE -> lerp(onBg, accent, 0.45f)
-        else -> accent
-    }
-    val previewWeight = when (level) {
-        AccentEmphasis.MEDIUM -> FontWeight.SemiBold
-        AccentEmphasis.STRONG -> FontWeight.Bold
-        else -> FontWeight.Normal
-    }
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Headline("Color the important text?")
-        Caption("Tints key numbers, titles and names with your accent. Change it anytime in Settings → Appearance.")
-        Column(
-            modifier = Modifier.fillMaxWidth()
-                .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp))
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp)
-        ) {
-            Text("THIS WEEK", style = MaterialTheme.typography.labelSmall, color = muted, letterSpacing = 1.5.sp)
-            Text("12,400 lb", style = MaterialTheme.typography.headlineSmall, color = previewColor, fontWeight = previewWeight)
-            Text("128 sets · 4 workouts", style = MaterialTheme.typography.bodyMedium, color = muted)
-        }
-        AccentEmphasis.options.forEach { (key, label) ->
-            SelectableRow(label, level == AccentEmphasis.from(key)) { onSelect(key) }
-        }
-    }
-}
-
-@Composable
 internal fun StepUnits(useKg: Boolean, onToggle: (Boolean) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Headline("Weight units")
         Caption("All weights in the app use this unit. You can change it later in Settings.")
         Row(
             modifier = Modifier.fillMaxWidth()
-                .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp))
-                .padding(16.dp),
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+                .padding(horizontal = 14.dp, vertical = 12.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -182,7 +185,7 @@ internal fun StepBodyweight(input: String, useKg: Boolean, onInputChange: (Strin
     val invalid = input.isNotBlank() && parseSaneBodyweightLb(input, useKg) == null
     val minDisp = toDisplayWeight(MIN_BODYWEIGHT_LB, useKg).roundToInt()
     val maxDisp = toDisplayWeight(MAX_BODYWEIGHT_LB, useKg).roundToInt()
-    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Headline("Starting bodyweight")
         Caption("Optional — used for relative strength comparisons.")
         OutlinedTextField(
@@ -202,7 +205,7 @@ internal fun StepBodyweight(input: String, useKg: Boolean, onInputChange: (Strin
 
 @Composable
 internal fun StepDays(days: Int, onChange: (Int) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Headline("Days per week")
         Caption("Your split adapts to this — 3 = Push/Pull/Legs, 4 = Upper/Lower, 7 adds an arms day. It's also your weekly target on the home screen.")
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -218,7 +221,7 @@ internal fun StepEquipment(
     onToggle: (String) -> Unit,
     onSelectPreset: (EquipmentPreset) -> Unit
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Headline("Your equipment")
         Caption("Pick a preset, then fine-tune. Generated plans only use what's on.")
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -241,7 +244,7 @@ internal fun StepPlateWeight(plateWeightLb: Double, useKg: Boolean, onSet: (Doub
     // shared converter so the factor can't drift.
     val plates = if (useKg) listOf(1.25, 2.5, 5.0, 10.0, 15.0, 20.0, 25.0) else listOf(5.0, 10.0, 15.0, 20.0, 25.0, 45.0)
     val unit = if (useKg) "kg" else "lb"
-    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Headline("Weight per plate")
         Caption("Only matters if your machine is loaded by counting plates (not a numbered stack). This is what one of those plates weighs. Not sure? Just leave the default — you can change it later.")
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -256,7 +259,7 @@ internal fun StepPlateWeight(plateWeightLb: Double, useKg: Boolean, onSet: (Doub
 
 @Composable
 internal fun StepProblemAreas(selected: Set<String>, onToggle: (String) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Headline("Any problem areas?")
         Caption("Flag a sore joint and the generator steers around movements that stress it. Optional.")
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -267,7 +270,7 @@ internal fun StepProblemAreas(selected: Set<String>, onToggle: (String) -> Unit)
 
 @Composable
 internal fun StepCadence(cadence: String, everyN: Int, onSet: (String, Int) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Headline("Auto-refresh your plan?")
         Caption("Re-roll your exercises automatically after this many workouts — same split, fresh moves. Change it anytime.")
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -276,80 +279,5 @@ internal fun StepCadence(cadence: String, everyN: Int, onSet: (String, Int) -> U
                 OnboardingChip("Every $n", cadence == "every_n" && everyN == n) { onSet("every_n", n) }
             }
         }
-    }
-}
-
-/** Final step: the live generated week, with a re-roll. The exact week shown is what gets saved. */
-@Composable
-internal fun StepPreview(days: List<GeneratedDay>, onRegenerate: () -> Unit) {
-    Column(modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Headline("Here's your week")
-        Caption("Built from your answers. Tap re-roll for a different set of moves, or start training.")
-        OnboardingChip("↻ Re-roll", selected = false, onClick = onRegenerate)
-        Spacer(Modifier.height(4.dp))
-        days.forEach { day ->
-            Column(
-                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant).padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                Text(
-                    "${day.name} · ${day.exercises.size} exercises",
-                    style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                val names = day.exercises.joinToString(" · ") { ex ->
-                    ExerciseLibrary.byId(ex.libId)?.name ?: ex.libId
-                }.ifBlank { "Cardio" }
-                Text(names, style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
-    }
-}
-
-@Composable
-private fun SelectableRow(label: String, isSelected: Boolean, subtitle: String? = null, onClick: () -> Unit) {
-    Box(
-        modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
-            .background(
-                if (isSelected) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
-                else MaterialTheme.colorScheme.surfaceVariant
-            )
-            .clickable { onClick() }.padding(16.dp),
-        contentAlignment = Alignment.CenterStart
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(label, style = MaterialTheme.typography.bodyLarge,
-                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                    color = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
-                if (subtitle != null) Text(subtitle, style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            if (isSelected) Text("✓", style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
-        }
-    }
-}
-
-@Composable
-internal fun OnboardingChip(label: String, selected: Boolean, onClick: () -> Unit) {
-    Box(
-        modifier = Modifier.clip(RoundedCornerShape(50))
-            .background(
-                if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
-                else MaterialTheme.colorScheme.surfaceVariant
-            )
-            .clickable(onClick = onClick).padding(horizontal = 18.dp, vertical = 10.dp)
-    ) {
-        Text(label, style = MaterialTheme.typography.bodyMedium,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-            color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface)
     }
 }

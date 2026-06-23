@@ -21,7 +21,6 @@ data class ForgeUiSettings(
     val quietHoursStart: Int = 22,
     val quietHoursEnd: Int = 7,
     val accentColorHex: String = "",         // empty = AccentNavy default
-    val accentEmphasis: String = "off",      // off | subtle | medium | strong — colors important text
     val plateWeightLb: Double = 15.0,        // weight of one plate (lb) for plate-loaded exercises
     /** True once the user has finished a workout — first-touch onboarding cards hide once set. */
     val firstWorkoutDone: Boolean = false

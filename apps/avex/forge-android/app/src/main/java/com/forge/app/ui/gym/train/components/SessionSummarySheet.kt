@@ -13,7 +13,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import com.forge.app.ui.theme.emphasized
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Text
@@ -22,103 +21,71 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
-import com.forge.app.ui.gym.stats.components.statsEntrance
 import androidx.compose.ui.text.font.FontStyle
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.forge.app.Features
 import com.forge.app.domain.mood.Mood
-import com.forge.app.domain.units.formatVolume
-import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.domain.notify.PrMilestone
-import com.forge.app.domain.units.unitLabel
+import com.forge.app.domain.units.formatVolume
 import com.forge.app.service.ForgeNotifications
 import com.forge.app.ui.common.ConfettiOverlay
 import com.forge.app.ui.common.bounceClick
-import com.forge.app.ui.theme.ForgeLastGreen
+import com.forge.app.ui.gym.stats.components.BodyHeatmap
+import com.forge.app.ui.gym.stats.components.statsEntrance
 import com.forge.app.ui.theme.LocalForgeSettings
 import com.forge.app.ui.gym.train.state.SessionSummary
-import com.forge.app.ui.gym.train.state.UnlockedTrophyHighlight
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
+/**
+ * The end-of-session summary. Stripped to five reads: any new PRs (hidden when none), the general
+ * stats + time, a recap of what you worked (muscle map + exercise list), and the coach's corner —
+ * what he saw and the effort data he'd like more of. [onDismiss] keeps its tags/mood params for the
+ * shared event signature, but both are now always empty; the mid-session journal flows straight
+ * through so it's still persisted on COMPLETE.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SessionSummarySheet(
     summary: SessionSummary,
     onDismiss: (mood: Mood?, tags: List<String>, journal: String) -> Unit
 ) {
-    // Block swipe-to-dismiss: the only way out is the COMPLETE button, otherwise the
-    // sheet can be swiped away while the summary is still "open", leaving FINISH dead.
+    // Block swipe-to-dismiss: the only way out is the COMPLETE button, otherwise the sheet can be
+    // swiped away while the summary is still "open", leaving FINISH dead.
     val sheetState = rememberModalBottomSheetState(
         skipPartiallyExpanded = true,
         confirmValueChange = { it != SheetValue.Hidden }
     )
-    // Tags are one-tap re-selections, so plain remember (reset on rotation) is fine.
-    var selectedTags by remember { mutableStateOf<Set<String>>(emptySet()) }
-    // Trophies are parked behind Features.SHOW_GAMIFICATION — the unlock logic still runs (trophies
-    // persist), but the summary neither lists them nor fires their celebration while it's off.
-    val showTrophies = Features.SHOW_GAMIFICATION && summary.unlockedTrophies.isNotEmpty()
-    // Finishing is an event: confetti for a trophy, a best-ever session, OR a clean sweep of the
-    // duel (every set beat last time). rememberSaveable so the burst doesn't replay on every rotation
-    // (and stays consistent with the trophy haptic, which also fires only once).
-    val cleanSweep = summary.ghostComparable > 0 && summary.ghostBeats == summary.ghostComparable
-    var showTrophyConfetti by rememberSaveable {
-        mutableStateOf(showTrophies || summary.isBestSession || cleanSweep)
-    }
 
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val outline = MaterialTheme.colorScheme.outline
     val bg = MaterialTheme.colorScheme.background
+    val accent = MaterialTheme.colorScheme.primary
     val useKg = LocalForgeSettings.current.useKg
     val context = LocalContext.current
-    val accentArgb = MaterialTheme.colorScheme.primary.toArgb().toLong()
-    val scope = rememberCoroutineScope()
-    // Guards against a second tap kicking off a concurrent render while the first is still in flight.
-    var sharing by remember { mutableStateOf(false) }
-    // A trophy unlock is the peak moment — confirm it in the hand, exactly once. rememberSaveable so a
-    // config change (rotation) while the sheet is open doesn't re-fire the celebratory haptic.
-    val haptic = LocalHapticFeedback.current
-    var trophyHapticFired by rememberSaveable { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
-        if (!trophyHapticFired && showTrophies) {
-            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-            trophyHapticFired = true
-        }
-    }
-    // A clean sweep (every comparable set beat last time) earns its own signature in the hand: a
-    // three-tap burst, distinct from the single long-press of a PR/finish. Skipped when a trophy
-    // already fired its haptic (don't stack two celebrations) and when the user turned haptics off.
-    // rememberSaveable so it fires once, not on every rotation.
     val hapticStrength = LocalForgeSettings.current.hapticStrength
-    var cleanSweepHapticFired by rememberSaveable { mutableStateOf(false) }
+
+    // A PR is the peak of a session — celebrate it once with confetti + a single haptic. Both are
+    // rememberSaveable so a rotation while the sheet is open doesn't replay them.
+    val hasPr = summary.prCount > 0
+    var showConfetti by rememberSaveable { mutableStateOf(hasPr) }
+    val haptic = LocalHapticFeedback.current
+    var prHapticFired by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(Unit) {
-        if (!cleanSweepHapticFired && cleanSweep && !showTrophies && hapticStrength != "off") {
-            repeat(3) {
-                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                delay(90)
-            }
-            cleanSweepHapticFired = true
+        if (!prHapticFired && hasPr && hapticStrength != "off") {
+            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+            prHapticFired = true
         }
     }
-    // PR-milestone push (#13): when this session pushed the lifetime PR count across a round number,
-    // drop a celebratory notification in the shade — a record the user can come back to or share. Own
-    // channel (independently mutable); fired once, only on a genuine milestone (rare, so never noisy).
+    // PR-milestone push (#13): a finished session crossing a lifetime-PR round number drops a
+    // celebratory notification in the shade. Own channel; fired once, only on a genuine milestone.
     var prMilestoneFired by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         if (!prMilestoneFired) {
@@ -154,7 +121,7 @@ fun SessionSummarySheet(
                     Text(
                         summary.displayName,
                         style = MaterialTheme.typography.headlineSmall,
-                        color = emphasized(onBg)
+                        color = onBg
                     )
                     Text(
                         "workout complete",
@@ -165,14 +132,23 @@ fun SessionSummarySheet(
                     )
                 }
 
-                // Primary stats strip — VOLUME + PRs roll up from 0 on open (the celebration numbers).
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-                    CountUpStat(value = summary.totalVolumeLb, label = "VOLUME", onBg = onBg, muted = muted) { formatVolume(it, useKg) }
-                    CountUpStat(value = summary.prCount.toDouble(), label = "PRs", onBg = onBg, muted = muted) { it.toInt().toString() }
-                    FlatStat(value = "${summary.durationMinutes} min", label = "TIME", onBg = onBg, muted = muted)
+                // New PRs — the celebration headline. Hidden entirely when there are none.
+                if (hasPr) {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                        CountUpStat(
+                            value = summary.prCount.toDouble(),
+                            label = if (summary.prCount == 1) "NEW PR" else "NEW PRs",
+                            onBg = onBg,
+                            muted = muted
+                        ) { it.toInt().toString() }
+                    }
                 }
 
-                // Secondary meta stats
+                // General stats + time taken.
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                    CountUpStat(value = summary.totalVolumeLb, label = "VOLUME", onBg = onBg, muted = muted) { formatVolume(it, useKg) }
+                    FlatStat(value = "${summary.durationMinutes} min", label = "TIME", onBg = onBg, muted = muted)
+                }
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
                     FlatStat(value = "${summary.setCount}", label = "SETS", onBg = onBg, muted = muted)
                     FlatStat(
@@ -183,190 +159,44 @@ fun SessionSummarySheet(
                     )
                 }
 
-                // Session efficiency metrics (#83, #127, #82, #133)
-                val hasEfficiency = summary.densityScore != null || summary.avgRestSeconds != null || summary.honestyPct != null
-                if (hasEfficiency) {
+                // Recap — what you worked on: the muscle map + the exercise list.
+                if (summary.setsByMuscle.isNotEmpty() || summary.highlights.isNotEmpty()) {
                     HorizontalDivider(color = outline.copy(alpha = 0.2f))
-                    Text("SESSION METRICS", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-                        summary.densityScore?.let { density ->
-                            FlatStat(value = "${toDisplayWeight(density, useKg).toInt()} ${unitLabel(useKg)}/min", label = "DENSITY", onBg = onBg, muted = muted)
-                        }
-                        summary.avgRestSeconds?.let { rest ->
-                            val restStr = if (rest >= 60) "${rest / 60}m ${rest % 60}s" else "${rest}s"
-                            FlatStat(value = restStr, label = "AVG REST", onBg = onBg, muted = muted)
-                        }
-                        summary.honestyPct?.let { pct ->
-                            FlatStat(value = "$pct%", label = "COMPLETION", onBg = onBg, muted = muted)
-                        }
+                    Text("WHAT YOU WORKED", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
+                    if (summary.setsByMuscle.isNotEmpty()) {
+                        BodyHeatmap(
+                            setsByMuscle = summary.setsByMuscle,
+                            accent = accent,
+                            faint = outline.copy(alpha = 0.34f),
+                            silhouette = outline.copy(alpha = 0.26f),
+                            labelColor = muted,
+                            modifier = Modifier.fillMaxWidth().statsEntrance(0)
+                        )
                     }
-                }
-
-                // Session comparison vs last same-day session (#52)
-                val hasComparison = summary.vsLastVolumeDelta != null || summary.vsLastSetsDelta != null
-                if (hasComparison) {
-                    HorizontalDivider(color = outline.copy(alpha = 0.2f))
-                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-                        summary.vsLastVolumeDelta?.let { delta ->
-                            val sign = if (delta >= 0) "+" else ""
-                            FlatStat(value = "$sign${toDisplayWeight(delta, useKg).toInt()} ${unitLabel(useKg)}", label = "vs LAST", onBg = onBg, muted = muted)
-                        }
-                        summary.vsLastSetsDelta?.let { delta ->
-                            val sign = if (delta >= 0) "+" else ""
-                            FlatStat(value = "$sign$delta sets", label = "vs LAST", onBg = onBg, muted = muted)
-                        }
-                    }
-                }
-
-                // "Beat the ghost" duel result — the session-long contest vs last time.
-                if (summary.ghostComparable > 0) {
-                    val beats = summary.ghostBeats
-                    val total = summary.ghostComparable
-                    val won = beats * 2 >= total
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .statsEntrance(0)
-                            .border(0.5.dp, (if (won) ForgeLastGreen else outline).copy(alpha = if (won) 0.6f else 0.3f), RoundedCornerShape(4.dp))
-                            .padding(horizontal = 14.dp, vertical = 10.dp)
-                    ) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text(if (cleanSweep) "⚡" else if (won) "↑" else "·", color = if (won) ForgeLastGreen else muted, style = MaterialTheme.typography.titleSmall)
-                            Text(
-                                when {
-                                    cleanSweep -> "Clean sweep — you beat last session on every set"
-                                    won -> "Beat last session on $beats of $total sets"
-                                    else -> "$beats of $total sets beat last session"
-                                },
-                                style = MaterialTheme.typography.bodySmall,
-                                color = if (won) onBg else muted
-                            )
-                        }
-                    }
-                }
-
-                // Best session callout (#53)
-                if (summary.isBestSession) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .border(0.5.dp, outline.copy(alpha = 0.3f), RoundedCornerShape(4.dp))
-                            .padding(horizontal = 14.dp, vertical = 10.dp)
-                    ) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text("★", color = onBg, fontWeight = FontWeight.Black, style = MaterialTheme.typography.titleSmall)
-                            Text("Your best ${summary.dayWord} ever", style = MaterialTheme.typography.bodySmall, color = onBg)
-                        }
-                    }
-                }
-
-                // Coach's read — one session-specific line, derived from this session's own result.
-                summary.coachOpinion?.let { opinion ->
-                    HorizontalDivider(color = outline.copy(alpha = 0.2f))
-                    Column(
-                        modifier = Modifier.fillMaxWidth().statsEntrance(1),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Text("COACH'S READ", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
-                        Text(opinion, style = MaterialTheme.typography.bodySmall, color = onBg)
-                    }
-                }
-
-                if (summary.highlights.isNotEmpty()) {
-                    HorizontalDivider(color = outline.copy(alpha = 0.2f))
-                    Text("EXERCISES", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
                     summary.highlights.forEach { h -> HighlightRow(h, onBg = onBg, muted = muted) }
                 }
 
-                if (showTrophies) {
-                    HorizontalDivider(color = outline.copy(alpha = 0.2f))
-                    Text("TROPHIES UNLOCKED", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
-                    // Each trophy row settles in on its own beat (staggered) rather than snapping in mid-confetti.
-                    summary.unlockedTrophies.forEachIndexed { i, t ->
-                        Box(Modifier.statsEntrance(i)) { TrophyUnlockRow(t, onBg = onBg, muted = muted, outline = outline) }
-                    }
-                }
-
-                // Per-day "how did this feel?" and the session journal are intentionally not here:
-                // effort is rated per exercise, and the journal is edited from the training screen's
-                // note icon (its value flows straight through on COMPLETE).
-
-                HorizontalDivider(color = outline.copy(alpha = 0.2f))
-                TagPicker(
-                    selected = selectedTags,
-                    onToggle = { tag ->
-                        selectedTags = if (tag in selectedTags) selectedTags - tag else selectedTags + tag
-                    },
+                // Coach — what he read from this session, and the effort data he'd like more of.
+                CoachReadSection(
+                    coachOpinion = summary.coachOpinion,
+                    setsWithRpe = summary.setsWithRpe,
+                    totalSets = summary.setCount,
+                    exercisesRated = summary.exercisesRated,
+                    exercisesLogged = summary.exercisesLogged,
                     onBg = onBg,
                     muted = muted,
                     outline = outline
                 )
 
-                // What's next — a first-time user doesn't know where the session goes or where records live (Cat 6).
-                HorizontalDivider(color = outline.copy(alpha = 0.2f))
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("WHAT'S NEXT", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
-                    Text(
-                        "Your session's saved to history. See your records in Gym → Stats → PRs, and the coach refines your plan as you log more.",
-                        style = MaterialTheme.typography.bodySmall, color = muted
-                    )
-                }
-
-                // Share a recap card (offline bitmap → system share sheet) — the organic "look what I did" moment.
-                HorizontalDivider(color = outline.copy(alpha = 0.2f))
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .bounceClick(enabled = !sharing) {
-                            // Render the ~4.7 MB bitmap off the main thread (it allocates, draws, PNG-
-                            // compresses and writes a file); only the share intent touches the UI thread.
-                            sharing = true
-                            scope.launch {
-                                val uri = withContext(Dispatchers.Default) {
-                                    SessionCardRenderer.render(
-                                        context = context,
-                                        title = summary.displayName,
-                                        dateLine = java.time.LocalDate.now()
-                                            .format(java.time.format.DateTimeFormatter.ofPattern("MMM d, yyyy")).uppercase(),
-                                        // formatVolume already includes the unit — don't append it again.
-                                        heroValue = formatVolume(summary.totalVolumeLb, useKg),
-                                        heroLabel = "VOLUME",
-                                        stats = buildList {
-                                            if (summary.prCount > 0) add("${summary.prCount}" to if (summary.prCount == 1) "PR" else "PRs")
-                                            add("${summary.setCount}" to "SETS")
-                                            if (summary.durationMinutes > 0) add("${summary.durationMinutes}" to "MIN")
-                                        },
-                                        footnote = when {
-                                            summary.isBestSession -> "Best ${summary.dayWord} ever"
-                                            summary.prCount > 0 -> "${summary.prCount} new ${if (summary.prCount == 1) "PR" else "PRs"}"
-                                            else -> null
-                                        },
-                                        accentArgb = accentArgb
-                                    )
-                                }
-                                uri?.let { SessionCardRenderer.share(context, it) }
-                                sharing = false
-                            }
-                        }
-                        .padding(vertical = 12.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        "Share card",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                        letterSpacing = 1.sp
-                    )
-                }
-
-                // Complete button — only way to dismiss
+                // Complete button — only way to dismiss. Tags/mood are gone; the mid-session journal
+                // flows straight through so it's still persisted on finish.
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(top = 4.dp, bottom = 16.dp)
                         .clip(RoundedCornerShape(4.dp))
                         .border(0.5.dp, outline.copy(alpha = 0.4f), RoundedCornerShape(4.dp))
-                        .bounceClick { onDismiss(null, selectedTags.toList(), summary.initialJournal) }
+                        .bounceClick { onDismiss(null, emptyList(), summary.initialJournal) }
                         .padding(vertical = 16.dp),
                     contentAlignment = Alignment.Center
                 ) {
@@ -379,14 +209,13 @@ fun SessionSummarySheet(
                 }
             }
 
-            // Trophy confetti (#30): fires once when sheet opens with unlocked trophies
-            if (showTrophyConfetti) {
+            // PR confetti: fires once when the sheet opens on a session with a new PR.
+            if (showConfetti) {
                 ConfettiOverlay(
                     modifier = Modifier.matchParentSize(),
-                    onComplete = { showTrophyConfetti = false }
+                    onComplete = { showConfetti = false }
                 )
             }
         }
     }
 }
-

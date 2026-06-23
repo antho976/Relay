@@ -47,7 +47,6 @@ import com.forge.app.data.repo.CoachWatch
 import com.forge.app.domain.units.formatVolumeCompact
 import com.forge.app.ui.gym.stats.components.statsEntrance
 import com.forge.app.ui.theme.LocalForgeSettings
-import com.forge.app.ui.theme.emphasized
 
 /**
  * The Week Brief (auto-coach Phase 1) — a coach's letter for the week, editorial hairline
@@ -240,7 +239,7 @@ private fun BriefContent(
         // Sections settle in on their own beat (staggered fade + slide) instead of snapping — a
         // deliberate reveal for the coach's trust-building screen. statsEntrance is reduced-motion aware.
         Column(Modifier.statsEntrance(0)) {
-            Text(brief.pass.weekId.uppercase(), style = MaterialTheme.typography.labelMedium, color = emphasized(muted))
+            Text(brief.pass.weekId.uppercase(), style = MaterialTheme.typography.labelMedium, color = muted)
             Spacer(Modifier.height(4.dp))
             // Item 3: distinguish explicit header states — proposals waiting / pre-baseline countdown /
             // "coach agrees the plan is working" (has prior applied changes and holding) / neutral steady.
@@ -310,7 +309,7 @@ private fun BriefContent(
             HorizontalDivider(color = outline.copy(alpha = 0.3f))
             Spacer(Modifier.height(16.dp))
             Column(Modifier.statsEntrance(1)) {
-                Text("WHAT CHANGED", style = MaterialTheme.typography.labelMedium, color = emphasized(muted))
+                Text("WHAT CHANGED", style = MaterialTheme.typography.labelMedium, color = muted)
                 Spacer(Modifier.height(6.dp))
                 Text(
                     "From last brief — these changes are now in effect.",
@@ -336,7 +335,7 @@ private fun BriefContent(
         Spacer(Modifier.height(20.dp))
         HorizontalDivider(color = outline.copy(alpha = 0.3f))
         Spacer(Modifier.height(16.dp))
-        Text("WHAT I'D CHANGE", style = MaterialTheme.typography.labelMedium, color = emphasized(muted))
+        Text("WHAT I'D CHANGE", style = MaterialTheme.typography.labelMedium, color = muted)
         Spacer(Modifier.height(10.dp))
         when (brief.pass.status) {
             CoachRepository.STATUS_PROPOSED, CoachRepository.STATUS_SHADOW -> {
@@ -392,7 +391,7 @@ private fun BriefContent(
             Spacer(Modifier.height(10.dp))
             HorizontalDivider(color = outline.copy(alpha = 0.3f))
             Spacer(Modifier.height(16.dp))
-            Text("FOCUS", style = MaterialTheme.typography.labelMedium, color = emphasized(muted))
+            Text("FOCUS", style = MaterialTheme.typography.labelMedium, color = muted)
             Spacer(Modifier.height(8.dp))
             Text(r.focusLine, style = MaterialTheme.typography.bodyMedium, color = onBg, fontStyle = FontStyle.Italic)
         }

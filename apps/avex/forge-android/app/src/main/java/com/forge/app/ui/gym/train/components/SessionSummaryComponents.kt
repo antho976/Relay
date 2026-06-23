@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -21,19 +22,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.forge.app.domain.units.formatVolume
 import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.gym.stats.components.CountUpText
+import com.forge.app.ui.gym.stats.components.statsEntrance
 import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.theme.LocalForgeSettings
 import androidx.compose.ui.unit.sp
 import com.forge.app.domain.mood.Mood
 import com.forge.app.ui.gym.train.state.ExerciseHighlight
-import com.forge.app.ui.gym.train.state.UnlockedTrophyHighlight
-import com.forge.app.ui.trophies.components.TrophyIconBadge
 
 @Composable
 internal fun FlatStat(value: String, label: String, onBg: Color, muted: Color) {
@@ -110,20 +109,110 @@ internal fun MoodChip(mood: Mood, isSelected: Boolean, onClick: () -> Unit, onBg
     }
 }
 
+/**
+ * The coach's corner of the summary: first the celebratory [coachOpinion] (what he reads from THIS
+ * session), then the [CoachCaptureNudge] showing how much effort signal the session actually carried
+ * (per-set RPE + per-exercise "how hard it felt") with an ask to log more so he can calibrate load
+ * and rest. Purely informational; effort capture itself stays inline during the session.
+ */
 @Composable
-internal fun TrophyUnlockRow(t: UnlockedTrophyHighlight, onBg: Color, muted: Color, outline: Color) {
-    Box(
+internal fun CoachReadSection(
+    coachOpinion: String?,
+    setsWithRpe: Int,
+    totalSets: Int,
+    exercisesRated: Int,
+    exercisesLogged: Int,
+    onBg: Color,
+    muted: Color,
+    outline: Color
+) {
+    // Nothing logged → nothing for the coach to read.
+    if (coachOpinion == null && exercisesLogged == 0) return
+    HorizontalDivider(color = outline.copy(alpha = 0.2f))
+    Column(
+        modifier = Modifier.fillMaxWidth().statsEntrance(1),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Text(
+            "WHAT THE COACH SEES",
+            style = MaterialTheme.typography.labelSmall,
+            color = muted,
+            fontSize = 9.sp,
+            letterSpacing = 1.sp
+        )
+        coachOpinion?.let {
+            Text(it, style = MaterialTheme.typography.bodySmall, color = onBg, lineHeight = 18.sp)
+        }
+        CoachCaptureNudge(setsWithRpe, totalSets, exercisesRated, exercisesLogged, onBg, muted, outline)
+    }
+}
+
+/**
+ * The "give me more to work with" block. Hidden for an empty session; a quiet confirmation when every
+ * lift + set carried its effort signal; otherwise the coverage is shown as two stat-style figures
+ * (effort per lift, RPE per set) above a short ask. Surfacing the numbers — rather than burying them
+ * in an italic line — makes it obvious at a glance how much the coach actually had to read.
+ */
+@Composable
+private fun CoachCaptureNudge(
+    setsWithRpe: Int,
+    totalSets: Int,
+    exercisesRated: Int,
+    exercisesLogged: Int,
+    onBg: Color,
+    muted: Color,
+    outline: Color
+) {
+    if (exercisesLogged == 0) return
+    val effortComplete = exercisesRated >= exercisesLogged
+    val rpeComplete = totalSets == 0 || setsWithRpe >= totalSets
+    val complete = effortComplete && rpeComplete
+
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .border(0.5.dp, outline.copy(alpha = 0.25f), RoundedCornerShape(4.dp))
-            .padding(12.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(onBg.copy(alpha = 0.05f))
+            .border(0.5.dp, outline.copy(alpha = 0.25f), RoundedCornerShape(8.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            TrophyIconBadge(icon = t.icon, unlocked = true, size = 40.dp, animateEntrance = true)
-            Column(modifier = Modifier.weight(1f).padding(start = 12.dp)) {
-                Text(t.name, style = MaterialTheme.typography.bodyMedium, color = onBg, fontWeight = FontWeight.SemiBold)
-                Text(t.description, style = MaterialTheme.typography.bodySmall, color = muted)
+        if (complete) {
+            Text(
+                "Full effort data this session. He can read exactly how hard it landed and tune the next one precisely.",
+                style = MaterialTheme.typography.bodySmall,
+                color = onBg,
+                lineHeight = 18.sp
+            )
+        } else {
+            Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+                CoverageStat("EFFORT", exercisesRated, exercisesLogged, "lifts", onBg, muted)
+                if (totalSets > 0) CoverageStat("RPE", setsWithRpe, totalSets, "sets", onBg, muted)
             }
+            Text(
+                "Rate how hard each set feels next time and the coach can dial in your load and rest.",
+                style = MaterialTheme.typography.bodySmall,
+                color = muted,
+                lineHeight = 18.sp
+            )
+        }
+    }
+}
+
+/** One coverage figure for [CoachCaptureNudge]: a small caps label over a "done/total unit" count. */
+@Composable
+private fun CoverageStat(label: String, done: Int, total: Int, unit: String, onBg: Color, muted: Color) {
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelSmall,
+            color = muted.copy(alpha = 0.6f),
+            fontSize = 9.sp,
+            letterSpacing = 0.5.sp
+        )
+        Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text("$done/$total", style = MaterialTheme.typography.bodyMedium, color = onBg, fontWeight = FontWeight.SemiBold)
+            Text(unit, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp)
         }
     }
 }

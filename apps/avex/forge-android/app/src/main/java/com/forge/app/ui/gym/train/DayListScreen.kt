@@ -23,7 +23,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import com.forge.app.ui.theme.emphasized
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -62,6 +62,8 @@ fun DayListScreen(
     onOpenRecap: () -> Unit = {},
     onEditProgram: (String) -> Unit = {},
     onOpenCardio: () -> Unit = {},
+    onLogFreestyle: () -> Unit = {},
+    onBuildPlan: () -> Unit = {},
     initialTab: Int = 0,
     /** Top-bar heading — "Stats" / "PRs" when hosting those sub-screens, "GYM" by default. */
     title: String = "GYM",
@@ -94,6 +96,8 @@ fun DayListScreen(
                     onOpenDayQuick = onOpenDayQuick,
                     onEditProgram = onEditProgram,
                     onOpenCardio = onOpenCardio,
+                    onLogFreestyle = onLogFreestyle,
+                    onBuildPlan = onBuildPlan,
                     viewModel = viewModel
                 )
             }
@@ -107,6 +111,8 @@ private fun TrainTab(
     onOpenDayQuick: (String) -> Unit,
     onEditProgram: (String) -> Unit = {},
     onOpenCardio: () -> Unit = {},
+    onLogFreestyle: () -> Unit = {},
+    onBuildPlan: () -> Unit = {},
     viewModel: DayListViewModel
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -125,36 +131,56 @@ private fun TrainTab(
             .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text(
-            "Pick your day.",
-            style = MaterialTheme.typography.headlineMedium,
-            color = emphasized(MaterialTheme.colorScheme.onSurface)
-        )
-        Text(
-            "Hold a day for options — re-roll, recolor, or edit it.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        state.days.forEach { item ->
-            DayCard(
-                item = item,
-                onClick = {
-                    if (item.plan.key.startsWith("cardio")) {
-                        onOpenCardio()
-                    } else {
-                        val active = state.activeSession
-                        if (active != null && active.dayKey != item.plan.key) {
-                            pendingOpenDayKey = item.plan.key
-                        } else {
-                            onOpenDay(item.plan.key)
-                        }
-                    }
-                },
-                onQuickStart = if (item.isNextUp && !item.isActive && !item.plan.key.startsWith("cardio")) {
-                    { onOpenDayQuick(item.plan.key) }
-                } else null,
-                onLongPress = { longPressMenuForDayKey = item.plan.key }
+        if (state.days.isEmpty()) {
+            Text(
+                "No plan yet.",
+                style = MaterialTheme.typography.headlineMedium,
+                color = MaterialTheme.colorScheme.onSurface
             )
+            Text(
+                "Build your own plan day by day, or just log workouts as you do them.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Button(onClick = onBuildPlan, modifier = Modifier.fillMaxWidth()) { Text("Build a plan") }
+        } else {
+            Text(
+                "Pick your day.",
+                style = MaterialTheme.typography.headlineMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                "Hold a day for options. Use Edit plan to add, rename, reorder or remove days.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            state.days.forEach { item ->
+                DayCard(
+                    item = item,
+                    onClick = {
+                        if (item.plan.key.startsWith("cardio")) {
+                            onOpenCardio()
+                        } else {
+                            val active = state.activeSession
+                            if (active != null && active.dayKey != item.plan.key) {
+                                pendingOpenDayKey = item.plan.key
+                            } else {
+                                onOpenDay(item.plan.key)
+                            }
+                        }
+                    },
+                    onQuickStart = if (item.isNextUp && !item.isActive && !item.plan.key.startsWith("cardio")) {
+                        { onOpenDayQuick(item.plan.key) }
+                    } else null,
+                    onLongPress = { longPressMenuForDayKey = item.plan.key }
+                )
+            }
+            OutlinedButton(onClick = onBuildPlan, modifier = Modifier.fillMaxWidth()) { Text("Edit plan") }
+        }
+        // Always-available freestyle log — so a "go with the flow" user (or anyone wanting a one-off)
+        // can log what they did without following the plan.
+        OutlinedButton(onClick = onLogFreestyle, modifier = Modifier.fillMaxWidth()) {
+            Text("Log a workout (no plan)")
         }
     }
 

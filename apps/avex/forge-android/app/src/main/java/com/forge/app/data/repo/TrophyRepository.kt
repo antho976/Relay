@@ -239,6 +239,10 @@ class TrophyRepository @Inject constructor(
     }
 
     private fun checkVarietyPack(sessions: List<Session>, zone: ZoneId): Boolean {
+        // "Train every day of the plan in a week" is meaningless with no plan (build-your-own /
+        // freestyle): an empty dayKeys set makes the size check pass and the `all {}` below vacuously
+        // true, falsely awarding the trophy on the first session. Require a real plan.
+        if (Program.dayKeys.isEmpty()) return false
         if (sessions.size < Program.dayKeys.size) return false
         // Slide a 7-day window; check if all 4 dayKeys appear within it
         val byDate = sessions.groupBy { s ->

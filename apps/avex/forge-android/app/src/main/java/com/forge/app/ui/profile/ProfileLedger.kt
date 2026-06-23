@@ -42,7 +42,6 @@ import androidx.compose.ui.unit.sp
 import com.forge.app.domain.rank.StandingMetric
 import com.forge.app.data.repo.SignatureLift
 import com.forge.app.ui.theme.ForgeMotion
-import com.forge.app.ui.theme.emphasized
 
 /**
  * Shared section scaffold: hairline divider + small-caps label (+ optional accent action) + body.
@@ -67,7 +66,7 @@ internal fun ProfileBlock(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(label, style = MaterialTheme.typography.labelMedium, color = emphasized(muted))
+        Text(label, style = MaterialTheme.typography.labelMedium, color = muted)
         if (action != null) Text(action, style = MaterialTheme.typography.labelSmall, color = accent)
     }
     Spacer(Modifier.height(if (compact) 8.dp else 12.dp))
@@ -229,7 +228,7 @@ internal fun CardioTotalsSection(
 @Composable
 private fun SignatureCell(value: String, label: String, onBg: Color, muted: Color, modifier: Modifier = Modifier) {
     Column(modifier.padding(end = 8.dp)) {
-        Text(value, style = MaterialTheme.typography.titleSmall, color = emphasized(onBg), maxLines = 2)
+        Text(value, style = MaterialTheme.typography.titleSmall, color = onBg, maxLines = 2)
         Spacer(Modifier.height(3.dp))
         Text(label, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 8.sp)
     }
@@ -247,7 +246,7 @@ internal fun LifetimeStat(value: String, label: String, compact: Boolean = false
         Text(
             value,
             style = if (compact) MaterialTheme.typography.titleSmall else MaterialTheme.typography.titleMedium,
-            color = emphasized(MaterialTheme.colorScheme.onBackground)
+            color = MaterialTheme.colorScheme.onBackground
         )
         Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 8.sp)
     }

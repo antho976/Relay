@@ -55,8 +55,7 @@ class PdfExportRepository @Inject constructor(
         val session = sessionDao.get(sessionId) ?: return null
         val useKg = settingsRepo.useKg.first()
         val exercises = loggedExerciseDao.forSession(sessionId)
-        val dayName = Program.days.firstOrNull { it.key == session.dayKey }?.defaultName
-            ?: session.dayKey
+        val dayName = Program.dayDisplayName(session.dayKey)
         val dateStr = Instant.ofEpochMilli(session.startedAt).atZone(zone).format(dateFmt)
         val timeStr = Instant.ofEpochMilli(session.startedAt).atZone(zone).format(timeFmt)
         val durationMin = session.durationMinutes()

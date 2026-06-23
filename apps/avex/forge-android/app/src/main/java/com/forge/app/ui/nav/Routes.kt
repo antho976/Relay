@@ -21,6 +21,11 @@ object Routes {
     const val MIRROR_TEST = "mirror-test"
     const val PROGRAM_EDITOR = "program-editor/{dayKey}"
     const val PROGRAM_VIEWER = "program-viewer"
+    const val PROGRAM_BUILDER = "program-builder?blank={blank}"
+    const val FREESTYLE_LOG = "freestyle-log"
+
+    const val ARG_BLANK = "blank"
+    fun programBuilder(blank: Boolean = false) = "program-builder?blank=$blank"
 
     fun programEditor(dayKey: String) = "program-editor/$dayKey"
 

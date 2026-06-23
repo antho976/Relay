@@ -20,7 +20,7 @@ enum class SettingsSection(val keys: List<Preferences.Key<*>>) {
     APPEARANCE(
         listOf(
             PreferenceKeys.AMOLED_MODE, PreferenceKeys.COMPACT_SET_LOGGING,
-            PreferenceKeys.ACCENT_COLOR_HEX, PreferenceKeys.ACCENT_EMPHASIS, PreferenceKeys.FONT_CHOICE
+            PreferenceKeys.ACCENT_COLOR_HEX, PreferenceKeys.FONT_CHOICE
         )
     ),
     FORMAT(
@@ -175,12 +175,6 @@ class SettingsRepository @Inject constructor(
         .map { it[PreferenceKeys.ACCENT_COLOR_HEX] ?: "" }
     suspend fun setAccentColorHex(hex: String) =
         context.forgePreferences.edit { it[PreferenceKeys.ACCENT_COLOR_HEX] = hex }
-
-    /** Accent emphasis intensity for important text: "off" | "subtle" | "medium" | "strong". */
-    val accentEmphasis: Flow<String> = context.forgePreferences.data
-        .map { it[PreferenceKeys.ACCENT_EMPHASIS] ?: "off" }
-    suspend fun setAccentEmphasis(level: String) =
-        context.forgePreferences.edit { it[PreferenceKeys.ACCENT_EMPHASIS] = level }
 
     val fontChoice: Flow<String> = context.forgePreferences.data
         .map { it[PreferenceKeys.FONT_CHOICE] ?: "default" }
@@ -454,6 +448,12 @@ class SettingsRepository @Inject constructor(
 
     val onboardingDone: Flow<Boolean> = context.forgePreferences.data
         .map { it[PreferenceKeys.ONBOARDING_DONE] ?: false }
+    /** Whether the default split has ever been auto-seeded — gates [ensureLoaded] so a deliberately
+     *  empty plan (build-your-own / cleared) is never re-seeded after onboarding finishes. */
+    val programSeeded: Flow<Boolean> = context.forgePreferences.data
+        .map { it[PreferenceKeys.PROGRAM_SEEDED] ?: false }
+    suspend fun setProgramSeeded(v: Boolean) =
+        context.forgePreferences.edit { it[PreferenceKeys.PROGRAM_SEEDED] = v }
     val userName: Flow<String> = context.forgePreferences.data
         .map { it[PreferenceKeys.USER_NAME] ?: "" }
     suspend fun setUserName(name: String) =
@@ -468,6 +468,20 @@ class SettingsRepository @Inject constructor(
         .map { it[PreferenceKeys.USER_SEX] ?: "" }
     suspend fun setUserSex(sex: String) =
         context.forgePreferences.edit { it[PreferenceKeys.USER_SEX] = sex }
+
+    /** "Go with the flow": no fixed program — the home surfaces freestyle logging instead of day
+     *  cards. A seed program still exists; this flag only changes what the UI leads with. */
+    val freestyleMode: Flow<Boolean> = context.forgePreferences.data
+        .map { it[PreferenceKeys.FREESTYLE_MODE] ?: false }
+    suspend fun setFreestyleMode(v: Boolean) =
+        context.forgePreferences.edit { it[PreferenceKeys.FREESTYLE_MODE] = v }
+
+    /** Whether the Coach is surfaced (tab + banners). Defaults on; declined during onboarding for the
+     *  no-plan / make-your-own modes hides it until re-enabled in Settings. */
+    val coachEnabled: Flow<Boolean> = context.forgePreferences.data
+        .map { it[PreferenceKeys.COACH_ENABLED] ?: true }
+    suspend fun setCoachEnabled(v: Boolean) =
+        context.forgePreferences.edit { it[PreferenceKeys.COACH_ENABLED] = v }
 
     /** Training experience drives generation volume + difficulty filter (program-unlock Phase 4 / Phase 2). */
     val programExperience: Flow<String> = context.forgePreferences.data

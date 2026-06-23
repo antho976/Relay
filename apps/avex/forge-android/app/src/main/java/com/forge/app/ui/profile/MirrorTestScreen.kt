@@ -54,7 +54,6 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.data.repo.ProgressPhoto
 import com.forge.app.ui.common.bounceClick
-import com.forge.app.ui.theme.emphasized
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -223,7 +222,7 @@ private fun FolderLevel(
                         folder.cover?.let { ProgressPhotoImage(fileFor(it), Modifier.fillMaxSize()) }
                     }
                     Spacer(Modifier.height(6.dp))
-                    Text(folder.displayName, style = MaterialTheme.typography.bodyMedium, color = emphasized(onBg), maxLines = 1)
+                    Text(folder.displayName, style = MaterialTheme.typography.bodyMedium, color = onBg, maxLines = 1)
                     Text(
                         "${folder.count} photo${if (folder.count == 1) "" else "s"}",
                         style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp

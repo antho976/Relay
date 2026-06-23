@@ -25,7 +25,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.ui.common.clickableLabeled
-import com.forge.app.ui.theme.emphasized
 
 /**
  * Settings → About. Shows the real installed version (read from PackageManager, so no BuildConfig
@@ -44,6 +43,7 @@ internal fun AboutPage(modifier: Modifier = Modifier, viewModel: SettingsViewMod
     }
 
     var showCrashLogs by remember { mutableStateOf(false) }
+    var showLicenses by remember { mutableStateOf(false) }
     val crashLogs by (viewModel?.crashLogs?.collectAsStateWithLifecycle()
         ?: remember { mutableStateOf<List<Pair<String, String>>?>(null) })
 
@@ -55,6 +55,10 @@ internal fun AboutPage(modifier: Modifier = Modifier, viewModel: SettingsViewMod
         )
     }
 
+    if (showLicenses) {
+        LicensesDialog(onDismiss = { showLicenses = false })
+    }
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -62,7 +66,7 @@ internal fun AboutPage(modifier: Modifier = Modifier, viewModel: SettingsViewMod
             .padding(bottom = 56.dp)
     ) {
         Column(Modifier.padding(start = 24.dp, end = 24.dp, top = 20.dp, bottom = 16.dp)) {
-            Text("FORGE", style = MaterialTheme.typography.headlineSmall, color = emphasized(onBg))
+            Text("FORGE", style = MaterialTheme.typography.headlineSmall, color = onBg)
             Text(
                 if (version.isBlank()) "Offline strength tracker" else "Version $version · Offline strength tracker",
                 style = MaterialTheme.typography.labelSmall,
@@ -129,6 +133,22 @@ internal fun AboutPage(modifier: Modifier = Modifier, viewModel: SettingsViewMod
                     .padding(horizontal = 24.dp, vertical = 10.dp)
             )
         }
+        SectionDivider()
+
+        SectionLabel("OPEN-SOURCE LICENSES")
+        AboutParagraph(
+            "Forge is built on open-source software. The anatomical muscle figures are adapted from " +
+                "react-native-body-highlighter (MIT License). The core libraries it's built on — Jetpack " +
+                "Compose, Room, Hilt and Health Connect — are under the Apache License 2.0."
+        )
+        Text(
+            "View licenses",
+            style = MaterialTheme.typography.bodySmall,
+            color = muted,
+            modifier = Modifier
+                .clickableLabeled("View open-source licenses") { showLicenses = true }
+                .padding(horizontal = 24.dp, vertical = 10.dp)
+        )
         Text(
             "Forge · a solo-built, offline-first project.",
             style = MaterialTheme.typography.labelSmall,
@@ -233,3 +253,70 @@ private fun CrashLogViewerDialog(
         }
     )
 }
+
+@Composable
+private fun LicensesDialog(onDismiss: () -> Unit) {
+    val onBg = MaterialTheme.colorScheme.onBackground
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Open-source licenses") },
+        text = {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                Text(
+                    "react-native-body-highlighter",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = onBg,
+                    letterSpacing = 0.5.sp
+                )
+                Text(
+                    "Anatomical front/back muscle figures.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = muted.copy(alpha = 0.7f),
+                    fontSize = 10.sp
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    MIT_LICENSE_BODY_HIGHLIGHTER,
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 10.sp
+                    ),
+                    color = muted.copy(alpha = 0.85f)
+                )
+                Spacer(Modifier.height(16.dp))
+                Text(
+                    "Jetpack Compose, Room, Hilt, Health Connect and other AndroidX libraries are " +
+                        "licensed under the Apache License 2.0 (© Google LLC and contributors).",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = muted
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("Close") }
+        }
+    )
+}
+
+private const val MIT_LICENSE_BODY_HIGHLIGHTER = """MIT License
+
+Copyright (c) 2022 ELABBASSI Hicham
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE."""

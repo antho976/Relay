@@ -55,13 +55,14 @@ internal fun ProgramPage(
     state: SettingsUiState,
     vm: SettingsViewModel,
     modifier: Modifier = Modifier,
-    onOpenCoachBrief: () -> Unit = {}
+    onOpenCoachBrief: () -> Unit = {},
+    onOpenBuilder: () -> Unit = {}
 ) {
     var section by remember { mutableStateOf<ProgramSection?>(null) }
     BackHandler(enabled = section != null) { section = null }
 
     when (section) {
-        null -> ProgramMenu(state, vm, modifier) { section = it }
+        null -> ProgramMenu(state, vm, modifier, onOpenBuilder) { section = it }
         ProgramSection.Split -> ProgramSectionScaffold(ProgramSection.Split, modifier, onBack = { section = null }) {
             SplitSection(state, vm)
         }
@@ -87,6 +88,7 @@ private fun ProgramMenu(
     state: SettingsUiState,
     vm: SettingsViewModel,
     modifier: Modifier,
+    onOpenBuilder: () -> Unit,
     onOpen: (ProgramSection) -> Unit
 ) {
     val priorityCount = state.priorityMuscles.size
@@ -97,7 +99,11 @@ private fun ProgramMenu(
             if (priorityCount > 0) " · $priorityCount priority" else "",
         ProgramSection.Maintenance to (if (state.rotationCadence == "never") "Auto-refresh off" else "Every ${state.rotationEveryN}") +
             (if (state.cardioWeeklyTargetMin > 0) " · cardio ${state.cardioWeeklyTargetMin}m" else ""),
-        ProgramSection.Coach to if (state.coachMode == "auto") "Earning auto-apply" else "Suggest mode"
+        ProgramSection.Coach to when {
+            !state.coachEnabled -> "Off"
+            state.coachMode == "auto" -> "Earning auto-apply"
+            else -> "Suggest mode"
+        }
     )
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
         Spacer(Modifier.height(8.dp))
@@ -105,6 +111,8 @@ private fun ProgramMenu(
             SettingsNavRow(s.title, subtitles[s] ?: "") { onOpen(s) }
             SectionDivider()
         }
+        SettingsNavRow("Build / edit plan", "Add, rename, reorder or remove days & exercises") { onOpenBuilder() }
+        SectionDivider()
         Spacer(Modifier.height(16.dp))
         GenerateBlock(state, vm)
         Spacer(Modifier.height(16.dp))
@@ -116,6 +124,15 @@ private fun ProgramMenu(
 
 @Composable
 private fun SplitSection(state: SettingsUiState, vm: SettingsViewModel) {
+    ProgramBlock(
+        "Training mode",
+        "Follow a plan, or go with the flow — no fixed plan, just log what you trained each session from the home screen."
+    ) {
+        ChipFlow {
+            PillChip("Follow a plan", !state.freestyleMode) { vm.setFreestyleMode(false) }
+            PillChip("Go with the flow", state.freestyleMode) { vm.setFreestyleMode(true) }
+        }
+    }
     if (state.weeklyVolume.isNotEmpty()) {
         ProgramBlock("Weekly volume", "Sets per muscle across your current week — tune days & priorities to rebalance.") {
             ChipFlow { state.weeklyVolume.forEach { (name, sets) -> PillChip("$name $sets", selected = false) {} } }
@@ -265,6 +282,21 @@ private fun CoachSection(state: SettingsUiState, vm: SettingsViewModel, onOpenCo
     val history by vm.coachHistory.collectAsState()
     val now = remember { System.currentTimeMillis() }
     LaunchedEffect(Unit) { vm.loadCoachData() }
+
+    ProgramBlock(
+        "Coach",
+        "When on, the coach gets its own tab and suggests weekly tweaks. Turn it off to hide it entirely."
+    ) {
+        ChipFlow {
+            PillChip("On", state.coachEnabled) { vm.setCoachEnabled(true) }
+            PillChip("Off", !state.coachEnabled) { vm.setCoachEnabled(false) }
+        }
+    }
+    // Everything below configures the coach — only meaningful while it's enabled.
+    if (!state.coachEnabled) {
+        SectionDivider()
+        return
+    }
 
     ProgramBlock("Week brief", "Your coach's read on the week — last week's numbers, any proposed changes, and a focus.") {
         ChipFlow { PillChip("View this week's brief", selected = false) { onOpenCoachBrief() } }

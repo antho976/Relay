@@ -10,7 +10,6 @@ import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.forge.app.ui.theme.emphasized
 
 /** Theme colors bundled so the per-tier section builders don't each take a fistful of color params. */
 data class StatsColors(
@@ -33,7 +32,7 @@ internal fun LazyListScope.statsSection(key: String, title: String, c: StatsColo
         Text(
             title.uppercase(),
             style = MaterialTheme.typography.labelMedium,
-            color = emphasized(c.muted),
+            color = c.muted,
             letterSpacing = 1.sp,
             modifier = Modifier
                 .padding(horizontal = STATS_GUTTER, vertical = 4.dp)

@@ -1,12 +1,10 @@
 package com.forge.app.ui.gym.train
 
 import androidx.lifecycle.viewModelScope
-import com.forge.app.data.db.entities.LoggedSet
 import com.forge.app.domain.volume.VolumeCalculator
 import com.forge.app.ui.gym.train.state.DayUiEvent
 import com.forge.app.ui.gym.train.state.ExerciseHighlight
 import com.forge.app.ui.gym.train.state.SessionSummary
-import com.forge.app.ui.gym.train.state.UnlockedTrophyHighlight
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -82,9 +80,10 @@ internal fun DayViewModel.applyOrderedExercises(suggestion: com.forge.app.domain
 private fun DayViewModel.finishWorkout() {
     viewModelScope.launch {
         val sessionId = _state.value.sessionId ?: return@launch
-        val allSets = _state.value.exercises.flatMap { it.loggedSets }
+        val exercises = _state.value.exercises
+        val allSets = exercises.flatMap { it.loggedSets }
         val totalVolumeLb = VolumeCalculator.sessionVolumeLb(allSets)
-        val prCount = _state.value.exercises.count { it.wasPr }
+        val prCount = exercises.count { it.wasPr }
 
         // finishSession closes the open sitting and returns total ACTIVE seconds (summed across
         // sittings) — the real duration, not wall-clock from the first start.
@@ -95,27 +94,25 @@ private fun DayViewModel.finishWorkout() {
         openRestEvent = null
         restTimer.stop()
         stopSessionService()
+        // Trophies still unlock + persist; the summary no longer lists them (gamification paused).
+        trophyRepo.evaluateAndUnlockNew()
 
-        val newlyUnlocked = trophyRepo.evaluateAndUnlockNew().map { t ->
-            UnlockedTrophyHighlight(id = t.id, name = t.name, description = t.description, icon = t.icon)
-        }
-
-        val prevSession = workoutRepo.previousSessionForDay(dayKey, sessionId)
-        val vsLastVolumeDelta = prevSession?.totalVolumeLb?.let { totalVolumeLb - it }
-        val vsLastSetsDelta = prevSession?.setCount?.let { allSets.size - it }
-            ?.takeIf { prevSession.setCount > 0 }
-        val bestPrevVolume = workoutRepo.bestPreviousVolumeForDay(dayKey, sessionId) ?: 0.0
-        val isBestSession = prevSession != null && totalVolumeLb > bestPrevVolume
         val durationMin = (activeSeconds / 60).coerceAtLeast(0)
-
-        val setsPerMin = if (durationMin > 0) allSets.size.toDouble() / durationMin else 0.0
-        val volumePerMin = if (durationMin > 0) totalVolumeLb / durationMin else 0.0
-        val densityScore = if (durationMin > 0) totalVolumeLb / durationMin else null
-        val avgRestSeconds = computeAvgRestSeconds(workoutRepo.allSetsForSession(sessionId))
         // Lifetime PR count AFTER this session (its PRs are already persisted) — drives the milestone push.
         val lifetimePrCount = runCatching { workoutRepo.lifetimePrCount() }.getOrDefault(0)
 
-        val exercises = _state.value.exercises
+        // Recap: only exercises you actually logged this session — a skip isn't "what you worked on".
+        val worked = exercises.filter { it.loggedSets.isNotEmpty() && !it.skipped }
+        // Per-muscle set counts tint the recap's body map.
+        val setsByMuscle = worked
+            .groupBy { it.plan.muscle }
+            .mapValues { (_, exs) -> exs.sumOf { it.loggedSets.size } }
+
+        // Local-only inputs for the coach's one-line read — no longer rendered as their own sections.
+        val prevSession = workoutRepo.previousSessionForDay(dayKey, sessionId)
+        val vsLastVolumeDelta = prevSession?.totalVolumeLb?.let { totalVolumeLb - it }
+        val bestPrevVolume = workoutRepo.bestPreviousVolumeForDay(dayKey, sessionId) ?: 0.0
+        val isBestSession = prevSession != null && totalVolumeLb > bestPrevVolume
         val plannedTotal = exercises.filter { !it.skipped }.sumOf { it.plan.sets }
         val loggedNonSkipped = exercises.filter { !it.skipped }.sumOf { it.loggedSets.size }
         val honestyPct = if (plannedTotal > 0)
@@ -128,29 +125,19 @@ private fun DayViewModel.finishWorkout() {
             totalVolumeLb = totalVolumeLb,
             prCount = prCount,
             setCount = allSets.size,
-            exercisesLogged = exercises.count { it.loggedSets.isNotEmpty() && !it.skipped },
+            exercisesLogged = worked.size,
             exercisesSkipped = exercises.count { it.skipped },
-            highlights = exercises
-                .filter { it.loggedSets.isNotEmpty() || it.skipped }
-                .map { ex ->
-                    ExerciseHighlight(
-                        exerciseName = ex.effectiveName,
-                        setsLogged = ex.loggedSets.size,
-                        volumeLb = VolumeCalculator.sessionVolumeLb(ex.loggedSets),
-                        isPr = ex.wasPr
-                    )
-                },
-            unlockedTrophies = newlyUnlocked,
-            vsLastVolumeDelta = vsLastVolumeDelta,
-            vsLastSetsDelta = vsLastSetsDelta,
-            isBestSession = isBestSession,
-            setsPerMin = setsPerMin,
-            volumePerMin = volumePerMin,
-            densityScore = densityScore,
-            avgRestSeconds = avgRestSeconds,
-            honestyPct = honestyPct,
-            ghostBeats = _state.value.ghostBeats,
-            ghostComparable = _state.value.ghostComparable,
+            highlights = worked.map { ex ->
+                ExerciseHighlight(
+                    exerciseName = ex.effectiveName,
+                    setsLogged = ex.loggedSets.size,
+                    volumeLb = VolumeCalculator.sessionVolumeLb(ex.loggedSets),
+                    isPr = ex.wasPr
+                )
+            },
+            setsByMuscle = setsByMuscle,
+            setsWithRpe = allSets.count { it.rpe != null },
+            exercisesRated = worked.count { it.difficulty != null },
             coachOpinion = com.forge.app.domain.coach.SessionOpinion.of(
                 setCount = allSets.size,
                 prCount = prCount,
@@ -264,9 +251,10 @@ private fun DayViewModel.crossDayGoBack() {
 internal suspend fun DayViewModel.beginSessionForThisDay() {
     val started = workoutRepo.startOrResumeSession(dayKey)
     val sessionId = started.session.id
-    // Resuming a session that already has logged work — you're mid-workout, so skip the warmup gate
-    // (the in-memory warmup state was lost when the screen was recreated).
-    val resuming = started.hasLoggedWork
+    // Resuming an existing session (not one freshly created by this call) — you already started this
+    // workout, so skip the warmup gate. The in-memory warmup state is lost when the screen is recreated,
+    // and re-showing the gate would force re-checking boxes you cleared before logging your first set.
+    val resuming = !started.created
     val nameOverride = customizationRepo.getDayName(dayKey)
     val resolvedName = nameOverride?.customName ?: dayPlan.defaultName
     val disabledUntilMs = settingsRepo.warmupDisabledUntilMs.firstOrNull() ?: 0L
@@ -300,16 +288,4 @@ internal suspend fun DayViewModel.beginSessionForThisDay() {
     refreshExercises()
     computeOrderingSuggestion()
     startSessionService(resolvedName)
-}
-
-private fun computeAvgRestSeconds(sets: List<LoggedSet>): Int? {
-    val gaps = sets
-        .groupBy { it.loggedExerciseId }
-        .values
-        .flatMap { exerciseSets ->
-            exerciseSets.sortedBy { it.completedAt }
-                .zipWithNext { a, b -> (b.completedAt - a.completedAt) / 1000L }
-                .filter { it in 5..600 }
-        }
-    return if (gaps.isEmpty()) null else gaps.average().toInt()
 }

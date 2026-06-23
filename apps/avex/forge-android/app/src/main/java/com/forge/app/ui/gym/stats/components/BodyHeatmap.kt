@@ -10,45 +10,39 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.forge.app.program.MuscleGroup
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
-/** A muscle region as one blob in normalized [0,1] figure coordinates (x,y = top-left). */
-private data class NRect(val x: Float, val y: Float, val w: Float, val h: Float)
+private fun parse(d: String): Path = PathParser().parsePathString(d).toPath()
 
-/** Front-view muscle blobs. A muscle can have several blobs (e.g. left + right arm). */
-private val FRONT_REGIONS: Map<MuscleGroup, List<NRect>> = mapOf(
-    MuscleGroup.SHOULDERS to listOf(NRect(0.16f, 0.17f, 0.18f, 0.10f), NRect(0.66f, 0.17f, 0.18f, 0.10f)),
-    MuscleGroup.CHEST to listOf(NRect(0.30f, 0.22f, 0.40f, 0.12f)),
-    MuscleGroup.BICEPS to listOf(NRect(0.10f, 0.30f, 0.14f, 0.16f), NRect(0.76f, 0.30f, 0.14f, 0.16f)),
-    MuscleGroup.CORE to listOf(NRect(0.34f, 0.36f, 0.32f, 0.18f)),
-    MuscleGroup.QUADS to listOf(NRect(0.28f, 0.58f, 0.18f, 0.24f), NRect(0.54f, 0.58f, 0.18f, 0.24f)),
-)
+/** An [AnatomyPart] with its SVG strings pre-compiled to [Path]s for drawing. */
+private class CompiledPart(val group: MuscleGroup?, val paths: List<Path>)
 
-/** Back-view muscle blobs. */
-private val BACK_REGIONS: Map<MuscleGroup, List<NRect>> = mapOf(
-    MuscleGroup.REAR_DELTS to listOf(NRect(0.16f, 0.17f, 0.18f, 0.10f), NRect(0.66f, 0.17f, 0.18f, 0.10f)),
-    MuscleGroup.BACK to listOf(NRect(0.28f, 0.22f, 0.44f, 0.22f)),
-    MuscleGroup.TRICEPS to listOf(NRect(0.10f, 0.30f, 0.14f, 0.16f), NRect(0.76f, 0.30f, 0.14f, 0.16f)),
-    MuscleGroup.GLUTES to listOf(NRect(0.30f, 0.48f, 0.40f, 0.13f)),
-    MuscleGroup.HAMSTRINGS to listOf(NRect(0.28f, 0.62f, 0.18f, 0.20f), NRect(0.54f, 0.62f, 0.18f, 0.20f)),
-    MuscleGroup.CALVES to listOf(NRect(0.30f, 0.84f, 0.15f, 0.13f), NRect(0.55f, 0.84f, 0.15f, 0.13f)),
-)
+/** A whole figure (regions + body outline) compiled off the main thread. */
+private class CompiledFigure(val parts: List<CompiledPart>, val outline: Path)
 
 /**
- * Two stylized figures (front + back) with each muscle region tinted by its weekly set count —
- * faint = neglected, bold accent = most-trained. The "where am I neglecting?" read the spec calls the
- * headline visual. Deliberately schematic (rounded blobs, not anatomy): legible at a glance and cheap
- * to draw. Intensity is relative to the busiest muscle this week.
+ * Two anatomical figures (front + back), each muscle region tinted by its set count — faint =
+ * neglected, bold accent = most-trained. The geometry is real anatomical vector art (adapted from
+ * react-native-body-highlighter, MIT — see [AnatomyPart]); the whole body is drawn faint and the
+ * trained muscles light up. Intensity is relative to the busiest muscle in the data set.
  */
 @Composable
 internal fun BodyHeatmap(
@@ -62,8 +56,8 @@ internal fun BodyHeatmap(
     val maxSets = (setsByMuscle.values.maxOrNull() ?: 0).coerceAtLeast(1)
     Column(modifier) {
         Row(Modifier.fillMaxWidth()) {
-            FigureColumn("FRONT", FRONT_REGIONS, setsByMuscle, maxSets, accent, faint, silhouette, labelColor, Modifier.weight(1f))
-            FigureColumn("BACK", BACK_REGIONS, setsByMuscle, maxSets, accent, faint, silhouette, labelColor, Modifier.weight(1f))
+            FigureColumn("FRONT", ANATOMY_FRONT, ANATOMY_FRONT_OUTLINE, 0f, setsByMuscle, maxSets, accent, faint, silhouette, labelColor, Modifier.weight(1f))
+            FigureColumn("BACK", ANATOMY_BACK, ANATOMY_BACK_OUTLINE, ANATOMY_BACK_ORIGIN_X, setsByMuscle, maxSets, accent, faint, silhouette, labelColor, Modifier.weight(1f))
         }
         Spacer(Modifier.height(10.dp))
         HeatLegend(accent = accent, faint = faint, labelColor = labelColor)
@@ -73,7 +67,9 @@ internal fun BodyHeatmap(
 @Composable
 private fun FigureColumn(
     title: String,
-    regions: Map<MuscleGroup, List<NRect>>,
+    rawParts: List<AnatomyPart>,
+    outlineStr: String,
+    originX: Float,
     setsByMuscle: Map<MuscleGroup, Int>,
     maxSets: Int,
     accent: Color,
@@ -82,41 +78,45 @@ private fun FigureColumn(
     labelColor: Color,
     modifier: Modifier = Modifier
 ) {
+    // Compile the SVG path strings to Paths OFF the composition thread — the outline strings are large
+    // (~kilobytes) and parsing them on the main thread janked the first Stats/summary frame. Stable
+    // top-level inputs, so this runs once per figure per process; until it's ready the canvas draws
+    // nothing for a frame rather than blocking.
+    val compiled by produceState<CompiledFigure?>(initialValue = null, rawParts, outlineStr) {
+        value = withContext(Dispatchers.Default) {
+            CompiledFigure(rawParts.map { CompiledPart(it.group, it.paths.map(::parse)) }, parse(outlineStr))
+        }
+    }
+    val edge = silhouette.copy(alpha = (silhouette.alpha * 2.5f).coerceAtMost(0.6f))
+
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
         Text(title, style = MaterialTheme.typography.labelSmall, color = labelColor)
         Spacer(Modifier.height(6.dp))
-        Canvas(Modifier.fillMaxWidth().height(220.dp).padding(horizontal = 8.dp)) {
-            drawSilhouette(silhouette)
-            regions.forEach { (muscle, blobs) ->
-                val sets = setsByMuscle[muscle] ?: 0
-                val color = lerp(faint, accent, sets.toFloat() / maxSets)
-                blobs.forEach { n ->
-                    drawRoundRect(
-                        color = color,
-                        topLeft = Offset(n.x * size.width, n.y * size.height),
-                        size = Size(n.w * size.width, n.h * size.height),
-                        cornerRadius = CornerRadius(6.dp.toPx(), 6.dp.toPx())
-                    )
+        Canvas(Modifier.fillMaxWidth().height(300.dp)) {
+            val figure = compiled ?: return@Canvas
+            // Uniform scale (preserve proportions) + centre the viewBox in the canvas.
+            val s = minOf(size.width / ANATOMY_VB_W, size.height / ANATOMY_VB_H)
+            val dx = (size.width - ANATOMY_VB_W * s) / 2f
+            val dy = (size.height - ANATOMY_VB_H * s) / 2f
+            withTransform({
+                translate(dx, dy)
+                scale(s, s, pivot = Offset.Zero)
+                translate(-originX, 0f) // back-view coords live in x∈[724,1448]; shift into view
+            }) {
+                // Solid faint body behind everything (guarantees no gaps between regions).
+                drawPath(figure.outline, silhouette)
+                // Every region faint; trained muscles light up toward the accent.
+                figure.parts.forEach { p ->
+                    val sets = if (p.group != null) setsByMuscle[p.group] ?: 0 else 0
+                    val color = if (p.group != null && sets > 0)
+                        lerp(faint, accent, (sets.toFloat() / maxSets).coerceIn(0f, 1f)) else faint
+                    p.paths.forEach { drawPath(it, color) }
                 }
+                // Crisp body contour on top.
+                drawPath(figure.outline, edge, style = Stroke(width = 2.5f))
             }
         }
     }
-}
-
-/** A faint humanoid backdrop so the colored blobs read as "on a body", not floating. */
-private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawSilhouette(color: Color) {
-    val w = size.width
-    val h = size.height
-    // head
-    drawCircle(color = color, radius = 0.07f * h, center = Offset(0.5f * w, 0.08f * h))
-    // torso
-    drawRoundRect(color = color, topLeft = Offset(0.28f * w, 0.15f * h), size = Size(0.44f * w, 0.42f * h), cornerRadius = CornerRadius(14f, 14f))
-    // arms
-    drawRoundRect(color = color, topLeft = Offset(0.09f * w, 0.16f * h), size = Size(0.15f * w, 0.34f * h), cornerRadius = CornerRadius(14f, 14f))
-    drawRoundRect(color = color, topLeft = Offset(0.76f * w, 0.16f * h), size = Size(0.15f * w, 0.34f * h), cornerRadius = CornerRadius(14f, 14f))
-    // legs
-    drawRoundRect(color = color, topLeft = Offset(0.30f * w, 0.56f * h), size = Size(0.18f * w, 0.42f * h), cornerRadius = CornerRadius(14f, 14f))
-    drawRoundRect(color = color, topLeft = Offset(0.52f * w, 0.56f * h), size = Size(0.18f * w, 0.42f * h), cornerRadius = CornerRadius(14f, 14f))
 }
 
 @Composable

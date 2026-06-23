@@ -63,9 +63,42 @@ class ProgramRepository @Inject constructor(
     /** Seed-if-empty, then load the DB program into the [Program] facade. Safe to call at startup,
      *  idempotent, and safe to call concurrently — on return [Program.isLoaded] is guaranteed true. */
     suspend fun ensureLoaded() = loadMutex.withLock {
-        if (dao.dayCount() == 0) seedFromDefault()
+        // Seed the default split only ONCE, on a genuine first run before onboarding. The persisted
+        // PROGRAM_SEEDED flag (set the first time we seed) — not just dayCount==0 — is what gates this,
+        // so a deliberately EMPTY plan (build-your-own / cleared) can never be silently re-seeded: not
+        // on relaunch, and not in the brief window where onboarding has cleared the program but not yet
+        // flipped ONBOARDING_DONE (a concurrent widget refresh used to re-seed the default there).
+        if (dao.dayCount() == 0 && !settings.programSeeded.first() && !settings.onboardingDone.first()) {
+            seedFromDefault()
+            settings.setProgramSeeded(true)
+        }
         loadIntoFacade()
     }
+
+    /**
+     * Persist a hand-built program (the builder) and make it live. The base rows become the single
+     * source of truth, so the customization overlay + coach swaps are wiped (a manual rebuild is the
+     * user taking the wheel) and any in-progress session is discarded. Empty lists = no plan.
+     */
+    suspend fun saveCustomProgram(days: List<ProgramDay>, slots: List<ProgramSlot>) {
+        database.withTransaction {
+            dao.replaceProgram(days, slots)
+            customizationDao.deleteAll()
+            exerciseCustomizationDao.clearCoachSwaps()
+            coachDao.foldAllAppliedDeltas()
+            discardActiveSession()
+        }
+        loadIntoFacade(refreshWidget = true)
+    }
+
+    /** Clear the program entirely (no plan) — used when the user opts to build their own from scratch. */
+    suspend fun clearProgram() = saveCustomProgram(emptyList(), emptyList())
+
+    /** Raw current day rows (ordered) — the builder loads these to edit the existing plan. */
+    suspend fun currentDayRows(): List<ProgramDay> = dao.days()
+
+    /** Raw current slot rows for a day (ordered) — the builder resolves names via [ExerciseLibrary]. */
+    suspend fun slotRowsForDay(dayId: String): List<ProgramSlot> = dao.slotsForDay(dayId)
 
     /**
      * What every (re)generation learns from the coach's record (auto-coach): applied volume
@@ -235,7 +268,13 @@ class ProgramRepository @Inject constructor(
      */
     private suspend fun loadIntoFacade(refreshWidget: Boolean = false) {
         val dbDays = dao.days()
-        if (dbDays.isEmpty()) return
+        if (dbDays.isEmpty()) {
+            // Empty is a real state now (build-your-own / no plan) — reflect it in the facade instead
+            // of leaving a stale plan loaded, and still notify display VMs.
+            Program.setActive(emptyList())
+            _revision.value += 1
+            return
+        }
         val plans = dbDays.map { pd ->
             val seed = Program.seedDays.firstOrNull { it.key == pd.id }
             val meta = archetypeMeta(pd.archetype)

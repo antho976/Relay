@@ -57,7 +57,6 @@ import com.forge.app.domain.units.unitLabel
 import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.theme.LocalForgeSettings
-import com.forge.app.ui.theme.emphasized
 import kotlin.math.roundToInt
 
 /**
@@ -226,7 +225,7 @@ internal fun RankInfoSheet(
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 32.dp)) {
-            Text("How XP works", style = MaterialTheme.typography.headlineSmall, color = emphasized(onBg), fontStyle = FontStyle.Italic)
+            Text("How XP works", style = MaterialTheme.typography.headlineSmall, color = onBg, fontStyle = FontStyle.Italic)
             Spacer(Modifier.height(4.dp))
             Text(
                 "${rank.displayName} · ${rank.xpTotal} XP" +
@@ -235,7 +234,7 @@ internal fun RankInfoSheet(
             )
 
             Spacer(Modifier.height(18.dp))
-            Text("WHERE YOUR XP CAME FROM", style = MaterialTheme.typography.labelSmall, color = emphasized(muted), fontSize = 10.sp)
+            Text("WHERE YOUR XP CAME FROM", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp)
             Spacer(Modifier.height(8.dp))
             if (xp.sources.isEmpty()) {
                 Text("Log your first workout to start earning XP.", style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic)
@@ -261,7 +260,7 @@ internal fun RankInfoSheet(
             Spacer(Modifier.height(18.dp))
             HorizontalDivider(color = outline.copy(alpha = 0.3f))
             Spacer(Modifier.height(14.dp))
-            Text("HOW TO EARN MORE", style = MaterialTheme.typography.labelSmall, color = emphasized(muted), fontSize = 10.sp)
+            Text("HOW TO EARN MORE", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp)
             Spacer(Modifier.height(8.dp))
             val useKg = LocalForgeSettings.current.useKg
             // Amounts + the volume threshold are derived from XpEngine so this list can never drift
@@ -285,7 +284,7 @@ internal fun RankInfoSheet(
             Spacer(Modifier.height(18.dp))
             HorizontalDivider(color = outline.copy(alpha = 0.3f))
             Spacer(Modifier.height(14.dp))
-            Text("THE LADDER", style = MaterialTheme.typography.labelSmall, color = emphasized(muted), fontSize = 10.sp)
+            Text("THE LADDER", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp)
             Spacer(Modifier.height(8.dp))
             RankTier.entries.forEach { t ->
                 val here = t == rank.tier

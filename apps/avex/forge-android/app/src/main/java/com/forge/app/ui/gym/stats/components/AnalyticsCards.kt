@@ -7,8 +7,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
-import com.forge.app.ui.theme.emphasized
-import com.forge.app.ui.theme.emphasizedWeight
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -35,8 +33,8 @@ internal fun StatCard(
         Text(
             title,
             style = MaterialTheme.typography.labelLarge,
-            color = emphasized(MaterialTheme.colorScheme.onSurfaceVariant),
-            fontWeight = emphasizedWeight(FontWeight.SemiBold)
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontWeight = FontWeight.SemiBold
         )
         content()
     }

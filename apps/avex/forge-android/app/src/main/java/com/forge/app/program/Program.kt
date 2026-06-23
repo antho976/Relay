@@ -66,7 +66,11 @@ val equipmentPresets: List<EquipmentPreset> = listOf(
         setOf(Equipment.DUMBBELLS.name, Equipment.BENCH.name, Equipment.CABLE.name, Equipment.MACHINE.name),
         frozenIds = ExerciseLibrary.DEVELOPER_FROZEN_IDS
     ),
-    EquipmentPreset("commercial", "Commercial gym", Equipment.entries.map { it.name }.toSet()),
+    EquipmentPreset("commercial", "Full gym (everything)", Equipment.entries.map { it.name }.toSet()),
+    EquipmentPreset("basic-gym", "Basic gym", setOf(
+        Equipment.DUMBBELLS.name, Equipment.BARBELL.name, Equipment.SQUAT_RACK.name,
+        Equipment.BENCH.name, Equipment.INCLINE_BENCH.name, Equipment.MACHINE.name, Equipment.CABLE.name
+    )),
     EquipmentPreset("home-barbell", "Home gym + barbell", setOf(
         Equipment.DUMBBELLS.name, Equipment.BARBELL.name, Equipment.SQUAT_RACK.name,
         Equipment.BENCH.name, Equipment.INCLINE_BENCH.name, Equipment.PULL_UP_BAR.name
@@ -129,6 +133,17 @@ object Program {
     const val LOWER_A = "lower-a"
     const val UPPER_B = "upper-b"
     const val LOWER_B = "lower-b"
+
+    /** Sentinel day key for freestyle ("go with the flow") sessions — not part of any program split.
+     *  Resolved to a friendly label by [dayDisplayName] wherever a session's day name is shown. */
+    const val FREESTYLE_DAY_KEY = "freestyle"
+
+    /** Human label for a session's day key: the program day's name, "Open workout" for a freestyle
+     *  session, or the raw key as a last resort. Use this instead of `day(key)?.defaultName ?: key`
+     *  on session-display surfaces so a freestyle log never shows the raw "freestyle" slug. */
+    fun dayDisplayName(dayKey: String): String =
+        if (dayKey == FREESTYLE_DAY_KEY) "Open workout"
+        else dayOrNull(dayKey)?.defaultName ?: dayKey
 
     private val defaultDays: List<DayPlan> = listOf(
         DayPlan(

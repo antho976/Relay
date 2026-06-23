@@ -146,7 +146,7 @@ private fun SessionRow(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val dayName = Program.days.firstOrNull { it.key == session.dayKey }?.defaultName ?: session.dayKey
+    val dayName = Program.dayDisplayName(session.dayKey)
     val durationMin = session.durationMinutes()
     val useKg = LocalForgeSettings.current.useKg
     Surface(

@@ -31,8 +31,8 @@ internal fun LazyListScope.muscleMapSection(
             BodyHeatmap(
                 setsByMuscle = setsBy,
                 accent = c.accent,
-                faint = c.outline.copy(alpha = 0.28f),
-                silhouette = c.outline.copy(alpha = 0.12f),
+                faint = c.outline.copy(alpha = 0.34f),
+                silhouette = c.outline.copy(alpha = 0.26f),
                 labelColor = c.muted,
                 modifier = Modifier.fillMaxWidth()
             )

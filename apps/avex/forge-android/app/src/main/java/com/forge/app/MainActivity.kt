@@ -219,8 +219,6 @@ class MainActivity : ComponentActivity() {
                     s.copy(overviewTileOrder = order)
                 }.combine(settingsRepo.accentColorHex) { s, v ->
                     s.copy(accentColorHex = v)
-                }.combine(settingsRepo.accentEmphasis) { s, v ->
-                    s.copy(accentEmphasis = v)
                 }.combine(settingsRepo.plateWeightLb) { s, v ->
                     s.copy(plateWeightLb = v)
                 }.combine(settingsRepo.firstWorkoutDone) { s, v ->

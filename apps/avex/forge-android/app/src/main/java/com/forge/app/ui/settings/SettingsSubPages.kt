@@ -69,9 +69,6 @@ internal fun AppearancePage(state: SettingsUiState, vm: SettingsViewModel, modif
         Spacer(Modifier.height(8.dp))
         AccentColorRow(state.accentColorHex, vm::setAccentColorHex)
         SectionDivider()
-        Spacer(Modifier.height(8.dp))
-        AccentEmphasisRow(state.accentEmphasis, vm::setAccentEmphasis)
-        SectionDivider()
         SectionResetRow(com.forge.app.data.prefs.SettingsSection.APPEARANCE, vm)
     }
 }

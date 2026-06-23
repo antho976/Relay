@@ -36,7 +36,6 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import com.forge.app.ui.theme.emphasized
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -59,6 +58,7 @@ import com.forge.app.ui.overview.state.OnThisDayMemory
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -135,7 +135,7 @@ private fun CoachHomeBlock(headline: String, body: String, clickLabel: String, o
     Spacer(Modifier.height(20.dp))
     HorizontalDivider(color = outline.copy(alpha = 0.3f))
     Spacer(Modifier.height(16.dp))
-    Text("COACH", style = MaterialTheme.typography.labelMedium, color = emphasized(muted))
+    Text("COACH", style = MaterialTheme.typography.labelMedium, color = muted)
     Spacer(Modifier.height(10.dp))
     Column(
         Modifier.fillMaxWidth().clickableLabeled(clickLabel) { onClick() }.padding(vertical = 2.dp)
@@ -160,9 +160,14 @@ fun OverviewScreen(
     onOpenCoachLab: () -> Unit = {},
     onOpenProfile: () -> Unit = {},
     onOpenSession: (Long) -> Unit = {},
+    onLogFreestyle: () -> Unit = {},
+    onBuildPlan: () -> Unit = {},
     viewModel: OverviewViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val freestyleMode by viewModel.freestyleMode.collectAsStateWithLifecycle()
+    val coachEnabled by viewModel.coachEnabled.collectAsStateWithLifecycle()
+    val programEmpty by viewModel.programEmpty.collectAsStateWithLifecycle()
     val coachBanner by viewModel.coachBanner.collectAsStateWithLifecycle()
     val orphanNotice by viewModel.orphanNotice.collectAsStateWithLifecycle()
     val selectedItem by viewModel.selectedItem.collectAsStateWithLifecycle()
@@ -292,7 +297,7 @@ fun OverviewScreen(
             }
 
             // ── Coach: a new Week Brief is ready (dismissible; lives in Settings too) ──
-            coachBanner?.let { banner ->
+            if (coachEnabled) coachBanner?.let { banner ->
                 Spacer(Modifier.height(16.dp))
                 Row(
                     modifier = Modifier
@@ -423,60 +428,110 @@ fun OverviewScreen(
 
             Spacer(Modifier.height(20.dp))
 
-            // ── Next workout ─────────────────────────────────────────────────
-            // If you've already trained today, the next session is tomorrow — say so.
-            val trainedToday = todayDow in state.weekDaysTrained
-            Text(if (trainedToday) "TOMORROW" else "TODAY",
-                style = MaterialTheme.typography.labelSmall, fontSize = 13.sp, color = emphasized(muted))
-            Spacer(Modifier.height(2.dp))
-            Text(
-                state.customDayName ?: nextDay?.defaultName ?: "Ready",
-                style = MaterialTheme.typography.displayLarge,
-                color = emphasized(onBg),
-                modifier = if (nextDay != null) Modifier.clickableLabeled("Edit or swap this day") { showDayEdit = true } else Modifier
-            )
-            if (nextDay != null) {
+            if (freestyleMode || programEmpty) {
+                // No fixed plan to surface — lead with a CTA instead of a next-up day card.
+                // freestyle → "log what you did"; empty plan → "build a plan" (with logging as a fallback).
+                Text("TODAY", style = MaterialTheme.typography.labelSmall, fontSize = 13.sp, color = muted)
+                Spacer(Modifier.height(2.dp))
+                Text(if (freestyleMode) "Open workout" else "No plan yet",
+                    style = MaterialTheme.typography.displayLarge, color = onBg)
                 Spacer(Modifier.height(10.dp))
                 Text(
-                    "${nextDay.subtitle} · ${nextDay.exercises.size} exercises",
-                    style = MaterialTheme.typography.bodyMedium.copy(fontStyle = FontStyle.Italic),
-                    color = muted
+                    if (freestyleMode) "No fixed plan — just log whatever you trained, whenever you want."
+                    else "Build your own plan, or just log what you do each session.",
+                    style = MaterialTheme.typography.bodyMedium.copy(fontStyle = FontStyle.Italic), color = muted
                 )
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(20.dp))
+                if (programEmpty && !freestyleMode) {
+                    // Same shape as the Start-session row: a primary action + a bordered-pill secondary
+                    // (the "skip warmup" style), here "Build a plan" + "log a workout".
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Button(
+                            onClick = onBuildPlan,
+                            shape = RoundedCornerShape(50),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
+                            contentPadding = PaddingValues(horizontal = 32.dp, vertical = 18.dp)
+                        ) {
+                            Text("Build a plan →", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
+                        }
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(50))
+                                .border(0.5.dp, muted.copy(alpha = 0.4f), RoundedCornerShape(50))
+                                .clickableLabeled("Log a workout") { onLogFreestyle() }
+                                .padding(horizontal = 18.dp, vertical = 12.dp)
+                        ) {
+                            Text("log a workout", style = MaterialTheme.typography.bodySmall, color = muted)
+                        }
+                    }
+                } else {
+                    Button(
+                        onClick = onLogFreestyle,
+                        shape = RoundedCornerShape(50),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
+                        contentPadding = PaddingValues(horizontal = 32.dp, vertical = 18.dp)
+                    ) {
+                        Text("Log a workout →", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            } else {
+                // ── Next workout ─────────────────────────────────────────────────
+                // If you've already trained today, the next session is tomorrow — say so.
+                val trainedToday = todayDow in state.weekDaysTrained
+                Text(if (trainedToday) "TOMORROW" else "TODAY",
+                    style = MaterialTheme.typography.labelSmall, fontSize = 13.sp, color = muted)
+                Spacer(Modifier.height(2.dp))
                 Text(
-                    "Tap the day name to edit or swap it",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = muted.copy(alpha = 0.7f)
+                    state.customDayName ?: nextDay?.defaultName ?: "Ready",
+                    style = MaterialTheme.typography.displayLarge,
+                    color = onBg,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = if (nextDay != null) Modifier.clickableLabeled("Edit or swap this day") { showDayEdit = true } else Modifier
                 )
-            }
-
-            Spacer(Modifier.height(20.dp))
-
-            // ── Start / resume session + skip warmup ─────────────────────────
-            val resumeKey = state.activeSessionDayKey
-            val ctaDayKey = resumeKey ?: state.nextUpDayKey
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Button(
-                    onClick = { viewModel.onSessionStarting(); onStartSession(ctaDayKey) },
-                    shape = RoundedCornerShape(50),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
-                    contentPadding = PaddingValues(horizontal = 32.dp, vertical = 18.dp)
-                ) {
+                if (nextDay != null) {
+                    Spacer(Modifier.height(10.dp))
                     Text(
-                        if (resumeKey != null) "Resume session →" else "Start session →",
-                        style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold
+                        "${nextDay.subtitle} · ${nextDay.exercises.size} exercises",
+                        style = MaterialTheme.typography.bodyMedium.copy(fontStyle = FontStyle.Italic),
+                        color = muted
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "Tap the day name to edit or swap it",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = muted.copy(alpha = 0.7f)
                     )
                 }
-                // Skipping the warmup only applies to a fresh start, not a resume.
-                if (resumeKey == null) {
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(50))
-                            .border(0.5.dp, muted.copy(alpha = 0.4f), RoundedCornerShape(50))
-                            .clickableLabeled("Start, skipping warmup") { val d = state.nextUpDayKey; viewModel.onSessionStarting(); onStartSessionSkipWarmup(d) }
-                            .padding(horizontal = 18.dp, vertical = 12.dp)
+
+                Spacer(Modifier.height(20.dp))
+
+                // ── Start / resume session + skip warmup ─────────────────────────
+                val resumeKey = state.activeSessionDayKey
+                val ctaDayKey = resumeKey ?: state.nextUpDayKey
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Button(
+                        onClick = { viewModel.onSessionStarting(); onStartSession(ctaDayKey) },
+                        shape = RoundedCornerShape(50),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
+                        contentPadding = PaddingValues(horizontal = 32.dp, vertical = 18.dp)
                     ) {
-                        Text("skip warmup", style = MaterialTheme.typography.bodySmall, color = muted)
+                        Text(
+                            if (resumeKey != null) "Resume session →" else "Start session →",
+                            style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                    // Skipping the warmup only applies to a fresh start, not a resume.
+                    if (resumeKey == null) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(50))
+                                .border(0.5.dp, muted.copy(alpha = 0.4f), RoundedCornerShape(50))
+                                .clickableLabeled("Start, skipping warmup") { val d = state.nextUpDayKey; viewModel.onSessionStarting(); onStartSessionSkipWarmup(d) }
+                                .padding(horizontal = 18.dp, vertical = 12.dp)
+                        ) {
+                            Text("skip warmup", style = MaterialTheme.typography.bodySmall, color = muted)
+                        }
                     }
                 }
             }
@@ -488,7 +543,7 @@ fun OverviewScreen(
             // ── This week ────────────────────────────────────────────────────
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically) {
-                Text("THIS WEEK", style = MaterialTheme.typography.labelMedium, color = emphasized(muted))
+                Text("THIS WEEK", style = MaterialTheme.typography.labelMedium, color = muted)
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("${state.workoutsThisWeek} of ${state.weeklyWorkoutTarget} target", style = MaterialTheme.typography.labelSmall, color = muted)
                     Text("·", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.5f))
@@ -532,11 +587,11 @@ fun OverviewScreen(
             }
 
             // ── Coach (adaptation engine: actionable advice only) ────────────
-            if (state.coach.isNotEmpty()) {
+            if (coachEnabled && state.coach.isNotEmpty()) {
                 Spacer(Modifier.height(20.dp))
                 HorizontalDivider(color = outline.copy(alpha = 0.3f))
                 Spacer(Modifier.height(16.dp))
-                Text("COACH", style = MaterialTheme.typography.labelMedium, color = emphasized(muted))
+                Text("COACH", style = MaterialTheme.typography.labelMedium, color = muted)
                 Spacer(Modifier.height(10.dp))
                 // Each coach card cascades in (fade + settle-up), so the section reveals as a
                 // sequence rather than one block. Reduced-motion-safe via the shared motion kit.
@@ -571,28 +626,30 @@ fun OverviewScreen(
 
             // ── Coach (home entry) — at most one shows: a learning countdown (CD-1), a fatigue nudge
             // (Tier 3), or a persistent "quiet but reachable" entry (D3). All share CoachHomeBlock. ──
-            state.coachLearning?.let { hint ->
-                CoachHomeBlock(
-                    "Still learning your training.",
-                    "${hint.sessionsToGo} more session${if (hint.sessionsToGo == 1) "" else "s"} and it starts " +
-                        "calling weekly adjustments. See what it's tracking →",
-                    clickLabel = "Open Coach Lab", onClick = onOpenCoachLab
-                )
-            }
-            state.coachFatigue?.let { f ->
-                CoachHomeBlock(
-                    "Recovery signals building.",
-                    "Fatigue ${f.score} of ${f.threshold}${f.topDriver?.let { " · $it" } ?: ""} — " +
-                        "not a deload yet, but easing up helps. See what it's tracking →",
-                    clickLabel = "Open Coach Lab", onClick = onOpenCoachLab
-                )
-            }
-            if (state.coach.isEmpty() && state.coachLearning == null && state.coachFatigue == null) {
-                CoachHomeBlock(
-                    "Your coach.",
-                    "See your weekly brief and what it's tracking →",
-                    clickLabel = "Open the week brief", onClick = onOpenCoachBrief
-                )
+            if (coachEnabled) {
+                state.coachLearning?.let { hint ->
+                    CoachHomeBlock(
+                        "Still learning your training.",
+                        "${hint.sessionsToGo} more session${if (hint.sessionsToGo == 1) "" else "s"} and it starts " +
+                            "calling weekly adjustments. See what it's tracking →",
+                        clickLabel = "Open Coach Lab", onClick = onOpenCoachLab
+                    )
+                }
+                state.coachFatigue?.let { f ->
+                    CoachHomeBlock(
+                        "Recovery signals building.",
+                        "Fatigue ${f.score} of ${f.threshold}${f.topDriver?.let { " · $it" } ?: ""} — " +
+                            "not a deload yet, but easing up helps. See what it's tracking →",
+                        clickLabel = "Open Coach Lab", onClick = onOpenCoachLab
+                    )
+                }
+                if (state.coach.isEmpty() && state.coachLearning == null && state.coachFatigue == null) {
+                    CoachHomeBlock(
+                        "Your coach.",
+                        "See your weekly brief and what it's tracking →",
+                        clickLabel = "Open the week brief", onClick = onOpenCoachBrief
+                    )
+                }
             }
 
             Spacer(Modifier.height(20.dp))
@@ -602,7 +659,7 @@ fun OverviewScreen(
             // ── Recent ───────────────────────────────────────────────────────
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically) {
-                Text("RECENT", style = MaterialTheme.typography.labelMedium, color = emphasized(muted))
+                Text("RECENT", style = MaterialTheme.typography.labelMedium, color = muted)
                 Text("view all →", style = MaterialTheme.typography.labelSmall,
                     color = muted, fontSize = 10.sp,
                     modifier = Modifier.clickableLabeled("View all sessions") { showHistory = true }.padding(vertical = 2.dp))

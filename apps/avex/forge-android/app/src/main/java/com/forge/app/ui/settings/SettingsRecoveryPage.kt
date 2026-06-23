@@ -31,7 +31,6 @@ import androidx.compose.ui.unit.dp
 import androidx.health.connect.client.PermissionController
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.forge.app.ui.theme.emphasized
 
 /**
  * Settings → Recovery. Connects Health Connect so the coach can read sleep + resting heart rate
@@ -64,7 +63,7 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
             .padding(bottom = 56.dp)
     ) {
         Column(Modifier.padding(start = 24.dp, end = 24.dp, top = 20.dp, bottom = 12.dp)) {
-            Text("RECOVERY", style = MaterialTheme.typography.headlineSmall, color = emphasized(onBg))
+            Text("RECOVERY", style = MaterialTheme.typography.headlineSmall, color = onBg)
             Text(
                 "Let the coach read your sleep and resting heart rate",
                 style = MaterialTheme.typography.labelSmall, color = muted
@@ -99,7 +98,7 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
                 ActionButton("Get Health Connect") { openHealthConnectInStore(context) }
             }
             state.granted -> {
-                StatusLine("Connected — reading sleep & resting heart rate.", emphasized(onBg))
+                StatusLine("Connected — reading sleep & resting heart rate.", onBg)
                 ActionButton("Manage in Health Connect") { openHealthConnectSettings(context) }
             }
             else -> {
@@ -113,7 +112,7 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
             Spacer(Modifier.height(20.dp))
             SectionDivider()
             Column(Modifier.padding(start = 24.dp, end = 24.dp, top = 16.dp, bottom = 4.dp)) {
-                Text("BODYWEIGHT SYNC", style = MaterialTheme.typography.headlineSmall, color = emphasized(onBg))
+                Text("BODYWEIGHT SYNC", style = MaterialTheme.typography.headlineSmall, color = onBg)
             }
             Paragraph(
                 "Forge can read your latest weight from a smart scale that writes to Health Connect, so " +
@@ -121,7 +120,7 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
                     "weigh-ins back, so other apps see them."
             )
             if (state.weightGranted) {
-                StatusLine("Connected — Forge can read and write your weight.", emphasized(onBg))
+                StatusLine("Connected — Forge can read and write your weight.", onBg)
                 ActionButton("Import latest weight now") { viewModel.importNow() }
                 state.importMessage?.let { StatusLine(it, muted) }
                 ToggleRow(
@@ -138,7 +137,7 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
             Spacer(Modifier.height(20.dp))
             SectionDivider()
             Column(Modifier.padding(start = 24.dp, end = 24.dp, top = 16.dp, bottom = 4.dp)) {
-                Text("WORKOUT CALORIES", style = MaterialTheme.typography.headlineSmall, color = emphasized(onBg))
+                Text("WORKOUT CALORIES", style = MaterialTheme.typography.headlineSmall, color = onBg)
             }
             Paragraph(
                 "Forge can write each finished session's estimated active calories to Health Connect, so " +
@@ -146,7 +145,7 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
                     "length, your intensity, and your latest logged bodyweight — Forge has no heart-rate stream."
             )
             if (state.calorieGranted) {
-                StatusLine("Connected — Forge can write your session calories.", emphasized(onBg))
+                StatusLine("Connected — Forge can write your session calories.", onBg)
                 ToggleRow(
                     label = "Write my session calories to Health Connect",
                     checked = state.writeCalories,

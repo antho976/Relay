@@ -36,7 +36,6 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.data.repo.CoachWatch
-import com.forge.app.ui.theme.emphasized
 
 /**
  * "Coach lab" (finding #5): the coach's inputs, in plain words — how far its learning has come,
@@ -95,7 +94,7 @@ private fun WatchContent(w: CoachWatch, onOpenTimeline: () -> Unit, modifier: Mo
         // ── Status: still learning, or active ─────────────────────────────────
         val learning = w.sessionsToGo > 0
         Text(if (learning) "STILL LEARNING" else "ACTIVE",
-            style = MaterialTheme.typography.labelMedium, color = emphasized(muted))
+            style = MaterialTheme.typography.labelMedium, color = muted)
         Spacer(Modifier.height(6.dp))
         Text(
             if (learning)
@@ -185,7 +184,7 @@ private fun Section(title: String, outline: Color, muted: Color) {
     Spacer(Modifier.height(20.dp))
     HorizontalDivider(color = outline.copy(alpha = 0.3f))
     Spacer(Modifier.height(16.dp))
-    Text(title, style = MaterialTheme.typography.labelMedium, color = emphasized(muted))
+    Text(title, style = MaterialTheme.typography.labelMedium, color = muted)
     Spacer(Modifier.height(8.dp))
 }
 

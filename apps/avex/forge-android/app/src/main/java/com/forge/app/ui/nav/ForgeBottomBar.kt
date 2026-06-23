@@ -49,7 +49,11 @@ enum class BottomTab(val label: String, val icon: ImageVector) {
  * accent; the rest stay muted. Each item is a full-height, ≥48dp Tab-role target (a11y).
  */
 @Composable
-fun ForgeBottomBar(selectedIndex: Int, onSelect: (Int) -> Unit) {
+fun ForgeBottomBar(
+    tabs: List<BottomTab> = BottomTab.entries.toList(),
+    selectedIndex: Int,
+    onSelect: (Int) -> Unit
+) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val accent = MaterialTheme.colorScheme.primary
     val outline = MaterialTheme.colorScheme.outline
@@ -63,7 +67,7 @@ fun ForgeBottomBar(selectedIndex: Int, onSelect: (Int) -> Unit) {
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            BottomTab.entries.forEachIndexed { index, tab ->
+            tabs.forEachIndexed { index, tab ->
                 val selected = index == selectedIndex
                 val color = if (selected) accent else muted.copy(alpha = 0.85f)
                 Column(

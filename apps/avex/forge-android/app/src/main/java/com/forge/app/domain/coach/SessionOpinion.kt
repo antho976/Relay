@@ -27,14 +27,14 @@ object SessionOpinion {
 
         // Lead with the single strongest thing that happened.
         val lead = when {
-            isBestSession -> "Best session yet for this day — that's a clear step up."
-            prCount > 0 -> "$prCount new ${if (prCount == 1) "PR" else "PRs"} — you found another gear today."
-            cleanSweep -> "Clean sweep — you beat last session on every comparable set."
+            isBestSession -> "Best session yet for this day. That's a clear step up."
+            prCount > 0 -> "$prCount new ${if (prCount == 1) "PR" else "PRs"} today. You found another gear."
+            cleanSweep -> "Clean sweep. You beat last session on every comparable set."
             wonDuel -> "You edged out last session on $ghostBeats of $ghostComparable sets."
-            vsLastVolumeDelta != null && vsLastVolumeDelta > 0 -> "Volume's up on last time — momentum is building."
+            vsLastVolumeDelta != null && vsLastVolumeDelta > 0 -> "Volume's up on last time. Momentum is building."
             vsLastVolumeDelta != null && vsLastVolumeDelta < 0 ->
-                "A touch lighter than last time — fine if it was planned, otherwise watch recovery."
-            else -> "Solid work in the bank — consistency is what moves the needle."
+                "A touch lighter than last time. Fine if it was planned, otherwise watch recovery."
+            else -> "Solid work in the bank. Consistency is what moves the needle."
         }
 
         // At most one gentle, actionable caveat — keep the finish moment encouraging.
