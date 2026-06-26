@@ -327,8 +327,13 @@ class StatsRepository @Inject constructor(
         val allRpe = exerciseDetails.flatMap { it.sets }.mapNotNull { it.rpe }
         val durationMin = session.durationMinutes()
         val title = Program.dayDisplayName(session.dayKey)
-        // The most recent OTHER session of this same training, for the summary-tile up/down/same carets.
+        // The previous session of this same training, for the summary-tile up/down/same carets. The DAO
+        // returns the most-recent OTHER session of this day_key regardless of date, so drop it when it
+        // actually finished LATER (i.e. we're viewing an older session from History) — otherwise the
+        // caret would compare against a future session and invert.
+        val curFinishedAt = session.finishedAt ?: Long.MAX_VALUE
         val prevSession = sessionDao.previousFinishedForDay(session.dayKey, session.id)
+            ?.takeIf { (it.finishedAt ?: Long.MAX_VALUE) < curFinishedAt }
 
         return SessionDetailData(
             sessionId = session.id,

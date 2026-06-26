@@ -3,6 +3,8 @@ package com.forge.app.ui.gym.session
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,18 +17,27 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -122,8 +133,13 @@ private fun CompactBodyMap(
     modifier: Modifier = Modifier
 ) {
     val setsBy = split.associate { it.muscle to it.sets }
-    var enlarged by remember { mutableStateOf(false) }
-    Box(modifier.clip(RoundedCornerShape(8.dp)).clickable { enlarged = true }) {
+    var enlarged by rememberSaveable { mutableStateOf(false) }
+    Box(
+        modifier
+            .clip(RoundedCornerShape(8.dp))
+            .semantics { contentDescription = "Muscles worked, tap to enlarge"; role = Role.Button }
+            .clickable { enlarged = true }
+    ) {
         BodyHeatmap(
             setsByMuscle = setsBy,
             accent = accent,
@@ -138,7 +154,11 @@ private fun CompactBodyMap(
     if (enlarged) MuscleMapDialog(setsBy, accent, muted, outline) { enlarged = false }
 }
 
-/** The full-size front+back heatmap (with captions + legend) shown when the header map is tapped. */
+/**
+ * The full-size front+back heatmap (with captions + legend) shown when the header map is tapped.
+ * Dismiss via the explicit close button, a scrim tap, or back — the content itself does NOT swallow
+ * taps as dismiss, leaving the figures free for future per-muscle tap targets. Scrolls on short screens.
+ */
 @Composable
 private fun MuscleMapDialog(
     setsByMuscle: Map<MuscleGroup, Int>,
@@ -151,12 +171,24 @@ private fun MuscleMapDialog(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(20.dp))
-                .clickable(onClick = onDismiss)
+                .clip(RoundedCornerShape(20.dp))
+                .background(MaterialTheme.colorScheme.surface)
+                .verticalScroll(rememberScrollState())
                 .padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Text("MUSCLES WORKED", style = MaterialTheme.typography.labelLarge, color = muted, fontWeight = FontWeight.SemiBold)
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    "MUSCLES WORKED",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = muted,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f)
+                )
+                IconButton(onClick = onDismiss) {
+                    Icon(Icons.Filled.Close, contentDescription = "Close", tint = muted)
+                }
+            }
             BodyHeatmap(
                 setsByMuscle = setsByMuscle,
                 accent = accent,
@@ -197,9 +229,13 @@ internal fun SummaryStrip(data: SessionDetailData, onBg: Color, muted: Color) {
 
 private enum class Trend { UP, DOWN, SAME }
 
-/** Direction of [cur] vs the previous session's [prev]; null when there's no prior to compare. */
+/**
+ * Direction of [cur] vs the previous session's [prev]; null only when there's no prior to compare.
+ * A prior of exactly 0.0 is valid (a bodyweight-only session logs zero volume), so we guard on null
+ * rather than `<= 0.0` — comparing real volume against a prior zero correctly reads as UP.
+ */
 private fun trendOf(cur: Double, prev: Double?): Trend? {
-    if (prev == null || prev <= 0.0) return null
+    if (prev == null) return null
     val eps = prev * 0.001 // ignore sub-0.1% float noise so "same" really means same
     return when {
         cur > prev + eps -> Trend.UP
@@ -215,12 +251,19 @@ private fun TrendStat(value: String, label: String, trend: Trend?, muted: Color,
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(value, style = MaterialTheme.typography.bodyMedium, color = onBg, fontWeight = FontWeight.Normal)
             trend?.let {
-                val (glyph, color) = when (it) {
-                    Trend.UP -> "▲" to Color(0xFF4CAF50)
-                    Trend.DOWN -> "▼" to Color(0xFFE53935)
-                    Trend.SAME -> "=" to muted.copy(alpha = 0.7f)
+                // Shape carries the meaning (color is additive); a contentDescription gives TalkBack a word.
+                val (glyph, color, desc) = when (it) {
+                    Trend.UP -> Triple("▲", Color(0xFF4CAF50), "up from last session")
+                    Trend.DOWN -> Triple("▼", Color(0xFFE53935), "down from last session")
+                    Trend.SAME -> Triple("=", muted.copy(alpha = 0.7f), "same as last session")
                 }
-                Text(glyph, style = MaterialTheme.typography.labelSmall, color = color, fontSize = 8.sp)
+                Text(
+                    glyph,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = color,
+                    fontSize = 8.sp,
+                    modifier = Modifier.semantics { contentDescription = desc }
+                )
             }
         }
         Text(label, style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.6f), fontSize = 9.sp, letterSpacing = 0.5.sp)

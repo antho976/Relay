@@ -30,6 +30,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -91,7 +92,7 @@ private fun MetricCardShell(
 
 /** The per-card bars/line switch — reuses the shared [SegmentRow]. */
 @Composable
-internal fun StyleToggle(
+private fun StyleToggle(
     style: SessionChartStyle,
     onStyle: (SessionChartStyle) -> Unit,
     onBg: Color,
@@ -128,6 +129,8 @@ internal fun MetricExerciseCard(
 ) {
     val values = exercises.map { it.metricValue(metric) }
     val rawMax = values.maxOrNull() ?: 0.0
+    // Hoisted above the card so the remember runs unconditionally regardless of the empty-state guard.
+    val progress = rememberDrawProgress(metric)
     MetricCardShell("${metric.label.uppercase()} PER EXERCISE", style, onStyle, onBg, muted, accent, outline) {
         // The Weight metric is meaningless for a bodyweight-only session — say so instead of empty bars.
         if (rawMax <= 0.0) {
@@ -139,7 +142,6 @@ internal fun MetricExerciseCard(
         }
         // Bars always compare the exercises; the bars/line toggle now only restyles the per-set chart
         // inside an expanded row. The first row opens by default to hint that rows are tappable.
-        val progress = rememberDrawProgress(metric)
         exercises.forEachIndexed { i, ex ->
             ExerciseDrillRow(
                 ex = ex,
@@ -171,9 +173,10 @@ private fun ExerciseDrillRow(
     outline: Color
 ) {
     val useKg = LocalForgeSettings.current.useKg
-    // Keyed by metric so each metric tracks its own rows. Starts at [defaultExpanded] (the first row),
-    // and rememberSaveable keeps it closed once collapsed — reopening only on a fresh visit.
-    var expanded by rememberSaveable(ex.name, metric) { mutableStateOf(defaultExpanded) }
+    // Keyed by name only (NOT metric): Weight/Volume/Reps share one composable tree, so adding metric
+    // to the key would reset the row on every metric switch and re-pop the first row open. Starts at
+    // [defaultExpanded]; rememberSaveable keeps it closed once collapsed, reopening only on a fresh visit.
+    var expanded by rememberSaveable(ex.name) { mutableStateOf(defaultExpanded) }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Column(
             modifier = Modifier
@@ -181,7 +184,10 @@ private fun ExerciseDrillRow(
                 .clip(RoundedCornerShape(8.dp))
                 // Open rows get an accent wash so it's obvious which one is expanded.
                 .background(if (expanded) accent.copy(alpha = 0.10f) else Color.Transparent)
-                .clickable { expanded = !expanded }
+                .clickable(
+                    onClickLabel = if (expanded) "Collapse ${ex.name}" else "Expand ${ex.name}",
+                    role = Role.Button
+                ) { expanded = !expanded }
                 .padding(horizontal = 8.dp, vertical = 6.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
@@ -238,7 +244,12 @@ internal fun RpeExerciseCard(
     accent: Color,
     outline: Color
 ) {
-    val withRpe = exercises.filter { it.avgRpe > 0.0 }
+    // Hoisted above the card and memoized so the filter/map don't re-run each recomposition and the
+    // selection state is created unconditionally (independent of the empty-state guard).
+    val withRpe = remember(exercises) { exercises.filter { it.avgRpe > 0.0 } }
+    val names = remember(withRpe) { withRpe.map { it.name } }
+    // Track the selection by name so it survives a reorder; fall back to the first if it vanishes.
+    var selectedName by rememberSaveable { mutableStateOf(withRpe.firstOrNull()?.name.orEmpty()) }
     MetricCardShell("RPE", style, onStyle, onBg, muted, accent, outline) {
         if (withRpe.isEmpty()) {
             Text(
@@ -247,12 +258,10 @@ internal fun RpeExerciseCard(
             )
             return@MetricCardShell
         }
-        // Track the selection by name so it survives a reorder; fall back to the first if it vanishes.
-        var selectedName by rememberSaveable { mutableStateOf(withRpe.first().name) }
         val idx = withRpe.indexOfFirst { it.name == selectedName }.let { if (it >= 0) it else 0 }
         val ex = withRpe[idx]
         ExercisePicker(
-            items = withRpe.map { it.name },
+            items = names,
             selectedIndex = idx,
             onSelect = { selectedName = withRpe[it].name },
             onBg = onBg, muted = muted, outline = outline

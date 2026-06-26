@@ -133,10 +133,11 @@ private fun PerSetLine(values: List<Double>, metric: SessionMetric, accent: Colo
         val pts = values.mapIndexed { i, v -> Offset(stepX * i, yOf(v)) }
         val clip = (size.width * progress.coerceIn(0f, 1f)).coerceAtLeast(0.01f)
         clipRect(right = clip) {
+            val baseline = size.height - inset
             val fill = Path().apply {
-                moveTo(pts.first().x, size.height)
+                moveTo(pts.first().x, baseline)
                 pts.forEach { lineTo(it.x, it.y) }
-                lineTo(pts.last().x, size.height)
+                lineTo(pts.last().x, baseline)
                 close()
             }
             drawPath(fill, brush = Brush.verticalGradient(listOf(accent.copy(alpha = 0.26f), accent.copy(alpha = 0f))))
