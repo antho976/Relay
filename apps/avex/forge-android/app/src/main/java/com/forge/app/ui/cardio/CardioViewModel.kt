@@ -4,6 +4,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.forge.app.core.time.Clock
 import com.forge.app.data.db.entities.CardioEntry
+import androidx.health.connect.client.records.ExerciseRoute
+import com.forge.app.data.health.HealthConnectManager
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.data.repo.BodyweightRepository
 import com.forge.app.data.repo.CardioRepository
@@ -11,6 +13,8 @@ import com.forge.app.data.repo.TrophyRepository
 import com.forge.app.domain.cardio.CardioEffort
 import com.forge.app.domain.cardio.CardioRestReason
 import com.forge.app.domain.cardio.CardioType
+import com.forge.app.domain.cardio.CardioWearableDay
+import com.forge.app.domain.cardio.RoutePoint
 import com.forge.app.ui.cardio.state.CardioDayCell
 import com.forge.app.ui.cardio.state.CardioUiState
 import java.time.DayOfWeek
@@ -46,6 +50,7 @@ class CardioViewModel @Inject constructor(
     private val settingsRepo: SettingsRepository,
     private val trophyRepo: TrophyRepository,
     private val bodyweightRepo: BodyweightRepository,
+    private val healthConnectManager: HealthConnectManager,
     private val clock: Clock
 ) : ViewModel() {
 
@@ -94,9 +99,15 @@ class CardioViewModel @Inject constructor(
             pendingDeleteId = tr.pendingDeleteId,
             detailOpen = tr.detailOpen,
             sessionDetailId = tr.sessionDetailId,
+            sessionWearable = tr.sessionWearable,
+            sessionRoute = tr.sessionRoute,
+            sessionRouteConsentId = tr.sessionRouteConsentId,
+            weekWearable = tr.weekWearable,
             historyExpanded = tr.historyExpanded,
             wearableHintDismissed = hintDismissed
         )
+    }.combine(settingsRepo.useMiles) { st, useMiles ->
+        st.copy(useMiles = useMiles)
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(stopTimeoutMillis = 5_000),
@@ -114,13 +125,62 @@ class CardioViewModel @Inject constructor(
 
     fun closeSheet() = transient.update { it.copy(sheetOpen = false, editing = null) }
 
-    /** Open / close the swipeable week-stats overlay. */
-    fun openDetail() = transient.update { it.copy(detailOpen = true) }
-    fun closeDetail() = transient.update { it.copy(detailOpen = false) }
+    /** Open / close the swipeable week-stats overlay. The current-week page shows today's watch steps,
+     *  loaded fail-soft (null when nothing's connected → the steps graph simply doesn't render). */
+    fun openDetail() {
+        transient.update { it.copy(detailOpen = true) }
+        viewModelScope.launch {
+            val today = loadStepsForDay(clock.nowMs())
+            transient.update { if (it.detailOpen) it.copy(weekWearable = today) else it }
+        }
+    }
+    fun closeDetail() = transient.update { it.copy(detailOpen = false, weekWearable = null) }
 
-    /** Open / close the per-session stats overlay for a logged entry. */
-    fun openSessionDetail(id: Long) = transient.update { it.copy(sessionDetailId = id) }
-    fun closeSessionDetail() = transient.update { it.copy(sessionDetailId = null) }
+    /** Open / close the per-session stats overlay for a logged entry. Loads that day's watch steps and
+     *  the best-matching GPS route in the background; each load is dropped if the user has since closed
+     *  or switched the overlay. */
+    fun openSessionDetail(id: Long) {
+        transient.update {
+            it.copy(sessionDetailId = id, sessionWearable = null, sessionRoute = null, sessionRouteConsentId = null)
+        }
+        viewModelScope.launch {
+            val entry = cardioRepo.get(id) ?: return@launch
+            val zone = ZoneId.systemDefault()
+            val day = Instant.ofEpochMilli(entry.date).atZone(zone).toLocalDate()
+            val startMs = day.atStartOfDay(zone).toInstant().toEpochMilli()
+            val endMs = day.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+            val steps = healthConnectManager.readStepsDay(startMs, endMs)
+            // A matched route either arrives ready to draw, or as a consent id the UI must confirm first.
+            val match = healthConnectManager.matchSessionRoute(entry.date, entry.durationMin, startMs, endMs)
+            transient.update {
+                if (it.sessionDetailId == id) it.copy(
+                    sessionWearable = steps,
+                    sessionRoute = match?.route,
+                    sessionRouteConsentId = if (match?.route == null) match?.recordId else null
+                ) else it
+            }
+        }
+    }
+    fun closeSessionDetail() = transient.update {
+        it.copy(sessionDetailId = null, sessionWearable = null, sessionRoute = null, sessionRouteConsentId = null)
+    }
+
+    /** Health Connect returned (or denied) the route after the consent screen. A non-null route with
+     *  ≥2 points is drawn; anything less clears the pending consent so the button stops offering it. */
+    fun onRouteConsented(route: ExerciseRoute?) {
+        val points = healthConnectManager.routePoints(route).takeIf { it.size >= 2 }
+        transient.update { it.copy(sessionRoute = points, sessionRouteConsentId = null) }
+    }
+
+    /** Read the watch's hourly steps for the local calendar day containing [dateMs] (empty when no
+     *  wearable is connected or HC has nothing — the caller treats empty as "no graph"). */
+    private suspend fun loadStepsForDay(dateMs: Long): CardioWearableDay {
+        val zone = ZoneId.systemDefault()
+        val day = Instant.ofEpochMilli(dateMs).atZone(zone).toLocalDate()
+        val startMs = day.atStartOfDay(zone).toInstant().toEpochMilli()
+        val endMs = day.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+        return healthConnectManager.readStepsDay(startMs, endMs)
+    }
 
     /** Permanently dismiss the "connect a watch/ring" hint banner. */
     fun dismissWearableHint() = viewModelScope.launch { settingsRepo.setCardioWearableHintDismissed() }
@@ -186,6 +246,10 @@ class CardioViewModel @Inject constructor(
         val pendingDeleteId: Long? = null,
         val detailOpen: Boolean = false,
         val sessionDetailId: Long? = null,
+        val sessionWearable: CardioWearableDay? = null,
+        val sessionRoute: List<RoutePoint>? = null,
+        val sessionRouteConsentId: String? = null,
+        val weekWearable: CardioWearableDay? = null,
         val historyExpanded: Boolean = false
     )
 

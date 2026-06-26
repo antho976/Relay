@@ -13,25 +13,16 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -146,97 +137,6 @@ internal fun SubSectionLabel(text: String) {
         letterSpacing = 1.sp,
         modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 20.dp, bottom = 6.dp)
     )
-}
-
-@Composable
-internal fun AccentColorRow(currentHex: String, onSelect: (String) -> Unit) {
-    val onBg = MaterialTheme.colorScheme.onBackground
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val accentColors = listOf(
-        "#3D4F73" to "Navy", "#8B3535" to "Red", "#4D6040" to "Olive", "#7A6435" to "Gold",
-        "#356B6B" to "Teal", "#5B4570" to "Purple", "#8B3556" to "Rose", "#3E5E3E" to "Forest",
-        "#8B5A35" to "Copper", "#445A6B" to "Steel", "#6B4535" to "Rust", "#556B35" to "Moss"
-    )
-    Column(
-        modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        Text("Accent color", style = MaterialTheme.typography.bodyMedium, color = onBg)
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            accentColors.forEach { (hex, label) ->
-                val isSelected = currentHex == hex || (currentHex.isEmpty() && hex == "#3D4F73")
-                val swatchColor = remember(hex) { Color(android.graphics.Color.parseColor(hex)) }
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                    modifier = Modifier.clickable { onSelect(hex) }
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(28.dp)
-                            .clip(CircleShape)
-                            .background(swatchColor)
-                            .border(2.dp, if (isSelected) onBg else Color.Transparent, CircleShape)
-                    )
-                    Text(
-                        label,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = muted.copy(alpha = if (isSelected) 0.9f else 0.45f),
-                        fontSize = 9.sp
-                    )
-                }
-            }
-        }
-        Spacer(Modifier.height(4.dp))
-        CustomHexInput(currentHex = currentHex, onSelect = onSelect, onBg = onBg, muted = muted)
-        Spacer(Modifier.height(4.dp))
-    }
-}
-
-/** Type any `#RRGGBB` hex for an accent colour outside the preset palette; applies live once valid. */
-@Composable
-private fun CustomHexInput(currentHex: String, onSelect: (String) -> Unit, onBg: Color, muted: Color) {
-    // Seed from the current pref only when it's a hex that ISN'T one of the presets (a real custom pick).
-    val presets = remember { setOf("#3D4F73", "#8B3535", "#4D6040", "#7A6435", "#356B6B", "#5B4570", "#8B3556", "#3E5E3E", "#8B5A35", "#445A6B", "#6B4535", "#556B35") }
-    var text by remember(currentHex) {
-        mutableStateOf(currentHex.takeIf { it.length == 7 && it !in presets }.orEmpty())
-    }
-    val valid = text.matches(Regex("#[0-9A-F]{6}"))
-    val preview = if (valid) remember(text) { Color(android.graphics.Color.parseColor(text)) } else null
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Text("Custom", style = MaterialTheme.typography.bodySmall, color = muted)
-        BasicTextField(
-            value = text,
-            onValueChange = { raw ->
-                // Normalize: a single leading '#', uppercase hex only, capped at #RRGGBB.
-                val hex = raw.uppercase().filter { it in "0123456789ABCDEF" }.take(6)
-                text = "#$hex"
-                if (text.matches(Regex("#[0-9A-F]{6}"))) onSelect(text)
-            },
-            singleLine = true,
-            textStyle = MaterialTheme.typography.bodyMedium.copy(color = onBg),
-            cursorBrush = SolidColor(onBg),
-            modifier = Modifier
-                .clip(RoundedCornerShape(6.dp))
-                .border(1.dp, muted.copy(alpha = 0.4f), RoundedCornerShape(6.dp))
-                .padding(horizontal = 10.dp, vertical = 6.dp)
-                .size(width = 96.dp, height = 20.dp)
-        )
-        Box(
-            modifier = Modifier
-                .size(28.dp)
-                .clip(CircleShape)
-                .background(preview ?: Color.Transparent)
-                .border(1.dp, muted.copy(alpha = 0.4f), CircleShape)
-        )
-    }
 }
 
 @Composable

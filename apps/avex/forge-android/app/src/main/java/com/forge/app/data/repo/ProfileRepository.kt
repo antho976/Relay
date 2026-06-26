@@ -79,7 +79,10 @@ data class ProfileData(
     /** All-time cardio: non-rest sessions, active minutes, distance (km). */
     val cardioSessions: Int = 0,
     val cardioMinutes: Int = 0,
-    val cardioDistanceKm: Double = 0.0
+    val cardioDistanceKm: Double = 0.0,
+    /** Cumulative lifted volume (lb), one point per finished session, oldest → newest — drives the
+     *  All-Time graph. Single-point until a second lifting workout exists. */
+    val lifetimeVolumeSeriesLb: List<Double> = emptyList()
 )
 
 /**
@@ -214,7 +217,8 @@ class ProfileRepository @Inject constructor(
             memory = memoryD.await(),
             cardioSessions = cardioSessionsD.await(),
             cardioMinutes = cardioMinutesD.await(),
-            cardioDistanceKm = cardioDistanceD.await()
+            cardioDistanceKm = cardioDistanceD.await(),
+            lifetimeVolumeSeriesLb = cumulativeSessionVolumeLb(sessions)
         )
         }.also { lastData = it }
     }
@@ -279,4 +283,16 @@ class ProfileRepository @Inject constructor(
         val SINCE_FMT: DateTimeFormatter = DateTimeFormatter.ofPattern("MMM yyyy", Locale.getDefault())
         val HOUR_FMT: DateTimeFormatter = DateTimeFormatter.ofPattern("h a", Locale.US)
     }
+}
+
+/**
+ * Cumulative lifted volume (lb) — one point per finished session, oldest → newest, as a running
+ * total (a null/0-volume session just carries the total flat). Feeds the All-Time graph, which needs
+ * ≥2 points to draw a line, so the curve appears as soon as there are two logged lifting workouts.
+ * Pure (no DAO/DI), mirroring the StatsVolumeAggregations helper pattern.
+ */
+internal fun cumulativeSessionVolumeLb(sessions: List<Session>): List<Double> {
+    if (sessions.isEmpty()) return emptyList()
+    var cumulative = 0.0
+    return sessions.sortedBy { it.startedAt }.map { cumulative += it.totalVolumeLb ?: 0.0; cumulative }
 }

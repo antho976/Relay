@@ -105,6 +105,21 @@ internal fun FormatPage(state: SettingsUiState, vm: SettingsViewModel, modifier:
             Spacer(Modifier.height(8.dp))
             SectionDivider()
         }
+        item("distance") {
+            ChipSection(
+                "Distance unit",
+                listOf("km" to "km", "mi" to "mi"),
+                if (state.useMiles) "mi" else "km"
+            ) { vm.setUseMiles(it == "mi") }
+            // Live preview — updates the moment the unit is switched.
+            Text(
+                "Cardio distance and pace show in ${if (state.useMiles) "miles" else "kilometers"} — e.g. ${com.forge.app.domain.units.formatDistance(5.0, state.useMiles)}.",
+                style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic,
+                modifier = Modifier.padding(horizontal = 24.dp)
+            )
+            Spacer(Modifier.height(8.dp))
+            SectionDivider()
+        }
         item("sex") {
             ChipSection(
                 "Sex",

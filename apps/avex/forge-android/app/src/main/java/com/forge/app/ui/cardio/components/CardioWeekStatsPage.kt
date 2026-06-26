@@ -29,7 +29,9 @@ import androidx.compose.ui.unit.sp
 import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.domain.cardio.CardioWeekAggregate
 import com.forge.app.domain.cardio.CardioWearableDay
-import com.forge.app.domain.cardio.pacePerKm
+import com.forge.app.domain.cardio.pacePerUnit
+import com.forge.app.domain.units.distanceUnitLabel
+import com.forge.app.domain.units.toDisplayDistance
 import java.time.ZoneId
 import java.util.Locale
 
@@ -42,6 +44,7 @@ import java.util.Locale
 internal fun CardioWeekStatsPage(
     agg: CardioWeekAggregate,
     weekEntries: List<CardioEntry>,
+    useMiles: Boolean,
     isCurrentWeek: Boolean,
     todayDow: Int,
     weekTargetMin: Int,
@@ -67,13 +70,14 @@ internal fun CardioWeekStatsPage(
         )
 
         // ── Number tiles ── fixed 3-up grid so a tile can never slip off the edge ──────
-        val avgPace = pacePerKm(agg.minutes, agg.distanceKm)
+        val avgPace = pacePerUnit(agg.minutes, agg.distanceKm, useMiles)
+        val distUnit = distanceUnitLabel(useMiles)
         val tiles = buildList {
             add("${agg.days}" to if (agg.days == 1) "day" else "days")
             add("${agg.sessions}" to "sessions")
             add("${agg.minutes}" to "minutes")
-            if (agg.distanceKm > 0) add(String.format(Locale.US, "%.1f", agg.distanceKm) to "km")
-            if (avgPace != null) add(avgPace to "/km avg")
+            if (agg.distanceKm > 0) add(String.format(Locale.US, "%.1f", toDisplayDistance(agg.distanceKm, useMiles)) to distUnit)
+            if (avgPace != null) add(avgPace to "/$distUnit avg")
         }
         Column(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 4.dp),
@@ -158,7 +162,7 @@ internal fun CardioWeekStatsPage(
             Spacer(Modifier.height(4.dp))
             ordered.forEach { entry ->
                 SessionTimelineRow(
-                    entry = entry, bodyweightLb = bodyweightLb, zone = zone,
+                    entry = entry, bodyweightLb = bodyweightLb, useMiles = useMiles, zone = zone,
                     onBg = onBg, muted = muted, onClick = { onOpenSession(entry.id) }
                 )
                 HorizontalDivider(modifier = Modifier.padding(horizontal = 24.dp), color = outline.copy(alpha = 0.12f))

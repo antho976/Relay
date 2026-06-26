@@ -55,6 +55,12 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
     val calorieLauncher = rememberLauncherForActivityResult(
         contract = PermissionController.createRequestPermissionResultContract()
     ) { viewModel.refresh() }
+    val stepsLauncher = rememberLauncherForActivityResult(
+        contract = PermissionController.createRequestPermissionResultContract()
+    ) { viewModel.refresh() }
+    val exerciseLauncher = rememberLauncherForActivityResult(
+        contract = PermissionController.createRequestPermissionResultContract()
+    ) { viewModel.refresh() }
 
     Column(
         modifier = modifier
@@ -154,6 +160,44 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
             } else {
                 StatusLine("Calorie sync isn't connected yet.", muted)
                 ActionButton("Connect calories") { calorieLauncher.launch(viewModel.caloriePermissions) }
+            }
+
+            // ─── Steps (read a watch/ring's step counts for the cardio screen) ─────────────────────
+            Spacer(Modifier.height(20.dp))
+            SectionDivider()
+            Column(Modifier.padding(start = 24.dp, end = 24.dp, top = 16.dp, bottom = 4.dp)) {
+                Text("STEPS & ACTIVITY", style = MaterialTheme.typography.headlineSmall, color = onBg)
+            }
+            Paragraph(
+                "Connect a watch or ring (via Samsung Health, Fitbit, etc.) that writes steps to Health " +
+                    "Connect, and Forge shows your steps-through-the-day graph on a cardio session and the " +
+                    "current week. Read-only — Forge never writes your steps anywhere."
+            )
+            if (state.stepsGranted) {
+                StatusLine("Connected — Forge can read your steps.", onBg)
+                ActionButton("Manage in Health Connect") { openHealthConnectSettings(context) }
+            } else {
+                StatusLine("Steps aren't connected yet.", muted)
+                ActionButton("Connect steps") { stepsLauncher.launch(viewModel.stepsPermissions) }
+            }
+
+            // ─── GPS routes (read a watch's outdoor sessions to draw their route shape) ─────────────
+            Spacer(Modifier.height(20.dp))
+            SectionDivider()
+            Column(Modifier.padding(start = 24.dp, end = 24.dp, top = 16.dp, bottom = 4.dp)) {
+                Text("GPS ROUTES", style = MaterialTheme.typography.headlineSmall, color = onBg)
+            }
+            Paragraph(
+                "If your watch records outdoor runs or rides with GPS, Forge can draw the route's shape on " +
+                    "the matching cardio session. There's no map — just the path, offline. Health Connect " +
+                    "asks you to confirm each route the first time Forge draws it."
+            )
+            if (state.exerciseGranted) {
+                StatusLine("Connected — Forge can offer your GPS routes.", onBg)
+                ActionButton("Manage in Health Connect") { openHealthConnectSettings(context) }
+            } else {
+                StatusLine("GPS routes aren't connected yet.", muted)
+                ActionButton("Connect GPS routes") { exerciseLauncher.launch(viewModel.exercisePermissions) }
             }
         }
 

@@ -4,6 +4,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.forge.app.data.db.entities.CardioEntry
+import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.data.repo.BodyweightRepository
 import com.forge.app.data.repo.CardioRepository
 import com.forge.app.domain.cardio.CardioEffort
@@ -26,7 +27,8 @@ data class CardioSessionDetailState(
     val entry: CardioEntry? = null,
     val bodyweightLb: Double? = null,
     val editing: Boolean = false,
-    val deleted: Boolean = false
+    val deleted: Boolean = false,
+    val useMiles: Boolean = false
 )
 
 /**
@@ -38,6 +40,7 @@ data class CardioSessionDetailState(
 class CardioSessionDetailViewModel @Inject constructor(
     private val cardioRepo: CardioRepository,
     bodyweightRepo: BodyweightRepository,
+    settingsRepo: SettingsRepository,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
@@ -50,9 +53,10 @@ class CardioSessionDetailViewModel @Inject constructor(
         cardioRepo.observeAll().map { list -> list.firstOrNull { it.id == cardioId } },
         bodyweightRepo.observeRecent(1).map { it.firstOrNull()?.weightLb },
         editing,
-        deleted
-    ) { entry, bodyweightLb, isEditing, isDeleted ->
-        CardioSessionDetailState(loaded = true, entry = entry, bodyweightLb = bodyweightLb, editing = isEditing, deleted = isDeleted)
+        deleted,
+        settingsRepo.useMiles
+    ) { entry, bodyweightLb, isEditing, isDeleted, useMiles ->
+        CardioSessionDetailState(loaded = true, entry = entry, bodyweightLb = bodyweightLb, editing = isEditing, deleted = isDeleted, useMiles = useMiles)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), CardioSessionDetailState())
 
     fun openEdit() { editing.value = true }

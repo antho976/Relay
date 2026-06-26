@@ -83,6 +83,9 @@ data class SessionDetailData(
     val volumeLb: Double?,
     val prCount: Int,
     val setCount: Int,
+    /** Same-training previous session's volume / set count, for the summary-tile trend carets (null = no prior). */
+    val prevVolumeLb: Double? = null,
+    val prevSetCount: Int? = null,
     val intensity: String,
     /** Stored session-type key (#109); resolve its pill via [com.forge.app.domain.session.SessionType]. */
     val sessionType: String,

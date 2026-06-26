@@ -240,6 +240,7 @@ private fun CardioHistoryRow(
     modifier: Modifier = Modifier
 ) {
     val type = com.forge.app.domain.cardio.CardioType.fromCode(entry.type)
+    val useMiles = com.forge.app.ui.theme.LocalForgeSettings.current.useMiles
     Surface(
         modifier = modifier.fillMaxWidth().clickable { onClick() },
         color = MaterialTheme.colorScheme.surface,
@@ -259,7 +260,7 @@ private fun CardioHistoryRow(
             }
             Column(horizontalAlignment = Alignment.End) {
                 entry.distanceKm?.let {
-                    Text(String.format(Locale.US, "%.1f km", it), style = MaterialTheme.typography.bodyMedium,
+                    Text(com.forge.app.domain.units.formatDistance(it, useMiles), style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
                 }
                 if (entry.durationMin > 0) {

@@ -38,6 +38,7 @@ import java.util.Locale
 internal fun SessionTimelineRow(
     entry: CardioEntry,
     bodyweightLb: Double?,
+    useMiles: Boolean,
     zone: ZoneId,
     onBg: Color,
     muted: Color,
@@ -54,7 +55,7 @@ internal fun SessionTimelineRow(
     val detail = if (type.isRest) {
         CardioRestReason.fromCode(entry.restReason)?.displayName ?: "Rest day"
     } else {
-        cardioDetailParts(entry, type, bodyweightLb).joinToString(" · ")
+        cardioDetailParts(entry, type, bodyweightLb, useMiles = useMiles).joinToString(" · ")
     }
     Row(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 24.dp, vertical = 12.dp),

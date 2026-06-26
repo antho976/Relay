@@ -25,6 +25,7 @@ import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.vector.PathParser
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.forge.app.program.MuscleGroup
 import kotlinx.coroutines.Dispatchers
@@ -51,16 +52,21 @@ internal fun BodyHeatmap(
     faint: Color,
     silhouette: Color,
     labelColor: Color,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    figureHeight: Dp = 300.dp,
+    showLegend: Boolean = true,
+    showTitles: Boolean = true
 ) {
     val maxSets = (setsByMuscle.values.maxOrNull() ?: 0).coerceAtLeast(1)
     Column(modifier) {
         Row(Modifier.fillMaxWidth()) {
-            FigureColumn("FRONT", ANATOMY_FRONT, ANATOMY_FRONT_OUTLINE, 0f, setsByMuscle, maxSets, accent, faint, silhouette, labelColor, Modifier.weight(1f))
-            FigureColumn("BACK", ANATOMY_BACK, ANATOMY_BACK_OUTLINE, ANATOMY_BACK_ORIGIN_X, setsByMuscle, maxSets, accent, faint, silhouette, labelColor, Modifier.weight(1f))
+            FigureColumn("FRONT", ANATOMY_FRONT, ANATOMY_FRONT_OUTLINE, 0f, setsByMuscle, maxSets, accent, faint, silhouette, labelColor, figureHeight, showTitles, Modifier.weight(1f))
+            FigureColumn("BACK", ANATOMY_BACK, ANATOMY_BACK_OUTLINE, ANATOMY_BACK_ORIGIN_X, setsByMuscle, maxSets, accent, faint, silhouette, labelColor, figureHeight, showTitles, Modifier.weight(1f))
         }
-        Spacer(Modifier.height(10.dp))
-        HeatLegend(accent = accent, faint = faint, labelColor = labelColor)
+        if (showLegend) {
+            Spacer(Modifier.height(10.dp))
+            HeatLegend(accent = accent, faint = faint, labelColor = labelColor)
+        }
     }
 }
 
@@ -76,6 +82,8 @@ private fun FigureColumn(
     faint: Color,
     silhouette: Color,
     labelColor: Color,
+    figureHeight: Dp,
+    showTitle: Boolean,
     modifier: Modifier = Modifier
 ) {
     // Compile the SVG path strings to Paths OFF the composition thread — the outline strings are large
@@ -90,9 +98,11 @@ private fun FigureColumn(
     val edge = silhouette.copy(alpha = (silhouette.alpha * 2.5f).coerceAtMost(0.6f))
 
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(title, style = MaterialTheme.typography.labelSmall, color = labelColor)
-        Spacer(Modifier.height(6.dp))
-        Canvas(Modifier.fillMaxWidth().height(300.dp)) {
+        if (showTitle) {
+            Text(title, style = MaterialTheme.typography.labelSmall, color = labelColor)
+            Spacer(Modifier.height(6.dp))
+        }
+        Canvas(Modifier.fillMaxWidth().height(figureHeight)) {
             val figure = compiled ?: return@Canvas
             // Uniform scale (preserve proportions) + centre the viewBox in the canvas.
             val s = minOf(size.width / ANATOMY_VB_W, size.height / ANATOMY_VB_H)

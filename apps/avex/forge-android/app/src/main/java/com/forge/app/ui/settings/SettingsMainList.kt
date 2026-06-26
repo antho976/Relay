@@ -141,7 +141,7 @@ internal fun SearchDialogGroup(entry: SettingsDialogEntry, onClick: () -> Unit) 
 
 internal fun rowSubtitle(page: SettingsPage, s: SettingsUiState): String = when (page) {
     SettingsPage.Appearance -> "AMOLED ${if (s.amoledMode) "on" else "off"} · compact ${if (s.compactSetLogging) "on" else "off"}"
-    SettingsPage.Format -> "${if (s.useKg) "kg" else "lb"} · ${dateShort(s.dateFormat)} · ${if (s.timeFormat24h) "24h" else "12h"} · ${tzShort(s.timezone)}"
+    SettingsPage.Format -> "${if (s.useKg) "kg" else "lb"} · ${if (s.useMiles) "mi" else "km"} · ${dateShort(s.dateFormat)} · ${if (s.timeFormat24h) "24h" else "12h"} · ${tzShort(s.timezone)}"
     SettingsPage.Session -> "Haptic: ${s.hapticStrength}"
     SettingsPage.Notifications -> {
         // Live preview of which notification types are on (was just quiet-hours / "Off").

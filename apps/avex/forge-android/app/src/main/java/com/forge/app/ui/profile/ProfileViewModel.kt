@@ -96,6 +96,7 @@ class ProfileViewModel @Inject constructor(
         totalPrs = data.totalPrs,
         streakDays = data.streakDays,
         longestStreakDays = data.longestStreakDays,
+        lifetimeVolumeSeriesLb = data.lifetimeVolumeSeriesLb,
         standings = data.standings,
         topLift = data.topLift,
         mostLoggedDay = data.mostLoggedDay,

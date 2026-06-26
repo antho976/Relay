@@ -44,7 +44,10 @@ import com.forge.app.domain.cardio.CardioCalorieEstimator
 import com.forge.app.domain.cardio.CardioEffort
 import com.forge.app.domain.cardio.CardioRestReason
 import com.forge.app.domain.cardio.CardioType
-import com.forge.app.domain.cardio.pacePerKm
+import com.forge.app.domain.cardio.pacePerUnit
+import com.forge.app.domain.units.distanceInputValue
+import com.forge.app.domain.units.distanceUnitLabel
+import com.forge.app.domain.units.parseToKm
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -67,6 +70,8 @@ fun CardioLogSheet(
     editing: CardioEntry? = null,
     /** Latest logged bodyweight (lb) — scales the live calorie estimate; null hides it. */
     bodyweightLb: Double? = null,
+    /** Distance entry/pace unit — true = miles, false = km. The field stores km regardless. */
+    useMiles: Boolean = false,
     /** Tapping the Forge wordmark — defaults to "go Home"; the cardio tab overrides it to close first. */
     onHome: () -> Unit = com.forge.app.ui.common.LocalGoHome.current
 ) {
@@ -75,7 +80,7 @@ fun CardioLogSheet(
     val editKey = editing?.id
     var type by remember(editKey) { mutableStateOf(editing?.let { CardioType.fromCode(it.type) } ?: CardioType.RUN) }
     var durationText by remember(editKey) { mutableStateOf(editing?.durationMin?.takeIf { it > 0 }?.toString() ?: "") }
-    var distanceText by remember(editKey) { mutableStateOf(editing?.distanceKm?.toString() ?: "") }
+    var distanceText by remember(editKey) { mutableStateOf(editing?.distanceKm?.let { distanceInputValue(it, useMiles) } ?: "") }
     var effort by remember(editKey) { mutableStateOf(editing?.let { CardioEffort.fromCode(it.effort) }) }
     var restReason by remember(editKey) { mutableStateOf(editing?.let { CardioRestReason.fromCode(it.restReason) }) }
     var note by remember(editKey) { mutableStateOf(editing?.note ?: "") }
@@ -90,7 +95,8 @@ fun CardioLogSheet(
     }
 
     val durationInt = durationText.toIntOrNull() ?: 0
-    val distanceDouble = distanceText.toDoubleOrNull()
+    // The field holds a number in the display unit; convert to the canonical km we store + pass to onSave.
+    val distanceKm = parseToKm(distanceText, useMiles)
     val intervalInt = intervalText.toIntOrNull()
     val canSubmit = if (type.isRest) restReason != null else durationInt > 0
 
@@ -174,7 +180,7 @@ fun CardioLogSheet(
                                 value = distanceText,
                                 onValueChange = { distanceText = sanitizeDecimal(it) },
                                 placeholder = "0",
-                                unit = "km",
+                                unit = distanceUnitLabel(useMiles),
                                 keyboardType = KeyboardType.Decimal,
                                 onBg = onBg, muted = muted, accent = accent, outline = outline,
                                 modifier = Modifier.weight(1f)
@@ -182,10 +188,10 @@ fun CardioLogSheet(
                         }
                         // Live readouts: calorie estimate (needs bodyweight) and pace (needs both fields).
                         val kcal = CardioCalorieEstimator.estimate(type, durationInt, effort, bodyweightLb)
-                        val pace = pacePerKm(durationInt, distanceDouble)
+                        val pace = pacePerUnit(durationInt, distanceKm, useMiles)
                         if (kcal != null || pace != null) {
                             Spacer(Modifier.height(8.dp))
-                            val parts = listOfNotNull(kcal?.let { "≈ $it kcal" }, pace?.let { "$it /km" })
+                            val parts = listOfNotNull(kcal?.let { "≈ $it kcal" }, pace?.let { "$it /${distanceUnitLabel(useMiles)}" })
                             Text(parts.joinToString("  ·  "), style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp)
                         }
                         Spacer(Modifier.height(10.dp))
@@ -259,7 +265,7 @@ fun CardioLogSheet(
                     onSave(
                         type,
                         if (type.isRest) 0 else durationInt,
-                        if (type.isRest) null else distanceDouble,
+                        if (type.isRest) null else distanceKm,
                         if (type.isRest) null else effort,
                         if (type.isRest) restReason else null,
                         note.ifBlank { null },

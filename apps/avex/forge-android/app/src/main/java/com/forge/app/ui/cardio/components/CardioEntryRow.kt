@@ -33,6 +33,7 @@ import androidx.compose.ui.unit.sp
 import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.domain.cardio.CardioRestReason
 import com.forge.app.domain.cardio.CardioType
+import com.forge.app.domain.units.formatDistance
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -50,6 +51,7 @@ import java.util.Locale
 fun CardioEntryRow(
     entry: CardioEntry,
     today: LocalDate,
+    useMiles: Boolean,
     onRequestDelete: () -> Unit,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
@@ -60,7 +62,7 @@ fun CardioEntryRow(
 
     val zone = ZoneId.systemDefault()
     val dayLabel = remember(entry.date, today) { entryDayLabel(entry.date, today, zone) }
-    val summary = remember(entry) { rowSummary(entry, type) }
+    val summary = remember(entry, useMiles) { rowSummary(entry, type, useMiles) }
 
     val dismissState = rememberSwipeToDismissBoxState(
         confirmValueChange = { value ->
@@ -153,10 +155,10 @@ private fun entryDayLabel(dateMs: Long, today: LocalDate, zone: ZoneId): String 
 
 /** A one-line row summary — just duration + distance (or the rest reason). Everything else (pace,
  *  HR zone, calories, effort, note, GPS) is shown in the per-session detail, not crammed here. */
-private fun rowSummary(entry: CardioEntry, type: CardioType): String {
+private fun rowSummary(entry: CardioEntry, type: CardioType, useMiles: Boolean): String {
     if (type.isRest) return CardioRestReason.fromCode(entry.restReason)?.displayName ?: "Rest day"
     return buildList {
         if (entry.durationMin > 0) add("${entry.durationMin} min")
-        entry.distanceKm?.let { add(String.format(Locale.US, "%.1f km", it)) }
+        entry.distanceKm?.let { add(formatDistance(it, useMiles)) }
     }.joinToString(" · ")
 }

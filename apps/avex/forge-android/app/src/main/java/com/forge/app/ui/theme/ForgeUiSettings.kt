@@ -10,6 +10,8 @@ import androidx.compose.runtime.compositionLocalOf
 data class ForgeUiSettings(
     val amoledMode: Boolean = false,
     val useKg: Boolean = false,
+    /** Cardio distance/pace unit — true = miles, false = km. Derives from the weight unit when unset. */
+    val useMiles: Boolean = false,
     val hiddenOverviewTiles: Set<String> = emptySet(),
     val compactSetLogging: Boolean = false,
     val overviewTileOrder: List<String> = listOf("gym", "cardio", "trophies"),

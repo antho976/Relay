@@ -1,6 +1,8 @@
 package com.forge.app.ui.cardio.state
 
 import com.forge.app.data.db.entities.CardioEntry
+import com.forge.app.domain.cardio.CardioWearableDay
+import com.forge.app.domain.cardio.RoutePoint
 
 /** One Mon–Sun cell of the cardio week row — active minutes plus whether a rest day was logged.
  *  A single self-contained cell (vs two index-aligned parallel lists) can't drift out of sync. */
@@ -32,8 +34,19 @@ data class CardioUiState(
     val detailOpen: Boolean = false,
     /** Non-null → the per-session stats overlay is open for this entry id. */
     val sessionDetailId: Long? = null,
+    /** Watch steps for the open session's day (Health Connect); null until loaded / when none. */
+    val sessionWearable: CardioWearableDay? = null,
+    /** GPS route for the open session, once available (already-consented or just confirmed); else null. */
+    val sessionRoute: List<RoutePoint>? = null,
+    /** Non-null → a matching watch session has a route that needs Health Connect consent; this is the
+     *  record id to hand the consent contract. Drives the "Show GPS route" button on the session sheet. */
+    val sessionRouteConsentId: String? = null,
+    /** Watch steps for today, shown on the current-week stats page; null until loaded / when none. */
+    val weekWearable: CardioWearableDay? = null,
     /** False → the main list shows only the 5 most-recent entries; true → the full history. */
     val historyExpanded: Boolean = false,
     /** True once the user permanently dismisses the "connect a watch/ring" hint banner. */
-    val wearableHintDismissed: Boolean = false
+    val wearableHintDismissed: Boolean = false,
+    /** Distance/pace unit — true shows miles, false km. Derives from the weight unit when unset. */
+    val useMiles: Boolean = false
 )

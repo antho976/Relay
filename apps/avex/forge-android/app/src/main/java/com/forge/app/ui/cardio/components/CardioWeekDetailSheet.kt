@@ -57,6 +57,7 @@ import java.util.Locale
 fun CardioWeekDetailSheet(
     allEntries: List<CardioEntry>,
     currentWeekStartMs: Long,
+    useMiles: Boolean,
     weekTargetMin: Int,
     cardioStreakDays: Int,
     bodyweightLb: Double?,
@@ -155,6 +156,7 @@ fun CardioWeekDetailSheet(
                 CardioWeekStatsPage(
                     agg = agg,
                     weekEntries = weekEntries,
+                    useMiles = useMiles,
                     isCurrentWeek = weeksAgoFor(page) == 0,
                     todayDow = todayDow,
                     weekTargetMin = weekTargetMin,

@@ -190,7 +190,7 @@ fun ProfileScreen(
                         )
                     } else {
                         Text(
-                            state.name.ifBlank { "Athlete" } + ".",
+                            state.name.ifBlank { "Athlete" },
                             style = MaterialTheme.typography.displaySmall, color = onBg,
                             modifier = Modifier.bounceClick { nameInput = state.name; editingName = true }
                         )
@@ -245,7 +245,7 @@ fun ProfileScreen(
                 // body — so each entrance wrapper MUST be a Column, not a Box. A Box would pile the
                 // siblings at the same top-start corner and they'd overlap.
                 Column(Modifier.statsEntrance(2)) {
-                    LedgerSection(state.totalSessions, state.totalVolumeLb, state.totalPrs, state.rank?.xpTotal ?: 0L, muted, accent, outline, state.longestStreakDays)
+                    LedgerSection(state.totalSessions, state.totalVolumeLb, state.totalPrs, state.rank?.xpTotal ?: 0L, muted, accent, outline, state.longestStreakDays, state.lifetimeVolumeSeriesLb)
                 }
                 if (Features.SHOW_GAMIFICATION) {
                     Column(Modifier.statsEntrance(3)) {

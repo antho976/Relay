@@ -3,11 +3,9 @@ package com.forge.app.ui.gym.session
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.CircularProgressIndicator
@@ -34,14 +32,14 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.ui.gym.session.state.SessionChartStyle
 import com.forge.app.ui.gym.session.state.SessionMetric
-import com.forge.app.ui.gym.stats.components.StatCard
 import com.forge.app.ui.gym.stats.components.statsEntrance
 
 /**
- * Full-screen breakdown of a single finished training: header + summary strip, then a session
- * overview chart and a card per exercise (set table + a per-exercise graph). The Metric (weight /
- * volume / reps) and Style (bars / line) toggles restyle every chart at once; they're held here as
- * UI state so they reset when you leave.
+ * Full-screen breakdown of a single finished training: a header that pairs the title/summary with a
+ * compact muscle map, then a global Metric picker (weight / volume / reps / RPE) and a single card
+ * for that metric. Weight/Volume/Reps render a tappable per-exercise comparison — tap a row to expand
+ * that exercise's full detail; RPE merges into one chart with an exercise selector. The bars/line
+ * style is now per-card (held here so each metric keeps its own choice but resets on leave).
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -56,7 +54,11 @@ fun SessionDetailScreen(
     val outline = MaterialTheme.colorScheme.outline
 
     var metric by rememberSaveable { mutableStateOf(SessionMetric.WEIGHT) }
-    var style by rememberSaveable { mutableStateOf(SessionChartStyle.BARS) }
+    // Bars/line is per-stat now — each metric carries its own style instead of one page-wide switch.
+    var weightStyle by rememberSaveable { mutableStateOf(SessionChartStyle.BARS) }
+    var volumeStyle by rememberSaveable { mutableStateOf(SessionChartStyle.BARS) }
+    var repsStyle by rememberSaveable { mutableStateOf(SessionChartStyle.BARS) }
+    var rpeStyle by rememberSaveable { mutableStateOf(SessionChartStyle.BARS) }
 
     Scaffold(
         topBar = {
@@ -101,22 +103,12 @@ fun SessionDetailScreen(
                 contentPadding = PaddingValues(start = 24.dp, end = 24.dp, top = 4.dp, bottom = 56.dp),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                item("header") { Box(Modifier.statsEntrance(0)) { SessionHeader(data, onBg, muted, outline) } }
-                item("summary") { Box(Modifier.statsEntrance(1)) { SummaryStrip(data, onBg, muted) } }
-                if (data.muscleSplit.isNotEmpty()) {
-                    item("muscles") {
-                        Box(Modifier.statsEntrance(2)) {
-                            StatCard(title = "MUSCLES WORKED") {
-                                MusclesWorkedCard(data.muscleSplit, onBg, muted, accent, outline)
-                            }
-                        }
-                    }
-                }
+                item("header") { Box(Modifier.statsEntrance(0)) { SessionHeaderBlock(data, onBg, muted, accent, outline) } }
                 if (data.exercises.isEmpty()) {
                     // Session exists but every exercise was skipped or logged no sets — keep its header
-                    // + summary and just note there's nothing to chart.
+                    // and just note there's nothing to chart.
                     item("empty") {
-                        Box(Modifier.statsEntrance(3)) {
+                        Box(Modifier.statsEntrance(1)) {
                             Text(
                                 "No exercises logged for this session.",
                                 style = MaterialTheme.typography.bodySmall,
@@ -126,21 +118,44 @@ fun SessionDetailScreen(
                         }
                     }
                 } else {
-                    item("controls") {
-                        Box(Modifier.statsEntrance(3)) {
-                            MetricStyleControls(metric, style, { metric = it }, { style = it }, onBg, muted, accent, outline)
+                    item("metric") {
+                        Box(Modifier.statsEntrance(1)) {
+                            SegmentRow(
+                                items = SessionMetric.entries,
+                                isSelected = { it == metric },
+                                label = { it.label },
+                                onSelect = { metric = it },
+                                onBg = onBg, muted = muted, accent = accent, outline = outline
+                            )
                         }
                     }
-                    item("overview") {
-                        Box(Modifier.statsEntrance(4)) {
-                            StatCard(title = "${metric.label.uppercase()} PER EXERCISE") {
-                                MetricByExerciseChart(data.exercises, metric, style, onBg, muted, accent, outline)
+                    item("metric-card") {
+                        Box(Modifier.statsEntrance(2)) {
+                            when (metric) {
+                                SessionMetric.RPE -> RpeExerciseCard(
+                                    data.exercises, rpeStyle, { rpeStyle = it }, onBg, muted, accent, outline
+                                )
+                                else -> {
+                                    val style = when (metric) {
+                                        SessionMetric.WEIGHT -> weightStyle
+                                        SessionMetric.VOLUME -> volumeStyle
+                                        else -> repsStyle
+                                    }
+                                    MetricExerciseCard(
+                                        exercises = data.exercises,
+                                        metric = metric,
+                                        style = style,
+                                        onStyle = { newStyle ->
+                                            when (metric) {
+                                                SessionMetric.WEIGHT -> weightStyle = newStyle
+                                                SessionMetric.VOLUME -> volumeStyle = newStyle
+                                                else -> repsStyle = newStyle
+                                            }
+                                        },
+                                        onBg = onBg, muted = muted, accent = accent, outline = outline
+                                    )
+                                }
                             }
-                        }
-                    }
-                    itemsIndexed(data.exercises, key = { i, ex -> "${ex.name}#$i" }) { i, ex ->
-                        Box(Modifier.statsEntrance(5 + i)) {
-                            ExerciseCard(ex, metric, style, onBg, muted, accent, outline)
                         }
                     }
                 }

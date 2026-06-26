@@ -44,12 +44,14 @@ fun CardioSessionDetailScreen(
             onDismiss = viewModel::closeEdit,
             onSave = viewModel::save,
             editing = entry,
-            bodyweightLb = state.bodyweightLb
+            bodyweightLb = state.bodyweightLb,
+            useMiles = state.useMiles
         )
     } else {
         CardioSessionDetailSheet(
             entry = entry,
             bodyweightLb = state.bodyweightLb,
+            useMiles = state.useMiles,
             route = null, // Health Connect route read is a deferred follow-up.
             wearable = null,
             onEdit = viewModel::openEdit,

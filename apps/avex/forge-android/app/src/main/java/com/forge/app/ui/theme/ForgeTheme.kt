@@ -27,8 +27,7 @@ fun ForgeTheme(
 
     val scheme = pearlColorScheme(accent, amoledMode)
 
-    val gradTop    = if (amoledMode) Color.Black         else PearlGradTop
-    val gradBottom = if (amoledMode) Color(0xFF050507)   else PearlGradBottom
+    val (gradTop, gradBottom) = forgeBackgroundGradient(amoledMode)
 
     MaterialTheme(
         colorScheme = scheme,
@@ -44,6 +43,16 @@ fun ForgeTheme(
         }
     }
 }
+
+/**
+ * The vertical background gradient (top → bottom) the app paints behind every screen, keyed only on
+ * [amoled] (the accent does not affect it). Single source of truth so the Compose theme AND the
+ * pre-content window background ([MainActivity] sets a matching drawable at boot) stay in lock-step —
+ * change the colors here and the cold-start background follows automatically.
+ */
+fun forgeBackgroundGradient(amoled: Boolean): Pair<Color, Color> =
+    if (amoled) Color.Black to Color(0xFF050507)
+    else PearlGradTop to PearlGradBottom
 
 // Indigo light scheme — available for future light-theme support
 @Suppress("unused")

@@ -327,6 +327,8 @@ class StatsRepository @Inject constructor(
         val allRpe = exerciseDetails.flatMap { it.sets }.mapNotNull { it.rpe }
         val durationMin = session.durationMinutes()
         val title = Program.dayDisplayName(session.dayKey)
+        // The most recent OTHER session of this same training, for the summary-tile up/down/same carets.
+        val prevSession = sessionDao.previousFinishedForDay(session.dayKey, session.id)
 
         return SessionDetailData(
             sessionId = session.id,
@@ -337,6 +339,8 @@ class StatsRepository @Inject constructor(
             volumeLb = session.totalVolumeLb,
             prCount = session.prCount,
             setCount = session.setCount,
+            prevVolumeLb = prevSession?.totalVolumeLb,
+            prevSetCount = prevSession?.setCount,
             intensity = session.intensity,
             sessionType = session.sessionType,
             deload = session.deloadMarkedHere,

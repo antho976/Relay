@@ -3,6 +3,7 @@ package com.forge.app
 import android.Manifest
 import android.content.pm.PackageManager
 import android.database.ContentObserver
+import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -32,10 +33,12 @@ import com.forge.app.service.AutoBackupWorker
 import com.forge.app.ui.common.ProvideTouchExploration
 import com.forge.app.ui.nav.ForgeNavHost
 import com.forge.app.ui.onboarding.OnboardingScreen
+import androidx.compose.ui.graphics.toArgb
 import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.theme.ForgeTheme
 import com.forge.app.ui.theme.ForgeUiSettings
 import com.forge.app.ui.theme.LocalForgeSettings
+import com.forge.app.ui.theme.forgeBackgroundGradient
 import androidx.lifecycle.lifecycleScope
 import dagger.hilt.android.AndroidEntryPoint
 import java.io.File
@@ -85,6 +88,23 @@ class MainActivity : ComponentActivity() {
         } else {
             window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
         }
+    }
+
+    /**
+     * Paint the activity window with the active theme's background gradient, overriding the static
+     * XML `windowBackground`. This is what shows in the brief "UI not loaded" frame after the splash
+     * and before Compose's first draw — keying it on the live [amoled] setting (via the shared
+     * [forgeBackgroundGradient]) means it always matches the current theme and auto-adapts when the
+     * theme is later changed, with no resource edit.
+     */
+    private fun applyAdaptiveWindowBackground(amoled: Boolean) {
+        val (top, bottom) = forgeBackgroundGradient(amoled)
+        window.setBackgroundDrawable(
+            GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(top.toArgb(), bottom.toArgb())
+            )
+        )
     }
 
     private val notifPermLauncher = registerForActivityResult(
@@ -181,8 +201,14 @@ class MainActivity : ComponentActivity() {
         AutoBackupWorker.schedule(this)
 
         // Apply privacy mode (#152) synchronously BEFORE the first frame so it's never unsecured,
-        // then keep a collector for live changes.
-        runBlocking { applyPrivacyMode(settingsRepo.privacyMode.first()) }
+        // then keep a collector for live changes. Paint the window background to match the active
+        // theme in the same pass so the post-splash "UI not loaded" frame never flashes an off-theme
+        // color — it tracks the live amoled setting, so a later theme change adapts the boot
+        // background on its own (no XML edit needed).
+        runBlocking {
+            applyPrivacyMode(settingsRepo.privacyMode.first())
+            applyAdaptiveWindowBackground(settingsRepo.amoledMode.first())
+        }
         lifecycleScope.launch {
             settingsRepo.privacyMode.collect { enabled -> applyPrivacyMode(enabled) }
         }
@@ -223,6 +249,8 @@ class MainActivity : ComponentActivity() {
                     s.copy(plateWeightLb = v)
                 }.combine(settingsRepo.firstWorkoutDone) { s, v ->
                     s.copy(firstWorkoutDone = v)
+                }.combine(settingsRepo.useMiles) { s, v ->
+                    s.copy(useMiles = v)
                 }
             }
             val uiSettings by uiSettingsFlow.collectAsState(initial = ForgeUiSettings())

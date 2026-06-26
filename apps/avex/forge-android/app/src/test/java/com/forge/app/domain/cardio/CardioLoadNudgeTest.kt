@@ -1,7 +1,9 @@
 package com.forge.app.domain.cardio
 
 import com.forge.app.data.db.entities.CardioEntry
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -32,5 +34,23 @@ class CardioLoadNudgeTest {
     @Test fun `sums multiple sessions in the window`() {
         val entries = listOf(entry("walk", 25, 6), entry("cycle", 25, 10))
         assertTrue(CardioLoadNudge.recentlyHeavy(entries, now))
+    }
+
+    @Test fun `load names a single activity and totals its minutes`() {
+        val load = CardioLoadNudge.recentLoad(listOf(entry("run", 50, 5)), now)!!
+        assertEquals(50, load.totalMinutes)
+        assertEquals("Run", load.activityLabel)
+        assertEquals(now - 5 * hourMs, load.lastSessionMs)
+    }
+
+    @Test fun `load labels a mixed block as Cardio and uses the latest session time`() {
+        val load = CardioLoadNudge.recentLoad(listOf(entry("walk", 25, 10), entry("cycle", 25, 6)), now)!!
+        assertEquals(50, load.totalMinutes)
+        assertEquals("Cardio", load.activityLabel)
+        assertEquals(now - 6 * hourMs, load.lastSessionMs)
+    }
+
+    @Test fun `load is null when under the threshold`() {
+        assertNull(CardioLoadNudge.recentLoad(listOf(entry("walk", 20, 5)), now))
     }
 }

@@ -54,6 +54,7 @@ class PdfExportRepository @Inject constructor(
     suspend fun exportSessionPdf(sessionId: Long): File? {
         val session = sessionDao.get(sessionId) ?: return null
         val useKg = settingsRepo.useKg.first()
+        val useMiles = settingsRepo.useMiles.first()
         val exercises = loggedExerciseDao.forSession(sessionId)
         val dayName = Program.dayDisplayName(session.dayKey)
         val dateStr = Instant.ofEpochMilli(session.startedAt).atZone(zone).format(dateFmt)
@@ -159,7 +160,7 @@ class PdfExportRepository @Inject constructor(
                 for (c in weekCardio) {
                     if (y > 800f) break
                     val type = CardioType.fromCode(c.type)
-                    val parts = cardioDetailParts(c, type, bodyweightLb, includeEffort = true)
+                    val parts = cardioDetailParts(c, type, bodyweightLb, includeEffort = true, useMiles = useMiles)
                     canvas.drawText("  ${type.displayName}: ${parts.joinToString(" · ")}", margin + 8, y, bodyPaint)
                     y += 13f
                     if (!c.note.isNullOrBlank() && y < 805f) {

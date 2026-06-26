@@ -21,6 +21,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.data.repo.StatsRepository
+import com.forge.app.domain.units.formatDistance
 import com.forge.app.domain.units.formatVolume
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.ui.theme.LocalForgeSettings
@@ -75,6 +76,7 @@ fun SummarySheet(
             Spacer(Modifier.height(20.dp))
 
             val useKg = LocalForgeSettings.current.useKg
+            val useMiles = LocalForgeSettings.current.useMiles
             // Stats strip
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
                 if (isGym && volumeLb != null && volumeLb > 0) {
@@ -84,7 +86,7 @@ fun SummarySheet(
                     SummaryStat(value = "$durationMin min", label = "DURATION", muted = muted, onBg = onBg)
                 }
                 if (!isGym && distanceKm != null && distanceKm > 0) {
-                    SummaryStat(value = "%.1f km".format(distanceKm), label = "DISTANCE", muted = muted, onBg = onBg)
+                    SummaryStat(value = formatDistance(distanceKm, useMiles), label = "DISTANCE", muted = muted, onBg = onBg)
                 }
                 if (isGym && prCount > 0) {
                     SummaryStat(value = "$prCount", label = "PRs", muted = muted, onBg = onBg)

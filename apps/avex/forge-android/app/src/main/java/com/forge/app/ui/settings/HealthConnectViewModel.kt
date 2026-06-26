@@ -42,6 +42,10 @@ class HealthConnectViewModel @Inject constructor(
         val calorieGranted: Boolean = false,
         /** Write opt-in: mirror each finished session's estimated active calories to HC (HC-4). */
         val writeCalories: Boolean = false,
+        /** Steps READ permission is granted — Forge may read a watch's step counts for the cardio graph. */
+        val stepsGranted: Boolean = false,
+        /** Exercise-session READ permission is granted — Forge may find watch sessions to offer GPS routes. */
+        val exerciseGranted: Boolean = false,
         /** Transient one-tap-import result line, cleared on the next refresh. */
         val importMessage: String? = null
     )
@@ -58,6 +62,12 @@ class HealthConnectViewModel @Inject constructor(
     /** Permissions the calorie launcher should request (write ActiveCaloriesBurned). */
     val caloriePermissions: Set<String> get() = manager.caloriePermissions
 
+    /** Permissions the steps launcher should request (read StepsRecord). */
+    val stepsPermissions: Set<String> get() = manager.stepsPermissions
+
+    /** Permissions the GPS-routes launcher should request (read ExerciseSessionRecord). */
+    val exercisePermissions: Set<String> get() = manager.exercisePermissions
+
     init { refresh() }
 
     fun refresh() = viewModelScope.launch {
@@ -65,6 +75,8 @@ class HealthConnectViewModel @Inject constructor(
         val granted = if (available) manager.hasAllPermissions() else false
         val weightGranted = if (available) manager.canReadWeight() else false
         val calorieGranted = if (available) manager.canWriteActiveCalories() else false
+        val stepsGranted = if (available) manager.canReadSteps() else false
+        val exerciseGranted = if (available) manager.canReadExercise() else false
         val writeBodyweight = settingsRepo.hcWriteBodyweight.first()
         val writeCalories = settingsRepo.hcWriteCalories.first()
         _state.value = _state.value.copy(
@@ -75,7 +87,9 @@ class HealthConnectViewModel @Inject constructor(
             weightGranted = weightGranted,
             writeBodyweight = writeBodyweight,
             calorieGranted = calorieGranted,
-            writeCalories = writeCalories
+            writeCalories = writeCalories,
+            stepsGranted = stepsGranted,
+            exerciseGranted = exerciseGranted
             // importMessage preserved (copy, not a fresh UiState) so a just-shown import result line
             // isn't wiped by a lifecycle-driven refresh before the user can read it.
         )

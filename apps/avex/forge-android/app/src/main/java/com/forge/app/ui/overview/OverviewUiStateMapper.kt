@@ -6,6 +6,7 @@ import com.forge.app.data.db.entities.Session
 import com.forge.app.data.db.entities.durationMinutes
 import com.forge.app.data.repo.StatsRepository
 import com.forge.app.domain.session.SessionType
+import com.forge.app.domain.units.formatDistance
 import com.forge.app.program.Program
 import com.forge.app.ui.overview.state.MilestoneEvent
 import com.forge.app.ui.overview.state.OnThisDayMemory
@@ -39,7 +40,8 @@ internal fun buildOverviewUiState(
     dayVolStats: Map<String, SessionDao.DayVolumeStats>,
     nowMs: Long,
     cardioTargetMin: Int = 0,
-    useKg: Boolean = false
+    useKg: Boolean = false,
+    useMiles: Boolean = false
 ): OverviewUiState {
     val gymItems = stats.recentGymSessions.map { session ->
         val day = Program.days.firstOrNull { it.key == session.dayKey }
@@ -80,7 +82,7 @@ internal fun buildOverviewUiState(
         val typeName = entry.type.replaceFirstChar { it.uppercase() }
         val sub = listOfNotNull(
             "${entry.durationMin} min",
-            entry.distanceKm?.takeIf { it > 0 }?.let { "${it} km" }
+            entry.distanceKm?.takeIf { it > 0 }?.let { formatDistance(it, useMiles) }
         ).joinToString(" · ")
         Pair(entry.date, OverviewRecentItem(
             dayLabel = relativeDay(entry.date),
@@ -106,7 +108,15 @@ internal fun buildOverviewUiState(
         val d = Instant.ofEpochMilli(entry.date).atZone(zone2).toLocalDate()
         if (!d.isBefore(isoWeekStart) && !d.isAfter(todayLocal)) d.dayOfWeek.value - 1 else null
     }.toSet()
-    val heavyCardioRecent = com.forge.app.domain.cardio.CardioLoadNudge.recentlyHeavy(recentCardio, nowMs)
+    val cardioLoad = com.forge.app.domain.cardio.CardioLoadNudge.recentLoad(recentCardio, nowMs)
+    val recentCardioLead = cardioLoad?.let { load ->
+        val whenLabel = when (val rel = relativeDay(load.lastSessionMs)) {
+            "TODAY" -> "today"
+            "YESTERDAY" -> "yesterday"
+            else -> rel.lowercase().replaceFirstChar { it.uppercase() }
+        }
+        "${load.activityLabel} · ${load.totalMinutes} min · $whenLabel"
+    }
 
     return OverviewUiState(
         workoutsThisWeek = stats.workouts,
@@ -129,7 +139,8 @@ internal fun buildOverviewUiState(
         recentItems = recentItems,
         trophiesUnlocked = trophiesUnlocked,
         cardioDistanceKm = distanceKm,
-        heavyCardioRecent = heavyCardioRecent
+        heavyCardioRecent = cardioLoad != null,
+        recentCardioLead = recentCardioLead
     )
 }
 

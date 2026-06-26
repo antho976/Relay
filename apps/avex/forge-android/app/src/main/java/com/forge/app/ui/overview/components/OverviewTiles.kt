@@ -28,6 +28,8 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.forge.app.domain.units.formatDistance
+import com.forge.app.ui.theme.LocalForgeSettings
 
 @Composable
 fun CardioTile(
@@ -40,6 +42,7 @@ fun CardioTile(
     outline: Color,
     modifier: Modifier = Modifier
 ) {
+    val useMiles = LocalForgeSettings.current.useMiles
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -80,7 +83,7 @@ fun CardioTile(
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.Bottom) {
                     Text("$totalMin min", style = MaterialTheme.typography.bodyMedium, color = onBg, fontWeight = FontWeight.Normal)
                     if (totalKm > 0) {
-                        Text("· ${"%.1f".format(totalKm)} km", style = MaterialTheme.typography.bodySmall, color = muted, fontSize = 11.sp)
+                        Text("· ${formatDistance(totalKm, useMiles)}", style = MaterialTheme.typography.bodySmall, color = muted, fontSize = 11.sp)
                     }
                 }
             } else {

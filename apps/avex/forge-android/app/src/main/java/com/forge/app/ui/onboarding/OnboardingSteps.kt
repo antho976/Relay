@@ -151,6 +151,26 @@ internal fun StepUnits(useKg: Boolean, onToggle: (Boolean) -> Unit) {
 }
 
 @Composable
+internal fun StepDistanceUnits(useMiles: Boolean, onToggle: (Boolean) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Headline("Distance units")
+        Caption("For cardio distance and pace. Starts matched to your weight unit — flip it if you'd rather not. Change it anytime in Settings.")
+        Row(
+            modifier = Modifier.fillMaxWidth()
+                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
+                .padding(horizontal = 14.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(if (useMiles) "Miles (mi)" else "Kilometers (km)",
+                style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurface)
+            Switch(checked = useMiles, onCheckedChange = onToggle)
+        }
+    }
+}
+
+@Composable
 internal fun StepGoal(selected: String, onSelect: (String) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Headline("What's your main goal?")

@@ -33,7 +33,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-/** THE MIRROR TEST — a 3-photo teaser; the full grid + albums live behind "View all". */
+/** GALLERY — a 3-photo teaser; the full chronological grid + optional albums live behind "View all". */
 @Composable
 internal fun MirrorTestSection(
     photos: List<ProgressPhoto>,
@@ -46,7 +46,7 @@ internal fun MirrorTestSection(
     accent: Color,
     outline: Color
 ) {
-    ProfileBlock("THE MIRROR TEST", muted, accent, outline, action = "+ add", onAction = onAdd) {
+    ProfileBlock("GALLERY", muted, accent, outline, action = "+ add", onAction = onAdd) {
         Text(
             "Private — these never leave your phone.",
             style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic, fontSize = 11.sp
@@ -85,7 +85,7 @@ internal fun MirrorTestSection(
         }
         Spacer(Modifier.height(8.dp))
         Text(
-            if (photos.size > 3) "View all ${photos.size} photos & albums →" else "View all photos & albums →",
+            if (photos.size > 3) "View all ${photos.size} photos →" else "View all photos →",
             style = MaterialTheme.typography.labelSmall, color = accent, fontSize = 10.sp,
             modifier = Modifier.bounceClick { onViewAll() }.padding(start = 2.dp, top = 2.dp, bottom = 2.dp)
         )

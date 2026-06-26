@@ -22,12 +22,14 @@ data class ProfileUiState(
     val rank: RankInfo? = null,
     val xp: XpBreakdown? = null,
 
-    // Ledger (all-time)
+    // All-time (lifetime tallies + cumulative-volume curve)
     val totalSessions: Int = 0,
     val totalVolumeLb: Double = 0.0,
     val totalPrs: Int = 0,
     val streakDays: Int = 0,
     val longestStreakDays: Int = 0,
+    /** Cumulative lifted volume (lb), one point per session, oldest → newest; drives the All-Time graph. */
+    val lifetimeVolumeSeriesLb: List<Double> = emptyList(),
 
     // Standing (estimated vs typical lifters, 90 days)
     val standings: List<StandingMetric> = emptyList(),

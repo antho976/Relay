@@ -426,9 +426,13 @@ fun OverviewScreen(
                             modifier = Modifier.size(16.dp).clickableLabeled("Dismiss") { cardioNudgeDismissed = true }
                         )
                     }
+                    state.recentCardioLead?.let { lead ->
+                        Text(lead, style = MaterialTheme.typography.bodyLarge, color = onBg)
+                        Spacer(Modifier.height(4.dp))
+                    }
                     Text(
-                        "You put in a solid cardio block recently — keep today's heavy lifts a touch submaximal, or fuel up well before you go after them.",
-                        style = MaterialTheme.typography.bodyMedium, color = onBg
+                        "Enough to compete with lifting recovery — keep today's heavy work a touch submaximal, or fuel up well before you go after it.",
+                        style = MaterialTheme.typography.bodyMedium, color = muted
                     )
                 }
             }

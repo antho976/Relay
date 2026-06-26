@@ -49,7 +49,7 @@ import com.forge.app.data.repo.GoalRepository
 import com.forge.app.domain.units.parseToLb
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.domain.units.weightInputValue
-import com.forge.app.ui.common.EmptyState
+import com.forge.app.ui.common.FirstTouchTip
 import com.forge.app.ui.theme.LocalForgeSettings
 
 /** A goal being added (currentTargetLb = null) or edited (existing target). */
@@ -97,9 +97,11 @@ fun GoalsScreen(
                 Spacer(Modifier.height(16.dp))
 
                 if (state.goals.isEmpty()) {
-                    EmptyState(
-                        title = "No goals yet.",
-                        subtitle = "Add one below — or set a goal on any exercise during a workout."
+                    // Left-aligned, quiet first-touch nudge (matches the Profile header / Overview
+                    // welcome) instead of a centered card that floated out of place on this screen.
+                    FirstTouchTip(
+                        "No goals yet.",
+                        "Tap + Add a goal below to pick a lift and a target — or set one on any exercise during a workout."
                     )
                 } else {
                     state.goals.forEach { g ->

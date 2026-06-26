@@ -33,10 +33,12 @@ import com.forge.app.domain.units.formatVolumeCompact
 import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.ui.common.InlineEmptyHint
+import com.forge.app.ui.gym.stats.components.LineChart
 import kotlin.math.roundToInt
 import com.forge.app.ui.theme.LocalForgeSettings
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.domain.rank.StandingMetric
@@ -73,7 +75,7 @@ internal fun ProfileBlock(
     Column(content = content)
 }
 
-/** THE LEDGER · ALL TIME — lifetime tallies (XP cell only when gamification is enabled). */
+/** ALL-TIME — lifetime tallies + a cumulative-volume curve (XP cell only when gamification is enabled). */
 @Composable
 internal fun LedgerSection(
     sessions: Int,
@@ -83,10 +85,12 @@ internal fun LedgerSection(
     muted: Color,
     accent: Color,
     outline: Color,
-    longestStreakDays: Int = 0
+    longestStreakDays: Int = 0,
+    /** Cumulative lifted volume (lb) bucketed by month, oldest → newest. Empty until ≥2 months exist. */
+    volumeSeriesLb: List<Double> = emptyList()
 ) {
     val useKg = LocalForgeSettings.current.useKg
-    ProfileBlock("THE LEDGER · ALL TIME", muted, accent, outline, compact = true) {
+    ProfileBlock("ALL-TIME", muted, accent, outline, compact = true) {
         if (sessions == 0) {
             // Bare zeros on a stranger's first open read as "empty/broken" — name what fills them.
             InlineEmptyHint(
@@ -102,6 +106,24 @@ internal fun LedgerSection(
                 LifetimeStat(formatVolume(volumeLb, useKg), "LIFETIME ${unitLabel(useKg).uppercase()}", compact = true)
                 LifetimeStat("$prs", "PRs", compact = true)
                 if (Features.SHOW_GAMIFICATION) LifetimeStat("$xp", "XP", compact = true)
+            }
+            // Cumulative-volume curve: total lifted weight (in the display unit) climbing month by
+            // month over your whole history. Needs ≥2 points to draw a line.
+            if (volumeSeriesLb.size >= 2) {
+                Spacer(Modifier.height(14.dp))
+                val series = volumeSeriesLb.map { toDisplayWeight(it, useKg) }
+                LineChart(
+                    values = series,
+                    lineColor = accent,
+                    minValue = 0.0,
+                    maxValue = series.last(),
+                    modifier = Modifier.fillMaxWidth().height(56.dp)
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Total ${unitLabel(useKg)} lifted, all time",
+                    style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp
+                )
             }
             if (longestStreakDays > 1) {
                 Spacer(Modifier.height(10.dp))
@@ -214,8 +236,9 @@ internal fun CardioTotalsSection(
     accent: Color,
     outline: Color
 ) {
+    val useMiles = com.forge.app.ui.theme.LocalForgeSettings.current.useMiles
     val timeLabel = if (minutes >= 60) "${minutes / 60}h ${minutes % 60}m" else "$minutes min"
-    val distLabel = if (distanceKm > 0) String.format(java.util.Locale.US, "%.1f km", distanceKm) else "—"
+    val distLabel = if (distanceKm > 0) com.forge.app.domain.units.formatDistance(distanceKm, useMiles) else "—"
     ProfileBlock("CARDIO", muted, accent, outline) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             LifetimeStat("$sessions", "SESSIONS")
@@ -228,7 +251,9 @@ internal fun CardioTotalsSection(
 @Composable
 private fun SignatureCell(value: String, label: String, onBg: Color, muted: Color, modifier: Modifier = Modifier) {
     Column(modifier.padding(end = 8.dp)) {
-        Text(value, style = MaterialTheme.typography.titleSmall, color = onBg, maxLines = 2)
+        // One line only — long lift names ellipsize rather than wrap to a second row, so the
+        // SIGNATURE block stays a single line tall.
+        Text(value, style = MaterialTheme.typography.titleSmall, color = onBg, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Spacer(Modifier.height(3.dp))
         Text(label, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 8.sp)
     }

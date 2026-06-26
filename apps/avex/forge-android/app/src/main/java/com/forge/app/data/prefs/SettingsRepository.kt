@@ -150,6 +150,16 @@ class SettingsRepository @Inject constructor(
     suspend fun setUseKg(value: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.USE_KG] = value }
 
+    /**
+     * Cardio distance unit. When the user never made an explicit choice, it follows the weight unit
+     * (lb→miles, kg→km) so a single "pounds + miles" / "kilos + km" mental model holds by default —
+     * this is also what existing users and the skip-onboarding path get for free.
+     */
+    val useMiles: Flow<Boolean> = context.forgePreferences.data
+        .map { it[PreferenceKeys.USE_MILES] ?: !(it[PreferenceKeys.USE_KG] ?: false) }
+    suspend fun setUseMiles(value: Boolean) =
+        context.forgePreferences.edit { it[PreferenceKeys.USE_MILES] = value }
+
     // ─── Health Connect bodyweight sync (HC-3) ────────────────────────────────
 
     /** Mirror weigh-ins to Health Connect. Off by default — write-back is strictly opt-in. */
@@ -523,12 +533,21 @@ class SettingsRepository @Inject constructor(
             prefs[PreferenceKeys.PINNED_EXERCISES] = if (on) cur + libId else cur - libId
         }
 
-    suspend fun completeOnboarding(name: String, useKgChoice: Boolean, goal: String, bodyweightLb: Double?) {
+    /** [useMilesChoice] is null when the user left the distance step untouched — in that case
+     *  USE_MILES is deliberately NOT persisted, so [useMiles] keeps deriving from the weight unit. */
+    suspend fun completeOnboarding(
+        name: String,
+        useKgChoice: Boolean,
+        goal: String,
+        bodyweightLb: Double?,
+        useMilesChoice: Boolean? = null
+    ) {
         context.forgePreferences.edit { prefs ->
             prefs[PreferenceKeys.ONBOARDING_DONE] = true
             prefs[PreferenceKeys.WELCOMED] = true
             if (name.isNotBlank()) prefs[PreferenceKeys.USER_NAME] = name
             prefs[PreferenceKeys.USE_KG] = useKgChoice
+            useMilesChoice?.let { prefs[PreferenceKeys.USE_MILES] = it }
             if (goal.isNotBlank()) prefs[PreferenceKeys.USER_GOAL] = goal
         }
     }

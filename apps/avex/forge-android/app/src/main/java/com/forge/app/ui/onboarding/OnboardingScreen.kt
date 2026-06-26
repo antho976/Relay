@@ -96,6 +96,10 @@ fun OnboardingScreen(
     var planMode by remember { mutableStateOf("") }
     var name by remember { mutableStateOf("") }
     var useKg by remember { mutableStateOf(localeDefaultUseKg()) }
+    // Distance unit tracks the weight unit (lb→miles, kg→km) until the user explicitly taps the
+    // distance toggle. Only an explicit pick is persisted, so leaving it untouched ties to the weight unit.
+    var useMilesChoice by remember { mutableStateOf(false) }
+    var distanceTouched by remember { mutableStateOf(false) }
     // Program-shaping choices start UNSELECTED — the user actively picks them; nothing is pre-highlighted.
     var goal by remember { mutableStateOf("") }
     var experience by remember { mutableStateOf("") }
@@ -131,7 +135,9 @@ fun OnboardingScreen(
     fun finish(coachEnabled: Boolean = true) {
         val bwLb = parseSaneBodyweightLb(bodyweightInput, useKg)
         viewModel.complete(
-            planMode = planMode, name = name.trim(), useKg = useKg, sex = sex ?: "", bodyweightLb = bwLb,
+            planMode = planMode, name = name.trim(), useKg = useKg,
+            useMiles = if (distanceTouched) useMilesChoice else null,
+            sex = sex ?: "", bodyweightLb = bwLb,
             goal = goal, daysPerWeek = daysPerWeek, equipment = equipment,
             cadence = cadence.ifEmpty { "never" }, everyN = everyN, experience = experience,
             problemAreas = problemAreas, seed = previewSeed,
@@ -188,6 +194,10 @@ fun OnboardingScreen(
                                 StepBodyweight(input = bodyweightInput, useKg = useKg, onInputChange = { bodyweightInput = it })
                                 StepSex(selected = sex, onSelect = { sex = it })
                                 StepUnits(useKg = useKg, onToggle = { useKg = it })
+                                StepDistanceUnits(
+                                    useMiles = if (distanceTouched) useMilesChoice else !useKg,
+                                    onToggle = { useMilesChoice = it; distanceTouched = true }
+                                )
                                 Text(
                                     "Everything stays on your phone. No account, no sign-up. Forge has no internet access, so it can't send your data anywhere.",
                                     style = MaterialTheme.typography.bodySmall,

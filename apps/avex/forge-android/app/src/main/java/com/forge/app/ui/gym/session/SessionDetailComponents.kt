@@ -6,6 +6,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -19,7 +21,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -27,19 +29,22 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
 import com.forge.app.data.db.types.EffortRating
 import com.forge.app.domain.session.SessionType
 import com.forge.app.domain.units.formatVolume
 import com.forge.app.domain.units.formatWeight
+import com.forge.app.program.MuscleGroup
 import com.forge.app.ui.common.rpeLabel
 import com.forge.app.ui.gym.session.state.ExerciseDetail
 import com.forge.app.ui.gym.session.state.SessionChartStyle
 import com.forge.app.ui.gym.session.state.SessionDetailData
 import com.forge.app.ui.gym.session.state.SessionMetric
 import com.forge.app.ui.gym.session.state.SetDetail
+import com.forge.app.ui.gym.stats.components.BodyHeatmap
+import com.forge.app.ui.gym.stats.state.MuscleSetCount
 import com.forge.app.ui.overview.SummaryStat
 import com.forge.app.ui.theme.LocalForgeSettings
 import java.time.Instant
@@ -47,54 +52,190 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 
-// ─── Header + summary ───────────────────────────────────────────────────────--
+// ─── Header + summary + muscle map ─────────────────────────────────────────────
 
+/**
+ * The top block: session title/date/journal + the summary stats on the left, and a compact
+ * front+back muscle map on the right. The map is sized to sit just below the title and bottom out
+ * near the summary stats so the whole header reads as one tight unit (replaces the old full-width
+ * "MUSCLES WORKED" bar card, which ate too much vertical space).
+ */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-internal fun SessionHeader(data: SessionDetailData, onBg: Color, muted: Color, outline: Color) {
-    val zone = ZoneId.systemDefault()
-    val date = Instant.ofEpochMilli(data.dateMs).atZone(zone).toLocalDate()
-    val dateStr = date.format(DateTimeFormatter.ofPattern("EEEE, d MMMM", Locale.getDefault()))
-    Column(Modifier.fillMaxWidth()) {
-        val sub = buildList {
-            // Deload marker wins; otherwise the stored session-type's pill (TEST/TECHNIQUE/… once a
-            // picker writes them) — same resolution as the Overview status pill so the two can't drift.
-            (if (data.deload) SessionType.DELOAD.pillLabel else SessionType.fromKey(data.sessionType)?.pillLabel)
-                ?.let { add(it) }
-            if (data.intensity.isNotBlank() && data.intensity != "normal") add(data.intensity.uppercase())
-            // Quick tags are stored comma-separated (#107); add each as its own token so the sub-line
-            // never shows a raw "FOCUS,HEAVY" (the Overview pill splits them the same way).
-            data.tag.split(",").forEach { t -> t.trim().takeIf { it.isNotEmpty() }?.let { add(it.uppercase()) } }
-        }.joinToString(" · ")
-        if (sub.isNotEmpty()) {
-            Text(sub, style = MaterialTheme.typography.labelSmall, letterSpacing = 1.5.sp, color = muted, fontSize = 9.sp)
-            Spacer(Modifier.height(2.dp))
+internal fun SessionHeaderBlock(
+    data: SessionDetailData,
+    onBg: Color,
+    muted: Color,
+    accent: Color,
+    outline: Color
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        // Bottom-align so the map's lower edge lands on the summary-stats row rather than floating.
+        verticalAlignment = Alignment.Bottom
+    ) {
+        Column(Modifier.weight(1f)) {
+            val zone = ZoneId.systemDefault()
+            val date = Instant.ofEpochMilli(data.dateMs).atZone(zone).toLocalDate()
+            val dateStr = date.format(DateTimeFormatter.ofPattern("EEEE, d MMMM", Locale.getDefault()))
+            val sub = buildList {
+                // Deload marker wins; otherwise the stored session-type's pill (TEST/TECHNIQUE/… once a
+                // picker writes them) — same resolution as the Overview status pill so the two can't drift.
+                (if (data.deload) SessionType.DELOAD.pillLabel else SessionType.fromKey(data.sessionType)?.pillLabel)
+                    ?.let { add(it) }
+                if (data.intensity.isNotBlank() && data.intensity != "normal") add(data.intensity.uppercase())
+                // Quick tags are stored comma-separated (#107); add each as its own token so the sub-line
+                // never shows a raw "FOCUS,HEAVY" (the Overview pill splits them the same way).
+                data.tag.split(",").forEach { t -> t.trim().takeIf { it.isNotEmpty() }?.let { add(it.uppercase()) } }
+            }.joinToString(" · ")
+            if (sub.isNotEmpty()) {
+                Text(sub, style = MaterialTheme.typography.labelSmall, letterSpacing = 1.5.sp, color = muted, fontSize = 9.sp)
+                Spacer(Modifier.height(2.dp))
+            }
+            Text(data.title, style = MaterialTheme.typography.headlineSmall, color = onBg, fontWeight = FontWeight.Normal)
+            Text(dateStr, style = MaterialTheme.typography.bodySmall, color = muted, fontSize = 11.sp, fontStyle = FontStyle.Italic)
+            if (data.journal.isNotBlank()) {
+                Spacer(Modifier.height(10.dp))
+                Text("“${data.journal}”", style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic)
+            }
+            Spacer(Modifier.height(14.dp))
+            SummaryStrip(data, onBg, muted)
         }
-        Text(data.title, style = MaterialTheme.typography.headlineSmall, color = onBg, fontWeight = FontWeight.Normal)
-        Text(dateStr, style = MaterialTheme.typography.bodySmall, color = muted, fontSize = 11.sp, fontStyle = FontStyle.Italic)
-        if (data.journal.isNotBlank()) {
-            Spacer(Modifier.height(10.dp))
-            Text("“${data.journal}”", style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic)
+        if (data.muscleSplit.isNotEmpty()) {
+            CompactBodyMap(data.muscleSplit, accent, muted, outline, Modifier.width(116.dp))
         }
     }
 }
 
-/** The top stats strip — reuses the overview's [SummaryStat] so the language matches the rest of history. */
+/**
+ * The two anatomical figures (front + back) tinted by set count — same art as the Stats heatmap, but
+ * shrunk for the header (no legend, no FRONT/BACK captions). Caller fixes the width; the figures
+ * scale to a short fixed height so the pair tucks beside the title. Tap to blow it up full-size.
+ */
+@Composable
+private fun CompactBodyMap(
+    split: List<MuscleSetCount>,
+    accent: Color,
+    muted: Color,
+    outline: Color,
+    modifier: Modifier = Modifier
+) {
+    val setsBy = split.associate { it.muscle to it.sets }
+    var enlarged by remember { mutableStateOf(false) }
+    Box(modifier.clip(RoundedCornerShape(8.dp)).clickable { enlarged = true }) {
+        BodyHeatmap(
+            setsByMuscle = setsBy,
+            accent = accent,
+            faint = outline.copy(alpha = 0.34f),
+            silhouette = outline.copy(alpha = 0.26f),
+            labelColor = muted,
+            figureHeight = 96.dp,
+            showLegend = false,
+            showTitles = false
+        )
+    }
+    if (enlarged) MuscleMapDialog(setsBy, accent, muted, outline) { enlarged = false }
+}
+
+/** The full-size front+back heatmap (with captions + legend) shown when the header map is tapped. */
+@Composable
+private fun MuscleMapDialog(
+    setsByMuscle: Map<MuscleGroup, Int>,
+    accent: Color,
+    muted: Color,
+    outline: Color,
+    onDismiss: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(20.dp))
+                .clickable(onClick = onDismiss)
+                .padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text("MUSCLES WORKED", style = MaterialTheme.typography.labelLarge, color = muted, fontWeight = FontWeight.SemiBold)
+            BodyHeatmap(
+                setsByMuscle = setsByMuscle,
+                accent = accent,
+                faint = outline.copy(alpha = 0.34f),
+                silhouette = outline.copy(alpha = 0.26f),
+                labelColor = muted,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+    }
+}
+
+/**
+ * The summary stats; wraps so it fits beside the muscle map. Volume & Sets carry an up/down/same
+ * caret vs the last session of this same training ([SessionDetailData.prevVolumeLb]/[prevSetCount]);
+ * the rest reuse the plain overview [SummaryStat].
+ */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun SummaryStrip(data: SessionDetailData, onBg: Color, muted: Color) {
     val useKg = LocalForgeSettings.current.useKg
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-        data.volumeLb?.takeIf { it > 0 }?.let { SummaryStat(formatVolume(it, useKg), "VOLUME", muted, onBg) }
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(18.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        data.volumeLb?.takeIf { it > 0 }?.let {
+            TrendStat(formatVolume(it, useKg), "VOLUME", trendOf(it, data.prevVolumeLb), muted, onBg)
+        }
         data.durationMin?.takeIf { it > 0 }?.let { SummaryStat("$it min", "DURATION", muted, onBg) }
-        if (data.setCount > 0) SummaryStat("${data.setCount}", "SETS", muted, onBg)
+        if (data.setCount > 0) {
+            TrendStat("${data.setCount}", "SETS", trendOf(data.setCount.toDouble(), data.prevSetCount?.toDouble()), muted, onBg)
+        }
         if (data.prCount > 0) SummaryStat("${data.prCount}", "PRs", muted, onBg)
         data.avgRpe?.let { SummaryStat(rpeLabel(it), "AVG RPE", muted, onBg) }
     }
 }
 
-// ─── Exercise card ───────────────────────────────────────────────────────────-
+private enum class Trend { UP, DOWN, SAME }
 
+/** Direction of [cur] vs the previous session's [prev]; null when there's no prior to compare. */
+private fun trendOf(cur: Double, prev: Double?): Trend? {
+    if (prev == null || prev <= 0.0) return null
+    val eps = prev * 0.001 // ignore sub-0.1% float noise so "same" really means same
+    return when {
+        cur > prev + eps -> Trend.UP
+        cur < prev - eps -> Trend.DOWN
+        else -> Trend.SAME
+    }
+}
+
+/** A summary stat (value over label) with a small up/down/same caret vs the last session. */
 @Composable
-internal fun ExerciseCard(
+private fun TrendStat(value: String, label: String, trend: Trend?, muted: Color, onBg: Color) {
+    Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(value, style = MaterialTheme.typography.bodyMedium, color = onBg, fontWeight = FontWeight.Normal)
+            trend?.let {
+                val (glyph, color) = when (it) {
+                    Trend.UP -> "▲" to Color(0xFF4CAF50)
+                    Trend.DOWN -> "▼" to Color(0xFFE53935)
+                    Trend.SAME -> "=" to muted.copy(alpha = 0.7f)
+                }
+                Text(glyph, style = MaterialTheme.typography.labelSmall, color = color, fontSize = 8.sp)
+            }
+        }
+        Text(label, style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.6f), fontSize = 9.sp, letterSpacing = 0.5.sp)
+    }
+}
+
+// ─── Per-exercise drill-in detail ──────────────────────────────────────────────
+
+/**
+ * The full breakdown for one exercise, shown when its row in a metric card is tapped: PR/e1RM/effort
+ * chips, the exercise note, a one-line gist, the per-set chart (in the page's metric + the card's
+ * bars/line style), and the complete set table. No outer card — the metric card already supplies it.
+ */
+@Composable
+internal fun ExerciseDetailBody(
     ex: ExerciseDetail,
     metric: SessionMetric,
     style: SessionChartStyle,
@@ -104,49 +245,25 @@ internal fun ExerciseCard(
     outline: Color
 ) {
     val useKg = LocalForgeSettings.current.useKg
-    // Collapsed by default so the page reads light; the chart + summary carry the gist, the full
-    // set table is one tap away.
-    var expanded by rememberSaveable(ex.name) { mutableStateOf(false) }
-    Column(
-        modifier = Modifier.fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp))
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                ex.name, style = MaterialTheme.typography.bodyLarge, color = onBg,
-                maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f)
-            )
-            // A new best e1RM lights up like a PR; otherwise it's a quiet reference chip.
-            ex.e1rmLb?.let { e ->
-                if (ex.e1rmIsBest) Chip("e1RM ${formatWeight(e, useKg)}", accent, accent.copy(alpha = 0.15f))
-                else Chip("e1RM ${formatWeight(e, useKg)}", muted, outline.copy(alpha = 0.12f))
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        val hasChip = ex.e1rmLb != null || ex.isPr || ex.effort != null
+        if (hasChip) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                // A new best e1RM lights up like a PR; otherwise it's a quiet reference chip.
+                ex.e1rmLb?.let { e ->
+                    if (ex.e1rmIsBest) Chip("e1RM ${formatWeight(e, useKg)}", accent, accent.copy(alpha = 0.15f))
+                    else Chip("e1RM ${formatWeight(e, useKg)}", muted, outline.copy(alpha = 0.12f))
+                }
+                if (ex.isPr) Chip("PR", accent, accent.copy(alpha = 0.15f))
+                ex.effort?.let { Chip(it.displayName, effortColor(it), effortColor(it).copy(alpha = 0.15f)) }
             }
-            if (ex.isPr) Chip("PR", accent, accent.copy(alpha = 0.15f))
-            ex.effort?.let { Chip(it.displayName, effortColor(it), effortColor(it).copy(alpha = 0.15f)) }
         }
         if (!ex.note.isNullOrBlank()) {
             Text("“${ex.note}”", style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic, fontSize = 11.sp)
         }
-
-        // One-line gist of the set table while it's collapsed.
         Text(exerciseSummary(ex, useKg), style = MaterialTheme.typography.bodySmall, color = muted)
-
-        // The per-exercise graph (bars or line) in the page's chosen metric.
         PerExerciseSetChart(ex, metric, style, accent, muted, outline)
-
-        Text(
-            if (expanded) "Hide sets ▴" else "Show all ${ex.sets.size} ${if (ex.sets.size == 1) "set" else "sets"} ▾",
-            style = MaterialTheme.typography.labelMedium,
-            color = accent,
-            modifier = Modifier.clickable { expanded = !expanded }
-        )
-        if (expanded) SetTable(ex.sets, onBg, muted, accent, outline)
+        SetTable(ex.sets, onBg, muted, accent, outline)
     }
 }
 

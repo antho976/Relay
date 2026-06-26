@@ -10,12 +10,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.selection.selectable
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.DirectionsRun
-import androidx.compose.material.icons.filled.AccountCircle
-import androidx.compose.material.icons.filled.BarChart
-import androidx.compose.material.icons.filled.Home
-import androidx.compose.material.icons.filled.Psychology
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -36,11 +30,11 @@ import androidx.compose.ui.unit.sp
  * the middle.
  */
 enum class BottomTab(val label: String, val icon: ImageVector) {
-    CARDIO("Cardio", Icons.AutoMirrored.Filled.DirectionsRun),
-    STATS("Stats", Icons.Filled.BarChart),
-    HOME("Home", Icons.Filled.Home),
-    COACH("Coach", Icons.Filled.Psychology),
-    PROFILE("Profile", Icons.Filled.AccountCircle),
+    CARDIO("Cardio", NavIcons.Cardio),
+    STATS("Stats", NavIcons.Stats),
+    HOME("Home", NavIcons.Home),
+    COACH("Coach", NavIcons.Coach),
+    PROFILE("Profile", NavIcons.Profile),
 }
 
 /**

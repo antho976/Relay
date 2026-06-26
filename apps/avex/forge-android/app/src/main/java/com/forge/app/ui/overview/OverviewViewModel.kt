@@ -105,7 +105,8 @@ class OverviewViewModel @Inject constructor(
         cardioRepo.observeDistanceKmSince(weekStartMs),
         statsRepo.observeDayVolumeStats(),
         settingsRepo.cardioWeeklyTargetMin,
-        settingsRepo.useKg
+        settingsRepo.useKg,
+        settingsRepo.useMiles
     ) { args ->
         val stats = args[0] as StatsRepository.WeeklyStats
         @Suppress("UNCHECKED_CAST")
@@ -120,6 +121,7 @@ class OverviewViewModel @Inject constructor(
         val dayVolStats = args[7] as Map<String, SessionDao.DayVolumeStats>
         val cardioTarget = args[8] as Int
         val useKg = args[9] as Boolean
+        val useMiles = args[10] as Boolean
 
         buildOverviewUiState(
             stats = stats,
@@ -132,7 +134,8 @@ class OverviewViewModel @Inject constructor(
             dayVolStats = dayVolStats,
             nowMs = clock.nowMs(),
             cardioTargetMin = cardioTarget,
-            useKg = useKg
+            useKg = useKg,
+            useMiles = useMiles
         )
     }.combine(customizationRepo.observeAllDayNames()) { s, names ->
         val customName = names.firstOrNull { it.dayKey == s.nextUpDayKey }?.customName

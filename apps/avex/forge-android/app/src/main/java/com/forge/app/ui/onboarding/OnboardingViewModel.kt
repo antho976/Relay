@@ -53,6 +53,8 @@ class OnboardingViewModel @Inject constructor(
         useKg: Boolean,
         sex: String,
         bodyweightLb: Double?,
+        /** Explicit cardio distance choice; null = leave tied to the weight unit (lb→miles, kg→km). */
+        useMiles: Boolean? = null,
         // Generated-path inputs (ignored for custom/freestyle, which use defaults):
         goal: String = "build_muscle",
         daysPerWeek: Int = 4,
@@ -118,7 +120,7 @@ class OnboardingViewModel @Inject constructor(
             }
             // Set ONBOARDING_DONE last — it flips the UI from onboarding to home, so the freshly
             // generated program is already live when the home screen first composes.
-            settingsRepo.completeOnboarding(name, useKg, effectiveGoal, bodyweightLb)
+            settingsRepo.completeOnboarding(name, useKg, effectiveGoal, bodyweightLb, useMiles)
         }
     }
 

@@ -22,6 +22,7 @@ import javax.inject.Inject
 data class SettingsUiState(
     val amoledMode: Boolean = false,
     val useKg: Boolean = false,
+    val useMiles: Boolean = false,
     val compactSetLogging: Boolean = false,
     val noteTemplates: Set<String> = setOf("form felt: ", "energy: ", "pain/discomfort: ", "focus cue: "),
     val hiddenOverviewTiles: Set<String> = emptySet(),
@@ -233,6 +234,8 @@ class SettingsViewModel @Inject constructor(
         s.copy(freestyleMode = v)
     }.combine(settingsRepo.coachEnabled) { s, v ->
         s.copy(coachEnabled = v)
+    }.combine(settingsRepo.useMiles) { s, v ->
+        s.copy(useMiles = v)
     }.combine(programRepository.revision) { s, _ ->
         s.copy(weeklyVolume = computeWeeklyVolume())
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsUiState())
@@ -248,6 +251,7 @@ class SettingsViewModel @Inject constructor(
 
     fun setAmoledMode(v: Boolean) = viewModelScope.launch { settingsRepo.setAmoledMode(v) }
     fun setUseKg(v: Boolean) = viewModelScope.launch { settingsRepo.setUseKg(v) }
+    fun setUseMiles(v: Boolean) = viewModelScope.launch { settingsRepo.setUseMiles(v) }
     fun setDateFormat(v: String) = viewModelScope.launch { settingsRepo.setDateFormat(v) }
     fun setTimeFormat24h(v: Boolean) = viewModelScope.launch { settingsRepo.setTimeFormat24h(v) }
     fun setFirstDayMonday(v: Boolean) = viewModelScope.launch { settingsRepo.setFirstDayMonday(v) }

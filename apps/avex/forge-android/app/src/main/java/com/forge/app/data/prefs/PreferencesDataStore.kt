@@ -48,6 +48,9 @@ object PreferenceKeys {
 
     // ─── Units (#2) ───────────────────────────────────────────────────────────
     val USE_KG = booleanPreferencesKey("use_kg")
+    /** Cardio distance/pace in miles. ABSENT = derive from [USE_KG] (lb→miles, kg→km); only an
+     *  explicit pick in onboarding or Settings persists this and breaks the tie to the weight unit. */
+    val USE_MILES = booleanPreferencesKey("use_miles")
 
     // ─── Health Connect bodyweight sync (HC-3) ────────────────────────────────
     /** When ON (and the WeightRecord write permission is granted), Forge mirrors each weigh-in to

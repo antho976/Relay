@@ -45,7 +45,9 @@ import com.forge.app.domain.cardio.CardioRestReason
 import com.forge.app.domain.cardio.CardioType
 import com.forge.app.domain.cardio.CardioWearableDay
 import com.forge.app.domain.cardio.RoutePoint
-import com.forge.app.domain.cardio.pacePerKm
+import com.forge.app.domain.cardio.pacePerUnit
+import com.forge.app.domain.units.distanceUnitLabel
+import com.forge.app.domain.units.formatDistance
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -61,8 +63,13 @@ import java.util.Locale
 fun CardioSessionDetailSheet(
     entry: CardioEntry,
     bodyweightLb: Double?,
-    /** GPS track (watch-only); null until the Health Connect route read is wired in. */
+    /** Distance/pace unit — true shows miles, false km. */
+    useMiles: Boolean = false,
+    /** GPS track (watch-only); non-null once the matching session's route is available to draw. */
     route: List<RoutePoint>? = null,
+    /** Non-null when a matching watch session has a route that needs Health Connect consent first —
+     *  shows a "Show GPS route" button that launches the consent flow. Ignored once [route] is set. */
+    onShowRoute: (() -> Unit)? = null,
     /** Watch-derived steps for the session's day; null until the Health Connect read is wired in. */
     wearable: CardioWearableDay? = null,
     onEdit: () -> Unit,
@@ -121,8 +128,8 @@ fun CardioSessionDetailSheet(
                         StatRow("Rest", CardioRestReason.fromCode(entry.restReason)?.displayName ?: "Rest day", onBg, muted, outline)
                     } else {
                         StatRow("Duration", if (entry.durationMin > 0) "${entry.durationMin} min" else "—", onBg, muted, outline)
-                        entry.distanceKm?.let { StatRow("Distance", String.format(Locale.US, "%.1f km", it), onBg, muted, outline) }
-                        pacePerKm(entry.durationMin, entry.distanceKm)?.let { StatRow("Pace", "$it /km", onBg, muted, outline) }
+                        entry.distanceKm?.let { StatRow("Distance", formatDistance(it, useMiles), onBg, muted, outline) }
+                        pacePerUnit(entry.durationMin, entry.distanceKm, useMiles)?.let { StatRow("Pace", "$it /${distanceUnitLabel(useMiles)}", onBg, muted, outline) }
                         CardioEffort.fromCode(entry.effort)?.let { StatRow("Effort", it.displayName, onBg, muted, outline) }
                         entry.hrZone?.let { StatRow("HR zone", "Z$it", onBg, muted, outline) }
                         entry.intervalCount?.takeIf { it > 0 }?.let { StatRow("Intervals", "$it", onBg, muted, outline) }
@@ -148,6 +155,23 @@ fun CardioSessionDetailSheet(
                             modifier = Modifier.fillMaxWidth().height(160.dp).clip(RoundedCornerShape(12.dp)).background(muted.copy(alpha = 0.06f))
                         ) {
                             RouteThumbnail(route = route, color = onBg, modifier = Modifier.fillMaxSize().padding(8.dp))
+                        }
+                    }
+                }
+            } else if (!type.isRest && onShowRoute != null) {
+                // A matching watch session has a route, but Health Connect needs per-route consent first.
+                item("route-cta") {
+                    Column(Modifier.padding(horizontal = 24.dp, vertical = 8.dp)) {
+                        Text("ROUTE (GPS)", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
+                        Spacer(Modifier.height(10.dp))
+                        OutlinedButton(
+                            onClick = onShowRoute,
+                            shape = RoundedCornerShape(50),
+                            border = androidx.compose.foundation.BorderStroke(1.5.dp, onBg),
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = onBg),
+                            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp)
+                        ) {
+                            Text("Show GPS route", style = MaterialTheme.typography.bodyMedium)
                         }
                     }
                 }

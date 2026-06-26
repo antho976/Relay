@@ -109,7 +109,9 @@ data class OverviewUiState(
     /** Non-null when Health Connect resting HR is elevated vs the user's baseline — recovery card. */
     val recoveryAlert: RecoveryAlert? = null,
     /** True when a big cardio block was logged in the last ~36h — drives a "go easier today" nudge. */
-    val heavyCardioRecent: Boolean = false
+    val heavyCardioRecent: Boolean = false,
+    /** The concrete block behind [heavyCardioRecent] — e.g. "Run · 63 min · yesterday" (null when none). */
+    val recentCardioLead: String? = null
 ) {
     val hasActiveSession: Boolean get() = activeSessionDayKey != null
 }

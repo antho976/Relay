@@ -96,6 +96,7 @@ internal val ALL_ITEMS = listOf(
     SettingsItem("Compact set logging", "compact logging display density", SettingsPage.Appearance),
     SettingsItem("Accent color", "color accent theme tint", SettingsPage.Appearance),
     SettingsItem("Weight unit", "kg lb weight unit pounds kilograms", SettingsPage.Format),
+    SettingsItem("Distance unit", "km mi miles kilometers distance cardio pace", SettingsPage.Format),
     SettingsItem("Date format", "date format dd mm yyyy", SettingsPage.Format),
     SettingsItem("Time format", "time 12h 24h clock hour", SettingsPage.Format),
     SettingsItem("First day of week", "week start monday sunday", SettingsPage.Format),

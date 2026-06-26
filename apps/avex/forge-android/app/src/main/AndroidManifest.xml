@@ -20,6 +20,17 @@
          BACK. Both opt-in and granted in the Health Connect app; still no internet permission. -->
     <uses-permission android:name="android.permission.health.READ_WEIGHT" />
     <uses-permission android:name="android.permission.health.WRITE_WEIGHT" />
+    <!-- Steps: read a watch/ring's daily step counts INTO Forge for the cardio screen's hourly-steps
+         graph. Read-only, opt-in, granted in the Health Connect app; still no internet permission. -->
+    <uses-permission android:name="android.permission.health.READ_STEPS" />
+    <!-- Exercise sessions: read a watch's recorded outdoor sessions so Forge can find the GPS route
+         that matches a cardio entry. The route data itself is released per-session via Health Connect's
+         own consent screen (ExerciseRouteRequestContract) — there is no blanket route-read permission.
+         Read-only, opt-in; still no internet permission. -->
+    <uses-permission android:name="android.permission.health.READ_EXERCISE" />
+    <!-- Workout calories (HC-4): write a finished session's estimated active calories OUT to Health
+         Connect's daily energy total. Without this the write permission can never be granted. -->
+    <uses-permission android:name="android.permission.health.WRITE_ACTIVE_CALORIES_BURNED" />
 
     <!-- Lets us detect / launch the Health Connect provider to check availability + manage grants. -->
     <queries>

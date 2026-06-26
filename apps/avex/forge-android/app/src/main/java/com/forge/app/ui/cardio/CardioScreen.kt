@@ -1,5 +1,6 @@
 package com.forge.app.ui.cardio
 
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
@@ -65,6 +66,12 @@ fun CardioScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val goHome = com.forge.app.ui.common.LocalGoHome.current
 
+    // Health Connect's per-route consent screen — returns the chosen session's route (or null if the
+    // user declines). Launched from the session sheet's "Show GPS route" button.
+    val routeLauncher = rememberLauncherForActivityResult(
+        contract = androidx.health.connect.client.contracts.ExerciseRouteRequestContract()
+    ) { route -> viewModel.onRouteConsented(route) }
+
     val zone = ZoneId.systemDefault()
     val today = LocalDate.now(zone)
     val weekNum = today.get(WeekFields.ISO.weekOfWeekBasedYear())
@@ -91,12 +98,16 @@ fun CardioScreen(
             onSave = viewModel::saveEntry,
             editing = state.editing,
             bodyweightLb = state.bodyweightLb,
+            useMiles = state.useMiles,
             onHome = { viewModel.closeSheet(); goHome() }
         )
         sessionEntry != null -> CardioSessionDetailSheet(
             entry = sessionEntry,
             bodyweightLb = state.bodyweightLb,
-            route = null, // Health Connect route read is a deferred follow-up.
+            useMiles = state.useMiles,
+            route = state.sessionRoute, // Matched watch GPS track, once available/consented (else null).
+            onShowRoute = state.sessionRouteConsentId?.let { id -> { routeLauncher.launch(id) } },
+            wearable = state.sessionWearable, // That day's watch steps (null until loaded / when none).
             onEdit = { viewModel.editEntry(sessionEntry.id) },
             onDelete = { viewModel.requestDelete(sessionEntry.id) },
             onBack = viewModel::closeSessionDetail,
@@ -105,10 +116,11 @@ fun CardioScreen(
         state.detailOpen -> CardioWeekDetailSheet(
             allEntries = state.entries,
             currentWeekStartMs = isoWeekStartMs,
+            useMiles = state.useMiles,
             weekTargetMin = state.weekTargetMin,
             cardioStreakDays = state.cardioStreakDays,
             bodyweightLb = state.bodyweightLb,
-            wearable = null, // Health Connect steps read is a deferred follow-up.
+            wearable = state.weekWearable, // Today's watch steps on the current-week page (null when none).
             todayDow = todayDow,
             zone = zone,
             onOpenSession = viewModel::openSessionDetail,
@@ -247,7 +259,7 @@ private fun CardioListContent(
 
             item("history-title") {
                 Text(
-                    "What I did",
+                    "Recent sessions",
                     style = MaterialTheme.typography.headlineSmall,
                     color = onBg,
                     fontStyle = FontStyle.Italic,
@@ -262,6 +274,7 @@ private fun CardioListContent(
                 CardioEntryRow(
                     entry = entry,
                     today = today,
+                    useMiles = state.useMiles,
                     onRequestDelete = { onRequestDelete(entry.id) },
                     onClick = { onOpenSession(entry.id) },
                     modifier = forgeItemMotion()
