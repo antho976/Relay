@@ -22,6 +22,9 @@ interface ProgramCustomizationDao {
     @Query("SELECT * FROM program_customization")
     suspend fun all(): List<ProgramCustomization>
 
+    @Query("SELECT * FROM program_customization")
+    fun observeAll(): Flow<List<ProgramCustomization>>
+
     @Query("DELETE FROM program_customization WHERE day_key = :dayKey AND exercise_id = :exerciseId")
     suspend fun delete(dayKey: String, exerciseId: String)
 

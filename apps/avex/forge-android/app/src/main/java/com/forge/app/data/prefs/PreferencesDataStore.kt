@@ -173,6 +173,9 @@ object PreferenceKeys {
     val LIKED_EXERCISES = stringSetPreferencesKey("liked_exercises")
     /** ExerciseLibrary ids the user DISLIKES — excluded from generation + swaps. */
     val DISLIKED_EXERCISES = stringSetPreferencesKey("disliked_exercises")
+    /** Whether, after a "Make default" swap, Forge offers to dislike the swapped-out exercise.
+     *  Default ON; the prompt's "Never ask" button or the Settings toggle turns it off. */
+    val SWAP_DISLIKE_PROMPT_ENABLED = booleanPreferencesKey("swap_dislike_prompt_enabled")
 
     // ─── Cardio layer (program-unlock Phase 6) ────────────────────────────────
     /** Weekly cardio goal in minutes. 0 = no goal. */

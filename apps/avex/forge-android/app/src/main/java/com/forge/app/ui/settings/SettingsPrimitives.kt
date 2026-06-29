@@ -16,8 +16,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -26,6 +24,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.forge.app.ui.common.ForgeSwitch
 import com.forge.app.ui.common.clickableLabeled
 
 @Composable
@@ -89,17 +88,15 @@ internal fun ToggleRow(
             Text(label, style = MaterialTheme.typography.bodyMedium, color = onBg)
             Text(subtitle, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp)
         }
-        Switch(
+        ForgeSwitch(
             checked = checked,
             onCheckedChange = onCheckedChange,
-            colors = SwitchDefaults.colors(
-                checkedTrackColor = onBg.copy(alpha = 0.85f),
-                checkedThumbColor = bg,
-                checkedBorderColor = Color.Transparent,
-                uncheckedTrackColor = Color.Transparent,
-                uncheckedThumbColor = outline,
-                uncheckedBorderColor = outline.copy(alpha = 0.5f)
-            )
+            checkedTrackColor = onBg.copy(alpha = 0.85f),
+            checkedThumbColor = bg,
+            checkedBorderColor = Color.Transparent,
+            uncheckedTrackColor = Color.Transparent,
+            uncheckedThumbColor = outline,
+            uncheckedBorderColor = outline.copy(alpha = 0.5f)
         )
     }
 }

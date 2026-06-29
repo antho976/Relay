@@ -17,6 +17,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -29,7 +30,8 @@ internal fun MainList(
     onOpenPage: (SettingsPage) -> Unit,
     onOpenCoachBrief: () -> Unit,
     onOpenDataDialog: () -> Unit,
-    onResetTarget: (ResetTarget) -> Unit
+    onResetTarget: (ResetTarget) -> Unit,
+    onOpenResetMenu: () -> Unit
 ) {
     LazyColumn(modifier = modifier, contentPadding = PaddingValues(bottom = 56.dp)) {
         if (searchQuery.isBlank()) {
@@ -55,16 +57,15 @@ internal fun MainList(
                 SettingsNavRow("Export data", "Sessions · weekly · full backup · PDF") { onOpenDataDialog() }
                 SectionDivider()
             }
-            item("about") {
-                SectionLabel("ABOUT")
-                SettingsNavRow("About Forge", "Version · privacy · what's stored") { onOpenPage(SettingsPage.About) }
-                SectionDivider()
-            }
             item("reset") {
                 SectionLabel("RESET")
-                ResetTarget.entries.forEach { target ->
-                    DestructiveRow(target.label, isFactory = target == ResetTarget.FACTORY) { onResetTarget(target) }
-                }
+                // One umbrella entry opens a chooser for the targeted resets…
+                DestructiveRow("Reset…") { onOpenResetMenu() }
+                // …and a factory reset stays a separate, clearly more dangerous button.
+                DestructiveRow(ResetTarget.FACTORY.label, isFactory = true) { onResetTarget(ResetTarget.FACTORY) }
+                Spacer(Modifier.height(16.dp))
+                // About Forge is now a quiet footer link at the very bottom of the app.
+                AboutLink { onOpenPage(SettingsPage.About) }
                 Spacer(Modifier.height(8.dp))
             }
         } else {
@@ -97,6 +98,21 @@ internal fun MainList(
             }
         }
     }
+}
+
+/** A quiet, centered footer link to the About page — sits at the very bottom of the settings list. */
+@Composable
+private fun AboutLink(onClick: () -> Unit) {
+    Text(
+        "About Forge",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+        textAlign = TextAlign.Center,
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 12.dp)
+    )
 }
 
 @Composable
@@ -155,7 +171,6 @@ internal fun rowSubtitle(page: SettingsPage, s: SettingsUiState): String = when 
         else on
     }
     SettingsPage.Equipment -> if (s.availableEquipment.isEmpty()) "All equipment" else "${s.availableEquipment.size} selected"
-    SettingsPage.Privacy -> if (s.privacyMode) "Screenshots blocked" else "Off"
     SettingsPage.Program -> "${s.daysPerWeek} days/week · auto-generate"
     SettingsPage.Recovery -> "Health Connect · sleep & resting HR"
     SettingsPage.ExercisePrefs -> "${s.liked.size} liked · ${s.disliked.size} disliked"

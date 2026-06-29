@@ -26,6 +26,16 @@ sealed interface DayUiEvent {
     /** Clear any persistent swap for this exercise (revert to program default). */
     data class ClearPersistentSwap(val exerciseId: String) : DayUiEvent
 
+    // Post-swap "dislike the swapped-out exercise?" prompt
+    /** Dislike the swapped-out exercise so it's never suggested again, then close the prompt. */
+    data object DislikeSwappedExercise : DayUiEvent
+    /** Close the prompt without disliking ("Keep it"). */
+    data object DismissDislikePrompt : DayUiEvent
+    /** Don't show the prompt again for the rest of this workout (in-memory, this session). */
+    data object SuppressDislikePromptThisSession : DayUiEvent
+    /** Turn the prompt off for good (persisted); re-enabled from Settings. */
+    data object NeverAskDislikePrompt : DayUiEvent
+
     // Warmup
     data class ToggleWarmupItem(val index: Int) : DayUiEvent
     data object SkipWarmup : DayUiEvent

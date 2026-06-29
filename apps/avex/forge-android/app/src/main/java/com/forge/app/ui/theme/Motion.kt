@@ -36,11 +36,19 @@ object ForgeMotion {
     const val DurationFast = 150          // micro: press, tiny fades
     const val DurationStandard = 240      // default enter/exit, tab content
     const val DurationEmphasized = 320    // page-level pushes
+    const val DurationDraw = 900          // chart draw-in reveals (sparklines, bars, lines)
     const val DurationCelebration = 2200  // confetti & one-shot flourishes
 
     // ── Easings ─────────────────────────────────────────────────────────────────
     /** Incoming content settles into place. */
     val Decelerate: Easing = CubicBezierEasing(0.05f, 0.7f, 0.1f, 1f)
+    /**
+     * A gentle ease-out (~easeOutSine): starts moving immediately at a moderate pace and
+     * decelerates evenly to a soft stop. Unlike [Decelerate] — which front-loads almost all the
+     * motion into the first few percent so a reveal reads as a sharp "snap" — this draws smoothly
+     * across the whole duration. Used for chart draw-ins (sparklines, bars, line reveals).
+     */
+    val DrawDecelerate: Easing = CubicBezierEasing(0.39f, 0.575f, 0.565f, 1f)
     /** Outgoing content speeds up as it leaves. */
     val Accelerate: Easing = CubicBezierEasing(0.3f, 0f, 0.8f, 0.15f)
     /** Symmetric easing for in-place changes (no enter/exit direction). */
@@ -66,4 +74,9 @@ object ForgeMotion {
 
     fun <T> standardTween(durationMs: Int = DurationStandard): FiniteAnimationSpec<T> =
         tween(scaled(durationMs), easing = Standard)
+
+    /** A long, even chart draw-in: starts instantly, decelerates gently to a soft stop. Slower and
+     *  smoother than [enterTween] so a line/bar reveal glides in rather than snapping. */
+    fun <T> drawTween(durationMs: Int = DurationDraw): FiniteAnimationSpec<T> =
+        tween(scaled(durationMs), easing = DrawDecelerate)
 }

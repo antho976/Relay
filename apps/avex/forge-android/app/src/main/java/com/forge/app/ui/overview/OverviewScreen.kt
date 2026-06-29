@@ -559,7 +559,7 @@ fun OverviewScreen(
                     Text("${state.workoutsThisWeek} of ${state.weeklyWorkoutTarget} target", style = MaterialTheme.typography.labelSmall, color = muted)
                     Text("·", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.5f))
                     Text("view program →", style = MaterialTheme.typography.labelMedium,
-                        color = accent,
+                        color = onBg,
                         modifier = Modifier.clickableLabeled("View your program") { onViewProgram() }.padding(vertical = 2.dp))
                 }
             }

@@ -126,6 +126,7 @@ internal fun DataExportDialog(
 
             // ── Quick export — one tap, format baked into each row ───────────────
             Text("Quick export", style = MaterialTheme.typography.bodyMedium, color = onBg)
+            ExportRow("All my data", "JSON", "every session, set & setting", onBg, muted) { viewModel.exportFullBackup(); onDismiss() }
             ExportRow("This week", "JSON", "summary for AI analysis", onBg, muted) { viewModel.exportWeeklyJson(); onDismiss() }
             ExportRow("All sessions", "CSV", "spreadsheet of every session", onBg, muted) { viewModel.exportSessionsCsv(); onDismiss() }
             ExportRow("All PRs", "CSV", "your best lift per exercise", onBg, muted) { viewModel.exportPrsCsv(); onDismiss() }
@@ -211,4 +212,41 @@ internal fun ResetConfirmDialog(
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
+}
+
+/**
+ * Chooser for the targeted resets — everything except [ResetTarget.FACTORY], which keeps its own
+ * dedicated (more dangerous) button. Picking an option here still routes through [ResetConfirmDialog]
+ * so each reset keeps its own confirmation.
+ */
+@Composable
+internal fun ResetMenuDialog(
+    onPick: (ResetTarget) -> Unit,
+    onDismiss: () -> Unit
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        val onBg = MaterialTheme.colorScheme.onBackground
+        val muted = MaterialTheme.colorScheme.onSurfaceVariant
+        val outline = MaterialTheme.colorScheme.outline
+        val bg = MaterialTheme.colorScheme.background
+        Column(
+            modifier = Modifier.fillMaxWidth().background(bg, RoundedCornerShape(8.dp)).padding(horizontal = 24.dp, vertical = 20.dp)
+        ) {
+            Text("RESET", style = MaterialTheme.typography.labelSmall, color = muted, letterSpacing = 1.5.sp)
+            Spacer(Modifier.height(8.dp))
+            val targets = ResetTarget.entries.filter { it != ResetTarget.FACTORY }
+            targets.forEachIndexed { i, target ->
+                Column(
+                    modifier = Modifier.fillMaxWidth().clickable { onPick(target) }.padding(vertical = 12.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    Text(target.label, style = MaterialTheme.typography.bodyMedium, color = onBg)
+                    Text(target.message, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp)
+                }
+                if (i < targets.lastIndex) HorizontalDivider(color = outline.copy(alpha = 0.25f))
+            }
+            Spacer(Modifier.height(8.dp))
+            TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) { Text("Cancel", color = muted) }
+        }
+    }
 }

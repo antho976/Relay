@@ -18,6 +18,13 @@ enum class VsLastStatus { BEATING, MATCHING, UNDER }
 data class CrossDaySessionInfo(val dayKey: String, val dayName: String)
 
 /**
+ * The swapped-out exercise the post-swap prompt offers to dislike. [exerciseId] is its
+ * ExerciseLibrary id (what [com.forge.app.data.prefs.SettingsRepository.setExerciseDisliked] keys
+ * on); [exerciseName] is the display name for the dialog copy.
+ */
+data class DislikeSwapPrompt(val exerciseId: String, val exerciseName: String)
+
+/**
  * Held in state until the user confirms or cancels the suspicious weight (#117). [lastLabel] /
  * [newLabel] are already formatted in the exercise's own unit (plate counts on PLATES, kg/lb
  * otherwise) so the dialog never shows a raw-lb number the user didn't enter (#1/#10).
@@ -104,7 +111,13 @@ data class DayUiState(
     /** Disliked library ids — excluded from the swap picker, same as generation (program-unlock). */
     val swapDislikedIds: Set<String> = emptySet(),
     /** Curated/frozen exercise pool (Developer's preset) — locks the swap picker to it; null = none. */
-    val swapFrozenIds: Set<String>? = null
+    val swapFrozenIds: Set<String>? = null,
+    /**
+     * Non-null ⇒ show the post-swap prompt offering to dislike the swapped-out exercise. Raised only
+     * after a "Make default" (persistent) swap, gated by the swap-dislike-prompt pref + the per-session
+     * "not this workout" suppression.
+     */
+    val dislikeSwapPrompt: DislikeSwapPrompt? = null
 ) {
     val hasUnsavedWork: Boolean
         get() = exercises.any { it.loggedSets.isNotEmpty() }

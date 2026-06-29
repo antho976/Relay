@@ -55,7 +55,6 @@ enum class SettingsPage(val title: String) {
     Session("Session"),
     Notifications("Notifications"),
     Equipment("Equipment"),
-    Privacy("Privacy"),
     Program("Program"),
     Recovery("Recovery"),
     ExercisePrefs("Exercise likes"),
@@ -71,7 +70,6 @@ internal val ALL_ROWS = listOf(
     SettingsRow("Session", "haptic feedback vibration notes templates rest timer between sets compound isolation", SettingsPage.Session),
     SettingsRow("Notifications", "quiet hours notify suppress", SettingsPage.Notifications),
     SettingsRow("Equipment", "equipment available barbell dumbbell cable machine", SettingsPage.Equipment),
-    SettingsRow("Privacy", "privacy mode blur screenshot", SettingsPage.Privacy),
     SettingsRow("Program", "program generate auto split days routine rotate trainings workouts", SettingsPage.Program),
     SettingsRow("Recovery", "health connect sleep heart rate resting recovery samsung watch coach deload", SettingsPage.Recovery),
     SettingsRow("Exercise likes", "like dislike favourite exclude exercises preferences movements heart", SettingsPage.ExercisePrefs)
@@ -108,7 +106,7 @@ internal val ALL_ITEMS = listOf(
     SettingsItem("Quiet hours", "quiet hours suppress notifications silent", SettingsPage.Notifications),
     SettingsItem("Notifications", "notifications enable disable notify", SettingsPage.Notifications),
     SettingsItem("Available equipment", "equipment barbell dumbbell cable machine body weight", SettingsPage.Equipment),
-    SettingsItem("Privacy mode", "privacy mode blur screenshot screen", SettingsPage.Privacy),
+    SettingsItem("Privacy mode", "privacy mode blur screenshot screen", SettingsPage.Appearance),
 ) + com.forge.app.program.Equipment.entries.map { equip ->
     // Each piece of equipment is searchable by name, so a query like "kettlebell" surfaces it
     // (tagged to the Equipment page) instead of only the generic "Available equipment" row.
@@ -139,6 +137,7 @@ fun SettingsScreen(
     var searchActive by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var confirmReset by remember { mutableStateOf<ResetTarget?>(null) }
+    var showResetMenu by remember { mutableStateOf(false) }
     var showDataDialog by remember { mutableStateOf(false) }
 
     // Complete DB backup & restore via the system file picker (survives uninstall).
@@ -281,14 +280,14 @@ fun SettingsScreen(
                     onOpenPage = { currentPage = it },
                     onOpenCoachBrief = onOpenCoachBrief,
                     onOpenDataDialog = { showDataDialog = true },
-                    onResetTarget = { confirmReset = it }
+                    onResetTarget = { confirmReset = it },
+                    onOpenResetMenu = { showResetMenu = true }
                 )
                 SettingsPage.Appearance -> AppearancePage(state, viewModel, Modifier.padding(inner))
                 SettingsPage.Format -> FormatPage(state, viewModel, Modifier.padding(inner))
                 SettingsPage.Session -> SessionPage(state, viewModel, Modifier.padding(inner))
                 SettingsPage.Notifications -> NotificationsPage(state, viewModel, Modifier.padding(inner))
                 SettingsPage.Equipment -> EquipmentPage(state, viewModel, Modifier.padding(inner))
-                SettingsPage.Privacy -> PrivacyPage(state, viewModel, Modifier.padding(inner))
                 SettingsPage.Program -> ProgramPage(state, viewModel, Modifier.padding(inner), onOpenCoachBrief, onOpenBuilder)
                 SettingsPage.Recovery -> RecoveryPage(Modifier.padding(inner))
                 SettingsPage.ExercisePrefs -> ExercisePrefsPage(state, viewModel, Modifier.padding(inner))
@@ -296,6 +295,13 @@ fun SettingsScreen(
                 SettingsPage.About -> AboutPage(Modifier.padding(inner), viewModel)
             }
         }
+    }
+
+    if (showResetMenu) {
+        ResetMenuDialog(
+            onPick = { showResetMenu = false; confirmReset = it },
+            onDismiss = { showResetMenu = false }
+        )
     }
 
     if (showDataDialog) {

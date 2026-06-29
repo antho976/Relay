@@ -78,6 +78,10 @@ class DayViewModel @Inject constructor(
     /** The rest interval being measured right now: opened on set log, closed by the next set. */
     internal var openRestEvent: OpenRestEvent? = null
 
+    /** "Not this workout" suppression for the post-swap dislike prompt — resets with the VM (i.e. when
+     *  the training screen is left and re-entered), matching a per-session scope without persisting. */
+    internal var dislikePromptSuppressedThisSession = false
+
     internal val _state = MutableStateFlow(
         DayUiState(dayPlan = dayPlan, displayName = dayPlan.defaultName)
     )
@@ -208,7 +212,9 @@ class DayViewModel @Inject constructor(
 
             is DayUiEvent.OpenSwapPicker, is DayUiEvent.CloseSwapPicker,
             is DayUiEvent.PickSwapForSession, is DayUiEvent.PickSwapPersistent,
-            is DayUiEvent.ClearPersistentSwap -> handleSwapEvent(event)
+            is DayUiEvent.ClearPersistentSwap, is DayUiEvent.DislikeSwappedExercise,
+            is DayUiEvent.DismissDislikePrompt, is DayUiEvent.SuppressDislikePromptThisSession,
+            is DayUiEvent.NeverAskDislikePrompt -> handleSwapEvent(event)
 
             is DayUiEvent.ToggleWarmupItem, is DayUiEvent.SkipWarmup,
             is DayUiEvent.DisableWarmupToday, is DayUiEvent.DisableWarmupWeek -> handleWarmupEvent(event)

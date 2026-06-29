@@ -42,6 +42,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.ui.common.ForgeHapticType
 import com.forge.app.ui.common.forgeHaptic
 import com.forge.app.ui.gym.train.components.AddExerciseSheet
+import com.forge.app.ui.gym.train.components.DislikeSwapPromptDialog
 import com.forge.app.ui.gym.train.components.PrCelebrationOverlay
 import com.forge.app.ui.gym.train.components.PlateCalculatorDialog
 import com.forge.app.ui.gym.train.components.RestTimerBubble
@@ -218,6 +219,16 @@ fun DayScreen(
             onPickPersistent = { swap -> viewModel.onEvent(DayUiEvent.PickSwapPersistent(exerciseUi.plan.id, swap)) },
             onClearPersistent = { viewModel.onEvent(DayUiEvent.ClearPersistentSwap(exerciseUi.plan.id)) },
             onDismiss = { viewModel.onEvent(DayUiEvent.CloseSwapPicker) }
+        )
+    }
+
+    state.dislikeSwapPrompt?.let { prompt ->
+        DislikeSwapPromptDialog(
+            exerciseName = prompt.exerciseName,
+            onDislike = { viewModel.onEvent(DayUiEvent.DislikeSwappedExercise) },
+            onKeep = { viewModel.onEvent(DayUiEvent.DismissDislikePrompt) },
+            onNotThisWorkout = { viewModel.onEvent(DayUiEvent.SuppressDislikePromptThisSession) },
+            onNeverAsk = { viewModel.onEvent(DayUiEvent.NeverAskDislikePrompt) }
         )
     }
 

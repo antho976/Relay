@@ -20,6 +20,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -36,6 +37,7 @@ import com.forge.app.ui.gym.session.state.SessionChartStyle
 import com.forge.app.ui.gym.session.state.SessionMetric
 import com.forge.app.ui.gym.stats.components.rememberDrawProgress
 import com.forge.app.ui.gym.stats.components.staggeredProgress
+import com.forge.app.ui.theme.ForgeMotion
 
 /** Volume/weight/reps value as a short label for the chosen metric (weight & volume honor the kg setting). */
 internal fun formatMetricValue(value: Double, metric: SessionMetric, useKg: Boolean): String = when (metric) {
@@ -110,52 +112,93 @@ internal fun PerExerciseSetChart(
 }
 
 /**
- * The per-set line: a rounded accent stroke over a soft gradient fill with a dot on every set and a
- * faint glow underneath — a richer read than a hairline polyline. Reveals left→right; a flat series
- * draws as a centred flat line (range padded so it doesn't glue to the baseline).
+ * The per-set line: a smooth (Catmull-Rom) accent stroke over a soft gradient fill, with a "cut-out"
+ * donut marker on every set and a faint underglow — a richer read than a hairline polyline. Every edge
+ * is inset so end markers + the rounded stroke never clip ("points going outside"); the latest set's
+ * marker is emphasized with a hollow centre. Reveals left→right; a flat series draws as a centred line.
  */
 @Composable
 private fun PerSetLine(values: List<Double>, metric: SessionMetric, accent: Color) {
-    val progress = rememberDrawProgress(metric)
+    // Reveal starts immediately but rides the slow, gentle draw curve so the line glides in over
+    // ~0.9 s instead of snapping — the default enter tween front-loads the motion and reads as sharp.
+    val progress = rememberDrawProgress(metric, ForgeMotion.drawTween())
+    // The marker ring "cuts" each point out of the card so dots read crisply on the accent-washed
+    // surface — matched to the expanded row's exact background (cardBg + the row's accent wash).
+    val cardBg = lerp(MaterialTheme.colorScheme.surfaceVariant, accent, 0.05f)
+    val haloBg = lerp(cardBg, accent, 0.10f)
     val lo = values.min()
     val hi = values.max()
     val pad = if (hi - lo < 1e-6) 1.0 else 0.0
     val minV = lo - pad
     val range = ((hi + pad) - minV).coerceAtLeast(1.0)
-    Canvas(modifier = Modifier.fillMaxWidth().height(60.dp)) {
-        val stepX = if (values.size > 1) size.width / (values.size - 1) else 0f
-        // Inset top/bottom so dots + stroke aren't clipped at the edges.
-        val inset = 5.dp.toPx()
+    Canvas(modifier = Modifier.fillMaxWidth().height(64.dp)) {
+        // Inset all four edges so the end markers + the rounded stroke sit clear of the canvas bounds.
+        val hInset = 10.dp.toPx()
+        val vInset = 9.dp.toPx()
+        val plotW = (size.width - hInset * 2).coerceAtLeast(1f)
+        val plotH = (size.height - vInset * 2).coerceAtLeast(1f)
+        val stepX = if (values.size > 1) plotW / (values.size - 1) else 0f
         fun yOf(v: Double): Float {
             val t = ((v - minV) / range).toFloat().coerceIn(0f, 1f)
-            return size.height - inset - t * (size.height - inset * 2)
+            return vInset + (1f - t) * plotH
         }
-        val pts = values.mapIndexed { i, v -> Offset(stepX * i, yOf(v)) }
+        val pts = values.mapIndexed { i, v -> Offset(hInset + stepX * i, yOf(v)) }
+        val baseline = size.height - vInset
+        // Curve control points are clamped to the plot box so the spline can't bow past an end point.
+        val line = smoothCurve(pts, minY = vInset, maxY = baseline)
+        val fill = Path().apply {
+            addPath(line)
+            lineTo(pts.last().x, baseline)
+            lineTo(pts.first().x, baseline)
+            close()
+        }
         val clip = (size.width * progress.coerceIn(0f, 1f)).coerceAtLeast(0.01f)
         clipRect(right = clip) {
-            val baseline = size.height - inset
-            val fill = Path().apply {
-                moveTo(pts.first().x, baseline)
-                pts.forEach { lineTo(it.x, it.y) }
-                lineTo(pts.last().x, baseline)
-                close()
-            }
-            drawPath(fill, brush = Brush.verticalGradient(listOf(accent.copy(alpha = 0.26f), accent.copy(alpha = 0f))))
-            val line = Path().apply {
-                moveTo(pts.first().x, pts.first().y)
-                for (i in 1 until pts.size) lineTo(pts[i].x, pts[i].y)
-            }
-            drawPath(line, color = accent.copy(alpha = 0.16f), style = Stroke(width = 6.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
+            drawPath(fill, brush = Brush.verticalGradient(listOf(accent.copy(alpha = 0.30f), accent.copy(alpha = 0f))))
+            drawPath(line, color = accent.copy(alpha = 0.16f), style = Stroke(width = 7.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
             drawPath(line, color = accent, style = Stroke(width = 2.5.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
-            pts.forEach { drawCircle(color = accent, radius = 2.5.dp.toPx(), center = it) }
+            pts.forEachIndexed { i, p ->
+                val last = i == pts.lastIndex
+                val r = if (last) 4.dp.toPx() else 3.dp.toPx()
+                drawCircle(color = haloBg, radius = r + 2.dp.toPx(), center = p)        // ring cuts the dot out
+                drawCircle(color = accent, radius = r, center = p)                       // accent core
+                if (last) drawCircle(color = haloBg, radius = 1.5.dp.toPx(), center = p) // hollow centre = latest set
+            }
         }
     }
+}
+
+/**
+ * A Catmull-Rom spline through [pts] as one cubic-bezier [Path]. Control-point Y is clamped to
+ * [[minY], [maxY]] so the curve stays inside the plot box (an overshoot would clip a marker). Falls
+ * back to a straight move/line for fewer than three points.
+ */
+private fun smoothCurve(pts: List<Offset>, minY: Float, maxY: Float): Path {
+    val path = Path()
+    if (pts.isEmpty()) return path
+    path.moveTo(pts.first().x, pts.first().y)
+    if (pts.size < 3) {
+        for (i in 1 until pts.size) path.lineTo(pts[i].x, pts[i].y)
+        return path
+    }
+    for (i in 0 until pts.size - 1) {
+        val p0 = pts[if (i == 0) 0 else i - 1]
+        val p1 = pts[i]
+        val p2 = pts[i + 1]
+        val p3 = pts[if (i + 2 <= pts.lastIndex) i + 2 else pts.lastIndex]
+        val c1x = p1.x + (p2.x - p0.x) / 6f
+        val c1y = (p1.y + (p2.y - p0.y) / 6f).coerceIn(minY, maxY)
+        val c2x = p2.x - (p3.x - p1.x) / 6f
+        val c2y = (p2.y - (p3.y - p1.y) / 6f).coerceIn(minY, maxY)
+        path.cubicTo(c1x, c1y, c2x, c2y, p2.x, p2.y)
+    }
+    return path
 }
 
 /** One centred dot — the Line-mode stand-in for an exercise with a single logged set. */
 @Composable
 private fun SinglePointMark(accent: Color) {
-    Box(modifier = Modifier.fillMaxWidth().height(56.dp), contentAlignment = Alignment.Center) {
+    Box(modifier = Modifier.fillMaxWidth().height(64.dp), contentAlignment = Alignment.Center) {
         Box(modifier = Modifier.size(8.dp).clip(RoundedCornerShape(50)).background(accent))
     }
 }
@@ -166,7 +209,8 @@ private fun SetBars(values: List<Double>, metric: SessionMetric, accent: Color) 
     val max = (values.maxOrNull() ?: 0.0).coerceAtLeast(1.0)
     // Keyed by metric so the first draw animates in. The play-once motion kit doesn't replay on a
     // later metric switch, so BARS (like the LINE branch) just snap to the new values — matching Stats.
-    val progress = rememberDrawProgress(metric)
+    // The slow draw curve grows the bars in gently rather than snapping them to height.
+    val progress = rememberDrawProgress(metric, ForgeMotion.drawTween())
     Row(
         modifier = Modifier.fillMaxWidth().height(56.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),

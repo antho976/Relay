@@ -350,6 +350,32 @@ class SettingsRepository @Inject constructor(
                 (prefs[PreferenceKeys.LIKED_EXERCISES] ?: emptySet()) - libId
         }
 
+    /**
+     * Batch variants — a custom exercise spans several `custom_…` ids (one per day it's on), so the
+     * like/dislike screen flips them together in a single edit. Mutual exclusion still holds.
+     */
+    suspend fun setExercisesLiked(ids: Set<String>, liked: Boolean) =
+        context.forgePreferences.edit { prefs ->
+            val cur = prefs[PreferenceKeys.LIKED_EXERCISES] ?: emptySet()
+            prefs[PreferenceKeys.LIKED_EXERCISES] = if (liked) cur + ids else cur - ids
+            if (liked) prefs[PreferenceKeys.DISLIKED_EXERCISES] =
+                (prefs[PreferenceKeys.DISLIKED_EXERCISES] ?: emptySet()) - ids
+        }
+
+    suspend fun setExercisesDisliked(ids: Set<String>, disliked: Boolean) =
+        context.forgePreferences.edit { prefs ->
+            val cur = prefs[PreferenceKeys.DISLIKED_EXERCISES] ?: emptySet()
+            prefs[PreferenceKeys.DISLIKED_EXERCISES] = if (disliked) cur + ids else cur - ids
+            if (disliked) prefs[PreferenceKeys.LIKED_EXERCISES] =
+                (prefs[PreferenceKeys.LIKED_EXERCISES] ?: emptySet()) - ids
+        }
+
+    /** After a "Make default" swap, offer to dislike the swapped-out exercise (default ON). */
+    val swapDislikePromptEnabled: Flow<Boolean> = context.forgePreferences.data
+        .map { it[PreferenceKeys.SWAP_DISLIKE_PROMPT_ENABLED] ?: true }
+    suspend fun setSwapDislikePromptEnabled(enabled: Boolean) =
+        context.forgePreferences.edit { it[PreferenceKeys.SWAP_DISLIKE_PROMPT_ENABLED] = enabled }
+
     /** Rotation cadence: "never" | "every_n" (count = finished sessions). */
     val rotationCadence: Flow<String> = context.forgePreferences.data
         .map { it[PreferenceKeys.ROTATION_CADENCE] ?: "never" }

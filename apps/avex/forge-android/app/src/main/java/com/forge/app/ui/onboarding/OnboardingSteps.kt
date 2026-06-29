@@ -16,7 +16,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Switch
+import com.forge.app.ui.common.ForgeSwitch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -145,7 +145,7 @@ internal fun StepUnits(useKg: Boolean, onToggle: (Boolean) -> Unit) {
             Text(if (useKg) "Kilograms (kg)" else "Pounds (lb)",
                 style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium,
                 color = MaterialTheme.colorScheme.onSurface)
-            Switch(checked = useKg, onCheckedChange = onToggle)
+            ForgeSwitch(checked = useKg, onCheckedChange = onToggle)
         }
     }
 }
@@ -165,7 +165,7 @@ internal fun StepDistanceUnits(useMiles: Boolean, onToggle: (Boolean) -> Unit) {
             Text(if (useMiles) "Miles (mi)" else "Kilometers (km)",
                 style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium,
                 color = MaterialTheme.colorScheme.onSurface)
-            Switch(checked = useMiles, onCheckedChange = onToggle)
+            ForgeSwitch(checked = useMiles, onCheckedChange = onToggle)
         }
     }
 }

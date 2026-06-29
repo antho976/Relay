@@ -7,6 +7,7 @@ import com.forge.app.program.ExercisePlan
 import com.forge.app.program.MuscleGroup
 import com.forge.app.program.Program
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -22,6 +23,17 @@ data class EditableExercise(
 )
 
 /**
+ * A user-created exercise, collapsed across the days it appears on. The same custom movement added
+ * to two days gets two distinct `custom_…` ids; this groups them by name+muscle so the like/dislike
+ * screen shows one row whose toggle flips every underlying id at once ([ids]).
+ */
+data class CustomExerciseRef(
+    val name: String,
+    val muscle: MuscleGroup,
+    val ids: Set<String>
+)
+
+/**
  * Manages user-defined program customizations (#90, #91, #92).
  * The static [Program] is the source of truth; overrides from this repo are applied on top.
  */
@@ -31,6 +43,28 @@ class ProgramCustomizationRepository @Inject constructor(
 ) {
     fun observeForDay(dayKey: String): Flow<List<ProgramCustomization>> =
         dao.observeForDay(dayKey)
+
+    /**
+     * Every distinct, still-active custom exercise the user has created, deduped by name+muscle
+     * across days (removed ones dropped). Feeds the "Exercise likes" screen so custom movements are
+     * likeable/dislikeable alongside the library — visibility only; the generator never picks them.
+     */
+    fun observeCustomExercises(): Flow<List<CustomExerciseRef>> =
+        dao.observeAll().map { rows ->
+            rows.filter { it.exerciseId.startsWith("custom_") && !it.removed && !it.customName.isNullOrBlank() }
+                .groupBy { it.customName!!.trim().lowercase() to (it.customMuscle ?: "") }
+                .map { (_, group) ->
+                    val first = group.first()
+                    CustomExerciseRef(
+                        name = first.customName!!.trim(),
+                        muscle = first.customMuscle
+                            ?.let { runCatching { MuscleGroup.fromCode(it) }.getOrNull() }
+                            ?: MuscleGroup.CHEST,
+                        ids = group.map { it.exerciseId }.toSet()
+                    )
+                }
+                .sortedBy { it.name.lowercase() }
+        }
 
     /**
      * Full editable exercise list for a day (static + custom-added), INCLUDING removed items

@@ -42,6 +42,7 @@ import com.forge.app.ui.gym.session.state.SessionChartStyle
 import com.forge.app.ui.gym.session.state.SessionMetric
 import com.forge.app.ui.gym.stats.components.rememberDrawProgress
 import com.forge.app.ui.gym.stats.components.staggeredProgress
+import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.theme.LocalForgeSettings
 
 // ─── Card shell + style toggle ─────────────────────────────────────────────────
@@ -130,7 +131,8 @@ internal fun MetricExerciseCard(
     val values = exercises.map { it.metricValue(metric) }
     val rawMax = values.maxOrNull() ?: 0.0
     // Hoisted above the card so the remember runs unconditionally regardless of the empty-state guard.
-    val progress = rememberDrawProgress(metric)
+    // The slow draw curve fills the comparison bars in gently rather than snapping them to width.
+    val progress = rememberDrawProgress(metric, ForgeMotion.drawTween())
     MetricCardShell("${metric.label.uppercase()} PER EXERCISE", style, onStyle, onBg, muted, accent, outline) {
         // The Weight metric is meaningless for a bodyweight-only session — say so instead of empty bars.
         if (rawMax <= 0.0) {

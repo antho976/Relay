@@ -6,14 +6,17 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.provider.Settings
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -22,12 +25,16 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -36,9 +43,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -66,6 +78,8 @@ internal fun AppearancePage(state: SettingsUiState, vm: SettingsViewModel, modif
         SectionDivider()
         ToggleRow("Compact set logging", "Denser set rows for experienced users", state.compactSetLogging, vm::setCompactSetLogging)
         SectionDivider()
+        ToggleRow("Privacy mode", "Hide the app preview in recent apps & block screenshots", state.privacyMode, vm::setPrivacyMode)
+        SectionDivider()
         Spacer(Modifier.height(8.dp))
         AccentColorRow(state.accentColorHex, vm::setAccentColorHex)
         SectionDivider()
@@ -76,130 +90,240 @@ internal fun AppearancePage(state: SettingsUiState, vm: SettingsViewModel, modif
 @Composable
 internal fun FormatPage(state: SettingsUiState, vm: SettingsViewModel, modifier: Modifier = Modifier) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val onBg = MaterialTheme.colorScheme.onBackground
-    val outline = MaterialTheme.colorScheme.outline
+    var showTzPicker by remember { mutableStateOf(false) }
 
-    LazyColumn(
-        modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(bottom = 56.dp)
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(bottom = 32.dp)
     ) {
-        item("intro") {
-            Text(
-                "Units, date & time formats, week start, your timezone — and the basis for your strength standards.",
-                style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic,
-                modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp)
-            )
-        }
-        item("weight") {
-            ChipSection(
-                "Weight unit",
+        Text(
+            "Units, date & time, week start & timezone — and the basis for your strength standards.",
+            style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic,
+            modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 4.dp)
+        )
+
+        // ── Units ────────────────────────────────────────────────────────────────
+        GroupHeader("Units")
+        SettingsCard {
+            InlineChipRow(
+                "Weight",
                 listOf("lb" to "lb", "kg" to "kg"),
                 if (state.useKg) "kg" else "lb"
             ) { vm.setUseKg(it == "kg") }
-            // Live preview — updates the moment the unit is switched.
-            Text(
-                "Everything shows in ${if (state.useKg) "kilograms" else "pounds"} — e.g. ${com.forge.app.domain.units.formatWeight(135.0, state.useKg)}.",
-                style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic,
-                modifier = Modifier.padding(horizontal = 24.dp)
-            )
-            Spacer(Modifier.height(8.dp))
-            SectionDivider()
-        }
-        item("distance") {
-            ChipSection(
-                "Distance unit",
+            CardDivider()
+            InlineChipRow(
+                "Distance",
                 listOf("km" to "km", "mi" to "mi"),
                 if (state.useMiles) "mi" else "km"
             ) { vm.setUseMiles(it == "mi") }
-            // Live preview — updates the moment the unit is switched.
-            Text(
-                "Cardio distance and pace show in ${if (state.useMiles) "miles" else "kilometers"} — e.g. ${com.forge.app.domain.units.formatDistance(5.0, state.useMiles)}.",
-                style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic,
-                modifier = Modifier.padding(horizontal = 24.dp)
-            )
-            Spacer(Modifier.height(8.dp))
-            SectionDivider()
         }
-        item("sex") {
-            ChipSection(
-                "Sex",
-                listOf("male" to "Male", "female" to "Female"),
-                state.userSex, vm::setUserSex
-            )
-            Text(
-                "Only scales the bodyweight-relative strength standards on the Stats tab.",
-                style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic,
-                modifier = Modifier.padding(horizontal = 24.dp)
-            )
-            Spacer(Modifier.height(8.dp))
-            SectionDivider()
-        }
-        item("date") {
-            ChipSection(
-                "Date format",
+        // Live preview — updates the moment a unit is switched.
+        CardCaption(
+            "e.g. ${com.forge.app.domain.units.formatWeight(135.0, state.useKg)} · " +
+                com.forge.app.domain.units.formatDistance(5.0, state.useMiles)
+        )
+
+        // ── Date & time ────────────────────────────────────────────────────────────
+        GroupHeader("Date & time")
+        SettingsCard {
+            InlineChipRow(
+                "Date",
                 listOf("MMM d, yyyy" to "Jan 5", "dd/MM/yyyy" to "05/01", "MM/dd/yyyy" to "01/05"),
                 state.dateFormat, vm::setDateFormat
             )
-            SectionDivider()
-        }
-        item("time") {
-            ChipSection(
+            CardDivider()
+            InlineChipRow(
                 "Time",
                 listOf("12h" to "12h", "24h" to "24h"),
                 if (state.timeFormat24h) "24h" else "12h"
             ) { vm.setTimeFormat24h(it == "24h") }
-            SectionDivider()
-        }
-        item("week") {
-            ChipSection(
+            CardDivider()
+            InlineChipRow(
                 "Week starts",
                 listOf("Mon" to "Mon", "Sun" to "Sun"),
                 if (state.firstDayMonday) "Mon" else "Sun"
             ) { vm.setFirstDayMonday(it == "Mon") }
-            SectionDivider()
+            CardDivider()
+            TimezoneRow(state.timezone) { showTzPicker = true }
         }
-        item("timezone-header") {
-            SubSectionLabel("Timezone")
+
+        // ── Strength standards ──────────────────────────────────────────────────────
+        GroupHeader("Strength standards")
+        SettingsCard {
+            InlineChipRow(
+                "Sex",
+                listOf("male" to "Male", "female" to "Female"),
+                state.userSex, vm::setUserSex
+            )
         }
-        item("timezone-current") {
-            // If the saved/device timezone isn't one of the presets, show it as a selected row so
-            // there's always a visible selection (was: nothing highlighted).
-            if (TIMEZONE_OPTIONS.none { it.first == state.timezone }) {
-                val current = state.timezone.ifBlank { java.util.TimeZone.getDefault().id }
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 12.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("$current (device)", style = MaterialTheme.typography.bodyMedium, color = onBg)
-                    Text("●", style = MaterialTheme.typography.labelSmall, color = onBg)
-                }
-                HorizontalDivider(color = outline.copy(alpha = 0.12f), modifier = Modifier.padding(horizontal = 24.dp))
+        CardCaption("Only scales the bodyweight-relative strength standards on the Stats tab.")
+
+        Spacer(Modifier.height(8.dp))
+        SectionResetRow(com.forge.app.data.prefs.SettingsSection.FORMAT, vm)
+    }
+
+    if (showTzPicker) {
+        TimezonePickerDialog(
+            current = state.timezone,
+            onPick = { vm.setTimezone(it); showTzPicker = false },
+            onDismiss = { showTzPicker = false }
+        )
+    }
+}
+
+// ─── Format-page building blocks (grouped "card" layout) ─────────────────────
+
+/** Quiet uppercase section label that sits just above a [SettingsCard]. */
+@Composable
+private fun GroupHeader(text: String) {
+    Text(
+        text.uppercase(),
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        letterSpacing = 1.5.sp,
+        modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 20.dp, bottom = 8.dp)
+    )
+}
+
+/** A small muted italic caption shown just below a card (live previews, scope notes). */
+@Composable
+private fun CardCaption(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        fontStyle = FontStyle.Italic,
+        modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 8.dp)
+    )
+}
+
+/** The rounded surface "card" that groups a few setting rows together. */
+@Composable
+private fun SettingsCard(content: @Composable ColumnScope.() -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant),
+        content = content
+    )
+}
+
+/** Inset hairline divider between rows inside a [SettingsCard]. */
+@Composable
+private fun CardDivider() {
+    HorizontalDivider(
+        modifier = Modifier.padding(start = 16.dp),
+        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.18f)
+    )
+}
+
+/** Label on the left, a chip group on the right — one setting per line, inside a card. */
+@Composable
+private fun InlineChipRow(
+    label: String,
+    options: List<Pair<String, String>>,
+    selected: String,
+    onSelect: (String) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onBackground,
+            modifier = Modifier.weight(1f)
+        )
+        Spacer(Modifier.width(12.dp))
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            options.forEach { (value, display) ->
+                PillChip(display.uppercase(), selected == value) { onSelect(value) }
             }
         }
-        items(TIMEZONE_OPTIONS, { it.first }) { (id, label) ->
-            val selected = state.timezone == id
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { vm.setTimezone(id) }
-                    .padding(horizontal = 24.dp, vertical = 12.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    label,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = if (selected) onBg else muted.copy(alpha = 0.6f)
-                )
-                if (selected) {
-                    Text("●", style = MaterialTheme.typography.labelSmall, color = onBg)
+    }
+}
+
+/** Collapsed timezone selector — shows the current zone and opens [TimezonePickerDialog] on tap. */
+@Composable
+private fun TimezoneRow(timezone: String, onClick: () -> Unit) {
+    val onBg = MaterialTheme.colorScheme.onBackground
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val label = TIMEZONE_OPTIONS.firstOrNull { it.first == timezone }?.second
+        ?: "${timezone.ifBlank { java.util.TimeZone.getDefault().id }} · device"
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text("Timezone", style = MaterialTheme.typography.bodyMedium, color = onBg)
+        Spacer(Modifier.weight(1f))
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = muted,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.widthIn(max = 200.dp)
+        )
+        Text(" ▾", style = MaterialTheme.typography.bodyMedium, color = muted)
+    }
+}
+
+/** The full timezone list, opened from [TimezoneRow] so the page isn't 13 stacked rows. */
+@Composable
+private fun TimezonePickerDialog(
+    current: String,
+    onPick: (String) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val outline = MaterialTheme.colorScheme.outline
+    // If the saved/device zone isn't a preset, surface it first so there's always a visible selection.
+    val showDevice = TIMEZONE_OPTIONS.none { it.first == current }
+    val deviceTz = current.ifBlank { java.util.TimeZone.getDefault().id }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Timezone") },
+        text = {
+            LazyColumn {
+                if (showDevice) {
+                    item {
+                        TimezoneOption("$deviceTz · device", selected = true) { onPick(deviceTz) }
+                        HorizontalDivider(color = outline.copy(alpha = 0.12f))
+                    }
+                }
+                items(TIMEZONE_OPTIONS, key = { it.first }) { (id, label) ->
+                    TimezoneOption(label, selected = current == id) { onPick(id) }
                 }
             }
-            HorizontalDivider(color = outline.copy(alpha = 0.12f), modifier = Modifier.padding(horizontal = 24.dp))
-        }
-        item("timezone-footer") { Spacer(Modifier.height(8.dp)) }
-        item("reset") { SectionResetRow(com.forge.app.data.prefs.SettingsSection.FORMAT, vm) }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } }
+    )
+}
+
+@Composable
+private fun TimezoneOption(label: String, selected: Boolean, onClick: () -> Unit) {
+    val onBg = MaterialTheme.colorScheme.onBackground
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 12.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, style = MaterialTheme.typography.bodyMedium, color = if (selected) onBg else muted)
+        if (selected) Text("●", style = MaterialTheme.typography.labelSmall, color = onBg)
     }
 }
 
@@ -507,68 +631,6 @@ internal fun EquipmentPage(state: SettingsUiState, vm: SettingsViewModel, modifi
 }
 
 @Composable
-internal fun PrivacyPage(state: SettingsUiState, vm: SettingsViewModel, modifier: Modifier = Modifier) {
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val onBg = MaterialTheme.colorScheme.onBackground
-    Column(modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-        ToggleRow("Privacy mode", "Hide the app preview in recent apps & block screenshots", state.privacyMode, vm::setPrivacyMode)
-        SectionDivider()
-        Text(
-            "When on, the recent-apps switcher shows a blank thumbnail instead of your workout, " +
-                "and screenshots / screen recording are blocked by the system.",
-            style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic,
-            modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp)
-        )
-
-        // What Forge stores — a plain data inventory, so someone handed the app knows exactly what's
-        // kept and that none of it leaves the phone (there is no internet permission).
-        Column(Modifier.padding(horizontal = 24.dp, vertical = 12.dp)) {
-            Text("WHAT FORGE STORES", style = MaterialTheme.typography.labelMedium, color = muted)
-            Spacer(Modifier.height(8.dp))
-            listOf(
-                "Workouts — sets, reps, weights & notes",
-                "Bodyweight history & progress photos",
-                "Mood check-ins & cardio",
-                "Trophies, XP & rank",
-                "What the coach has learned from you",
-                "Your settings & generated program"
-            ).forEach { line ->
-                Text("·  $line", style = MaterialTheme.typography.bodySmall, color = onBg,
-                    modifier = Modifier.padding(vertical = 2.dp))
-            }
-            Spacer(Modifier.height(12.dp))
-            Text(
-                "All of it stays in this app's private storage on this device. Forge holds no internet " +
-                    "permission, so nothing is ever uploaded or shared — use Export / Backup to keep your own copy.",
-                style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic
-            )
-        }
-
-        SectionDivider()
-
-        // Export shortcut — privacy-aware users expect a data-export entry under Privacy.
-        // Reuses the existing exportFullBackup() action (exportFullDataJson → share sheet).
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickableLabeled("Export all my data as JSON") { vm.exportFullBackup() }
-                .padding(horizontal = 24.dp, vertical = 14.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text("Export all my data", style = MaterialTheme.typography.bodyMedium, color = onBg)
-                Text(
-                    "Human-readable JSON of every session, set & setting",
-                    style = MaterialTheme.typography.labelSmall, color = muted
-                )
-            }
-            Text("JSON →", style = MaterialTheme.typography.labelSmall, color = muted)
-        }
-    }
-}
-
-@Composable
 internal fun ExercisePrefsPage(state: SettingsUiState, vm: SettingsViewModel, modifier: Modifier = Modifier) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val onBg = MaterialTheme.colorScheme.onBackground
@@ -587,97 +649,249 @@ internal fun ExercisePrefsPage(state: SettingsUiState, vm: SettingsViewModel, mo
             .groupBy { it.muscle }
     }
 
-    // Two-level navigation: pick a body part, then like/dislike its movements — so the page
-    // isn't one giant scroll of every exercise at once.
-    var selectedMuscle by remember { mutableStateOf<com.forge.app.program.MuscleGroup?>(null) }
-    BackHandler(enabled = selectedMuscle != null) { selectedMuscle = null }
+    // Search-first flat list: a search box + filter chips over one scrolling list with muscle
+    // sub-headers, plus a Custom section for user-created movements. No more drill-down.
+    var query by remember { mutableStateOf("") }
+    var filter by remember { mutableStateOf(PrefFilter.ALL) }
+    val q = query.trim()
 
-    val muscle = selectedMuscle
-    if (muscle == null) {
-        LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 32.dp)) {
-            item("intro") {
-                Text(
-                    "Tell the generator what to favour or avoid. ♥ shows up more often · ✕ is never picked. Pick a body part to set its movements.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = muted,
-                    fontStyle = FontStyle.Italic,
-                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp)
-                )
-            }
-            items(byMuscle.keys.toList(), key = { it.code }) { m ->
-                val defs = byMuscle[m].orEmpty()
-                val likedN = defs.count { it.id in state.liked }
-                val dislikedN = defs.count { it.id in state.disliked }
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { selectedMuscle = m }
-                        .padding(horizontal = 24.dp, vertical = 14.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column {
-                        Text(m.displayName, style = MaterialTheme.typography.bodyMedium, color = onBg)
-                        val summary = buildList {
-                            if (likedN > 0) add("$likedN ♥")
-                            if (dislikedN > 0) add("$dislikedN ✕")
-                        }.joinToString(" · ").ifEmpty { "${defs.size} exercises" }
-                        Text(summary, style = MaterialTheme.typography.labelSmall, color = muted)
-                    }
-                    Text("→", style = MaterialTheme.typography.bodyMedium, color = muted)
-                }
-                HorizontalDivider(color = outline.copy(alpha = 0.12f), modifier = Modifier.padding(horizontal = 24.dp))
+    val visibleByMuscle = remember(byMuscle, q, filter, state.liked, state.disliked) {
+        byMuscle
+            .mapValues { (_, defs) -> defs.filter { libVisible(it, q, filter, state.liked, state.disliked) } }
+            .filterValues { it.isNotEmpty() }
+    }
+    val visibleCustom = remember(state.customExercises, q, filter, state.liked, state.disliked) {
+        state.customExercises.filter { customVisible(it, q, filter, state.liked, state.disliked) }
+    }
+    val nothingMatches = visibleByMuscle.isEmpty() && visibleCustom.isEmpty()
+
+    Column(modifier.fillMaxSize()) {
+        PrefSearchField(query, onQuery = { query = it })
+        FlowRow(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            PrefFilter.entries.forEach { f ->
+                PillChip(f.label, filter == f) { filter = f }
             }
         }
-    } else {
-        val defs = byMuscle[muscle].orEmpty()
-        LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 32.dp)) {
-            item("back") {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { selectedMuscle = null }
-                        .padding(horizontal = 24.dp, vertical = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text("←", style = MaterialTheme.typography.bodyMedium, color = muted)
-                    Text(
-                        muscle.displayName.uppercase(),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = onBg
+        Text(
+            "♥ shows up more often in generated programs · ✕ is never picked.",
+            style = MaterialTheme.typography.labelSmall,
+            color = muted,
+            fontStyle = FontStyle.Italic,
+            modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 4.dp, bottom = 8.dp)
+        )
+
+        LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 32.dp)) {
+            visibleByMuscle.forEach { (m, defs) ->
+                item("hdr-${m.code}") {
+                    val likedN = defs.count { it.id in state.liked }
+                    val dislikedN = defs.count { it.id in state.disliked }
+                    PrefSectionHeader(m.displayName.uppercase(), prefSummary(likedN, dislikedN, defs.size))
+                }
+                items(defs, key = { "lib-${it.id}" }) { def ->
+                    ExercisePrefRow(
+                        name = def.name,
+                        subtitle = libSubtitle(def),
+                        liked = def.id in state.liked,
+                        disliked = def.id in state.disliked,
+                        onLike = { vm.setExercisesLiked(setOf(def.id), def.id !in state.liked) },
+                        onDislike = { vm.setExercisesDisliked(setOf(def.id), def.id !in state.disliked) }
                     )
                 }
-                HorizontalDivider(color = outline.copy(alpha = 0.25f), modifier = Modifier.padding(horizontal = 24.dp))
             }
-            items(defs, key = { it.id }) { def ->
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        def.name,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = onBg,
-                        modifier = Modifier.weight(1f)
+            if (visibleCustom.isNotEmpty()) {
+                item("hdr-custom") {
+                    PrefSectionHeader(
+                        "★ CUSTOM",
+                        "${visibleCustom.size} ${if (visibleCustom.size == 1) "exercise" else "exercises"}"
                     )
-                    PillChip("♥", def.id in state.liked) { vm.toggleLike(def.id) }
-                    PillChip("✕", def.id in state.disliked) { vm.toggleDislike(def.id) }
                 }
+                // Group id-sets are disjoint, so the smallest id is a unique, stable per-group key
+                // (name+muscle could collide on malformed data and crash the list).
+                items(visibleCustom, key = { "cus-${it.ids.minOrNull()}" }) { ref ->
+                    val liked = ref.ids.any { it in state.liked }
+                    val disliked = ref.ids.any { it in state.disliked }
+                    ExercisePrefRow(
+                        name = ref.name,
+                        subtitle = "Custom · ${ref.muscle.displayName}",
+                        liked = liked,
+                        disliked = disliked,
+                        onLike = { vm.setExercisesLiked(ref.ids, !liked) },
+                        onDislike = { vm.setExercisesDisliked(ref.ids, !disliked) }
+                    )
+                }
+            }
+            if (nothingMatches) {
+                item("empty") {
+                    Text(
+                        if (q.isNotEmpty()) "No exercises match “$q”." else "No exercises here yet.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = muted,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 48.dp)
+                    )
+                }
+            }
+            // The post-swap dislike prompt toggle lives here too — it's about likes/dislikes.
+            item("swap-toggle") {
+                Spacer(Modifier.height(12.dp))
+                HorizontalDivider(color = outline.copy(alpha = 0.12f), modifier = Modifier.padding(horizontal = 24.dp))
+                ToggleRow(
+                    label = "Ask to dislike after swapping",
+                    subtitle = "After a \"Make default\" swap, offer to hide the old exercise.",
+                    checked = state.swapDislikePromptEnabled,
+                    onCheckedChange = { vm.setSwapDislikePromptEnabled(it) }
+                )
             }
         }
     }
 }
 
-// ─── LazyListScope helpers not in stdlib ─────────────────────────────────────
+/** Top-level filter for the Exercise likes list. */
+private enum class PrefFilter(val label: String) {
+    ALL("All"), LIKED("♥ Liked"), DISLIKED("✕ Disliked"), CUSTOM("★ Custom")
+}
 
-private fun androidx.compose.foundation.lazy.LazyListScope.items(
-    items: List<Pair<String, String>>,
-    key: (Pair<String, String>) -> Any,
-    itemContent: @Composable (Pair<String, String>) -> Unit
+private fun matchesQuery(name: String, q: String): Boolean =
+    q.isEmpty() || name.contains(q, ignoreCase = true)
+
+private fun libVisible(
+    def: com.forge.app.program.ExerciseDef,
+    q: String,
+    filter: PrefFilter,
+    liked: Set<String>,
+    disliked: Set<String>
+): Boolean {
+    if (!matchesQuery(def.name, q)) return false
+    return when (filter) {
+        PrefFilter.ALL -> true
+        PrefFilter.LIKED -> def.id in liked
+        PrefFilter.DISLIKED -> def.id in disliked
+        PrefFilter.CUSTOM -> false
+    }
+}
+
+private fun customVisible(
+    ref: com.forge.app.data.repo.CustomExerciseRef,
+    q: String,
+    filter: PrefFilter,
+    liked: Set<String>,
+    disliked: Set<String>
+): Boolean {
+    if (!matchesQuery(ref.name, q)) return false
+    return when (filter) {
+        PrefFilter.ALL, PrefFilter.CUSTOM -> true
+        PrefFilter.LIKED -> ref.ids.any { it in liked }
+        PrefFilter.DISLIKED -> ref.ids.any { it in disliked }
+    }
+}
+
+/** Per-muscle header summary: liked/disliked tallies, or a plain move count when neither is set. */
+private fun prefSummary(likedN: Int, dislikedN: Int, total: Int): String =
+    buildList {
+        if (likedN > 0) add("$likedN ♥")
+        if (dislikedN > 0) add("$dislikedN ✕")
+    }.joinToString(" · ").ifEmpty { "$total ${if (total == 1) "move" else "moves"}" }
+
+/** "Barbell · Compound"-style secondary line for a library movement. */
+private fun libSubtitle(def: com.forge.app.program.ExerciseDef): String {
+    val equip = def.equipment.firstOrNull()?.display ?: "Bodyweight"
+    val kind = when {
+        com.forge.app.program.ExerciseTag.COMPOUND in def.tags -> "Compound"
+        com.forge.app.program.ExerciseTag.ISOLATION in def.tags -> "Isolation"
+        else -> def.difficulty.displayName
+    }
+    return "$equip · $kind"
+}
+
+@Composable
+private fun PrefSearchField(query: String, onQuery: (String) -> Unit) {
+    val onBg = MaterialTheme.colorScheme.onBackground
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val outline = MaterialTheme.colorScheme.outline
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 24.dp, vertical = 12.dp)
+            .border(1.dp, outline.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+            .padding(horizontal = 14.dp, vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Text("⌕", style = MaterialTheme.typography.bodyLarge, color = muted)
+        BasicTextField(
+            value = query,
+            onValueChange = onQuery,
+            singleLine = true,
+            textStyle = MaterialTheme.typography.bodyMedium.copy(color = onBg),
+            cursorBrush = SolidColor(onBg),
+            modifier = Modifier.weight(1f),
+            decorationBox = { inner ->
+                Box {
+                    if (query.isEmpty()) {
+                        Text(
+                            "Search exercises…",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = muted.copy(alpha = 0.5f)
+                        )
+                    }
+                    inner()
+                }
+            }
+        )
+        if (query.isNotEmpty()) {
+            Text(
+                "×",
+                style = MaterialTheme.typography.bodyLarge,
+                color = muted,
+                modifier = Modifier.clickable { onQuery("") }
+            )
+        }
+    }
+}
+
+@Composable
+private fun PrefSectionHeader(title: String, summary: String) {
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val onBg = MaterialTheme.colorScheme.onBackground
+    val outline = MaterialTheme.colorScheme.outline
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 24.dp, end = 24.dp, top = 18.dp, bottom = 6.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(title, style = MaterialTheme.typography.labelSmall, color = onBg)
+        Text(summary, style = MaterialTheme.typography.labelSmall, color = muted)
+    }
+    HorizontalDivider(color = outline.copy(alpha = 0.2f), modifier = Modifier.padding(horizontal = 24.dp))
+}
+
+@Composable
+private fun ExercisePrefRow(
+    name: String,
+    subtitle: String,
+    liked: Boolean,
+    disliked: Boolean,
+    onLike: () -> Unit,
+    onDislike: () -> Unit
 ) {
-    items.forEach { pair ->
-        item("kv-${key(pair)}") { itemContent(pair) }
+    val onBg = MaterialTheme.colorScheme.onBackground
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(name, style = MaterialTheme.typography.bodyMedium, color = onBg)
+            Text(subtitle, style = MaterialTheme.typography.labelSmall, color = muted)
+        }
+        PillChip("♥", liked, onClick = onLike)
+        PillChip("✕", disliked, onClick = onDislike)
     }
 }

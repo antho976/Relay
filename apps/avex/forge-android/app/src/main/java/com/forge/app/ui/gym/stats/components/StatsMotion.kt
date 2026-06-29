@@ -1,6 +1,7 @@
 package com.forge.app.ui.gym.stats.components
 
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.foundation.layout.Box
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -85,14 +86,18 @@ internal fun CountUpText(
 /**
  * Single 0→1 reveal driving draw-in: sparklines clip left-to-right, bars grow, tiles
  * fill. Re-keyed by [key] (pass the data identity) so a data refresh re-reveals only
- * when the series itself changes.
+ * when the series itself changes. [spec] is the curve the reveal rides — defaults to the
+ * standard 600 ms enter tween; pass [ForgeMotion.drawTween] for a slower, gentler glide.
  */
 @Composable
-internal fun rememberDrawProgress(key: Any? = Unit): Float {
+internal fun rememberDrawProgress(
+    key: Any? = Unit,
+    spec: FiniteAnimationSpec<Float> = ForgeMotion.enterTween(DRAW_IN_MS)
+): Float {
     var played by rememberSaveable { mutableStateOf(false) }
     val anim = remember { Animatable(if (played) 1f else 0f) }
     LaunchedEffect(key) {
-        if (anim.value < 1f) anim.animateTo(1f, ForgeMotion.enterTween(DRAW_IN_MS))
+        if (anim.value < 1f) anim.animateTo(1f, spec)
         played = true
     }
     return anim.value

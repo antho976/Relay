@@ -306,7 +306,7 @@ internal fun ExerciseDetailBody(
         }
         Text(exerciseSummary(ex, useKg), style = MaterialTheme.typography.bodySmall, color = muted)
         PerExerciseSetChart(ex, metric, style, accent, muted, outline)
-        SetTable(ex.sets, onBg, muted, accent, outline)
+        SetTable(ex.sets, onBg, muted, outline)
     }
 }
 
@@ -321,7 +321,7 @@ private fun exerciseSummary(ex: ExerciseDetail, useKg: Boolean): String {
 }
 
 @Composable
-private fun SetTable(sets: List<SetDetail>, onBg: Color, muted: Color, accent: Color, outline: Color) {
+private fun SetTable(sets: List<SetDetail>, onBg: Color, muted: Color, outline: Color) {
     val useKg = LocalForgeSettings.current.useKg
     Column {
         sets.forEachIndexed { i, s ->
@@ -336,7 +336,8 @@ private fun SetTable(sets: List<SetDetail>, onBg: Color, muted: Color, accent: C
                     Text(
                         "${weightLabel(s, useKg)} × ${s.reps}",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = if (s.isTopSet) accent else onBg,
+                        // Always white — the top set keeps a SemiBold emphasis but is no longer accent-tinted.
+                        color = onBg,
                         fontWeight = if (s.isTopSet) FontWeight.SemiBold else FontWeight.Normal
                     )
                 }

@@ -30,13 +30,13 @@ fun ForgeWordmark(
     modifier: Modifier = Modifier
 ) {
     val onBg = MaterialTheme.colorScheme.onBackground
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val accent = MaterialTheme.colorScheme.secondary
     Row(
         modifier = modifier.clickableLabeled("Go to Home", onClick = onClick),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        Text("•", style = MaterialTheme.typography.bodyMedium, color = muted)
+        Text("•", style = MaterialTheme.typography.bodyMedium, color = accent)
         Text("Forge", style = MaterialTheme.typography.bodyMedium, color = onBg, fontStyle = FontStyle.Italic)
     }
 }

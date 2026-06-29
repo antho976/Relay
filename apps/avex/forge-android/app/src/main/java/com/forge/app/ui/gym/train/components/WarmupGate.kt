@@ -100,25 +100,6 @@ fun WarmupGate(
 
         Spacer(Modifier.height(20.dp))
 
-        // Skip just this session — a subtle outlined pill on its own centred row. Pulled out of the
-        // old single SpaceBetween row, where it collided with the two persistent-skip links on a phone.
-        Box(
-            modifier = Modifier
-                .align(Alignment.CenterHorizontally)
-                .clip(RoundedCornerShape(50))
-                .border(1.dp, outline, RoundedCornerShape(50))
-                .clickable(onClick = onSkip)
-                .padding(horizontal = 22.dp, vertical = 9.dp)
-        ) {
-            Text(
-                "Skip warmup",
-                style = MaterialTheme.typography.labelMedium,
-                color = onBg
-            )
-        }
-
-        Spacer(Modifier.height(14.dp))
-
         // Persistent skips — turn warmups off for the rest of today / the rest of this week. Centred
         // with a separator dot so the two labels breathe instead of running into each other.
         Row(
@@ -149,6 +130,25 @@ fun WarmupGate(
                 modifier = Modifier
                     .clickable(onClick = onDisableWeek)
                     .padding(vertical = 6.dp, horizontal = 6.dp)
+            )
+        }
+
+        Spacer(Modifier.height(14.dp))
+
+        // Skip just this session — a subtle outlined pill on its own centred row. Pulled out of the
+        // old single SpaceBetween row, where it collided with the two persistent-skip links on a phone.
+        Box(
+            modifier = Modifier
+                .align(Alignment.CenterHorizontally)
+                .clip(RoundedCornerShape(50))
+                .border(1.dp, outline, RoundedCornerShape(50))
+                .clickable(onClick = onSkip)
+                .padding(horizontal = 22.dp, vertical = 9.dp)
+        ) {
+            Text(
+                "Skip warmup",
+                style = MaterialTheme.typography.labelMedium,
+                color = onBg
             )
         }
     }

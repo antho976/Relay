@@ -55,6 +55,10 @@ data class SettingsUiState(
     val daysPerWeek: Int = 4,
     val liked: Set<String> = emptySet(),
     val disliked: Set<String> = emptySet(),
+    /** User-created exercises (deduped by name), so they can be liked/disliked on the same screen. */
+    val customExercises: List<com.forge.app.data.repo.CustomExerciseRef> = emptyList(),
+    /** After a "Make default" swap, offer to dislike the swapped-out exercise (default on). */
+    val swapDislikePromptEnabled: Boolean = true,
     val rotationCadence: String = "never",
     val rotationEveryN: Int = 4,
     val cardioWeeklyTargetMin: Int = 0,
@@ -86,6 +90,7 @@ class SettingsViewModel @Inject constructor(
     private val photoRepo: com.forge.app.data.repo.ProgressPhotoRepository,
     private val pdfExport: com.forge.app.data.repo.PdfExportRepository,
     private val programRepository: com.forge.app.data.repo.ProgramRepository,
+    private val programCustomizationRepo: com.forge.app.data.repo.ProgramCustomizationRepository,
     private val vacationRepo: com.forge.app.data.repo.VacationRepository,
     private val coachRepo: com.forge.app.data.repo.CoachRepository,
     private val reminderScheduler: com.forge.app.service.ReminderScheduler,
@@ -206,6 +211,8 @@ class SettingsViewModel @Inject constructor(
         s.copy(liked = v)
     }.combine(settingsRepo.dislikedExercises) { s, v ->
         s.copy(disliked = v)
+    }.combine(settingsRepo.swapDislikePromptEnabled) { s, v ->
+        s.copy(swapDislikePromptEnabled = v)
     }.combine(settingsRepo.rotationCadence) { s, v ->
         s.copy(rotationCadence = v)
     }.combine(settingsRepo.rotationEveryN) { s, v ->
@@ -238,6 +245,8 @@ class SettingsViewModel @Inject constructor(
         s.copy(useMiles = v)
     }.combine(programRepository.revision) { s, _ ->
         s.copy(weeklyVolume = computeWeeklyVolume())
+    }.combine(programCustomizationRepo.observeCustomExercises()) { s, v ->
+        s.copy(customExercises = v)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), SettingsUiState())
 
     /** Sets-per-muscle across the active program (busiest first) — drives the Program page readout. */
@@ -329,11 +338,18 @@ class SettingsViewModel @Inject constructor(
         settingsRepo.availableEquipment.first()
             .mapNotNull { runCatching { com.forge.app.program.Equipment.valueOf(it) }.getOrNull() }.toSet()
 
-    fun toggleLike(libId: String) = viewModelScope.launch {
-        settingsRepo.setExerciseLiked(libId, libId !in settingsRepo.likedExercises.first())
+    /**
+     * Set the like/dislike state for one or more ids at once. A library exercise passes its single
+     * id; a custom exercise passes every `custom_…` id sharing its name so they flip together.
+     */
+    fun setExercisesLiked(ids: Set<String>, liked: Boolean) = viewModelScope.launch {
+        settingsRepo.setExercisesLiked(ids, liked)
     }
-    fun toggleDislike(libId: String) = viewModelScope.launch {
-        settingsRepo.setExerciseDisliked(libId, libId !in settingsRepo.dislikedExercises.first())
+    fun setExercisesDisliked(ids: Set<String>, disliked: Boolean) = viewModelScope.launch {
+        settingsRepo.setExercisesDisliked(ids, disliked)
+    }
+    fun setSwapDislikePromptEnabled(enabled: Boolean) = viewModelScope.launch {
+        settingsRepo.setSwapDislikePromptEnabled(enabled)
     }
     fun setRotationCadence(cadence: String, n: Int) = viewModelScope.launch {
         settingsRepo.setRotationCadence(cadence)

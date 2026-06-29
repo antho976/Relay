@@ -4,8 +4,10 @@ import androidx.compose.ui.graphics.Color
 
 // ── Pearl (dark default) ──────────────────────────────────────────────────────
 val PearlBackground  = Color(0xFF0E0E11)
-val PearlSurface     = Color(0xFF18181C)
-val PearlSurfaceVar  = Color(0xFF222228)
+// Surfaces sit as a quiet, faintly-cool lift off the near-black bg rather than flat pale-grey slabs:
+// darker + a hair of blue (B channel highest) so the "boxes" read as intentional dark cards, not grey.
+val PearlSurface     = Color(0xFF15161B)   // was #18181C
+val PearlSurfaceVar  = Color(0xFF1C1D24)   // was #222228 (the card/"grey box" the content sits on)
 val PearlOutline     = Color(0xFF2E2E38)
 val PearlOnBg        = Color(0xFFEEEEF2)
 val PearlMuted       = Color(0xFFB4B4C2)   // A6: brightened so muted text — incl. the .65–.7 alpha captions — clears WCAG-AA 4.5:1 on PearlBackground (old #A6A6B6 fell to ~4.4:1 once alpha-dimmed; full tone now ~9.4:1, alpha-0.7 ~5.1:1)
