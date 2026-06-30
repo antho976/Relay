@@ -55,9 +55,24 @@ class CardioViewModel @Inject constructor(
 ) : ViewModel() {
 
     private val transient = MutableStateFlow(TransientState())
+    // Which Health Connect grants Forge actually holds — re-checked on init and on every resume (the
+    // user may grant them in the HC app and return). Drives the banner's auto-hide and the "connected
+    // but no data yet" steps placeholder. A one-shot read, not a flow: HC has no permission-change
+    // observable, so we poll it at the moments it can change (resume) rather than continuously.
+    private val connection = MutableStateFlow(WearableConnection())
     // Start of the current ISO week (Monday) — matches the "this week" label and the Mon–Sun bars
     // (was a rolling now-minus-7-days window). Captured once at construction.
     private val weekStartMs: Long = com.forge.app.core.time.mondayStartMs(clock.nowMs())
+
+    init { refreshConnection() }
+
+    /** Re-read whether the steps / exercise grants are held (call on resume — grants change in the HC app). */
+    fun refreshConnection() = viewModelScope.launch {
+        connection.value = WearableConnection(
+            steps = healthConnectManager.canReadSteps(),
+            routes = healthConnectManager.canReadExercise()
+        )
+    }
 
     // All DB-derived aggregates (streak, weekly/last-week totals, the Mon–Sun cells) are computed
     // here off the DB flow and on Dispatchers.Default — NOT in the combine with `transient` below,
@@ -108,6 +123,8 @@ class CardioViewModel @Inject constructor(
         )
     }.combine(settingsRepo.useMiles) { st, useMiles ->
         st.copy(useMiles = useMiles)
+    }.combine(connection) { st, conn ->
+        st.copy(stepsConnected = conn.steps, routesConnected = conn.routes)
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(stopTimeoutMillis = 5_000),
@@ -239,6 +256,9 @@ class CardioViewModel @Inject constructor(
             viewModelScope.launch { runCatching { trophyRepo.evaluateAndUnlockNew() } }
         }
     }
+
+    /** The Health Connect grants Forge holds for the cardio screen's wearable data. */
+    private data class WearableConnection(val steps: Boolean = false, val routes: Boolean = false)
 
     private data class TransientState(
         val sheetOpen: Boolean = false,

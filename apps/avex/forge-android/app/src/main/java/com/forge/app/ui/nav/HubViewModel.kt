@@ -15,4 +15,8 @@ class HubViewModel @Inject constructor(settingsRepo: SettingsRepository) : ViewM
     /** When false the Coach tab is removed from the bar/pager (declined in onboarding / Settings). */
     val coachEnabled: StateFlow<Boolean> =
         settingsRepo.coachEnabled.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
+
+    /** "Go with the flow" — the Coach tab is also removed here (there's no plan to coach against). */
+    val freestyleMode: StateFlow<Boolean> =
+        settingsRepo.freestyleMode.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 }

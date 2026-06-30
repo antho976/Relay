@@ -236,4 +236,27 @@ class StatsDerivedAggregationsTest {
         assertEquals(1, weeks.size)
         assertEquals(60, weeks[0].medianMin)
     }
+
+    // ── buildLifetimeMetrics ───────────────────────────────────────────────────
+
+    @Test
+    fun lifetimeMetrics_nullWhenEmpty() {
+        assertNull(buildLifetimeMetrics(emptyList()))
+    }
+
+    @Test
+    fun lifetimeMetrics_sumsTonnage_andAveragesPerDistinctSession() {
+        val s1 = dayMs(monday)
+        val s2 = dayMs(monday.plusWeeks(1))
+        val sets = listOf(
+            set("a", 100.0, 10, s1),  // 1000
+            set("b", 50.0, 5, s1),    // 250  → session s1 total 1250
+            set("a", 100.0, 10, s2)   // 1000 → session s2 total 1000
+        )
+        val m = buildLifetimeMetrics(sets)!!
+        assertEquals(2, m.totalSessions)               // two distinct session starts
+        assertEquals(2250.0, m.lifetimeVolumeLb, 0.001) // 1250 + 1000
+        assertEquals(1125.0, m.avgSessionVolumeLb, 0.001)
+        assertEquals(1.5, m.avgSetCount, 0.001)         // 3 sets / 2 sessions
+    }
 }

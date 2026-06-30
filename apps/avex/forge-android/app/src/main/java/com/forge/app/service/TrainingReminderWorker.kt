@@ -20,8 +20,8 @@ import dagger.assisted.AssistedInject
 import kotlinx.coroutines.flow.first
 import java.time.Duration
 import java.time.LocalDate
-import java.time.LocalDateTime
 import java.time.ZoneId
+import java.time.ZonedDateTime
 import java.util.concurrent.TimeUnit
 
 /**
@@ -52,13 +52,21 @@ class TrainingReminderWorker @AssistedInject constructor(
         val dayEnd = today.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
         val finishedToday = sessionDao.finishedInRange(dayStart, dayEnd)
 
-        val dayName = resolveTodayDayName(today, finishedToday.map { it.dayKey }.toSet())
+        // Freestyle ("go with the flow"): there's no plan to name a day from — skip the resolution so we
+        // never announce a phantom day (a stale seed plan could still resolve one). The reminder stays,
+        // just with plan-agnostic copy.
+        val freestyle = settingsRepo.freestyleMode.first()
+        val dayName = if (freestyle) null else resolveTodayDayName(today, finishedToday.map { it.dayKey }.toSet())
+        // No plan to name a day (freestyle, OR a custom user who hasn't built their plan yet) → use the
+        // plan-agnostic nudge instead of going silent, so an opted-in user still gets their reminder.
+        val noFixedPlan = freestyle || Program.dayKeys.isEmpty()
         // Focused two-query streak read — not the full weekly-stats flow — inside the worker's window.
         val streak = runCatching { statsRepo.currentStreakDays() }.getOrDefault(0)
 
         // A scheduled rest day = weekday mode with today's slot deliberately blank (a real program is
         // loaded). Sequence mode has no fixed rest days, so the gentle rest note only applies here.
-        val isRestDay = dayName == null &&
+        // Freestyle has no schedule, so it can't be a "scheduled rest day".
+        val isRestDay = !freestyle && dayName == null &&
             Program.dayKeys.isNotEmpty() &&
             settingsRepo.scheduleMode.first() == WeeklySchedule.MODE_WEEKDAY &&
             settingsRepo.weeklySchedule.first().getOrNull(today.dayOfWeek.value - 1).isNullOrBlank()
@@ -67,7 +75,8 @@ class TrainingReminderWorker @AssistedInject constructor(
             trainedToday = finishedToday.isNotEmpty(),
             dayName = dayName,
             streakDays = streak,
-            isScheduledRestDay = isRestDay
+            isScheduledRestDay = isRestDay,
+            noFixedPlan = noFixedPlan
         ) ?: return Result.success()
 
         ForgeNotifications.ensureChannel(ctx, CHANNEL_ID, CHANNEL_NAME, CHANNEL_DESC)
@@ -117,9 +126,12 @@ class TrainingReminderWorker @AssistedInject constructor(
             WorkManager.getInstance(context).cancelUniqueWork(WORK_NAME)
         }
 
-        /** Minutes from now until the next occurrence of [hour]:00 (always ≥ 1). */
+        /** Minutes from now until the next occurrence of [hour]:00 (always ≥ 1). Zone-aware (ZonedDateTime,
+         *  not LocalDateTime) so the delay spans real elapsed time across a DST gap/overlap — a zone-less
+         *  computation drifts an hour on transition days and fires the reminder early/late. */
         private fun initialDelayMinutes(hour: Int): Long {
-            val now = LocalDateTime.now()
+            val zone = ZoneId.systemDefault()
+            val now = ZonedDateTime.now(zone)
             var next = now.withHour(hour.coerceIn(0, 23)).withMinute(0).withSecond(0).withNano(0)
             if (!next.isAfter(now)) next = next.plusDays(1)
             return Duration.between(now, next).toMinutes().coerceAtLeast(1)

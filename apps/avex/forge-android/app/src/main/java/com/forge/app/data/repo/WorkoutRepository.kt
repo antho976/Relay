@@ -248,6 +248,10 @@ class WorkoutRepository @Inject constructor(
 
     /** Rotation (program-unlock Phase 3): re-roll the program every N finished sessions, if enabled. */
     private suspend fun maybeRotateProgram() {
+        // A freestyle user has no plan to rotate — and rerollAll() would silently generate one that
+        // stays hidden behind the freestyle home (the manual Settings paths flip freestyle off, but
+        // this background path can't ask). Skip entirely.
+        if (settingsRepo.freestyleMode.first()) return
         if (settingsRepo.rotationCadence.first() != "every_n") return
         // Pause auto-rotation inside the deload week — a rotation regenerates a full-volume program
         // and would silently wipe the recovery week mid-deload (seam fix #18). The counter is left

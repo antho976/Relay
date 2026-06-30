@@ -24,12 +24,15 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -118,12 +121,13 @@ internal fun FormatPage(state: SettingsUiState, vm: SettingsViewModel, modifier:
                 listOf("km" to "km", "mi" to "mi"),
                 if (state.useMiles) "mi" else "km"
             ) { vm.setUseMiles(it == "mi") }
+            CardDivider()
+            // Live preview — updates the moment a unit is switched.
+            CardFootnote(
+                "e.g. ${com.forge.app.domain.units.formatWeight(135.0, state.useKg)} · " +
+                    com.forge.app.domain.units.formatDistance(5.0, state.useMiles)
+            )
         }
-        // Live preview — updates the moment a unit is switched.
-        CardCaption(
-            "e.g. ${com.forge.app.domain.units.formatWeight(135.0, state.useKg)} · " +
-                com.forge.app.domain.units.formatDistance(5.0, state.useMiles)
-        )
 
         // ── Date & time ────────────────────────────────────────────────────────────
         GroupHeader("Date & time")
@@ -157,17 +161,19 @@ internal fun FormatPage(state: SettingsUiState, vm: SettingsViewModel, modifier:
                 listOf("male" to "Male", "female" to "Female"),
                 state.userSex, vm::setUserSex
             )
+            CardDivider()
+            CardFootnote("Only scales the bodyweight-relative strength standards on the Stats tab.")
         }
-        CardCaption("Only scales the bodyweight-relative strength standards on the Stats tab.")
 
-        Spacer(Modifier.height(8.dp))
-        SectionResetRow(com.forge.app.data.prefs.SettingsSection.FORMAT, vm)
+        FormatResetButton(vm)
     }
 
     if (showTzPicker) {
         TimezonePickerDialog(
             current = state.timezone,
+            favorites = state.favoriteTimezones,
             onPick = { vm.setTimezone(it); showTzPicker = false },
+            onToggleFavorite = vm::toggleFavoriteTimezone,
             onDismiss = { showTzPicker = false }
         )
     }
@@ -187,37 +193,65 @@ private fun GroupHeader(text: String) {
     )
 }
 
-/** A small muted italic caption shown just below a card (live previews, scope notes). */
+/** A muted italic note shown as the last row *inside* a [SettingsCard] (live previews, scope notes). */
 @Composable
-private fun CardCaption(text: String) {
+private fun CardFootnote(text: String) {
     Text(
         text,
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         fontStyle = FontStyle.Italic,
-        modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 8.dp)
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)
     )
 }
 
-/** The rounded surface "card" that groups a few setting rows together. */
+/** A prominent, clearly-tappable "reset this page" button (Format page only, for now). */
+@Composable
+private fun FormatResetButton(vm: SettingsViewModel) {
+    val onBg = MaterialTheme.colorScheme.onBackground
+    val outline = MaterialTheme.colorScheme.outline
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 20.dp, end = 20.dp, top = 24.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .border(1.dp, outline.copy(alpha = 0.6f), RoundedCornerShape(12.dp))
+            .clickableLabeled("Reset this page to defaults") {
+                vm.resetSection(com.forge.app.data.prefs.SettingsSection.FORMAT)
+            }
+            .padding(vertical = 14.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            "↺  Reset this page to defaults",
+            style = MaterialTheme.typography.labelLarge,
+            color = onBg,
+            letterSpacing = 0.5.sp,
+            textAlign = TextAlign.Center
+        )
+    }
+}
+
+/** The "card" that groups a few setting rows: a clean outline with no fill (matches the Recovery
+ *  page) so the page color shows straight through. */
 @Composable
 private fun SettingsCard(content: @Composable ColumnScope.() -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant),
+            .padding(horizontal = 20.dp)
+            .border(1.dp, MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.22f), RoundedCornerShape(18.dp))
+            .padding(vertical = 4.dp),
         content = content
     )
 }
 
-/** Inset hairline divider between rows inside a [SettingsCard]. */
+/** Hairline divider between rows inside a [SettingsCard] — inset both sides so it never touches the outline. */
 @Composable
 private fun CardDivider() {
     HorizontalDivider(
-        modifier = Modifier.padding(start = 16.dp),
-        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.18f)
+        modifier = Modifier.padding(horizontal = 16.dp),
+        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.15f)
     )
 }
 
@@ -256,8 +290,11 @@ private fun InlineChipRow(
 private fun TimezoneRow(timezone: String, onClick: () -> Unit) {
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val label = TIMEZONE_OPTIONS.firstOrNull { it.first == timezone }?.second
-        ?: "${timezone.ifBlank { java.util.TimeZone.getDefault().id }} · device"
+    val label = when {
+        timezone.isBlank() -> "${java.util.TimeZone.getDefault().id} · device"
+        else -> TIMEZONE_OPTIONS.firstOrNull { it.first == timezone }?.second
+            ?: timezone.substringAfterLast('/').replace('_', ' ')
+    }
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -279,30 +316,177 @@ private fun TimezoneRow(timezone: String, onClick: () -> Unit) {
     }
 }
 
-/** The full timezone list, opened from [TimezoneRow] so the page isn't 13 stacked rows. */
+/** One row in the searchable "all timezones" list. [label] is the friendly, offset-stamped display. */
+private data class TzEntry(val id: String, val city: String, val offsetMinutes: Int, val label: String)
+
+/** "+5:30" / "−8" / "±0" for a UTC offset given in minutes. */
+private fun tzOffsetLabel(mins: Int): String {
+    if (mins == 0) return "±0"
+    val sign = if (mins > 0) "+" else "−"
+    val abs = kotlin.math.abs(mins)
+    val h = abs / 60
+    val m = abs % 60
+    return if (m == 0) "$sign$h" else "$sign$h:${m.toString().padStart(2, '0')}"
+}
+
+/**
+ * Every IANA zone (minus the noisy Etc/SystemV aliases & bare 3-letter ids), stamped with its
+ * *current* UTC offset and sorted west→east then alphabetically. Built once per open via remember.
+ */
+private fun allTimezones(): List<TzEntry> {
+    val now = java.time.Instant.now()
+    return java.time.ZoneId.getAvailableZoneIds()
+        .asSequence()
+        .filter { it.contains('/') && !it.startsWith("Etc/") && !it.startsWith("SystemV/") }
+        .map { id ->
+            val mins = java.time.ZoneId.of(id).rules.getOffset(now).totalSeconds / 60
+            val city = id.substringAfterLast('/').replace('_', ' ')
+            val region = id.substringBeforeLast('/').replace('_', ' ')
+            TzEntry(id, city, mins, "$city · $region  (UTC${tzOffsetLabel(mins)})")
+        }
+        .sortedWith(compareBy({ it.offsetMinutes }, { it.city }))
+        .toList()
+}
+
+/**
+ * Timezone picker: a search box over the full IANA list. Tap ☆ to star a zone; starred zones (and
+ * the current pick, if it isn't already pinned) sit at the top, followed by the common presets and
+ * the full list. Tapping a row selects & closes; tapping its star just favorites and stays open.
+ */
 @Composable
 private fun TimezonePickerDialog(
     current: String,
+    favorites: Set<String>,
     onPick: (String) -> Unit,
+    onToggleFavorite: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val onBg = MaterialTheme.colorScheme.onBackground
     val outline = MaterialTheme.colorScheme.outline
-    // If the saved/device zone isn't a preset, surface it first so there's always a visible selection.
-    val showDevice = TIMEZONE_OPTIONS.none { it.first == current }
-    val deviceTz = current.ifBlank { java.util.TimeZone.getDefault().id }
+    var query by remember { mutableStateOf("") }
+    val all = remember { allTimezones() }
+    val allById = remember(all) { all.associate { it.id to it.label } }
+    val commonIds = remember { TIMEZONE_OPTIONS.map { it.first }.toSet() }
+    fun labelFor(id: String): String =
+        allById[id] ?: TIMEZONE_OPTIONS.firstOrNull { it.first == id }?.second ?: id
+
+    val q = query.trim()
+    val filtered = remember(q) {
+        if (q.isBlank()) emptyList()
+        else all.filter { it.id.contains(q, ignoreCase = true) || it.label.contains(q, ignoreCase = true) }
+    }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Timezone") },
         text = {
-            LazyColumn {
-                if (showDevice) {
-                    item {
-                        TimezoneOption("$deviceTz · device", selected = true) { onPick(deviceTz) }
-                        HorizontalDivider(color = outline.copy(alpha = 0.12f))
+            Column {
+                // ── Search box ──
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant)
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    BasicTextField(
+                        value = query,
+                        onValueChange = { query = it },
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(color = onBg),
+                        cursorBrush = SolidColor(onBg),
+                        singleLine = true,
+                        decorationBox = { inner ->
+                            Box {
+                                if (query.isEmpty()) {
+                                    Text(
+                                        "Search a city or region…",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = muted.copy(alpha = 0.5f),
+                                        fontStyle = FontStyle.Italic
+                                    )
+                                }
+                                inner()
+                            }
+                        },
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (query.isNotEmpty()) {
+                        Text(
+                            "×",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = muted,
+                            modifier = Modifier
+                                .clickableLabeled("Clear search") { query = "" }
+                                .padding(start = 8.dp)
+                        )
                     }
                 }
-                items(TIMEZONE_OPTIONS, key = { it.first }) { (id, label) ->
-                    TimezoneOption(label, selected = current == id) { onPick(id) }
+                Spacer(Modifier.height(8.dp))
+
+                LazyColumn(modifier = Modifier.heightIn(max = 360.dp)) {
+                    if (q.isNotBlank()) {
+                        if (filtered.isEmpty()) {
+                            item("empty") {
+                                Text(
+                                    "No timezone matches “$q”.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = muted,
+                                    modifier = Modifier.padding(vertical = 16.dp)
+                                )
+                            }
+                        } else {
+                            items(filtered, key = { it.id }) { e ->
+                                TimezoneOption(
+                                    e.label, selected = current == e.id,
+                                    isFavorite = e.id in favorites,
+                                    onToggleFavorite = { onToggleFavorite(e.id) }
+                                ) { onPick(e.id) }
+                            }
+                        }
+                    } else {
+                        // The current pick, only when it isn't already shown under Favorites/Common.
+                        if (current !in favorites && current !in commonIds) {
+                            item("cur-label") { TzSectionLabel("Current") }
+                            item("cur") {
+                                TimezoneOption(
+                                    labelFor(current), selected = true,
+                                    isFavorite = false,
+                                    onToggleFavorite = { onToggleFavorite(current) }
+                                ) { onPick(current) }
+                            }
+                        }
+                        if (favorites.isNotEmpty()) {
+                            item("fav-label") { TzSectionLabel("Favorites") }
+                            items(favorites.sortedBy { labelFor(it) }, key = { "fav-$it" }) { id ->
+                                TimezoneOption(
+                                    labelFor(id), selected = current == id,
+                                    isFavorite = true,
+                                    onToggleFavorite = { onToggleFavorite(id) }
+                                ) { onPick(id) }
+                            }
+                        }
+                        item("common-label") { TzSectionLabel("Common") }
+                        items(TIMEZONE_OPTIONS, key = { "common-${it.first}" }) { (id, label) ->
+                            TimezoneOption(
+                                label, selected = current == id,
+                                isFavorite = id in favorites,
+                                onToggleFavorite = { onToggleFavorite(id) }
+                            ) { onPick(id) }
+                        }
+                        item("all-label") {
+                            HorizontalDivider(color = outline.copy(alpha = 0.12f), modifier = Modifier.padding(vertical = 4.dp))
+                            TzSectionLabel("All timezones")
+                        }
+                        items(all, key = { it.id }) { e ->
+                            TimezoneOption(
+                                e.label, selected = current == e.id,
+                                isFavorite = e.id in favorites,
+                                onToggleFavorite = { onToggleFavorite(e.id) }
+                            ) { onPick(e.id) }
+                        }
+                    }
                 }
             }
         },
@@ -311,19 +495,50 @@ private fun TimezonePickerDialog(
 }
 
 @Composable
-private fun TimezoneOption(label: String, selected: Boolean, onClick: () -> Unit) {
+private fun TzSectionLabel(text: String) {
+    Text(
+        text.uppercase(),
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        letterSpacing = 1.sp,
+        modifier = Modifier.padding(top = 10.dp, bottom = 4.dp)
+    )
+}
+
+@Composable
+private fun TimezoneOption(
+    label: String,
+    selected: Boolean,
+    isFavorite: Boolean,
+    onToggleFavorite: () -> Unit,
+    onClick: () -> Unit
+) {
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(vertical = 12.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
+            .padding(vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(label, style = MaterialTheme.typography.bodyMedium, color = if (selected) onBg else muted)
-        if (selected) Text("●", style = MaterialTheme.typography.labelSmall, color = onBg)
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = if (selected) onBg else muted,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+        if (selected) Text("●", style = MaterialTheme.typography.labelSmall, color = onBg, modifier = Modifier.padding(start = 8.dp))
+        Text(
+            if (isFavorite) "★" else "☆",
+            style = MaterialTheme.typography.bodyLarge,
+            color = if (isFavorite) onBg else muted.copy(alpha = 0.5f),
+            modifier = Modifier
+                .clickableLabeled(if (isFavorite) "Remove favorite" else "Add favorite", onClick = onToggleFavorite)
+                .padding(start = 12.dp, top = 2.dp, bottom = 2.dp)
+        )
     }
 }
 
@@ -512,128 +727,8 @@ internal fun NotificationsPage(state: SettingsUiState, vm: SettingsViewModel, mo
 }
 
 @Composable
-internal fun EquipmentPage(state: SettingsUiState, vm: SettingsViewModel, modifier: Modifier = Modifier) {
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val onBg = MaterialTheme.colorScheme.onBackground
-    val accent = MaterialTheme.colorScheme.primary
-    // Becomes true once equipment is touched this visit, so the regenerate prompt only nags after a change.
-    var equipmentEdited by remember { mutableStateOf(false) }
-    Column(modifier.fillMaxSize()) {
-        Spacer(Modifier.height(16.dp))
-        Text(
-            "Generated programs only pick exercises you can do with the equipment you select here.",
-            style = MaterialTheme.typography.bodySmall,
-            color = muted,
-            fontStyle = FontStyle.Italic,
-            modifier = Modifier.padding(horizontal = 24.dp)
-        )
-        Spacer(Modifier.height(12.dp))
-        // Quick presets — one-tap fill. The Developer's preset is curated (a locked exercise pool).
-        FlowRow(
-            modifier = Modifier.padding(horizontal = 24.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            com.forge.app.program.equipmentPresets.forEach { preset ->
-                val selected = state.availableEquipment == preset.equipment &&
-                    state.frozenExerciseIds == preset.frozenIds
-                PillChip(preset.label, selected) { vm.selectEquipmentPreset(preset); equipmentEdited = true }
-            }
-        }
-        if (state.frozenExerciseIds != null) {
-            Spacer(Modifier.height(10.dp))
-            Text(
-                "This is a curated preset — its exercise list is locked and won't change. " +
-                    "Tap any equipment below to switch to a custom set.",
-                style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic,
-                modifier = Modifier.padding(horizontal = 24.dp)
-            )
-        }
-        Spacer(Modifier.height(12.dp))
-        FlowRow(
-            modifier = Modifier.padding(horizontal = 24.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            com.forge.app.program.Equipment.entries.forEach { equip ->
-                val selected = equip.name in state.availableEquipment
-                PillChip(equip.display.uppercase(), selected) {
-                    val current = state.availableEquipment.toMutableSet()
-                    if (selected) current.remove(equip.name) else current.add(equip.name)
-                    vm.setAvailableEquipment(current)
-                    equipmentEdited = true
-                }
-            }
-        }
-        Spacer(Modifier.height(20.dp))
-        Text(
-            if (equipmentEdited) "You changed your equipment — regenerate so your program only uses what you've got."
-            else "Changed your equipment? Regenerate so the program matches what you've got.",
-            style = MaterialTheme.typography.bodySmall,
-            color = if (equipmentEdited) accent else muted,
-            fontStyle = FontStyle.Italic,
-            modifier = Modifier.padding(horizontal = 24.dp)
-        )
-        Spacer(Modifier.height(10.dp))
-        FlowRow(modifier = Modifier.padding(horizontal = 24.dp)) {
-            PillChip("Regenerate for this equipment", selected = equipmentEdited) {
-                vm.generateProgram(state.daysPerWeek); equipmentEdited = false
-            }
-        }
-        Spacer(Modifier.height(24.dp))
-
-        // ── Plate weight ────────────────────────────────────────────────────────
-        Text("Weight per plate", style = MaterialTheme.typography.titleSmall, color = onBg,
-            modifier = Modifier.padding(horizontal = 24.dp))
-        Spacer(Modifier.height(4.dp))
-        Text(
-            "For machines that load by counting plates (not a numbered stack): exercises are entered and " +
-                "shown as a plate count. This is what one plate weighs, used for PRs and volume.",
-            style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic,
-            modifier = Modifier.padding(horizontal = 24.dp)
-        )
-        Spacer(Modifier.height(12.dp))
-        FlowRow(
-            modifier = Modifier.padding(horizontal = 24.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            listOf(5.0, 10.0, 15.0, 20.0, 25.0, 45.0).forEach { w ->
-                PillChip(com.forge.app.domain.units.formatWeight(w, state.useKg), state.plateWeightLb == w) { vm.setPlateWeightLb(w) }
-            }
-        }
-        Spacer(Modifier.height(24.dp))
-
-        // ── Heaviest dumbbell (auto-coach Phase 0) ──────────────────────────────
-        Text("Heaviest dumbbell", style = MaterialTheme.typography.titleSmall, color = onBg,
-            modifier = Modifier.padding(horizontal = 24.dp))
-        Spacer(Modifier.height(4.dp))
-        Text(
-            "If your dumbbells max out (adjustable sets), heavy lifts in generated programs lean on " +
-                "the plate stack instead, and weight suggestions switch to rep progression at the ceiling.",
-            style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic,
-            modifier = Modifier.padding(horizontal = 24.dp)
-        )
-        Spacer(Modifier.height(12.dp))
-        FlowRow(
-            modifier = Modifier.padding(horizontal = 24.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            PillChip("No limit", state.maxDbWeightLb == null) { vm.setMaxDbWeightLb(null) }
-            listOf(15.0, 20.0, 25.0, 30.0, 40.0, 50.0, 75.0, 100.0).forEach { w ->
-                PillChip(com.forge.app.domain.units.formatWeight(w, state.useKg), state.maxDbWeightLb == w) { vm.setMaxDbWeightLb(w) }
-            }
-        }
-        Spacer(Modifier.height(16.dp))
-        SectionDivider()
-    }
-}
-
-@Composable
 internal fun ExercisePrefsPage(state: SettingsUiState, vm: SettingsViewModel, modifier: Modifier = Modifier) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val onBg = MaterialTheme.colorScheme.onBackground
     val outline = MaterialTheme.colorScheme.outline
     // Only show exercises the user can actually do — the available pool (curated freeze when a
     // preset like the Developer's is active, otherwise equipment-filtered). Muscle groups with no
@@ -677,11 +772,11 @@ internal fun ExercisePrefsPage(state: SettingsUiState, vm: SettingsViewModel, mo
             }
         }
         Text(
-            "♥ shows up more often in generated programs · ✕ is never picked.",
+            "Preferred movements appear more often in generated programs · Hidden ones are never picked.",
             style = MaterialTheme.typography.labelSmall,
             color = muted,
             fontStyle = FontStyle.Italic,
-            modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 4.dp, bottom = 8.dp)
+            modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 4.dp, bottom = 12.dp)
         )
 
         LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 32.dp)) {
@@ -692,35 +787,36 @@ internal fun ExercisePrefsPage(state: SettingsUiState, vm: SettingsViewModel, mo
                     PrefSectionHeader(m.displayName.uppercase(), prefSummary(likedN, dislikedN, defs.size))
                 }
                 items(defs, key = { "lib-${it.id}" }) { def ->
+                    val pref = prefOf(def.id in state.liked, def.id in state.disliked)
                     ExercisePrefRow(
                         name = def.name,
                         subtitle = libSubtitle(def),
-                        liked = def.id in state.liked,
-                        disliked = def.id in state.disliked,
-                        onLike = { vm.setExercisesLiked(setOf(def.id), def.id !in state.liked) },
-                        onDislike = { vm.setExercisesDisliked(setOf(def.id), def.id !in state.disliked) }
+                        pref = pref,
+                        onSet = { applyPref(it, pref, setOf(def.id), vm) }
                     )
                 }
             }
             if (visibleCustom.isNotEmpty()) {
                 item("hdr-custom") {
                     PrefSectionHeader(
-                        "★ CUSTOM",
+                        "CUSTOM",
                         "${visibleCustom.size} ${if (visibleCustom.size == 1) "exercise" else "exercises"}"
                     )
                 }
                 // Group id-sets are disjoint, so the smallest id is a unique, stable per-group key
                 // (name+muscle could collide on malformed data and crash the list).
                 items(visibleCustom, key = { "cus-${it.ids.minOrNull()}" }) { ref ->
-                    val liked = ref.ids.any { it in state.liked }
-                    val disliked = ref.ids.any { it in state.disliked }
+                    val pref = prefOf(
+                        liked = ref.ids.any { it in state.liked },
+                        disliked = ref.ids.any { it in state.disliked }
+                    )
                     ExercisePrefRow(
                         name = ref.name,
-                        subtitle = "Custom · ${ref.muscle.displayName}",
-                        liked = liked,
-                        disliked = disliked,
-                        onLike = { vm.setExercisesLiked(ref.ids, !liked) },
-                        onDislike = { vm.setExercisesDisliked(ref.ids, !disliked) }
+                        // Null muscle ⇒ the stored code was missing/unparseable; show a plain "Custom"
+                        // label rather than fabricating a (wrong) muscle.
+                        subtitle = ref.muscle?.let { "Custom · ${it.displayName}" } ?: "Custom",
+                        pref = pref,
+                        onSet = { applyPref(it, pref, ref.ids, vm) }
                     )
                 }
             }
@@ -752,7 +848,38 @@ internal fun ExercisePrefsPage(state: SettingsUiState, vm: SettingsViewModel, mo
 
 /** Top-level filter for the Exercise likes list. */
 private enum class PrefFilter(val label: String) {
-    ALL("All"), LIKED("♥ Liked"), DISLIKED("✕ Disliked"), CUSTOM("★ Custom")
+    ALL("All"), LIKED("Preferred"), DISLIKED("Hidden"), CUSTOM("Custom")
+}
+
+/** The mutually-exclusive preference an exercise can carry (mirrors the liked/disliked data model). */
+private enum class Pref(val label: String) {
+    PREFERRED("Preferred"), NEUTRAL("Neutral"), HIDDEN("Hidden")
+}
+
+/** Collapse the two independent liked/disliked flags into the single 3-state preference the UI shows. */
+private fun prefOf(liked: Boolean, disliked: Boolean): Pref = when {
+    liked -> Pref.PREFERRED
+    disliked -> Pref.HIDDEN
+    else -> Pref.NEUTRAL
+}
+
+/**
+ * Move a row from its [current] preference to [target] using the existing mutually-exclusive toggles
+ * (liking clears dislike and vice-versa), so the data layer stays the source of truth. The toggles key
+ * "on" off whether ANY id is set — matching how [prefOf] derives the row state — so this round-trips
+ * cleanly for grouped custom exercises too.
+ */
+private fun applyPref(target: Pref, current: Pref, ids: Set<String>, vm: SettingsViewModel) {
+    if (target == current) return
+    when (target) {
+        Pref.PREFERRED -> vm.toggleExercisesLiked(ids)      // adds liked, clears any dislike
+        Pref.HIDDEN -> vm.toggleExercisesDisliked(ids)      // adds disliked, clears any like
+        Pref.NEUTRAL -> when (current) {
+            Pref.PREFERRED -> vm.toggleExercisesLiked(ids)  // toggles the like back off
+            Pref.HIDDEN -> vm.toggleExercisesDisliked(ids)  // toggles the dislike back off
+            Pref.NEUTRAL -> Unit
+        }
+    }
 }
 
 private fun matchesQuery(name: String, q: String): Boolean =
@@ -789,11 +916,11 @@ private fun customVisible(
     }
 }
 
-/** Per-muscle header summary: liked/disliked tallies, or a plain move count when neither is set. */
+/** Per-muscle header summary: preferred/hidden tallies, or a plain move count when neither is set. */
 private fun prefSummary(likedN: Int, dislikedN: Int, total: Int): String =
     buildList {
-        if (likedN > 0) add("$likedN ♥")
-        if (dislikedN > 0) add("$dislikedN ✕")
+        if (likedN > 0) add("$likedN preferred")
+        if (dislikedN > 0) add("$dislikedN hidden")
     }.joinToString(" · ").ifEmpty { "$total ${if (total == 1) "move" else "moves"}" }
 
 /** "Barbell · Compound"-style secondary line for a library movement. */
@@ -875,23 +1002,76 @@ private fun PrefSectionHeader(title: String, summary: String) {
 private fun ExercisePrefRow(
     name: String,
     subtitle: String,
-    liked: Boolean,
-    disliked: Boolean,
-    onLike: () -> Unit,
-    onDislike: () -> Unit
+    pref: Pref,
+    onSet: (Pref) -> Unit
 ) {
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(name, style = MaterialTheme.typography.bodyMedium, color = onBg)
-            Text(subtitle, style = MaterialTheme.typography.labelSmall, color = muted)
+    val outline = MaterialTheme.colorScheme.outline
+    var menuOpen by remember { mutableStateOf(false) }
+
+    Box {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { menuOpen = true }
+                .padding(horizontal = 24.dp, vertical = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(name, style = MaterialTheme.typography.bodyMedium, color = onBg)
+                Text(subtitle, style = MaterialTheme.typography.labelSmall, color = muted)
+            }
+            // Editorial status: the current preference as a quiet word + a caret hinting it's tappable.
+            // Neutral reads as a faint em-dash so a "set" state still looks intentional, not empty.
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    when (pref) {
+                        Pref.PREFERRED -> "Preferred"
+                        Pref.HIDDEN -> "Hidden"
+                        Pref.NEUTRAL -> "—"
+                    },
+                    style = MaterialTheme.typography.labelMedium,
+                    color = when (pref) {
+                        Pref.PREFERRED -> onBg
+                        Pref.HIDDEN -> muted
+                        Pref.NEUTRAL -> muted.copy(alpha = 0.4f)
+                    },
+                    letterSpacing = 0.3.sp
+                )
+                Text("▾", style = MaterialTheme.typography.labelMedium, color = muted.copy(alpha = 0.5f))
+            }
         }
-        PillChip("♥", liked, onClick = onLike)
-        PillChip("✕", disliked, onClick = onDislike)
+        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+            Pref.entries.forEach { option ->
+                DropdownMenuItem(
+                    text = {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            // A leading dot marks the active state; a blank keeps the labels aligned.
+                            Box(Modifier.width(8.dp)) {
+                                if (option == pref) Text("•", color = onBg)
+                            }
+                            Text(
+                                option.label,
+                                color = if (option == pref) onBg else muted,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                    },
+                    onClick = { onSet(option); menuOpen = false }
+                )
+            }
+        }
     }
+    HorizontalDivider(
+        color = outline.copy(alpha = 0.1f),
+        modifier = Modifier.padding(horizontal = 24.dp)
+    )
 }

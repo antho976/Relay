@@ -3,6 +3,7 @@ package com.forge.app.ui.profile
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,21 +14,13 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -42,41 +35,40 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.material.icons.filled.Share
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.ui.platform.LocalContext
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import com.forge.app.Features
-import com.forge.app.domain.units.unitLabel
-import com.forge.app.ui.theme.LocalForgeSettings
 import com.forge.app.data.repo.ProgressPhoto
 import com.forge.app.ui.common.ConfettiOverlay
 import com.forge.app.ui.common.FirstTouchTip
 import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.gym.stats.components.statsEntrance
+import com.forge.app.ui.theme.LocalForgeSettings
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
 /**
- * The "You" hub: rank ladder + earned XP, an offline standing estimate, signature lifts, goals,
- * the private mirror-test photos and the trophy case. All local — no account, no server.
+ * The "You" hub: an identity card (avatar · name · streak), a dashboard of stat tiles, signature
+ * lifts, goals-as-rings, the private gallery and an on-this-day throwback. The rank ladder, offline
+ * standing and trophy case stay gated behind [Features.SHOW_GAMIFICATION]. All local — no account.
  * See [ProfileViewModel] / `data/repo/ProfileRepository` / `domain/rank`.
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -93,14 +85,11 @@ fun ProfileScreen(
     val showRankUpCelebration by viewModel.showRankUpCelebration.collectAsStateWithLifecycle()
     var viewing by remember { mutableStateOf<ProgressPhoto?>(null) }
     var showXpInfo by remember { mutableStateOf(false) }
-    var editingName by remember { mutableStateOf(false) }
-    var nameInput by remember { mutableStateOf("") }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val haptic = LocalHapticFeedback.current
 
-    // One-shot rank-up haptic — fires as soon as the celebration flag goes true, then clears.
-    // Suppressed while the gamification layer is parked (Features.SHOW_GAMIFICATION).
+    // One-shot rank-up haptic — fires as soon as the celebration flag goes true (gamification only).
     LaunchedEffect(showRankUpCelebration) {
         if (Features.SHOW_GAMIFICATION && showRankUpCelebration) {
             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -112,14 +101,18 @@ fun ProfileScreen(
     }
     fun pickPhoto() = photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
 
+    val avatarPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        uri?.let { viewModel.setAvatar(it) }
+    }
+    fun pickAvatar() = avatarPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val accent = MaterialTheme.colorScheme.primary
     val outline = MaterialTheme.colorScheme.outline
 
     Box(Modifier.fillMaxSize()) {
-        // Soft rank-tier wash bleeding down from the top bar — ties the screen to the current tier.
-        // Parked with the rest of the rank UI behind Features.SHOW_GAMIFICATION.
+        // Soft rank-tier wash bleeding down from the top bar (parked with the rest of the rank UI).
         if (Features.SHOW_GAMIFICATION) state.rank?.let { r ->
             Box(
                 Modifier.fillMaxWidth().height(140.dp)
@@ -157,71 +150,26 @@ fun ProfileScreen(
             containerColor = Color.Transparent
         ) { inner ->
             if (state.loading) {
-                // Shimmer placeholder instead of the empty-default flash while load() runs (#8).
-                ProfileSkeleton(Modifier.fillMaxSize().padding(inner).padding(horizontal = 24.dp))
-            } else
-            Column(
-                Modifier.fillMaxSize().padding(inner).verticalScroll(rememberScrollState()).padding(horizontal = 24.dp)
+                ProfileSkeleton(Modifier.fillMaxSize().padding(inner).padding(horizontal = 20.dp))
+            } else Column(
+                Modifier.fillMaxSize().padding(inner).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp)
             ) {
-                // ── Header (entrance index 0) ────────────────────────────────────
-                // The header block (name + "since" line + rank line) enters together as the first item.
+                // ── Identity hero (entrance index 0) ─────────────────────────────
                 Column(Modifier.statsEntrance(0)) {
-                    if (editingName) {
-                        val nameFocus = remember { FocusRequester() }
-                        LaunchedEffect(Unit) { nameFocus.requestFocus() }
-                        // Commit on Done OR on focus loss (tap-away / keyboard dismiss / leaving the
-                        // screen) so a typed name is never silently lost. Blank input is ignored — it
-                        // would otherwise wipe the name to the "Athlete" placeholder.
-                        fun commitName() {
-                            val trimmed = nameInput.trim()
-                            if (trimmed.isNotEmpty() && trimmed != state.name) viewModel.setUserName(trimmed)
-                            editingName = false
-                        }
-                        BasicTextField(
-                            value = nameInput,
-                            onValueChange = { nameInput = it.take(30) },
-                            singleLine = true,
-                            textStyle = MaterialTheme.typography.displaySmall.copy(color = onBg),
-                            cursorBrush = SolidColor(accent),
-                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                            keyboardActions = KeyboardActions(onDone = { commitName() }),
-                            modifier = Modifier.fillMaxWidth().focusRequester(nameFocus)
-                                .onFocusChanged { if (!it.isFocused && editingName) commitName() }
-                        )
-                    } else {
-                        Text(
-                            state.name.ifBlank { "Athlete" },
-                            style = MaterialTheme.typography.displaySmall, color = onBg,
-                            modifier = Modifier.bounceClick { nameInput = state.name; editingName = true }
-                        )
-                    }
-                    // Member-since line, now directly under the name.
-                    if (state.sinceLabel.isNotBlank()) {
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            "SINCE ${state.sinceLabel}",
-                            style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp
-                        )
-                    }
-                    // Rank line parked behind Features.SHOW_GAMIFICATION; a streak line stands in for it.
-                    if (Features.SHOW_GAMIFICATION) state.rank?.let { r ->
-                        Spacer(Modifier.height(2.dp))
-                        val streak = if (state.streakDays >= 2) " · ${state.streakDays}-day streak, still alive." else ""
-                        Text(
-                            "Rank ${r.roman} — ${r.tier.display}$streak",
-                            style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic
-                        )
-                    } else if (state.streakDays >= 2) {
-                        Spacer(Modifier.height(2.dp))
-                        Text(
-                            "${state.streakDays}-day streak, still alive.",
-                            style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic
-                        )
-                    }
+                    ProfileHeaderCard(
+                        name = state.name,
+                        sinceLabel = state.sinceLabel,
+                        streakDays = state.streakDays,
+                        hasAvatar = state.hasAvatar,
+                        avatarFile = viewModel.avatarFile(),
+                        avatarStamp = state.avatarStamp,
+                        onSetName = viewModel::setUserName,
+                        onPickAvatar = { pickAvatar() },
+                        onBg = onBg, muted = muted, accent = accent
+                    )
                 }
 
-                // First-touch (D1): a brand-new profile is all dashes and empty bars — say what fills it in.
-                // Persistent flag too, so a returning user (e.g. after a data wipe) isn't told they're new.
+                // First-touch (D1): a brand-new profile is all dashes and empty rings — say what fills it.
                 if (state.totalSessions == 0 && !LocalForgeSettings.current.firstWorkoutDone) {
                     Spacer(Modifier.height(20.dp))
                     FirstTouchTip(
@@ -230,9 +178,7 @@ fun ProfileScreen(
                     )
                 }
 
-                // ── Rank track (index 1 — already has its own internal enter animation) ──
-                // Wrapped in statsEntrance so the whole block slides in, complementing the
-                // internal emblem scale/alpha. The two animations compound tastefully.
+                // ── Rank track (gamification, index 1) ───────────────────────────
                 if (Features.SHOW_GAMIFICATION) state.rank?.let { r ->
                     Spacer(Modifier.height(20.dp))
                     Column(Modifier.statsEntrance(1)) {
@@ -240,50 +186,61 @@ fun ProfileScreen(
                     }
                 }
 
-                // ── Sections (indices 2 onwards, top-to-bottom) ──────────────────
-                // These sections (via ProfileBlock) emit several stacked siblings — divider, label,
-                // body — so each entrance wrapper MUST be a Column, not a Box. A Box would pile the
-                // siblings at the same top-start corner and they'd overlap.
+                // ── All-time stat tiles (index 2) ────────────────────────────────
+                Spacer(Modifier.height(24.dp))
                 Column(Modifier.statsEntrance(2)) {
-                    LedgerSection(state.totalSessions, state.totalVolumeLb, state.totalPrs, state.rank?.xpTotal ?: 0L, muted, accent, outline, state.longestStreakDays, state.lifetimeVolumeSeriesLb)
+                    AllTimeTiles(
+                        sessions = state.totalSessions,
+                        volumeLb = state.totalVolumeLb,
+                        prs = state.totalPrs,
+                        xp = state.rank?.xpTotal ?: 0L,
+                        longestStreakDays = state.longestStreakDays,
+                        volumeSeriesLb = state.lifetimeVolumeSeriesLb,
+                        onBg = onBg, muted = muted, accent = accent, outline = outline
+                    )
                 }
+
                 if (Features.SHOW_GAMIFICATION) {
+                    Spacer(Modifier.height(24.dp))
                     Column(Modifier.statsEntrance(3)) {
                         StandingSection(state.standings, onBg, muted, accent, outline)
                     }
                 }
+
+                // ── Signature (index 4) ──────────────────────────────────────────
+                Spacer(Modifier.height(24.dp))
                 Column(Modifier.statsEntrance(4)) {
-                    SignatureSection(state.topLift, state.mostLoggedDay, state.usualHour, onBg, muted, accent, outline)
-                }
-                if (state.cardioSessions > 0) {
-                    Column(Modifier.statsEntrance(5)) {
-                        CardioTotalsSection(state.cardioSessions, state.cardioMinutes, state.cardioDistanceKm, muted, accent, outline)
-                    }
-                }
-                // Goals sit above the mirror test, previewing the top few with progress.
-                Column(Modifier.statsEntrance(6)) {
-                    GoalsPreviewSection(state.goals, onOpenGoals, onBg, muted, accent, outline)
+                    SignatureCard(state.topLift, state.mostLoggedDay, state.usualHour, onBg, muted, accent, outline)
                 }
 
+                if (state.cardioSessions > 0) {
+                    Spacer(Modifier.height(24.dp))
+                    Column(Modifier.statsEntrance(5)) {
+                        CardioCard(state.cardioSessions, state.cardioMinutes, state.cardioDistanceKm, onBg, muted, accent, outline)
+                    }
+                }
+
+                // ── Goals as rings (index 6) ─────────────────────────────────────
+                Spacer(Modifier.height(24.dp))
+                Column(Modifier.statsEntrance(6)) {
+                    GoalTilesSection(state.goals, onOpenGoals, onBg, muted, accent, outline)
+                }
+
+                // ── Gallery (index 7) ────────────────────────────────────────────
+                Spacer(Modifier.height(24.dp))
                 Column(Modifier.statsEntrance(7)) {
-                    MirrorTestSection(state.photos, viewModel::fileFor, onAdd = { pickPhoto() }, onView = { viewing = it }, onViewAll = onOpenPhotoGallery, onBg, muted, accent, outline)
+                    GalleryCard(state.photos, viewModel::fileFor, onAdd = { pickPhoto() }, onView = { viewing = it }, onViewAll = onOpenPhotoGallery, onBg, muted, accent, outline)
                 }
 
                 state.memory?.let { m ->
+                    Spacer(Modifier.height(24.dp))
                     Column(Modifier.statsEntrance(8)) {
-                        ProfileBlock("ON THIS DAY", muted, accent, outline) {
-                            val useKg = LocalForgeSettings.current.useKg
-                            val ago = com.forge.app.ui.common.monthsAgoPhrase(m.monthsAgo)
-                            Text(
-                                "$ago you trained ${m.dayName} — ${formatVolume(m.totalVolumeLb, useKg)} ${unitLabel(useKg)}" +
-                                    if (m.prCount > 0) " · ${m.prCount} PR${if (m.prCount == 1) "" else "s"}" else "",
-                                style = MaterialTheme.typography.bodyMedium, color = onBg
-                            )
-                        }
+                        OnThisDayCard(m, onBg, muted, accent)
                     }
                 }
 
                 if (Features.SHOW_GAMIFICATION) {
+                    Spacer(Modifier.height(24.dp))
                     Column(Modifier.statsEntrance(9)) {
                         TrophyCaseSection(state.trophyGrid, state.trophyUnlocked, state.trophyTotal, state.closestTrophy, onOpenTrophies, onBg, muted, accent, outline)
                     }
@@ -293,10 +250,7 @@ fun ProfileScreen(
             }
         }
 
-        // ── Rank-up celebration overlay (Item 2) ─────────────────────────────
-        // One-shot confetti burst on the first profile open after the user crosses into a new tier.
-        // Drawn above the Scaffold so it covers the whole screen — touches pass through (Canvas has
-        // no pointer-input). Clears itself after the animation completes via onComplete.
+        // ── Rank-up celebration overlay (gamification) ───────────────────────────
         if (Features.SHOW_GAMIFICATION && showRankUpCelebration) {
             ConfettiOverlay(
                 modifier = Modifier.fillMaxSize(),
@@ -338,7 +292,7 @@ private fun PhotoViewerDialog(
     var noteInput by remember(note) { mutableStateOf(note) }
     // Persist the caption when the viewer closes, only if it actually changed.
     fun commit() { if (noteInput.trim() != note) onSaveNote(noteInput.trim()); onDismiss() }
-    Dialog(onDismissRequest = { commit() }) {
+    androidx.compose.ui.window.Dialog(onDismissRequest = { commit() }) {
         Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))) {
             ProgressPhotoImage(file, Modifier.fillMaxWidth().aspectRatio(0.8f).clip(RoundedCornerShape(12.dp)), reqPx = 1200)
             Spacer(Modifier.height(10.dp))

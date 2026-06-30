@@ -26,7 +26,10 @@ enum class SettingsSection(val keys: List<Preferences.Key<*>>) {
     FORMAT(
         listOf(
             PreferenceKeys.USE_KG, PreferenceKeys.USER_SEX, PreferenceKeys.DATE_FORMAT,
-            PreferenceKeys.TIMEZONE, PreferenceKeys.TIME_FORMAT_24H, PreferenceKeys.FIRST_DAY_MONDAY
+            PreferenceKeys.TIMEZONE,
+            PreferenceKeys.TIME_FORMAT_24H, PreferenceKeys.FIRST_DAY_MONDAY
+            // FAVORITE_TIMEZONES is the user's curated star list (data, not a format default), so a
+            // scoped "reset Format" must NOT wipe it — it's only cleared by a full settings reset.
         )
     ),
     SESSION(
@@ -211,6 +214,15 @@ class SettingsRepository @Inject constructor(
     suspend fun setTimezone(id: String) =
         context.forgePreferences.edit { it[PreferenceKeys.TIMEZONE] = id }
 
+    /** IANA zone ids the user has starred, pinned to the top of the timezone picker. */
+    val favoriteTimezones: Flow<Set<String>> = context.forgePreferences.data
+        .map { it[PreferenceKeys.FAVORITE_TIMEZONES] ?: emptySet() }
+    suspend fun toggleFavoriteTimezone(id: String) =
+        context.forgePreferences.edit { prefs ->
+            val cur = prefs[PreferenceKeys.FAVORITE_TIMEZONES] ?: emptySet()
+            prefs[PreferenceKeys.FAVORITE_TIMEZONES] = if (id in cur) cur - id else cur + id
+        }
+
     // ─── Feel (#118) ──────────────────────────────────────────────────────────
 
     val hapticStrength: Flow<String> = context.forgePreferences.data
@@ -351,23 +363,46 @@ class SettingsRepository @Inject constructor(
         }
 
     /**
-     * Batch variants — a custom exercise spans several `custom_…` ids (one per day it's on), so the
-     * like/dislike screen flips them together in a single edit. Mutual exclusion still holds.
+     * Batch absolute set — a custom exercise spans several `custom_…` ids (one per day it's on), so the
+     * post-swap dislike prompt hides every copy in one edit. Mutual exclusion still holds. (Likes/dislikes
+     * driven by the picker chips go through the [toggleExercisesLiked]/[toggleExercisesDisliked] toggles.)
      */
-    suspend fun setExercisesLiked(ids: Set<String>, liked: Boolean) =
-        context.forgePreferences.edit { prefs ->
-            val cur = prefs[PreferenceKeys.LIKED_EXERCISES] ?: emptySet()
-            prefs[PreferenceKeys.LIKED_EXERCISES] = if (liked) cur + ids else cur - ids
-            if (liked) prefs[PreferenceKeys.DISLIKED_EXERCISES] =
-                (prefs[PreferenceKeys.DISLIKED_EXERCISES] ?: emptySet()) - ids
-        }
-
     suspend fun setExercisesDisliked(ids: Set<String>, disliked: Boolean) =
         context.forgePreferences.edit { prefs ->
             val cur = prefs[PreferenceKeys.DISLIKED_EXERCISES] ?: emptySet()
             prefs[PreferenceKeys.DISLIKED_EXERCISES] = if (disliked) cur + ids else cur - ids
             if (disliked) prefs[PreferenceKeys.LIKED_EXERCISES] =
                 (prefs[PreferenceKeys.LIKED_EXERCISES] ?: emptySet()) - ids
+        }
+
+    /**
+     * Toggle variants — read-decide-write inside one DataStore edit so the decision uses the freshly
+     * persisted set, not a (possibly stale) UI snapshot. A rapid double-tap therefore cycles the chip
+     * correctly (on→off) instead of two taps computing the same target and the second no-op'ing.
+     * "On" is keyed on whether ANY id is currently set (matching how the custom-exercise row displays).
+     */
+    suspend fun toggleExercisesLiked(ids: Set<String>) =
+        context.forgePreferences.edit { prefs ->
+            val cur = prefs[PreferenceKeys.LIKED_EXERCISES] ?: emptySet()
+            if (ids.any { it in cur }) {
+                prefs[PreferenceKeys.LIKED_EXERCISES] = cur - ids
+            } else {
+                prefs[PreferenceKeys.LIKED_EXERCISES] = cur + ids
+                prefs[PreferenceKeys.DISLIKED_EXERCISES] =
+                    (prefs[PreferenceKeys.DISLIKED_EXERCISES] ?: emptySet()) - ids
+            }
+        }
+
+    suspend fun toggleExercisesDisliked(ids: Set<String>) =
+        context.forgePreferences.edit { prefs ->
+            val cur = prefs[PreferenceKeys.DISLIKED_EXERCISES] ?: emptySet()
+            if (ids.any { it in cur }) {
+                prefs[PreferenceKeys.DISLIKED_EXERCISES] = cur - ids
+            } else {
+                prefs[PreferenceKeys.DISLIKED_EXERCISES] = cur + ids
+                prefs[PreferenceKeys.LIKED_EXERCISES] =
+                    (prefs[PreferenceKeys.LIKED_EXERCISES] ?: emptySet()) - ids
+            }
         }
 
     /** After a "Make default" swap, offer to dislike the swapped-out exercise (default ON). */
@@ -594,11 +629,19 @@ class SettingsRepository @Inject constructor(
             val welcomed = prefs[PreferenceKeys.WELCOMED]
             val name = prefs[PreferenceKeys.USER_NAME]
             val goal = prefs[PreferenceKeys.USER_GOAL]
+            // Training mode is identity-like too — wiping it would silently flip a "go with the flow"
+            // user into follow-a-plan with an empty program and no explanation.
+            val freestyle = prefs[PreferenceKeys.FREESTYLE_MODE]
+            // "Never ask to dislike after a swap" is an explicit, deliberate opt-out — same rationale as
+            // freestyle: a reset shouldn't silently re-surface a dialog the user permanently dismissed.
+            val swapDislikePrompt = prefs[PreferenceKeys.SWAP_DISLIKE_PROMPT_ENABLED]
             prefs.clear()
             onboarding?.let { prefs[PreferenceKeys.ONBOARDING_DONE] = it }
             welcomed?.let { prefs[PreferenceKeys.WELCOMED] = it }
             name?.let { prefs[PreferenceKeys.USER_NAME] = it }
             goal?.let { prefs[PreferenceKeys.USER_GOAL] = it }
+            freestyle?.let { prefs[PreferenceKeys.FREESTYLE_MODE] = it }
+            swapDislikePrompt?.let { prefs[PreferenceKeys.SWAP_DISLIKE_PROMPT_ENABLED] = it }
         }
     }
 
@@ -622,11 +665,13 @@ class SettingsRepository @Inject constructor(
     suspend fun setLastSeenRankTierOrdinal(ordinal: Int) =
         context.forgePreferences.edit { it[PreferenceKeys.LAST_SEEN_RANK_TIER_ORDINAL] = ordinal }
 
-    /** Last Stats sub-tab index the user settled on (default 0 = Snapshot). Reopening Stats deep-links here (S4). */
-    val lastStatsTab: Flow<Int> = context.forgePreferences.data
-        .map { it[PreferenceKeys.LAST_STATS_TAB] ?: 0 }
-    suspend fun setLastStatsTab(index: Int) =
-        context.forgePreferences.edit { it[PreferenceKeys.LAST_STATS_TAB] = index }
+    /** Last Stats sub-tab the user settled on, stored by enum NAME (not ordinal) so adding/reordering
+     *  tabs can't restore the wrong one. null = unset → the screen lands on its default. Reopening Stats
+     *  deep-links here (S4). */
+    val lastStatsTabName: Flow<String?> = context.forgePreferences.data
+        .map { it[PreferenceKeys.LAST_STATS_TAB_NAME] }
+    suspend fun setLastStatsTabName(name: String) =
+        context.forgePreferences.edit { it[PreferenceKeys.LAST_STATS_TAB_NAME] = name }
 
     /** Returns true if the current wall-clock time falls within the user's quiet hours window (#122). */
     suspend fun isQuietNow(): Boolean {

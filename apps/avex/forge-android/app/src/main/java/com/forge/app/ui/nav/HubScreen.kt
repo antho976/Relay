@@ -51,12 +51,16 @@ fun HubScreen(
     viewModel: HubViewModel = hiltViewModel(),
 ) {
     val coachEnabled by viewModel.coachEnabled.collectAsStateWithLifecycle()
-    val tabs = remember(coachEnabled) {
-        if (coachEnabled) BottomTab.entries.toList() else BottomTab.entries.filterNot { it == BottomTab.COACH }
+    val freestyleMode by viewModel.freestyleMode.collectAsStateWithLifecycle()
+    // The Coach tab is shown only when the coach is on AND the user follows a plan — a freestyle user
+    // has nothing to coach against.
+    val showCoach = coachEnabled && !freestyleMode
+    val tabs = remember(showCoach) {
+        if (showCoach) BottomTab.entries.toList() else BottomTab.entries.filterNot { it == BottomTab.COACH }
     }
     // Re-create the pager when the tab set changes (coach toggled), so a settled currentPage can't be
     // left pointing past the now-shorter list — which would otherwise strand the user on a stale page.
-    val pagerState = key(coachEnabled) {
+    val pagerState = key(showCoach) {
         rememberPagerState(
             initialPage = initialPage.coerceIn(0, tabs.lastIndex),
             pageCount = { tabs.size }
@@ -97,7 +101,8 @@ fun HubScreen(
             // Pages are keyed off the visible tab list so they always line up with the bar.
             when (tabs.getOrElse(page) { BottomTab.HOME }) {
                 BottomTab.CARDIO -> CardioScreen(
-                    onOpenHistory = { nav.navigate(Routes.SESSION_HISTORY) }
+                    onOpenHistory = { nav.navigate(Routes.SESSION_HISTORY) },
+                    onConnectWearable = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) }
                 )
                 BottomTab.STATS -> DayListScreen(
                     onOpenDay = { dayKey -> nav.navigate(Routes.gymDay(dayKey)) },
@@ -123,7 +128,7 @@ fun HubScreen(
                     onGoToTrophies = { nav.navigate(Routes.TROPHIES) },
                     onOpenNotes = { nav.navigate(Routes.NOTES_SEARCH) },
                     onGoToNutrition = { nav.navigate(Routes.NUTRITION) },
-                    onGoToSettings = { nav.navigate(Routes.SETTINGS) },
+                    onGoToSettings = { nav.navigate(Routes.settings()) },
                     // Coach is its own hub page when enabled — swipe to it rather than pushing the modal brief.
                     onOpenCoachBrief = { goToTab(BottomTab.COACH) },
                     onOpenCoachLab = { nav.navigate(Routes.COACH_LAB) },

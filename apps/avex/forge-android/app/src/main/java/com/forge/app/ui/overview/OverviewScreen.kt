@@ -441,7 +441,8 @@ fun OverviewScreen(
 
             if (freestyleMode || programEmpty) {
                 // No fixed plan to surface — lead with a CTA instead of a next-up day card.
-                // freestyle → "log what you did"; empty plan → "build a plan" (with logging as a fallback).
+                // freestyle → log what you did; no-plan (custom) → build a plan. Custom is a plan mode,
+                // not the logger, so there's no freestyle fallback in the no-plan state.
                 Text("TODAY", style = MaterialTheme.typography.labelSmall, fontSize = 13.sp, color = muted)
                 Spacer(Modifier.height(2.dp))
                 Text(if (freestyleMode) "Open workout" else "No plan yet",
@@ -449,31 +450,20 @@ fun OverviewScreen(
                 Spacer(Modifier.height(10.dp))
                 Text(
                     if (freestyleMode) "No fixed plan — just log whatever you trained, whenever you want."
-                    else "Build your own plan, or just log what you do each session.",
+                    else "Build your own plan and Forge will guide each session.",
                     style = MaterialTheme.typography.bodyMedium.copy(fontStyle = FontStyle.Italic), color = muted
                 )
                 Spacer(Modifier.height(20.dp))
                 if (programEmpty && !freestyleMode) {
-                    // Same shape as the Start-session row: a primary action + a bordered-pill secondary
-                    // (the "skip warmup" style), here "Build a plan" + "log a workout".
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Button(
-                            onClick = onBuildPlan,
-                            shape = RoundedCornerShape(50),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
-                            contentPadding = PaddingValues(horizontal = 32.dp, vertical = 18.dp)
-                        ) {
-                            Text("Build a plan →", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
-                        }
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(50))
-                                .border(0.5.dp, muted.copy(alpha = 0.4f), RoundedCornerShape(50))
-                                .clickableLabeled("Log a workout") { onLogFreestyle() }
-                                .padding(horizontal = 18.dp, vertical = 12.dp)
-                        ) {
-                            Text("log a workout", style = MaterialTheme.typography.bodySmall, color = muted)
-                        }
+                    // Custom user hasn't built their plan yet — a single CTA into the builder. No
+                    // "log a workout" fallback here: this mode is "make my plan", not the logger.
+                    Button(
+                        onClick = onBuildPlan,
+                        shape = RoundedCornerShape(50),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
+                        contentPadding = PaddingValues(horizontal = 32.dp, vertical = 18.dp)
+                    ) {
+                        Text("Build a plan →", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
                     }
                 } else {
                     Button(
@@ -555,12 +545,17 @@ fun OverviewScreen(
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically) {
                 Text("THIS WEEK", style = MaterialTheme.typography.labelMedium, color = muted)
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("${state.workoutsThisWeek} of ${state.weeklyWorkoutTarget} target", style = MaterialTheme.typography.labelSmall, color = muted)
-                    Text("·", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.5f))
-                    Text("view program →", style = MaterialTheme.typography.labelMedium,
-                        color = onBg,
-                        modifier = Modifier.clickableLabeled("View your program") { onViewProgram() }.padding(vertical = 2.dp))
+                // The weekly target + program link only make sense with a real plan. Hidden for
+                // freestyle and for a custom user who hasn't built their plan yet (the weekday boxes and
+                // workout/volume/cardio stats below stay — they track actual activity in every mode).
+                if (!freestyleMode && !programEmpty) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("${state.workoutsThisWeek} of ${state.weeklyWorkoutTarget} target", style = MaterialTheme.typography.labelSmall, color = muted)
+                        Text("·", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.5f))
+                        Text("view program →", style = MaterialTheme.typography.labelMedium,
+                            color = onBg,
+                            modifier = Modifier.clickableLabeled("View your program") { onViewProgram() }.padding(vertical = 2.dp))
+                    }
                 }
             }
             Spacer(Modifier.height(12.dp))
@@ -587,7 +582,9 @@ fun OverviewScreen(
             }
 
             // ── Coach (adaptation engine: actionable advice only) ────────────
-            if (coachEnabled && state.coach.isNotEmpty()) {
+            // Hidden in freestyle (no plan to coach against); shown for generated AND custom — custom
+            // has a real plan, so fatigue/deload/swap advice all apply once they've trained.
+            if (coachEnabled && !freestyleMode && state.coach.isNotEmpty()) {
                 Spacer(Modifier.height(20.dp))
                 HorizontalDivider(color = outline.copy(alpha = 0.3f))
                 Spacer(Modifier.height(16.dp))
@@ -626,7 +623,8 @@ fun OverviewScreen(
 
             // ── Coach (home entry) — at most one shows: a learning countdown (CD-1), a fatigue nudge
             // (Tier 3), or a persistent "quiet but reachable" entry (D3). All share CoachHomeBlock. ──
-            if (coachEnabled) {
+            // Same gate as the actionable coach above: present for generated/custom, hidden in freestyle.
+            if (coachEnabled && !freestyleMode) {
                 state.coachLearning?.let { hint ->
                     CoachHomeBlock(
                         "Still learning your training.",
@@ -666,8 +664,15 @@ fun OverviewScreen(
             }
             Spacer(Modifier.height(10.dp))
             if (state.recentItems.isEmpty()) {
-                InlineEmptyHint("No workouts yet — tap \"Start session\" above to log your first, and it'll show up here.",
-                    color = muted)
+                // Point at whichever CTA this mode actually shows above, so the hint isn't a dead end.
+                InlineEmptyHint(
+                    when {
+                        freestyleMode -> "No workouts yet — tap \"Log a workout\" above to log your first, and it'll show up here."
+                        programEmpty -> "No workouts yet — tap \"Build a plan\" above to set up your plan, then start training."
+                        else -> "No workouts yet — tap \"Start session\" above to log your first, and it'll show up here."
+                    },
+                    color = muted
+                )
             } else {
                 state.recentItems.forEach { item ->
                     RecentRow(item = item, muted = muted, onBg = onBg, outline = outline,

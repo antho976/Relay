@@ -7,6 +7,7 @@ import com.forge.app.program.ExercisePlan
 import com.forge.app.program.MuscleGroup
 import com.forge.app.program.Program
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import java.util.UUID
 import javax.inject.Inject
@@ -29,7 +30,9 @@ data class EditableExercise(
  */
 data class CustomExerciseRef(
     val name: String,
-    val muscle: MuscleGroup,
+    /** Null when the stored muscle code is missing/unparseable — the UI shows a plain "Custom" label
+     *  rather than fabricating a (wrong) muscle. New rows always persist [MuscleGroup.code]. */
+    val muscle: MuscleGroup?,
     val ids: Set<String>
 )
 
@@ -50,21 +53,41 @@ class ProgramCustomizationRepository @Inject constructor(
      * likeable/dislikeable alongside the library — visibility only; the generator never picks them.
      */
     fun observeCustomExercises(): Flow<List<CustomExerciseRef>> =
-        dao.observeAll().map { rows ->
-            rows.filter { it.exerciseId.startsWith("custom_") && !it.removed && !it.customName.isNullOrBlank() }
+        dao.observeCustom().map { rows ->
+            rows.filter { !it.customName.isNullOrBlank() }
                 .groupBy { it.customName!!.trim().lowercase() to (it.customMuscle ?: "") }
                 .map { (_, group) ->
                     val first = group.first()
                     CustomExerciseRef(
                         name = first.customName!!.trim(),
                         muscle = first.customMuscle
-                            ?.let { runCatching { MuscleGroup.fromCode(it) }.getOrNull() }
-                            ?: MuscleGroup.CHEST,
+                            ?.let { runCatching { MuscleGroup.fromCode(it) }.getOrNull() },
                         ids = group.map { it.exerciseId }.toSet()
                     )
                 }
                 .sortedBy { it.name.lowercase() }
         }
+            // Room invalidates observeCustom on every program_customization write (table-level), so it
+            // re-emits on every coach override during a workout. Collapse no-op emissions here so the
+            // settings uiState combine chain only re-runs when the custom-exercise list actually changes.
+            .distinctUntilChanged()
+
+    /**
+     * Every active `custom_…` id sharing this id's name+muscle — i.e. the whole group the like/dislike
+     * screen collapses into one row. Returns just [exerciseId] for a library id or an unknown row, so
+     * disliking a swapped-out custom exercise hides every day's copy, not only the one slot.
+     */
+    suspend fun customSiblingIds(exerciseId: String): Set<String> {
+        if (!exerciseId.startsWith("custom_")) return setOf(exerciseId)
+        val rows = dao.all().filter {
+            it.exerciseId.startsWith("custom_") && !it.removed && !it.customName.isNullOrBlank()
+        }
+        val target = rows.firstOrNull { it.exerciseId == exerciseId } ?: return setOf(exerciseId)
+        val key = target.customName!!.trim().lowercase() to (target.customMuscle ?: "")
+        return rows.filter { (it.customName!!.trim().lowercase() to (it.customMuscle ?: "")) == key }
+            .map { it.exerciseId }.toSet()
+            .ifEmpty { setOf(exerciseId) }
+    }
 
     /**
      * Full editable exercise list for a day (static + custom-added), INCLUDING removed items

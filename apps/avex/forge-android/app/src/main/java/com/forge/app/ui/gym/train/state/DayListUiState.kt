@@ -5,7 +5,9 @@ import com.forge.app.program.DayPlan
 
 data class DayListUiState(
     val days: List<DayListItem> = emptyList(),
-    val activeSession: Session? = null
+    val activeSession: Session? = null,
+    /** "Go with the flow" — when on, the Train tab offers freestyle logging; plan modes hide it. */
+    val freestyleMode: Boolean = false
 )
 
 data class DayListItem(

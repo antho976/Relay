@@ -172,7 +172,8 @@ internal fun AccentColorRow(currentHex: String, onSelect: (String) -> Unit) {
 /**
  * Type any `#RRGGBB` hex for an accent colour outside the preset palette; applies live once valid.
  * The preview swatch doubles as the show/hide toggle for the colour wheel and reflects the live
- * wheel/slider pick instantly ([livePreview]), while the text field mirrors the committed value.
+ * wheel/slider pick instantly ([livePreview]); the text field tracks the same live value so it never
+ * shows a stale hex mid-drag (it settles on the committed value when the gesture ends).
  */
 @Composable
 private fun CustomHexInput(
@@ -184,9 +185,11 @@ private fun CustomHexInput(
     wheelVisible: Boolean,
     onToggleWheel: () -> Unit
 ) {
-    // Mirror whatever accent is committed (preset, wheel pick, or hand-typed) so the field shows the live hex.
-    var text by remember(currentHex) {
-        mutableStateOf(currentHex.takeIf { it.length == 7 }.orEmpty())
+    // Track the live (in-progress) pick so the field mirrors the wheel/slider during a drag — matching
+    // the swatch — instead of lagging on the committed value. When idle livePreview == currentHex, and
+    // it settles back to the committed hex on release, so typing/presets still round-trip cleanly.
+    var text by remember(livePreview) {
+        mutableStateOf(livePreview.takeIf { it.length == 7 }.orEmpty())
     }
     // Swatch tracks the live (in-progress) pick so dragging the wheel gives instant feedback.
     val swatch = remember(livePreview) {
@@ -255,7 +258,7 @@ private fun ColorWheel(
 ) {
     val hsv = remember(hex) { hexToHsv(hex) }
     // Read the latest values via state inside the gesture to dodge stale closures without restarting it.
-    val valueState = rememberUpdatedState(hsv[2]) // brightness stays fixed while picking hue/saturation
+    val valueState = rememberUpdatedState(hsv[2]) // brightness, sampled ONCE at each gesture's down
     val startState = rememberUpdatedState(onPickStart)
     val pickState = rememberUpdatedState(onPick)
     val endState = rememberUpdatedState(onPickEnd)
@@ -278,11 +281,15 @@ private fun ColorWheel(
                 awaitEachGesture {
                     val down = awaitFirstDown()
                     startState.value()
-                    var last = hueSatToHex(down.position, size, valueState.value)
+                    // Sample brightness ONCE, at down — picking hue/saturation keeps it fixed. Reading it
+                    // live each frame would let readableHsvToHex's readability lift feed back through
+                    // liveHex and ratchet brightness upward across the drag.
+                    val value = valueState.value
+                    var last = hueSatToHex(down.position, size, value)
                     pickState.value(last)
                     down.consume()
                     drag(down.id) { change ->
-                        last = hueSatToHex(change.position, size, valueState.value)
+                        last = hueSatToHex(change.position, size, value)
                         pickState.value(last)
                         change.consume()
                     }
@@ -359,14 +366,17 @@ private fun BrightnessSlider(
             .fillMaxWidth()
             .height(26.dp)
             .pointerInput(Unit) {
+                // Inset the touch track to match the thumb's drawn track ([outerR, width-outerR] below)
+                // so the value a tap selects lines up with where the thumb renders. Equals outerR (12.dp).
+                val thumbInset = 12.dp.toPx()
                 awaitEachGesture {
                     val down = awaitFirstDown()
                     startState.value()
-                    var last = valueToHex(down.position.x, size, hsvState.value)
+                    var last = valueToHex(down.position.x, size, hsvState.value, thumbInset)
                     pickState.value(last)
                     down.consume()
                     drag(down.id) { change ->
-                        last = valueToHex(change.position.x, size, hsvState.value)
+                        last = valueToHex(change.position.x, size, hsvState.value, thumbInset)
                         pickState.value(last)
                         change.consume()
                     }
@@ -395,7 +405,9 @@ private fun BrightnessSlider(
         // Map the current value onto the readable [vMin, 1] span the bar represents.
         val span = 1f - vMin
         val frac = if (span <= 0.0001f) 1f else ((hsv[2] - vMin) / span).coerceIn(0f, 1f)
-        val thumbX = (frac * size.width).coerceIn(outerR, size.width - outerR)
+        // Place the thumb on the same inset track the touch maps over ([outerR, width-outerR]) so the
+        // indicator and the value it represents agree at the extremes (and the thumb never clips).
+        val thumbX = outerR + frac * (size.width - 2f * outerR)
         val thumbCenter = Offset(thumbX, size.height / 2f)
         val thumbColor = Color(android.graphics.Color.HSVToColor(hsv))
         drawCircle(thumbColor, radius = thumbR, center = thumbCenter)
@@ -423,11 +435,15 @@ private fun hueSatToHex(pos: Offset, size: IntSize, value: Float): String {
  * spans only the readable range [[minReadableValue] … 1], so the dim, unreadable end simply isn't
  * there to land on: x = 0 → the dimmest still-legible shade, x = width → full brightness.
  */
-private fun valueToHex(x: Float, size: IntSize, hsv: FloatArray): String {
+private fun valueToHex(x: Float, size: IntSize, hsv: FloatArray, insetPx: Float = 0f): String {
     val width = size.width
     val vMin = minReadableValue(hsv[0], hsv[1])
     if (width <= 0) return hsvToHex(hsv[0], hsv[1], hsv[2].coerceAtLeast(vMin))
-    val v = vMin + (x / width).coerceIn(0f, 1f) * (1f - vMin)
+    // Map over the inset track [insetPx, width-insetPx] so a tap matches the thumb's drawn position
+    // (the thumb is clamped to the same inset so it never clips at the edges).
+    val usable = (width - 2f * insetPx).coerceAtLeast(1f)
+    val frac = ((x - insetPx) / usable).coerceIn(0f, 1f)
+    val v = vMin + frac * (1f - vMin)
     return hsvToHex(hsv[0], hsv[1], v)
 }
 
@@ -469,18 +485,25 @@ private fun isReadableAccent(hex: String): Boolean {
 }
 
 /**
- * Like [hsvToHex], but lifts brightness (HSV value) just enough to clear [MIN_ACCENT_LUMINANCE]
- * while preserving hue & saturation. Luminance rises monotonically with value (hue/sat fixed), so
- * stepping up converges; the cap at v = 1 bounds the loop. Used by the wheel so a hue/sat picked at
- * a too-dark brightness is nudged up to a legible one rather than committed faint.
+ * Like [hsvToHex], but nudges the colour up to clear [MIN_ACCENT_LUMINANCE] so the wheel never
+ * commits an unreadable accent (its stated invariant). Two stages: (1) lift brightness (preserves
+ * hue & saturation) — the common case; (2) if a deep hue (saturated blue/violet) can't clear the
+ * floor at any brightness, desaturate toward white. Luminance rises monotonically as value rises
+ * (hue/sat fixed) and as saturation drops (at full value), so both loops converge — white always
+ * clears the floor — and the v = 1 / s = 0 caps bound them.
  */
 private fun readableHsvToHex(h: Float, s: Float, v: Float): String {
-    val sat = s.coerceIn(0f, 1f)
+    var sat = s.coerceIn(0f, 1f)
     var value = v.coerceIn(0f, 1f)
     while (value < 1f &&
         relLuminance(android.graphics.Color.HSVToColor(floatArrayOf(h, sat, value))) < MIN_ACCENT_LUMINANCE
     ) {
         value = (value + 0.02f).coerceAtMost(1f)
+    }
+    while (sat > 0f &&
+        relLuminance(android.graphics.Color.HSVToColor(floatArrayOf(h, sat, value))) < MIN_ACCENT_LUMINANCE
+    ) {
+        sat = (sat - 0.02f).coerceAtLeast(0f)
     }
     return hsvToHex(h, sat, value)
 }

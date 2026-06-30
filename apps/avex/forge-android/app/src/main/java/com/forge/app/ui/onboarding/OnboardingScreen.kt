@@ -42,8 +42,9 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.forge.app.program.Equipment
 import kotlin.random.Random
 
-// Page indices. The plan-mode step (1) gates the rest: only "generated" continues through the
-// plan-building pages (2-5); "custom"/"freestyle" finish right after picking a mode.
+// Page indices. After the plan-mode step (1): "generated" continues through the plan-building pages
+// (2-5); "custom"/"freestyle" stop one step later, at Goals (2), to pick a goal + experience (which
+// steer the coach), then finish.
 private const val PAGE_ABOUT = 0
 private const val PAGE_PLAN_MODE = 1
 private const val PAGE_GOALS = 2
@@ -51,7 +52,7 @@ private const val PAGE_GYM = 3
 private const val PAGE_TUNING = 4
 private const val PAGE_PREVIEW = 5
 
-/** Step names for the progress label — indexed by page. Only 0-1 are reached off the generated path. */
+/** Step names for the progress label — indexed by page. Only 0-2 are reached off the generated path. */
 private val ONBOARDING_STEP_NAMES = listOf(
     "About you", "Your plan", "Goals", "Your gym", "Fine-tuning", "Your week"
 )
@@ -122,10 +123,21 @@ fun OnboardingScreen(
     // Coach opt-in is asked only on the no-plan / make-your-own paths (the generated path keeps it on).
     var showCoachAsk by remember { mutableStateOf(false) }
 
-    // Only the generated path walks the plan-building pages; the others end on the plan-mode step.
+    // The generated path walks all plan-building pages through the preview. Custom & freestyle don't
+    // build a plan here, but they still pick a goal + experience on the Goals page (so the coach/Stats
+    // have them) — so they finish one step past the plan-mode step. Before a mode is picked, the bar
+    // assumes the short path.
     val isGenerated = planMode == PLAN_GENERATED
-    val lastPage = if (isGenerated) PAGE_PREVIEW else PAGE_PLAN_MODE
-    val pageCount = lastPage + 1
+    val lastPage = when {
+        isGenerated -> PAGE_PREVIEW
+        planMode.isNotEmpty() -> PAGE_GOALS
+        else -> PAGE_PLAN_MODE
+    }
+    // Progress denominator: until a mode is picked we don't know the path length, so assume the LONGEST
+    // (generated). Committing to the short custom/freestyle path then only ever nudges the bar FORWARD
+    // (the fraction grows), never backward — picking a mode on the plan-mode page felt jumpy otherwise.
+    // Once a short mode is committed, use its real length so the bar still reaches 100% on finish.
+    val progressTotal = if (planMode.isEmpty() || isGenerated) PAGE_PREVIEW + 1 else PAGE_GOALS + 1
 
     // Pure preview — recomputed whenever an input or the re-roll seed changes (shown on the last page).
     val previewDays = remember(previewSeed, daysPerWeek, equipment, frozenIds, goal, experience, problemAreas) {
@@ -154,7 +166,7 @@ fun OnboardingScreen(
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
             // Slim progress bar + small step label.
-            val progress by animateFloatAsState((page + 1).toFloat() / pageCount, label = "progress")
+            val progress by animateFloatAsState((page + 1).toFloat() / progressTotal, label = "progress")
             LinearProgressIndicator(
                 progress = { progress },
                 modifier = Modifier.fillMaxWidth().height(4.dp),
@@ -295,21 +307,33 @@ fun OnboardingScreen(
                 title = { Text("Skip setup?") },
                 text = {
                     Text(
-                        "You'll start with a basic bodyweight program and default settings, with no plan " +
-                            "tailored to your gym or goals. You can set your equipment and goal, and " +
-                            "generate a personalized program, any time in Settings → Program."
+                        when (planMode) {
+                            PLAN_CUSTOM -> "You'll skip the rest of setup and start with no plan yet — build " +
+                                "your own from the home screen, or generate one anytime in Settings → Program."
+                            PLAN_FREESTYLE -> "You'll skip the rest of setup and start with no fixed plan — just " +
+                                "log your workouts. You can switch to a plan anytime in Settings → Program."
+                            else -> "You'll start with a basic bodyweight program and default settings, with no " +
+                                "plan tailored to your gym or goals. You can set your equipment and goal, and " +
+                                "generate a personalized program, any time in Settings → Program."
+                        }
                     )
                 },
                 confirmButton = {
                     TextButton(onClick = {
                         showSkipConfirm = false
                         val bwLb = parseSaneBodyweightLb(bodyweightInput, useKg)
+                        // Honor a mode the user already picked (forward → Back → Skip); default to
+                        // generated for the usual page-0 skip where nothing was chosen yet.
+                        val effectiveMode = planMode.ifEmpty { PLAN_GENERATED }
                         viewModel.complete(
-                            planMode = PLAN_GENERATED, name = name.trim(), useKg = useKg, sex = sex ?: "",
+                            planMode = effectiveMode, name = name.trim(), useKg = useKg, sex = sex ?: "",
                             bodyweightLb = bwLb, goal = "build_muscle", daysPerWeek = 4,
-                            equipment = setOf(Equipment.BODYWEIGHT_ONLY.name), experience = "intermediate"
+                            equipment = setOf(Equipment.BODYWEIGHT_ONLY.name), experience = "intermediate",
+                            // Skipping bypasses the coach-ask dialog — keep coach ON only for the generated
+                            // default; custom/freestyle (where the dialog would have asked) default to OFF.
+                            coachEnabled = effectiveMode == PLAN_GENERATED
                         )
-                        onFinished(PLAN_GENERATED)
+                        onFinished(effectiveMode)
                     }) { Text("Skip anyway") }
                 },
                 dismissButton = {

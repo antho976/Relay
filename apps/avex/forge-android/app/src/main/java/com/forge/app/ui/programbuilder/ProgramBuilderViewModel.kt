@@ -10,6 +10,9 @@ import com.forge.app.data.repo.ProgramRepository
 import com.forge.app.program.ExerciseLibrary
 import com.forge.app.ui.common.ProgramChangeGuard
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.util.UUID
 import javax.inject.Inject
@@ -33,6 +36,11 @@ class ProgramBuilderViewModel @Inject constructor(
         private set
     var saving by mutableStateOf(false)
         private set
+
+    /** Currently "go with the flow" — saving a plan switches to follow-a-plan, so the screen confirms
+     *  first (see [save], which performs the flip). */
+    val freestyleMode: StateFlow<Boolean> =
+        settingsRepo.freestyleMode.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
     private var loaded = false
 
@@ -105,19 +113,25 @@ class ProgramBuilderViewModel @Inject constructor(
         if (saving) return
         saving = true
         viewModelScope.launch {
-            val (dayRows, slotRows) = days.toEntities()
-            // saveCustomProgram rewrites the base program and discards any in-progress workout
-            // (CASCADE-deleting its logged sets). Route through the shared guard so an active session
-            // raises the same "discard & continue?" confirm the generate / deload / re-roll paths use
-            // instead of silently wiping logged work; on cancel the staged save is dropped and the
-            // builder stays open (dirty), so nothing is lost.
-            programChangeGuard.run {
-                programRepository.saveCustomProgram(dayRows, slotRows)
-                settingsRepo.setFreestyleMode(false)
-                dirty = false
-                onSaved()
+            // finally so a throw from saveCustomProgram / setFreestyleMode (DB or DataStore failure) —
+            // or the guard cancelling — always releases the flag; otherwise saving stays true and the
+            // Save button is permanently locked for this screen's lifetime.
+            try {
+                val (dayRows, slotRows) = days.toEntities()
+                // saveCustomProgram rewrites the base program and discards any in-progress workout
+                // (CASCADE-deleting its logged sets). Route through the shared guard so an active session
+                // raises the same "discard & continue?" confirm the generate / deload / re-roll paths use
+                // instead of silently wiping logged work; on cancel the staged save is dropped and the
+                // builder stays open (dirty), so nothing is lost.
+                programChangeGuard.run {
+                    programRepository.saveCustomProgram(dayRows, slotRows)
+                    settingsRepo.setFreestyleMode(false)
+                    dirty = false
+                    onSaved()
+                }
+            } finally {
+                saving = false
             }
-            saving = false
         }
     }
 }

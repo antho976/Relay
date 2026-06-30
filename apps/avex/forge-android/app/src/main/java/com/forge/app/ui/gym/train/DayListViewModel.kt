@@ -119,6 +119,8 @@ class DayListViewModel @Inject constructor(
                 )
             )
         })
+    }.combine(settingsRepo.freestyleMode) { s, freestyle ->
+        s.copy(freestyleMode = freestyle)
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(stopTimeoutMillis = 5_000),

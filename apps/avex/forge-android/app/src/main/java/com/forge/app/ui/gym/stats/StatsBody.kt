@@ -2,13 +2,12 @@ package com.forge.app.ui.gym.stats
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyListScope
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -23,7 +22,6 @@ import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.ui.gym.stats.components.BandedBar
 import com.forge.app.ui.gym.stats.components.ScatterChart
-import com.forge.app.ui.gym.stats.components.statsEntrance
 import com.forge.app.ui.gym.stats.state.BodyweightPoint
 import com.forge.app.ui.gym.stats.state.E1rmLift
 import java.text.SimpleDateFormat
@@ -49,56 +47,53 @@ private fun tierIndex(ratio: Double, sex: String): Int {
  * Tier 5a — bodyweight as a moving-average line over the raw daily scatter. Daily weigh-ins are noisy,
  * so the smoothed line is the honest read; the dots keep the raw truth visible.
  */
-internal fun LazyListScope.bodyweightSection(points: List<BodyweightPoint>, useKg: Boolean, c: StatsColors) {
+@Composable
+internal fun ColumnScope.BodyweightContent(points: List<BodyweightPoint>, useKg: Boolean, c: StatsColors) {
     if (points.isEmpty()) return
-    item("bodyweight") {
-        val unit = unitLabel(useKg)
-        // Display conversion + the O(n×window) moving-average sweep run once per data change, not on
-        // every recomposition.
-        val display = remember(points, useKg) { points.map { toDisplayWeight(it.weightLb, useKg) } }
-        Column(Modifier.fillMaxWidth().statsEntrance(0).padding(horizontal = STATS_GUTTER)) {
-            if (points.size < 2) {
-                Text(
-                    "Latest: ${display.last().roundToInt()} $unit. A few more weigh-ins and the trend line shows up.",
-                    style = MaterialTheme.typography.bodySmall, color = c.muted, fontStyle = FontStyle.Italic
-                )
-            } else {
-                val chart = remember(points, useKg) {
-                    val day0 = points.first().recordedAt
-                    val xs = points.map { ((it.recordedAt - day0) / 86_400_000.0).toFloat() }
-                    val scatter = display.indices.map { Offset(xs[it], display[it].toFloat()) }
-                    val window = minOf(7, points.size)
-                    val ma = display.indices.map { i ->
-                        val from = maxOf(0, i - window + 1)
-                        Offset(xs[i], display.subList(from, i + 1).average().toFloat())
-                    }
-                    val lo = display.min().toFloat()
-                    val hi = display.max().toFloat()
-                    val pad = ((hi - lo) * 0.12f).coerceAtLeast(1f)
-                    BwChartData(scatter, ma, xs.first(), xs.last(), lo - pad, hi + pad, window)
-                }
-                ScatterChart(
-                    points = chart.scatter,
-                    overlay = chart.ma,
-                    pointColor = c.muted,
-                    lineColor = c.accent,
-                    gridColor = c.outline.copy(alpha = 0.12f),
-                    minX = chart.minX, maxX = chart.maxX,
-                    minY = chart.minY, maxY = chart.maxY,
-                    modifier = Modifier.fillMaxWidth().height(150.dp)
-                )
-                Spacer(Modifier.height(6.dp))
-                val fmt = remember { SimpleDateFormat("MMM d", Locale.getDefault()) }
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(fmt.format(Date(points.first().recordedAt)).uppercase(),
-                        style = MaterialTheme.typography.labelSmall, color = c.muted)
-                    Text("now ${display.last().roundToInt()} $unit · ${chart.window}-pt avg line",
-                        style = MaterialTheme.typography.labelSmall, color = c.muted)
-                    Text(fmt.format(Date(points.last().recordedAt)).uppercase(),
-                        style = MaterialTheme.typography.labelSmall, color = c.muted)
-                }
-            }
+    val unit = unitLabel(useKg)
+    // Display conversion + the O(n×window) moving-average sweep run once per data change, not on
+    // every recomposition.
+    val display = remember(points, useKg) { points.map { toDisplayWeight(it.weightLb, useKg) } }
+    if (points.size < 2) {
+        Text(
+            "Latest: ${display.last().roundToInt()} $unit. A few more weigh-ins and the trend line shows up.",
+            style = MaterialTheme.typography.bodySmall, color = c.muted, fontStyle = FontStyle.Italic
+        )
+        return
+    }
+    val chart = remember(points, useKg) {
+        val day0 = points.first().recordedAt
+        val xs = points.map { ((it.recordedAt - day0) / 86_400_000.0).toFloat() }
+        val scatter = display.indices.map { Offset(xs[it], display[it].toFloat()) }
+        val window = minOf(7, points.size)
+        val ma = display.indices.map { i ->
+            val from = maxOf(0, i - window + 1)
+            Offset(xs[i], display.subList(from, i + 1).average().toFloat())
         }
+        val lo = display.min().toFloat()
+        val hi = display.max().toFloat()
+        val pad = ((hi - lo) * 0.12f).coerceAtLeast(1f)
+        BwChartData(scatter, ma, xs.first(), xs.last(), lo - pad, hi + pad, window)
+    }
+    ScatterChart(
+        points = chart.scatter,
+        overlay = chart.ma,
+        pointColor = c.muted,
+        lineColor = c.accent,
+        gridColor = c.outline.copy(alpha = 0.12f),
+        minX = chart.minX, maxX = chart.maxX,
+        minY = chart.minY, maxY = chart.maxY,
+        modifier = Modifier.fillMaxWidth().height(STATS_CHART_H)
+    )
+    Spacer(Modifier.height(6.dp))
+    val fmt = remember { SimpleDateFormat("MMM d", Locale.getDefault()) }
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(fmt.format(Date(points.first().recordedAt)).uppercase(),
+            style = MaterialTheme.typography.labelSmall, color = c.muted)
+        Text("now ${display.last().roundToInt()} $unit · ${chart.window}-pt avg line",
+            style = MaterialTheme.typography.labelSmall, color = c.muted)
+        Text(fmt.format(Date(points.last().recordedAt)).uppercase(),
+            style = MaterialTheme.typography.labelSmall, color = c.muted)
     }
 }
 
@@ -118,7 +113,8 @@ private class BwChartData(
  * zones (Untrained → Elite). "Where do I rank" at a glance. A tier only locks once a lift has a few
  * sessions behind its e1RM, so one fluke set can't read as Advanced.
  */
-internal fun LazyListScope.strengthStandardsSection(
+@Composable
+internal fun ColumnScope.StrengthStandardsContent(
     lifts: List<E1rmLift>,
     bodyweightLb: Double?,
     sex: String,
@@ -126,33 +122,25 @@ internal fun LazyListScope.strengthStandardsSection(
 ) {
     val bw = bodyweightLb ?: 0.0
     if (bw <= 0.0) {
-        item("standards-nobw") {
-            Text(
-                "Log your bodyweight to see where you stand.",
-                style = MaterialTheme.typography.bodySmall, color = c.muted, fontStyle = FontStyle.Italic,
-                modifier = Modifier.padding(horizontal = STATS_GUTTER, vertical = 8.dp)
-            )
-        }
+        Text(
+            "Log your bodyweight to see where you stand.",
+            style = MaterialTheme.typography.bodySmall, color = c.muted, fontStyle = FontStyle.Italic
+        )
         return
     }
     val rated = lifts.filter { it.currentE1rm > 0 && it.history.size >= MIN_SESSIONS_FOR_TIER }.take(5)
     if (rated.isEmpty()) {
-        item("standards-calibrating") {
-            Text(
-                "Still calibrating — a few more sessions of your main lifts and your tier locks in.",
-                style = MaterialTheme.typography.bodySmall, color = c.muted, fontStyle = FontStyle.Italic,
-                modifier = Modifier.padding(horizontal = STATS_GUTTER, vertical = 8.dp)
-            )
-        }
+        Text(
+            "Still calibrating — a few more sessions of your main lifts and your tier locks in.",
+            style = MaterialTheme.typography.bodySmall, color = c.muted, fontStyle = FontStyle.Italic
+        )
         return
     }
-    itemsIndexed(rated, key = { _, l -> "std-${l.exerciseId}" }) { i, lift ->
-        StrengthStandardRow(lift, bw, sex, c, i)
-    }
+    rated.forEach { lift -> StrengthStandardRow(lift, bw, sex, c) }
 }
 
 @Composable
-private fun StrengthStandardRow(lift: E1rmLift, bw: Double, sex: String, c: StatsColors, index: Int) {
+private fun StrengthStandardRow(lift: E1rmLift, bw: Double, sex: String, c: StatsColors) {
     val ratio = lift.currentE1rm / bw
     val idx = tierIndex(ratio, sex)
     val cutoffs = tierCutoffs(sex)
@@ -160,9 +148,7 @@ private fun StrengthStandardRow(lift: E1rmLift, bw: Double, sex: String, c: Stat
     val zoneEdges = cutoffs.map { (it / maxRatio).toFloat() }
     val zoneColors = (0..4).map { lerp(c.outline.copy(alpha = 0.30f), c.accent, it / 4f) }
 
-    Column(
-        Modifier.fillMaxWidth().statsEntrance(index).padding(horizontal = STATS_GUTTER, vertical = 8.dp)
-    ) {
+    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(lift.exerciseName, style = MaterialTheme.typography.bodyMedium, color = c.onBg)
             Text(

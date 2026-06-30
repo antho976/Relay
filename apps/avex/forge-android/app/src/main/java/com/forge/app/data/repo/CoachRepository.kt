@@ -663,6 +663,11 @@ class CoachRepository @Inject constructor(
      * the brief has been opened or the banner dismissed (both call [markSeen]).
      */
     suspend fun pendingBanner(): CoachBanner? {
+        // Nothing to coach without a plan (freestyle) and nothing to surface when the user declined the
+        // coach — bail before ensureWeeklyPass so no pass runs, no auto-apply fires, and no banner/push
+        // shows. The explicit Week Brief screen still runs its own pass; this only gates the passive
+        // Overview banner + the weekly coach-brief push (which both route through here).
+        if (settings.freestyleMode.first() || !settings.coachEnabled.first()) return null
         val pass = ensureWeeklyPass()
         if (pass.weekId == settings.lastSeenCoachWeekId.first()) return null
         // Stay silent while the coach is still pre-baseline (the first ~week after onboarding). The

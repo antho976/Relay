@@ -22,8 +22,11 @@ interface ProgramCustomizationDao {
     @Query("SELECT * FROM program_customization")
     suspend fun all(): List<ProgramCustomization>
 
-    @Query("SELECT * FROM program_customization")
-    fun observeAll(): Flow<List<ProgramCustomization>>
+    /** Active, user-created (custom_…) rows only — feeds the likeable custom-exercise list. Scoped so
+     *  the scan skips swap/override rows; downstream still needs distinctUntilChanged because Room
+     *  invalidates this Flow at table granularity (every program_customization write re-emits). */
+    @Query("SELECT * FROM program_customization WHERE removed = 0 AND exercise_id LIKE 'custom\\_%' ESCAPE '\\'")
+    fun observeCustom(): Flow<List<ProgramCustomization>>
 
     @Query("DELETE FROM program_customization WHERE day_key = :dayKey AND exercise_id = :exerciseId")
     suspend fun delete(dayKey: String, exerciseId: String)

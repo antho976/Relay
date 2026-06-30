@@ -1,5 +1,6 @@
 package com.forge.app.ui.cardio
 
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -27,6 +28,21 @@ fun CardioSessionDetailScreen(
     var confirmDelete by remember { mutableStateOf(false) }
     var leaving by remember { mutableStateOf(false) }
 
+    // Health Connect's per-route consent screen — hands back the chosen session's GPS track (or null).
+    val routeLauncher = rememberLauncherForActivityResult(
+        contract = androidx.health.connect.client.contracts.ExerciseRouteRequestContract()
+    ) { route -> viewModel.onRouteConsented(route) }
+
+    // Re-read the steps/GPS grant + day data on resume — the user may connect in Settings and return.
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) viewModel.loadWearable()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     // Leave exactly once — when the entry is deleted, or once loaded and it no longer exists. A delete
     // makes BOTH true (deleted flips, and the DB flow drops the row), so the `leaving` guard stops a
     // second onBack() that would pop past this screen (e.g. the History list beneath it).
@@ -52,8 +68,10 @@ fun CardioSessionDetailScreen(
             entry = entry,
             bodyweightLb = state.bodyweightLb,
             useMiles = state.useMiles,
-            route = null, // Health Connect route read is a deferred follow-up.
-            wearable = null,
+            route = state.route, // Matched watch GPS track, once available/consented (else null).
+            onShowRoute = state.routeConsentId?.let { id -> { routeLauncher.launch(id) } },
+            wearable = state.wearable, // That day's watch steps (null until loaded / when none).
+            wearableConnected = state.stepsConnected, // Show an empty placeholder once connected.
             onEdit = viewModel::openEdit,
             onDelete = { confirmDelete = true },
             onBack = onBack

@@ -97,6 +97,8 @@ class ForgeWidget : GlanceAppWidget() {
             trainedTodayKeys = trainedTodayKeys
         )
         val nextDayPlan = nextDayKey?.let { key -> Program.days.firstOrNull { it.key == key } }
+        // "Go with the flow" — drives the fallback copy below so the widget doesn't claim a plan exists.
+        val freestyleMode = settings.freestyleMode.first()
 
         // --- Item 1: build the extras bundle for this widget state ---
         // Active session → set EXTRA_RESUME_SESSION=true (+ dayKey) for future intent handler.
@@ -198,17 +200,22 @@ class ForgeWidget : GlanceAppWidget() {
                             )
                         }
                     } else {
+                        // No active session and no next day — the normal state for freestyle (no plan)
+                        // and for a custom user who hasn't built a plan yet, so don't claim "your program
+                        // is ready". Branch on the actual mode / program state.
+                        val (head, sub) = when {
+                            freestyleMode -> "Tap to log a workout" to "No fixed plan — open Forge to log your session."
+                            Program.dayKeys.isEmpty() -> "Tap to build your plan" to "Set up your program in Forge to get started."
+                            else -> "Tap to start your first workout" to "Your program is ready — open Forge to begin."
+                        }
                         Text(
-                            "Tap to start your first workout",
+                            head,
                             style = TextStyle(
                                 fontWeight = FontWeight.Bold,
                                 color = ColorProvider(onBgArgb)
                             )
                         )
-                        Text(
-                            "Your program is ready — open Forge to begin.",
-                            style = TextStyle(color = ColorProvider(mutedArgb))
-                        )
+                        Text(sub, style = TextStyle(color = ColorProvider(mutedArgb)))
                     }
                     // Streak + this-week dots (Cat 21) — once there's any finished session to count.
                     if (finished.isNotEmpty()) {

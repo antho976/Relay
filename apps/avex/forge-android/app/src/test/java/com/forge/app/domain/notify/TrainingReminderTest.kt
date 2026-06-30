@@ -56,4 +56,30 @@ class TrainingReminderTest {
         val n = TrainingReminder.build(trainedToday = false, dayName = "Pull", streakDays = 1)
         assertEquals("Time to train", n!!.title)
     }
+
+    @Test
+    fun freestyle_noDay_stillNudgesWithPlanAgnosticCopy() {
+        // No plan to name a day, but the user opted in — nudge with generic copy, no day name.
+        val n = TrainingReminder.build(
+            trainedToday = false, dayName = null, streakDays = 0, noFixedPlan = true
+        )
+        assertEquals("Time to train", n!!.title)
+        assertTrue(n.body.contains("log whatever", ignoreCase = true))
+    }
+
+    @Test
+    fun freestyle_withStreak_protectsTheStreakWithoutADayName() {
+        val n = TrainingReminder.build(
+            trainedToday = false, dayName = null, streakDays = 4, noFixedPlan = true
+        )
+        assertEquals("Don't break your streak", n!!.title)
+        assertTrue(n.body.contains("4-day streak"))
+    }
+
+    @Test
+    fun freestyle_trainedToday_staysQuiet() {
+        assertNull(TrainingReminder.build(
+            trainedToday = true, dayName = null, streakDays = 4, noFixedPlan = true
+        ))
+    }
 }

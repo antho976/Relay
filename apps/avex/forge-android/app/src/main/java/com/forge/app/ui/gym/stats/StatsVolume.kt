@@ -2,14 +2,13 @@ package com.forge.app.ui.gym.stats
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyListScope
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -23,7 +22,6 @@ import com.forge.app.program.MuscleGroup
 import com.forge.app.ui.gym.stats.components.DivergingBar
 import com.forge.app.ui.gym.stats.components.LineChart
 import com.forge.app.ui.gym.stats.components.TargetBar
-import com.forge.app.ui.gym.stats.components.statsEntrance
 import com.forge.app.ui.gym.stats.state.BalanceRatioUi
 import com.forge.app.ui.gym.stats.state.MuscleSetCount
 import com.forge.app.ui.gym.stats.state.WeeklyTonnage
@@ -45,7 +43,8 @@ private fun muscleRows(
  * Tier 2a — sets per muscle this week against a per-muscle target tick. "Am I doing enough?" at a
  * glance: bars hitting their tick are on plan, short bars are the neglected areas.
  */
-internal fun LazyListScope.setsPerMuscleSection(
+@Composable
+internal fun ColumnScope.SetsPerMuscleContent(
     weekly: List<MuscleSetCount>,
     planned: Map<MuscleGroup, Int>,
     c: StatsColors
@@ -53,19 +52,14 @@ internal fun LazyListScope.setsPerMuscleSection(
     val rows = muscleRows(weekly, planned)
     if (rows.isEmpty()) return
     val maxV = rows.maxOf { maxOf(it.actual, it.target) }.coerceAtLeast(1)
-    itemsIndexed(rows, key = { _, r -> "setsmuscle-${r.muscle.code}" }) { i, r ->
-        MuscleSetBarRow(r, maxV, c, i)
-    }
+    rows.forEach { r -> MuscleSetBarRow(r, maxV, c) }
 }
 
 @Composable
-private fun MuscleSetBarRow(r: MuscleSetRow, maxV: Int, c: StatsColors, index: Int) {
+private fun MuscleSetBarRow(r: MuscleSetRow, maxV: Int, c: StatsColors) {
     val onPlan = r.target > 0 && r.actual >= r.target
     Row(
-        Modifier
-            .fillMaxWidth()
-            .statsEntrance(index)
-            .padding(horizontal = STATS_GUTTER, vertical = 5.dp),
+        Modifier.fillMaxWidth().padding(vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
@@ -96,21 +90,14 @@ private fun MuscleSetBarRow(r: MuscleSetRow, maxV: Int, c: StatsColors, index: I
  * Tier 2b — structural balance as diverging bars (push/pull, quad/ham). Paired sides from a midline,
  * NOT a radar: asymmetry reads directly as imbalance and the two sides are honestly comparable.
  */
-internal fun LazyListScope.balanceSection(ratios: List<BalanceRatioUi>, c: StatsColors) {
-    // Key by index, not title — two ratios sharing a title would crash LazyColumn on a duplicate key.
-    itemsIndexed(ratios, key = { i, _ -> "balance-$i" }) { i, b ->
-        BalanceRow(b, c, i)
-    }
+@Composable
+internal fun ColumnScope.BalanceContent(ratios: List<BalanceRatioUi>, c: StatsColors) {
+    ratios.forEach { b -> BalanceRow(b, c) }
 }
 
 @Composable
-private fun BalanceRow(b: BalanceRatioUi, c: StatsColors, index: Int) {
-    Column(
-        Modifier
-            .fillMaxWidth()
-            .statsEntrance(index)
-            .padding(horizontal = STATS_GUTTER, vertical = 8.dp)
-    ) {
+private fun BalanceRow(b: BalanceRatioUi, c: StatsColors) {
+    Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(b.title, style = MaterialTheme.typography.labelMedium, color = c.onBg)
             val verdict = when (b.balanced) {
@@ -147,34 +134,29 @@ private fun tonnageLabel(v: Double, unit: String): String =
  * Tier 2c — weekly tonnage trend, the "is it holding?" companion to the target bars. Deload weeks
  * dip by design, so the line is context, not a verdict.
  */
-internal fun LazyListScope.tonnageTrendSection(
+@Composable
+internal fun ColumnScope.TonnageTrendContent(
     weeklyTonnage: List<WeeklyTonnage>,
     useKg: Boolean,
     c: StatsColors
 ) {
     if (weeklyTonnage.size < 2) return
-    item("tonnage-trend") {
-        val display = weeklyTonnage.map { toDisplayWeight(it.volumeLb, useKg) }
-        val lo = display.min()
-        val hi = display.max()
-        val unit = unitLabel(useKg)
-        Column(
-            Modifier.fillMaxWidth().statsEntrance(0).padding(horizontal = STATS_GUTTER, vertical = 8.dp)
-        ) {
-            LineChart(
-                values = display,
-                lineColor = c.accent,
-                trendColor = c.muted,
-                minValue = lo,
-                maxValue = hi,
-                modifier = Modifier.fillMaxWidth().height(120.dp)
-            )
-            Spacer(Modifier.height(6.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(tonnageLabel(lo, unit), style = MaterialTheme.typography.labelSmall, color = c.muted)
-                Text("weekly volume · last ${weeklyTonnage.size} wks", style = MaterialTheme.typography.labelSmall, color = c.muted)
-                Text(tonnageLabel(hi, unit), style = MaterialTheme.typography.labelSmall, color = c.muted)
-            }
-        }
+    val display = weeklyTonnage.map { toDisplayWeight(it.volumeLb, useKg) }
+    val lo = display.min()
+    val hi = display.max()
+    val unit = unitLabel(useKg)
+    LineChart(
+        values = display,
+        lineColor = c.accent,
+        trendColor = c.muted,
+        minValue = lo,
+        maxValue = hi,
+        modifier = Modifier.fillMaxWidth().height(STATS_CHART_H)
+    )
+    Spacer(Modifier.height(6.dp))
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(tonnageLabel(lo, unit), style = MaterialTheme.typography.labelSmall, color = c.muted)
+        Text("weekly volume · last ${weeklyTonnage.size} wks", style = MaterialTheme.typography.labelSmall, color = c.muted)
+        Text(tonnageLabel(hi, unit), style = MaterialTheme.typography.labelSmall, color = c.muted)
     }
 }

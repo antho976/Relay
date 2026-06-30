@@ -35,6 +35,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -54,8 +55,7 @@ enum class SettingsPage(val title: String) {
     Format("Units & format"),
     Session("Session"),
     Notifications("Notifications"),
-    Equipment("Equipment"),
-    Program("Program"),
+    Program("Program & equipment"),
     Recovery("Recovery"),
     ExercisePrefs("Exercise likes"),
     Vacation("Holiday / Vacation"),
@@ -69,8 +69,7 @@ internal val ALL_ROWS = listOf(
     SettingsRow("Units & format", "kg lb weight date time week timezone locale", SettingsPage.Format),
     SettingsRow("Session", "haptic feedback vibration notes templates rest timer between sets compound isolation", SettingsPage.Session),
     SettingsRow("Notifications", "quiet hours notify suppress", SettingsPage.Notifications),
-    SettingsRow("Equipment", "equipment available barbell dumbbell cable machine", SettingsPage.Equipment),
-    SettingsRow("Program", "program generate auto split days routine rotate trainings workouts", SettingsPage.Program),
+    SettingsRow("Program & equipment", "program generate auto split days routine rotate trainings workouts equipment available barbell dumbbell cable machine plate", SettingsPage.Program),
     SettingsRow("Recovery", "health connect sleep heart rate resting recovery samsung watch coach deload", SettingsPage.Recovery),
     SettingsRow("Exercise likes", "like dislike favourite exclude exercises preferences movements heart", SettingsPage.ExercisePrefs)
 )
@@ -105,12 +104,14 @@ internal val ALL_ITEMS = listOf(
     SettingsItem("Training reminders", "reminder notify nudge daily streak train schedule engagement", SettingsPage.Notifications),
     SettingsItem("Quiet hours", "quiet hours suppress notifications silent", SettingsPage.Notifications),
     SettingsItem("Notifications", "notifications enable disable notify", SettingsPage.Notifications),
-    SettingsItem("Available equipment", "equipment barbell dumbbell cable machine body weight", SettingsPage.Equipment),
+    SettingsItem("Available equipment", "equipment barbell dumbbell cable machine body weight", SettingsPage.Program),
+    SettingsItem("Weight per plate", "plate weight machine plates count", SettingsPage.Program),
+    SettingsItem("Heaviest dumbbell", "dumbbell max heaviest adjustable ceiling", SettingsPage.Program),
     SettingsItem("Privacy mode", "privacy mode blur screenshot screen", SettingsPage.Appearance),
 ) + com.forge.app.program.Equipment.entries.map { equip ->
     // Each piece of equipment is searchable by name, so a query like "kettlebell" surfaces it
-    // (tagged to the Equipment page) instead of only the generic "Available equipment" row.
-    SettingsItem(equip.display, "equipment ${equip.name.lowercase()} ${equip.display.lowercase()}", SettingsPage.Equipment)
+    // (tagged to the Program & equipment page) instead of only the generic "Available equipment" row.
+    SettingsItem(equip.display, "equipment ${equip.name.lowercase()} ${equip.display.lowercase()}", SettingsPage.Program)
 }
 
 enum class ResetTarget(val label: String, val message: String) {
@@ -127,13 +128,23 @@ fun SettingsScreen(
     onBack: () -> Unit,
     onOpenCoachBrief: () -> Unit = {},
     onOpenBuilder: () -> Unit = {},
+    // When set, open straight to this sub-page (deep link, e.g. the cardio "connect a watch" banner →
+    // Recovery) instead of the root list.
+    initialPage: SettingsPage? = null,
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val exportPath by viewModel.exportPath.collectAsStateWithLifecycle()
     val photoCount by viewModel.photoCount.collectAsStateWithLifecycle()
 
-    var currentPage by remember { mutableStateOf<SettingsPage?>(null) }
+    // Persisted across nav (rememberSaveable) so returning from a deep screen launched here — the
+    // program Builder, the Coach brief — lands back on the page you opened it from, not the root list.
+    // Seeded with [initialPage] for a deep link; rememberSaveable keeps a later in-screen back/forward
+    // navigation sticky rather than snapping back to the deep-linked page.
+    var currentPage by rememberSaveable { mutableStateOf<SettingsPage?>(initialPage) }
+    // The Program page's open sub-section is hoisted here so EVERY back affordance (top-bar arrow,
+    // system back) returns to the Program menu first, then to Settings — never skipping a level.
+    var programSection by rememberSaveable { mutableStateOf<ProgramSection?>(null) }
     var searchActive by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var confirmReset by remember { mutableStateOf<ResetTarget?>(null) }
@@ -166,8 +177,11 @@ fun SettingsScreen(
     }
 
     BackHandler(enabled = currentPage != null || searchActive) {
-        if (currentPage != null) currentPage = null
-        else { searchActive = false; searchQuery = "" }
+        when {
+            currentPage == SettingsPage.Program && programSection != null -> programSection = null
+            currentPage != null -> { currentPage = null; programSection = null }
+            else -> { searchActive = false; searchQuery = "" }
+        }
     }
 
     val displayRows = ALL_ROWS
@@ -216,7 +230,8 @@ fun SettingsScreen(
                 navigationIcon = {
                     IconButton(onClick = {
                         when {
-                            currentPage != null -> currentPage = null
+                            currentPage == SettingsPage.Program && programSection != null -> programSection = null
+                            currentPage != null -> { currentPage = null; programSection = null }
                             searchActive -> { searchActive = false; searchQuery = "" }
                             else -> onBack()
                         }
@@ -227,8 +242,12 @@ fun SettingsScreen(
                 actions = {
                     when {
                         currentPage != null -> {
+                            // Inside a Program sub-section, name the section (Equipment, Coach…) rather
+                            // than the page, so the header tracks how deep you are.
+                            val headerLabel = if (currentPage == SettingsPage.Program && programSection != null)
+                                programSection!!.title else currentPage!!.title
                             Text(
-                                currentPage!!.title.uppercase(),
+                                headerLabel.uppercase(),
                                 style = MaterialTheme.typography.labelSmall,
                                 letterSpacing = 1.5.sp,
                                 color = muted,
@@ -277,7 +296,7 @@ fun SettingsScreen(
                     displayRows = displayRows,
                     searchQuery = searchQuery,
                     modifier = Modifier.fillMaxSize().padding(inner),
-                    onOpenPage = { currentPage = it },
+                    onOpenPage = { currentPage = it; programSection = null },
                     onOpenCoachBrief = onOpenCoachBrief,
                     onOpenDataDialog = { showDataDialog = true },
                     onResetTarget = { confirmReset = it },
@@ -287,8 +306,15 @@ fun SettingsScreen(
                 SettingsPage.Format -> FormatPage(state, viewModel, Modifier.padding(inner))
                 SettingsPage.Session -> SessionPage(state, viewModel, Modifier.padding(inner))
                 SettingsPage.Notifications -> NotificationsPage(state, viewModel, Modifier.padding(inner))
-                SettingsPage.Equipment -> EquipmentPage(state, viewModel, Modifier.padding(inner))
-                SettingsPage.Program -> ProgramPage(state, viewModel, Modifier.padding(inner), onOpenCoachBrief, onOpenBuilder)
+                SettingsPage.Program -> ProgramPage(
+                    state = state,
+                    vm = viewModel,
+                    section = programSection,
+                    onSectionChange = { programSection = it },
+                    modifier = Modifier.padding(inner),
+                    onOpenCoachBrief = onOpenCoachBrief,
+                    onOpenBuilder = onOpenBuilder
+                )
                 SettingsPage.Recovery -> RecoveryPage(Modifier.padding(inner))
                 SettingsPage.ExercisePrefs -> ExercisePrefsPage(state, viewModel, Modifier.padding(inner))
                 SettingsPage.Vacation -> VacationPage(viewModel, Modifier.padding(inner))

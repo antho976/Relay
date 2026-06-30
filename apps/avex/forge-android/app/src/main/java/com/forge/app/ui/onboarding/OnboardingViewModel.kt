@@ -43,9 +43,9 @@ class OnboardingViewModel @Inject constructor(
     /**
      * Finish onboarding. [planMode] drives what program (if any) is built:
      * - [PLAN_GENERATED]: persist the previewed week (all generator inputs supplied).
-     * - [PLAN_CUSTOM]: seed a sensible default split so the editor has real days to reshape.
-     * - [PLAN_FREESTYLE]: seed the same default split (a safety net) but flip [setFreestyleMode] so the
-     *   home leads with freestyle logging instead of day cards — the user keeps no fixed plan.
+     * - [PLAN_CUSTOM]: clear the program so the builder opens blank — the user constructs their days.
+     * - [PLAN_FREESTYLE]: clear the program too (no fixed plan) and flip [setFreestyleMode] so the home
+     *   leads with freestyle logging instead of day cards.
      */
     fun complete(
         planMode: String,
@@ -55,7 +55,8 @@ class OnboardingViewModel @Inject constructor(
         bodyweightLb: Double?,
         /** Explicit cardio distance choice; null = leave tied to the weight unit (lb→miles, kg→km). */
         useMiles: Boolean? = null,
-        // Generated-path inputs (ignored for custom/freestyle, which use defaults):
+        // [goal] + [experience] are collected on EVERY path (they steer the coach's rep-range/volume
+        // suggestions). The rest of these are generated-only; custom/freestyle default them.
         goal: String = "build_muscle",
         daysPerWeek: Int = 4,
         equipment: Set<String> = emptySet(),
@@ -92,30 +93,33 @@ class OnboardingViewModel @Inject constructor(
                 }
                 PLAN_CUSTOM -> {
                     // Build-your-own starts with a genuinely EMPTY plan — the builder opens blank and
-                    // the user constructs their days/exercises from scratch. Default generation inputs
-                    // are still set so a later Settings → Generate works if they want it.
-                    effectiveGoal = "build_muscle"
+                    // the user constructs their days/exercises from scratch. Goal + experience ARE
+                    // collected (they steer the coach's rep-range/volume suggestions on the plan you
+                    // build); the rest default so a later Settings → Generate works if you want it.
+                    effectiveGoal = goal.ifBlank { "build_muscle" }
                     val fullGym = Equipment.entries.map { it.name }.toSet()
                     settingsRepo.setDaysPerWeek(4)
                     settingsRepo.setAvailableEquipment(fullGym)
                     settingsRepo.setFrozenExerciseIds(null)
                     settingsRepo.setRotationCadence("never")
-                    settingsRepo.setProgramExperience("intermediate")
-                    settingsRepo.setUserGoal("build_muscle")
+                    settingsRepo.setProgramExperience(experience.ifBlank { "intermediate" })
+                    settingsRepo.setUserGoal(effectiveGoal)
                     programRepository.clearProgram()
                 }
                 else -> {
-                    // freestyle: seed a default full-gym split under the hood as a fallback; freestyleMode
-                    // hides it and the home leads with logging.
-                    effectiveGoal = "build_muscle"
+                    // freestyle: no fixed plan. Clear the program (same as custom) so there's a genuine
+                    // "no program" state to lead with logging — no hidden split to leak into the home
+                    // counter, coach, reminders or Stats. Goal + experience are still collected so Stats
+                    // and the coach have them if the user later switches to following a plan.
+                    effectiveGoal = goal.ifBlank { "build_muscle" }
                     val fullGym = Equipment.entries.map { it.name }.toSet()
                     settingsRepo.setDaysPerWeek(4)
                     settingsRepo.setAvailableEquipment(fullGym)
                     settingsRepo.setFrozenExerciseIds(null)
                     settingsRepo.setRotationCadence("never")
-                    settingsRepo.setProgramExperience("intermediate")
-                    settingsRepo.setUserGoal("build_muscle")
-                    generateProgram(4, "build_muscle", "intermediate", emptySet(), fullGym, null, seed)
+                    settingsRepo.setProgramExperience(experience.ifBlank { "intermediate" })
+                    settingsRepo.setUserGoal(effectiveGoal)
+                    programRepository.clearProgram()
                 }
             }
             // Set ONBOARDING_DONE last — it flips the UI from onboarding to home, so the freshly
@@ -129,6 +133,10 @@ class OnboardingViewModel @Inject constructor(
         problemAreas: Set<String>, equipment: Set<String>, frozenIds: Set<String>?, seed: Long
     ) {
         programRepository.generate(
+            // Onboarding doesn't collect emphasis / priorityMuscles / pinned / dbMaxLb (the dumbbell
+            // ceiling) — they take their no-op defaults (balanced / none / none / no ceiling) and are
+            // refined later in Settings → Program. MUST stay identical to [buildPreview] so the saved
+            // week matches the previewed one (same seed + inputs).
             GenerationParams(
                 daysPerWeek = daysPerWeek, goal = goal, experience = experience,
                 problemAreas = problemAreas.mapNotNull { ProblemArea.fromCode(it) }.toSet(),

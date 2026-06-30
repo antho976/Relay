@@ -202,11 +202,20 @@ fun ForgeNavHost(initialDayKey: String? = null) {
         composable(Routes.TROPHIES) {
             TrophiesScreen(onBack = { nav.popBackStack() })
         }
-        composable(Routes.SETTINGS) {
+        composable(
+            route = Routes.SETTINGS,
+            arguments = listOf(navArgument(Routes.ARG_SETTINGS_PAGE) {
+                type = NavType.StringType
+                defaultValue = ""
+            })
+        ) { entry ->
+            val pageArg = entry.arguments?.getString(Routes.ARG_SETTINGS_PAGE).orEmpty()
+            val initialPage = com.forge.app.ui.settings.SettingsPage.entries.firstOrNull { it.name == pageArg }
             SettingsScreen(
                 onBack = { nav.popBackStack() },
                 onOpenCoachBrief = { nav.navigate(Routes.COACH_BRIEF) },
-                onOpenBuilder = { nav.navigate(Routes.programBuilder()) }
+                onOpenBuilder = { nav.navigate(Routes.programBuilder()) },
+                initialPage = initialPage
             )
         }
         composable(Routes.RECAP) {

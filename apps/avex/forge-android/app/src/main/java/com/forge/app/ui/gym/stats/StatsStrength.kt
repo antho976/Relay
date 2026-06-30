@@ -7,14 +7,13 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyListScope
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -33,7 +32,6 @@ import com.forge.app.domain.units.unitLabel
 import com.forge.app.ui.common.clickableLabeled
 import com.forge.app.ui.gym.stats.components.LineChart
 import com.forge.app.ui.gym.stats.components.Sparkline
-import com.forge.app.ui.gym.stats.components.statsEntrance
 import com.forge.app.ui.gym.stats.state.E1rmLift
 import kotlin.math.roundToInt
 
@@ -45,14 +43,15 @@ import kotlin.math.roundToInt
  * X is the session ordinal (oldest → newest), not a calendar axis yet — `E1rmLift.history` is a bare
  * per-session series. A dated axis is a later tweak (needs the repo to carry timestamps per point).
  */
-internal fun LazyListScope.e1rmLedger(lifts: List<E1rmLift>, useKg: Boolean, c: StatsColors) {
-    itemsIndexed(lifts, key = { _, l -> "e1rm-${l.exerciseId}" }) { index, lift ->
-        E1rmLiftRow(lift, useKg, c, index)
+@Composable
+internal fun ColumnScope.E1rmLedgerContent(lifts: List<E1rmLift>, useKg: Boolean, c: StatsColors) {
+    lifts.forEachIndexed { index, lift ->
+        E1rmLiftRow(lift, useKg, c, showDivider = index < lifts.lastIndex)
     }
 }
 
 @Composable
-private fun E1rmLiftRow(lift: E1rmLift, useKg: Boolean, c: StatsColors, index: Int) {
+private fun E1rmLiftRow(lift: E1rmLift, useKg: Boolean, c: StatsColors, showDivider: Boolean) {
     var expanded by rememberSaveable(lift.exerciseId) { mutableStateOf(false) }
     val display = remember(lift.history, useKg) { lift.history.map { toDisplayWeight(it, useKg) } }
     val current = toDisplayWeight(lift.currentE1rm, useKg).roundToInt()
@@ -63,12 +62,11 @@ private fun E1rmLiftRow(lift: E1rmLift, useKg: Boolean, c: StatsColors, index: I
     Column(
         Modifier
             .fillMaxWidth()
-            .statsEntrance(index)
             .clickableLabeled(
                 if (expanded) "Hide ${lift.exerciseName} trend"
                 else "Show estimated 1RM trend for ${lift.exerciseName}"
             ) { expanded = !expanded }
-            .padding(horizontal = STATS_GUTTER, vertical = 10.dp)
+            .padding(vertical = 10.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
@@ -122,7 +120,7 @@ private fun E1rmLiftRow(lift: E1rmLift, useKg: Boolean, c: StatsColors, index: I
                         trendColor = c.muted,
                         minValue = lo,
                         maxValue = hi,
-                        modifier = Modifier.fillMaxWidth().height(160.dp)
+                        modifier = Modifier.fillMaxWidth().height(STATS_CHART_H)
                     )
                     Spacer(Modifier.height(6.dp))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -140,7 +138,9 @@ private fun E1rmLiftRow(lift: E1rmLift, useKg: Boolean, c: StatsColors, index: I
             }
         }
 
-        Spacer(Modifier.height(10.dp))
-        HorizontalDivider(color = c.outline.copy(alpha = 0.25f))
+        if (showDivider) {
+            Spacer(Modifier.height(10.dp))
+            HorizontalDivider(color = c.outline.copy(alpha = 0.25f))
+        }
     }
 }

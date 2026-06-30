@@ -71,6 +71,8 @@ object PreferenceKeys {
     /** "MM/dd/yyyy" or "dd/MM/yyyy" */
     val DATE_FORMAT = stringPreferencesKey("date_format")
     val TIMEZONE = stringPreferencesKey("timezone")
+    /** IANA zone ids the user has starred — pinned to the top of the timezone picker. */
+    val FAVORITE_TIMEZONES = stringSetPreferencesKey("favorite_timezones")
     val TIME_FORMAT_24H = booleanPreferencesKey("time_format_24h")
     val FIRST_DAY_MONDAY = booleanPreferencesKey("first_day_monday")
 
@@ -210,6 +212,8 @@ object PreferenceKeys {
      *  and trigger the one-shot confetti/haptic celebration. -1 = never seen (first open). */
     val LAST_SEEN_RANK_TIER_ORDINAL = intPreferencesKey("last_seen_rank_tier_ordinal")
 
-    /** Last Stats sub-tab index the user settled on (0–4). Reopening Stats deep-links here (S4). */
-    val LAST_STATS_TAB = intPreferencesKey("last_stats_tab")
+    /** Last Stats sub-tab the user settled on, stored by enum NAME so inserting/reordering tabs can't
+     *  silently restore the wrong one (an ordinal Int would shift). Reopening Stats deep-links here (S4).
+     *  (The legacy ordinal key `last_stats_tab` is intentionally abandoned — unset here just lands on Overview.) */
+    val LAST_STATS_TAB_NAME = stringPreferencesKey("last_stats_tab_name")
 }

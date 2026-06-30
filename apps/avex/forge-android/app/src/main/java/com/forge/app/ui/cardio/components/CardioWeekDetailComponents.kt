@@ -80,23 +80,33 @@ internal fun SessionTimelineRow(
 }
 
 /**
- * The watch-only "steps through the day" graph — rendered ONLY when a wearable actually fed data.
- * The invitation to connect a wearable now lives in the dismissible banner, so there's no inline
- * placeholder here. Stays dormant until the Health Connect steps read is wired in.
+ * The watch-only "steps through the day" graph. Shows the hourly bars when a wearable actually fed
+ * data; once Forge holds the steps grant ([connected]) but that day has none synced yet, shows a quiet
+ * "no data yet" placeholder so the feature reads as live. When NOT connected it renders nothing — the
+ * invitation to connect lives in the dismissible banner, not here.
  */
 @Composable
 internal fun StepsByHourSection(
     wearable: CardioWearableDay?,
+    connected: Boolean,
     onBg: Color,
     muted: Color,
     outline: Color,
     accent: Color
 ) {
-    if (wearable == null || !wearable.hasData) return
+    val hasData = wearable != null && wearable.hasData
+    if (!hasData && !connected) return
     Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp)) {
         Text("STEPS THROUGH THE DAY", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
         Spacer(Modifier.height(10.dp))
-        HourlyStepsBars(wearable, muted = muted, outline = outline, accent = accent)
+        if (hasData) {
+            HourlyStepsBars(wearable!!, muted = muted, outline = outline, accent = accent)
+        } else {
+            Text(
+                "No steps from your watch for this day yet.",
+                style = MaterialTheme.typography.bodySmall, color = muted
+            )
+        }
     }
 }
 

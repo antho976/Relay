@@ -55,7 +55,13 @@ data class StatsUiState(
     /** Sessions per day of week + best training hour (Trends tab). */
     val trainingTimes: TrainingTimes? = null,
     /** PR count by day of week (Mon–Sun, index 0=Mon) (Trends tab). */
-    val prsByDayOfWeek: List<Int> = List(7) { 0 }
+    val prsByDayOfWeek: List<Int> = List(7) { 0 },
+    /** This ISO week vs last week, side by side (Overview tab). */
+    val weekComparison: PeriodComparison? = null,
+    /** All-time best set per lift, heaviest first (Overview "records"). */
+    val hallOfFame: List<PrRecord> = emptyList(),
+    /** Lifetime totals for the Overview at-a-glance tiles. */
+    val lifetime: LifetimeMetrics? = null
 )
 
 /** One ISO week's total tonnage for the Volume trend bars. */

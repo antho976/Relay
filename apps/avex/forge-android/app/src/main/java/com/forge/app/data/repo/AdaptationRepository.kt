@@ -315,6 +315,9 @@ class AdaptationRepository @Inject constructor(
             settingsRepository.likedExercises.first(),
             settingsRepository.dislikedExercises.first()
         )
+        // A deload regenerates a real plan, so a freestyle user who reached this is now following one —
+        // flip freestyle off (mirrors SettingsViewModel.generateDeloadWeek) so the plan actually surfaces.
+        if (settingsRepository.freestyleMode.first()) settingsRepository.setFreestyleMode(false)
         logAdviceApplied("deload.suggest")
     }
 }

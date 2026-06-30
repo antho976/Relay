@@ -47,6 +47,10 @@ data class CardioUiState(
     val historyExpanded: Boolean = false,
     /** True once the user permanently dismisses the "connect a watch/ring" hint banner. */
     val wearableHintDismissed: Boolean = false,
+    /** Forge holds the StepsRecord read grant — drives the steps placeholder (and hides the banner). */
+    val stepsConnected: Boolean = false,
+    /** Forge holds the ExerciseSession read grant — for GPS-route matching (also hides the banner). */
+    val routesConnected: Boolean = false,
     /** Distance/pace unit — true shows miles, false km. Derives from the weight unit when unset. */
     val useMiles: Boolean = false
 )

@@ -80,7 +80,9 @@ class RecapViewModel @Inject constructor(
             val avgDur = monthSessions.mapNotNull { it.durationMinutes() }.average().toInt()
             val bestDay = monthSessions.groupBy { it.dayKey }
                 .maxByOrNull { (_, sessions) -> sessions.sumOf { it.prCount } }
-                ?.key?.let { key -> Program.days.firstOrNull { it.key == key }?.defaultName }
+                // dayDisplayName resolves freestyle ("Open workout") and survives a day removed from the
+                // plan; the raw Program.days lookup returned null for both and silently dropped the row.
+                ?.key?.let { key -> Program.dayDisplayName(key) }
             MonthRecap(
                 month = now,
                 sessionCount = monthSessions.size,

@@ -85,7 +85,11 @@ fun ForgeSwitch(
         animationSpec = spring(stiffness = 700f),
         label = "switch-thumb-color"
     )
-    val borderColor = if (checked) checkedBorderColor else uncheckedBorderColor
+    val borderColor by animateColorAsState(
+        targetValue = if (checked) checkedBorderColor else uncheckedBorderColor,
+        animationSpec = spring(stiffness = 700f),
+        label = "switch-border"
+    )
 
     val alpha = if (enabled) 1f else 0.38f
 

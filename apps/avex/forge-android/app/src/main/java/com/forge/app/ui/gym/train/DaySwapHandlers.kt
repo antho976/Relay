@@ -60,17 +60,25 @@ private suspend fun DayViewModel.doSessionSwap(exerciseId: String, swap: Exercis
 }
 
 private fun DayViewModel.applyPersistentSwap(exerciseId: String, swap: ExerciseDef) {
+    // Drop a duplicate "Make default" for a slot already mid-swap: two concurrent runs would both
+    // capture the same pre-swap original and both raise the dislike prompt, so dismissing the first
+    // would instantly re-show the second. add() returns false when the slot is already in flight.
+    if (!swapsInFlight.add(exerciseId)) return
     viewModelScope.launch {
-        // Capture the exercise being replaced BEFORE the swap re-keys the card (#11): effectiveExerciseId
-        // is its ExerciseLibrary id (what dislikes key on), effectiveName its display name — both needed
-        // for the post-swap dislike prompt.
-        val ui = _state.value.exercises.firstOrNull { it.plan.id == exerciseId }
-        val originalId = ui?.effectiveExerciseId?.takeIf { it.isNotBlank() } ?: exerciseId
-        val originalName = ui?.effectiveName ?: originalId
+        try {
+            // Capture the exercise being replaced BEFORE the swap re-keys the card (#11): effectiveExerciseId
+            // is its ExerciseLibrary id (what dislikes key on), effectiveName its display name — both needed
+            // for the post-swap dislike prompt.
+            val ui = _state.value.exercises.firstOrNull { it.plan.id == exerciseId }
+            val originalId = ui?.effectiveExerciseId?.takeIf { it.isNotBlank() } ?: exerciseId
+            val originalName = ui?.effectiveName ?: originalId
 
-        customizationRepo.setSwap(exerciseId, swap.name, swap.unit.code, swappedExerciseId = swap.id)
-        doSessionSwap(exerciseId, swap)
-        maybeShowDislikePrompt(originalId, originalName, swap.id)
+            customizationRepo.setSwap(exerciseId, swap.name, swap.unit.code, swappedExerciseId = swap.id)
+            doSessionSwap(exerciseId, swap)
+            maybeShowDislikePrompt(originalId, originalName, swap.id)
+        } finally {
+            swapsInFlight.remove(exerciseId)
+        }
     }
 }
 
@@ -99,9 +107,15 @@ internal fun shouldShowDislikePrompt(
 
 private fun DayViewModel.dislikeSwappedExercise() {
     val prompt = _state.value.dislikeSwapPrompt ?: return
+    // Clear synchronously so a rapid double-tap on "Hide" reads null and bails — otherwise both taps
+    // see the prompt and fire setExercisesDisliked + the snackbar twice.
+    _state.update { it.copy(dislikeSwapPrompt = null) }
     viewModelScope.launch {
-        settingsRepo.setExerciseDisliked(prompt.exerciseId, true)
-        _state.update { it.copy(dislikeSwapPrompt = null) }
+        // A custom exercise spans several custom_… ids (one per day it's on); hide every copy, not just
+        // the swapped slot, so "won't suggest it again" holds everywhere. For a library id this is just
+        // the single id.
+        val ids = programCustomRepo.customSiblingIds(prompt.exerciseId)
+        settingsRepo.setExercisesDisliked(ids, true)
         _messages.trySend("Won't suggest ${prompt.exerciseName} again.")
     }
 }

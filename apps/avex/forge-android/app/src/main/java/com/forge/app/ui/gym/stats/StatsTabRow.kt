@@ -27,8 +27,10 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
-/** The Stats sub-tabs. Each groups a few tiers so the screen is short lists, not one long scroll. */
+/** The Stats sub-tabs. Each groups a few tiers so the screen is short lists, not one long scroll.
+ *  OVERVIEW is the landing tab — a populated at-a-glance read so first open is never blank. */
 enum class StatsTab(val label: String) {
+    OVERVIEW("Overview"),
     STRENGTH("Strength"),
     VOLUME("Volume"),
     BODY("Body"),

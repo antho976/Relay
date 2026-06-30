@@ -67,7 +67,7 @@ private val SEX_DETAILS = listOf(
 /** Plan source — generated, self-built in the editor, or no plan at all (freestyle logging). */
 private val PLAN_MODE_DETAILS = listOf(
     Triple("generated", "Build me a plan", "Forge picks your exercises from your gear and goal. Recommended."),
-    Triple("custom", "I'll make my own", "Skip the questions and build your own plan in the editor."),
+    Triple("custom", "I'll make my own", "Set your goal, then build your own plan from scratch."),
     Triple("freestyle", "Go with the flow", "No fixed plan. Just log what you did at the gym, whenever you want.")
 )
 

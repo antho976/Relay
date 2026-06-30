@@ -1,40 +1,29 @@
 package com.forge.app.ui.settings
 
-import android.content.Intent
-import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
-import com.forge.app.ui.common.ForgeSwitch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import androidx.health.connect.client.PermissionController
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
 /**
- * Settings → Recovery. Connects Health Connect so the coach can read sleep + resting heart rate
- * as recovery signals (finding #2/#3). Everything is opt-in and reversible — denying or never
+ * Settings → Recovery. Connects Health Connect so the coach and cardio screen can use what your
+ * watch and scale already track — sleep, resting heart rate, bodyweight, calories, steps and GPS.
+ * Each integration is its own [RecoveryCard]: a one-line summary up top, a "Why this?" expander for
+ * the full detail, and a single action. Everything is opt-in and reversible — denying or never
  * connecting leaves the coach exactly as it is, reading only on-app signals.
  */
 @Composable
@@ -44,8 +33,8 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
 
-    // Health Connect's own permission flow — the result tells us what the user granted. Recovery
-    // (sleep + resting HR) and bodyweight are separate launchers so each stays independently opt-in.
+    // Health Connect's own permission flow — the result tells us what the user granted. Each
+    // integration gets its own launcher so they stay independently opt-in.
     val permissionLauncher = rememberLauncherForActivityResult(
         contract = PermissionController.createRequestPermissionResultContract()
     ) { viewModel.refresh() }
@@ -68,208 +57,125 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
             .verticalScroll(rememberScrollState())
             .padding(bottom = 56.dp)
     ) {
-        Column(Modifier.padding(start = 24.dp, end = 24.dp, top = 20.dp, bottom = 12.dp)) {
+        Column(Modifier.padding(start = 24.dp, end = 24.dp, top = 20.dp, bottom = 8.dp)) {
             Text("RECOVERY", style = MaterialTheme.typography.headlineSmall, color = onBg)
             Text(
-                "Let the coach read your sleep and resting heart rate",
-                style = MaterialTheme.typography.labelSmall, color = muted
+                "Let the coach and cardio screen use what your watch and scale already track. " +
+                    "All opt-in, all on-device.",
+                style = MaterialTheme.typography.bodySmall, color = muted,
+                modifier = Modifier.padding(top = 6.dp)
             )
         }
-        SectionDivider()
 
-        Paragraph(
-            "Connect Health Connect and the coach can factor your recovery into its deload call — short " +
-                "sleep or an elevated resting heart rate add to the fatigue score, alongside your effort, " +
-                "moods and rest-day flags."
-        )
-        Paragraph(
-            "Health Connect is Android's on-device hub. Apps like Samsung Health and your watch write to " +
-                "it; Forge only reads sleep and resting heart rate from it. Nothing leaves your phone — Forge " +
-                "still has no Internet permission."
-        )
-        Paragraph(
-            "It's optional and additive: skip it and the coach works exactly as before. You can disconnect " +
-                "any time from the Health Connect app."
-        )
-
-        SectionLabel("STATUS")
-        when {
-            state.loading -> StatusLine("Checking…", muted)
-            state.needsUpdate -> {
-                StatusLine("Health Connect needs an update.", muted)
-                ActionButton("Update Health Connect") { openHealthConnectInStore(context) }
-            }
-            !state.available -> {
-                StatusLine("Health Connect isn't installed on this device.", muted)
-                ActionButton("Get Health Connect") { openHealthConnectInStore(context) }
-            }
-            state.granted -> {
-                StatusLine("Connected — reading sleep & resting heart rate.", onBg)
-                ActionButton("Manage in Health Connect") { openHealthConnectSettings(context) }
-            }
-            else -> {
-                StatusLine("Health Connect is available but not connected yet.", muted)
-                ActionButton("Connect Health Connect") { permissionLauncher.launch(viewModel.permissions) }
+        // ─── Sleep & resting HR — the core recovery signal (finding #2/#3) ─────────────────────
+        val (recoveryStatus, recoveryConnected) = when {
+            state.loading -> "…" to false
+            state.needsUpdate -> "Update" to false
+            !state.available -> "Get app" to false
+            state.granted -> "On" to true
+            else -> "Off" to false
+        }
+        RecoveryCard(
+            title = "Sleep & heart rate",
+            statusLabel = recoveryStatus,
+            connected = recoveryConnected,
+            details = "Health Connect is Android's on-device hub — apps like Samsung Health and your " +
+                "watch write to it, and Forge only reads sleep and resting heart rate. Nothing leaves " +
+                "your phone; Forge still has no Internet permission. Optional and additive: skip it and " +
+                "the coach works exactly as before, and you can disconnect any time from the Health " +
+                "Connect app."
+        ) {
+            CardText("Short sleep or an elevated resting heart rate add to the coach's fatigue score, sharpening its deload call.")
+            when {
+                state.loading -> {}
+                state.needsUpdate -> CardButton("Update Health Connect") { openHealthConnectInStore(context) }
+                !state.available -> CardButton("Get Health Connect") { openHealthConnectInStore(context) }
+                state.granted -> CardButton("Manage in Health Connect") { openHealthConnectSettings(context) }
+                else -> CardButton("Connect Health Connect") { permissionLauncher.launch(viewModel.permissions) }
             }
         }
 
-        // ─── Bodyweight sync (HC-2/HC-3) — only meaningful once a provider exists ──────────────
+        // The remaining integrations only mean anything once a Health Connect provider exists.
         if (state.available) {
-            Spacer(Modifier.height(20.dp))
-            SectionDivider()
-            Column(Modifier.padding(start = 24.dp, end = 24.dp, top = 16.dp, bottom = 4.dp)) {
-                Text("BODYWEIGHT SYNC", style = MaterialTheme.typography.headlineSmall, color = onBg)
-            }
-            Paragraph(
-                "Forge can read your latest weight from a smart scale that writes to Health Connect, so " +
-                    "your bodyweight trend stays current without typing it. You can also write your Forge " +
-                    "weigh-ins back, so other apps see them."
-            )
-            if (state.weightGranted) {
-                StatusLine("Connected — Forge can read and write your weight.", onBg)
-                ActionButton("Import latest weight now") { viewModel.importNow() }
-                state.importMessage?.let { StatusLine(it, muted) }
-                ToggleRow(
-                    label = "Write my weigh-ins to Health Connect",
-                    checked = state.writeBodyweight,
-                    onCheckedChange = { viewModel.setWriteBodyweight(it) }
-                )
-            } else {
-                StatusLine("Bodyweight isn't connected yet.", muted)
-                ActionButton("Connect bodyweight") { weightLauncher.launch(viewModel.weightPermissions) }
-            }
-
-            // ─── Workout calories (HC-4) — write a session's estimated burn out to HC ─────────────
-            Spacer(Modifier.height(20.dp))
-            SectionDivider()
-            Column(Modifier.padding(start = 24.dp, end = 24.dp, top = 16.dp, bottom = 4.dp)) {
-                Text("WORKOUT CALORIES", style = MaterialTheme.typography.headlineSmall, color = onBg)
-            }
-            Paragraph(
-                "Forge can write each finished session's estimated active calories to Health Connect, so " +
-                    "your daily energy total there includes your lifting. It's an estimate from session " +
-                    "length, your intensity, and your latest logged bodyweight — Forge has no heart-rate stream."
-            )
-            if (state.calorieGranted) {
-                StatusLine("Connected — Forge can write your session calories.", onBg)
-                ToggleRow(
-                    label = "Write my session calories to Health Connect",
-                    checked = state.writeCalories,
-                    onCheckedChange = { viewModel.setWriteCalories(it) }
-                )
-            } else {
-                StatusLine("Calorie sync isn't connected yet.", muted)
-                ActionButton("Connect calories") { calorieLauncher.launch(viewModel.caloriePermissions) }
+            // ─── Bodyweight sync (HC-2/HC-3) ──────────────────────────────────────────────────
+            RecoveryCard(
+                title = "Bodyweight sync",
+                statusLabel = if (state.weightGranted) "On" else "Off",
+                connected = state.weightGranted,
+                details = "Forge reads your latest weight from a smart scale that writes to Health " +
+                    "Connect, so your bodyweight trend stays current without typing it. Turn on " +
+                    "write-back and your Forge weigh-ins flow back to Health Connect for other apps to see."
+            ) {
+                CardText("Keep your weight trend current from a smart scale — both directions.")
+                if (state.weightGranted) {
+                    CardButton("Import latest weight now") { viewModel.importNow() }
+                    state.importMessage?.let { CardText(it) }
+                    CardToggleRow(
+                        label = "Write my weigh-ins to Health Connect",
+                        checked = state.writeBodyweight,
+                        onCheckedChange = { viewModel.setWriteBodyweight(it) }
+                    )
+                } else {
+                    CardButton("Connect bodyweight") { weightLauncher.launch(viewModel.weightPermissions) }
+                }
             }
 
-            // ─── Steps (read a watch/ring's step counts for the cardio screen) ─────────────────────
-            Spacer(Modifier.height(20.dp))
-            SectionDivider()
-            Column(Modifier.padding(start = 24.dp, end = 24.dp, top = 16.dp, bottom = 4.dp)) {
-                Text("STEPS & ACTIVITY", style = MaterialTheme.typography.headlineSmall, color = onBg)
-            }
-            Paragraph(
-                "Connect a watch or ring (via Samsung Health, Fitbit, etc.) that writes steps to Health " +
-                    "Connect, and Forge shows your steps-through-the-day graph on a cardio session and the " +
-                    "current week. Read-only — Forge never writes your steps anywhere."
-            )
-            if (state.stepsGranted) {
-                StatusLine("Connected — Forge can read your steps.", onBg)
-                ActionButton("Manage in Health Connect") { openHealthConnectSettings(context) }
-            } else {
-                StatusLine("Steps aren't connected yet.", muted)
-                ActionButton("Connect steps") { stepsLauncher.launch(viewModel.stepsPermissions) }
+            // ─── Workout calories (HC-4) ──────────────────────────────────────────────────────
+            RecoveryCard(
+                title = "Workout calories",
+                statusLabel = if (state.calorieGranted) "On" else "Off",
+                connected = state.calorieGranted,
+                details = "Forge writes each finished session's estimated active calories so your daily " +
+                    "energy total includes lifting. It's an estimate from session length, your intensity, " +
+                    "and your latest logged bodyweight — Forge has no heart-rate stream."
+            ) {
+                CardText("Add each session's estimated burn to your daily energy total.")
+                if (state.calorieGranted) {
+                    CardToggleRow(
+                        label = "Write my session calories to Health Connect",
+                        checked = state.writeCalories,
+                        onCheckedChange = { viewModel.setWriteCalories(it) }
+                    )
+                } else {
+                    CardButton("Connect calories") { calorieLauncher.launch(viewModel.caloriePermissions) }
+                }
             }
 
-            // ─── GPS routes (read a watch's outdoor sessions to draw their route shape) ─────────────
-            Spacer(Modifier.height(20.dp))
-            SectionDivider()
-            Column(Modifier.padding(start = 24.dp, end = 24.dp, top = 16.dp, bottom = 4.dp)) {
-                Text("GPS ROUTES", style = MaterialTheme.typography.headlineSmall, color = onBg)
+            // ─── Steps & activity (read a watch/ring's step counts for the cardio screen) ─────
+            RecoveryCard(
+                title = "Steps & activity",
+                statusLabel = if (state.stepsGranted) "On" else "Off",
+                connected = state.stepsGranted,
+                details = "Connect a watch or ring (via Samsung Health, Fitbit, etc.) that writes steps " +
+                    "to Health Connect and Forge shows your steps-through-the-day graph on a cardio " +
+                    "session and the current week. Read-only — Forge never writes your steps anywhere."
+            ) {
+                CardText("Show your steps-through-the-day graph on cardio sessions.")
+                if (state.stepsGranted) {
+                    CardButton("Manage in Health Connect") { openHealthConnectSettings(context) }
+                } else {
+                    CardButton("Connect steps") { stepsLauncher.launch(viewModel.stepsPermissions) }
+                }
             }
-            Paragraph(
-                "If your watch records outdoor runs or rides with GPS, Forge can draw the route's shape on " +
-                    "the matching cardio session. There's no map — just the path, offline. Health Connect " +
-                    "asks you to confirm each route the first time Forge draws it."
-            )
-            if (state.exerciseGranted) {
-                StatusLine("Connected — Forge can offer your GPS routes.", onBg)
-                ActionButton("Manage in Health Connect") { openHealthConnectSettings(context) }
-            } else {
-                StatusLine("GPS routes aren't connected yet.", muted)
-                ActionButton("Connect GPS routes") { exerciseLauncher.launch(viewModel.exercisePermissions) }
+
+            // ─── GPS routes (read a watch's outdoor sessions to draw their route shape) ────────
+            RecoveryCard(
+                title = "GPS routes",
+                statusLabel = if (state.exerciseGranted) "On" else "Off",
+                connected = state.exerciseGranted,
+                details = "If your watch records outdoor runs or rides with GPS, Forge draws the route's " +
+                    "shape on the matching cardio session. There's no map — just the path, offline. " +
+                    "Health Connect asks you to confirm each route the first time Forge draws it."
+            ) {
+                CardText("Draw your outdoor run or ride's route shape on its session.")
+                if (state.exerciseGranted) {
+                    CardButton("Manage in Health Connect") { openHealthConnectSettings(context) }
+                } else {
+                    CardButton("Connect GPS routes") { exerciseLauncher.launch(viewModel.exercisePermissions) }
+                }
             }
         }
 
-        Spacer(Modifier.height(12.dp))
-    }
-}
-
-@Composable
-private fun ToggleRow(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onBackground,
-            modifier = Modifier.weight(1f).padding(end = 16.dp)
-        )
-        ForgeSwitch(checked = checked, onCheckedChange = onCheckedChange)
-    }
-}
-
-@Composable
-private fun Paragraph(text: String) {
-    Text(
-        text,
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
-    )
-}
-
-@Composable
-private fun StatusLine(text: String, color: Color) {
-    Text(
-        text,
-        style = MaterialTheme.typography.bodyMedium,
-        color = color,
-        fontStyle = FontStyle.Italic,
-        modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp)
-    )
-}
-
-@Composable
-private fun ActionButton(label: String, onClick: () -> Unit) {
-    val onBg = MaterialTheme.colorScheme.onBackground
-    Button(
-        onClick = onClick,
-        shape = RoundedCornerShape(50),
-        colors = ButtonDefaults.buttonColors(containerColor = onBg, contentColor = MaterialTheme.colorScheme.background),
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 12.dp)
-    ) {
-        Text(label, style = MaterialTheme.typography.bodyMedium)
-    }
-}
-
-private const val HEALTH_CONNECT_PACKAGE = "com.google.android.apps.healthdata"
-
-/** Open the Play store page for the Health Connect provider (web fallback if Play is absent). */
-private fun openHealthConnectInStore(context: android.content.Context) {
-    val market = Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$HEALTH_CONNECT_PACKAGE"))
-    val web = Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=$HEALTH_CONNECT_PACKAGE"))
-    runCatching { context.startActivity(market) }.recoverCatching { context.startActivity(web) }
-}
-
-/** Open the Health Connect app's management UI so the user can review or revoke access. */
-private fun openHealthConnectSettings(context: android.content.Context) {
-    runCatching {
-        context.startActivity(Intent(androidx.health.connect.client.HealthConnectClient.ACTION_HEALTH_CONNECT_SETTINGS))
-    }.recoverCatching {
-        context.startActivity(context.packageManager.getLaunchIntentForPackage(HEALTH_CONNECT_PACKAGE)!!)
+        Spacer(Modifier.height(16.dp))
     }
 }

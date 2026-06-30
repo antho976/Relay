@@ -132,17 +132,32 @@ private fun TrainTab(
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         if (state.days.isEmpty()) {
-            Text(
-                "No plan yet.",
-                style = MaterialTheme.typography.headlineMedium,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Text(
-                "Build your own plan day by day, or just log workouts as you do them.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Button(onClick = onBuildPlan, modifier = Modifier.fillMaxWidth()) { Text("Build a plan") }
+            if (state.freestyleMode) {
+                // Freestyle: no plan by design — lead with logging, not a "build a plan" push.
+                Text(
+                    "No fixed plan.",
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    "Just log what you did, whenever you train. The Log a workout button below adds a session.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                // Custom user who hasn't built their plan yet — a plan mode, not the logger.
+                Text(
+                    "No plan yet.",
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                    "Build your own plan day by day, then train from it.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Button(onClick = onBuildPlan, modifier = Modifier.fillMaxWidth()) { Text("Build a plan") }
+            }
         } else {
             Text(
                 "Pick your day.",
@@ -177,10 +192,12 @@ private fun TrainTab(
             }
             OutlinedButton(onClick = onBuildPlan, modifier = Modifier.fillMaxWidth()) { Text("Edit plan") }
         }
-        // Always-available freestyle log — so a "go with the flow" user (or anyone wanting a one-off)
-        // can log what they did without following the plan.
-        OutlinedButton(onClick = onLogFreestyle, modifier = Modifier.fillMaxWidth()) {
-            Text("Log a workout (no plan)")
+        // Freestyle logging belongs to the "go with the flow" user only. Plan modes (generated / custom)
+        // train from their days, so a no-plan logger here would just muddy the screen.
+        if (state.freestyleMode) {
+            OutlinedButton(onClick = onLogFreestyle, modifier = Modifier.fillMaxWidth()) {
+                Text("Log a workout")
+            }
         }
     }
 

@@ -139,11 +139,19 @@ object Program {
     const val FREESTYLE_DAY_KEY = "freestyle"
 
     /** Human label for a session's day key: the program day's name, "Open workout" for a freestyle
-     *  session, or the raw key as a last resort. Use this instead of `day(key)?.defaultName ?: key`
+     *  session, or a humanized key as a last resort. Use this instead of `day(key)?.defaultName ?: key`
      *  on session-display surfaces so a freestyle log never shows the raw "freestyle" slug. */
     fun dayDisplayName(dayKey: String): String =
         if (dayKey == FREESTYLE_DAY_KEY) "Open workout"
-        else dayOrNull(dayKey)?.defaultName ?: dayKey
+        // A day removed from the plan has no defaultName; humanize its key ("upper_a" → "Upper A") so the
+        // row still reads cleanly (it survives removal by design) instead of leaking a raw slug.
+        else dayOrNull(dayKey)?.defaultName ?: humanizeDayKey(dayKey)
+
+    private fun humanizeDayKey(dayKey: String): String =
+        dayKey.split('_', '-', ' ')
+            .filter { it.isNotBlank() }
+            .joinToString(" ") { part -> part.replaceFirstChar { it.uppercaseChar() } }
+            .ifBlank { dayKey }
 
     private val defaultDays: List<DayPlan> = listOf(
         DayPlan(

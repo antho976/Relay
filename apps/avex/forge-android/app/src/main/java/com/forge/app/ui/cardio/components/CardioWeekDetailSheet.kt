@@ -61,8 +61,10 @@ fun CardioWeekDetailSheet(
     weekTargetMin: Int,
     cardioStreakDays: Int,
     bodyweightLb: Double?,
-    /** Watch-derived steps/route; null until the Health Connect read is wired in. */
+    /** Watch-derived steps/route for the current week (today); null when none loaded. */
     wearable: CardioWearableDay?,
+    /** Forge holds the steps grant — show the current-week steps section even before data syncs. */
+    wearableConnected: Boolean,
     todayDow: Int,
     zone: ZoneId,
     onOpenSession: (Long) -> Unit,
@@ -162,6 +164,8 @@ fun CardioWeekDetailSheet(
                     weekTargetMin = weekTargetMin,
                     cardioStreakDays = cardioStreakDays,
                     wearable = if (weeksAgoFor(page) == 0) wearable else null,
+                    // Steps are only loaded for the current week, so the placeholder belongs there too.
+                    wearableConnected = weeksAgoFor(page) == 0 && wearableConnected,
                     bodyweightLb = bodyweightLb,
                     zone = zone,
                     onOpenSession = onOpenSession,

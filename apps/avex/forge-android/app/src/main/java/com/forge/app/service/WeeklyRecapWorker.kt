@@ -56,27 +56,36 @@ class WeeklyRecapWorker @AssistedInject constructor(
 
         val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
-        // ── Coach-brief push (#13): notify when a NEW week brief is ready and unseen. Read-only —
-        // pendingBanner() compares the latest pass to lastSeenCoachWeekId, so a brief the user has
-        // already opened never re-pushes, and we don't run/regenerate the coach pass here.
-        runCatching { coachRepo.pendingBanner() }.getOrNull()?.let { banner ->
-            ForgeNotifications.ensureChannel(ctx, COACH_CHANNEL_ID, "Coach updates", "When your weekly coach brief is ready")
-            nm.notify(COACH_NOTIF_ID, ForgeNotifications.build(
-                ctx, COACH_CHANNEL_ID, "Your coach has an update", banner.text
-            ))
+        // The coach pushes (brief + deload) only apply when the user kept the coach AND follows a plan —
+        // a freestyle user has nothing to coach against, and a coach-off user opted out entirely.
+        val freestyle = settingsRepo.freestyleMode.first()
+        val coachActive = settingsRepo.coachEnabled.first() && !freestyle
+
+        // ── Coach-brief push (#13): notify when a NEW week brief is ready and unseen. pendingBanner()
+        // compares the latest pass to lastSeenCoachWeekId, so a brief the user has already opened never
+        // re-pushes. It self-guards on freestyle/coach-off too; the outer gate just avoids the work.
+        if (coachActive) {
+            runCatching { coachRepo.pendingBanner() }.getOrNull()?.let { banner ->
+                ForgeNotifications.ensureChannel(ctx, COACH_CHANNEL_ID, "Coach updates", "When your weekly coach brief is ready")
+                nm.notify(COACH_NOTIF_ID, ForgeNotifications.build(
+                    ctx, COACH_CHANNEL_ID, "Your coach has an update", banner.text
+                ))
+            }
         }
 
         // ── Deload suggestion: when accumulated fatigue crosses the deload line (DeloadAdvisor, which
         // already self-suppresses right after a deload). Its own channel so it's independently mutable;
         // a fixed id so it never stacks week-over-week. Uses the focused deloadSuggestion() — one
         // snapshot, no plateau-ladder/arbitration fan-out — so the weekly worker stays inside its window.
-        runCatching { adaptationRepo.deloadSuggestion() }.getOrNull()
-            ?.let { rec ->
-                ForgeNotifications.ensureChannel(ctx, DELOAD_CHANNEL_ID, "Deload suggestions", "When your fatigue suggests a lighter week")
-                nm.notify(DELOAD_NOTIF_ID, ForgeNotifications.build(
-                    ctx, DELOAD_CHANNEL_ID, "Time for a deload week", rec.reason
-                ))
-            }
+        if (coachActive) {
+            runCatching { adaptationRepo.deloadSuggestion() }.getOrNull()
+                ?.let { rec ->
+                    ForgeNotifications.ensureChannel(ctx, DELOAD_CHANNEL_ID, "Deload suggestions", "When your fatigue suggests a lighter week")
+                    nm.notify(DELOAD_NOTIF_ID, ForgeNotifications.build(
+                        ctx, DELOAD_CHANNEL_ID, "Time for a deload week", rec.reason
+                    ))
+                }
+        }
 
         val stats = statsRepo.observeWeeklyStats().firstOrNull() ?: return Result.success()
 
@@ -84,11 +93,17 @@ class WeeklyRecapWorker @AssistedInject constructor(
             // ── Re-engagement (#13): a whole week with no sessions = a lapse. Nudge gently — unless
             // the user is on holiday, where a "come back" would be guilt-trippy, not helpful.
             if (!isOnVacationToday()) {
+                // A freestyle user has no plan "waiting" — keep the nudge plan-agnostic so it doesn't
+                // reference something they didn't set up.
+                val body = if (freestyle)
+                    "No pressure — log whatever you train, whenever. Even one session this week keeps your momentum going."
+                else
+                    "No pressure — your plan's right where you left it. Even one session this week keeps your momentum going."
                 ForgeNotifications.ensureChannel(ctx, REENGAGE_CHANNEL_ID, "Come-back nudges", "A gentle nudge after a week away")
                 nm.notify(REENGAGE_NOTIF_ID, ForgeNotifications.build(
                     ctx, REENGAGE_CHANNEL_ID,
                     "Ready when you are",
-                    "No pressure — your plan's right where you left it. Even one session this week keeps your momentum going."
+                    body
                 ))
             }
             return Result.success()

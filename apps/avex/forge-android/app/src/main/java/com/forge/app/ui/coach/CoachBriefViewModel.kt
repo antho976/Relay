@@ -42,6 +42,13 @@ class CoachBriefViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
+            // Defense-in-depth: the coach entry points (hub tab + Settings row) are hidden for freestyle,
+            // but if this screen is ever reached in that mode, don't run brief()/ensureWeeklyPass against
+            // the empty program (it would write a coach_pass row and maybe auto-apply). Show the neutral empty.
+            if (settingsRepo.freestyleMode.first()) {
+                _state.value = UiState(loading = false, brief = null, countdown = null, showIntroCard = false)
+                return@launch
+            }
             val brief = runCatching { coachRepo.brief() }.getOrNull()
             // No brief yet (brand-new user, or the pass couldn't assemble): pull the lightweight
             // learning countdown so the empty state can explain itself with real numbers (CO1).

@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -67,12 +68,15 @@ class StatsViewModel @Inject constructor(
 
     fun clearBodyweightMessage() { _bodyweightMessage.value = null }
 
-    /** Last Stats sub-tab the user settled on, persisted so reopening Stats lands there (S4).
-     *  -1 = not yet loaded, so the screen only deep-links once a real stored value arrives. */
-    val lastStatsTab: StateFlow<Int> =
-        settingsRepo.lastStatsTab.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), -1)
+    /** Last Stats sub-tab the user settled on (by enum NAME), persisted so reopening Stats lands there
+     *  (S4). Maps an unset pref to the default tab so emitted values are always non-null — the screen
+     *  reserves null for "not yet loaded" and only deep-links once a real value arrives. */
+    val lastStatsTabName: StateFlow<String?> =
+        settingsRepo.lastStatsTabName
+            .map { it ?: StatsTab.OVERVIEW.name }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
-    fun saveStatsTab(index: Int) = viewModelScope.launch { settingsRepo.setLastStatsTab(index) }
+    fun saveStatsTab(name: String) = viewModelScope.launch { settingsRepo.setLastStatsTabName(name) }
 
     /** Re-check HC read permission (e.g. right before showing the quick-log sheet) so a grant made in
      *  Settings after this screen opened surfaces the import option without recreating the ViewModel. */
@@ -102,7 +106,10 @@ class StatsViewModel @Inject constructor(
             rpeDistribution = snapshot.rpeDistribution,
             avgRpe = snapshot.avgRpe,
             trainingTimes = snapshot.trainingTimes,
-            prsByDayOfWeek = snapshot.prsByDayOfWeek
+            prsByDayOfWeek = snapshot.prsByDayOfWeek,
+            weekComparison = snapshot.weekComparison,
+            hallOfFame = snapshot.hallOfFame,
+            lifetime = snapshot.lifetime
         )
     }.catch {
         // A crash in any stats aggregation drops to a non-loading ERROR state instead of an

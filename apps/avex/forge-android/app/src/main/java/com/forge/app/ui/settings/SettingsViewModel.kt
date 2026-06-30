@@ -52,6 +52,8 @@ data class SettingsUiState(
     val maxDbWeightLb: Double? = null,
     val accentColorHex: String = "",
     val timezone: String = java.util.TimeZone.getDefault().id,
+    /** IANA zone ids the user has starred — pinned to the top of the timezone picker. */
+    val favoriteTimezones: Set<String> = emptySet(),
     val daysPerWeek: Int = 4,
     val liked: Set<String> = emptySet(),
     val disliked: Set<String> = emptySet(),
@@ -205,6 +207,8 @@ class SettingsViewModel @Inject constructor(
         s.copy(accentColorHex = v)
     }.combine(settingsRepo.timezone) { s, v ->
         s.copy(timezone = v)
+    }.combine(settingsRepo.favoriteTimezones) { s, v ->
+        s.copy(favoriteTimezones = v)
     }.combine(settingsRepo.daysPerWeek) { s, v ->
         s.copy(daysPerWeek = v)
     }.combine(settingsRepo.likedExercises) { s, v ->
@@ -339,14 +343,16 @@ class SettingsViewModel @Inject constructor(
             .mapNotNull { runCatching { com.forge.app.program.Equipment.valueOf(it) }.getOrNull() }.toSet()
 
     /**
-     * Set the like/dislike state for one or more ids at once. A library exercise passes its single
-     * id; a custom exercise passes every `custom_…` id sharing its name so they flip together.
+     * Toggle the like/dislike state for one or more ids at once. A library exercise passes its single
+     * id; a custom exercise passes every `custom_…` id sharing its name so they flip together. The
+     * toggle decision is made against the freshly persisted set inside the DataStore edit (not the UI
+     * snapshot), so a rapid double-tap cycles the chip correctly instead of no-op'ing the second tap.
      */
-    fun setExercisesLiked(ids: Set<String>, liked: Boolean) = viewModelScope.launch {
-        settingsRepo.setExercisesLiked(ids, liked)
+    fun toggleExercisesLiked(ids: Set<String>) = viewModelScope.launch {
+        settingsRepo.toggleExercisesLiked(ids)
     }
-    fun setExercisesDisliked(ids: Set<String>, disliked: Boolean) = viewModelScope.launch {
-        settingsRepo.setExercisesDisliked(ids, disliked)
+    fun toggleExercisesDisliked(ids: Set<String>) = viewModelScope.launch {
+        settingsRepo.toggleExercisesDisliked(ids)
     }
     fun setSwapDislikePromptEnabled(enabled: Boolean) = viewModelScope.launch {
         settingsRepo.setSwapDislikePromptEnabled(enabled)
@@ -357,13 +363,20 @@ class SettingsViewModel @Inject constructor(
         settingsRepo.setRotationCounter(0)
     }
     fun rerollProgram() = viewModelScope.launch {
+        // Re-rolling produces a concrete plan, so a "go with the flow" user is now following one —
+        // flip freestyle off, else the fresh plan stays hidden behind the freestyle home.
+        val wasFreestyle = settingsRepo.freestyleMode.first()
         programRepository.reroll(
             buildParams(settingsRepo.daysPerWeek.first()),
             currentEquipment(),
             settingsRepo.likedExercises.first(),
             settingsRepo.dislikedExercises.first()
         )
-        _statusMessage.value = "Re-rolled — same split, fresh exercises. Open Gym to see it."
+        if (wasFreestyle) settingsRepo.setFreestyleMode(false)
+        _statusMessage.value = if (wasFreestyle)
+            "Re-rolled — you're now following a plan. Open Gym to see it."
+        else
+            "Re-rolled — same split, fresh exercises. Open Gym to see it."
     }
 
     // Goal/experience/problem-areas/priority/pins are staged config — applied when the user taps
@@ -389,29 +402,38 @@ class SettingsViewModel @Inject constructor(
      * change — including the day-count write — only commits past the guard).
      */
     fun generateProgram(days: Int) = viewModelScope.launch {
+        // Generating gives the user a real plan — leave freestyle so the home actually surfaces it.
+        val wasFreestyle = settingsRepo.freestyleMode.first()
         programChangeGuard.run {
             settingsRepo.setDaysPerWeek(days)
             programRepository.generate(
                 buildParams(days),
                 currentEquipment(), settingsRepo.likedExercises.first(), settingsRepo.dislikedExercises.first()
             )
-            _statusMessage.value = "New $days-day program generated. Open Gym to see it."
+            if (wasFreestyle) settingsRepo.setFreestyleMode(false)
+            _statusMessage.value = if (wasFreestyle)
+                "New $days-day program generated — you're now following a plan. Open Gym to see it."
+            else
+                "New $days-day program generated. Open Gym to see it."
         }
     }
 
     /** Regenerate the current split at reduced volume for a recovery week (Phase 4 periodization). */
     fun generateDeloadWeek() = viewModelScope.launch {
+        val wasFreestyle = settingsRepo.freestyleMode.first()
         programChangeGuard.run {
             val days = settingsRepo.daysPerWeek.first()
             programRepository.generate(
                 buildParams(days).copy(deload = true),
                 currentEquipment(), settingsRepo.likedExercises.first(), settingsRepo.dislikedExercises.first()
             )
+            if (wasFreestyle) settingsRepo.setFreestyleMode(false)
             _statusMessage.value = "Deload week generated — lighter volume. Open Gym to see it."
         }
     }
     fun setAccentColorHex(hex: String) = viewModelScope.launch { settingsRepo.setAccentColorHex(hex) }
     fun setTimezone(id: String) = viewModelScope.launch { settingsRepo.setTimezone(id) }
+    fun toggleFavoriteTimezone(id: String) = viewModelScope.launch { settingsRepo.toggleFavoriteTimezone(id) }
     fun exportLastSessionPdf() = viewModelScope.launch {
         val file = pdfExport.exportLastSessionPdf()
         if (file != null) _exportPath.value = file.absolutePath

@@ -8,7 +8,7 @@ object Routes {
     const val CARDIO = "cardio"
     const val TROPHIES = "trophies"
     const val NUTRITION = "nutrition"
-    const val SETTINGS = "settings"
+    const val SETTINGS = "settings?page={page}"
     const val SESSION_HISTORY = "gym/session-history"
     const val SESSION_DETAIL = "gym/session-detail/{sessionId}"
     const val CARDIO_SESSION = "cardio/session/{cardioId}"
@@ -34,6 +34,10 @@ object Routes {
     const val ARG_SKIP_WARMUP = "skipWarmup"
     const val ARG_SESSION_ID = "sessionId"
     const val ARG_CARDIO_ID = "cardioId"
+    const val ARG_SETTINGS_PAGE = "page"
+
+    /** Settings, optionally deep-linked to a sub-page (pass a [SettingsPage] name; empty = root list). */
+    fun settings(page: String? = null) = "settings?page=${page.orEmpty()}"
 
     fun gymDay(dayKey: String, skipWarmup: Boolean = false) =
         "gym/day/$dayKey?skipWarmup=$skipWarmup"

@@ -61,10 +61,24 @@ fun CardioScreen(
     // When set, the "See all" row opens the unified History page (where cardio + workouts merge);
     // null falls back to expanding the list inline.
     onOpenHistory: (() -> Unit)? = null,
+    // Tapping the "connect a watch/ring" banner — opens Settings → Recovery to grant the steps/GPS read.
+    onConnectWearable: () -> Unit = {},
     viewModel: CardioViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val goHome = com.forge.app.ui.common.LocalGoHome.current
+
+    // Re-check the Health Connect grants whenever the screen resumes — the user can connect steps/GPS
+    // in Settings (or the HC app) and come back, and the banner should vanish + the placeholders appear
+    // without a manual reload.
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) viewModel.refreshConnection()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     // Health Connect's per-route consent screen — returns the chosen session's route (or null if the
     // user declines). Launched from the session sheet's "Show GPS route" button.
@@ -108,6 +122,7 @@ fun CardioScreen(
             route = state.sessionRoute, // Matched watch GPS track, once available/consented (else null).
             onShowRoute = state.sessionRouteConsentId?.let { id -> { routeLauncher.launch(id) } },
             wearable = state.sessionWearable, // That day's watch steps (null until loaded / when none).
+            wearableConnected = state.stepsConnected, // Show an empty placeholder once connected.
             onEdit = { viewModel.editEntry(sessionEntry.id) },
             onDelete = { viewModel.requestDelete(sessionEntry.id) },
             onBack = viewModel::closeSessionDetail,
@@ -121,6 +136,7 @@ fun CardioScreen(
             cardioStreakDays = state.cardioStreakDays,
             bodyweightLb = state.bodyweightLb,
             wearable = state.weekWearable, // Today's watch steps on the current-week page (null when none).
+            wearableConnected = state.stepsConnected, // Show an empty placeholder once connected.
             todayDow = todayDow,
             zone = zone,
             onOpenSession = viewModel::openSessionDetail,
@@ -141,6 +157,7 @@ fun CardioScreen(
             onRequestDelete = viewModel::requestDelete,
             onSeeAll = onOpenHistory ?: viewModel::toggleHistoryExpanded,
             seeAllExpands = onOpenHistory == null,
+            onConnectWearable = onConnectWearable,
             onDismissHint = viewModel::dismissWearableHint
         )
     }
@@ -172,6 +189,7 @@ private fun CardioListContent(
     onRequestDelete: (Long) -> Unit,
     onSeeAll: () -> Unit,
     seeAllExpands: Boolean,
+    onConnectWearable: () -> Unit,
     onDismissHint: () -> Unit
 ) {
     val onBg = MaterialTheme.colorScheme.onBackground
@@ -180,8 +198,10 @@ private fun CardioListContent(
 
     val isEmpty = state.entries.isEmpty() && !state.isLoading
     // The connect-a-wearable hint only rides along once there's content (the first-run empty state has
-    // its own copy), and only until the user dismisses it for good.
-    val showWearableHint = !isEmpty && !state.wearableHintDismissed
+    // its own copy), until the user dismisses it for good — and never once a watch is actually connected
+    // (steps OR GPS granted), since by then the invite is moot and would just nag.
+    val showWearableHint = !isEmpty && !state.wearableHintDismissed &&
+        !(state.stepsConnected || state.routesConnected)
 
     Scaffold(
         topBar = {
@@ -212,7 +232,11 @@ private fun CardioListContent(
         ) {
             if (showWearableHint) {
                 item("watch-hint") {
-                    CardioWatchBanner(onDismiss = onDismissHint, onBg = onBg, muted = muted, outline = outline)
+                    CardioWatchBanner(
+                        onConnect = onConnectWearable,
+                        onDismiss = onDismissHint,
+                        onBg = onBg, muted = muted, outline = outline
+                    )
                 }
             }
 

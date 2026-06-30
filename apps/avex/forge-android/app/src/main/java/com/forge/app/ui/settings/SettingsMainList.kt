@@ -43,10 +43,13 @@ internal fun MainList(
             }
             // Persistent Coach entry: the Overview banner is conditional (no new brief ⇒ no banner),
             // so Settings is the one always-available door to the coach (its brief + what it's learning).
-            item("coach") {
-                SectionLabel("COACH")
-                SettingsNavRow("Your coach", "This week's brief · what it's tracking") { onOpenCoachBrief() }
-                SectionDivider()
+            // Hidden for freestyle users — there's no plan to coach against, matching the hub tab.
+            if (!state.freestyleMode) {
+                item("coach") {
+                    SectionLabel("COACH")
+                    SettingsNavRow("Your coach", "This week's brief · what it's tracking") { onOpenCoachBrief() }
+                    SectionDivider()
+                }
             }
             item("vacation") {
                 SettingsNavRow("Holiday / Vacation", "Pause your streak during a holiday") { onOpenPage(SettingsPage.Vacation) }
@@ -170,8 +173,7 @@ internal fun rowSubtitle(page: SettingsPage, s: SettingsUiState): String = when 
             "$on · quiet ${s.quietHoursStart.toString().padStart(2, '0')}:00–${s.quietHoursEnd.toString().padStart(2, '0')}:00"
         else on
     }
-    SettingsPage.Equipment -> if (s.availableEquipment.isEmpty()) "All equipment" else "${s.availableEquipment.size} selected"
-    SettingsPage.Program -> "${s.daysPerWeek} days/week · auto-generate"
+    SettingsPage.Program -> "${s.daysPerWeek} days/week · ${if (s.availableEquipment.isEmpty()) "all equipment" else "${s.availableEquipment.size} equipment"}"
     SettingsPage.Recovery -> "Health Connect · sleep & resting HR"
     SettingsPage.ExercisePrefs -> "${s.liked.size} liked · ${s.disliked.size} disliked"
     // Reached via a dedicated MainList row, not the search/nav grid — subtitle unused.

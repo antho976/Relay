@@ -382,7 +382,13 @@ class StatsRepository @Inject constructor(
         val avgRpe: Double? = null,
         /** Sessions per day of week + best training hour. */
         val trainingTimes: TrainingTimes? = null,
-        val prsByDayOfWeek: List<Int> = List(7) { 0 }
+        val prsByDayOfWeek: List<Int> = List(7) { 0 },
+        /** This-ISO-week vs last-week side-by-side (Overview tab). */
+        val weekComparison: PeriodComparison? = null,
+        /** All-time best set per lift, heaviest first (Overview "records"). */
+        val hallOfFame: List<PrRecord> = emptyList(),
+        /** Lifetime totals for the Overview tiles. */
+        val lifetime: LifetimeMetrics? = null
     )
 
     /**
@@ -402,9 +408,10 @@ class StatsRepository @Inject constructor(
             val volumeSets = allSets
                 .filter { it.sessionStartedAt >= volumeStartMs }
                 .map { SetWithExerciseId(it.weightLb, it.reps, it.exerciseId) }
-            // The two aggregate queries the trimmed screen still needs, fired concurrently.
+            // The aggregate queries the trimmed screen still needs, fired concurrently.
             val prTimesD = async { sessionDao.prSessionStartTimes() }
             val deloadRowsD = async { sessionDao.allFinishedVolumeDeload() }
+            val weekCompD = async { buildWeekComparison() }
             val prTimes = prTimesD.await()
             val deloadTrend = buildVolumeDeloadTrend(deloadRowsD.await())
             GymStats(
@@ -412,18 +419,40 @@ class StatsRepository @Inject constructor(
                 e1rmLifts = buildE1rmLifts(allSets),
                 strengthCurves = buildStrengthCurves(allSets),
                 weeklySetsByMuscle = buildWeeklySetsByMuscle(volumeSets),
-                plannedSetsByMuscle = com.forge.app.program.VolumeTargets.plannedWeeklySetsByMuscle(Program.days),
+                // Always compute the planned targets here (cheap, program-only); freestyle zeroes them in
+                // the trailing combine so toggling the mode doesn't re-run any of the heavy aggregations.
+                plannedSetsByMuscle =
+                    com.forge.app.program.VolumeTargets.plannedWeeklySetsByMuscle(Program.days),
                 weeklyTonnage = buildWeeklyTonnage(deloadTrend),
                 dailyActivity = buildDailyActivity(allSets),
                 rpeDistribution = buildRpeDistribution(allSets),
                 avgRpe = allSets.mapNotNull { it.rpe }.takeIf { it.isNotEmpty() }?.average(),
                 trainingTimes = buildTrainingTimes(allSets),
-                prsByDayOfWeek = buildPrsByDayOfWeek(prTimes)
+                prsByDayOfWeek = buildPrsByDayOfWeek(prTimes),
+                weekComparison = weekCompD.await(),
+                // Heaviest-first so the Overview "records" card leads with the biggest lifts; relative
+                // strength is filled in by the bodyweight combine below.
+                hallOfFame = buildHallOfFame(allSets).sortedByDescending { it.maxWeightLb },
+                lifetime = buildLifetimeMetrics(allSets)
             )
           }
         }.combine(bodyweightRepo.observeRecent(90)) { stats, bw ->
             // observeRecent is newest-first; reverse to chronological for the trend chart.
-            stats.copy(bodyweightPoints = bw.reversed().map { BodyweightPoint(it.recordedAt, it.weightLb) })
+            val points = bw.reversed().map { BodyweightPoint(it.recordedAt, it.weightLb) }
+            // Now that the latest bodyweight is known, fill in each record's relative strength (× BW).
+            // Done here (not in buildHallOfFame) so a bodyweight change re-derives it without re-running
+            // the whole set aggregation. Matches buildHallOfFame's 1-decimal rounding.
+            val latestBwLb = bw.firstOrNull()?.weightLb
+            val hallOfFame = if (latestBwLb != null && latestBwLb > 0)
+                stats.hallOfFame.map {
+                    it.copy(relativeStrength = (it.maxWeightLb / latestBwLb * 10).toInt() / 10.0)
+                }
+            else stats.hallOfFame
+            stats.copy(bodyweightPoints = points, hallOfFame = hallOfFame)
+        }.combine(settingsRepo.freestyleMode) { stats, freestyle ->
+            // No fixed plan (freestyle) → no planned volume targets to chart actual sets against. Folded
+            // in last so flipping freestyle only re-runs this cheap copy, not the aggregations above.
+            if (freestyle) stats.copy(plannedSetsByMuscle = emptyMap()) else stats
         }.flowOn(Dispatchers.Default)
     }
 

@@ -2,6 +2,7 @@ package com.forge.app.data.repo
 
 import com.forge.app.program.Program
 import com.forge.app.ui.gym.stats.state.DayTypeVolumeStats
+import com.forge.app.ui.gym.stats.state.LifetimeMetrics
 import com.forge.app.ui.gym.stats.state.MuscleSetCount
 import com.forge.app.ui.gym.stats.state.MuscleVolume
 import com.forge.app.ui.gym.stats.state.RepRangeDist
@@ -129,5 +130,25 @@ internal fun buildDayTypeBestVsAvg(
             sessionCount = row.sessionCount
         )
     }.sortedBy { it.dayKey }
+}
+
+/**
+ * Lifetime at-a-glance for the Stats Overview tiles: total training sessions (distinct session
+ * starts that logged working sets), lifetime working tonnage, and the per-session averages. Pure —
+ * folds the already-loaded working-set population, so it carries the same tracked/non-skipped/
+ * unassisted definition as the rest of the screen. Null when nothing's been logged.
+ */
+internal fun buildLifetimeMetrics(
+    allSets: List<com.forge.app.data.db.projections.SetWithExerciseAndSession>
+): LifetimeMetrics? {
+    if (allSets.isEmpty()) return null
+    val totalSessions = allSets.map { it.sessionStartedAt }.distinct().size
+    val lifetimeVolume = allSets.sumOf { (it.weightLb ?: 0.0) * it.reps }
+    return LifetimeMetrics(
+        lifetimeVolumeLb = lifetimeVolume,
+        totalSessions = totalSessions,
+        avgSessionVolumeLb = if (totalSessions > 0) lifetimeVolume / totalSessions else 0.0,
+        avgSetCount = if (totalSessions > 0) allSets.size.toDouble() / totalSessions else 0.0
+    )
 }
 

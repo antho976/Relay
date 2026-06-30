@@ -70,8 +70,10 @@ fun CardioSessionDetailSheet(
     /** Non-null when a matching watch session has a route that needs Health Connect consent first —
      *  shows a "Show GPS route" button that launches the consent flow. Ignored once [route] is set. */
     onShowRoute: (() -> Unit)? = null,
-    /** Watch-derived steps for the session's day; null until the Health Connect read is wired in. */
+    /** Watch-derived steps for the session's day; null until loaded / when none. */
     wearable: CardioWearableDay? = null,
+    /** Forge holds the steps grant — show the steps section (with a placeholder) even before data syncs. */
+    wearableConnected: Boolean = false,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
     onBack: () -> Unit,
@@ -139,11 +141,12 @@ fun CardioSessionDetailSheet(
                 }
             }
 
-            // Wearable-only sections — shown ONLY when a watch/ring actually fed data. With nothing
-            // connected there's no steps/route, so these stay hidden entirely (no empty placeholders).
-            if (!type.isRest && wearable != null && wearable.hasData) {
+            // Wearable steps — shown when a watch fed data, or as a quiet placeholder once connected
+            // (so a connected user sees the section is live before that day's steps sync). Hidden
+            // entirely on a rest day, and when nothing's connected (the banner carries the invite).
+            if (!type.isRest && (wearable?.hasData == true || wearableConnected)) {
                 item("steps") {
-                    StepsByHourSection(wearable = wearable, onBg = onBg, muted = muted, outline = outline, accent = accent)
+                    StepsByHourSection(wearable = wearable, connected = wearableConnected, onBg = onBg, muted = muted, outline = outline, accent = accent)
                 }
             }
             if (!type.isRest && route != null && route.size >= 2) {

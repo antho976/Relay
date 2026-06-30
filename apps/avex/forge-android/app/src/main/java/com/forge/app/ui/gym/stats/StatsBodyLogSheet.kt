@@ -45,7 +45,7 @@ internal fun BodyweightLogButton(c: StatsColors, onClick: () -> Unit) {
         Modifier
             .fillMaxWidth()
             .clickable(onClickLabel = "Log today's bodyweight", onClick = onClick)
-            .padding(horizontal = STATS_GUTTER, vertical = 12.dp),
+            .padding(vertical = 4.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {

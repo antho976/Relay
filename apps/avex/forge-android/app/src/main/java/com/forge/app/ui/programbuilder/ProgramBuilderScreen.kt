@@ -46,6 +46,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.ui.common.DraggableItem
 import com.forge.app.ui.common.dragContainer
 import com.forge.app.ui.common.rememberDragDropState
@@ -64,6 +65,12 @@ fun ProgramBuilderScreen(
     LaunchedEffect(Unit) { viewModel.loadIfNeeded(blank) }
     var editingDayUid by remember { mutableStateOf<String?>(null) }
     var showDiscard by remember { mutableStateOf(false) }
+    var showFreestyleSwitch by remember { mutableStateOf(false) }
+    val freestyleMode by viewModel.freestyleMode.collectAsStateWithLifecycle()
+
+    // Saving a plan flips a "go with the flow" user to follow-a-plan — confirm that switch first so it's
+    // never silent. Plan users save straight through.
+    fun attemptSave() { if (freestyleMode) showFreestyleSwitch = true else viewModel.save { onClose() } }
 
     val editingDay = editingDayUid?.let { viewModel.day(it) }
     if (editingDay != null) {
@@ -102,7 +109,7 @@ fun ProgramBuilderScreen(
                 },
                 navigationIcon = { IconButton(onClick = { attemptClose() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
                 actions = {
-                    TextButton(onClick = { viewModel.save { onClose() } }, enabled = !viewModel.saving) {
+                    TextButton(onClick = { attemptSave() }, enabled = !viewModel.saving) {
                         Text("Save", fontWeight = FontWeight.SemiBold)
                     }
                 },
@@ -160,6 +167,23 @@ fun ProgramBuilderScreen(
             text = { Text("Your edits to this plan haven't been saved.") },
             confirmButton = { TextButton(onClick = { showDiscard = false; onClose() }) { Text("Discard") } },
             dismissButton = { TextButton(onClick = { showDiscard = false }) { Text("Keep editing") } }
+        )
+    }
+
+    if (showFreestyleSwitch) {
+        AlertDialog(
+            onDismissRequest = { showFreestyleSwitch = false },
+            title = { Text("Switch to following a plan?") },
+            text = {
+                Text("Saving this plan turns off Go with the flow and starts you on it. You can switch " +
+                    "back to free logging anytime in Settings → Program.")
+            },
+            confirmButton = {
+                TextButton(onClick = { showFreestyleSwitch = false; viewModel.save { onClose() } }) {
+                    Text("Save & follow")
+                }
+            },
+            dismissButton = { TextButton(onClick = { showFreestyleSwitch = false }) { Text("Cancel") } }
         )
     }
 }

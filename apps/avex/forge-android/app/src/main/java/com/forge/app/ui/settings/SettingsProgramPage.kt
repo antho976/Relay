@@ -1,7 +1,6 @@
 @file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 package com.forge.app.ui.settings
 
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -40,13 +39,14 @@ import com.forge.app.ui.common.clickableLabeled
  * long crowded scroll (was ~10 stacked sections). The menu lists each sub-page with its
  * current value; tapping drills in. The primary "Generate" action stays on the menu root,
  * always one tap away. Nested navigation is local state (mirrors the Exercise-likes page),
- * so the outer Settings nav is untouched.
+ * so the outer Settings nav is untouched. The open section is hoisted to [SettingsScreen] so the
+ * top-bar back arrow and system back both return here (the menu) before exiting to Settings.
  */
-private enum class ProgramSection(val title: String) {
+internal enum class ProgramSection(val title: String) {
     Split("Split & schedule"),
     Goal("Goal & experience"),
     Emphasis("Emphasis & priorities"),
-    Maintenance("Auto-refresh & cardio"),
+    Equipment("Equipment"),
     Coach("Coach")
 }
 
@@ -54,28 +54,27 @@ private enum class ProgramSection(val title: String) {
 internal fun ProgramPage(
     state: SettingsUiState,
     vm: SettingsViewModel,
+    section: ProgramSection?,
+    onSectionChange: (ProgramSection?) -> Unit,
     modifier: Modifier = Modifier,
     onOpenCoachBrief: () -> Unit = {},
     onOpenBuilder: () -> Unit = {}
 ) {
-    var section by remember { mutableStateOf<ProgramSection?>(null) }
-    BackHandler(enabled = section != null) { section = null }
-
     when (section) {
-        null -> ProgramMenu(state, vm, modifier, onOpenBuilder) { section = it }
-        ProgramSection.Split -> ProgramSectionScaffold(ProgramSection.Split, modifier, onBack = { section = null }) {
+        null -> ProgramMenu(state, vm, modifier, onOpenBuilder) { onSectionChange(it) }
+        ProgramSection.Split -> ProgramSectionScaffold(ProgramSection.Split, modifier, onBack = { onSectionChange(null) }) {
             SplitSection(state, vm)
         }
-        ProgramSection.Goal -> ProgramSectionScaffold(ProgramSection.Goal, modifier, onBack = { section = null }) {
+        ProgramSection.Goal -> ProgramSectionScaffold(ProgramSection.Goal, modifier, onBack = { onSectionChange(null) }) {
             GoalSection(state, vm)
         }
-        ProgramSection.Emphasis -> ProgramSectionScaffold(ProgramSection.Emphasis, modifier, onBack = { section = null }) {
+        ProgramSection.Emphasis -> ProgramSectionScaffold(ProgramSection.Emphasis, modifier, onBack = { onSectionChange(null) }) {
             EmphasisSection(state, vm)
         }
-        ProgramSection.Maintenance -> ProgramSectionScaffold(ProgramSection.Maintenance, modifier, onBack = { section = null }) {
-            MaintenanceSection(state, vm)
+        ProgramSection.Equipment -> ProgramSectionScaffold(ProgramSection.Equipment, modifier, onBack = { onSectionChange(null) }) {
+            EquipmentSection(state, vm)
         }
-        ProgramSection.Coach -> ProgramSectionScaffold(ProgramSection.Coach, modifier, onBack = { section = null }) {
+        ProgramSection.Coach -> ProgramSectionScaffold(ProgramSection.Coach, modifier, onBack = { onSectionChange(null) }) {
             CoachSection(state, vm, onOpenCoachBrief)
         }
     }
@@ -97,8 +96,7 @@ private fun ProgramMenu(
         ProgramSection.Goal to "${goalLabel(state.userGoal)} · ${state.experience.replaceFirstChar { it.uppercase() }}",
         ProgramSection.Emphasis to "${emphasisLabel(state.programEmphasis)}" +
             if (priorityCount > 0) " · $priorityCount priority" else "",
-        ProgramSection.Maintenance to (if (state.rotationCadence == "never") "Auto-refresh off" else "Every ${state.rotationEveryN}") +
-            (if (state.cardioWeeklyTargetMin > 0) " · cardio ${state.cardioWeeklyTargetMin}m" else ""),
+        ProgramSection.Equipment to (if (state.availableEquipment.isEmpty()) "All equipment" else "${state.availableEquipment.size} selected"),
         ProgramSection.Coach to when {
             !state.coachEnabled -> "Off"
             state.coachMode == "auto" -> "Earning auto-apply"
@@ -114,7 +112,11 @@ private fun ProgramMenu(
         SettingsNavRow("Build / edit plan", "Add, rename, reorder or remove days & exercises") { onOpenBuilder() }
         SectionDivider()
         Spacer(Modifier.height(16.dp))
+        // The whole "make/refresh a plan" cluster lives together at the bottom: generate fresh,
+        // auto-refresh on a cadence, or refresh by hand.
         GenerateBlock(state, vm)
+        AutoRefreshBlock(state, vm)
+        ManualRefreshBlock(vm)
         Spacer(Modifier.height(16.dp))
         SectionDivider()
     }
@@ -132,6 +134,14 @@ private fun SplitSection(state: SettingsUiState, vm: SettingsViewModel) {
             PillChip("Follow a plan", !state.freestyleMode) { vm.setFreestyleMode(false) }
             PillChip("Go with the flow", state.freestyleMode) { vm.setFreestyleMode(true) }
         }
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "Switching never deletes anything — Go with the flow just hides your plan (it stays saved), " +
+                "and your logged workouts remain either way.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 24.dp)
+        )
     }
     if (state.weeklyVolume.isNotEmpty()) {
         ProgramBlock("Weekly volume", "Sets per muscle across your current week — tune days & priorities to rebalance.") {
@@ -245,8 +255,9 @@ private fun EmphasisSection(state: SettingsUiState, vm: SettingsViewModel) {
     SectionDivider()
 }
 
+/** Auto re-roll the exercises on a cadence. Lives in the Generate cluster at the bottom of the menu. */
 @Composable
-private fun MaintenanceSection(state: SettingsUiState, vm: SettingsViewModel) {
+private fun AutoRefreshBlock(state: SettingsUiState, vm: SettingsViewModel) {
     ProgramBlock("Auto-refresh", "Automatically re-roll the exercises (same split) after this many finished sessions.") {
         ChipFlow {
             PillChip("Never", state.rotationCadence == "never") { vm.setRotationCadence("never", state.rotationEveryN) }
@@ -257,17 +268,101 @@ private fun MaintenanceSection(state: SettingsUiState, vm: SettingsViewModel) {
             }
         }
     }
+}
+
+/** One-tap refreshes that sit beside Generate: swap exercises now, or drop into a recovery week. */
+@Composable
+private fun ManualRefreshBlock(vm: SettingsViewModel) {
     ProgramBlock("Manual refresh", "Re-roll keeps your split and swaps the exercises. Deload rebuilds the week at ~half volume for recovery.") {
         ChipFlow {
             PillChip("Re-roll exercises now", selected = false) { vm.rerollProgram() }
             PillChip("Deload week", selected = false) { vm.generateDeloadWeek() }
         }
     }
-    ProgramBlock("Weekly cardio goal", "A weekly cardio target tracked on the home screen. Log cardio in the Cardio tab whenever you do it.") {
+}
+
+/**
+ * Equipment lives inside Program now (the page is "Program & equipment"): the generator only picks
+ * movements you can do with what's selected here, plus the plate/dumbbell ceilings it loads against.
+ */
+@Composable
+private fun EquipmentSection(state: SettingsUiState, vm: SettingsViewModel) {
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val accent = MaterialTheme.colorScheme.primary
+    // Becomes true once equipment is touched this visit, so the regenerate prompt only nags after a change.
+    var equipmentEdited by remember { mutableStateOf(false) }
+
+    ProgramBlock(
+        "Available equipment",
+        "Generated programs only pick exercises you can do with the equipment you select here."
+    ) {
+        // Quick presets — one-tap fill. The Developer's preset is curated (a locked exercise pool).
         ChipFlow {
-            PillChip("Off", state.cardioWeeklyTargetMin == 0) { vm.setCardioWeeklyTargetMin(0) }
-            listOf(60, 120, 150, 200).forEach { m ->
-                PillChip("$m min", state.cardioWeeklyTargetMin == m) { vm.setCardioWeeklyTargetMin(m) }
+            com.forge.app.program.equipmentPresets.forEach { preset ->
+                val selected = state.availableEquipment == preset.equipment &&
+                    state.frozenExerciseIds == preset.frozenIds
+                PillChip(preset.label, selected) { vm.selectEquipmentPreset(preset); equipmentEdited = true }
+            }
+        }
+        if (state.frozenExerciseIds != null) {
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "This is a curated preset — its exercise list is locked and won't change. " +
+                    "Tap any equipment below to switch to a custom set.",
+                style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic,
+                modifier = Modifier.padding(horizontal = 24.dp)
+            )
+        }
+        Spacer(Modifier.height(12.dp))
+        ChipFlow {
+            com.forge.app.program.Equipment.entries.forEach { equip ->
+                val selected = equip.name in state.availableEquipment
+                PillChip(equip.display.uppercase(), selected) {
+                    val current = state.availableEquipment.toMutableSet()
+                    if (selected) current.remove(equip.name) else current.add(equip.name)
+                    vm.setAvailableEquipment(current)
+                    equipmentEdited = true
+                }
+            }
+        }
+        Spacer(Modifier.height(16.dp))
+        Text(
+            if (equipmentEdited) "You changed your equipment — regenerate so your program only uses what you've got."
+            else "Changed your equipment? Regenerate so the program matches what you've got.",
+            style = MaterialTheme.typography.bodySmall,
+            color = if (equipmentEdited) accent else muted,
+            fontStyle = FontStyle.Italic,
+            modifier = Modifier.padding(horizontal = 24.dp)
+        )
+        Spacer(Modifier.height(10.dp))
+        ChipFlow {
+            PillChip("Regenerate for this equipment", selected = equipmentEdited) {
+                vm.generateProgram(state.daysPerWeek); equipmentEdited = false
+            }
+        }
+    }
+
+    ProgramBlock(
+        "Weight per plate",
+        "For machines that load by counting plates (not a numbered stack): exercises are entered and " +
+            "shown as a plate count. This is what one plate weighs, used for PRs and volume."
+    ) {
+        ChipFlow {
+            listOf(5.0, 10.0, 15.0, 20.0, 25.0, 45.0).forEach { w ->
+                PillChip(com.forge.app.domain.units.formatWeight(w, state.useKg), state.plateWeightLb == w) { vm.setPlateWeightLb(w) }
+            }
+        }
+    }
+
+    ProgramBlock(
+        "Heaviest dumbbell",
+        "If your dumbbells max out (adjustable sets), heavy lifts in generated programs lean on " +
+            "the plate stack instead, and weight suggestions switch to rep progression at the ceiling."
+    ) {
+        ChipFlow {
+            PillChip("No limit", state.maxDbWeightLb == null) { vm.setMaxDbWeightLb(null) }
+            listOf(15.0, 20.0, 25.0, 30.0, 40.0, 50.0, 75.0, 100.0).forEach { w ->
+                PillChip(com.forge.app.domain.units.formatWeight(w, state.useKg), state.maxDbWeightLb == w) { vm.setMaxDbWeightLb(w) }
             }
         }
     }

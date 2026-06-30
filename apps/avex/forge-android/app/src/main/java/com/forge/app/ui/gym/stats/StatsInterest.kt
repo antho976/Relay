@@ -5,13 +5,12 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -25,7 +24,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
-import com.forge.app.ui.gym.stats.components.statsEntrance
 import com.forge.app.ui.gym.stats.state.DayLoad
 import com.forge.app.ui.gym.stats.state.RpeBucket
 import com.forge.app.ui.gym.stats.state.TrainingTimes
@@ -37,62 +35,56 @@ private val DOW = listOf("M", "T", "W", "T", "F", "S", "S")
 private fun rpeLabel(r: Double) = if (r % 1.0 == 0.0) r.toInt().toString() else "%.1f".format(r)
 
 /** Tier 8a — effort distribution as an RPE histogram. Mostly redundant with readiness, so: for interest. */
-internal fun LazyListScope.rpeHistogramSection(buckets: List<RpeBucket>, avgRpe: Double?, c: StatsColors) {
+@Composable
+internal fun ColumnScope.RpeHistogramContent(buckets: List<RpeBucket>, avgRpe: Double?, c: StatsColors) {
     if (buckets.isEmpty()) return
-    item("rpe-hist") {
-        val sorted = buckets.sortedBy { it.rpe }
-        val max = sorted.maxOf { it.count }.coerceAtLeast(1)
-        Column(Modifier.fillMaxWidth().statsEntrance(0).padding(horizontal = STATS_GUTTER)) {
-            Row(
-                Modifier.fillMaxWidth().height(72.dp),
-                verticalAlignment = Alignment.Bottom,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                sorted.forEach { b ->
-                    Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-                        Box(
-                            Modifier
-                                .width(16.dp)
-                                .height((b.count.toFloat() / max * 52f).dp.coerceAtLeast(2.dp))
-                                .clip(RoundedCornerShape(topStart = 3.dp, topEnd = 3.dp))
-                                .background(c.accent.copy(alpha = 0.7f))
-                        )
-                        Spacer(Modifier.height(3.dp))
-                        Text(rpeLabel(b.rpe), style = MaterialTheme.typography.labelSmall, color = c.muted)
-                    }
-                }
-            }
-            avgRpe?.let {
-                Spacer(Modifier.height(6.dp))
-                Text("Average RPE ${"%.1f".format(it)}", style = MaterialTheme.typography.labelSmall, color = c.muted)
+    val sorted = buckets.sortedBy { it.rpe }
+    val max = sorted.maxOf { it.count }.coerceAtLeast(1)
+    Row(
+        Modifier.fillMaxWidth().height(72.dp),
+        verticalAlignment = Alignment.Bottom,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        sorted.forEach { b ->
+            Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                Box(
+                    Modifier
+                        .width(16.dp)
+                        .height((b.count.toFloat() / max * 52f).dp.coerceAtLeast(2.dp))
+                        .clip(RoundedCornerShape(topStart = 3.dp, topEnd = 3.dp))
+                        .background(c.accent.copy(alpha = 0.7f))
+                )
+                Spacer(Modifier.height(3.dp))
+                Text(rpeLabel(b.rpe), style = MaterialTheme.typography.labelSmall, color = c.muted)
             }
         }
+    }
+    avgRpe?.let {
+        Spacer(Modifier.height(6.dp))
+        Text("Average RPE ${"%.1f".format(it)}", style = MaterialTheme.typography.labelSmall, color = c.muted)
     }
 }
 
 /** Tier 8b — time-of-day & PRs-by-weekday. The beautiful-but-useless trap: charted small, as one-liners. */
-internal fun LazyListScope.trainingPatternsSection(
+@Composable
+internal fun ColumnScope.TrainingPatternsContent(
     trainingTimes: TrainingTimes?,
     prsByDayOfWeek: List<Int>,
     c: StatsColors
 ) {
     if (trainingTimes == null && prsByDayOfWeek.all { it == 0 }) return
-    item("patterns") {
-        Column(Modifier.fillMaxWidth().statsEntrance(0).padding(horizontal = STATS_GUTTER)) {
-            trainingTimes?.let { tt ->
-                if (tt.sessionsByDayOfWeek.any { it > 0 }) {
-                    MiniDowBars("Sessions by day", tt.sessionsByDayOfWeek, c)
-                    Spacer(Modifier.height(8.dp))
-                }
-                tt.bestHourLabel?.let {
-                    Text("Most productive time: $it", style = MaterialTheme.typography.bodySmall, color = c.muted)
-                    Spacer(Modifier.height(8.dp))
-                }
-            }
-            if (prsByDayOfWeek.any { it > 0 }) {
-                MiniDowBars("PRs by day", prsByDayOfWeek, c)
-            }
+    trainingTimes?.let { tt ->
+        if (tt.sessionsByDayOfWeek.any { it > 0 }) {
+            MiniDowBars("Sessions by day", tt.sessionsByDayOfWeek, c)
+            Spacer(Modifier.height(8.dp))
         }
+        tt.bestHourLabel?.let {
+            Text("Most productive time: $it", style = MaterialTheme.typography.bodySmall, color = c.muted)
+            Spacer(Modifier.height(8.dp))
+        }
+    }
+    if (prsByDayOfWeek.any { it > 0 }) {
+        MiniDowBars("PRs by day", prsByDayOfWeek, c)
     }
 }
 
@@ -126,41 +118,38 @@ private fun MiniDowBars(label: String, counts: List<Int>, c: StatsColors) {
  * over training load, with form as their difference. The prettiest chart here and a genuine showpiece,
  * but kept strictly viz-only — it earns its place as a visual, not a decision gate.
  */
-internal fun LazyListScope.banisterSection(dailyActivity: List<DayLoad>, c: StatsColors) {
+@Composable
+internal fun ColumnScope.BanisterContent(dailyActivity: List<DayLoad>, c: StatsColors) {
     if (dailyActivity.size < 5) return
-    item("banister") {
-        // The 182-day EWMA sweep is recomputed only when the data changes, not on every recomposition.
-        val series = remember(dailyActivity) {
-            val today = LocalDate.now().toEpochDay()
-            val start = today - 182 + 1
-            val loadByDay = dailyActivity.associate { it.epochDay to it.volumeLb }
-            // Normalized EWMA so fitness (slow) and fatigue (fast) share a load scale; form = fitness −
-            // fatigue dips after hard blocks and recovers with rest — the classic shape.
-            val aFit = exp(-1.0 / 42.0)
-            val aFat = exp(-1.0 / 7.0)
-            var f = 0.0
-            var g = 0.0
-            val fitness = ArrayList<Float>()
-            val fatigue = ArrayList<Float>()
-            val form = ArrayList<Float>()
-            for (day in start..today) {
-                val load = loadByDay[day] ?: 0.0
-                f = f * aFit + (1 - aFit) * load
-                g = g * aFat + (1 - aFat) * load
-                fitness.add(f.toFloat()); fatigue.add(g.toFloat()); form.add((f - g).toFloat())
-            }
-            Triple(fitness, fatigue, form)
+    // The 182-day EWMA sweep is recomputed only when the data changes, not on every recomposition.
+    val series = remember(dailyActivity) {
+        val today = LocalDate.now().toEpochDay()
+        val start = today - 182 + 1
+        val loadByDay = dailyActivity.associate { it.epochDay to it.volumeLb }
+        // Normalized EWMA so fitness (slow) and fatigue (fast) share a load scale; form = fitness −
+        // fatigue dips after hard blocks and recovers with rest — the classic shape.
+        val aFit = exp(-1.0 / 42.0)
+        val aFat = exp(-1.0 / 7.0)
+        var f = 0.0
+        var g = 0.0
+        val fitness = ArrayList<Float>()
+        val fatigue = ArrayList<Float>()
+        val form = ArrayList<Float>()
+        for (day in start..today) {
+            val load = loadByDay[day] ?: 0.0
+            f = f * aFit + (1 - aFit) * load
+            g = g * aFat + (1 - aFat) * load
+            fitness.add(f.toFloat()); fatigue.add(g.toFloat()); form.add((f - g).toFloat())
         }
-        Column(Modifier.fillMaxWidth().statsEntrance(0).padding(horizontal = STATS_GUTTER)) {
-            BanisterChart(series.first, series.second, series.third, c.accent, c.muted, c.onBg, c.outline.copy(alpha = 0.12f),
-                Modifier.fillMaxWidth().height(150.dp))
-            Spacer(Modifier.height(6.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                LegendDot("Fitness", c.accent, c.muted)
-                LegendDot("Fatigue", c.muted, c.muted)
-                LegendDot("Form", c.onBg, c.muted)
-            }
-        }
+        Triple(fitness, fatigue, form)
+    }
+    BanisterChart(series.first, series.second, series.third, c.accent, c.muted, c.onBg, c.outline.copy(alpha = 0.12f),
+        Modifier.fillMaxWidth().height(STATS_CHART_H))
+    Spacer(Modifier.height(6.dp))
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        LegendDot("Fitness", c.accent, c.muted)
+        LegendDot("Fatigue", c.muted, c.muted)
+        LegendDot("Form", c.onBg, c.muted)
     }
 }
 

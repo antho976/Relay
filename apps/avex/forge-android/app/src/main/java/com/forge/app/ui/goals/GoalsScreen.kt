@@ -114,8 +114,15 @@ fun GoalsScreen(
 
                 Spacer(Modifier.height(8.dp))
                 val canAdd = state.addable.isNotEmpty()
+                // With no program (freestyle / custom-not-yet-built) "every exercise already has a goal"
+                // is misleading — there are no program exercises to add from in the first place.
+                val noProgram = com.forge.app.program.Program.days.isEmpty()
                 Text(
-                    if (canAdd) "+ Add a goal" else "Every program exercise already has a goal",
+                    when {
+                        canAdd -> "+ Add a goal"
+                        noProgram -> "Build a plan to set goals from its exercises"
+                        else -> "Every program exercise already has a goal"
+                    },
                     style = MaterialTheme.typography.labelLarge,
                     color = if (canAdd) accent else muted,
                     modifier = Modifier
