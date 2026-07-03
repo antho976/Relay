@@ -16,12 +16,12 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import com.forge.app.ui.common.EditorialHairline
 import com.forge.app.ui.common.ForgeSwitch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
@@ -93,22 +93,20 @@ internal fun StepPreview(days: List<GeneratedDay>, onRegenerate: () -> Unit) {
         OnboardingChip("↻ Re-roll", selected = false, onClick = onRegenerate)
         Spacer(Modifier.height(4.dp))
         days.forEach { day ->
-            Column(
-                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)).padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                Text(
-                    "${day.name} · ${day.exercises.size} exercises",
-                    style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                val names = day.exercises.joinToString(" · ") { ex ->
-                    ExerciseLibrary.byId(ex.libId)?.name ?: ex.libId
-                }.ifBlank { "Cardio" }
-                Text(names, style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
+            val cs = MaterialTheme.colorScheme
+            EditorialHairline(cs.outline)
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "${day.name} · ${day.exercises.size} exercises",
+                style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold,
+                color = cs.onSurface
+            )
+            val names = day.exercises.joinToString(" · ") { ex ->
+                ExerciseLibrary.byId(ex.libId)?.name ?: ex.libId
+            }.ifBlank { "Cardio" }
+            Text(names, style = MaterialTheme.typography.bodySmall,
+                color = cs.onSurfaceVariant)
+            Spacer(Modifier.height(6.dp))
         }
     }
 }

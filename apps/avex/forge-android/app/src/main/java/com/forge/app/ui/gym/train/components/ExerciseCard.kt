@@ -143,8 +143,10 @@ fun ExerciseCard(
             ) {
                 Spacer(Modifier.height(8.dp))
 
-                val isBodyweight = state.plan.unit == ExerciseUnit.BODYWEIGHT
-                val isPlates = state.plan.unit == ExerciseUnit.PLATES
+                // Read the EFFECTIVE unit (swap-aware), not the static plan's, so swapping a
+                // bodyweight slot for a weighted one (or vice-versa) switches the weight type too.
+                val isBodyweight = state.effectiveUnit == ExerciseUnit.BODYWEIGHT
+                val isPlates = state.effectiveUnit == ExerciseUnit.PLATES
 
                 // Exercise counter. The "⋯ options" button was removed (its actions — swap via the
                 // name, skip/rate via the footer, rest timer via the timer bubble — are all reachable

@@ -12,6 +12,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -31,7 +32,15 @@ fun ProgressPhotoImage(file: File, modifier: Modifier = Modifier, reqPx: Int = 6
     }
     val bmp = bitmap
     if (bmp != null) {
-        Image(bitmap = bmp, contentDescription = "Progress photo", modifier = modifier, contentScale = ContentScale.Crop)
+        Image(
+            bitmap = bmp,
+            contentDescription = "Progress photo",
+            modifier = modifier,
+            contentScale = ContentScale.Crop,
+            // Bilinear/mipmapped sampling instead of the default Low — noticeably crisper when the
+            // bitmap is scaled to fill (esp. the full-width profile banner).
+            filterQuality = FilterQuality.High
+        )
     } else {
         Box(modifier.background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)))
     }
@@ -44,8 +53,25 @@ private fun decodeOriented(file: File, reqPx: Int): Bitmap? {
     var sample = 1
     val maxDim = maxOf(bounds.outWidth, bounds.outHeight)
     while (maxDim / (sample * 2) >= reqPx) sample *= 2
-    val opts = BitmapFactory.Options().apply { inSampleSize = sample }
-    val bmp = BitmapFactory.decodeFile(file.path, opts) ?: return null
+    val opts = BitmapFactory.Options().apply {
+        inSampleSize = sample
+        inPreferredConfig = Bitmap.Config.ARGB_8888
+    }
+    val decoded = BitmapFactory.decodeFile(file.path, opts) ?: return null
+
+    // inSampleSize only halves, so `decoded` can be up to ~2× the target. Scale it precisely to reqPx
+    // with a bilinear filter: caps memory (no oversized bitmap held for the view) and reads sharper
+    // than letting the GPU rescale a ragged power-of-two sample at draw time.
+    val decodedMax = maxOf(decoded.width, decoded.height)
+    val bmp = if (decodedMax > reqPx && decodedMax > 0) {
+        val ratio = reqPx.toFloat() / decodedMax
+        Bitmap.createScaledBitmap(
+            decoded,
+            (decoded.width * ratio).toInt().coerceAtLeast(1),
+            (decoded.height * ratio).toInt().coerceAtLeast(1),
+            true
+        ).also { if (it !== decoded) decoded.recycle() }
+    } else decoded
 
     val orientation = runCatching {
         ExifInterface(file.path).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)

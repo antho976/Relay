@@ -12,3 +12,11 @@ import java.time.ZoneId
 fun mondayStartMs(nowMs: Long, zone: ZoneId = ZoneId.systemDefault()): Long =
     Instant.ofEpochMilli(nowMs).atZone(zone).toLocalDate()
         .with(DayOfWeek.MONDAY).atStartOfDay(zone).toInstant().toEpochMilli()
+
+/**
+ * Epoch-ms of the start (00:00 on the 1st) of the calendar month containing [nowMs], in [zone].
+ * The "this month" boundary for month-scoped custom goals — mirrors [mondayStartMs].
+ */
+fun monthStartMs(nowMs: Long, zone: ZoneId = ZoneId.systemDefault()): Long =
+    Instant.ofEpochMilli(nowMs).atZone(zone).toLocalDate()
+        .withDayOfMonth(1).atStartOfDay(zone).toInstant().toEpochMilli()

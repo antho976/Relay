@@ -4,7 +4,6 @@ import android.content.Intent
 import android.net.Uri
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -18,6 +17,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -39,9 +39,9 @@ import com.forge.app.ui.common.clickableLabeled
  */
 
 /**
- * One Health Connect integration: a bordered card with a title + status pill, a body (summary,
- * action, any toggles) and a "Why this?" expander that reveals [details] on demand. The collapsed
- * detail is what keeps the page short while the cards stay roomy.
+ * One Health Connect integration: an open section with a title + status pill, a body (summary,
+ * action, any toggles) and a "Why this?" expander that reveals [details] on demand. Sits directly
+ * on the page background — no card shell.
  */
 @Composable
 internal fun RecoveryCard(
@@ -53,13 +53,16 @@ internal fun RecoveryCard(
 ) {
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val outline = MaterialTheme.colorScheme.outline
     var expanded by rememberSaveable(title) { mutableStateOf(false) }
+    HorizontalDivider(
+        modifier = Modifier.padding(horizontal = 24.dp),
+        color = outline.copy(alpha = 0.25f)
+    )
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 20.dp, vertical = 8.dp)
-            .border(1.dp, muted.copy(alpha = 0.22f), RoundedCornerShape(18.dp))
-            .padding(horizontal = 18.dp, vertical = 16.dp)
+            .padding(horizontal = 24.dp, vertical = 16.dp)
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -94,18 +97,15 @@ internal fun RecoveryCard(
     }
 }
 
-/** Small connection indicator: a filled dot + label, tinted onBackground when connected. */
+/** Small connection indicator: a filled dot + label — passive status, no border shell. */
 @Composable
 private fun StatusPill(label: String, connected: Boolean) {
     val color = if (connected) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onSurfaceVariant
     Row(
-        modifier = Modifier
-            .border(1.dp, color.copy(alpha = 0.4f), RoundedCornerShape(50))
-            .padding(horizontal = 10.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        Spacer(Modifier.size(7.dp).background(color, CircleShape))
+        Spacer(Modifier.size(7.dp).background(color.copy(alpha = if (connected) 1f else 0.5f), CircleShape))
         Text(label.uppercase(), style = MaterialTheme.typography.labelSmall, color = color, letterSpacing = 0.5.sp)
     }
 }

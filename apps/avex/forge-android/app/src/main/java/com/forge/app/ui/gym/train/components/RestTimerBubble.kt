@@ -351,7 +351,7 @@ fun RestTimerControlsDialog(
                     modifier = Modifier.clickable(onClick = onReset).padding(4.dp)
                 )
                 Text(
-                    "skip",
+                    "done",
                     style = MaterialTheme.typography.labelSmall,
                     color = muted.copy(alpha = 0.6f),
                     modifier = Modifier.clickable(onClick = onSkip).padding(4.dp)

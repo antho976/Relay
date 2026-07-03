@@ -347,10 +347,11 @@ internal fun InlineRestTimer(timer: RestTimerState, onTap: () -> Unit, onSkip: (
             Text("/ ${timer.totalSeconds.toTimerLabel()}", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.45f), fontSize = 9.sp)
         }
         HorizontalDivider(modifier = Modifier.weight(1f), color = muted.copy(alpha = 0.25f))
-        // One-tap skip — the common "I'm ready, move on" action without opening a dialog.
+        // One-tap end-rest — the common "I'm ready, move on" action without opening a dialog.
+        // Always "done" (you finish the rest normally, not "skip" it).
         if (onSkip != null) {
             Text(
-                if (isReady) "done" else "skip",
+                "done",
                 style = MaterialTheme.typography.labelSmall,
                 color = (if (isReady) readyColor else muted).copy(alpha = 0.8f),
                 fontSize = 9.sp,
@@ -382,7 +383,7 @@ internal fun ExerciseCardFooter(
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
         ActionChip(icon = Icons.Outlined.Description, label = "NOTE") { showNote = !showNote }
         ActionChip(icon = Icons.Outlined.Visibility, label = "VIDEO") {
-            runCatching { context.startActivity(youTubeSearchIntent(state.effectiveName, state.plan.unit == ExerciseUnit.PLATES)) }
+            runCatching { context.startActivity(youTubeSearchIntent(state.effectiveName, state.effectiveUnit == ExerciseUnit.PLATES)) }
         }
         ActionChip(icon = Icons.Outlined.SwapHoriz, label = "SWAP") { onOpenSwapPicker() }
         ActionChip(icon = Icons.Outlined.SkipNext, label = if (state.skipped) "UN-SKIP" else "SKIP") { onToggleSkipped() }

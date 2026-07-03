@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -29,13 +30,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.forge.app.ui.common.EditorialHairline
 import com.forge.app.ui.common.rpeLabel
 import com.forge.app.ui.gym.session.state.ExerciseDetail
 import com.forge.app.ui.gym.session.state.SessionChartStyle
@@ -45,9 +46,13 @@ import com.forge.app.ui.gym.stats.components.staggeredProgress
 import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.theme.LocalForgeSettings
 
-// ─── Card shell + style toggle ─────────────────────────────────────────────────
+// ─── Open section anchor + style toggle ────────────────────────────────────────
 
-/** The surfaceVariant card shell with a title and its OWN bars/line toggle (one "stat" per card). */
+/**
+ * Open editorial section for a metric: hairline above, small-caps mono label on the left, the
+ * bars/line style toggle right-aligned, then content directly on the page — no card shell, no fill,
+ * no border. The accent wash on tappable expand/collapse rows inside [content] remains.
+ */
 @Composable
 private fun MetricCardShell(
     title: String,
@@ -59,35 +64,31 @@ private fun MetricCardShell(
     outline: Color,
     content: @Composable () -> Unit
 ) {
-    // A faint accent wash + hairline accent border gives the stats box its own identity vs the plain
-    // surfaceVariant cards elsewhere; softer 16dp corners.
-    val cardBg = lerp(MaterialTheme.colorScheme.surfaceVariant, accent, 0.05f)
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(cardBg)
-            .border(1.dp, accent.copy(alpha = 0.18f), RoundedCornerShape(16.dp))
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
+    // One Column root: call sites wrap this in a Box (statsEntrance), where loose siblings would
+    // stack on top of each other instead of flowing vertically.
+    Column(Modifier.fillMaxWidth()) {
+        EditorialHairline(outline)
+        Spacer(Modifier.height(12.dp))
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                title,
-                style = MaterialTheme.typography.labelLarge,
+                title.uppercase(),
+                style = MaterialTheme.typography.labelMedium,
                 color = muted,
-                fontWeight = FontWeight.SemiBold,
+                letterSpacing = 1.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f)
             )
             StyleToggle(style, onStyle, onBg, muted, accent, outline)
         }
-        content()
+        Spacer(Modifier.height(12.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            content()
+        }
     }
 }
 

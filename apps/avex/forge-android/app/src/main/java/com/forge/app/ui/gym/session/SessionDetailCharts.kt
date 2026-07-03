@@ -20,7 +20,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -86,7 +85,9 @@ internal fun PerExerciseSetChart(
     style: SessionChartStyle,
     accent: Color,
     muted: Color,
-    outline: Color
+    outline: Color,
+    /** Background color of the surface the chart sits on — used for the dot ring cut-out in LINE mode. */
+    pageBg: Color = MaterialTheme.colorScheme.background
 ) {
     // RPE is only meaningful on the sets that logged one — drop the rest so unrated sets don't read
     // as a 0 trough. Every other metric maps one value per set.
@@ -104,7 +105,7 @@ internal fun PerExerciseSetChart(
 
     when {
         style != SessionChartStyle.LINE -> SetBars(values, metric, accent)
-        values.size >= 2 -> PerSetLine(values, metric, accent)
+        values.size >= 2 -> PerSetLine(values, metric, accent, pageBg)
         // A single-set exercise can't draw a line — show one endpoint dot so Line mode stays
         // visually uniform instead of silently flipping back to a bar.
         else -> SinglePointMark(accent)
@@ -118,14 +119,13 @@ internal fun PerExerciseSetChart(
  * marker is emphasized with a hollow centre. Reveals left→right; a flat series draws as a centred line.
  */
 @Composable
-private fun PerSetLine(values: List<Double>, metric: SessionMetric, accent: Color) {
+private fun PerSetLine(values: List<Double>, metric: SessionMetric, accent: Color, pageBg: Color) {
     // Reveal starts immediately but rides the slow, gentle draw curve so the line glides in over
     // ~0.9 s instead of snapping — the default enter tween front-loads the motion and reads as sharp.
     val progress = rememberDrawProgress(metric, ForgeMotion.drawTween())
-    // The marker ring "cuts" each point out of the card so dots read crisply on the accent-washed
-    // surface — matched to the expanded row's exact background (cardBg + the row's accent wash).
-    val cardBg = lerp(MaterialTheme.colorScheme.surfaceVariant, accent, 0.05f)
-    val haloBg = lerp(cardBg, accent, 0.10f)
+    // The marker ring "cuts" each point out of the page background so dots read crisply on the open
+    // surface — now uses pageBg directly since there's no card fill beneath the chart.
+    val haloBg = pageBg
     val lo = values.min()
     val hi = values.max()
     val pad = if (hi - lo < 1e-6) 1.0 else 0.0

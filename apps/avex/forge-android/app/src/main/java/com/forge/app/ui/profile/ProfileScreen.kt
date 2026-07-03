@@ -83,8 +83,12 @@ fun ProfileScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val showRankUpCelebration by viewModel.showRankUpCelebration.collectAsStateWithLifecycle()
+    val bodyweight by viewModel.bodyweight.collectAsStateWithLifecycle()
+    val weightConnected by viewModel.weightConnected.collectAsStateWithLifecycle()
+    val bodyweightMessage by viewModel.bodyweightMessage.collectAsStateWithLifecycle()
     var viewing by remember { mutableStateOf<ProgressPhoto?>(null) }
     var showXpInfo by remember { mutableStateOf(false) }
+    var showWeightSheet by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val haptic = LocalHapticFeedback.current
@@ -122,7 +126,8 @@ fun ProfileScreen(
         Scaffold(
             topBar = {
                 TopAppBar(
-                    title = { Text("Profile.", style = MaterialTheme.typography.headlineMedium) },
+                    // Title intentionally empty — the bumped avatar + name hero below *is* the title.
+                    title = {},
                     navigationIcon = {
                         if (onBack != null) IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
                     },
@@ -150,103 +155,135 @@ fun ProfileScreen(
             containerColor = Color.Transparent
         ) { inner ->
             if (state.loading) {
-                ProfileSkeleton(Modifier.fillMaxSize().padding(inner).padding(horizontal = 20.dp))
+                ProfileSkeleton(
+                    Modifier.fillMaxSize().padding(bottom = inner.calculateBottomPadding()),
+                    topInset = inner.calculateTopPadding()
+                )
             } else Column(
-                Modifier.fillMaxSize().padding(inner).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp)
+                // Don't apply the TOP inset — the cover banner draws to the very top of the screen
+                // (behind the status bar), filling the whole page. Only the bottom bar is cleared.
+                Modifier.fillMaxSize().padding(bottom = inner.calculateBottomPadding()).verticalScroll(rememberScrollState())
             ) {
-                // ── Identity hero (entrance index 0) ─────────────────────────────
-                Column(Modifier.statsEntrance(0)) {
+                // ── Full-bleed identity banner (entrance index 0) — the profile photo as a cover ──
+                Box(Modifier.statsEntrance(0)) {
                     ProfileHeaderCard(
                         name = state.name,
                         sinceLabel = state.sinceLabel,
                         streakDays = state.streakDays,
+                        longestStreakDays = state.longestStreakDays,
                         hasAvatar = state.hasAvatar,
                         avatarFile = viewModel.avatarFile(),
                         avatarStamp = state.avatarStamp,
                         onSetName = viewModel::setUserName,
                         onPickAvatar = { pickAvatar() },
-                        onBg = onBg, muted = muted, accent = accent
+                        onBg = onBg, muted = muted, accent = accent,
+                        topInset = inner.calculateTopPadding()
                     )
                 }
+
+                // Sections sit openly on the page. Each applies the side margins itself so the
+                // gallery filmstrip can break out and run edge-to-edge like the cover above.
+                val pad = Modifier.fillMaxWidth().padding(horizontal = 20.dp)
 
                 // First-touch (D1): a brand-new profile is all dashes and empty rings — say what fills it.
                 if (state.totalSessions == 0 && !LocalForgeSettings.current.firstWorkoutDone) {
                     Spacer(Modifier.height(20.dp))
                     FirstTouchTip(
                         "Your profile starts with your first set.",
-                        "Log a workout and this page fills in — your lifetime totals, signature lifts, goals and progress photos."
+                        "Log a workout and this page fills in — your lifetime totals, signature lifts, goals and progress photos.",
+                        modifier = pad
                     )
                 }
 
-                // ── Rank track (gamification, index 1) ───────────────────────────
+                // ── Bodyweight (index 1) — surfaced right under the cover; it's the number Antho ──
+                //    checks most, so it leads the page rather than sitting below the lifetime tallies.
+                Spacer(Modifier.height(24.dp))
+                Column(pad.statsEntrance(1)) {
+                    BodySection(
+                        entries = bodyweight,
+                        onLog = {
+                            // Fresh sheet: drop any prior result line and re-check HC permission so a
+                            // grant made in Settings since this screen opened surfaces the import option.
+                            viewModel.clearBodyweightMessage()
+                            viewModel.refreshWeightConnected()
+                            showWeightSheet = true
+                        },
+                        onBg = onBg, muted = muted, accent = accent
+                    )
+                }
+
+                // ── Rank track (gamification, index 2) ───────────────────────────
                 if (Features.SHOW_GAMIFICATION) state.rank?.let { r ->
-                    Spacer(Modifier.height(20.dp))
-                    Column(Modifier.statsEntrance(1)) {
+                    Spacer(Modifier.height(28.dp))
+                    Column(pad.statsEntrance(2)) {
                         RankSection(r, muted, accent, outline, onInfo = { showXpInfo = true })
                     }
                 }
 
-                // ── All-time stat tiles (index 2) ────────────────────────────────
-                Spacer(Modifier.height(24.dp))
-                Column(Modifier.statsEntrance(2)) {
-                    AllTimeTiles(
+                // ── All-time figures + signature + lifetime volume curve (index 3) ─
+                Spacer(Modifier.height(28.dp))
+                Column(pad.statsEntrance(3)) {
+                    AllTimeSection(
                         sessions = state.totalSessions,
                         volumeLb = state.totalVolumeLb,
                         prs = state.totalPrs,
+                        sets = state.totalSets,
                         xp = state.rank?.xpTotal ?: 0L,
-                        longestStreakDays = state.longestStreakDays,
+                        workoutsDelta = state.workoutsThisWeek - state.workoutsLastWeek,
+                        setsDelta = state.setsThisWeek - state.setsLastWeek,
+                        prsDelta = state.prsThisWeek - state.prsLastWeek,
                         volumeSeriesLb = state.lifetimeVolumeSeriesLb,
+                        topLift = state.topLift,
+                        mostLoggedDay = state.mostLoggedDay,
+                        usualHour = state.usualHour,
                         onBg = onBg, muted = muted, accent = accent, outline = outline
                     )
                 }
 
                 if (Features.SHOW_GAMIFICATION) {
-                    Spacer(Modifier.height(24.dp))
-                    Column(Modifier.statsEntrance(3)) {
+                    Spacer(Modifier.height(28.dp))
+                    Column(pad.statsEntrance(4)) {
                         StandingSection(state.standings, onBg, muted, accent, outline)
                     }
                 }
 
-                // ── Signature (index 4) ──────────────────────────────────────────
-                Spacer(Modifier.height(24.dp))
-                Column(Modifier.statsEntrance(4)) {
-                    SignatureCard(state.topLift, state.mostLoggedDay, state.usualHour, onBg, muted, accent, outline)
-                }
+                // Signature now shares the ALL-TIME block above (index 3), so no separate section here.
+                // Bodyweight moved up near the cover (index 1), above the lifetime tallies.
 
                 if (state.cardioSessions > 0) {
-                    Spacer(Modifier.height(24.dp))
-                    Column(Modifier.statsEntrance(5)) {
-                        CardioCard(state.cardioSessions, state.cardioMinutes, state.cardioDistanceKm, onBg, muted, accent, outline)
+                    Spacer(Modifier.height(28.dp))
+                    Column(pad.statsEntrance(5)) {
+                        CardioSection(state.cardioSessions, state.cardioMinutes, state.cardioDistanceKm, state.cardioDistanceSeries, onBg, muted, accent, outline)
                     }
                 }
 
-                // ── Goals as rings (index 6) ─────────────────────────────────────
-                Spacer(Modifier.height(24.dp))
-                Column(Modifier.statsEntrance(6)) {
-                    GoalTilesSection(state.goals, onOpenGoals, onBg, muted, accent, outline)
+                // ── Goals as open progress lines (index 6) ───────────────────────
+                Spacer(Modifier.height(28.dp))
+                Column(pad.statsEntrance(6)) {
+                    GoalLinesSection(state.goals, state.customGoals, onOpenGoals, onBg, muted, accent, outline)
                 }
 
-                // ── Gallery (index 7) ────────────────────────────────────────────
-                Spacer(Modifier.height(24.dp))
-                Column(Modifier.statsEntrance(7)) {
-                    GalleryCard(state.photos, viewModel::fileFor, onAdd = { pickPhoto() }, onView = { viewing = it }, onViewAll = onOpenPhotoGallery, onBg, muted, accent, outline)
+                // ── Gallery filmstrip (index 7) — full-bleed, pads itself ────────
+                Spacer(Modifier.height(28.dp))
+                Column(Modifier.fillMaxWidth().statsEntrance(7)) {
+                    GalleryStrip(state.photos, viewModel::fileFor, onAdd = { pickPhoto() }, onView = { viewing = it }, onViewAll = onOpenPhotoGallery, onBg, muted, accent, outline)
                 }
 
                 state.memory?.let { m ->
-                    Spacer(Modifier.height(24.dp))
-                    Column(Modifier.statsEntrance(8)) {
-                        OnThisDayCard(m, onBg, muted, accent)
+                    Spacer(Modifier.height(28.dp))
+                    Column(pad.statsEntrance(8)) {
+                        OnThisDaySection(m, onBg, muted, accent)
                     }
                 }
 
                 if (Features.SHOW_GAMIFICATION) {
-                    Spacer(Modifier.height(24.dp))
-                    Column(Modifier.statsEntrance(9)) {
+                    Spacer(Modifier.height(28.dp))
+                    Column(pad.statsEntrance(9)) {
                         TrophyCaseSection(state.trophyGrid, state.trophyUnlocked, state.trophyTotal, state.closestTrophy, onOpenTrophies, onBg, muted, accent, outline)
                     }
                 }
 
-                Spacer(Modifier.height(40.dp))
+                Spacer(Modifier.height(44.dp))
             }
         }
 
@@ -274,6 +311,23 @@ fun ProfileScreen(
         val r = state.rank
         val xp = state.xp
         if (r != null && xp != null) RankInfoSheet(r, xp, onDismiss = { showXpInfo = false })
+    }
+
+    if (showWeightSheet) {
+        BodyweightLogSheet(
+            latestLb = bodyweight.lastOrNull()?.weightLb,
+            canImport = weightConnected,
+            message = bodyweightMessage,
+            onSave = { lb ->
+                viewModel.logBodyweight(lb)
+                showWeightSheet = false
+            },
+            onImport = { viewModel.importBodyweight() },  // stays open so the result line shows
+            onDismiss = {
+                showWeightSheet = false
+                viewModel.clearBodyweightMessage()
+            }
+        )
     }
 }
 

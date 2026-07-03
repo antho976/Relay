@@ -52,6 +52,15 @@ internal suspend fun DayViewModel.buildExerciseUi(
         ?: persistent?.takeIf { it.swappedName.isNotBlank() }?.swappedExerciseId
         ?: plan.id
 
+    // Swap-aware unit: a swapped slot logs + progresses in the swapped exercise's unit, not the
+    // base plan's, so a bodyweight→weighted swap suggests a weight (not more reps) and vice-versa.
+    // Mirrors ExerciseUiState.effectiveUnit's precedence (session swap → persistent → base).
+    val effectiveUnit = when {
+        !logged?.swappedName.isNullOrBlank() -> logged?.swappedUnit
+        !persistent?.swappedName.isNullOrBlank() -> persistent?.swappedUnit
+        else -> null
+    }?.let { com.forge.app.program.ExerciseUnit.fromCode(it) } ?: plan.unit
+
     // The remaining reads key on effectiveExerciseId; fan them out concurrently.
     val prevDeferred = async {
         val prevLE = workoutRepo.lastLoggedExerciseBefore(effectiveExerciseId, sessionId)
@@ -95,25 +104,25 @@ internal suspend fun DayViewModel.buildExerciseUi(
 
     // Double-progression suggestion (#12/#13) — pure rules in the adaptation engine; the
     // VM only assembles inputs. inputText is unit-correct (plate count on PLATES exercises).
-    val stepMode = stepCalibration.modeFor(effectiveExerciseId, plan.unit.code)
+    val stepMode = stepCalibration.modeFor(effectiveExerciseId, effectiveUnit.code)
     val suggestion = ProgressionAdvisor.suggestNextLoad(
         exerciseId = effectiveExerciseId,
         exerciseName = plan.name,
         prevSets = prevSets,
         prevEffort = prevLE?.difficulty,
         repsText = plan.reps,
-        unit = plan.unit,
+        unit = effectiveUnit,
         plateLb = plateLb,
         intensity = IntensityIntent.fromCode(_state.value.sessionIntensity),
         readiness = readiness,
         dbMaxLb = dbMaxLb,
         // Doubling the step only makes sense on the DB grid; PLATES move whole plates anyway.
-        fastStep = stepMode == com.forge.app.domain.coach.StepMode.FASTER && plan.unit == com.forge.app.program.ExerciseUnit.DUMBBELL,
+        fastStep = stepMode == com.forge.app.domain.coach.StepMode.FASTER && effectiveUnit == com.forge.app.program.ExerciseUnit.DUMBBELL,
         consolidate = stepMode == com.forge.app.domain.coach.StepMode.CONSOLIDATE
     )
 
     // Bodyweight movements have no weight to suggest, so they get a rep-progression cue instead (CO5).
-    val repSuggestion = if (plan.unit == com.forge.app.program.ExerciseUnit.BODYWEIGHT)
+    val repSuggestion = if (effectiveUnit == com.forge.app.program.ExerciseUnit.BODYWEIGHT)
         ProgressionAdvisor.suggestNextReps(effectiveExerciseId, plan.name, prevSets, prevLE?.difficulty, plan.reps)
     else null
 

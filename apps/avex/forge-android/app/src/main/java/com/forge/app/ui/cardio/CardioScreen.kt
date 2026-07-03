@@ -32,7 +32,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -42,6 +41,8 @@ import com.forge.app.ui.cardio.components.CardioEntryRow
 import com.forge.app.ui.cardio.components.CardioSessionDetailSheet
 import com.forge.app.ui.cardio.components.CardioWatchBanner
 import com.forge.app.ui.cardio.components.CardioWeekDetailSheet
+import com.forge.app.ui.common.EditorialHairline
+import com.forge.app.ui.common.EditorialHeader
 import com.forge.app.ui.common.forgeItemMotion
 import com.forge.app.ui.cardio.components.CardioLogSheet
 import com.forge.app.ui.cardio.state.CardioUiState
@@ -282,11 +283,16 @@ private fun CardioListContent(
             }
 
             item("history-title") {
-                Text(
-                    "Recent sessions",
-                    style = MaterialTheme.typography.headlineSmall,
-                    color = onBg,
-                    fontStyle = FontStyle.Italic,
+                Spacer(Modifier.height(8.dp))
+                EditorialHairline(
+                    outline = outline,
+                    modifier = Modifier.padding(horizontal = 24.dp)
+                )
+                Spacer(Modifier.height(14.dp))
+                EditorialHeader(
+                    label = "Recent sessions",
+                    muted = muted,
+                    accent = MaterialTheme.colorScheme.primary,
                     modifier = Modifier.padding(horizontal = 24.dp)
                 )
                 Spacer(Modifier.height(12.dp))

@@ -1,9 +1,7 @@
-package com.forge.app.ui.gym.stats
+package com.forge.app.ui.profile
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.KeyboardOptions
@@ -20,7 +18,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.input.KeyboardType
@@ -35,27 +32,8 @@ import com.forge.app.ui.theme.LocalForgeSettings
 import kotlin.math.roundToInt
 
 /**
- * A tappable "Log today's weight" row — the manual bodyweight entry point on the Body tab and the
- * only one after onboarding (Health Connect import is opt-in and needs an external weigh-in). Opens
- * [BodyweightLogSheet] via [onClick]; always present so even a brand-new user can record a weigh-in.
- */
-@Composable
-internal fun BodyweightLogButton(c: StatsColors, onClick: () -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .clickable(onClickLabel = "Log today's bodyweight", onClick = onClick)
-            .padding(vertical = 4.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text("Log today's weight", style = MaterialTheme.typography.bodyMedium, color = c.onBg)
-        Text("＋ LOG", style = MaterialTheme.typography.labelMedium, color = c.accent)
-    }
-}
-
-/**
- * Quick-log sheet for the Body tab — the only place to record bodyweight after onboarding. Type
+ * Quick-log sheet for bodyweight — lives on the Profile's BODYWEIGHT section (moved from the old
+ * Stats Body tab 2026-07-01), and is the only place to record bodyweight after onboarding. Type
  * today's value (validated against the same sane range as onboarding) or, when Health Connect is
  * connected, pull the latest reading with one tap. Saving closes the sheet; importing keeps it open
  * so the result line is visible.
@@ -74,8 +52,8 @@ internal fun BodyweightLogSheet(
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val sheetState = rememberModalBottomSheetState()
-    // Keyed on latestLb so the prefill lands even if the stats flow emits the latest weight just
-    // AFTER the sheet opens (otherwise the field would be stuck blank for that open).
+    // Keyed on latestLb so the prefill lands even if the flow emits the latest weight just AFTER the
+    // sheet opens (otherwise the field would be stuck blank for that open).
     var input by remember(latestLb) { mutableStateOf(latestLb?.let { weightInputValue(it, useKg) } ?: "") }
     val parsed = parseSaneBodyweightLb(input, useKg)
     val invalid = input.isNotBlank() && parsed == null

@@ -1,6 +1,5 @@
 package com.forge.app.ui.recap
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,15 +25,18 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.compose.ui.draw.clip
 import com.forge.app.domain.units.formatVolumeCompact
+import com.forge.app.ui.common.EditorialFigure
+import com.forge.app.ui.common.EditorialHairline
+import com.forge.app.ui.common.EditorialHeader
+import com.forge.app.ui.common.InlineEmptyHint
 import com.forge.app.ui.common.forgeShimmer
 import com.forge.app.ui.theme.LocalForgeSettings
 
@@ -46,6 +48,11 @@ fun RecapScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val useKg = LocalForgeSettings.current.useKg
+    val cs = MaterialTheme.colorScheme
+    val muted = cs.onSurfaceVariant
+    val accent = cs.primary
+    val onBg = cs.onBackground
+    val outline = cs.outline
 
     Scaffold(
         topBar = {
@@ -60,7 +67,7 @@ fun RecapScreen(
         containerColor = Color.Transparent
     ) { inner ->
         if (state.isLoading) {
-            // A skeleton that mirrors the two recap cards anchors the layout, so content swaps in
+            // A skeleton that mirrors the two recap sections anchors the layout, so content swaps in
             // without a jump — beats a generic spinner that teaches the user nothing (#404).
             RecapSkeleton(Modifier.fillMaxSize().padding(inner).padding(horizontal = 16.dp, vertical = 8.dp))
             return@Scaffold
@@ -72,58 +79,81 @@ fun RecapScreen(
                 .padding(inner)
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            verticalArrangement = Arrangement.spacedBy(0.dp)
         ) {
-            // Monthly recap card (#32)
+            // Monthly recap section (#32)
             state.monthRecap?.let { recap ->
-                RecapCard(
-                    title = "THIS MONTH · ${recap.month.month.name.lowercase().replaceFirstChar { it.uppercase() }} ${recap.month.year}"
+                RecapSection(
+                    title = "THIS MONTH · ${recap.month.month.name.lowercase().replaceFirstChar { it.uppercase() }} ${recap.month.year}",
+                    muted = muted, accent = accent, outline = outline
                 ) {
-                    BigStat("${recap.sessionCount}", "workouts")
-                    BigStat(formatRecapVolume(recap.totalVolumeLb, useKg), "total volume")
-                    BigStat("${recap.totalPrs}", "PRs")
-                    BigStat("${recap.totalSets}", "sets logged")
-                    if (recap.topExercise != null) RecapRow("Most trained", recap.topExercise)
-                    if (recap.avgDurationMin > 0) RecapRow("Avg session", "${recap.avgDurationMin} min")
-                    if (recap.bestDayName != null) RecapRow("Best PR day", recap.bestDayName)
+                    RecapFiguresRow(
+                        figures = listOf(
+                            Pair("${recap.sessionCount}", "workouts"),
+                            Pair(formatRecapVolume(recap.totalVolumeLb, useKg), "total volume"),
+                            Pair("${recap.totalPrs}", "prs"),
+                            Pair("${recap.totalSets}", "sets")
+                        ),
+                        onBg = onBg, muted = muted, accent = accent
+                    )
+                    if (recap.topExercise != null) RecapRow("Most trained", recap.topExercise, onBg, muted)
+                    if (recap.avgDurationMin > 0) RecapRow("Avg session", "${recap.avgDurationMin} min", onBg, muted)
+                    if (recap.bestDayName != null) RecapRow("Best PR day", recap.bestDayName, onBg, muted)
                 }
-            } ?: Text("No sessions this month yet.", style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } ?: run {
+                Spacer(Modifier.height(24.dp))
+                EditorialHairline(outline)
+                Spacer(Modifier.height(14.dp))
+                EditorialHeader(label = "THIS MONTH", muted = muted, accent = accent)
+                Spacer(Modifier.height(12.dp))
+                InlineEmptyHint("No sessions this month yet.", muted)
+            }
 
-            // Year-over-year recap card (#33)
+            Spacer(Modifier.height(28.dp))
+
+            // Year-over-year recap section (#33)
             state.yearRecap?.let { recap ->
-                RecapCard(
-                    title = "${recap.year} IN REVIEW"
+                RecapSection(
+                    title = "${recap.year} IN REVIEW",
+                    muted = muted, accent = accent, outline = outline
                 ) {
-                    BigStat("${recap.sessionCount}", "workouts")
-                    BigStat(formatRecapVolume(recap.totalVolumeLb, useKg), "total volume")
-                    BigStat("${recap.totalPrs}", "total PRs")
-                    BigStat("${recap.longestStreak}d", "longest streak")
-                    if (recap.avgWeeklyVolume > 0) RecapRow("Avg weekly volume", formatRecapVolume(recap.avgWeeklyVolume, useKg))
-                    if (recap.topExercise != null) RecapRow("Most trained exercise", recap.topExercise)
-                    if (recap.bestMonthName != null) RecapRow("Best month", recap.bestMonthName)
+                    RecapFiguresRow(
+                        figures = listOf(
+                            Pair("${recap.sessionCount}", "workouts"),
+                            Pair(formatRecapVolume(recap.totalVolumeLb, useKg), "total volume"),
+                            Pair("${recap.totalPrs}", "prs"),
+                            Pair("${recap.longestStreak}d", "streak")
+                        ),
+                        onBg = onBg, muted = muted, accent = accent
+                    )
+                    if (recap.avgWeeklyVolume > 0) RecapRow("Avg weekly volume", formatRecapVolume(recap.avgWeeklyVolume, useKg), onBg, muted)
+                    if (recap.topExercise != null) RecapRow("Most trained exercise", recap.topExercise, onBg, muted)
+                    if (recap.bestMonthName != null) RecapRow("Best month", recap.bestMonthName, onBg, muted)
                 }
-            } ?: Text("No sessions this year yet.", style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } ?: run {
+                EditorialHairline(outline)
+                Spacer(Modifier.height(14.dp))
+                EditorialHeader(label = "THIS YEAR", muted = muted, accent = accent)
+                Spacer(Modifier.height(12.dp))
+                InlineEmptyHint("No sessions this year yet.", muted)
+            }
 
             Spacer(Modifier.height(16.dp))
         }
     }
 }
 
-/** Loading placeholder mirroring the two recap cards (title · big stats · rows) — uses the shared
+/** Loading placeholder mirroring the two recap sections (label · big stats · rows) — uses the shared
  *  [forgeShimmer] so the populated content swaps in without a layout jump (#404). */
 @Composable
 private fun RecapSkeleton(modifier: Modifier = Modifier) {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(16.dp)) {
         repeat(2) {
             Column(
-                Modifier.fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(16.dp))
-                    .padding(20.dp),
+                Modifier.fillMaxWidth().padding(vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                Box(Modifier.width(180.dp).height(18.dp).clip(RoundedCornerShape(50)).forgeShimmer())
+                Box(Modifier.width(180.dp).height(12.dp).clip(RoundedCornerShape(50)).forgeShimmer())
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                     repeat(4) {
                         Box(Modifier.width(56.dp).height(40.dp).clip(RoundedCornerShape(8.dp)).forgeShimmer())
@@ -137,41 +167,63 @@ private fun RecapSkeleton(modifier: Modifier = Modifier) {
     }
 }
 
+/** Open editorial section: hairline → small-caps label → content, directly on the page background. */
 @Composable
-private fun RecapCard(title: String, content: @Composable () -> Unit) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(16.dp))
-            .padding(20.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
+private fun RecapSection(
+    title: String,
+    muted: Color,
+    accent: Color,
+    outline: Color,
+    content: @Composable () -> Unit
+) {
+    EditorialHairline(outline)
+    Spacer(Modifier.height(14.dp))
+    EditorialHeader(label = title, muted = muted, accent = accent)
+    Spacer(Modifier.height(16.dp))
+    content()
+}
+
+/** Four open serif figures in a row — the headline stats for a recap period. */
+@Composable
+private fun RecapFiguresRow(
+    figures: List<Pair<String, String>>,
+    onBg: Color,
+    muted: Color,
+    accent: Color
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        Text(title, style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Black)
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            content()
+        figures.forEach { (value, label) ->
+            EditorialFigure(
+                value = value,
+                label = label,
+                onBg = onBg,
+                muted = muted,
+                accent = accent,
+                // Equal columns so a wide volume figure can't crowd the row off-screen.
+                modifier = Modifier.weight(1f)
+            )
         }
     }
+    Spacer(Modifier.height(14.dp))
 }
 
-@Composable
-private fun BigStat(value: String, label: String) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(value, style = MaterialTheme.typography.headlineSmall,
-            fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.onSurface)
-        Text(label, style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-}
-
-/** Volume for the recap cards: "12.5k lb" for big numbers, the exact value under 1000 lb (no "0k"). */
+/** Volume for the recap sections: "12.5k lb" for big numbers, the exact value under 1000 lb (no "0k"). */
 private fun formatRecapVolume(lb: Double, useKg: Boolean): String = formatVolumeCompact(lb, useKg)
 
 @Composable
-private fun RecapRow(label: String, value: String) {
+private fun RecapRow(
+    label: String,
+    value: String,
+    onBg: Color,
+    muted: Color
+) {
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(label, style = MaterialTheme.typography.bodySmall, color = muted)
         Text(value, style = MaterialTheme.typography.bodySmall,
-            fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+            fontWeight = FontWeight.SemiBold, color = onBg)
     }
+    Spacer(Modifier.height(6.dp))
 }

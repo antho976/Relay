@@ -30,10 +30,11 @@ class AvatarRepository @Inject constructor(
 
     /**
      * Import the picked image: decode downsampled to ~[MAX_PX], apply its EXIF rotation, and write a
-     * compact JPEG. An avatar is only ever shown as a small circle, so storing the raw multi-MB pick
-     * (which would also bloat every backup ZIP) is wasteful — re-encoding keeps it tiny. Rotation is
-     * baked in and the EXIF tag dropped, so [ProgressPhotoImage] (which honours EXIF) shows it upright.
-     * Returns true on success.
+     * compact JPEG. The avatar is shown as a FULL-WIDTH cover banner on the profile, so [MAX_PX] has to
+     * be large enough that a portrait shot cropped to fill the screen isn't upscaled (the old 512-px cap
+     * — sized for a small circle — made the banner look like butter). Still re-encoded rather than storing
+     * the raw multi-MB pick, which would bloat every backup ZIP. Rotation is baked in and the EXIF tag
+     * dropped, so [ProgressPhotoImage] (which honours EXIF) shows it upright. Returns true on success.
      */
     suspend fun set(source: Uri): Boolean = withContext(Dispatchers.IO) {
         val ok = runCatching {
@@ -71,7 +72,12 @@ class AvatarRepository @Inject constructor(
 
     companion object {
         const val FILE_NAME = "avatar.jpg"
-        /** Max stored edge — an avatar is a small circle, so this is plenty and keeps the file tiny. */
-        private const val MAX_PX = 512
+        /**
+         * Max stored edge. The avatar is a full-width cover banner now, so this must exceed the display
+         * width even for a tall portrait cropped to fill (longest edge = height, so stored width ≈
+         * MAX_PX × aspect): 2560 keeps a ~9:20 portrait's width above a 1080-wide screen. Was 512 (a
+         * small-circle assumption) — the cause of the badly blurred banner.
+         */
+        private const val MAX_PX = 2560
     }
 }

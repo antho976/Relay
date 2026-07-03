@@ -32,6 +32,8 @@ import com.forge.app.domain.cardio.CardioWearableDay
 import com.forge.app.domain.cardio.pacePerUnit
 import com.forge.app.domain.units.distanceUnitLabel
 import com.forge.app.domain.units.toDisplayDistance
+import com.forge.app.ui.common.EditorialFigure
+import com.forge.app.ui.common.EditorialHairline
 import java.time.ZoneId
 import java.util.Locale
 
@@ -71,30 +73,42 @@ internal fun CardioWeekStatsPage(
             onBg = onBg, muted = muted, outline = outline
         )
 
-        // ── Number tiles ── fixed 3-up grid so a tile can never slip off the edge ──────
+        // ── Open figures ── serif number + tiny mono label, no card shell ─────
         val avgPace = pacePerUnit(agg.minutes, agg.distanceKm, useMiles)
         val distUnit = distanceUnitLabel(useMiles)
-        val tiles = buildList {
+        val figures = buildList {
             add("${agg.days}" to if (agg.days == 1) "day" else "days")
             add("${agg.sessions}" to "sessions")
             add("${agg.minutes}" to "minutes")
             if (agg.distanceKm > 0) add(String.format(Locale.US, "%.1f", toDisplayDistance(agg.distanceKm, useMiles)) to distUnit)
             if (avgPace != null) add(avgPace to "/$distUnit avg")
         }
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 4.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            tiles.chunked(3).forEach { rowTiles ->
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    rowTiles.forEach { (value, label) ->
-                        StatTile(value, label, onBg, muted, outline, modifier = Modifier.weight(1f))
+        EditorialHairline(outline = outline, modifier = Modifier.padding(horizontal = 24.dp))
+        Spacer(Modifier.height(14.dp))
+        figures.chunked(3).forEach { rowFigs ->
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
+                horizontalArrangement = Arrangement.spacedBy(0.dp)
+            ) {
+                rowFigs.forEachIndexed { idx, (value, label) ->
+                    EditorialFigure(
+                        value = value,
+                        label = label,
+                        onBg = onBg, muted = muted, accent = accent,
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (idx < rowFigs.lastIndex) {
+                        // Even 16dp on both sides so a long figure never touches the rule.
+                        Spacer(Modifier.width(16.dp))
+                        Box(Modifier.width(1.dp).height(40.dp).background(outline.copy(alpha = 0.25f)).align(Alignment.CenterVertically))
+                        Spacer(Modifier.width(16.dp))
                     }
-                    // Keep tiles equal-width when the last row isn't full.
-                    repeat(3 - rowTiles.size) { Spacer(Modifier.weight(1f)) }
                 }
+                repeat(3 - rowFigs.size) { Spacer(Modifier.weight(1f)) }
             }
+            Spacer(Modifier.height(14.dp))
         }
+        EditorialHairline(outline = outline, modifier = Modifier.padding(horizontal = 24.dp))
 
         // ── Activity breakdown graph ────────────────────────────────────────
         if (agg.minutesByType.isNotEmpty()) {
@@ -201,16 +215,3 @@ private fun PerDayBars(perDayMinutes: List<Int>, todayDow: Int, onBg: Color, mut
     )
 }
 
-@Composable
-private fun StatTile(value: String, label: String, onBg: Color, muted: Color, outline: Color, modifier: Modifier = Modifier) {
-    Column(
-        modifier = modifier
-            .clip(RoundedCornerShape(12.dp))
-            .background(outline.copy(alpha = 0.06f))
-            .padding(horizontal = 14.dp, vertical = 12.dp),
-        horizontalAlignment = Alignment.Start
-    ) {
-        Text(value, style = MaterialTheme.typography.headlineSmall, color = onBg, maxLines = 1)
-        Text(label.uppercase(), style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp, maxLines = 1)
-    }
-}

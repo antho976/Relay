@@ -1,17 +1,17 @@
 @file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 package com.forge.app.ui.gym.freestyle
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -43,6 +43,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.domain.units.parseToLb
 import com.forge.app.program.ExerciseLibrary
 import com.forge.app.program.ExerciseUnit
+import com.forge.app.ui.common.EditorialHairline
 import com.forge.app.ui.common.ExerciseLibraryPicker
 
 private data class FsSet(val weight: String = "", val reps: String = "")
@@ -110,7 +111,7 @@ fun FreestyleLogScreen(
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(inner),
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(0.dp)
         ) {
             item {
                 Text(
@@ -119,6 +120,7 @@ fun FreestyleLogScreen(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                Spacer(Modifier.height(8.dp))
             }
             itemsIndexed(items, key = { _, ex -> ex.libId }) { i, ex ->
                 FsExerciseCard(
@@ -165,10 +167,11 @@ private fun FsExerciseCard(
     onAddSet: () -> Unit,
     onRemoveSet: (Int) -> Unit
 ) {
+    val cs = MaterialTheme.colorScheme
+    EditorialHairline(cs.outline)
+    Spacer(Modifier.height(12.dp))
     Column(
-        modifier = Modifier.fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
-            .padding(12.dp),
+        modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Row(
@@ -177,7 +180,7 @@ private fun FsExerciseCard(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(exercise.name, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
+                color = cs.onSurface, modifier = Modifier.weight(1f))
             IconButton(onClick = onRemove) { Icon(Icons.Default.Close, "Remove exercise") }
         }
         exercise.sets.forEachIndexed { setIdx, set ->
@@ -187,7 +190,7 @@ private fun FsExerciseCard(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text("${setIdx + 1}", style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    color = cs.onSurfaceVariant)
                 if (!exercise.bodyweight) {
                     OutlinedTextField(
                         value = set.weight,
@@ -208,12 +211,13 @@ private fun FsExerciseCard(
                 )
                 IconButton(onClick = { onRemoveSet(setIdx) }, enabled = exercise.sets.size > 1) {
                     Icon(Icons.Default.Close, "Remove set",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        tint = cs.onSurfaceVariant)
                 }
             }
         }
         TextButton(onClick = onAddSet, contentPadding = PaddingValues(horizontal = 0.dp, vertical = 4.dp)) {
             Text("+ Add set")
         }
+        Spacer(Modifier.height(8.dp))
     }
 }

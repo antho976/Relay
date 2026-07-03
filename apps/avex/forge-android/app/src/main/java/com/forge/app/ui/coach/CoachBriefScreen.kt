@@ -1,8 +1,5 @@
 package com.forge.app.ui.coach
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Arrangement
 import com.forge.app.ui.common.clickableLabeled
 import androidx.compose.foundation.layout.Box
@@ -35,7 +32,6 @@ import androidx.compose.runtime.setValue
 import com.forge.app.domain.coach.CoachOutcome
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
@@ -162,19 +158,15 @@ private fun LearningGateList(cd: CoachWatch) {
     val hasMoods = cd.recoverySignals.firstOrNull { it.label == "Effort check-ins" }?.active == true
 
     Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
-            .padding(horizontal = 14.dp, vertical = 12.dp),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         Text(
-            "What I still need from you",
+            "WHAT I STILL NEED FROM YOU",
             style = MaterialTheme.typography.labelMedium,
             color = muted
         )
-        Spacer(Modifier.height(2.dp))
+        Spacer(Modifier.height(4.dp))
 
         // Gate 1: sessions — always shown since sessionsToGo > 0 guarantees this is incomplete
         GateItem(
@@ -411,18 +403,13 @@ private fun BriefContent(
     }
 }
 
-/** Small pill marking that Health Connect recovery signals fed this week's brief. */
+/** Quiet inline note that Health Connect recovery signals fed this week's brief. */
 @Composable
 private fun HcSyncBadge() {
-    val accent = MaterialTheme.colorScheme.primary
     Text(
         "✦ Health Connect signals used",
         style = MaterialTheme.typography.labelSmall,
-        color = accent,
-        modifier = Modifier
-            .clip(RoundedCornerShape(50))
-            .background(accent.copy(alpha = 0.12f))
-            .padding(horizontal = 10.dp, vertical = 4.dp)
+        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.8f)
     )
 }
 
@@ -499,20 +486,20 @@ private fun BriefStatRow(label: String, value: String) {
     }
 }
 
-/** One-time card on first Brief open explaining how the coach learns and that it never auto-changes (CO6). */
+/** One-time note on first Brief open explaining how the coach learns and that it never auto-changes (CO6). */
 @Composable
 private fun CoachIntroCard(onDismiss: () -> Unit) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val outline = MaterialTheme.colorScheme.outline
     Column(
         Modifier
             .fillMaxWidth()
             .padding(top = 8.dp, bottom = 4.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
-            .padding(16.dp)
     ) {
-        Text("How your coach learns", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurface)
-        Spacer(Modifier.height(6.dp))
+        HorizontalDivider(color = outline.copy(alpha = 0.25f))
+        Spacer(Modifier.height(12.dp))
+        Text("HOW YOUR COACH LEARNS", style = MaterialTheme.typography.labelMedium, color = muted)
+        Spacer(Modifier.height(8.dp))
         Text(
             "Forge watches your sessions — the weights you lift, how hard they feel, your recovery — and " +
                 "writes a brief like this each week. It never changes your plan on its own: anything it " +
@@ -529,6 +516,9 @@ private fun CoachIntroCard(onDismiss: () -> Unit) {
                 .clickableLabeled("Dismiss") { onDismiss() }
                 .padding(vertical = 4.dp)
         )
+        Spacer(Modifier.height(4.dp))
+        HorizontalDivider(color = outline.copy(alpha = 0.25f))
+        Spacer(Modifier.height(8.dp))
     }
 }
 

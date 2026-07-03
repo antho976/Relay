@@ -7,6 +7,7 @@ import com.forge.app.domain.timer.RestTimerState
 import com.forge.app.program.DayPlan
 import com.forge.app.program.Equipment
 import com.forge.app.program.ExercisePlan
+import com.forge.app.program.ExerciseUnit
 
 /** How the current session compares to the previous session on the same exercise. */
 enum class VsLastStatus { BEATING, MATCHING, UNDER }
@@ -290,6 +291,22 @@ data class ExerciseUiState(
      *  [plan]'s form cue then describes a different movement and must not be shown. */
     val isSwapped: Boolean
         get() = sessionSwapName != null || persistentSwapName != null
+
+    /**
+     * The unit the input/set rows should use: the swapped-in exercise's unit when a swap is active
+     * (session, then persistent), else the static [plan]'s. Without this a BODYWEIGHT→weighted swap
+     * (or vice-versa) kept showing the old weight type — the swap stored the new unit but the card
+     * still read [plan].unit. Pairs with [effectiveName] (same session→persistent→base precedence).
+     */
+    val effectiveUnit: ExerciseUnit
+        get() {
+            val code = when {
+                sessionSwapName != null -> sessionSwapUnit
+                persistentSwapName != null -> persistentSwapUnit
+                else -> null
+            }
+            return code?.let { ExerciseUnit.fromCode(it) } ?: plan.unit
+        }
 }
 
 /** Slim per-session aggregate for one exercise (for the day-screen ledger strip). */

@@ -11,23 +11,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.forge.app.domain.units.toDisplayWeight
-import com.forge.app.domain.units.unitLabel
 import com.forge.app.ui.gym.stats.components.BandedBar
-import com.forge.app.ui.gym.stats.components.ScatterChart
-import com.forge.app.ui.gym.stats.state.BodyweightPoint
 import com.forge.app.ui.gym.stats.state.E1rmLift
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
-import kotlin.math.roundToInt
 
 // Bodyweight-relative strength tiers — recovered verbatim from the old StrengthStandardsCard so the
 // "where you stand" read can't drift. Generic ×bodyweight bands (a simplification: real standards
@@ -43,70 +33,9 @@ private fun tierIndex(ratio: Double, sex: String): Int {
     return tierCutoffs(sex).size
 }
 
-/**
- * Tier 5a — bodyweight as a moving-average line over the raw daily scatter. Daily weigh-ins are noisy,
- * so the smoothed line is the honest read; the dots keep the raw truth visible.
- */
-@Composable
-internal fun ColumnScope.BodyweightContent(points: List<BodyweightPoint>, useKg: Boolean, c: StatsColors) {
-    if (points.isEmpty()) return
-    val unit = unitLabel(useKg)
-    // Display conversion + the O(n×window) moving-average sweep run once per data change, not on
-    // every recomposition.
-    val display = remember(points, useKg) { points.map { toDisplayWeight(it.weightLb, useKg) } }
-    if (points.size < 2) {
-        Text(
-            "Latest: ${display.last().roundToInt()} $unit. A few more weigh-ins and the trend line shows up.",
-            style = MaterialTheme.typography.bodySmall, color = c.muted, fontStyle = FontStyle.Italic
-        )
-        return
-    }
-    val chart = remember(points, useKg) {
-        val day0 = points.first().recordedAt
-        val xs = points.map { ((it.recordedAt - day0) / 86_400_000.0).toFloat() }
-        val scatter = display.indices.map { Offset(xs[it], display[it].toFloat()) }
-        val window = minOf(7, points.size)
-        val ma = display.indices.map { i ->
-            val from = maxOf(0, i - window + 1)
-            Offset(xs[i], display.subList(from, i + 1).average().toFloat())
-        }
-        val lo = display.min().toFloat()
-        val hi = display.max().toFloat()
-        val pad = ((hi - lo) * 0.12f).coerceAtLeast(1f)
-        BwChartData(scatter, ma, xs.first(), xs.last(), lo - pad, hi + pad, window)
-    }
-    ScatterChart(
-        points = chart.scatter,
-        overlay = chart.ma,
-        pointColor = c.muted,
-        lineColor = c.accent,
-        gridColor = c.outline.copy(alpha = 0.12f),
-        minX = chart.minX, maxX = chart.maxX,
-        minY = chart.minY, maxY = chart.maxY,
-        modifier = Modifier.fillMaxWidth().height(STATS_CHART_H)
-    )
-    Spacer(Modifier.height(6.dp))
-    val fmt = remember { SimpleDateFormat("MMM d", Locale.getDefault()) }
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(fmt.format(Date(points.first().recordedAt)).uppercase(),
-            style = MaterialTheme.typography.labelSmall, color = c.muted)
-        Text("now ${display.last().roundToInt()} $unit · ${chart.window}-pt avg line",
-            style = MaterialTheme.typography.labelSmall, color = c.muted)
-        Text(fmt.format(Date(points.last().recordedAt)).uppercase(),
-            style = MaterialTheme.typography.labelSmall, color = c.muted)
-    }
-}
-
-/** Precomputed bodyweight scatter + moving-average overlay + axis bounds for one render (see above). */
-private class BwChartData(
-    val scatter: List<Offset>,
-    val ma: List<Offset>,
-    val minX: Float,
-    val maxX: Float,
-    val minY: Float,
-    val maxY: Float,
-    val window: Int
-)
+// The bodyweight chart moved to the Profile's BODYWEIGHT section 2026-07-01 (your body lives on
+// your profile, not in Stats). This file keeps only the strength-standards read, which the
+// STRENGTH tab renders.
 
 /**
  * Tier 5b — relative strength: each main lift's e1RM ÷ bodyweight as a marker sitting on banded tier

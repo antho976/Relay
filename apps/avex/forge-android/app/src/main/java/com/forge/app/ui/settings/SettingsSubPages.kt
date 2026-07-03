@@ -16,7 +16,6 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -109,61 +108,57 @@ internal fun FormatPage(state: SettingsUiState, vm: SettingsViewModel, modifier:
 
         // ── Units ────────────────────────────────────────────────────────────────
         GroupHeader("Units")
-        SettingsCard {
-            InlineChipRow(
-                "Weight",
-                listOf("lb" to "lb", "kg" to "kg"),
-                if (state.useKg) "kg" else "lb"
-            ) { vm.setUseKg(it == "kg") }
-            CardDivider()
-            InlineChipRow(
-                "Distance",
-                listOf("km" to "km", "mi" to "mi"),
-                if (state.useMiles) "mi" else "km"
-            ) { vm.setUseMiles(it == "mi") }
-            CardDivider()
-            // Live preview — updates the moment a unit is switched.
-            CardFootnote(
-                "e.g. ${com.forge.app.domain.units.formatWeight(135.0, state.useKg)} · " +
-                    com.forge.app.domain.units.formatDistance(5.0, state.useMiles)
-            )
-        }
+        InlineChipRow(
+            "Weight",
+            listOf("lb" to "lb", "kg" to "kg"),
+            if (state.useKg) "kg" else "lb"
+        ) { vm.setUseKg(it == "kg") }
+        SectionDivider()
+        InlineChipRow(
+            "Distance",
+            listOf("km" to "km", "mi" to "mi"),
+            if (state.useMiles) "mi" else "km"
+        ) { vm.setUseMiles(it == "mi") }
+        SectionDivider()
+        // Live preview — updates the moment a unit is switched.
+        CardFootnote(
+            "e.g. ${com.forge.app.domain.units.formatWeight(135.0, state.useKg)} · " +
+                com.forge.app.domain.units.formatDistance(5.0, state.useMiles)
+        )
 
         // ── Date & time ────────────────────────────────────────────────────────────
+        SectionDivider()
         GroupHeader("Date & time")
-        SettingsCard {
-            InlineChipRow(
-                "Date",
-                listOf("MMM d, yyyy" to "Jan 5", "dd/MM/yyyy" to "05/01", "MM/dd/yyyy" to "01/05"),
-                state.dateFormat, vm::setDateFormat
-            )
-            CardDivider()
-            InlineChipRow(
-                "Time",
-                listOf("12h" to "12h", "24h" to "24h"),
-                if (state.timeFormat24h) "24h" else "12h"
-            ) { vm.setTimeFormat24h(it == "24h") }
-            CardDivider()
-            InlineChipRow(
-                "Week starts",
-                listOf("Mon" to "Mon", "Sun" to "Sun"),
-                if (state.firstDayMonday) "Mon" else "Sun"
-            ) { vm.setFirstDayMonday(it == "Mon") }
-            CardDivider()
-            TimezoneRow(state.timezone) { showTzPicker = true }
-        }
+        InlineChipRow(
+            "Date",
+            listOf("MMM d, yyyy" to "Jan 5", "dd/MM/yyyy" to "05/01", "MM/dd/yyyy" to "01/05"),
+            state.dateFormat, vm::setDateFormat
+        )
+        SectionDivider()
+        InlineChipRow(
+            "Time",
+            listOf("12h" to "12h", "24h" to "24h"),
+            if (state.timeFormat24h) "24h" else "12h"
+        ) { vm.setTimeFormat24h(it == "24h") }
+        SectionDivider()
+        InlineChipRow(
+            "Week starts",
+            listOf("Mon" to "Mon", "Sun" to "Sun"),
+            if (state.firstDayMonday) "Mon" else "Sun"
+        ) { vm.setFirstDayMonday(it == "Mon") }
+        SectionDivider()
+        TimezoneRow(state.timezone) { showTzPicker = true }
 
         // ── Strength standards ──────────────────────────────────────────────────────
+        SectionDivider()
         GroupHeader("Strength standards")
-        SettingsCard {
-            InlineChipRow(
-                "Sex",
-                listOf("male" to "Male", "female" to "Female"),
-                state.userSex, vm::setUserSex
-            )
-            CardDivider()
-            CardFootnote("Only scales the bodyweight-relative strength standards on the Stats tab.")
-        }
+        InlineChipRow(
+            "Sex",
+            listOf("male" to "Male", "female" to "Female"),
+            state.userSex, vm::setUserSex
+        )
+        SectionDivider()
+        CardFootnote("Only scales the bodyweight-relative strength standards on the Stats tab.")
 
         FormatResetButton(vm)
     }
@@ -179,9 +174,9 @@ internal fun FormatPage(state: SettingsUiState, vm: SettingsViewModel, modifier:
     }
 }
 
-// ─── Format-page building blocks (grouped "card" layout) ─────────────────────
+// ─── Format-page building blocks ─────────────────────────────────────────────
 
-/** Quiet uppercase section label that sits just above a [SettingsCard]. */
+/** Quiet uppercase section label that sits above a group of open rows. */
 @Composable
 private fun GroupHeader(text: String) {
     Text(
@@ -193,7 +188,7 @@ private fun GroupHeader(text: String) {
     )
 }
 
-/** A muted italic note shown as the last row *inside* a [SettingsCard] (live previews, scope notes). */
+/** A muted italic note — live previews and scope annotations sitting openly on the page. */
 @Composable
 private fun CardFootnote(text: String) {
     Text(
@@ -201,7 +196,7 @@ private fun CardFootnote(text: String) {
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         fontStyle = FontStyle.Italic,
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp)
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 10.dp)
     )
 }
 
@@ -232,30 +227,7 @@ private fun FormatResetButton(vm: SettingsViewModel) {
     }
 }
 
-/** The "card" that groups a few setting rows: a clean outline with no fill (matches the Recovery
- *  page) so the page color shows straight through. */
-@Composable
-private fun SettingsCard(content: @Composable ColumnScope.() -> Unit) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 20.dp)
-            .border(1.dp, MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.22f), RoundedCornerShape(18.dp))
-            .padding(vertical = 4.dp),
-        content = content
-    )
-}
-
-/** Hairline divider between rows inside a [SettingsCard] — inset both sides so it never touches the outline. */
-@Composable
-private fun CardDivider() {
-    HorizontalDivider(
-        modifier = Modifier.padding(horizontal = 16.dp),
-        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.15f)
-    )
-}
-
-/** Label on the left, a chip group on the right — one setting per line, inside a card. */
+/** Label on the left, a chip group on the right — one setting per open row. */
 @Composable
 private fun InlineChipRow(
     label: String,
@@ -264,7 +236,7 @@ private fun InlineChipRow(
     onSelect: (String) -> Unit
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
@@ -598,7 +570,8 @@ private fun NoteTemplatesEditor(
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             templates.forEach { t ->
                 Row(
-                    Modifier.background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(50))
+                    Modifier
+                        .border(1.dp, muted.copy(alpha = 0.35f), RoundedCornerShape(50))
                         .padding(start = 12.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -676,13 +649,12 @@ private fun NotificationsBlockedBanner() {
                         .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
                 )
             }
-            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f))
             .padding(horizontal = 24.dp, vertical = 14.dp)
     ) {
         Text("Notifications are turned off", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground)
         Spacer(Modifier.height(2.dp))
         Text(
-            "Forge can't send any of the below until you turn them on for the app. Tap to open system settings.",
+            "Forge can't send any of the below until you turn them on for the app. Tap to open system settings →",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }

@@ -23,11 +23,20 @@ interface ExtendedGoalDao {
     @Query("SELECT * FROM extended_goal ORDER BY created_at DESC")
     fun observeAll(): Flow<List<ExtendedGoal>>
 
+    @Query("SELECT * FROM extended_goal ORDER BY created_at DESC")
+    suspend fun getAll(): List<ExtendedGoal>
+
     @Query("SELECT * FROM extended_goal WHERE exercise_id = :exerciseId")
     fun observeForExercise(exerciseId: String): Flow<List<ExtendedGoal>>
 
     @Query("UPDATE extended_goal SET completed_at = :ts WHERE id = :id")
     suspend fun markComplete(id: Long, ts: Long)
+
+    @Query("UPDATE extended_goal SET target_value = :target WHERE id = :id")
+    suspend fun updateTarget(id: Long, target: Double)
+
+    @Query("DELETE FROM extended_goal WHERE id = :id")
+    suspend fun deleteById(id: Long)
 
     @Query("DELETE FROM extended_goal")
     suspend fun deleteAll()

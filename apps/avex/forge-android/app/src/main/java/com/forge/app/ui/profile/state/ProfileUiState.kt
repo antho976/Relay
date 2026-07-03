@@ -1,5 +1,6 @@
 package com.forge.app.ui.profile.state
 
+import com.forge.app.data.repo.ExtendedGoalRepository
 import com.forge.app.data.repo.GoalRepository
 import com.forge.app.data.repo.ProgressPhoto
 import com.forge.app.data.repo.SignatureLift
@@ -26,10 +27,19 @@ data class ProfileUiState(
     val totalSessions: Int = 0,
     val totalVolumeLb: Double = 0.0,
     val totalPrs: Int = 0,
+    val totalSets: Int = 0,
     val streakDays: Int = 0,
     val longestStreakDays: Int = 0,
     /** Cumulative lifted volume (lb), one point per session, oldest → newest; drives the All-Time graph. */
     val lifetimeVolumeSeriesLb: List<Double> = emptyList(),
+
+    // This-week vs last-week tallies — the All-Time tiles' "vs last week" arrows.
+    val workoutsThisWeek: Int = 0,
+    val workoutsLastWeek: Int = 0,
+    val setsThisWeek: Int = 0,
+    val setsLastWeek: Int = 0,
+    val prsThisWeek: Int = 0,
+    val prsLastWeek: Int = 0,
 
     // Standing (estimated vs typical lifters, 90 days)
     val standings: List<StandingMetric> = emptyList(),
@@ -41,6 +51,8 @@ data class ProfileUiState(
 
     // Goals (all set goals, achieved-first then closest-first; the Profile previews the top few)
     val goals: List<GoalRepository.GoalProgress> = emptyList(),
+    // Custom goals (cardio / sessions / volume / bodyweight, auto-tracked) — previewed in the same box.
+    val customGoals: List<ExtendedGoalRepository.Progress> = emptyList(),
 
     // The mirror test (progress photos)
     val photos: List<ProgressPhoto> = emptyList(),
@@ -61,5 +73,7 @@ data class ProfileUiState(
     // All-time cardio totals
     val cardioSessions: Int = 0,
     val cardioMinutes: Int = 0,
-    val cardioDistanceKm: Double = 0.0
+    val cardioDistanceKm: Double = 0.0,
+    /** Per-session cardio distance (km), oldest → newest; drives the CARDIO distance trend line. */
+    val cardioDistanceSeries: List<Double> = emptyList()
 )

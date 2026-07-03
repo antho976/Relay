@@ -9,161 +9,152 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.forge.app.domain.units.formatVolumeCompact
 import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.domain.units.unitLabel
-import com.forge.app.ui.gym.stats.components.LineChart
-import com.forge.app.ui.gym.stats.state.E1rmLift
-import com.forge.app.ui.gym.stats.state.LifetimeMetrics
-import com.forge.app.ui.gym.stats.state.PeriodComparison
+import com.forge.app.ui.common.clickableLabeled
+import com.forge.app.ui.gym.stats.components.BodyHeatmap
 import com.forge.app.ui.gym.stats.state.PrRecord
+import com.forge.app.ui.gym.stats.state.StatsUiState
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /**
- * Overview — the Stats landing tab. Built so the very first thing on screen is a populated, legible
- * read (the old screen opened on a near-empty Strength list). One headline lift, the lifetime
- * at-a-glance tiles, this-week-vs-last, and the records — each in its own quiet [StatsCard].
+ * The Stats hero + the always-on Records list. The hero mirrors the session-detail header — the
+ * page's "face": THIS WEEK's three serif figures (volume · sessions · sets, with vs-last deltas) on
+ * the left, the compact weekly muscle map on the right, and the one-line readiness status underneath
+ * (2026-07-01 fusion — the old top-lift hero dissolved into the Strength lens, where it's simply the
+ * first row).
  */
-
-/** Hero: the strongest lift's estimated 1RM as the headline number, with its trend underneath. */
 @Composable
-internal fun ColumnScope.OverviewHeroContent(lift: E1rmLift, useKg: Boolean, c: StatsColors) {
-    val display = lift.history.map { toDisplayWeight(it, useKg) }
-    val current = toDisplayWeight(lift.currentE1rm, useKg).roundToInt()
-    val unit = unitLabel(useKg)
-    Text(
-        "TOP LIFT",
-        style = MaterialTheme.typography.labelMedium,
-        color = c.muted
-    )
-    Spacer(Modifier.height(4.dp))
-    Text(lift.exerciseName, style = MaterialTheme.typography.titleMedium, color = c.onBg)
-    Spacer(Modifier.height(4.dp))
-    Row(verticalAlignment = Alignment.Bottom) {
-        Text(
-            "$current",
-            style = MaterialTheme.typography.headlineLarge,
-            color = c.accent,
-            fontWeight = FontWeight.SemiBold
-        )
-        Spacer(Modifier.width(6.dp))
-        Text(
-            "$unit e1RM",
-            style = MaterialTheme.typography.titleSmall,
-            color = c.muted,
-            modifier = Modifier.padding(bottom = 4.dp)
-        )
-        Spacer(Modifier.weight(1f))
-        lift.monthlyPct?.let { pct ->
+internal fun ColumnScope.StatsHeroContent(state: StatsUiState, useKg: Boolean, c: StatsColors) {
+    val cmp = state.weekComparison
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+        Column(Modifier.weight(1f)) {
             Text(
-                "%+.1f%%/mo".format(pct),
-                style = MaterialTheme.typography.labelLarge,
-                color = if (pct >= 0) c.accent else c.muted,
-                modifier = Modifier.padding(bottom = 4.dp)
+                "THIS WEEK",
+                style = MaterialTheme.typography.labelMedium,
+                color = c.muted,
+                letterSpacing = 1.sp,
+                modifier = Modifier.semantics { heading() }
+            )
+            Spacer(Modifier.height(12.dp))
+            if (cmp != null) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    WeekMetric(
+                        formatVolumeCompact(cmp.current.volumeLb, useKg, withUnit = false),
+                        cmp.volumeDelta.takeIf { it != 0.0 }?.let { formatVolumeCompact(abs(it), useKg, withUnit = false) to (it > 0) },
+                        unitLabel(useKg), c, Modifier.weight(1.1f)
+                    )
+                    WeekMetric("${cmp.current.sessions}", countDelta(cmp.sessionsDelta), "sessions", c, Modifier.weight(1f))
+                    WeekMetric("${cmp.current.sets}", countDelta(cmp.current.sets - cmp.previous.sets), "sets", c, Modifier.weight(1f))
+                }
+            } else {
+                Text(
+                    "Nothing logged yet this week.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = c.muted,
+                    fontStyle = FontStyle.Italic
+                )
+            }
+        }
+        // The weekly muscle map as the header's face — same spot as the session screen's body figure.
+        if (state.weeklySetsByMuscle.isNotEmpty()) {
+            Spacer(Modifier.width(14.dp))
+            BodyHeatmap(
+                setsByMuscle = state.weeklySetsByMuscle.associate { it.muscle to it.sets },
+                accent = c.accent,
+                faint = c.outline.copy(alpha = 0.34f),
+                silhouette = c.outline.copy(alpha = 0.26f),
+                labelColor = c.muted,
+                figureHeight = 96.dp,
+                showLegend = false,
+                showTitles = false,
+                modifier = Modifier.width(104.dp)
             )
         }
     }
-    if (display.size >= 2) {
-        val lo = display.min()
-        val hi = display.max()
-        Spacer(Modifier.height(12.dp))
-        LineChart(
-            values = display,
-            lineColor = c.accent,
-            trendColor = c.muted,
-            minValue = lo,
-            maxValue = hi,
-            modifier = Modifier.fillMaxWidth().height(STATS_HERO_CHART_H)
-        )
+    if (state.readinessPulse != null && state.readinessThreshold != null) {
+        Spacer(Modifier.height(14.dp))
+        ReadinessLine(state.readinessPulse, state.readinessThreshold, c)
     }
 }
 
-/** Lifetime at-a-glance — four compact tiles. */
+/** The delta text + direction for a count metric; null = unchanged (no delta line shown). */
+internal fun countDelta(d: Int): Pair<String, Boolean>? = if (d == 0) null else "${abs(d)}" to (d > 0)
+
+/**
+ * One week figure. The change vs last week sits on its OWN line under the label — a filled ▲/▼ plus
+ * the actual amount ("▲ 2 vs last"), readable at a glance.
+ */
 @Composable
-internal fun ColumnScope.LifetimeTilesContent(
-    lifetime: LifetimeMetrics,
-    recordCount: Int,
-    useKg: Boolean,
-    c: StatsColors
+private fun WeekMetric(
+    value: String,
+    delta: Pair<String, Boolean>?,
+    label: String,
+    c: StatsColors,
+    modifier: Modifier = Modifier
 ) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        StatTile("${lifetime.totalSessions}", "sessions", c, Modifier.weight(1f))
-        StatTile(formatVolumeCompact(lifetime.lifetimeVolumeLb, useKg, withUnit = false), unitLabel(useKg) + " lifted", c, Modifier.weight(1f))
-        StatTile("$recordCount", "records", c, Modifier.weight(1f))
-        StatTile("${lifetime.avgSetCount.roundToInt()}", "avg sets", c, Modifier.weight(1f))
-    }
-}
-
-@Composable
-private fun StatTile(value: String, label: String, c: StatsColors, modifier: Modifier = Modifier) {
-    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(modifier) {
         Text(
             value,
-            style = MaterialTheme.typography.titleLarge,
+            style = MaterialTheme.typography.headlineMedium,
             color = c.onBg,
-            fontWeight = FontWeight.SemiBold
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
         Spacer(Modifier.height(2.dp))
-        Text(label, style = MaterialTheme.typography.labelSmall, color = c.muted, textAlign = TextAlign.Center)
-    }
-}
-
-/** This ISO week vs last — four metrics, each with the up/down delta against the prior week. */
-@Composable
-internal fun ColumnScope.WeekComparisonContent(cmp: PeriodComparison, useKg: Boolean, c: StatsColors) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        WeekMetric("${cmp.current.sessions}", cmp.sessionsDelta.toDouble(), "sessions", c, Modifier.weight(1f))
-        WeekMetric(
-            formatVolumeCompact(cmp.current.volumeLb, useKg, withUnit = false),
-            cmp.volumeDelta, "volume", c, Modifier.weight(1f)
-        )
-        WeekMetric("${cmp.current.sets}", (cmp.current.sets - cmp.previous.sets).toDouble(), "sets", c, Modifier.weight(1f))
-        WeekMetric("${cmp.current.prs}", cmp.prsDelta.toDouble(), "PRs", c, Modifier.weight(1f))
-    }
-}
-
-@Composable
-private fun WeekMetric(value: String, delta: Double, label: String, c: StatsColors, modifier: Modifier = Modifier) {
-    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(value, style = MaterialTheme.typography.titleLarge, color = c.onBg, fontWeight = FontWeight.SemiBold)
-        Spacer(Modifier.height(2.dp))
-        val (arrow, color) = when {
-            delta > 0 -> "▲" to c.accent
-            delta < 0 -> "▼" to c.muted
-            else -> "•" to c.muted
-        }
         Text(
-            if (delta == 0.0) "same" else "$arrow vs last",
+            label.uppercase(),
             style = MaterialTheme.typography.labelSmall,
-            color = color,
-            textAlign = TextAlign.Center
+            color = c.muted,
+            fontSize = 9.sp
         )
-        Text(label, style = MaterialTheme.typography.labelSmall, color = c.muted, textAlign = TextAlign.Center)
+        delta?.let { (amount, up) ->
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "${if (up) "▲" else "▼"} $amount vs last",
+                style = MaterialTheme.typography.labelSmall,
+                color = if (up) c.accent else c.muted,
+                fontSize = 9.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
     }
 }
 
-/** Records — the all-time heaviest set per lift, biggest first. */
+/** Records — the all-time heaviest set per lift, biggest first. Rows tap through to the lift's trend. */
 @Composable
-internal fun ColumnScope.RecordsContent(records: List<PrRecord>, useKg: Boolean, c: StatsColors) {
+internal fun ColumnScope.RecordsContent(
+    records: List<PrRecord>,
+    useKg: Boolean,
+    c: StatsColors,
+    onOpenLift: (String) -> Unit = {}
+) {
     val fmt = remember { SimpleDateFormat("MMM d, yyyy", Locale.getDefault()) }
     val unit = unitLabel(useKg)
     val shown = records.take(6)
     shown.forEachIndexed { i, r ->
         Row(
-            Modifier.fillMaxWidth().padding(vertical = 8.dp),
+            Modifier.fillMaxWidth()
+                .clickableLabeled("Show estimated 1RM trend for ${r.exerciseName}") { onOpenLift(r.exerciseId) }
+                .padding(vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(Modifier.weight(1f)) {
@@ -173,10 +164,9 @@ internal fun ColumnScope.RecordsContent(records: List<PrRecord>, useKg: Boolean,
             Text(
                 "${toDisplayWeight(r.maxWeightLb, useKg).roundToInt()} $unit × ${r.bestReps}",
                 style = MaterialTheme.typography.titleSmall,
-                color = c.accent,
-                fontWeight = FontWeight.SemiBold
+                color = c.accent
             )
         }
-        if (i < shown.lastIndex) HorizontalDivider(color = c.outline.copy(alpha = 0.18f))
+        if (i < shown.lastIndex) androidx.compose.material3.HorizontalDivider(color = c.outline.copy(alpha = 0.18f))
     }
 }

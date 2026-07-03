@@ -64,6 +64,10 @@ fun DayListScreen(
     onOpenCardio: () -> Unit = {},
     onLogFreestyle: () -> Unit = {},
     onBuildPlan: () -> Unit = {},
+    /** Stats → consistency-heatmap day sheet → a gym session's detail screen. */
+    onOpenSession: (Long) -> Unit = {},
+    /** Stats → consistency-heatmap day sheet → a cardio session's detail screen. */
+    onOpenCardioSession: (Long) -> Unit = {},
     initialTab: Int = 0,
     /** Top-bar heading — "Stats" / "PRs" when hosting those sub-screens, "GYM" by default. */
     title: String = "GYM",
@@ -90,7 +94,11 @@ fun DayListScreen(
                 // onOpenHistory/onOpenNotes/onOpenRecap stay wired into DayListScreen (and HubScreen)
                 // so the history/notes/recap routes keep an entry point, but the rebuilt Stats screen
                 // no longer surfaces them, so they aren't forwarded here.
-                1 -> StatsContent(modifier = Modifier.fillMaxSize())
+                1 -> StatsContent(
+                    modifier = Modifier.fillMaxSize(),
+                    onOpenSession = onOpenSession,
+                    onOpenCardioSession = onOpenCardioSession
+                )
                 else -> TrainTab(
                     onOpenDay = onOpenDay,
                     onOpenDayQuick = onOpenDayQuick,

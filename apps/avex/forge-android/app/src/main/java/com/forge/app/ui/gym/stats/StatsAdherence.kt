@@ -18,10 +18,15 @@ private const val HEATMAP_WEEKS = 26
 
 /**
  * Tier 7 — adherence calendar heatmap. "Did I actually show up?" answered instantly by the density of
- * lit days over the last [HEATMAP_WEEKS] weeks.
+ * lit days over the last [HEATMAP_WEEKS] weeks. Lit days are tappable — [onDayTap] opens everything
+ * logged that day.
  */
 @Composable
-internal fun ColumnScope.AdherenceContent(dailyActivity: List<DayLoad>, c: StatsColors) {
+internal fun ColumnScope.AdherenceContent(
+    dailyActivity: List<DayLoad>,
+    c: StatsColors,
+    onDayTap: (LocalDate) -> Unit = {}
+) {
     if (dailyActivity.isEmpty()) return
     val byDay = remember(dailyActivity) { dailyActivity.associate { it.epochDay to it.sets } }
     // Count only the days the heatmap actually shows (last HEATMAP_WEEKS weeks), so the label can't
@@ -35,11 +40,12 @@ internal fun ColumnScope.AdherenceContent(dailyActivity: List<DayLoad>, c: Stats
         weeks = HEATMAP_WEEKS,
         faint = c.outline.copy(alpha = 0.18f),
         accent = c.accent,
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier.fillMaxWidth(),
+        onDayTap = onDayTap
     )
     Spacer(Modifier.height(8.dp))
     Text(
-        "$windowDays training days in the last $HEATMAP_WEEKS weeks · scroll the grid →",
+        "$windowDays training days in the last $HEATMAP_WEEKS weeks · tap a lit day to see it",
         style = MaterialTheme.typography.labelSmall,
         color = c.muted
     )

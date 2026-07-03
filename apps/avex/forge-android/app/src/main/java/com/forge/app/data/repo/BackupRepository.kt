@@ -231,6 +231,67 @@ class BackupRepository @Inject constructor(
         return file
     }
 
+    /**
+     * Export a SINGLE finished session as JSON — the per-session "save this workout's data" action on
+     * the session detail page. Same lossy/human-readable shape as one entry of [exportFullDataJson],
+     * with library-resolved exercise names. Returns null when the session id no longer exists.
+     */
+    suspend fun exportSessionJson(sessionId: Long): File? {
+        val s = sessionDao.get(sessionId) ?: return null
+        val exercises = loggedExerciseDao.forSession(s.id)
+        val root = JSONObject().apply {
+            put("exportVersion", 1)
+            put("exportedAt", dateFmt.format(Instant.now().atZone(zone)))
+            put("appVersion", com.forge.app.BuildConfig.VERSION_NAME)
+            put("session", JSONObject().apply {
+                put("id", s.id)
+                put("dayKey", s.dayKey)
+                put("date", dateFmt.format(Instant.ofEpochMilli(s.startedAt).atZone(zone)))
+                put("startedAt", s.startedAt)
+                put("finishedAt", s.finishedAt ?: 0)
+                put("activeSeconds", activeSecondsOf(s))
+                put("totalVolumeLb", s.totalVolumeLb ?: 0)
+                put("prCount", s.prCount)
+                put("setCount", s.setCount)
+                put("sessionType", s.sessionType)
+                put("intensity", s.intensity)
+                put("tags", s.tags)
+                put("journal", s.journal)
+                put("mood", db.moodDao().forSession(s.id)?.mood ?: "")
+                put("segments", segmentsJson(s.id))
+                val exArr = JSONArray()
+                exercises.forEach { ex ->
+                    val sets = loggedSetDao.forLoggedExercise(ex.id)
+                    exArr.put(JSONObject().apply {
+                        put("exerciseId", ex.exerciseId)
+                        put("name", com.forge.app.program.Program.exerciseDisplayName(ex.exerciseId, ex.swappedName))
+                        put("orderIndex", ex.orderIndex)
+                        put("difficulty", ex.difficulty?.name ?: "")
+                        put("skipped", ex.skipped)
+                        put("note", ex.note ?: "")
+                        val setArr = JSONArray()
+                        sets.forEach { set ->
+                            setArr.put(JSONObject().apply {
+                                put("weightText", set.weightText)
+                                put("weightLb", set.weightLb ?: 0)
+                                put("reps", set.reps)
+                                put("rpe", set.rpe ?: 0)
+                                put("completedAt", set.completedAt)
+                                put("difficultyTag", set.difficultyTag ?: "")
+                            })
+                        }
+                        put("sets", setArr)
+                    })
+                }
+                put("exercises", exArr)
+            })
+        }
+        // Session-id in the filename so saving several sessions doesn't overwrite one another.
+        val file = File(context.filesDir, "forge_session_${s.id}.json")
+        file.writeText(root.toString(2))
+        return file
+    }
+
     /** RFC 4180 CSV field: quote and double embedded quotes when the value holds a comma/quote/newline. */
     private fun csv(value: String): String =
         if (value.any { it == ',' || it == '"' || it == '\n' || it == '\r' })

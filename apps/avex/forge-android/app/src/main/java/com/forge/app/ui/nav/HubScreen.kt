@@ -24,6 +24,7 @@ import com.forge.app.ui.coach.CoachBriefScreen
 import com.forge.app.ui.gym.train.DayListScreen
 import com.forge.app.ui.overview.OverviewScreen
 import com.forge.app.ui.profile.ProfileScreen
+import com.forge.app.ui.theme.ForgeMotion
 import kotlinx.coroutines.launch
 
 /**
@@ -67,14 +68,20 @@ fun HubScreen(
         )
     }
     val scope = rememberCoroutineScope()
-    fun goTo(page: Int) { scope.launch { pagerState.animateScrollToPage(page.coerceIn(0, tabs.lastIndex)) } }
+    // Tapping a bar item (or a "go home"/external request) should glide like a swipe, not snap. The
+    // default animateScrollToPage spec lands fast + sharp; this smooth page-level tween matches the
+    // swipe-settle feel (and collapses to an instant jump under reduced-motion).
+    val pageSpec = ForgeMotion.standardTween<Float>(ForgeMotion.DurationEmphasized)
+    fun goTo(page: Int) {
+        scope.launch { pagerState.animateScrollToPage(page.coerceIn(0, tabs.lastIndex), animationSpec = pageSpec) }
+    }
     fun goToTab(tab: BottomTab) { tabs.indexOf(tab).takeIf { it >= 0 }?.let { goTo(it) } }
     val homeIndex = tabs.indexOf(BottomTab.HOME)
 
     // External tab requests (deep screen → tab, or a cardio widget launch).
     LaunchedEffect(pendingPage) {
         if (pendingPage != null) {
-            pagerState.animateScrollToPage(pendingPage.coerceIn(0, tabs.lastIndex))
+            pagerState.animateScrollToPage(pendingPage.coerceIn(0, tabs.lastIndex), animationSpec = pageSpec)
             onPendingConsumed()
         }
     }
@@ -116,6 +123,9 @@ fun HubScreen(
                     onOpenCardio = { goToTab(BottomTab.CARDIO) },
                     onLogFreestyle = { nav.navigate(Routes.FREESTYLE_LOG) },
                     onBuildPlan = { nav.navigate(Routes.programBuilder()) },
+                    // The consistency-heatmap day sheet drills into the same detail screens History uses.
+                    onOpenSession = { sessionId -> nav.navigate(Routes.sessionDetail(sessionId)) },
+                    onOpenCardioSession = { cardioId -> nav.navigate(Routes.cardioSession(cardioId)) },
                     initialTab = 1,
                     title = "Stats"
                 )

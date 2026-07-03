@@ -2,8 +2,12 @@ package com.forge.app.ui.gym.stats
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.forge.app.data.db.dao.SessionDao
 import com.forge.app.data.repo.AdaptationRepository
+import com.forge.app.data.repo.CardioRepository
 import com.forge.app.data.repo.StatsRepository
+import com.forge.app.domain.cardio.CardioType
+import com.forge.app.ui.gym.history.HistoryItem
 import com.forge.app.ui.gym.stats.state.StatsUiState
 import com.forge.app.ui.gym.stats.state.balanceRatioUi
 import com.forge.app.ui.gym.stats.state.buildReadinessPulse
@@ -14,17 +18,30 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import java.time.LocalDate
+import java.time.ZoneId
 import javax.inject.Inject
+
+/**
+ * Everything logged on one calendar day — opened by tapping a lit day on the consistency heatmap.
+ * Reuses [HistoryItem] so the sheet renders the exact same rows as the History screen.
+ */
+data class StatsDayDetail(
+    val date: LocalDate,
+    val items: List<HistoryItem>
+)
 
 @HiltViewModel
 class StatsViewModel @Inject constructor(
     statsRepo: StatsRepository,
     adaptationRepo: AdaptationRepository,
     private val settingsRepo: com.forge.app.data.prefs.SettingsRepository,
-    private val bodyweightRepo: com.forge.app.data.repo.BodyweightRepository
+    private val sessionDao: SessionDao,
+    private val cardioRepo: CardioRepository
 ) : ViewModel() {
 
     /**
@@ -36,53 +53,42 @@ class StatsViewModel @Inject constructor(
      */
     private val engineFlow = MutableStateFlow<AdaptationRepository.EngineStatsRead?>(null)
 
-    /** Whether the Body-tab quick-log should offer "Import from Health Connect" (read granted). */
-    private val _weightConnected = MutableStateFlow(false)
-    val weightConnected: StateFlow<Boolean> = _weightConnected.asStateFlow()
-
-    /** Transient confirmation/result line for the quick-log sheet; cleared when the sheet closes. */
-    private val _bodyweightMessage = MutableStateFlow<String?>(null)
-    val bodyweightMessage: StateFlow<String?> = _bodyweightMessage.asStateFlow()
-
     init {
         // Guard the whole-history snapshot fan-out: a failure here leaves the engine read null
         // (no pulse/plateaus/insights) instead of an uncaught crash in viewModelScope.
         viewModelScope.launch { engineFlow.value = runCatching { adaptationRepo.engineStatsRead() }.getOrNull() }
-        viewModelScope.launch {
-            _weightConnected.value = runCatching { bodyweightRepo.canImportFromHealthConnect() }.getOrDefault(false)
-        }
     }
 
-    /** Save a typed weigh-in (lb); the bodyweight trend updates reactively via observeRecent. */
-    fun logBodyweight(weightLb: Double) = viewModelScope.launch {
-        bodyweightRepo.log(weightLb)
-        _bodyweightMessage.value = "Saved."
-    }
-
-    /** Pull the latest weight from Health Connect into the log (no-op if nothing newer). */
-    fun importBodyweight() = viewModelScope.launch {
-        val imported = bodyweightRepo.importLatestFromHealthConnect()
-        _bodyweightMessage.value =
-            if (imported != null) "Imported your latest weight." else "No newer weight in Health Connect."
-    }
-
-    fun clearBodyweightMessage() { _bodyweightMessage.value = null }
-
-    /** Last Stats sub-tab the user settled on (by enum NAME), persisted so reopening Stats lands there
-     *  (S4). Maps an unset pref to the default tab so emitted values are always non-null — the screen
-     *  reserves null for "not yet loaded" and only deep-links once a real value arrives. */
+    /** Last Stats LENS the user settled on (by enum NAME), persisted so reopening Stats lands there
+     *  (reuses the old sub-tab pref; retired tab names simply fall back to the default). Maps an
+     *  unset pref to the default so emitted values are always non-null — the screen reserves null
+     *  for "not yet loaded" and only deep-links once a real value arrives. */
     val lastStatsTabName: StateFlow<String?> =
         settingsRepo.lastStatsTabName
-            .map { it ?: StatsTab.OVERVIEW.name }
+            .map { it ?: StatsLens.STRENGTH.name }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     fun saveStatsTab(name: String) = viewModelScope.launch { settingsRepo.setLastStatsTabName(name) }
 
-    /** Re-check HC read permission (e.g. right before showing the quick-log sheet) so a grant made in
-     *  Settings after this screen opened surfaces the import option without recreating the ViewModel. */
-    fun refreshWeightConnected() = viewModelScope.launch {
-        _weightConnected.value = runCatching { bodyweightRepo.canImportFromHealthConnect() }.getOrDefault(false)
+    /** The day the user tapped on the consistency heatmap; null = sheet closed. */
+    private val _dayDetail = MutableStateFlow<StatsDayDetail?>(null)
+    val dayDetail: StateFlow<StatsDayDetail?> = _dayDetail.asStateFlow()
+
+    /** Load everything logged on [date] (gym sessions + cardio, newest first) and open the day sheet. */
+    fun openDay(date: LocalDate) = viewModelScope.launch {
+        runCatching {
+            val zone = ZoneId.systemDefault()
+            val fromMs = date.atStartOfDay(zone).toInstant().toEpochMilli()
+            val toMs = date.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+            val workouts = sessionDao.finishedInRange(fromMs, toMs).map { HistoryItem.Workout(it) }
+            val cardio = cardioRepo.observeAll().first()
+                .filter { it.date in fromMs until toMs && it.type != CardioType.REST.code }
+                .map { HistoryItem.Cardio(it) }
+            StatsDayDetail(date, (workouts + cardio).sortedByDescending { it.dateMs })
+        }.getOrNull()?.let { _dayDetail.value = it }
     }
+
+    fun closeDay() { _dayDetail.value = null }
 
     val state: StateFlow<StatsUiState> = combine(
         statsRepo.observeGymStats(),

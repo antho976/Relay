@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.IosShare
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -18,6 +19,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -25,6 +27,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -48,10 +51,32 @@ fun SessionDetailScreen(
     viewModel: SessionDetailViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val exportPath by viewModel.exportPath.collectAsStateWithLifecycle()
+    val context = LocalContext.current
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val accent = MaterialTheme.colorScheme.primary
     val outline = MaterialTheme.colorScheme.outline
+
+    // When the per-session JSON has been written, open the system share sheet on it (Save to Files /
+    // Drive / send) — the same path Settings' exports use. Mirror of SettingsScreen's export effect.
+    exportPath?.let { path ->
+        LaunchedEffect(path) {
+            runCatching {
+                val file = java.io.File(path)
+                val uri = androidx.core.content.FileProvider.getUriForFile(
+                    context, "${context.packageName}.fileprovider", file
+                )
+                val send = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                    type = "application/json"
+                    putExtra(android.content.Intent.EXTRA_STREAM, uri)
+                    addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                context.startActivity(android.content.Intent.createChooser(send, "Save or share session"))
+            }
+            viewModel.clearExportPath()
+        }
+    }
 
     var metric by rememberSaveable { mutableStateOf(SessionMetric.WEIGHT) }
     // Bars/line is per-stat now — each metric carries its own style instead of one page-wide switch.
@@ -70,6 +95,12 @@ fun SessionDetailScreen(
                     }
                 },
                 actions = {
+                    // Save just this session's data as a JSON file (opens the share sheet).
+                    if (state.data != null) {
+                        IconButton(onClick = { viewModel.exportSession() }) {
+                            Icon(Icons.Default.IosShare, contentDescription = "Save this session as JSON", tint = muted)
+                        }
+                    }
                     Text(
                         "SESSION",
                         style = MaterialTheme.typography.labelSmall,

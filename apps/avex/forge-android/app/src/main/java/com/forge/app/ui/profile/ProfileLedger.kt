@@ -46,7 +46,7 @@ import kotlin.math.roundToInt
 
 /**
  * Shared section scaffold (label + optional accent action + body) used only by the gamification
- * [StandingSection] now — the everyday stat sections moved to the card/tile primitives in
+ * [StandingSection] now — the everyday stat sections sit openly on the page via the primitives in
  * [ProfileTiles]. Kept so re-enabling [Features.SHOW_GAMIFICATION] needs no rework.
  */
 @Composable
@@ -75,45 +75,73 @@ internal fun ProfileBlock(
     Column(content = content)
 }
 
-/** ALL-TIME — lifetime tallies as a 2-up tile grid; the volume tile carries a cumulative sparkline. */
+/**
+ * ALL-TIME — lifetime tallies as big open serif figures (two-up, no boxes), the count figures each
+ * carrying a small ↑/↓ "vs last week" badge, then the SIGNATURE strip (top lift · most-logged day ·
+ * usual hour) sharing this same block under its own small-caps label, with the cumulative
+ * lifted-volume curve drawn full-width beneath as its own quiet chart.
+ */
 @Composable
-internal fun AllTimeTiles(
+internal fun AllTimeSection(
     sessions: Int,
     volumeLb: Double,
     prs: Int,
+    sets: Int,
     xp: Long,
-    longestStreakDays: Int,
-    /** Cumulative lifted volume (lb), oldest → newest; powers the volume tile's sparkline. */
+    /** Signed this-week-minus-last-week deltas for the workouts / sets / PRs figures. */
+    workoutsDelta: Int,
+    setsDelta: Int,
+    prsDelta: Int,
+    /** Cumulative lifted volume (lb), oldest → newest; powers the full-width curve. */
     volumeSeriesLb: List<Double>,
+    /** Signature strip — shares this block, sitting between the figures and the curve. */
+    topLift: SignatureLift?,
+    mostLoggedDay: String?,
+    usualHour: String?,
     onBg: Color,
     muted: Color,
     accent: Color,
-    @Suppress("UNUSED_PARAMETER") outline: Color
+    outline: Color
 ) {
     val useKg = LocalForgeSettings.current.useKg
     SectionHeader("ALL-TIME", muted, accent)
     if (sessions == 0) {
         // Bare zeros read as "empty/broken" on a stranger's first open — name what fills them.
-        ProfileCard {
-            InlineEmptyHint(
-                if (Features.SHOW_GAMIFICATION)
-                    "Finish your first workout — your lifetime workouts, volume, PRs, and XP start tallying here."
-                else
-                    "Finish your first workout — your lifetime workouts, volume and PRs start tallying here.",
-                muted
-            )
-        }
+        InlineEmptyHint(
+            if (Features.SHOW_GAMIFICATION)
+                "Finish your first workout — your lifetime workouts, volume, sets, PRs, and XP start tallying here."
+            else
+                "Finish your first workout — your lifetime workouts, volume, sets and PRs start tallying here.",
+            muted
+        )
         return
     }
-    val series = if (volumeSeriesLb.size >= 2) volumeSeriesLb.map { toDisplayWeight(it, useKg) } else null
     val specs = buildList {
-        add(StatTileSpec("$sessions", "WORKOUTS"))
-        add(StatTileSpec(formatVolume(volumeLb, useKg), "LIFETIME ${unitLabel(useKg).uppercase()}", sparkline = series))
-        add(StatTileSpec("$prs", "PRs"))
-        add(StatTileSpec("$longestStreakDays", "BEST STREAK", caption = if (longestStreakDays > 1) "days" else null))
-        if (Features.SHOW_GAMIFICATION) add(StatTileSpec("$xp", "XP"))
+        add(StatCellSpec("$sessions", "WORKOUTS", delta = workoutsDelta))
+        add(StatCellSpec(formatVolume(volumeLb, useKg), "LIFETIME ${unitLabel(useKg).uppercase()}"))
+        add(StatCellSpec("$prs", "PRs", delta = prsDelta))
+        add(StatCellSpec(formatCount(sets), "SETS", delta = setsDelta))
+        if (Features.SHOW_GAMIFICATION) add(StatCellSpec("$xp", "XP"))
     }
-    StatTileGrid(specs, accent, muted, onBg)
+    StatCellGrid(specs, accent, muted, onBg)
+    // SIGNATURE lives in the same block, differentiated only by its small-caps label, and sits
+    // above the lifetime curve.
+    Spacer(Modifier.height(24.dp))
+    SignatureSection(topLift, mostLoggedDay, usualHour, onBg, muted, accent, outline)
+    if (volumeSeriesLb.size >= 2) {
+        val series = volumeSeriesLb.map { toDisplayWeight(it, useKg) }
+        Spacer(Modifier.height(24.dp))
+        ProfileSparkline(series, accent, Modifier.fillMaxWidth().height(72.dp))
+        Spacer(Modifier.height(8.dp))
+        ChartCaption(accent, "LIFETIME VOLUME · SESSION BY SESSION", muted)
+    }
+}
+
+/** "1,240" → "1.2k"; small counts stay exact. Keeps a big lifetime sets figure from overflowing its column. */
+private fun formatCount(n: Int): String = when {
+    n >= 10_000 -> "${(n / 1000.0).roundToInt()}k"
+    n >= 1_000 -> "${"%.1f".format(n / 1000.0)}k"
+    else -> "$n"
 }
 
 /** STANDING · ESTIMATED, 90 DAYS — offline percentile estimate (never a live leaderboard). */
@@ -168,9 +196,9 @@ internal fun StandingSection(
     }
 }
 
-/** SIGNATURE — top lift · most-logged day · usual hour, three cells on one card. */
+/** SIGNATURE — top lift · most-logged day · usual hour, three open cells split by hairlines. */
 @Composable
-internal fun SignatureCard(
+internal fun SignatureSection(
     topLift: SignatureLift?,
     mostLoggedDay: String?,
     usualHour: String?,
@@ -181,34 +209,40 @@ internal fun SignatureCard(
 ) {
     val useKg = LocalForgeSettings.current.useKg
     SectionHeader("SIGNATURE", muted, accent)
-    ProfileCard {
-        if (topLift == null && mostLoggedDay == null && usualHour == null) {
-            InlineEmptyHint(
-                "Your signature — your go-to lift, the day you train most, and your usual hour — takes shape after a few logged sessions.",
-                muted
-            )
-        } else {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-                SignatureCell(
-                    value = topLift?.name ?: "—",
-                    label = if (topLift != null) "TOP LIFT · ${toDisplayWeight(topLift.weightLb, useKg).roundToInt()} ${unitLabel(useKg).uppercase()}" else "TOP LIFT",
-                    onBg = onBg, muted = muted, modifier = Modifier.weight(1f)
-                )
-                SignatureDivider(outline)
-                SignatureCell(value = mostLoggedDay ?: "—", label = "MOST LOGGED", onBg = onBg, muted = muted, modifier = Modifier.weight(1f))
-                SignatureDivider(outline)
-                SignatureCell(value = usualHour ?: "—", label = "USUAL HOUR", onBg = onBg, muted = muted, modifier = Modifier.weight(1f))
-            }
-        }
+    if (topLift == null && mostLoggedDay == null && usualHour == null) {
+        InlineEmptyHint(
+            "Your signature — your go-to lift, the day you train most, and your usual hour — takes shape after a few logged sessions.",
+            muted
+        )
+        return
+    }
+    // TOP LIFT names (e.g. "Close-Grip Lat Pulldown") run long, so it gets the lion's share of
+    // the width; MOST LOGGED / USUAL HOUR are short and sit compactly to the right.
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+        SignatureCell(
+            value = topLift?.name ?: "—",
+            label = if (topLift != null) "TOP LIFT · ${toDisplayWeight(topLift.weightLb, useKg).roundToInt()} ${unitLabel(useKg).uppercase()}" else "TOP LIFT",
+            onBg = onBg, muted = muted, modifier = Modifier.weight(1.7f)
+        )
+        SignatureDivider(outline)
+        SignatureCell(value = mostLoggedDay ?: "—", label = "MOST LOGGED", onBg = onBg, muted = muted, modifier = Modifier.weight(1f))
+        SignatureDivider(outline)
+        SignatureCell(value = usualHour ?: "—", label = "USUAL HOUR", onBg = onBg, muted = muted, modifier = Modifier.weight(1f))
     }
 }
 
-/** All-time cardio totals — three cells on a card, only shown once a non-rest session exists. */
+/**
+ * All-time cardio totals — three open cells, only shown once a non-rest session exists. When there
+ * are ≥2 recent sessions carrying distance, a single distance trend line sits below the cells.
+ * (Time is the cell number; a dual time+distance overlay normalises two incomparable scales onto one
+ * box and reads as a meaningless crossing, so the chart shows distance alone.)
+ */
 @Composable
-internal fun CardioCard(
+internal fun CardioSection(
     sessions: Int,
     minutes: Int,
     distanceKm: Double,
+    distanceSeries: List<Double>,
     onBg: Color,
     muted: Color,
     accent: Color,
@@ -218,21 +252,26 @@ internal fun CardioCard(
     val timeLabel = if (minutes >= 60) "${minutes / 60}h ${minutes % 60}m" else "$minutes min"
     val distLabel = if (distanceKm > 0) com.forge.app.domain.units.formatDistance(distanceKm, useMiles) else "—"
     SectionHeader("CARDIO", muted, accent)
-    ProfileCard {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-            SignatureCell("$sessions", "SESSIONS", onBg, muted, Modifier.weight(1f))
-            SignatureDivider(outline)
-            SignatureCell(timeLabel, "TIME", onBg, muted, Modifier.weight(1f))
-            SignatureDivider(outline)
-            SignatureCell(distLabel, "DISTANCE", onBg, muted, Modifier.weight(1f))
-        }
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+        SignatureCell("$sessions", "SESSIONS", onBg, muted, Modifier.weight(1f))
+        SignatureDivider(outline)
+        SignatureCell(timeLabel, "TIME", onBg, muted, Modifier.weight(1f))
+        SignatureDivider(outline)
+        SignatureCell(distLabel, "DISTANCE", onBg, muted, Modifier.weight(1f))
+    }
+    // Need ≥2 sessions and some actual distance for a meaningful trend.
+    if (distanceSeries.size >= 2 && distanceSeries.count { it > 0.0 } >= 2) {
+        Spacer(Modifier.height(16.dp))
+        ProfileSparkline(distanceSeries, accent, Modifier.fillMaxWidth().height(52.dp))
+        Spacer(Modifier.height(8.dp))
+        ChartCaption(accent, "DISTANCE · LAST ${distanceSeries.size}", muted)
     }
 }
 
 @Composable
 private fun SignatureCell(value: String, label: String, onBg: Color, muted: Color, modifier: Modifier = Modifier) {
     Column(modifier.padding(end = 8.dp)) {
-        Text(value, style = MaterialTheme.typography.titleSmall, color = onBg, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(value, style = MaterialTheme.typography.titleMedium, color = onBg, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Spacer(Modifier.height(3.dp))
         Text(label, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 8.sp)
     }
@@ -240,7 +279,8 @@ private fun SignatureCell(value: String, label: String, onBg: Color, muted: Colo
 
 @Composable
 private fun SignatureDivider(outline: Color) {
-    Box(Modifier.width(1.dp).height(28.dp).padding(end = 8.dp).background(outline.copy(alpha = 0.3f)))
+    // Order matters: pad first, then size — sizing first would leave zero drawable width for the line.
+    Box(Modifier.padding(end = 8.dp).width(1.dp).height(30.dp).background(outline.copy(alpha = 0.3f)))
 }
 
 /** "412k" / "950" — compact lifetime volume (unit-less). */

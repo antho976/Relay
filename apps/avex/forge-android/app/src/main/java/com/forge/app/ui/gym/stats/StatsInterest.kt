@@ -26,11 +26,8 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
 import com.forge.app.ui.gym.stats.state.DayLoad
 import com.forge.app.ui.gym.stats.state.RpeBucket
-import com.forge.app.ui.gym.stats.state.TrainingTimes
 import java.time.LocalDate
 import kotlin.math.exp
-
-private val DOW = listOf("M", "T", "W", "T", "F", "S", "S")
 
 private fun rpeLabel(r: Double) = if (r % 1.0 == 0.0) r.toInt().toString() else "%.1f".format(r)
 
@@ -65,53 +62,9 @@ internal fun ColumnScope.RpeHistogramContent(buckets: List<RpeBucket>, avgRpe: D
     }
 }
 
-/** Tier 8b — time-of-day & PRs-by-weekday. The beautiful-but-useless trap: charted small, as one-liners. */
-@Composable
-internal fun ColumnScope.TrainingPatternsContent(
-    trainingTimes: TrainingTimes?,
-    prsByDayOfWeek: List<Int>,
-    c: StatsColors
-) {
-    if (trainingTimes == null && prsByDayOfWeek.all { it == 0 }) return
-    trainingTimes?.let { tt ->
-        if (tt.sessionsByDayOfWeek.any { it > 0 }) {
-            MiniDowBars("Sessions by day", tt.sessionsByDayOfWeek, c)
-            Spacer(Modifier.height(8.dp))
-        }
-        tt.bestHourLabel?.let {
-            Text("Most productive time: $it", style = MaterialTheme.typography.bodySmall, color = c.muted)
-            Spacer(Modifier.height(8.dp))
-        }
-    }
-    if (prsByDayOfWeek.any { it > 0 }) {
-        MiniDowBars("PRs by day", prsByDayOfWeek, c)
-    }
-}
-
-@Composable
-private fun MiniDowBars(label: String, counts: List<Int>, c: StatsColors) {
-    val max = counts.maxOrNull()?.coerceAtLeast(1) ?: 1
-    Text(label, style = MaterialTheme.typography.labelSmall, color = c.muted)
-    Spacer(Modifier.height(4.dp))
-    Row(
-        Modifier.fillMaxWidth().height(40.dp),
-        verticalAlignment = Alignment.Bottom,
-        horizontalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        counts.take(7).forEachIndexed { i, n ->
-            Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
-                Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .height((n.toFloat() / max * 26f).dp.coerceAtLeast(2.dp))
-                        .clip(RoundedCornerShape(2.dp))
-                        .background(c.accent.copy(alpha = 0.5f))
-                )
-                Text(DOW.getOrElse(i) { "" }, style = MaterialTheme.typography.labelSmall, color = c.muted)
-            }
-        }
-    }
-}
+// "Sessions/PRs by day-of-week" patterns chart REMOVED 2026-07-01 — Antho: knowing how many
+// sessions you do per day isn't useful. The state fields still flow (cheap aggregation) but no UI
+// renders them.
 
 /**
  * Tier 8c — the Banister fitness/fatigue model: a slow decay curve (fitness) and a fast one (fatigue)

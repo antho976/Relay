@@ -39,11 +39,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.forge.app.ui.common.ConfettiOverlay
 import com.forge.app.ui.common.ForgeHapticType
 import com.forge.app.ui.common.forgeHaptic
 import com.forge.app.ui.gym.train.components.AddExerciseSheet
 import com.forge.app.ui.gym.train.components.DislikeSwapPromptDialog
-import com.forge.app.ui.gym.train.components.PrCelebrationOverlay
 import com.forge.app.ui.gym.train.components.PlateCalculatorDialog
 import com.forge.app.ui.gym.train.components.RestTimerBubble
 import com.forge.app.ui.gym.train.components.RestTimerControlsDialog
@@ -76,16 +76,11 @@ fun DayScreen(
     var prevTotalSets = remember { mutableIntStateOf(-1) }
     var prevTotalPrs = remember { mutableIntStateOf(-1) }
     var showPrBurst by remember { mutableStateOf(false) }
-    var prBurstName by remember { mutableStateOf("") }
-    var prBurstPb by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(totalSets, totalPrSets) {
         when {
             prevTotalPrs.intValue >= 0 && totalPrSets > prevTotalPrs.intValue -> {
                 view.forgeHaptic(ForgeHapticType.PR_OR_FINISH, hapticStrength)
-                val prEx = state.exercises.firstOrNull { it.prSetIds.isNotEmpty() && it.bestPrSetId != null }
-                    ?: state.exercises.firstOrNull { it.prSetIds.isNotEmpty() }
-                prBurstName = prEx?.effectiveName ?: ""
-                prBurstPb = prEx?.allTimePbText
+                // A PR plays confetti + leaves the gold set-row text; the full-screen takeover was removed.
                 showPrBurst = true
                 // A4: announce to TalkBack (phone is often face-down mid-set). No-op without a screen reader.
                 view.announceForAccessibility("New personal record!")
@@ -163,11 +158,9 @@ fun DayScreen(
         Box(Modifier.fillMaxSize().padding(inner)) {
             DayContent(state = state, onEvent = viewModel::onEvent)
             if (showPrBurst) {
-                PrCelebrationOverlay(
-                    exerciseName = prBurstName,
-                    pbText = prBurstPb,
-                    onComplete = { showPrBurst = false }
-                )
+                // PR celebration is now just the confetti burst (over the live screen) plus the gold
+                // ★/text on the record set row — no full-screen "PERSONAL RECORD" takeover.
+                ConfettiOverlay(modifier = Modifier.fillMaxSize(), onComplete = { showPrBurst = false })
             }
         }
     }
@@ -204,12 +197,16 @@ fun DayScreen(
     }
 
     state.swapPickerExercise?.let { exerciseUi ->
+        // Don't offer an exercise the day already has — picking it would put the same movement in the
+        // day twice (a duplicate card that breaks per-exercise logging). Excludes every other slot's
+        // exercise AND the one being swapped (it's the card title, no need to list it again).
+        val alreadyInDay = state.exercises.map { it.effectiveName }.toSet()
         val swapCandidates = com.forge.app.program.ExerciseLibrary.swapCandidates(
             muscle = exerciseUi.plan.muscle,
             available = state.swapAvailableEquipment,
             disliked = state.swapDislikedIds,
             frozenIds = state.swapFrozenIds
-        )
+        ).filterNot { it.name in alreadyInDay }
         SwapPickerSheet(
             forExercise = exerciseUi.plan,
             candidates = swapCandidates,

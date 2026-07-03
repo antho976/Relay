@@ -1,24 +1,18 @@
 package com.forge.app.ui.goals
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -27,7 +21,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -37,7 +30,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.input.KeyboardType
@@ -45,15 +37,19 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.forge.app.data.repo.GoalRepository
-import com.forge.app.domain.units.parseToLb
-import com.forge.app.domain.units.unitLabel
-import com.forge.app.domain.units.weightInputValue
+import com.forge.app.data.repo.ExtendedGoalRepository
+import com.forge.app.domain.goal.GoalMetric
 import com.forge.app.ui.common.FirstTouchTip
-import com.forge.app.ui.theme.LocalForgeSettings
 
-/** A goal being added (currentTargetLb = null) or edited (existing target). */
-private data class Editing(val exerciseId: String, val name: String, val currentTargetLb: Double?)
+/** The in-progress "add a goal" / "edit a goal" flow. Null = no dialog open. */
+private sealed interface GoalsFlow {
+    data object ChooseType : GoalsFlow
+    data object LiftPicker : GoalsFlow
+    /** Set/edit a lift's target weight. [currentTargetLb] null when adding. */
+    data class LiftWeight(val exerciseId: String, val name: String, val currentTargetLb: Double?) : GoalsFlow
+    data class CustomNew(val metric: GoalMetric) : GoalsFlow
+    data class CustomEdit(val goal: ExtendedGoalRepository.Progress) : GoalsFlow
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -62,13 +58,25 @@ fun GoalsScreen(
     viewModel: GoalsViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    var pickerOpen by remember { mutableStateOf(false) }
-    var editing by remember { mutableStateOf<Editing?>(null) }
+    var flow by remember { mutableStateOf<GoalsFlow?>(null) }
+    var query by remember { mutableStateOf("") }
 
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val accent = MaterialTheme.colorScheme.primary
     val outline = MaterialTheme.colorScheme.outline
+
+    val totalGoals = state.liftGoals.size + state.customGoals.size
+    val q = query.trim()
+    val lifts = remember(state.liftGoals, q) {
+        state.liftGoals.filter { q.isBlank() || it.name.contains(q, ignoreCase = true) }
+    }
+    val customs = remember(state.customGoals, q) {
+        state.customGoals.filter {
+            q.isBlank() || it.label.contains(q, ignoreCase = true) ||
+                metricDisplayName(it.metric).contains(q, ignoreCase = true)
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -91,170 +99,111 @@ fun GoalsScreen(
             ) {
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    "Set a target weight for a lift and track your way to it. Progress is your heaviest set so far.",
+                    "Set a target and track your way to it — a weight on a lift, a weekly cardio or workout " +
+                        "target, or a bodyweight goal. Custom goals update themselves from what you log.",
                     style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic
                 )
                 Spacer(Modifier.height(16.dp))
 
-                if (state.goals.isEmpty()) {
-                    // Left-aligned, quiet first-touch nudge (matches the Profile header / Overview
-                    // welcome) instead of a centered card that floated out of place on this screen.
+                if (totalGoals >= 4) {
+                    OutlinedTextField(
+                        value = query,
+                        onValueChange = { query = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("Search goals") },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text)
+                    )
+                    Spacer(Modifier.height(16.dp))
+                }
+
+                if (totalGoals == 0) {
                     FirstTouchTip(
                         "No goals yet.",
-                        "Tap + Add a goal below to pick a lift and a target — or set one on any exercise during a workout."
+                        "Tap + Add a goal below to pick a target — a lift weight, a weekly cardio/workout " +
+                            "target, or a bodyweight goal."
+                    )
+                } else if (lifts.isEmpty() && customs.isEmpty()) {
+                    Text(
+                        "No goals match “$q”.",
+                        style = MaterialTheme.typography.bodyMedium, color = muted,
+                        modifier = Modifier.padding(vertical = 24.dp)
                     )
                 } else {
-                    state.goals.forEach { g ->
-                        GoalRow(g, onBg, muted, accent, outline) {
-                            editing = Editing(g.exerciseId, g.name, g.targetLb)
+                    if (lifts.isNotEmpty()) {
+                        SectionLabel("LIFT TARGETS", muted)
+                        lifts.forEach { g ->
+                            LiftGoalRow(g, onBg, muted, accent, outline) {
+                                flow = GoalsFlow.LiftWeight(g.exerciseId, g.name, g.targetLb)
+                            }
+                            Spacer(Modifier.height(16.dp))
                         }
-                        Spacer(Modifier.height(16.dp))
+                    }
+                    if (customs.isNotEmpty()) {
+                        SectionLabel("OTHER GOALS", muted)
+                        customs.forEach { g ->
+                            CustomGoalRow(g, onBg, muted, accent, outline) {
+                                flow = GoalsFlow.CustomEdit(g)
+                            }
+                            Spacer(Modifier.height(16.dp))
+                        }
                     }
                 }
 
                 Spacer(Modifier.height(8.dp))
-                val canAdd = state.addable.isNotEmpty()
-                // With no program (freestyle / custom-not-yet-built) "every exercise already has a goal"
-                // is misleading — there are no program exercises to add from in the first place.
-                val noProgram = com.forge.app.program.Program.days.isEmpty()
                 Text(
-                    when {
-                        canAdd -> "+ Add a goal"
-                        noProgram -> "Build a plan to set goals from its exercises"
-                        else -> "Every program exercise already has a goal"
-                    },
+                    "+ Add a goal",
                     style = MaterialTheme.typography.labelLarge,
-                    color = if (canAdd) accent else muted,
-                    modifier = Modifier
-                        .let { if (canAdd) it.clickable { pickerOpen = true } else it }
-                        .padding(vertical = 8.dp)
+                    color = accent,
+                    modifier = Modifier.clickable { flow = GoalsFlow.ChooseType }.padding(vertical = 8.dp)
                 )
                 Spacer(Modifier.height(40.dp))
             }
         }
     }
 
-    if (pickerOpen) {
-        ExercisePickerDialog(
-            options = state.addable,
-            onPick = { opt -> pickerOpen = false; editing = Editing(opt.id, opt.name, null) },
-            onDismiss = { pickerOpen = false }
+    when (val f = flow) {
+        null -> Unit
+        GoalsFlow.ChooseType -> AddGoalTypeDialog(
+            onPickLift = { flow = GoalsFlow.LiftPicker },
+            onPickMetric = { flow = GoalsFlow.CustomNew(it) },
+            onDismiss = { flow = null }
         )
-    }
-
-    editing?.let { e ->
-        GoalWeightDialog(
-            exerciseName = e.name,
-            currentTargetLb = e.currentTargetLb,
-            onSet = { lb -> viewModel.setGoal(e.exerciseId, lb); editing = null },
-            onClear = { viewModel.clearGoal(e.exerciseId); editing = null },
-            onDismiss = { editing = null }
+        GoalsFlow.LiftPicker -> LiftTargetPickerDialog(
+            exclude = state.liftPickerExclude,
+            onPick = { id, name -> flow = GoalsFlow.LiftWeight(id, name, null) },
+            onDismiss = { flow = null }
         )
-    }
-}
-
-@Composable
-private fun GoalRow(
-    g: GoalRepository.GoalProgress,
-    onBg: Color, muted: Color, accent: Color, outline: Color,
-    onClick: () -> Unit
-) {
-    val useKg = LocalForgeSettings.current.useKg
-    Column(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(g.name, style = MaterialTheme.typography.bodyLarge, color = onBg)
-            if (g.achieved) {
-                Text("reached ✓", style = MaterialTheme.typography.labelMedium, color = accent)
-            } else {
-                Text("${(g.fraction * 100).toInt()}%", style = MaterialTheme.typography.labelMedium, color = muted)
-            }
-        }
-        Spacer(Modifier.height(6.dp))
-        ProgressBar(g.fraction, if (g.achieved) accent else onBg, outline)
-        Spacer(Modifier.height(6.dp))
-        Text(
-            // weightInputValue gives the bare number in the display unit; the unit is appended once
-            // (formatWeight already includes it, which doubled to "200 lb lb").
-            "${weightInputValue(g.currentBestLb, useKg)} / ${weightInputValue(g.targetLb, useKg)} ${unitLabel(useKg)}",
-            style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp
+        is GoalsFlow.LiftWeight -> GoalWeightDialog(
+            exerciseName = f.name,
+            currentTargetLb = f.currentTargetLb,
+            onSet = { lb -> viewModel.setLiftGoal(f.exerciseId, lb); flow = null },
+            onClear = { viewModel.clearLiftGoal(f.exerciseId); flow = null },
+            onDismiss = { flow = null }
+        )
+        is GoalsFlow.CustomNew -> CustomGoalDialog(
+            metric = f.metric,
+            onConfirm = { period, target, label ->
+                viewModel.createCustomGoal(f.metric, period, target, label); flow = null
+            },
+            onDismiss = { flow = null }
+        )
+        is GoalsFlow.CustomEdit -> CustomGoalEditDialog(
+            goal = f.goal,
+            onSave = { target -> viewModel.updateCustomGoalTarget(f.goal.id, target); flow = null },
+            onDelete = { viewModel.deleteCustomGoal(f.goal.id); flow = null },
+            onDismiss = { flow = null }
         )
     }
 }
 
 @Composable
-private fun ProgressBar(fraction: Float, fill: Color, outline: Color) {
-    Box(
-        Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(2.dp)).background(outline.copy(alpha = 0.25f))
-    ) {
-        Box(
-            Modifier.fillMaxWidth(fraction.coerceIn(0f, 1f)).height(4.dp)
-                .clip(RoundedCornerShape(2.dp)).background(fill)
-        )
-    }
-}
-
-@Composable
-private fun ExercisePickerDialog(
-    options: List<GoalsViewModel.ExerciseOption>,
-    onPick: (GoalsViewModel.ExerciseOption) -> Unit,
-    onDismiss: () -> Unit
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Pick an exercise") },
-        text = {
-            Column(Modifier.fillMaxWidth().heightIn(max = 360.dp).verticalScroll(rememberScrollState())) {
-                options.forEach { opt ->
-                    Text(
-                        opt.name,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onBackground,
-                        modifier = Modifier.fillMaxWidth().clickable { onPick(opt) }.padding(vertical = 12.dp)
-                    )
-                }
-            }
-        },
-        confirmButton = {},
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
-    )
-}
-
-@Composable
-private fun GoalWeightDialog(
-    exerciseName: String,
-    currentTargetLb: Double?,
-    onSet: (Double) -> Unit,
-    onClear: () -> Unit,
-    onDismiss: () -> Unit
-) {
-    val useKg = LocalForgeSettings.current.useKg
-    var weightText by remember { mutableStateOf(currentTargetLb?.let { weightInputValue(it, useKg) } ?: "") }
-    val weightLb = parseToLb(weightText, useKg)
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text("Goal weight — $exerciseName") },
-        text = {
-            OutlinedTextField(
-                value = weightText,
-                onValueChange = { weightText = it.filter { c -> c.isDigit() || c == '.' } },
-                label = { Text("Target (${unitLabel(useKg)})") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
-            )
-        },
-        confirmButton = {
-            TextButton(
-                enabled = weightLb != null && weightLb > 0,
-                onClick = { weightLb?.let(onSet) }
-            ) { Text("Set goal") }
-        },
-        dismissButton = {
-            if (currentTargetLb != null) TextButton(onClick = onClear) { Text("Clear goal") }
-            else TextButton(onClick = onDismiss) { Text("Cancel") }
-        }
+private fun SectionLabel(text: String, muted: Color) {
+    Text(
+        text,
+        style = MaterialTheme.typography.labelSmall,
+        color = muted,
+        fontSize = 11.sp,
+        modifier = Modifier.padding(bottom = 12.dp)
     )
 }

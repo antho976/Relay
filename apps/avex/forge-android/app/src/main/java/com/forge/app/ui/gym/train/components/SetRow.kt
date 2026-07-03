@@ -272,12 +272,30 @@ fun SetRow(
 
             // Weight + ghost prior col — gold only when this set is a new PR
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    displayWeight,
-                    style = MaterialTheme.typography.headlineSmall,
-                    color = if (isPr) ForgePrGold else onBg,
-                    fontWeight = if (isPr) FontWeight.SemiBold else FontWeight.Normal
-                )
+                val plateLbField = set.weightLb?.takeIf { isPlates }
+                if (plateLbField != null) {
+                    // Plate exercises read as a plate COUNT on the first line with the lb equivalent on
+                    // its OWN second line — so "(45 lb)" never wraps half-onto the next line (#9).
+                    Text(
+                        "${formatPlateCount(plateLbField / plateLb)} plates",
+                        style = MaterialTheme.typography.headlineSmall,
+                        color = if (isPr) ForgePrGold else onBg,
+                        fontWeight = if (isPr) FontWeight.SemiBold else FontWeight.Normal
+                    )
+                    Text(
+                        "(${formatWeight(plateLbField, useKg)})",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = muted.copy(alpha = 0.8f),
+                        fontSize = 11.sp
+                    )
+                } else {
+                    Text(
+                        displayWeight,
+                        style = MaterialTheme.typography.headlineSmall,
+                        color = if (isPr) ForgePrGold else onBg,
+                        fontWeight = if (isPr) FontWeight.SemiBold else FontWeight.Normal
+                    )
+                }
                 priorSet?.let { prior ->
                     // Plate exercises read as a plate count, not the lb equivalent (#9).
                     val priorDisplay = prior.weightLb?.let { lb ->
