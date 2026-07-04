@@ -59,8 +59,11 @@ fun StatsContent(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val useKg = LocalForgeSettings.current.useKg
     val dayDetail by viewModel.dayDetail.collectAsStateWithLifecycle()
-    // A record tap deep-links into the Strength lens with that lift's row already open.
+    // A record tap deep-links into the Strength lens with that lift's row already open. focusNonce
+    // bumps on every such tap so re-tapping the SAME lift (a no-op assignment to focusLift) still
+    // re-expands its row after a manual collapse.
     var focusLift by rememberSaveable { mutableStateOf<String?>(null) }
+    var focusNonce by rememberSaveable { mutableStateOf(0) }
 
     // Reopen on the last lens the user viewed (reuses the old tab pref; unknown stored names — the
     // retired tab names — fall back to the default). Restore once, THEN start persisting changes.
@@ -135,8 +138,8 @@ fun StatsContent(
 
                     when (lens) {
                         StatsLens.STRENGTH -> strengthLens(
-                            state, useKg, c, focusLift,
-                            onOpenLift = { id -> focusLift = id; lens = StatsLens.STRENGTH }
+                            state, useKg, c, focusLift, focusNonce,
+                            onOpenLift = { id -> focusLift = id; focusNonce++; lens = StatsLens.STRENGTH }
                         )
                         StatsLens.VOLUME -> volumeLens(state, useKg, c)
                         StatsLens.EFFORT -> effortLens(state, c)
@@ -189,6 +192,7 @@ private fun LazyListScope.strengthLens(
     useKg: Boolean,
     c: StatsColors,
     focusLift: String?,
+    focusNonce: Int,
     onOpenLift: (String) -> Unit
 ) {
     if (state.e1rmLifts.isEmpty()) {
@@ -201,7 +205,7 @@ private fun LazyListScope.strengthLens(
             caption = "Estimated 1RM, ranked — tap a lift for its trend, PRs and curve.",
             index = 2
         ) {
-            E1rmComparisonList(state.e1rmLifts, state.recentPrs, state.strengthCurves, useKg, c, focusLift)
+            E1rmComparisonList(state.e1rmLifts, state.recentPrs, state.strengthCurves, useKg, c, focusLift, focusNonce)
         }
     }
     // Relative strength — each lift as a multiple of bodyweight.

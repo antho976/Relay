@@ -62,7 +62,7 @@ fun SessionDetailScreen(
     // Drive / send) — the same path Settings' exports use. Mirror of SettingsScreen's export effect.
     exportPath?.let { path ->
         LaunchedEffect(path) {
-            runCatching {
+            val shared = runCatching {
                 val file = java.io.File(path)
                 val uri = androidx.core.content.FileProvider.getUriForFile(
                     context, "${context.packageName}.fileprovider", file
@@ -73,6 +73,13 @@ fun SessionDetailScreen(
                     addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 }
                 context.startActivity(android.content.Intent.createChooser(send, "Save or share session"))
+            }.isSuccess
+            // Tell the user if the share sheet couldn't open instead of silently swallowing it. The path
+            // is cleared either way so the one-shot doesn't loop; tapping export again re-fires cleanly.
+            if (!shared) {
+                android.widget.Toast.makeText(
+                    context, "Couldn't open the share sheet.", android.widget.Toast.LENGTH_SHORT
+                ).show()
             }
             viewModel.clearExportPath()
         }

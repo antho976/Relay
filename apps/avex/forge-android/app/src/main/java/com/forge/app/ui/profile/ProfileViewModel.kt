@@ -6,8 +6,6 @@ import androidx.lifecycle.viewModelScope
 import com.forge.app.data.db.entities.BodyweightEntry
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.data.repo.BodyweightRepository
-import com.forge.app.data.repo.ExtendedGoalRepository
-import com.forge.app.data.repo.GoalRepository
 import com.forge.app.data.repo.ProfileData
 import com.forge.app.data.repo.ProfileRepository
 import com.forge.app.data.repo.AvatarRepository
@@ -38,8 +36,6 @@ class ProfileViewModel @Inject constructor(
     private val settingsRepo: SettingsRepository,
     private val photoRepo: ProgressPhotoRepository,
     private val avatarRepo: AvatarRepository,
-    private val goalRepo: GoalRepository,
-    private val extendedGoalRepo: ExtendedGoalRepository,
     private val bodyweightRepo: BodyweightRepository
 ) : ViewModel() {
 
@@ -94,19 +90,15 @@ class ProfileViewModel @Inject constructor(
         val photos = photoRepo.photos()
         val hasAvatar = avatarRepo.exists()
         val avatarStamp = if (hasAvatar) avatarRepo.file.lastModified() else 0L
-        // All goals (sorted achieved-first / closest-first); the Profile previews the top few. Lift
-        // targets and auto-tracked custom goals both feed the profile goal box.
-        val goals = runCatching { goalRepo.goalsWithProgress() }.getOrDefault(emptyList())
-        val customGoals = runCatching { extendedGoalRepo.goalsWithProgress() }.getOrDefault(emptyList())
         // Instant first paint on re-entry: render the last-assembled data while the fresh fan-out runs (P3).
         val cached = profileRepo.cached()
-        _state.value = if (cached != null) buildState(cached, name, photos, hasAvatar, avatarStamp, goals, customGoals)
-            else _state.value.copy(name = name, photos = photos, hasAvatar = hasAvatar, avatarStamp = avatarStamp, goals = goals, customGoals = customGoals)
+        _state.value = if (cached != null) buildState(cached, name, photos, hasAvatar, avatarStamp)
+            else _state.value.copy(name = name, photos = photos, hasAvatar = hasAvatar, avatarStamp = avatarStamp)
         val data = profileRepo.load()
         // Merge the fresh fan-out but keep the user-editable fields from current state, so a rename /
         // photo-note / avatar change made while the (slow) fan-out ran isn't reverted by the pre-load
         // snapshot — the edit fns persist then update _state, so reading them back here is correct.
-        _state.value = buildState(data, _state.value.name, _state.value.photos, _state.value.hasAvatar, _state.value.avatarStamp, goals, customGoals)
+        _state.value = buildState(data, _state.value.name, _state.value.photos, _state.value.hasAvatar, _state.value.avatarStamp)
 
         // ── Rank-up celebration detection ─────────────────────────────────────
         // Compare the current tier to the last-seen tier ordinal. A higher ordinal = tier upgrade.
@@ -131,9 +123,7 @@ class ProfileViewModel @Inject constructor(
         name: String,
         photos: List<ProgressPhoto>,
         hasAvatar: Boolean,
-        avatarStamp: Long,
-        goals: List<GoalRepository.GoalProgress>,
-        customGoals: List<ExtendedGoalRepository.Progress>
+        avatarStamp: Long
     ) = ProfileUiState(
         loading = false,
         name = name,
@@ -146,7 +136,6 @@ class ProfileViewModel @Inject constructor(
         totalSets = data.totalSets,
         streakDays = data.streakDays,
         longestStreakDays = data.longestStreakDays,
-        lifetimeVolumeSeriesLb = data.lifetimeVolumeSeriesLb,
         workoutsThisWeek = data.workoutsThisWeek,
         workoutsLastWeek = data.workoutsLastWeek,
         setsThisWeek = data.setsThisWeek,
@@ -157,8 +146,6 @@ class ProfileViewModel @Inject constructor(
         topLift = data.topLift,
         mostLoggedDay = data.mostLoggedDay,
         usualHour = data.usualHour,
-        goals = goals,
-        customGoals = customGoals,
         photos = photos,
         hasAvatar = hasAvatar,
         avatarStamp = avatarStamp,
@@ -170,7 +157,7 @@ class ProfileViewModel @Inject constructor(
         cardioSessions = data.cardioSessions,
         cardioMinutes = data.cardioMinutes,
         cardioDistanceKm = data.cardioDistanceKm,
-        cardioDistanceSeries = data.cardioDistanceSeries
+        lifetimeVolumeSeriesLb = data.lifetimeVolumeSeriesLb
     )
 
     /** Called by the UI after the one-shot celebration has played so it never replays on recompose. */

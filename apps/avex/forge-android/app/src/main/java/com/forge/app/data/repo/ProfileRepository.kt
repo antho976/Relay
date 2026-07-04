@@ -80,9 +80,6 @@ data class ProfileData(
     val cardioSessions: Int = 0,
     val cardioMinutes: Int = 0,
     val cardioDistanceKm: Double = 0.0,
-    /** Per-session cardio distance (km), oldest → newest (capped) — drives the CARDIO distance
-     *  trend line. ≥2 points (with some distance) needed to draw. */
-    val cardioDistanceSeries: List<Double> = emptyList(),
     /** Lifetime total sets logged — an All-Time tile alongside workouts/volume/PRs. */
     val totalSets: Int = 0,
     /** This-week vs last-week tallies (ISO weeks) — power the All-Time tiles' "vs last week" arrows. */
@@ -146,9 +143,6 @@ class ProfileRepository @Inject constructor(
         val cardioSessionsD = async { runCatching { cardioDao.totalSessions() }.getOrDefault(0) }
         val cardioMinutesD = async { runCatching { cardioDao.totalMinutes() }.getOrNull() ?: 0 }
         val cardioDistanceD = async { runCatching { cardioDao.totalDistanceKm() }.getOrNull() ?: 0.0 }
-        // Recent non-rest cardio entries (capped) — drives the CARDIO time+distance chart.
-        val cardioEntriesD = async { runCatching { cardioDao.since(0L) }.getOrDefault(emptyList()) }
-
         val sessions = sessionsD.await()
         val unlockedDates = unlockedDatesD.await()
         val unlockedIds = unlockedDates.keys
@@ -225,12 +219,6 @@ class ProfileRepository @Inject constructor(
                 ?.let { (t, _) -> TrophyEvaluator.progressRemaining(t.unlock, snap, useKg)?.let { "$it away from ${t.name}" } }
         }
 
-        // ── Cardio distance series (oldest → newest, capped) ──────────────────────────────────────
-        val cardioRecent = cardioEntriesD.await()
-            .filter { it.type != "rest" }
-            .sortedBy { it.date }
-            .takeLast(CARDIO_SERIES_POINTS)
-
         ProfileData(
             rank = rank,
             xp = xp,
@@ -253,7 +241,6 @@ class ProfileRepository @Inject constructor(
             cardioSessions = cardioSessionsD.await(),
             cardioMinutes = cardioMinutesD.await(),
             cardioDistanceKm = cardioDistanceD.await(),
-            cardioDistanceSeries = cardioRecent.map { it.distanceKm ?: 0.0 },
             totalSets = totalSets,
             workoutsThisWeek = workoutsThisWeek,
             workoutsLastWeek = workoutsLastWeek,
@@ -323,7 +310,6 @@ class ProfileRepository @Inject constructor(
     private companion object {
         const val HARDEST_DONE = 3        // unlocked trophies shown (hardest first)
         const val TROPHY_HIGHLIGHTS = 9   // total cells (done + almost-complete + 0% fillers)
-        const val CARDIO_SERIES_POINTS = 12 // recent non-rest sessions charted in the CARDIO block
         val SINCE_FMT: DateTimeFormatter = DateTimeFormatter.ofPattern("MMM yyyy", Locale.getDefault())
         val HOUR_FMT: DateTimeFormatter = DateTimeFormatter.ofPattern("h a", Locale.US)
     }
@@ -340,3 +326,4 @@ internal fun cumulativeSessionVolumeLb(sessions: List<Session>): List<Double> {
     var cumulative = 0.0
     return sessions.sortedBy { it.startedAt }.map { cumulative += it.totalVolumeLb ?: 0.0; cumulative }
 }
+

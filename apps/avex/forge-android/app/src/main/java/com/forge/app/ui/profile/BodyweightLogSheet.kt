@@ -53,8 +53,9 @@ internal fun BodyweightLogSheet(
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val sheetState = rememberModalBottomSheetState()
     // Keyed on latestLb so the prefill lands even if the flow emits the latest weight just AFTER the
-    // sheet opens (otherwise the field would be stuck blank for that open).
-    var input by remember(latestLb) { mutableStateOf(latestLb?.let { weightInputValue(it, useKg) } ?: "") }
+    // sheet opens; also on useKg so flipping the unit while the sheet is open re-seeds the field in
+    // the new unit instead of leaving a stale value that fails validation and locks Save.
+    var input by remember(latestLb, useKg) { mutableStateOf(latestLb?.let { weightInputValue(it, useKg) } ?: "") }
     val parsed = parseSaneBodyweightLb(input, useKg)
     val invalid = input.isNotBlank() && parsed == null
     val minDisp = toDisplayWeight(MIN_BODYWEIGHT_LB, useKg).roundToInt()

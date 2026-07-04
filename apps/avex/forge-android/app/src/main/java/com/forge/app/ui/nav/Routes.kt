@@ -19,6 +19,7 @@ object Routes {
     const val COACH_TIMELINE = "coach-timeline"
     const val PROFILE = "profile"
     const val GOALS = "goals"
+    const val GOAL_EDITOR = "goals/editor?exerciseId={exerciseId}&customId={customId}"
     const val MIRROR_TEST = "mirror-test"
     const val PROGRAM_EDITOR = "program-editor/{dayKey}"
     const val PROGRAM_VIEWER = "program-viewer"
@@ -35,6 +36,13 @@ object Routes {
     const val ARG_SESSION_ID = "sessionId"
     const val ARG_CARDIO_ID = "cardioId"
     const val ARG_SETTINGS_PAGE = "page"
+    const val ARG_GOAL_EXERCISE_ID = "exerciseId"
+    const val ARG_GOAL_CUSTOM_ID = "customId"
+
+    /** The goal editor: pass an exerciseId (lift target) OR a customId (custom goal) to edit one;
+     *  neither = the add-a-goal flow. */
+    fun goalEditor(exerciseId: String? = null, customId: Long? = null) =
+        "goals/editor?exerciseId=${exerciseId.orEmpty()}&customId=${customId?.toString().orEmpty()}"
 
     /** Settings, optionally deep-linked to a sub-page (pass a [SettingsPage] name; empty = root list). */
     fun settings(page: String? = null) = "settings?page=${page.orEmpty()}"

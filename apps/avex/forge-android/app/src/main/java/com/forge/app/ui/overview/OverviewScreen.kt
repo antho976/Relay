@@ -69,6 +69,7 @@ import com.forge.app.program.Program
 import com.forge.app.program.Trophies
 import com.forge.app.ui.common.InlineEmptyHint
 import com.forge.app.ui.gym.stats.components.statsEntrance
+import com.forge.app.ui.profile.GoalLinesSection
 import com.forge.app.ui.overview.components.OverviewStat
 import com.forge.app.ui.overview.components.RecentRow
 import com.forge.app.ui.overview.components.TrophiesTile
@@ -158,6 +159,7 @@ fun OverviewScreen(
     onGoToSettings: () -> Unit = {},
     onOpenCoachBrief: () -> Unit = {},
     onOpenCoachLab: () -> Unit = {},
+    onOpenGoals: () -> Unit = {},
     onOpenProfile: () -> Unit = {},
     onOpenSession: (Long) -> Unit = {},
     onViewAllHistory: () -> Unit = {},
@@ -641,14 +643,15 @@ fun OverviewScreen(
                         clickLabel = "Open Coach Lab", onClick = onOpenCoachLab
                     )
                 }
-                if (state.coach.isEmpty() && state.coachLearning == null && state.coachFatigue == null) {
-                    CoachHomeBlock(
-                        "Your coach.",
-                        "See your weekly brief and what it's tracking →",
-                        clickLabel = "Open the week brief", onClick = onOpenCoachBrief
-                    )
-                }
+                // The generic "Your coach → see the brief" entry that used to sit here was removed
+                // (Antho 2026-07-03): the coach already has its own tab + a new-analysis pop-up, so the
+                // Home pointer was redundant. Goals took its spot below as the ambient motivator.
             }
+
+            // ── Goals — folded into THIS WEEK (no separator): the week's figures run straight
+            // into what you're working toward ──
+            Spacer(Modifier.height(16.dp))
+            GoalLinesSection(state.goals, state.customGoals, onOpenGoals, onBg, muted, accent, outline)
 
             Spacer(Modifier.height(20.dp))
             HorizontalDivider(color = outline.copy(alpha = 0.3f))

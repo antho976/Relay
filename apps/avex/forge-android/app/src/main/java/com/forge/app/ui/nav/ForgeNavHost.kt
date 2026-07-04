@@ -52,6 +52,7 @@ import com.forge.app.ui.gym.notes.NotesSearchScreen
 import com.forge.app.ui.gym.train.DayListScreen
 import com.forge.app.ui.gym.train.ProgramViewerScreen
 import com.forge.app.ui.gym.train.DayScreen
+import com.forge.app.ui.goals.GoalEditorScreen
 import com.forge.app.ui.goals.GoalsScreen
 import com.forge.app.ui.profile.MirrorTestScreen
 import com.forge.app.ui.programeditor.ProgramEditorScreen
@@ -237,7 +238,25 @@ fun ForgeNavHost(initialDayKey: String? = null) {
             CoachTimelineScreen(onBack = { nav.popBackStack() })
         }
         composable(Routes.GOALS) {
-            GoalsScreen(onBack = { nav.popBackStack() })
+            GoalsScreen(
+                onBack = { nav.popBackStack() },
+                onAddGoal = { nav.navigate(Routes.goalEditor()) },
+                onEditLift = { id -> nav.navigate(Routes.goalEditor(exerciseId = id)) },
+                onEditCustom = { id -> nav.navigate(Routes.goalEditor(customId = id)) }
+            )
+        }
+        composable(
+            route = Routes.GOAL_EDITOR,
+            arguments = listOf(
+                navArgument(Routes.ARG_GOAL_EXERCISE_ID) { type = NavType.StringType; defaultValue = "" },
+                navArgument(Routes.ARG_GOAL_CUSTOM_ID) { type = NavType.StringType; defaultValue = "" }
+            )
+        ) { entry ->
+            GoalEditorScreen(
+                exerciseId = entry.arguments?.getString(Routes.ARG_GOAL_EXERCISE_ID)?.takeIf { it.isNotBlank() },
+                customId = entry.arguments?.getString(Routes.ARG_GOAL_CUSTOM_ID)?.toLongOrNull(),
+                onDone = { nav.popBackStack() }
+            )
         }
         composable(Routes.MIRROR_TEST) {
             MirrorTestScreen(onBack = { nav.popBackStack() })

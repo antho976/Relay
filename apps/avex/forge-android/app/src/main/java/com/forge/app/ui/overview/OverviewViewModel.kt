@@ -46,6 +46,8 @@ class OverviewViewModel @Inject constructor(
     private val trophyRepo: TrophyRepository,
     private val customizationRepo: CustomizationRepository,
     private val workoutRepo: WorkoutRepository,
+    private val goalRepo: com.forge.app.data.repo.GoalRepository,
+    private val extendedGoalRepo: com.forge.app.data.repo.ExtendedGoalRepository,
     private val sessionDao: SessionDao,
     private val sampleDataSeeder: com.forge.app.data.repo.SampleDataSeeder,
     private val adaptationRepo: com.forge.app.data.repo.AdaptationRepository,
@@ -94,6 +96,15 @@ class OverviewViewModel @Inject constructor(
             )
 
     private val weekStartMs = clock.nowMs() - 7L * 24 * 60 * 60 * 1000
+
+    /** Goals for the Home preview, recomputed whenever a goal is added/edited/removed OR a session
+     *  lands (which shifts lift bests + weekly tallies). Both reads are cheap aggregate queries. */
+    private val goalsFlow: kotlinx.coroutines.flow.Flow<Pair<List<com.forge.app.data.repo.GoalRepository.GoalProgress>, List<com.forge.app.data.repo.ExtendedGoalRepository.Progress>>> =
+        combine(goalRepo.observeAll(), extendedGoalRepo.observeAll(), statsRepo.observeWeeklyStats()) { _, _, _ ->
+            val lift = runCatching { goalRepo.goalsWithProgress() }.getOrDefault(emptyList())
+            val custom = runCatching { extendedGoalRepo.goalsWithProgress() }.getOrDefault(emptyList())
+            lift to custom
+        }.flowOn(Dispatchers.Default)
 
     val state: StateFlow<OverviewUiState> = combine(
         statsRepo.observeWeeklyStats(),
@@ -184,6 +195,8 @@ class OverviewViewModel @Inject constructor(
             .filter { it.target > 0 && it.trophyId !in unlockedIds }
             .maxByOrNull { it.progress.toFloat() / it.target }
         s.copy(topNearMiss = top?.let { nearMissLabel(it, useKg) })
+    }.combine(goalsFlow) { s, gc ->
+        s.copy(goals = gc.first, customGoals = gc.second)
     }.flowOn(Dispatchers.Default).stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(stopTimeoutMillis = 5_000),

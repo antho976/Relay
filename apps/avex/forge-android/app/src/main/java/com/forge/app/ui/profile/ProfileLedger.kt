@@ -30,11 +30,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontStyle
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.Features
-import com.forge.app.data.repo.SignatureLift
 import com.forge.app.domain.rank.StandingMetric
 import com.forge.app.domain.units.formatVolumeCompact
 import com.forge.app.domain.units.toDisplayWeight
@@ -77,9 +75,8 @@ internal fun ProfileBlock(
 
 /**
  * ALL-TIME — lifetime tallies as big open serif figures (two-up, no boxes), the count figures each
- * carrying a small ↑/↓ "vs last week" badge, then the SIGNATURE strip (top lift · most-logged day ·
- * usual hour) sharing this same block under its own small-caps label, with the cumulative
- * lifted-volume curve drawn full-width beneath as its own quiet chart.
+ * carrying a small ↑/↓ "vs last week" badge. The cumulative lifted-volume curve is a separate
+ * [LifetimeVolumeGraph] so the bodyweight figure can sit between the tallies and the curve.
  */
 @Composable
 internal fun AllTimeSection(
@@ -92,19 +89,12 @@ internal fun AllTimeSection(
     workoutsDelta: Int,
     setsDelta: Int,
     prsDelta: Int,
-    /** Cumulative lifted volume (lb), oldest → newest; powers the full-width curve. */
-    volumeSeriesLb: List<Double>,
-    /** Signature strip — shares this block, sitting between the figures and the curve. */
-    topLift: SignatureLift?,
-    mostLoggedDay: String?,
-    usualHour: String?,
     onBg: Color,
     muted: Color,
-    accent: Color,
-    outline: Color
+    accent: Color
 ) {
     val useKg = LocalForgeSettings.current.useKg
-    SectionHeader("ALL-TIME", muted, accent)
+    SectionHeader("ALL-TIME", muted)
     if (sessions == 0) {
         // Bare zeros read as "empty/broken" on a stranger's first open — name what fills them.
         InlineEmptyHint(
@@ -124,13 +114,24 @@ internal fun AllTimeSection(
         if (Features.SHOW_GAMIFICATION) add(StatCellSpec("$xp", "XP"))
     }
     StatCellGrid(specs, accent, muted, onBg)
-    // SIGNATURE lives in the same block, differentiated only by its small-caps label, and sits
-    // above the lifetime curve.
-    Spacer(Modifier.height(24.dp))
-    SignatureSection(topLift, mostLoggedDay, usualHour, onBg, muted, accent, outline)
-    if (volumeSeriesLb.size >= 2) {
-        val series = volumeSeriesLb.map { toDisplayWeight(it, useKg) }
-        Spacer(Modifier.height(24.dp))
+}
+
+/**
+ * The cumulative lifetime-volume curve (session by session), drawn full-width as its own quiet chart.
+ * Split from [AllTimeSection] so the bodyweight figure can sit above it and below the ALL-TIME
+ * tallies. Draws nothing under two logged sessions.
+ */
+@Composable
+internal fun LifetimeVolumeGraph(
+    volumeSeriesLb: List<Double>,
+    muted: Color,
+    accent: Color,
+    modifier: Modifier = Modifier
+) {
+    if (volumeSeriesLb.size < 2) return
+    val useKg = LocalForgeSettings.current.useKg
+    val series = volumeSeriesLb.map { toDisplayWeight(it, useKg) }
+    Column(modifier) {
         ProfileSparkline(series, accent, Modifier.fillMaxWidth().height(72.dp))
         Spacer(Modifier.height(8.dp))
         ChartCaption(accent, "LIFETIME VOLUME · SESSION BY SESSION", muted)
@@ -194,93 +195,6 @@ internal fun StandingSection(
             fontStyle = FontStyle.Italic, fontSize = 10.sp
         )
     }
-}
-
-/** SIGNATURE — top lift · most-logged day · usual hour, three open cells split by hairlines. */
-@Composable
-internal fun SignatureSection(
-    topLift: SignatureLift?,
-    mostLoggedDay: String?,
-    usualHour: String?,
-    onBg: Color,
-    muted: Color,
-    accent: Color,
-    outline: Color
-) {
-    val useKg = LocalForgeSettings.current.useKg
-    SectionHeader("SIGNATURE", muted, accent)
-    if (topLift == null && mostLoggedDay == null && usualHour == null) {
-        InlineEmptyHint(
-            "Your signature — your go-to lift, the day you train most, and your usual hour — takes shape after a few logged sessions.",
-            muted
-        )
-        return
-    }
-    // TOP LIFT names (e.g. "Close-Grip Lat Pulldown") run long, so it gets the lion's share of
-    // the width; MOST LOGGED / USUAL HOUR are short and sit compactly to the right.
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-        SignatureCell(
-            value = topLift?.name ?: "—",
-            label = if (topLift != null) "TOP LIFT · ${toDisplayWeight(topLift.weightLb, useKg).roundToInt()} ${unitLabel(useKg).uppercase()}" else "TOP LIFT",
-            onBg = onBg, muted = muted, modifier = Modifier.weight(1.7f)
-        )
-        SignatureDivider(outline)
-        SignatureCell(value = mostLoggedDay ?: "—", label = "MOST LOGGED", onBg = onBg, muted = muted, modifier = Modifier.weight(1f))
-        SignatureDivider(outline)
-        SignatureCell(value = usualHour ?: "—", label = "USUAL HOUR", onBg = onBg, muted = muted, modifier = Modifier.weight(1f))
-    }
-}
-
-/**
- * All-time cardio totals — three open cells, only shown once a non-rest session exists. When there
- * are ≥2 recent sessions carrying distance, a single distance trend line sits below the cells.
- * (Time is the cell number; a dual time+distance overlay normalises two incomparable scales onto one
- * box and reads as a meaningless crossing, so the chart shows distance alone.)
- */
-@Composable
-internal fun CardioSection(
-    sessions: Int,
-    minutes: Int,
-    distanceKm: Double,
-    distanceSeries: List<Double>,
-    onBg: Color,
-    muted: Color,
-    accent: Color,
-    outline: Color
-) {
-    val useMiles = LocalForgeSettings.current.useMiles
-    val timeLabel = if (minutes >= 60) "${minutes / 60}h ${minutes % 60}m" else "$minutes min"
-    val distLabel = if (distanceKm > 0) com.forge.app.domain.units.formatDistance(distanceKm, useMiles) else "—"
-    SectionHeader("CARDIO", muted, accent)
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-        SignatureCell("$sessions", "SESSIONS", onBg, muted, Modifier.weight(1f))
-        SignatureDivider(outline)
-        SignatureCell(timeLabel, "TIME", onBg, muted, Modifier.weight(1f))
-        SignatureDivider(outline)
-        SignatureCell(distLabel, "DISTANCE", onBg, muted, Modifier.weight(1f))
-    }
-    // Need ≥2 sessions and some actual distance for a meaningful trend.
-    if (distanceSeries.size >= 2 && distanceSeries.count { it > 0.0 } >= 2) {
-        Spacer(Modifier.height(16.dp))
-        ProfileSparkline(distanceSeries, accent, Modifier.fillMaxWidth().height(52.dp))
-        Spacer(Modifier.height(8.dp))
-        ChartCaption(accent, "DISTANCE · LAST ${distanceSeries.size}", muted)
-    }
-}
-
-@Composable
-private fun SignatureCell(value: String, label: String, onBg: Color, muted: Color, modifier: Modifier = Modifier) {
-    Column(modifier.padding(end = 8.dp)) {
-        Text(value, style = MaterialTheme.typography.titleMedium, color = onBg, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Spacer(Modifier.height(3.dp))
-        Text(label, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 8.sp)
-    }
-}
-
-@Composable
-private fun SignatureDivider(outline: Color) {
-    // Order matters: pad first, then size — sizing first would leave zero drawable width for the line.
-    Box(Modifier.padding(end = 8.dp).width(1.dp).height(30.dp).background(outline.copy(alpha = 0.3f)))
 }
 
 /** "412k" / "950" — compact lifetime volume (unit-less). */

@@ -1,7 +1,5 @@
 package com.forge.app.ui.profile
 
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -23,18 +21,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontStyle
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.data.repo.ExtendedGoalRepository
@@ -44,10 +36,10 @@ import com.forge.app.domain.units.unitLabel
 import com.forge.app.domain.units.weightInputValue
 import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.common.monthsAgoPhrase
+import com.forge.app.ui.goals.GoalProgressLine
 import com.forge.app.ui.goals.customGoalTitle
 import com.forge.app.ui.goals.customGoalValueLine
 import com.forge.app.ui.overview.state.OnThisDayMemory
-import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.theme.LocalForgeSettings
 import java.io.File
 import java.text.SimpleDateFormat
@@ -58,7 +50,7 @@ import java.util.Locale
 private val StripCellWidth = 132.dp
 private val StripCellHeight = 176.dp
 
-/** A profile goal tile — a lift target or an auto-tracked custom goal, unified for previewing. */
+/** A goal tile — a lift target or an auto-tracked custom goal, unified for previewing. */
 private sealed interface GoalTile {
     val fraction: Float
     val achieved: Boolean
@@ -76,8 +68,9 @@ private sealed interface GoalTile {
 
 /**
  * GOALS — the top goals as a stack of open progress lines (achieved-first / closest-first), mixing
- * lift targets and auto-tracked custom goals, each bar sweeping in on entrance. Capped at three so it
- * stays a teaser; the header action opens the full Goals screen, where goals are added and edited.
+ * lift targets and auto-tracked custom goals, each bar sweeping in on entrance. Home's teaser
+ * (dropped from the Profile 2026-07-03) — capped at three; the header action opens the full Goals
+ * screen, where goals are added and edited.
  */
 @Composable
 internal fun GoalLinesSection(
@@ -91,7 +84,7 @@ internal fun GoalLinesSection(
 ) {
     val total = goals.size + customGoals.size
     SectionHeader(
-        "GOALS", muted, accent,
+        "GOALS", muted,
         action = when {
             total == 0 -> null
             total > 3 -> "all $total →"
@@ -110,8 +103,10 @@ internal fun GoalLinesSection(
         }
         return
     }
+    // In-progress goals lead (closest-first), then achieved ones — so a full slate of reached goals
+    // can't bury the active target you're actually working toward.
     val preview = (goals.map { GoalTile.Lift(it) } + customGoals.map { GoalTile.Custom(it) })
-        .sortedWith(compareByDescending<GoalTile> { it.achieved }.thenByDescending { it.fraction })
+        .sortedWith(compareBy<GoalTile> { it.achieved }.thenByDescending { it.fraction })
         .take(3)
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(18.dp)) {
         preview.forEachIndexed { i, tile -> GoalLine(tile, i, onOpenGoals, onBg, muted, accent, outline) }
@@ -142,46 +137,14 @@ private fun GoalLine(
             valueLine = customGoalValueLine(tile.g, settings.useKg, settings.useMiles)
         }
     }
-    val frac = tile.fraction.coerceIn(0f, 1f)
-    // Bar sweeps out from zero on entrance, staggered per row — the animation Antho liked, now on a line.
-    var play by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { play = true }
-    val w by animateFloatAsState(
-        targetValue = if (play) frac else 0f,
-        animationSpec = tween(
-            durationMillis = ForgeMotion.scaledDuration(ForgeMotion.DurationEmphasized),
-            delayMillis = ForgeMotion.scaledDuration(index * 90),
-            easing = ForgeMotion.Standard
-        ),
-        label = "goal-line"
+    // The shared goal line (ui/goals) — one visual language whether a goal shows here or on the
+    // Goals screen; the sweep-in animation lives in the shared component.
+    GoalProgressLine(
+        title = name, valueLine = valueLine,
+        fraction = tile.fraction, achieved = tile.achieved, index = index,
+        onBg = onBg, muted = muted, accent = accent, outline = outline,
+        onClick = onClick
     )
-    Column(Modifier.fillMaxWidth().bounceClick { onClick() }) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                name, style = MaterialTheme.typography.bodyMedium, color = onBg,
-                maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f)
-            )
-            Spacer(Modifier.width(8.dp))
-            if (tile.achieved) Text("✓", style = MaterialTheme.typography.titleSmall, color = accent)
-            else Text("${(frac * 100).toInt()}%", style = MaterialTheme.typography.labelMedium, color = onBg)
-        }
-        Spacer(Modifier.height(7.dp))
-        Box(
-            Modifier.fillMaxWidth().height(3.dp)
-                .clip(RoundedCornerShape(50)).background(outline.copy(alpha = 0.25f))
-        ) {
-            Box(
-                Modifier.fillMaxWidth(w).fillMaxHeight()
-                    .clip(RoundedCornerShape(50))
-                    .background(if (tile.achieved) accent else onBg)
-            )
-        }
-        Spacer(Modifier.height(5.dp))
-        Text(
-            valueLine, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp,
-            maxLines = 1, overflow = TextOverflow.Ellipsis
-        )
-    }
 }
 
 /**
@@ -200,11 +163,10 @@ internal fun GalleryStrip(
     onViewAll: () -> Unit,
     onBg: Color,
     muted: Color,
-    accent: Color,
     outline: Color
 ) {
     Box(Modifier.padding(horizontal = 20.dp)) {
-        SectionHeader("GALLERY", muted, accent, action = "+ add", onAction = onAdd)
+        SectionHeader("GALLERY", muted, action = "+ add", onAction = onAdd)
     }
     if (photos.isEmpty()) {
         Column(Modifier.padding(horizontal = 20.dp)) {
@@ -237,7 +199,7 @@ internal fun GalleryStrip(
             StripPhotoCell(photo, fileFor(photo), onView)
         }
         item(key = "view-all") {
-            ViewAllCell(photos.size, onViewAll, onBg, accent, outline)
+            ViewAllCell(photos.size, onViewAll, onBg, muted, outline)
         }
     }
     Spacer(Modifier.height(10.dp))
@@ -269,7 +231,7 @@ private fun StripPhotoCell(photo: ProgressPhoto, file: File, onView: (ProgressPh
 
 /** The strip's tail cell — total count + a route into the full Gallery (albums, compare, search). */
 @Composable
-private fun ViewAllCell(count: Int, onViewAll: () -> Unit, onBg: Color, accent: Color, outline: Color) {
+private fun ViewAllCell(count: Int, onViewAll: () -> Unit, onBg: Color, muted: Color, outline: Color) {
     // No fill — just a hairline ghost cell, so it sits back into the page instead of reading as a
     // solid slab beside the photos.
     Box(
@@ -284,7 +246,7 @@ private fun ViewAllCell(count: Int, onViewAll: () -> Unit, onBg: Color, accent: 
             Spacer(Modifier.height(4.dp))
             Text(
                 "GALLERY →", style = MaterialTheme.typography.labelSmall,
-                color = accent, fontSize = 9.sp, letterSpacing = 1.5.sp
+                color = muted, fontSize = 9.sp, letterSpacing = 1.5.sp
             )
         }
     }
@@ -303,7 +265,7 @@ private fun PrivateNote(muted: Color) {
 @Composable
 internal fun OnThisDaySection(memory: OnThisDayMemory, onBg: Color, muted: Color, accent: Color) {
     val useKg = LocalForgeSettings.current.useKg
-    SectionHeader("ON THIS DAY", muted, accent)
+    SectionHeader("ON THIS DAY", muted)
     val ago = monthsAgoPhrase(memory.monthsAgo)
     Row(Modifier.height(IntrinsicSize.Min)) {
         Box(

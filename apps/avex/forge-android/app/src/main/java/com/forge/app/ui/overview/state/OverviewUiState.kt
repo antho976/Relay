@@ -111,7 +111,11 @@ data class OverviewUiState(
     /** True when a big cardio block was logged in the last ~36h — drives a "go easier today" nudge. */
     val heavyCardioRecent: Boolean = false,
     /** The concrete block behind [heavyCardioRecent] — e.g. "Run · 63 min · yesterday" (null when none). */
-    val recentCardioLead: String? = null
+    val recentCardioLead: String? = null,
+    /** Lift-target goals + auto-tracked custom goals (achieved-first/closest-first). Home previews the
+     *  top few as progress lines — the ambient motivator that replaced the generic coach entry. */
+    val goals: List<com.forge.app.data.repo.GoalRepository.GoalProgress> = emptyList(),
+    val customGoals: List<com.forge.app.data.repo.ExtendedGoalRepository.Progress> = emptyList()
 ) {
     val hasActiveSession: Boolean get() = activeSessionDayKey != null
 }

@@ -17,6 +17,10 @@ class CardioRepository @Inject constructor(
 
     fun observeSince(sinceEpochMs: Long): Flow<List<CardioEntry>> = cardioDao.observeSince(sinceEpochMs)
 
+    /** Non-rest cardio logged within [fromMs, toMs) — a bounded query for a single day's detail, so
+     *  callers don't load the full history just to filter one day out of it. */
+    suspend fun entriesInRange(fromMs: Long, toMs: Long): List<CardioEntry> = cardioDao.between(fromMs, toMs)
+
     /** Total cardio minutes since [sinceEpochMs], excluding REST entries. */
     fun observeMinutesSince(sinceEpochMs: Long): Flow<Int?> = cardioDao.observeMinutesSince(sinceEpochMs)
 

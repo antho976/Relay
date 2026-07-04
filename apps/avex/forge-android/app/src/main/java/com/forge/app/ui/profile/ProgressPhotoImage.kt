@@ -65,12 +65,16 @@ private fun decodeOriented(file: File, reqPx: Int): Bitmap? {
     val decodedMax = maxOf(decoded.width, decoded.height)
     val bmp = if (decodedMax > reqPx && decodedMax > 0) {
         val ratio = reqPx.toFloat() / decodedMax
-        Bitmap.createScaledBitmap(
-            decoded,
-            (decoded.width * ratio).toInt().coerceAtLeast(1),
-            (decoded.height * ratio).toInt().coerceAtLeast(1),
-            true
-        ).also { if (it !== decoded) decoded.recycle() }
+        // Guard the scale allocation like the rotation step below — a very large source can OOM here,
+        // and an uncaught throw would crash produceState's coroutine. Fall back to the valid `decoded`.
+        runCatching {
+            Bitmap.createScaledBitmap(
+                decoded,
+                (decoded.width * ratio).toInt().coerceAtLeast(1),
+                (decoded.height * ratio).toInt().coerceAtLeast(1),
+                true
+            )
+        }.getOrDefault(decoded).also { if (it !== decoded) decoded.recycle() }
     } else decoded
 
     val orientation = runCatching {
@@ -84,5 +88,5 @@ private fun decodeOriented(file: File, reqPx: Int): Bitmap? {
     }
     return runCatching {
         Bitmap.createBitmap(bmp, 0, 0, bmp.width, bmp.height, Matrix().apply { postRotate(degrees) }, true)
-    }.getOrDefault(bmp)
+    }.getOrDefault(bmp).also { if (it !== bmp) bmp.recycle() }
 }

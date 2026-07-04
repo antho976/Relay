@@ -33,19 +33,9 @@ internal fun ProfileSkeleton(modifier: Modifier = Modifier, topInset: Dp = 0.dp)
         Box(Modifier.fillMaxWidth().height(240.dp + topInset).forgeShimmer())
 
         Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp)) {
-            Spacer(Modifier.height(24.dp))
-
-            // BODYWEIGHT label + big figure + unit + a short trend line (now leads the page).
-            ShimmerBar(96.dp, 10.dp)
-            Spacer(Modifier.height(14.dp))
-            ShimmerBar(90.dp, 34.dp)
-            Spacer(Modifier.height(6.dp))
-            ShimmerBar(56.dp, 8.dp)
-            Spacer(Modifier.height(14.dp))
-            ShimmerBlock(Modifier.fillMaxWidth().height(56.dp))
             Spacer(Modifier.height(28.dp))
 
-            // ALL-TIME label + open 2×2 figure grid + the full-width volume curve.
+            // ALL-TIME label + open 2×2 figure grid.
             ShimmerBar(96.dp, 10.dp)
             Spacer(Modifier.height(14.dp))
             repeat(2) { row ->
@@ -60,28 +50,20 @@ internal fun ProfileSkeleton(modifier: Modifier = Modifier, topInset: Dp = 0.dp)
                 }
                 if (row == 0) Spacer(Modifier.height(18.dp))
             }
-            Spacer(Modifier.height(20.dp))
+            Spacer(Modifier.height(28.dp))
+
+            // BODYWEIGHT label + big figure + unit (sits between the tallies and the curve).
+            ShimmerBar(96.dp, 10.dp)
+            Spacer(Modifier.height(14.dp))
+            ShimmerBar(90.dp, 34.dp)
+            Spacer(Modifier.height(6.dp))
+            ShimmerBar(56.dp, 8.dp)
+            Spacer(Modifier.height(28.dp))
+
+            // Lifetime-volume curve.
             ShimmerBlock(Modifier.fillMaxWidth().height(72.dp))
             Spacer(Modifier.height(28.dp))
 
-            // GOALS label + a stack of open progress lines.
-            ShimmerBar(96.dp, 10.dp)
-            Spacer(Modifier.height(14.dp))
-            Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-                repeat(3) {
-                    Column(Modifier.fillMaxWidth()) {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            ShimmerBar(120.dp, 12.dp)
-                            ShimmerBar(28.dp, 12.dp)
-                        }
-                        Spacer(Modifier.height(7.dp))
-                        Box(Modifier.fillMaxWidth().height(3.dp).clip(RoundedCornerShape(50)).forgeShimmer())
-                        Spacer(Modifier.height(5.dp))
-                        ShimmerBar(64.dp, 8.dp)
-                    }
-                }
-            }
-            Spacer(Modifier.height(28.dp))
             ShimmerBar(96.dp, 10.dp)
             Spacer(Modifier.height(14.dp))
         }

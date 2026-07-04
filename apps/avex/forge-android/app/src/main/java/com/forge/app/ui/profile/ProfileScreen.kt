@@ -67,7 +67,7 @@ import java.util.Locale
 
 /**
  * The "You" hub: an identity card (avatar · name · streak), a dashboard of stat tiles, signature
- * lifts, goals-as-rings, the private gallery and an on-this-day throwback. The rank ladder, offline
+ * lifts, the private gallery and an on-this-day throwback. The rank ladder, offline
  * standing and trophy case stay gated behind [Features.SHOW_GAMIFICATION]. All local — no account.
  * See [ProfileViewModel] / `data/repo/ProfileRepository` / `domain/rank`.
  */
@@ -77,7 +77,6 @@ fun ProfileScreen(
     // Null when shown as a hub pager page (no redundant back arrow); a real callback as a deep route.
     onBack: (() -> Unit)? = null,
     onOpenTrophies: () -> Unit,
-    onOpenGoals: () -> Unit = {},
     onOpenPhotoGallery: () -> Unit = {},
     viewModel: ProfileViewModel = hiltViewModel()
 ) {
@@ -190,15 +189,35 @@ fun ProfileScreen(
                     Spacer(Modifier.height(20.dp))
                     FirstTouchTip(
                         "Your profile starts with your first set.",
-                        "Log a workout and this page fills in — your lifetime totals, signature lifts, goals and progress photos.",
+                        "Log a workout and this page fills in — your lifetime totals, signature lifts and progress photos.",
                         modifier = pad
                     )
                 }
 
-                // ── Bodyweight (index 1) — surfaced right under the cover; it's the number Antho ──
-                //    checks most, so it leads the page rather than sitting below the lifetime tallies.
-                Spacer(Modifier.height(24.dp))
-                Column(pad.statsEntrance(1)) {
+                // ── Rank track (gamification, index 1) ───────────────────────────
+                if (Features.SHOW_GAMIFICATION) state.rank?.let { r ->
+                    Spacer(Modifier.height(20.dp))
+                    Column(pad.statsEntrance(1)) {
+                        RankSection(r, muted, accent, outline, onInfo = { showXpInfo = true })
+                    }
+                }
+
+                // ── All-time figures → bodyweight → lifetime volume curve (index 2) ─
+                //    Bodyweight sits between the tallies and the curve (Antho 2026-07-03).
+                Spacer(Modifier.height(28.dp))
+                Column(pad.statsEntrance(2)) {
+                    AllTimeSection(
+                        sessions = state.totalSessions,
+                        volumeLb = state.totalVolumeLb,
+                        prs = state.totalPrs,
+                        sets = state.totalSets,
+                        xp = state.rank?.xpTotal ?: 0L,
+                        workoutsDelta = state.workoutsThisWeek - state.workoutsLastWeek,
+                        setsDelta = state.setsThisWeek - state.setsLastWeek,
+                        prsDelta = state.prsThisWeek - state.prsLastWeek,
+                        onBg = onBg, muted = muted, accent = accent
+                    )
+                    Spacer(Modifier.height(28.dp))
                     BodySection(
                         entries = bodyweight,
                         onLog = {
@@ -210,75 +229,39 @@ fun ProfileScreen(
                         },
                         onBg = onBg, muted = muted, accent = accent
                     )
-                }
-
-                // ── Rank track (gamification, index 2) ───────────────────────────
-                if (Features.SHOW_GAMIFICATION) state.rank?.let { r ->
-                    Spacer(Modifier.height(28.dp))
-                    Column(pad.statsEntrance(2)) {
-                        RankSection(r, muted, accent, outline, onInfo = { showXpInfo = true })
+                    if (state.lifetimeVolumeSeriesLb.size >= 2) {
+                        Spacer(Modifier.height(28.dp))
+                        LifetimeVolumeGraph(state.lifetimeVolumeSeriesLb, muted, accent)
                     }
-                }
-
-                // ── All-time figures + signature + lifetime volume curve (index 3) ─
-                Spacer(Modifier.height(28.dp))
-                Column(pad.statsEntrance(3)) {
-                    AllTimeSection(
-                        sessions = state.totalSessions,
-                        volumeLb = state.totalVolumeLb,
-                        prs = state.totalPrs,
-                        sets = state.totalSets,
-                        xp = state.rank?.xpTotal ?: 0L,
-                        workoutsDelta = state.workoutsThisWeek - state.workoutsLastWeek,
-                        setsDelta = state.setsThisWeek - state.setsLastWeek,
-                        prsDelta = state.prsThisWeek - state.prsLastWeek,
-                        volumeSeriesLb = state.lifetimeVolumeSeriesLb,
-                        topLift = state.topLift,
-                        mostLoggedDay = state.mostLoggedDay,
-                        usualHour = state.usualHour,
-                        onBg = onBg, muted = muted, accent = accent, outline = outline
-                    )
                 }
 
                 if (Features.SHOW_GAMIFICATION) {
                     Spacer(Modifier.height(28.dp))
-                    Column(pad.statsEntrance(4)) {
+                    Column(pad.statsEntrance(3)) {
                         StandingSection(state.standings, onBg, muted, accent, outline)
                     }
                 }
 
-                // Signature now shares the ALL-TIME block above (index 3), so no separate section here.
-                // Bodyweight moved up near the cover (index 1), above the lifetime tallies.
+                // Signature + Cardio sections removed 2026-07-03 (Antho), Goals too (they live on
+                // Home and the Goals screen) — the profile keeps the all-time figures + bodyweight
+                // + lifetime-volume graph, gallery and on-this-day.
 
-                if (state.cardioSessions > 0) {
-                    Spacer(Modifier.height(28.dp))
-                    Column(pad.statsEntrance(5)) {
-                        CardioSection(state.cardioSessions, state.cardioMinutes, state.cardioDistanceKm, state.cardioDistanceSeries, onBg, muted, accent, outline)
-                    }
-                }
-
-                // ── Goals as open progress lines (index 6) ───────────────────────
+                // ── Gallery filmstrip (index 4) — full-bleed, pads itself ────────
                 Spacer(Modifier.height(28.dp))
-                Column(pad.statsEntrance(6)) {
-                    GoalLinesSection(state.goals, state.customGoals, onOpenGoals, onBg, muted, accent, outline)
-                }
-
-                // ── Gallery filmstrip (index 7) — full-bleed, pads itself ────────
-                Spacer(Modifier.height(28.dp))
-                Column(Modifier.fillMaxWidth().statsEntrance(7)) {
-                    GalleryStrip(state.photos, viewModel::fileFor, onAdd = { pickPhoto() }, onView = { viewing = it }, onViewAll = onOpenPhotoGallery, onBg, muted, accent, outline)
+                Column(Modifier.fillMaxWidth().statsEntrance(4)) {
+                    GalleryStrip(state.photos, viewModel::fileFor, onAdd = { pickPhoto() }, onView = { viewing = it }, onViewAll = onOpenPhotoGallery, onBg, muted, outline)
                 }
 
                 state.memory?.let { m ->
                     Spacer(Modifier.height(28.dp))
-                    Column(pad.statsEntrance(8)) {
+                    Column(pad.statsEntrance(5)) {
                         OnThisDaySection(m, onBg, muted, accent)
                     }
                 }
 
                 if (Features.SHOW_GAMIFICATION) {
                     Spacer(Modifier.height(28.dp))
-                    Column(pad.statsEntrance(9)) {
+                    Column(pad.statsEntrance(6)) {
                         TrophyCaseSection(state.trophyGrid, state.trophyUnlocked, state.trophyTotal, state.closestTrophy, onOpenTrophies, onBg, muted, accent, outline)
                     }
                 }

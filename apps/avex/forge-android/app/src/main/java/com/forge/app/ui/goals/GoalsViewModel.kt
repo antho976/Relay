@@ -8,10 +8,14 @@ import com.forge.app.data.repo.GoalRepository
 import com.forge.app.domain.goal.GoalMetric
 import com.forge.app.domain.goal.GoalPeriod
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.launchIn
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -43,18 +47,31 @@ class GoalsViewModel @Inject constructor(
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
 
-    init { reload() }
+    init {
+        // Reactive: reload whenever a goal table or the hidden-exercises pref changes, so an edit
+        // made on the routed editor screen is already reflected here when you come back.
+        combine(goalRepo.observeAll(), extendedGoalRepo.observeAll(), settingsRepo.dislikedExercises) { _, _, _ -> }
+            .onEach { reload() }
+            .launchIn(viewModelScope)
+    }
 
-    private fun reload() = viewModelScope.launch {
-        val liftGoals = runCatching { goalRepo.goalsWithProgress() }.getOrDefault(emptyList())
-        val customGoals = runCatching { extendedGoalRepo.goalsWithProgress() }.getOrDefault(emptyList())
-        val disliked = runCatching { settingsRepo.dislikedExercises.first() }.getOrDefault(emptySet())
-        _state.value = UiState(
-            loading = false,
-            liftGoals = liftGoals,
-            customGoals = customGoals,
-            liftPickerExclude = liftGoals.mapTo(mutableSetOf()) { it.exerciseId }.apply { addAll(disliked) },
-        )
+    /** Single-flight: a fresh reload cancels any in-flight one so a slow earlier read can't land after
+     *  a newer one and overwrite _state with a stale snapshot (e.g. a just-deleted goal reappearing). */
+    private var reloadJob: Job? = null
+
+    private fun reload() {
+        reloadJob?.cancel()
+        reloadJob = viewModelScope.launch {
+            val liftGoals = runCatching { goalRepo.goalsWithProgress() }.getOrDefault(emptyList())
+            val customGoals = runCatching { extendedGoalRepo.goalsWithProgress() }.getOrDefault(emptyList())
+            val disliked = runCatching { settingsRepo.dislikedExercises.first() }.getOrDefault(emptySet())
+            _state.value = UiState(
+                loading = false,
+                liftGoals = liftGoals,
+                customGoals = customGoals,
+                liftPickerExclude = liftGoals.mapTo(mutableSetOf()) { it.exerciseId }.apply { addAll(disliked) },
+            )
+        }
     }
 
     // ─── Lift targets (exercise_goal) ──────────────────────────────────────────

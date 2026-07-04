@@ -142,6 +142,7 @@ fun HubScreen(
                     // Coach is its own hub page when enabled — swipe to it rather than pushing the modal brief.
                     onOpenCoachBrief = { goToTab(BottomTab.COACH) },
                     onOpenCoachLab = { nav.navigate(Routes.COACH_LAB) },
+                    onOpenGoals = { nav.navigate(Routes.GOALS) },
                     onOpenProfile = { goToTab(BottomTab.PROFILE) },
                     onOpenSession = { sessionId -> nav.navigate(Routes.sessionDetail(sessionId)) },
                     // "View all" opens the real searchable History destination (a proper back-stack
@@ -155,7 +156,6 @@ fun HubScreen(
                 )
                 BottomTab.PROFILE -> ProfileScreen(
                     onOpenTrophies = { nav.navigate(Routes.TROPHIES) },
-                    onOpenGoals = { nav.navigate(Routes.GOALS) },
                     onOpenPhotoGallery = { nav.navigate(Routes.MIRROR_TEST) }
                 )
             }

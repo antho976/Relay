@@ -43,7 +43,7 @@ internal fun BodySection(
 ) {
     val useKg = LocalForgeSettings.current.useKg
     val unit = unitLabel(useKg)
-    SectionHeader("BODYWEIGHT", muted, accent, action = "+ log", onAction = onLog)
+    SectionHeader("BODYWEIGHT", muted, action = "+ log", onAction = onLog)
     if (entries.isEmpty()) {
         // Just a quiet hint under the header — the "+ log" action IS the entry point. A bold CTA row
         // here read as out of place between the populated sections.

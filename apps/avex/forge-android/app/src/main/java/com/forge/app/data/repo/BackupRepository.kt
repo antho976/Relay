@@ -236,8 +236,8 @@ class BackupRepository @Inject constructor(
      * the session detail page. Same lossy/human-readable shape as one entry of [exportFullDataJson],
      * with library-resolved exercise names. Returns null when the session id no longer exists.
      */
-    suspend fun exportSessionJson(sessionId: Long): File? {
-        val s = sessionDao.get(sessionId) ?: return null
+    suspend fun exportSessionJson(sessionId: Long): File? = withContext(Dispatchers.IO) {
+        val s = sessionDao.get(sessionId) ?: return@withContext null
         val exercises = loggedExerciseDao.forSession(s.id)
         val root = JSONObject().apply {
             put("exportVersion", 1)
@@ -250,7 +250,7 @@ class BackupRepository @Inject constructor(
                 put("startedAt", s.startedAt)
                 put("finishedAt", s.finishedAt ?: 0)
                 put("activeSeconds", activeSecondsOf(s))
-                put("totalVolumeLb", s.totalVolumeLb ?: 0)
+                put("totalVolumeLb", s.totalVolumeLb ?: 0.0)
                 put("prCount", s.prCount)
                 put("setCount", s.setCount)
                 put("sessionType", s.sessionType)
@@ -273,7 +273,7 @@ class BackupRepository @Inject constructor(
                         sets.forEach { set ->
                             setArr.put(JSONObject().apply {
                                 put("weightText", set.weightText)
-                                put("weightLb", set.weightLb ?: 0)
+                                put("weightLb", set.weightLb ?: 0.0)
                                 put("reps", set.reps)
                                 put("rpe", set.rpe ?: 0)
                                 put("completedAt", set.completedAt)
@@ -286,10 +286,11 @@ class BackupRepository @Inject constructor(
                 put("exercises", exArr)
             })
         }
-        // Session-id in the filename so saving several sessions doesn't overwrite one another.
+        // Session-id in the filename so saving several sessions doesn't overwrite one another (and a
+        // re-export of the same session overwrites its own file rather than accumulating).
         val file = File(context.filesDir, "forge_session_${s.id}.json")
         file.writeText(root.toString(2))
-        return file
+        file
     }
 
     /** RFC 4180 CSV field: quote and double embedded quotes when the value holds a comma/quote/newline. */

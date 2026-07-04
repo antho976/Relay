@@ -22,6 +22,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -69,7 +70,9 @@ internal fun ColumnScope.E1rmComparisonList(
     useKg: Boolean,
     c: StatsColors,
     /** A lift to open pre-expanded — set when a record tap deep-links here. */
-    focusLift: String? = null
+    focusLift: String? = null,
+    /** Bumps on every record tap so re-tapping the same [focusLift] re-expands its row. */
+    focusNonce: Int = 0
 ) {
     val maxE1 = lifts.maxOf { it.currentE1rm }.coerceAtLeast(1.0)
     // The comparison bars glide in on first appearance, staggered down the list — the same motion
@@ -84,7 +87,8 @@ internal fun ColumnScope.E1rmComparisonList(
             curve = curves.firstOrNull { it.exerciseId == lift.exerciseId },
             useKg = useKg,
             c = c,
-            initiallyExpanded = lift.exerciseId == focusLift
+            isFocused = lift.exerciseId == focusLift,
+            focusNonce = focusNonce
         )
     }
 }
@@ -103,12 +107,15 @@ private fun E1rmDrillRow(
     curve: StrengthCurve?,
     useKg: Boolean,
     c: StatsColors,
-    initiallyExpanded: Boolean
+    isFocused: Boolean,
+    focusNonce: Int
 ) {
     val display = remember(lift.history, useKg) { lift.history.map { toDisplayWeight(it, useKg) } }
     val expandable = display.size >= 2
-    // Re-keyed on the deep-link flag so tapping a record re-opens the row even if previously collapsed.
-    var expanded by rememberSaveable(lift.exerciseId, initiallyExpanded) { mutableStateOf(initiallyExpanded && expandable) }
+    var expanded by rememberSaveable(lift.exerciseId) { mutableStateOf(isFocused && expandable) }
+    // A record tap deep-links here and focuses this row; focusNonce changes on every such tap, so
+    // re-tapping the already-focused lift re-expands it even after the user manually collapsed it.
+    LaunchedEffect(focusNonce) { if (isFocused && expandable) expanded = true }
     val current = toDisplayWeight(lift.currentE1rm, useKg).roundToInt()
     val unit = unitLabel(useKg)
 

@@ -31,6 +31,9 @@ class ExtendedGoalRepository @Inject constructor(
     private val bodyweightDao: BodyweightDao,
     private val clock: Clock,
 ) {
+    /** Raw goals stream — a cheap change signal (add/edit/delete) callers recompute progress off. */
+    fun observeAll(): kotlinx.coroutines.flow.Flow<List<ExtendedGoal>> = dao.observeAll()
+
     /** One custom goal joined with its live progress. Values are in each metric's canonical unit. */
     data class Progress(
         val id: Long,
@@ -112,13 +115,16 @@ class ExtendedGoalRepository @Inject constructor(
             GoalPeriod.ALL -> 0L
         }
         return when (metric) {
+            // between() bounds the window to [windowStart, now) and drops rest-day rows, so a
+            // future-dated entry can't inflate a this-week/month total (which the sessions path,
+            // aggregateInRange(windowStart, now), already guards against).
             GoalMetric.CARDIO_DISTANCE ->
                 if (period == GoalPeriod.ALL) cardioDao.totalDistanceKm() ?: 0.0
-                else cardioDao.since(windowStart).filter { it.type != REST }.sumOf { it.distanceKm ?: 0.0 }
+                else cardioDao.between(windowStart, now).sumOf { it.distanceKm ?: 0.0 }
 
             GoalMetric.CARDIO_MINUTES ->
                 if (period == GoalPeriod.ALL) (cardioDao.totalMinutes() ?: 0).toDouble()
-                else cardioDao.since(windowStart).filter { it.type != REST }.sumOf { it.durationMin.toDouble() }
+                else cardioDao.between(windowStart, now).sumOf { it.durationMin.toDouble() }
 
             GoalMetric.SESSIONS ->
                 sessionDao.aggregateInRange(windowStart, now).sessionCount.toDouble()
@@ -129,10 +135,5 @@ class ExtendedGoalRepository @Inject constructor(
             GoalMetric.BODYWEIGHT ->
                 bodyweightDao.latest()?.weightLb ?: (g.stretchValue ?: 0.0)
         }
-    }
-
-    private companion object {
-        /** Rest-day cardio rows don't count toward distance/time goals (mirrors CardioDao). */
-        const val REST = "rest"
     }
 }

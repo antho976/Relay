@@ -6,7 +6,6 @@ import com.forge.app.data.db.dao.SessionDao
 import com.forge.app.data.repo.AdaptationRepository
 import com.forge.app.data.repo.CardioRepository
 import com.forge.app.data.repo.StatsRepository
-import com.forge.app.domain.cardio.CardioType
 import com.forge.app.ui.gym.history.HistoryItem
 import com.forge.app.ui.gym.stats.state.StatsUiState
 import com.forge.app.ui.gym.stats.state.balanceRatioUi
@@ -18,7 +17,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -81,9 +79,9 @@ class StatsViewModel @Inject constructor(
             val fromMs = date.atStartOfDay(zone).toInstant().toEpochMilli()
             val toMs = date.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
             val workouts = sessionDao.finishedInRange(fromMs, toMs).map { HistoryItem.Workout(it) }
-            val cardio = cardioRepo.observeAll().first()
-                .filter { it.date in fromMs until toMs && it.type != CardioType.REST.code }
-                .map { HistoryItem.Cardio(it) }
+            // Bounded query (non-rest, in [fromMs, toMs)) instead of loading the whole cardio history
+            // and filtering one day out of it.
+            val cardio = cardioRepo.entriesInRange(fromMs, toMs).map { HistoryItem.Cardio(it) }
             StatsDayDetail(date, (workouts + cardio).sortedByDescending { it.dateMs })
         }.getOrNull()?.let { _dayDetail.value = it }
     }

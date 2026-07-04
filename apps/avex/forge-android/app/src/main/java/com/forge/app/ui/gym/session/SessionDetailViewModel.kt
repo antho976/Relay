@@ -8,6 +8,7 @@ import com.forge.app.data.repo.StatsRepository
 import com.forge.app.ui.gym.session.state.SessionDetailUiState
 import com.forge.app.ui.nav.Routes
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -42,10 +43,15 @@ class SessionDetailViewModel @Inject constructor(
         }
     }
 
+    /** In-flight export so a double-tap doesn't launch two concurrent writers of the same file. */
+    private var exportJob: Job? = null
+
     /** Write this session's data to a JSON file, then surface its path so the screen can share it. */
-    fun exportSession() = viewModelScope.launch {
-        if (sessionId < 0) return@launch
-        backupRepo.exportSessionJson(sessionId)?.let { _exportPath.value = it.absolutePath }
+    fun exportSession() {
+        if (sessionId < 0 || exportJob?.isActive == true) return
+        exportJob = viewModelScope.launch {
+            backupRepo.exportSessionJson(sessionId)?.let { _exportPath.value = it.absolutePath }
+        }
     }
 
     fun clearExportPath() { _exportPath.value = null }

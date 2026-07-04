@@ -32,14 +32,14 @@ import com.forge.app.ui.common.bounceClick
  */
 
 /**
- * A quiet small-caps section anchor (label + optional accent action). Spacing and the big figures
- * themselves carry the page structure — this is just the label.
+ * A quiet small-caps section anchor (label + optional action). Spacing and the big figures
+ * themselves carry the page structure — this is just the label. The action reads muted like the
+ * label, not accent — same quiet register as RECENT's "view all" on Home.
  */
 @Composable
 internal fun SectionHeader(
     label: String,
     muted: Color,
-    accent: Color,
     action: String? = null,
     onAction: (() -> Unit)? = null
 ) {
@@ -50,7 +50,7 @@ internal fun SectionHeader(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(label, style = MaterialTheme.typography.labelMedium, color = muted)
-        if (action != null) Text(action, style = MaterialTheme.typography.labelSmall, color = accent)
+        if (action != null) Text(action, style = MaterialTheme.typography.labelSmall, color = muted)
     }
 }
 

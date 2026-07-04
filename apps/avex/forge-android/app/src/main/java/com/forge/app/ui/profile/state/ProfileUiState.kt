@@ -1,7 +1,5 @@
 package com.forge.app.ui.profile.state
 
-import com.forge.app.data.repo.ExtendedGoalRepository
-import com.forge.app.data.repo.GoalRepository
 import com.forge.app.data.repo.ProgressPhoto
 import com.forge.app.data.repo.SignatureLift
 import com.forge.app.data.repo.TrophyCell
@@ -23,15 +21,13 @@ data class ProfileUiState(
     val rank: RankInfo? = null,
     val xp: XpBreakdown? = null,
 
-    // All-time (lifetime tallies + cumulative-volume curve)
+    // All-time lifetime tallies
     val totalSessions: Int = 0,
     val totalVolumeLb: Double = 0.0,
     val totalPrs: Int = 0,
     val totalSets: Int = 0,
     val streakDays: Int = 0,
     val longestStreakDays: Int = 0,
-    /** Cumulative lifted volume (lb), one point per session, oldest → newest; drives the All-Time graph. */
-    val lifetimeVolumeSeriesLb: List<Double> = emptyList(),
 
     // This-week vs last-week tallies — the All-Time tiles' "vs last week" arrows.
     val workoutsThisWeek: Int = 0,
@@ -48,11 +44,6 @@ data class ProfileUiState(
     val topLift: SignatureLift? = null,
     val mostLoggedDay: String? = null,
     val usualHour: String? = null,
-
-    // Goals (all set goals, achieved-first then closest-first; the Profile previews the top few)
-    val goals: List<GoalRepository.GoalProgress> = emptyList(),
-    // Custom goals (cardio / sessions / volume / bodyweight, auto-tracked) — previewed in the same box.
-    val customGoals: List<ExtendedGoalRepository.Progress> = emptyList(),
 
     // The mirror test (progress photos)
     val photos: List<ProgressPhoto> = emptyList(),
@@ -74,6 +65,7 @@ data class ProfileUiState(
     val cardioSessions: Int = 0,
     val cardioMinutes: Int = 0,
     val cardioDistanceKm: Double = 0.0,
-    /** Per-session cardio distance (km), oldest → newest; drives the CARDIO distance trend line. */
-    val cardioDistanceSeries: List<Double> = emptyList()
+
+    // Cumulative lifted volume (lb), one point per finished session, oldest → newest — the All-Time graph.
+    val lifetimeVolumeSeriesLb: List<Double> = emptyList()
 )
