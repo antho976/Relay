@@ -1,8 +1,6 @@
 package com.forge.app.ui.goals
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,7 +15,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -38,6 +35,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.listSaver
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -58,6 +57,7 @@ import com.forge.app.domain.units.unitLabel
 import com.forge.app.domain.units.weightInputValue
 import com.forge.app.ui.common.EditorialHairline
 import com.forge.app.ui.common.filterLibrary
+import com.forge.app.ui.settings.PillChip
 import com.forge.app.ui.theme.LocalForgeSettings
 
 /** Where the editor is in the add/edit flow. Editing an existing goal jumps straight to its form. */
@@ -69,6 +69,35 @@ private sealed interface EditorStep {
     data class CustomNew(val metric: GoalMetric) : EditorStep
     data class CustomEdit(val goal: ExtendedGoalRepository.Progress) : EditorStep
 }
+
+/**
+ * Keeps the add flow's position across configuration change / process death — this is a routed full
+ * screen, so plain `remember` would dump the user back to the type chooser on rotation. CustomEdit
+ * deliberately saves as nothing: it carries a live [ExtendedGoalRepository.Progress] snapshot, and
+ * restoring as null lets the resolve effect re-derive it from the reloaded state.
+ */
+private val EditorStepSaver = listSaver<EditorStep?, String>(
+    save = { step ->
+        when (step) {
+            null, is EditorStep.CustomEdit -> emptyList()
+            EditorStep.ChooseType -> listOf("choose")
+            EditorStep.LiftPicker -> listOf("picker")
+            is EditorStep.LiftWeight ->
+                listOf("lift", step.exerciseId, step.name, step.currentTargetLb?.toString() ?: "")
+            is EditorStep.CustomNew -> listOf("new", step.metric.name)
+        }
+    },
+    restore = { saved ->
+        when (saved.firstOrNull()) {
+            "choose" -> EditorStep.ChooseType
+            "picker" -> EditorStep.LiftPicker
+            "lift" -> EditorStep.LiftWeight(saved[1], saved[2], saved[3].toDoubleOrNull())
+            "new" -> GoalMetric.entries.firstOrNull { it.name == saved.getOrNull(1) }
+                ?.let { EditorStep.CustomNew(it) }
+            else -> null
+        }
+    }
+)
 
 /**
  * The routed add/edit-goal flow — a full screen pushed from the Goals list, not a dialog. Adding
@@ -87,7 +116,9 @@ fun GoalEditorScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val adding = exerciseId == null && customId == null
     // null while the edit target is still loading; the add flow resolves immediately.
-    var step by remember { mutableStateOf<EditorStep?>(if (adding) EditorStep.ChooseType else null) }
+    var step by rememberSaveable(stateSaver = EditorStepSaver) {
+        mutableStateOf<EditorStep?>(if (adding) EditorStep.ChooseType else null)
+    }
     LaunchedEffect(state.loading) {
         if (step == null && !state.loading) {
             step = when {
@@ -245,7 +276,9 @@ private fun ColumnScope.LiftPickerStep(exclude: Set<String>, muted: Color, onPic
 @Composable
 private fun LiftWeightStep(step: EditorStep.LiftWeight, onSet: (Double) -> Unit, onClear: () -> Unit) {
     val useKg = LocalForgeSettings.current.useKg
-    var weightText by remember(step) {
+    // Keyed on useKg (like BodyweightLogSheet) so a unit flip re-seeds in the new unit instead of
+    // parsing the old unit's digits as the new unit; saveable so a typed target survives rotation.
+    var weightText by rememberSaveable(step, useKg) {
         mutableStateOf(step.currentTargetLb?.let { weightInputValue(it, useKg) } ?: "")
     }
     val weightLb = parseToLb(weightText, useKg)
@@ -289,12 +322,10 @@ private fun CustomNewStep(
     onConfirm: (period: GoalPeriod, targetCanonical: Double, label: String) -> Unit
 ) {
     val settings = LocalForgeSettings.current
-    val decimal = metric != GoalMetric.CARDIO_MINUTES && metric != GoalMetric.SESSIONS
-    val unit = customGoalUnitLabel(metric, settings.useKg, settings.useMiles)
-
-    var valueText by remember(metric) { mutableStateOf("") }
-    var name by remember(metric) { mutableStateOf("") }
-    var period by remember(metric) {
+    // Saveable (routed full screen): typed input and the picked period survive rotation.
+    var valueText by rememberSaveable(metric) { mutableStateOf("") }
+    var name by rememberSaveable(metric) { mutableStateOf("") }
+    var period by rememberSaveable(metric) {
         mutableStateOf(if (metric == GoalMetric.BODYWEIGHT) GoalPeriod.ALL else GoalPeriod.WEEK)
     }
     val target = parseCustomTarget(metric, valueText, settings.useKg, settings.useMiles)
@@ -302,23 +333,14 @@ private fun CustomNewStep(
     Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
         Text(metricHint(metric), style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic)
         Spacer(Modifier.height(16.dp))
-        OutlinedTextField(
-            value = valueText,
-            onValueChange = { new -> valueText = new.filter { it.isDigit() || (decimal && it == '.') } },
-            label = { Text("Target ($unit)") },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(
-                keyboardType = if (decimal) KeyboardType.Decimal else KeyboardType.Number
-            ),
-            modifier = Modifier.fillMaxWidth()
-        )
+        CustomTargetField(metric, valueText) { valueText = it }
         if (metric.isCumulative) {
             Spacer(Modifier.height(16.dp))
             Text("Timeframe", style = MaterialTheme.typography.labelSmall, color = muted)
             Spacer(Modifier.height(6.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 GoalPeriod.entries.forEach { p ->
-                    PeriodChip(periodLabel(p), p == period) { period = p }
+                    PillChip(periodLabel(p), p == period) { period = p }
                 }
             }
         }
@@ -348,27 +370,19 @@ private fun CustomEditStep(
     onUnchanged: () -> Unit
 ) {
     val settings = LocalForgeSettings.current
-    val decimal = goal.metric != GoalMetric.CARDIO_MINUTES && goal.metric != GoalMetric.SESSIONS
-    val unit = customGoalUnitLabel(goal.metric, settings.useKg, settings.useMiles)
-    val initial = remember(goal) {
+    // Seed and buffer are keyed on the display units too: a unit flip while this form is composed
+    // re-seeds both in the new unit, so the `changed` comparison below never crosses unit regimes
+    // (which would either save a mis-parsed canonical value or silently skip a real save).
+    val initial = remember(goal, settings.useKg, settings.useMiles) {
         customTargetInputValue(goal.metric, goal.targetValue, settings.useKg, settings.useMiles)
     }
-    var valueText by remember(goal) { mutableStateOf(initial) }
+    var valueText by rememberSaveable(goal, settings.useKg, settings.useMiles) { mutableStateOf(initial) }
     val target = parseCustomTarget(goal.metric, valueText, settings.useKg, settings.useMiles)
     // Only persist a genuinely changed target: re-saving the untouched, unit-rounded seed would drift
     // the stored canonical value (e.g. 100 lb shown as "45.4" kg parses back to 100.09 lb).
     val changed = valueText.trim() != initial.trim()
     Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
-        OutlinedTextField(
-            value = valueText,
-            onValueChange = { new -> valueText = new.filter { it.isDigit() || (decimal && it == '.') } },
-            label = { Text("Target ($unit)") },
-            singleLine = true,
-            keyboardOptions = KeyboardOptions(
-                keyboardType = if (decimal) KeyboardType.Decimal else KeyboardType.Number
-            ),
-            modifier = Modifier.fillMaxWidth()
-        )
+        CustomTargetField(goal.metric, valueText) { valueText = it }
         Spacer(Modifier.height(24.dp))
         OutlinedButton(
             enabled = target != null && target > 0,
@@ -386,6 +400,28 @@ private fun CustomEditStep(
 }
 
 // ─── Custom-goal unit helpers ─────────────────────────────────────────────
+
+/** Whether a metric's target is a decimal quantity (weights, distance) or a whole count. */
+private val GoalMetric.acceptsDecimals: Boolean
+    get() = this != GoalMetric.CARDIO_MINUTES && this != GoalMetric.SESSIONS
+
+/** The target-entry field shared by the new-goal and edit-goal forms — one home for the digit
+ *  filter, keyboard type and unit label so the two forms can't drift apart. */
+@Composable
+private fun CustomTargetField(metric: GoalMetric, valueText: String, onValueChange: (String) -> Unit) {
+    val settings = LocalForgeSettings.current
+    val decimal = metric.acceptsDecimals
+    OutlinedTextField(
+        value = valueText,
+        onValueChange = { new -> onValueChange(new.filter { it.isDigit() || (decimal && it == '.') }) },
+        label = { Text("Target (${customGoalUnitLabel(metric, settings.useKg, settings.useMiles)})") },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(
+            keyboardType = if (decimal) KeyboardType.Decimal else KeyboardType.Number
+        ),
+        modifier = Modifier.fillMaxWidth()
+    )
+}
 
 private fun customGoalUnitLabel(metric: GoalMetric, useKg: Boolean, useMiles: Boolean): String = when (metric) {
     GoalMetric.CARDIO_DISTANCE -> distanceUnitLabel(useMiles)
@@ -414,26 +450,4 @@ private fun periodLabel(period: GoalPeriod): String = when (period) {
     GoalPeriod.WEEK -> "This week"
     GoalPeriod.MONTH -> "This month"
     GoalPeriod.ALL -> "All-time"
-}
-
-@Composable
-private fun PeriodChip(label: String, selected: Boolean, onClick: () -> Unit) {
-    val onBg = MaterialTheme.colorScheme.onBackground
-    val bg = MaterialTheme.colorScheme.background
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val outline = MaterialTheme.colorScheme.outline
-    Box(
-        modifier = Modifier
-            .border(1.dp, if (selected) onBg else outline.copy(alpha = 0.4f), RoundedCornerShape(4.dp))
-            .background(if (selected) onBg else Color.Transparent, RoundedCornerShape(4.dp))
-            .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 7.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.labelSmall,
-            color = if (selected) bg else muted.copy(alpha = 0.7f)
-        )
-    }
 }

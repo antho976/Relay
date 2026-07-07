@@ -54,10 +54,15 @@ class ExtendedGoalRepository @Inject constructor(
      * `stretch_value` column) so a cut like "get to 80 kg" shows correct progress from where you were.
      */
     suspend fun create(metric: GoalMetric, period: GoalPeriod, targetValue: Double, label: String = "") {
+        // Repository-level guards so no entry point can store a degenerate goal: a non-positive
+        // target breaks the fraction math, and BODYWEIGHT is point-in-time — a WEEK/MONTH window is
+        // meaningless for it (currentValue ignores the period), so it normalizes to ALL.
+        if (targetValue <= 0) return
+        val normalizedPeriod = if (metric == GoalMetric.BODYWEIGHT) GoalPeriod.ALL else period
         val baseline = if (metric == GoalMetric.BODYWEIGHT) bodyweightDao.latest()?.weightLb else null
         dao.insert(
             ExtendedGoal(
-                goalType = encodeGoalType(metric, period),
+                goalType = encodeGoalType(metric, normalizedPeriod),
                 targetValue = targetValue,
                 stretchValue = baseline,
                 label = label.trim(),
@@ -66,7 +71,11 @@ class ExtendedGoalRepository @Inject constructor(
         )
     }
 
-    suspend fun updateTarget(id: Long, targetValue: Double) = dao.updateTarget(id, targetValue)
+    /** Guarded like [create]: a non-positive target is ignored rather than stored. */
+    suspend fun updateTarget(id: Long, targetValue: Double) {
+        if (targetValue <= 0) return
+        dao.updateTarget(id, targetValue)
+    }
 
     suspend fun delete(id: Long) = dao.deleteById(id)
 

@@ -51,6 +51,8 @@ data class SettingsUiState(
     /** Heaviest dumbbell owned (lb); null = no ceiling (auto-coach Phase 0). */
     val maxDbWeightLb: Double? = null,
     val accentColorHex: String = "",
+    /** When false the accent is disabled app-wide — monochrome, neutral highlights. */
+    val accentEnabled: Boolean = true,
     val timezone: String = java.util.TimeZone.getDefault().id,
     /** IANA zone ids the user has starred — pinned to the top of the timezone picker. */
     val favoriteTimezones: Set<String> = emptySet(),
@@ -205,6 +207,8 @@ class SettingsViewModel @Inject constructor(
         s.copy(coachMode = v)
     }.combine(settingsRepo.accentColorHex) { s, v ->
         s.copy(accentColorHex = v)
+    }.combine(settingsRepo.accentEnabled) { s, v ->
+        s.copy(accentEnabled = v)
     }.combine(settingsRepo.timezone) { s, v ->
         s.copy(timezone = v)
     }.combine(settingsRepo.favoriteTimezones) { s, v ->
@@ -432,6 +436,7 @@ class SettingsViewModel @Inject constructor(
         }
     }
     fun setAccentColorHex(hex: String) = viewModelScope.launch { settingsRepo.setAccentColorHex(hex) }
+    fun setAccentEnabled(enabled: Boolean) = viewModelScope.launch { settingsRepo.setAccentEnabled(enabled) }
     fun setTimezone(id: String) = viewModelScope.launch { settingsRepo.setTimezone(id) }
     fun toggleFavoriteTimezone(id: String) = viewModelScope.launch { settingsRepo.toggleFavoriteTimezone(id) }
     fun exportLastSessionPdf() = viewModelScope.launch {

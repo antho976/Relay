@@ -13,17 +13,22 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.forge.app.ui.common.EditorialHeader
 import com.forge.app.ui.common.ForgeSwitch
 import com.forge.app.ui.common.clickableLabeled
 
@@ -38,6 +43,21 @@ internal fun SectionLabel(title: String) {
     )
 }
 
+/**
+ * The shared Settings section anchor — mono 13sp ([EditorialHeader]) carrying the app's air rhythm
+ * (DESIGN §7/§8), NO hairline beneath it. Used by the main list and the sub-pages so all of Settings
+ * speaks one section-header voice (replaces the older 10sp [SectionLabel]/GroupHeader as pages migrate).
+ */
+@Composable
+internal fun SettingsSectionHeader(label: String, top: Dp = 26.dp) {
+    EditorialHeader(
+        label = label,
+        muted = MaterialTheme.colorScheme.onSurfaceVariant,
+        accent = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = top, bottom = 4.dp)
+    )
+}
+
 @Composable
 internal fun SectionDivider() {
     HorizontalDivider(
@@ -47,7 +67,12 @@ internal fun SectionDivider() {
 }
 
 @Composable
-internal fun SettingsNavRow(label: String, subtitle: String, onClick: () -> Unit) {
+internal fun SettingsNavRow(
+    label: String,
+    subtitle: String,
+    icon: ImageVector? = null,
+    onClick: () -> Unit
+) {
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     Row(
@@ -55,14 +80,18 @@ internal fun SettingsNavRow(label: String, subtitle: String, onClick: () -> Unit
             .fillMaxWidth()
             .clickable(onClick = onClick)
             .padding(horizontal = 24.dp, vertical = 14.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        // Quiet leading glyph (nav-bar family) — wayfinding, muted so it never competes with the accent.
+        if (icon != null) {
+            Icon(icon, contentDescription = null, tint = muted, modifier = Modifier.size(22.dp))
+        }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(label, style = MaterialTheme.typography.bodyMedium, color = onBg)
             Text(subtitle, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp)
         }
-        Text("→", style = MaterialTheme.typography.bodyMedium, color = onBg)
+        Text("→", style = MaterialTheme.typography.bodyMedium, color = muted)
     }
 }
 
@@ -113,7 +142,7 @@ internal fun PillChip(label: String, selected: Boolean, enabled: Boolean = true,
             .border(1.dp, (if (selected) onBg else outline.copy(alpha = 0.4f)).copy(alpha = alpha), RoundedCornerShape(4.dp))
             .background((if (selected) onBg else Color.Transparent).copy(alpha = alpha), RoundedCornerShape(4.dp))
             .then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier)
-            .padding(horizontal = 12.dp, vertical = 7.dp),
+            .padding(horizontal = 10.dp, vertical = 5.dp),
         contentAlignment = Alignment.Center
     ) {
         Text(
@@ -123,6 +152,55 @@ internal fun PillChip(label: String, selected: Boolean, enabled: Boolean = true,
             letterSpacing = 0.5.sp
         )
     }
+}
+
+/**
+ * Settings "do-it-now" action button (DESIGN §8 ①) — a filled light capsule, theme-aware (onBackground
+ * fill / background text) so it survives a monochrome accent. Gutter-less: place inside a padded
+ * row/[ChipFlow], and group the action buttons at the END of the page — never mid-scroll.
+ */
+@Composable
+internal fun SettingsPrimaryAction(label: String, enabled: Boolean = true, onClick: () -> Unit) {
+    val onBg = MaterialTheme.colorScheme.onBackground
+    val bg = MaterialTheme.colorScheme.background
+    Box(
+        modifier = Modifier
+            .background(onBg.copy(alpha = if (enabled) 1f else 0.35f), RoundedCornerShape(50))
+            .then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier)
+            .padding(horizontal = 16.dp, vertical = 9.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(label, style = MaterialTheme.typography.labelMedium, color = bg, letterSpacing = 0.3.sp)
+    }
+}
+
+/** The outlined sidekick capsule (DESIGN §8 ②) that sits beside a [SettingsPrimaryAction]. */
+@Composable
+internal fun SettingsOutlineAction(label: String, onClick: () -> Unit) {
+    val onBg = MaterialTheme.colorScheme.onBackground
+    val outline = MaterialTheme.colorScheme.outline
+    Box(
+        modifier = Modifier
+            .border(1.dp, outline.copy(alpha = 0.5f), RoundedCornerShape(50))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 9.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(label, style = MaterialTheme.typography.labelMedium, color = onBg, letterSpacing = 0.3.sp)
+    }
+}
+
+/** A quiet mono accent navigation link ("action →") — jumping to another screen (DESIGN §8 ③).
+ *  Self-contained: bakes the 24dp gutter + a tappable inset, so call it directly and stack. */
+@Composable
+internal fun SettingsActionLink(label: String, onClick: () -> Unit) {
+    Text(
+        label,
+        style = MaterialTheme.typography.labelLarge,
+        color = MaterialTheme.colorScheme.primary,
+        letterSpacing = 0.3.sp,
+        modifier = Modifier.clickableLabeled(label, onClick = onClick).padding(horizontal = 24.dp, vertical = 8.dp)
+    )
 }
 
 @Composable

@@ -49,12 +49,13 @@ fun ForgeSwitch(
     uncheckedThumbColor: Color = MaterialTheme.colorScheme.outline,
     uncheckedBorderColor: Color = MaterialTheme.colorScheme.outline,
 ) {
-    val trackWidth = 52.dp
-    val trackHeight = 32.dp
-    val inset = 5.dp
-    val thumbUnchecked = 18.dp
-    val thumbChecked = 22.dp
-    val thumbPressed = 26.dp
+    // Trim, per DESIGN §8 (was 52×32 — ~25% oversize vs the spec). 40×24 track, thumb 14→17, press 20.
+    val trackWidth = 40.dp
+    val trackHeight = 24.dp
+    val inset = 3.5.dp
+    val thumbUnchecked = 14.dp
+    val thumbChecked = 17.dp
+    val thumbPressed = 20.dp
 
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()

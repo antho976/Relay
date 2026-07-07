@@ -64,6 +64,8 @@ object PreferenceKeys {
     val AMOLED_MODE = booleanPreferencesKey("amoled_mode")
     /** Stored hex string e.g. "#EF4444". Empty = use default. Reserved for UI pass. */
     val ACCENT_COLOR_HEX = stringPreferencesKey("accent_color_hex")
+    /** When false the app goes monochrome — highlights use a neutral tone instead of the accent. */
+    val ACCENT_ENABLED = booleanPreferencesKey("accent_enabled")
     /** Font choice key. Reserved for UI pass. */
     val FONT_CHOICE = stringPreferencesKey("font_choice")
 

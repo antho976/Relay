@@ -8,15 +8,19 @@ import com.forge.app.data.repo.GoalRepository
 import com.forge.app.domain.goal.GoalMetric
 import com.forge.app.domain.goal.GoalPeriod
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
 /**
@@ -47,60 +51,87 @@ class GoalsViewModel @Inject constructor(
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
 
+    /** Latest hidden-exercises set — collected once in init; only shapes [UiState.liftPickerExclude]. */
+    private var disliked: Set<String> = emptySet()
+
     init {
-        // Reactive: reload whenever a goal table or the hidden-exercises pref changes, so an edit
-        // made on the routed editor screen is already reflected here when you come back.
-        combine(goalRepo.observeAll(), extendedGoalRepo.observeAll(), settingsRepo.dislikedExercises) { _, _, _ -> }
+        // Reactive: reload whenever a goal table changes, so an edit made on the routed editor
+        // screen is already reflected here when you come back.
+        combine(goalRepo.observeAll(), extendedGoalRepo.observeAll()) { _, _ -> }
             .onEach { reload() }
+            .launchIn(viewModelScope)
+        // The hidden-exercises pref only affects the lift-picker exclude set — patch it in place
+        // instead of re-running the goal-progress queries on every like/dislike toggle.
+        settingsRepo.dislikedExercises
+            .onEach { d ->
+                disliked = d
+                _state.value = _state.value.let { s -> s.copy(liftPickerExclude = excludeFrom(s.liftGoals, d)) }
+            }
             .launchIn(viewModelScope)
     }
 
     /** Single-flight: a fresh reload cancels any in-flight one so a slow earlier read can't land after
-     *  a newer one and overwrite _state with a stale snapshot (e.g. a just-deleted goal reappearing). */
+     *  a newer one and overwrite _state with a stale snapshot (e.g. a just-deleted goal reappearing).
+     *  [fetchOr] rethrows cancellation, so a cancelled reload dies before the state write. */
     private var reloadJob: Job? = null
 
     private fun reload() {
         reloadJob?.cancel()
         reloadJob = viewModelScope.launch {
-            val liftGoals = runCatching { goalRepo.goalsWithProgress() }.getOrDefault(emptyList())
-            val customGoals = runCatching { extendedGoalRepo.goalsWithProgress() }.getOrDefault(emptyList())
-            val disliked = runCatching { settingsRepo.dislikedExercises.first() }.getOrDefault(emptySet())
+            val (liftGoals, customGoals) = coroutineScope {
+                val lifts = async { fetchOr(emptyList()) { goalRepo.goalsWithProgress() } }
+                val customs = async { fetchOr(emptyList()) { extendedGoalRepo.goalsWithProgress() } }
+                lifts.await() to customs.await()
+            }
             _state.value = UiState(
                 loading = false,
                 liftGoals = liftGoals,
                 customGoals = customGoals,
-                liftPickerExclude = liftGoals.mapTo(mutableSetOf()) { it.exerciseId }.apply { addAll(disliked) },
+                liftPickerExclude = excludeFrom(liftGoals, disliked),
             )
         }
     }
 
+    /** Fallback on real failures ONLY — swallowing CancellationException (as a bare runCatching
+     *  would) lets a just-cancelled reload keep running and publish an empty snapshot. */
+    private suspend fun <T> fetchOr(fallback: T, read: suspend () -> T): T =
+        try { read() } catch (e: CancellationException) { throw e } catch (_: Exception) { fallback }
+
+    private fun excludeFrom(liftGoals: List<GoalRepository.GoalProgress>, disliked: Set<String>): Set<String> =
+        liftGoals.mapTo(mutableSetOf()) { it.exerciseId }.apply { addAll(disliked) }
+
+    // ─── Mutations ─────────────────────────────────────────────────────────────
+    // Writes run under NonCancellable: the routed editor fires one of these and immediately pops its
+    // back-stack entry, which clears this ViewModel — without the shield the Room write could be
+    // cancelled mid-flight and silently dropped (viewModelScope launches undispatched on
+    // Main.immediate, so the shield is entered before the pop's cancellation lands). No explicit
+    // reload afterwards: the observeAll() combine in init refreshes any live list reactively.
+
     // ─── Lift targets (exercise_goal) ──────────────────────────────────────────
 
     fun setLiftGoal(exerciseId: String, targetWeightLb: Double) = viewModelScope.launch {
-        goalRepo.setGoal(exerciseId, targetWeightLb)
-        reload()
+        // Repo-level GoalRepository has no floor; guard here so no picker path stores a degenerate
+        // target (fraction math needs > 0).
+        if (targetWeightLb <= 0) return@launch
+        withContext(NonCancellable) { goalRepo.setGoal(exerciseId, targetWeightLb) }
     }
 
     fun clearLiftGoal(exerciseId: String) = viewModelScope.launch {
-        goalRepo.clearGoal(exerciseId)
-        reload()
+        withContext(NonCancellable) { goalRepo.clearGoal(exerciseId) }
     }
 
     // ─── Custom goals (extended_goal) ──────────────────────────────────────────
 
     fun createCustomGoal(metric: GoalMetric, period: GoalPeriod, targetValue: Double, label: String) =
         viewModelScope.launch {
-            extendedGoalRepo.create(metric, period, targetValue, label)
-            reload()
+            withContext(NonCancellable) { extendedGoalRepo.create(metric, period, targetValue, label) }
         }
 
     fun updateCustomGoalTarget(id: Long, targetValue: Double) = viewModelScope.launch {
-        extendedGoalRepo.updateTarget(id, targetValue)
-        reload()
+        withContext(NonCancellable) { extendedGoalRepo.updateTarget(id, targetValue) }
     }
 
     fun deleteCustomGoal(id: Long) = viewModelScope.launch {
-        extendedGoalRepo.delete(id)
-        reload()
+        withContext(NonCancellable) { extendedGoalRepo.delete(id) }
     }
 }

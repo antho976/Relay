@@ -1,7 +1,6 @@
 package com.forge.app.ui.profile.state
 
 import com.forge.app.data.repo.ProgressPhoto
-import com.forge.app.data.repo.SignatureLift
 import com.forge.app.data.repo.TrophyCell
 import com.forge.app.domain.rank.RankInfo
 import com.forge.app.domain.rank.StandingMetric
@@ -40,11 +39,6 @@ data class ProfileUiState(
     // Standing (estimated vs typical lifters, 90 days)
     val standings: List<StandingMetric> = emptyList(),
 
-    // Signature
-    val topLift: SignatureLift? = null,
-    val mostLoggedDay: String? = null,
-    val usualHour: String? = null,
-
     // The mirror test (progress photos)
     val photos: List<ProgressPhoto> = emptyList(),
 
@@ -60,11 +54,6 @@ data class ProfileUiState(
 
     // Memory
     val memory: OnThisDayMemory? = null,
-
-    // All-time cardio totals
-    val cardioSessions: Int = 0,
-    val cardioMinutes: Int = 0,
-    val cardioDistanceKm: Double = 0.0,
 
     // Cumulative lifted volume (lb), one point per finished session, oldest → newest — the All-Time graph.
     val lifetimeVolumeSeriesLb: List<Double> = emptyList()

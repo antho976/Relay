@@ -115,7 +115,16 @@ private fun E1rmDrillRow(
     var expanded by rememberSaveable(lift.exerciseId) { mutableStateOf(isFocused && expandable) }
     // A record tap deep-links here and focuses this row; focusNonce changes on every such tap, so
     // re-tapping the already-focused lift re-expands it even after the user manually collapsed it.
-    LaunchedEffect(focusNonce) { if (isFocused && expandable) expanded = true }
+    // The nonce is CONSUMED (tracked in a saveable) rather than re-applied on every first
+    // composition — otherwise returning to Stats or rotating would restore the old nonce, replay
+    // the effect, and pop open a row the user had deliberately collapsed.
+    var consumedNonce by rememberSaveable(lift.exerciseId) { mutableStateOf(if (isFocused) focusNonce else -1) }
+    LaunchedEffect(focusNonce) {
+        if (isFocused && expandable && focusNonce > consumedNonce) {
+            consumedNonce = focusNonce
+            expanded = true
+        }
+    }
     val current = toDisplayWeight(lift.currentE1rm, useKg).roundToInt()
     val unit = unitLabel(useKg)
 

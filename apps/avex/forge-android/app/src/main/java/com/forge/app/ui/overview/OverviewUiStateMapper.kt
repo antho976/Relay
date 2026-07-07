@@ -38,7 +38,6 @@ internal fun buildOverviewUiState(
     trophiesUnlocked: Int,
     distanceKm: Double,
     dayVolStats: Map<String, SessionDao.DayVolumeStats>,
-    nowMs: Long,
     cardioTargetMin: Int = 0,
     useKg: Boolean = false,
     useMiles: Boolean = false
@@ -108,16 +107,6 @@ internal fun buildOverviewUiState(
         val d = Instant.ofEpochMilli(entry.date).atZone(zone2).toLocalDate()
         if (!d.isBefore(isoWeekStart) && !d.isAfter(todayLocal)) d.dayOfWeek.value - 1 else null
     }.toSet()
-    val cardioLoad = com.forge.app.domain.cardio.CardioLoadNudge.recentLoad(recentCardio, nowMs)
-    val recentCardioLead = cardioLoad?.let { load ->
-        val whenLabel = when (val rel = relativeDay(load.lastSessionMs)) {
-            "TODAY" -> "today"
-            "YESTERDAY" -> "yesterday"
-            else -> rel.lowercase().replaceFirstChar { it.uppercase() }
-        }
-        "${load.activityLabel} · ${load.totalMinutes} min · $whenLabel"
-    }
-
     return OverviewUiState(
         workoutsThisWeek = stats.workouts,
         volumeThisWeekLb = stats.volumeLb,
@@ -125,7 +114,6 @@ internal fun buildOverviewUiState(
         cardioWeeklyTargetMin = cardioTargetMin,
         totalFinishedSessions = stats.totalFinishedSessions,
         streakDays = stats.streakDays,
-        daysSinceLastSession = stats.daysSinceLastSession,
         bestSessionThisWeekLb = stats.bestSessionThisWeekLb,
         pendingMilestone = computePendingMilestone(stats, shown, useKg),
         onThisDayMemory = memory,
@@ -138,9 +126,7 @@ internal fun buildOverviewUiState(
         cardioWeekDays = cardioWeekDays,
         recentItems = recentItems,
         trophiesUnlocked = trophiesUnlocked,
-        cardioDistanceKm = distanceKm,
-        heavyCardioRecent = cardioLoad != null,
-        recentCardioLead = recentCardioLead
+        cardioDistanceKm = distanceKm
     )
 }
 

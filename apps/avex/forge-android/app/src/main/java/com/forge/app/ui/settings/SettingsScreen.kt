@@ -10,16 +10,10 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -37,14 +31,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -56,36 +45,47 @@ enum class SettingsPage(val title: String) {
     Session("Session"),
     Notifications("Notifications"),
     Program("Program & equipment"),
+    Coach("Coach"),
     Recovery("Recovery"),
     ExercisePrefs("Exercise likes"),
     Vacation("Holiday / Vacation"),
     About("About")
 }
 
-internal data class SettingsRow(val label: String, val tags: String, val page: SettingsPage)
-
-internal val ALL_ROWS = listOf(
-    SettingsRow("Appearance", "amoled dark theme accent compact logging display", SettingsPage.Appearance),
-    SettingsRow("Units & format", "kg lb weight date time week timezone locale", SettingsPage.Format),
-    SettingsRow("Session", "haptic feedback vibration notes templates rest timer between sets compound isolation", SettingsPage.Session),
-    SettingsRow("Notifications", "quiet hours notify suppress", SettingsPage.Notifications),
-    SettingsRow("Program & equipment", "program generate auto split days routine rotate trainings workouts equipment available barbell dumbbell cable machine plate", SettingsPage.Program),
-    SettingsRow("Recovery", "health connect sleep heart rate resting recovery samsung watch coach deload", SettingsPage.Recovery),
-    SettingsRow("Exercise likes", "like dislike favourite exclude exercises preferences movements heart", SettingsPage.ExercisePrefs)
-)
-
 internal data class SettingsItem(val name: String, val tags: String, val page: SettingsPage)
 
-/** A synthetic search entry that triggers a dialog rather than navigating to a page. */
-internal data class SettingsDialogEntry(val name: String, val hint: String, val tags: String)
+/** What a non-page search hit does when tapped — fire an action (dialog/menu), not open a sub-page. */
+enum class SearchAction { DATA, RESET, COACH }
 
-/** Entries that match a search query and open a dialog instead of a settings page. */
-internal val DIALOG_ENTRIES = listOf(
-    SettingsDialogEntry(
-        name = "Export data",
-        hint = "Backup · restore · CSV · PDF",
-        tags = "data backup export restore csv pdf weekly json sessions full import"
-    )
+/** A search hit that triggers an [action] instead of navigating to a page. [where] is its breadcrumb. */
+internal data class SettingsActionEntry(val name: String, val where: String, val tags: String, val action: SearchAction)
+
+/** Search-reachable actions: the export/backup dialog, the reset menu, and the coach brief. */
+internal val ACTION_ENTRIES = listOf(
+    SettingsActionEntry("Export data", "Data", "data export csv pdf weekly json sessions full", SearchAction.DATA),
+    SettingsActionEntry("Backup & restore", "Data", "backup restore database file save load import survive uninstall", SearchAction.DATA),
+    SettingsActionEntry("Reset…", "Reset", "reset delete clear wipe erase sessions trophies cardio settings data", SearchAction.RESET),
+    SettingsActionEntry("Factory reset", "Reset", "factory reset erase everything wipe delete all clean slate", SearchAction.RESET),
+    SettingsActionEntry("Your coach", "Coach", "coach brief tracking plan learning weekly review autopilot deload", SearchAction.COACH),
+)
+
+/**
+ * Page-level search entries — so a query like "app" surfaces the whole Appearance page, not only its
+ * individual toggles. A page's own NAME is otherwise absent from the item index (its items are
+ * "AMOLED mode", "Accent color", …), which is why "app"/"prog"/"recov" used to return nothing.
+ */
+internal data class SettingsPageEntry(val page: SettingsPage, val tags: String)
+
+internal val PAGE_ENTRIES = listOf(
+    SettingsPageEntry(SettingsPage.Appearance, "appearance amoled dark theme accent color compact logging display privacy look"),
+    SettingsPageEntry(SettingsPage.Format, "units format kg lb weight date time week timezone locale distance strength standards sex"),
+    SettingsPageEntry(SettingsPage.Session, "session haptic feedback vibration notes templates rest timer between sets compound isolation"),
+    SettingsPageEntry(SettingsPage.Notifications, "notifications reminders quiet hours recap timer alerts notify suppress"),
+    SettingsPageEntry(SettingsPage.Program, "program equipment generate auto split days routine rotate trainings workouts barbell dumbbell cable machine plate focus goal experience emphasis priority"),
+    SettingsPageEntry(SettingsPage.Coach, "coach weekly review autopilot auto-apply suggest trust brief tweaks proposals history undo"),
+    SettingsPageEntry(SettingsPage.Recovery, "recovery health connect sleep heart rate resting samsung watch coach deload steps bodyweight"),
+    SettingsPageEntry(SettingsPage.ExercisePrefs, "exercise likes dislike favourite exclude preferences movements heart hidden preferred"),
+    SettingsPageEntry(SettingsPage.Vacation, "holiday vacation pause streak break away travel"),
 )
 
 internal val ALL_ITEMS = listOf(
@@ -103,11 +103,22 @@ internal val ALL_ITEMS = listOf(
     SettingsItem("Note templates", "notes templates prompts form energy pain focus", SettingsPage.Session),
     SettingsItem("Training reminders", "reminder notify nudge daily streak train schedule engagement", SettingsPage.Notifications),
     SettingsItem("Quiet hours", "quiet hours suppress notifications silent", SettingsPage.Notifications),
-    SettingsItem("Notifications", "notifications enable disable notify", SettingsPage.Notifications),
     SettingsItem("Available equipment", "equipment barbell dumbbell cable machine body weight", SettingsPage.Program),
     SettingsItem("Weight per plate", "plate weight machine plates count", SettingsPage.Program),
     SettingsItem("Heaviest dumbbell", "dumbbell max heaviest adjustable ceiling", SettingsPage.Program),
     SettingsItem("Privacy mode", "privacy mode blur screenshot screen", SettingsPage.Appearance),
+    SettingsItem("Strength standards", "strength standards sex male female relative bodyweight ratio elite novice", SettingsPage.Format),
+    SettingsItem("Weekly recap", "weekly recap summary notification report", SettingsPage.Notifications),
+    SettingsItem("Rest timer alerts", "rest timer alert notification background buzz vibrate", SettingsPage.Notifications),
+    SettingsItem("Health Connect", "health connect recovery sync samsung google fit permissions wearable watch", SettingsPage.Recovery),
+    SettingsItem("Sleep", "sleep recovery hours health connect rest coach deload", SettingsPage.Recovery),
+    SettingsItem("Resting heart rate", "resting heart rate hr recovery health connect coach", SettingsPage.Recovery),
+    SettingsItem("Steps", "steps recovery health connect cardio wearable daily", SettingsPage.Recovery),
+    SettingsItem("Bodyweight sync", "bodyweight weight sync health connect log recovery", SettingsPage.Recovery),
+    SettingsItem("Exercise preferences", "exercise likes dislikes preferred hidden movements favourite heart", SettingsPage.ExercisePrefs),
+    SettingsItem("Ask to dislike after swap", "swap dislike prompt hide exercise default", SettingsPage.ExercisePrefs),
+    SettingsItem("Holiday mode", "holiday vacation pause streak break away travel", SettingsPage.Vacation),
+    SettingsItem("Coach mode", "coach mode suggest auto apply autopilot earn trust proposals history", SettingsPage.Coach),
 ) + com.forge.app.program.Equipment.entries.map { equip ->
     // Each piece of equipment is searchable by name, so a query like "kettlebell" surfaces it
     // (tagged to the Program & equipment page) instead of only the generic "Available equipment" row.
@@ -145,7 +156,6 @@ fun SettingsScreen(
     // The Program page's open sub-section is hoisted here so EVERY back affordance (top-bar arrow,
     // system back) returns to the Program menu first, then to Settings — never skipping a level.
     var programSection by rememberSaveable { mutableStateOf<ProgramSection?>(null) }
-    var searchActive by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var confirmReset by remember { mutableStateOf<ResetTarget?>(null) }
     var showResetMenu by remember { mutableStateOf(false) }
@@ -171,68 +181,26 @@ fun SettingsScreen(
     ) { uri -> uri?.let { viewModel.exportCrashLogs(it) } }
     LaunchedEffect(restoreSucceeded) { if (restoreSucceeded) restartApp(context) }
 
-    val focusRequester = remember { FocusRequester() }
-    LaunchedEffect(searchActive) {
-        if (searchActive) focusRequester.requestFocus()
-    }
-
-    BackHandler(enabled = currentPage != null || searchActive) {
+    BackHandler(enabled = currentPage != null || searchQuery.isNotBlank()) {
         when {
             currentPage == SettingsPage.Program && programSection != null -> programSection = null
             currentPage != null -> { currentPage = null; programSection = null }
-            else -> { searchActive = false; searchQuery = "" }
+            else -> searchQuery = ""
         }
     }
 
-    val displayRows = ALL_ROWS
-
-    val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = {
-                    when {
-                        currentPage != null -> {
-                            com.forge.app.ui.common.ForgeWordmark()
-                        }
-                        searchActive -> {
-                            BasicTextField(
-                                value = searchQuery,
-                                onValueChange = { searchQuery = it },
-                                textStyle = MaterialTheme.typography.bodyMedium.copy(color = onBg),
-                                cursorBrush = SolidColor(onBg),
-                                singleLine = true,
-                                decorationBox = { inner ->
-                                    Box {
-                                        if (searchQuery.isEmpty()) {
-                                            Text(
-                                                "Search settings…",
-                                                style = MaterialTheme.typography.bodyMedium,
-                                                color = muted.copy(alpha = 0.45f),
-                                                fontStyle = FontStyle.Italic
-                                            )
-                                        }
-                                        inner()
-                                    }
-                                },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .focusRequester(focusRequester)
-                            )
-                        }
-                        else -> {
-                            com.forge.app.ui.common.ForgeWordmark()
-                        }
-                    }
-                },
+                title = { com.forge.app.ui.common.ForgeWordmark() },
                 navigationIcon = {
                     IconButton(onClick = {
                         when {
                             currentPage == SettingsPage.Program && programSection != null -> programSection = null
                             currentPage != null -> { currentPage = null; programSection = null }
-                            searchActive -> { searchActive = false; searchQuery = "" }
+                            searchQuery.isNotBlank() -> searchQuery = ""
                             else -> onBack()
                         }
                     }) {
@@ -240,40 +208,20 @@ fun SettingsScreen(
                     }
                 },
                 actions = {
-                    when {
-                        currentPage != null -> {
-                            // Inside a Program sub-section, name the section (Equipment, Coach…) rather
-                            // than the page, so the header tracks how deep you are.
-                            val headerLabel = if (currentPage == SettingsPage.Program && programSection != null)
-                                programSection!!.title else currentPage!!.title
-                            Text(
-                                headerLabel.uppercase(),
-                                style = MaterialTheme.typography.labelSmall,
-                                letterSpacing = 1.5.sp,
-                                color = muted,
-                                modifier = Modifier.padding(end = 16.dp)
-                            )
-                        }
-                        searchActive -> {
-                            if (searchQuery.isNotEmpty()) {
-                                TextButton(onClick = { searchQuery = "" }) {
-                                    Text("×", style = MaterialTheme.typography.bodyLarge, color = muted)
-                                }
-                            }
-                        }
-                        else -> {
-                            IconButton(onClick = { searchActive = true }) {
-                                Icon(Icons.Filled.Search, contentDescription = "Search", tint = muted)
-                            }
-                            Text(
-                                "SETTINGS",
-                                style = MaterialTheme.typography.labelSmall,
-                                letterSpacing = 2.sp,
-                                color = muted,
-                                modifier = Modifier.padding(end = 16.dp)
-                            )
-                        }
+                    // The screen name sits as a quiet right-aligned label. Inside a Program sub-section,
+                    // name the section (Equipment, Coach…) so the header tracks how deep you are.
+                    val headerLabel = when {
+                        currentPage == SettingsPage.Program && programSection != null -> programSection!!.title
+                        currentPage != null -> currentPage!!.title
+                        else -> "Settings"
                     }
+                    Text(
+                        headerLabel.uppercase(),
+                        style = MaterialTheme.typography.labelSmall,
+                        letterSpacing = if (currentPage == null) 2.sp else 1.5.sp,
+                        color = muted,
+                        modifier = Modifier.padding(end = 16.dp)
+                    )
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
             )
@@ -293,9 +241,9 @@ fun SettingsScreen(
             when (page) {
                 null -> MainList(
                     state = state,
-                    displayRows = displayRows,
                     searchQuery = searchQuery,
                     modifier = Modifier.fillMaxSize().padding(inner),
+                    onSearchChange = { searchQuery = it },
                     onOpenPage = { currentPage = it; programSection = null },
                     onOpenCoachBrief = onOpenCoachBrief,
                     onOpenDataDialog = { showDataDialog = true },
@@ -312,9 +260,9 @@ fun SettingsScreen(
                     section = programSection,
                     onSectionChange = { programSection = it },
                     modifier = Modifier.padding(inner),
-                    onOpenCoachBrief = onOpenCoachBrief,
                     onOpenBuilder = onOpenBuilder
                 )
+                SettingsPage.Coach -> CoachSettingsPage(state, viewModel, onOpenCoachBrief, Modifier.padding(inner))
                 SettingsPage.Recovery -> RecoveryPage(Modifier.padding(inner))
                 SettingsPage.ExercisePrefs -> ExercisePrefsPage(state, viewModel, Modifier.padding(inner))
                 SettingsPage.Vacation -> VacationPage(viewModel, Modifier.padding(inner))

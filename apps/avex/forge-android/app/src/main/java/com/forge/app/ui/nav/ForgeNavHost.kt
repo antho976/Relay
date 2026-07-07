@@ -40,9 +40,8 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
-import com.forge.app.ui.coach.CoachBriefScreen
-import com.forge.app.ui.coach.CoachLabScreen
-import com.forge.app.ui.coach.CoachTimelineScreen
+import com.forge.app.ui.coach.CoachLens
+import com.forge.app.ui.coach.CoachScreen
 import com.forge.app.ui.gym.freestyle.FreestyleLogScreen
 import com.forge.app.ui.programbuilder.ProgramBuilderScreen
 import com.forge.app.ui.common.ProgramChangeGuardHost
@@ -223,19 +222,26 @@ fun ForgeNavHost(initialDayKey: String? = null) {
             RecapScreen(onBack = { nav.popBackStack() })
         }
         composable(Routes.COACH_BRIEF) {
-            CoachBriefScreen(
+            CoachScreen(
                 onBack = { nav.popBackStack() },
-                onOpenCoachLab = { nav.navigate(Routes.COACH_LAB) }
+                onConnectHealth = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) }
             )
         }
+        // The lab and timeline are now lenses of the one Coach page; the routes stay so every
+        // existing "what it's watching" and "learning timeline" link lands on the right lens.
         composable(Routes.COACH_LAB) {
-            CoachLabScreen(
+            CoachScreen(
                 onBack = { nav.popBackStack() },
-                onOpenTimeline = { nav.navigate(Routes.COACH_TIMELINE) }
+                initialLens = CoachLens.SIGNALS,
+                onConnectHealth = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) }
             )
         }
         composable(Routes.COACH_TIMELINE) {
-            CoachTimelineScreen(onBack = { nav.popBackStack() })
+            CoachScreen(
+                onBack = { nav.popBackStack() },
+                initialLens = CoachLens.JOURNEY,
+                onConnectHealth = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) }
+            )
         }
         composable(Routes.GOALS) {
             GoalsScreen(

@@ -143,9 +143,6 @@ class ProfileViewModel @Inject constructor(
         prsThisWeek = data.prsThisWeek,
         prsLastWeek = data.prsLastWeek,
         standings = data.standings,
-        topLift = data.topLift,
-        mostLoggedDay = data.mostLoggedDay,
-        usualHour = data.usualHour,
         photos = photos,
         hasAvatar = hasAvatar,
         avatarStamp = avatarStamp,
@@ -154,9 +151,6 @@ class ProfileViewModel @Inject constructor(
         trophyGrid = data.trophyGrid,
         closestTrophy = data.closestTrophy,
         memory = data.memory,
-        cardioSessions = data.cardioSessions,
-        cardioMinutes = data.cardioMinutes,
-        cardioDistanceKm = data.cardioDistanceKm,
         lifetimeVolumeSeriesLb = data.lifetimeVolumeSeriesLb
     )
 

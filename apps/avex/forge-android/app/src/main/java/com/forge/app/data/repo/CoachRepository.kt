@@ -78,6 +78,15 @@ data class CoachWatch(
     /** Current accumulated-fatigue score, or null below the deload data gates. */
     val fatigueScore: Int?,
     val fatigueThreshold: Int,
+    /** The advisor's own session gate for a recovery read (NOT the coach's activation gate). */
+    val recoveryGateSessions: Int = 0,
+    /** Days of training history on record — the advisor also needs one full window of it. */
+    val historyDays: Int = 0,
+    /** The advisor's window length in days; a read needs [historyDays] to reach it. */
+    val recoveryWindowDays: Int = 0,
+    /** The advisor's full instrument panel — every fatigue check with its live reading,
+     *  fired or quiet. Empty until the advisor's data gates are met. */
+    val fatigueChecks: List<DeloadAdvisor.FatigueCheck> = emptyList(),
     /** Lifts with logged history, "concrete" once they clear the judge-it gate. */
     val trackedLifts: List<TrackedLift>,
     /** Recovery inputs the coach reads — each active or "still forming". */
@@ -86,7 +95,14 @@ data class CoachWatch(
     val learnedBiases: List<LearnedBias>
 )
 
-data class TrackedLift(val name: String, val bouts: Int, val concrete: Boolean, val stalling: Boolean = false)
+data class TrackedLift(
+    val name: String,
+    val bouts: Int,
+    val concrete: Boolean,
+    val stalling: Boolean = false,
+    /** The program-slot key the engine tracks this lift under — lets the UI join chart series. */
+    val slotId: String = ""
+)
 data class RecoverySignal(val label: String, val detail: String, val active: Boolean)
 data class LearnedBias(val label: String, val detail: String)
 
@@ -240,8 +256,13 @@ class CoachRepository @Inject constructor(
         // both crossed the apply line once. "Wins" are changes the watcher later judged ok.
         val applied = all.count { it.status == "applied" || it.status == "folded" || it.status == "reverted" }
         val wins = all.count { it.outcome == "ok" }
+        val misses = all.count { it.outcome == "failed" }
+        val deloads = all.count { it.type == "deload" }
         val earned = trust.filter { it.earned }
         val proposed = all.isNotEmpty()
+        // Lessons come off the same ledger the generator reads its biases from.
+        val bias = CoachGenBias.from(all)
+        val lessons = bias.volumeBias.size + bias.repBias.size + bias.prefer.size + bias.avoid.size
         return listOf(
             CoachMilestone(
                 "First weekly report",
@@ -249,24 +270,44 @@ class CoachRepository @Inject constructor(
                 passes.isNotEmpty()
             ),
             CoachMilestone(
-                "First suggestion made",
-                if (proposed) "The coach has started calling changes" else "Once it has a baseline to act on",
+                "First suggestion",
+                if (proposed) "The coach has started calling changes" else "Unlocks once the coach has a baseline",
                 proposed
             ),
             CoachMilestone(
-                "First change applied",
+                "First change",
                 if (applied > 0) "$applied accepted so far" else "When you apply a weekly suggestion",
                 applied > 0
             ),
             CoachMilestone(
-                "First win confirmed",
+                "First win",
                 if (wins > 0) "$wins change${if (wins == 1) "" else "s"} stuck after the watch window" else "When an applied change proves out",
                 wins > 0
             ),
             CoachMilestone(
-                "Autopilot unlocked",
+                "First correction",
+                if (misses > 0) "$misses caught by the two-week watch and walked back" else "When an applied change fails its watch",
+                misses > 0
+            ),
+            CoachMilestone(
+                "First deload",
+                if (deloads > 0) "$deloads called so far" else "When recovery load crosses the line",
+                deloads > 0
+            ),
+            CoachMilestone(
+                "First lesson",
+                if (lessons > 0) "$lessons on the books" else "The changes you keep become rules",
+                lessons > 0
+            ),
+            CoachMilestone(
+                "Autopilot",
                 if (earned.isNotEmpty()) earned.joinToString(", ") { it.label } else "Accept a change type a few weeks running",
                 earned.isNotEmpty()
+            ),
+            CoachMilestone(
+                "Ten weeks coached",
+                if (passes.size >= 10) "${passes.size} weeks in" else "${passes.size} of 10 weeks on record",
+                passes.size >= 10
             )
         )
     }
@@ -598,7 +639,8 @@ class CoachRepository @Inject constructor(
                 ?: slotId
             TrackedLift(
                 name = name, bouts = nonSkipped,
-                concrete = weighted > t.plateauMinBouts, stalling = slotId in stalledIds
+                concrete = weighted > t.plateauMinBouts, stalling = slotId in stalledIds,
+                slotId = slotId
             )
         }.sortedWith(
             compareByDescending<TrackedLift> { it.stalling }
@@ -611,13 +653,13 @@ class CoachRepository @Inject constructor(
         val hrReadings = s.health.restingHr.count { it.timeMs >= windowStart }
         val recovery = listOf(
             RecoverySignal("Effort check-ins",
-                if (moodCount > 0) "$moodCount in the last 2 weeks" else "none yet — rate how a session felt", moodCount > 0),
+                if (moodCount > 0) "$moodCount in the last two weeks" else "none yet", moodCount > 0),
             RecoverySignal("Rest-day flags",
-                if (restFlags > 0) "$restFlags sore/sick day(s) noted" else "none flagged", restFlags > 0),
+                if (restFlags > 0) "$restFlags sore or sick day${if (restFlags == 1) "" else "s"} noted" else "none flagged", restFlags > 0),
             RecoverySignal("Sleep",
-                if (sleepNights > 0) "$sleepNights night(s) via Health Connect" else "not connected", sleepNights > 0),
+                if (sleepNights > 0) "$sleepNights night${if (sleepNights == 1) "" else "s"} via Health Connect" else "not connected", sleepNights > 0),
             RecoverySignal("Resting heart rate",
-                if (hrReadings > 0) "$hrReadings reading(s) via Health Connect" else "not connected", hrReadings > 0)
+                if (hrReadings > 0) "$hrReadings reading${if (hrReadings == 1) "" else "s"} via Health Connect" else "not connected", hrReadings > 0)
         )
 
         val learned = buildList {
@@ -637,6 +679,13 @@ class CoachRepository @Inject constructor(
             autopilot = settings.coachMode.first() == "auto",
             fatigueScore = fatigue?.score,
             fatigueThreshold = t.deloadScoreThreshold,
+            recoveryGateSessions = t.deloadMinSessions,
+            historyDays = s.sessions.minOfOrNull { it.startedAt }
+                ?.let { ((s.nowMs - it) / dayMs).toInt() } ?: 0,
+            recoveryWindowDays = t.deloadWindowDays,
+            // Surface the checks from session one (§4.9): when the advisor is gated, show the same
+            // readings with nothing fired — a live panel, not a lone "building a baseline" bar.
+            fatigueChecks = fatigue?.checks ?: DeloadAdvisor.checks(s, t).map { it.copy(fired = false) },
             trackedLifts = tracked,
             recoverySignals = recovery,
             learnedBiases = learned

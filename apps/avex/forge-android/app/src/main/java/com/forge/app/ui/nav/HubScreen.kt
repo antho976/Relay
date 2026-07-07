@@ -20,7 +20,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import com.forge.app.ui.cardio.CardioScreen
-import com.forge.app.ui.coach.CoachBriefScreen
+import com.forge.app.ui.coach.CoachScreen
 import com.forge.app.ui.gym.train.DayListScreen
 import com.forge.app.ui.overview.OverviewScreen
 import com.forge.app.ui.profile.ProfileScreen
@@ -151,8 +151,8 @@ fun HubScreen(
                     onLogFreestyle = { nav.navigate(Routes.FREESTYLE_LOG) },
                     onBuildPlan = { nav.navigate(Routes.programBuilder()) }
                 )
-                BottomTab.COACH -> CoachBriefScreen(
-                    onOpenCoachLab = { nav.navigate(Routes.COACH_LAB) }
+                BottomTab.COACH -> CoachScreen(
+                    onConnectHealth = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) }
                 )
                 BottomTab.PROFILE -> ProfileScreen(
                     onOpenTrophies = { nav.navigate(Routes.TROPHIES) },

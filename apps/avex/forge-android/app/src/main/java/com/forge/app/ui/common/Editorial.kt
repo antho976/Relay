@@ -53,7 +53,8 @@ fun EditorialHeader(
     ) {
         Text(
             label.uppercase(),
-            style = MaterialTheme.typography.labelMedium,
+            // labelLarge (13sp) — section anchors read as present, not incidental (§6, 2026-07-05).
+            style = MaterialTheme.typography.labelLarge,
             color = muted,
             letterSpacing = 1.sp,
             modifier = Modifier.semantics { heading() }

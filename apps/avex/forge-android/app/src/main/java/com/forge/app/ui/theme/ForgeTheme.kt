@@ -12,15 +12,20 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 
 @Composable
 fun ForgeTheme(
     amoledMode: Boolean = false,
     accentColorHex: String = "",
+    accentEnabled: Boolean = true,
     content: @Composable () -> Unit
 ) {
-    val accent = remember(accentColorHex) {
-        accentColorHex.takeIf { it.isNotEmpty() }
+    val accent = remember(accentColorHex, accentEnabled) {
+        // Accent off ⇒ a near-white neutral so highlights (selected pill, active nav, chart strokes)
+        // stay legible and distinct from the muted rest, just without any colour.
+        if (!accentEnabled) PearlOnBg
+        else accentColorHex.takeIf { it.isNotEmpty() }
             ?.let { runCatching { Color(android.graphics.Color.parseColor(it)) }.getOrNull() }
             ?: AccentNavy
     }
@@ -79,6 +84,9 @@ private fun pearlColorScheme(accent: Color, amoled: Boolean): ColorScheme {
     val bg         = if (amoled) Color.Black         else PearlBackground
     val surface    = if (amoled) Color(0xFF080808)   else PearlSurface
     val surfaceVar = if (amoled) Color(0xFF111111)   else PearlSurfaceVar
+    // Content ON an accent fill: dark for a light accent (near-white neutral, or a pale custom hex),
+    // else the near-white default — so a filled-primary control never renders same-on-same.
+    val onAccent   = if (accent.luminance() > 0.55f) bg else PearlOnBg
     return darkColorScheme(
         background         = bg,
         onBackground       = PearlOnBg,
@@ -88,7 +96,7 @@ private fun pearlColorScheme(accent: Color, amoled: Boolean): ColorScheme {
         onSurfaceVariant   = PearlMuted,
         outline            = PearlOutline,
         primary            = accent,                          // user-editable brand/accent
-        onPrimary          = PearlOnBg,
+        onPrimary          = onAccent,
         primaryContainer   = accent.copy(alpha = 0.15f),
         onPrimaryContainer = PearlOnBg,
         secondary          = accent.copy(alpha = 0.6f),

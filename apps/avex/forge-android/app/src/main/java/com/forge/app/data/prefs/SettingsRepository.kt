@@ -20,7 +20,7 @@ enum class SettingsSection(val keys: List<Preferences.Key<*>>) {
     APPEARANCE(
         listOf(
             PreferenceKeys.AMOLED_MODE, PreferenceKeys.COMPACT_SET_LOGGING,
-            PreferenceKeys.ACCENT_COLOR_HEX, PreferenceKeys.FONT_CHOICE
+            PreferenceKeys.ACCENT_COLOR_HEX, PreferenceKeys.ACCENT_ENABLED, PreferenceKeys.FONT_CHOICE
         )
     ),
     FORMAT(
@@ -188,6 +188,12 @@ class SettingsRepository @Inject constructor(
         .map { it[PreferenceKeys.ACCENT_COLOR_HEX] ?: "" }
     suspend fun setAccentColorHex(hex: String) =
         context.forgePreferences.edit { it[PreferenceKeys.ACCENT_COLOR_HEX] = hex }
+
+    /** When false the accent is suppressed app-wide (monochrome highlights). Default on. */
+    val accentEnabled: Flow<Boolean> = context.forgePreferences.data
+        .map { it[PreferenceKeys.ACCENT_ENABLED] ?: true }
+    suspend fun setAccentEnabled(value: Boolean) =
+        context.forgePreferences.edit { it[PreferenceKeys.ACCENT_ENABLED] = value }
 
     val fontChoice: Flow<String> = context.forgePreferences.data
         .map { it[PreferenceKeys.FONT_CHOICE] ?: "default" }

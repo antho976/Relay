@@ -365,79 +365,9 @@ fun OverviewScreen(
                 }
             }
 
-            // ── Comeback nudge: a multi-day gap since the last session (>4d) ──
-            state.daysSinceLastSession?.let { gap ->
-                if (gap > 4 && state.activeSessionDayKey == null) {
-                    Spacer(Modifier.height(16.dp))
-                    Column(
-                        Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(accent.copy(alpha = 0.10f))
-                            .padding(horizontal = 14.dp, vertical = 12.dp)
-                    ) {
-                        Text("WELCOME BACK", style = MaterialTheme.typography.labelSmall, color = accent, fontSize = 10.sp)
-                        Text("It's been $gap days — start light today and rebuild momentum.",
-                            style = MaterialTheme.typography.bodyMedium, color = onBg)
-                    }
-                }
-            }
-
-            // ── Recovery snapshot: resting HR elevated vs your baseline (Health Connect) ──
-            state.recoveryAlert?.let { alert ->
-                Spacer(Modifier.height(16.dp))
-                Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(accent.copy(alpha = 0.10f))
-                        .padding(horizontal = 14.dp, vertical = 12.dp)
-                ) {
-                    Text("RECOVERY", style = MaterialTheme.typography.labelSmall, color = accent, fontSize = 10.sp)
-                    Text(
-                        "Resting HR is ${alert.deltaBpm} bpm above your baseline " +
-                            "(${alert.restingBpm} vs ${alert.baselineBpm}) — a sign you're not fully recovered. " +
-                            "An easier day and an earlier night will help.",
-                        style = MaterialTheme.typography.bodyMedium, color = onBg
-                    )
-                }
-            }
-
-            // ── Cardio-load nudge: a big cardio block in the last day or two ──
-            // Dismissible for the session (rememberSaveable) — a closed nudge re-appears next launch
-            // only while the heavy-cardio window still holds, not forever.
-            var cardioNudgeDismissed by rememberSaveable { mutableStateOf(false) }
-            if (state.heavyCardioRecent && state.activeSessionDayKey == null && !cardioNudgeDismissed) {
-                Spacer(Modifier.height(16.dp))
-                Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(accent.copy(alpha = 0.10f))
-                        .padding(horizontal = 14.dp, vertical = 12.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text("RECENT CARDIO", style = MaterialTheme.typography.labelSmall, color = accent, fontSize = 10.sp)
-                        Icon(
-                            Icons.Default.Close, contentDescription = "Dismiss",
-                            tint = muted.copy(alpha = 0.7f),
-                            modifier = Modifier.size(16.dp).clickableLabeled("Dismiss") { cardioNudgeDismissed = true }
-                        )
-                    }
-                    state.recentCardioLead?.let { lead ->
-                        Text(lead, style = MaterialTheme.typography.bodyLarge, color = onBg)
-                        Spacer(Modifier.height(4.dp))
-                    }
-                    Text(
-                        "Enough to compete with lifting recovery — keep today's heavy work a touch submaximal, or fuel up well before you go after it.",
-                        style = MaterialTheme.typography.bodyMedium, color = muted
-                    )
-                }
-            }
+            // The comeback / recovery-snapshot / cardio-load nudge cards that sat here were removed
+            // (Antho 2026-07-04) — only functional banners (resume, coach brief, milestone, orphan
+            // notice) remain above the TODAY block.
 
             Spacer(Modifier.height(20.dp))
 
@@ -650,7 +580,7 @@ fun OverviewScreen(
 
             // ── Goals — folded into THIS WEEK (no separator): the week's figures run straight
             // into what you're working toward ──
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(26.dp))
             GoalLinesSection(state.goals, state.customGoals, onOpenGoals, onBg, muted, accent, outline)
 
             Spacer(Modifier.height(20.dp))

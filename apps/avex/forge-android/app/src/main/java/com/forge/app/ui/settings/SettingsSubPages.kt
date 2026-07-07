@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.provider.Settings
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -75,23 +76,38 @@ private val TIMEZONE_OPTIONS = listOf(
 
 @Composable
 internal fun AppearancePage(state: SettingsUiState, vm: SettingsViewModel, modifier: Modifier = Modifier) {
-    Column(modifier.fillMaxSize()) {
-        ToggleRow("AMOLED pure black", "Pure-black backgrounds — saves battery on OLED screens; on an LCD phone it just looks darker.", state.amoledMode, vm::setAmoledMode)
-        SectionDivider()
+    Column(
+        modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(bottom = 24.dp)
+    ) {
+        // Grouped by quiet mono anchors + air — no per-row hairlines (DESIGN §1/§7).
+        SettingsSectionHeader("Display", top = 12.dp)
+        ToggleRow("AMOLED pure black", "Pure-black backgrounds. Saves battery on OLED screens; on an LCD phone it just looks darker.", state.amoledMode, vm::setAmoledMode)
         ToggleRow("Compact set logging", "Denser set rows for experienced users", state.compactSetLogging, vm::setCompactSetLogging)
-        SectionDivider()
         ToggleRow("Privacy mode", "Hide the app preview in recent apps & block screenshots", state.privacyMode, vm::setPrivacyMode)
-        SectionDivider()
+
+        SettingsSectionHeader("Accent")
+        ToggleRow(
+            "Use accent color",
+            "Off makes the app monochrome; highlights use a neutral tone.",
+            state.accentEnabled,
+            vm::setAccentEnabled
+        )
+        // The picker is only meaningful while the accent is on, so it collapses away when off (the
+        // chosen colour is kept and returns on re-enable).
+        AnimatedVisibility(visible = state.accentEnabled) {
+            AccentColorRow(state.accentColorHex, vm::setAccentColorHex)
+        }
+
         Spacer(Modifier.height(8.dp))
-        AccentColorRow(state.accentColorHex, vm::setAccentColorHex)
-        SectionDivider()
         SectionResetRow(com.forge.app.data.prefs.SettingsSection.APPEARANCE, vm)
     }
 }
 
 @Composable
 internal fun FormatPage(state: SettingsUiState, vm: SettingsViewModel, modifier: Modifier = Modifier) {
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
     var showTzPicker by remember { mutableStateOf(false) }
 
     Column(
@@ -100,67 +116,52 @@ internal fun FormatPage(state: SettingsUiState, vm: SettingsViewModel, modifier:
             .verticalScroll(rememberScrollState())
             .padding(bottom = 32.dp)
     ) {
-        Text(
-            "Units, date & time, week start & timezone — and the basis for your strength standards.",
-            style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic,
-            modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 4.dp)
-        )
-
-        // ── Units ────────────────────────────────────────────────────────────────
-        GroupHeader("Units")
+        // Grouped by quiet mono anchors + air, no per-row hairlines (DESIGN §1/§7) —
+        // the same rhythm the Appearance page already migrated to.
+        SettingsSectionHeader("Units", top = 12.dp)
         InlineChipRow(
             "Weight",
             listOf("lb" to "lb", "kg" to "kg"),
             if (state.useKg) "kg" else "lb"
         ) { vm.setUseKg(it == "kg") }
-        SectionDivider()
         InlineChipRow(
             "Distance",
             listOf("km" to "km", "mi" to "mi"),
             if (state.useMiles) "mi" else "km"
         ) { vm.setUseMiles(it == "mi") }
-        SectionDivider()
         // Live preview — updates the moment a unit is switched.
         CardFootnote(
             "e.g. ${com.forge.app.domain.units.formatWeight(135.0, state.useKg)} · " +
                 com.forge.app.domain.units.formatDistance(5.0, state.useMiles)
         )
 
-        // ── Date & time ────────────────────────────────────────────────────────────
-        SectionDivider()
-        GroupHeader("Date & time")
+        SettingsSectionHeader("Date & time")
         InlineChipRow(
             "Date",
             listOf("MMM d, yyyy" to "Jan 5", "dd/MM/yyyy" to "05/01", "MM/dd/yyyy" to "01/05"),
             state.dateFormat, vm::setDateFormat
         )
-        SectionDivider()
         InlineChipRow(
             "Time",
             listOf("12h" to "12h", "24h" to "24h"),
             if (state.timeFormat24h) "24h" else "12h"
         ) { vm.setTimeFormat24h(it == "24h") }
-        SectionDivider()
         InlineChipRow(
             "Week starts",
             listOf("Mon" to "Mon", "Sun" to "Sun"),
             if (state.firstDayMonday) "Mon" else "Sun"
         ) { vm.setFirstDayMonday(it == "Mon") }
-        SectionDivider()
         TimezoneRow(state.timezone) { showTzPicker = true }
 
-        // ── Strength standards ──────────────────────────────────────────────────────
-        SectionDivider()
-        GroupHeader("Strength standards")
+        SettingsSectionHeader("Strength standards")
         InlineChipRow(
             "Sex",
             listOf("male" to "Male", "female" to "Female"),
             state.userSex, vm::setUserSex
         )
-        SectionDivider()
         CardFootnote("Only scales the bodyweight-relative strength standards on the Stats tab.")
 
-        FormatResetButton(vm)
+        SectionResetRow(com.forge.app.data.prefs.SettingsSection.FORMAT, vm)
     }
 
     if (showTzPicker) {
@@ -176,18 +177,6 @@ internal fun FormatPage(state: SettingsUiState, vm: SettingsViewModel, modifier:
 
 // ─── Format-page building blocks ─────────────────────────────────────────────
 
-/** Quiet uppercase section label that sits above a group of open rows. */
-@Composable
-private fun GroupHeader(text: String) {
-    Text(
-        text.uppercase(),
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        letterSpacing = 1.5.sp,
-        modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 20.dp, bottom = 8.dp)
-    )
-}
-
 /** A muted italic note — live previews and scope annotations sitting openly on the page. */
 @Composable
 private fun CardFootnote(text: String) {
@@ -200,33 +189,6 @@ private fun CardFootnote(text: String) {
     )
 }
 
-/** A prominent, clearly-tappable "reset this page" button (Format page only, for now). */
-@Composable
-private fun FormatResetButton(vm: SettingsViewModel) {
-    val onBg = MaterialTheme.colorScheme.onBackground
-    val outline = MaterialTheme.colorScheme.outline
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(start = 20.dp, end = 20.dp, top = 24.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .border(1.dp, outline.copy(alpha = 0.6f), RoundedCornerShape(12.dp))
-            .clickableLabeled("Reset this page to defaults") {
-                vm.resetSection(com.forge.app.data.prefs.SettingsSection.FORMAT)
-            }
-            .padding(vertical = 14.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            "↺  Reset this page to defaults",
-            style = MaterialTheme.typography.labelLarge,
-            color = onBg,
-            letterSpacing = 0.5.sp,
-            textAlign = TextAlign.Center
-        )
-    }
-}
-
 /** Label on the left, a chip group on the right — one setting per open row. */
 @Composable
 private fun InlineChipRow(
@@ -236,7 +198,7 @@ private fun InlineChipRow(
     onSelect: (String) -> Unit
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 12.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
@@ -271,7 +233,7 @@ private fun TimezoneRow(timezone: String, onClick: () -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 14.dp),
+            .padding(horizontal = 24.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text("Timezone", style = MaterialTheme.typography.bodyMedium, color = onBg)
@@ -658,42 +620,49 @@ private fun NotificationsBlockedBanner() {
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
-    SectionDivider()
+    Spacer(Modifier.height(8.dp))
 }
 
 @Composable
 internal fun NotificationsPage(state: SettingsUiState, vm: SettingsViewModel, modifier: Modifier = Modifier) {
     Column(modifier.fillMaxSize()) {
         NotificationsBlockedBanner()
+
+        // Quiet mono anchors + air, no per-row hairlines (DESIGN §1/§7) — same rhythm as Format.
+        // "Alerts" (what Forge sends) reads cleaner than echoing the page name "Notifications" (§2).
+        SettingsSectionHeader("Alerts", top = 12.dp)
         ToggleRow(
             "Training reminders",
-            "A daily nudge to train on your scheduled days — keeps your streak alive",
+            "A daily nudge to train on scheduled days and keep your streak alive",
             state.trainingReminderEnabled, vm::setTrainingReminderEnabled
         )
-        SectionDivider()
         if (state.trainingReminderEnabled) {
             HourPickerRow("Remind me at", state.trainingReminderHour, vm::setTrainingReminderHour)
-            SectionDivider()
         }
         ToggleRow(
             "Weekly recap",
-            "A weekly summary of your training — workouts, volume, streak",
+            "A weekly summary of workouts, volume, and streak",
             state.weeklyRecapEnabled, vm::setWeeklyRecapEnabled
         )
-        SectionDivider()
         ToggleRow(
             "Rest timer alerts",
             "Buzz + notify when your rest ends while the app is in the background",
             state.restTimerAlertEnabled, vm::setRestTimerAlertEnabled
         )
-        SectionDivider()
-        ToggleRow("Quiet hours", "Suppress timer + recap notifications", state.quietHoursEnabled, vm::setQuietHoursEnabled)
-        SectionDivider()
+
+        // Own group: the mute window is a suppressor, not an alert. Toggle is "Silence alerts" so it
+        // doesn't echo the "Quiet hours" header directly above it (§4.3 one-home).
+        SettingsSectionHeader("Quiet hours")
+        ToggleRow(
+            "Silence alerts",
+            "Mute timer and recap notifications during the hours below",
+            state.quietHoursEnabled, vm::setQuietHoursEnabled
+        )
         if (state.quietHoursEnabled) {
             HourPickerRow("From", state.quietHoursStart, vm::setQuietHoursStart)
             HourPickerRow("Until", state.quietHoursEnd, vm::setQuietHoursEnd)
-            SectionDivider()
         }
+
         SectionResetRow(com.forge.app.data.prefs.SettingsSection.NOTIFICATIONS, vm)
     }
 }

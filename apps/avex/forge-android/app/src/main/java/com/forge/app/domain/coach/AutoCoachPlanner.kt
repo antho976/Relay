@@ -83,6 +83,17 @@ object AutoCoachPlanner {
 
     /** Below this many finished sessions there is no baseline to coach against. */
     const val MIN_SESSIONS = 4
+
+    /** Lead-in of the pre-baseline hold — lets the UI recognize a stale learning pass. */
+    const val LEARNING_HOLD_PREFIX = "Still building your baseline"
+
+    /** True when [reason] is the pre-baseline hold (possibly written earlier in the week).
+     *  Also matches the wording older persisted passes carry — pass rows are immutable per week,
+     *  so a stored reason can predate a copy change. */
+    fun isLearningHold(reason: String?): Boolean =
+        reason != null &&
+            (reason.startsWith(LEARNING_HOLD_PREFIX) || reason.startsWith("Still learning your baseline"))
+
     /** A training gap at least this long means "ease back in", not "restructure". */
     private const val GAP_HOLD_DAYS = 14
     /** Per-muscle net applied-volume drift cap, in sets (hardening 11). */
@@ -99,13 +110,13 @@ object AutoCoachPlanner {
         t: AdaptThresholds = AdaptThresholds()
     ): CoachPassResult {
         if (s.sessions.size < MIN_SESSIONS) return hold(
-            "Still learning your baseline — ${s.sessions.size} session(s) logged. " +
-                "Keep training; the coach starts calling adjustments at $MIN_SESSIONS."
+            "$LEARNING_HOLD_PREFIX. ${s.sessions.size} of $MIN_SESSIONS sessions logged; " +
+                "the weekly calls start at $MIN_SESSIONS."
         )
         val lastSessionAt = s.sessions.maxOf { it.startedAt }
         if (s.nowMs - lastSessionAt >= GAP_HOLD_DAYS * DAY_MS) return hold(
-            "You're just getting back after a break — run the plan as-is this week and ease in. " +
-                "No changes until there's fresh data."
+            "First week back after a break. Run the plan as it is and ease in; " +
+                "changes resume once there's fresh data."
         )
 
         // A deload call supersedes everything else (mirrors the arbiter's suppression rule):
@@ -182,17 +193,19 @@ object AutoCoachPlanner {
                 fatigue.score < t.deloadScoreThreshold
             return when {
                 building -> hold(
-                    "Fatigue is creeping up (${fatigue!!.score} of ${t.deloadScoreThreshold}) — make this a " +
-                        "consolidation week: hold your working weights, chase the top of your rep ranges instead " +
-                        "of adding load, and bank some sleep. Consolidating now usually heads off a forced deload" +
+                    "Fatigue is at ${fatigue!!.score} of ${t.deloadScoreThreshold}. Make this a " +
+                        "consolidation week: hold your working weights, chase the top of each rep range, " +
+                        "and bank some sleep. That usually heads off a forced deload" +
                         (fatigue.drivers.firstOrNull()?.let { " ($it)" } ?: "") + "."
                 )
                 tracked == 0 -> hold(
-                    "Not enough lift history to judge progress yet — keep logging and the weekly calls will start."
+                    "Not enough lift history to judge progress yet. Keep logging and the weekly calls will start."
+                )
+                tracked == 1 -> hold(
+                    "Your one tracked lift is progressing or too fresh to judge. The plan is working."
                 )
                 else -> hold(
-                    "All $tracked tracked lift(s) are progressing or too fresh to judge — " +
-                        "the plan is working. That's what a hold looks like."
+                    "All $tracked tracked lifts are progressing or too fresh to judge. The plan is working."
                 )
             }
         }

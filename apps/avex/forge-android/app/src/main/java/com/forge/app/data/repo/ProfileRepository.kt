@@ -1,7 +1,6 @@
 package com.forge.app.data.repo
 
 import com.forge.app.core.time.Clock
-import com.forge.app.data.db.dao.CardioDao
 import com.forge.app.data.db.dao.LoggedSetDao
 import com.forge.app.data.db.dao.SessionDao
 import com.forge.app.data.db.entities.Session
@@ -16,7 +15,6 @@ import com.forge.app.domain.rank.XpEngine
 import com.forge.app.domain.rank.XpSnapshot
 import com.forge.app.domain.trophy.TrophyEvaluator
 import com.forge.app.domain.trophy.TrophyStatsSnapshot
-import com.forge.app.program.Program
 import com.forge.app.program.Trophy
 import com.forge.app.program.TrophyIcon
 import com.forge.app.program.Trophies
@@ -28,16 +26,12 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import java.time.Instant
 import java.time.LocalDate
-import java.time.LocalTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.temporal.IsoFields
 import java.util.Locale
 import javax.inject.Inject
 import javax.inject.Singleton
-
-/** A single signature lift (heaviest set ever). */
-data class SignatureLift(val name: String, val weightLb: Double)
 
 /**
  * One trophy in the profile's trophy-case grid. [progress] is 0f..1f (1f when unlocked).
@@ -68,18 +62,11 @@ data class ProfileData(
     val streakDays: Int,
     val longestStreakDays: Int,
     val sinceLabel: String,
-    val topLift: SignatureLift?,
-    val mostLoggedDay: String?,
-    val usualHour: String?,
     val trophyUnlocked: Int,
     val trophyTotal: Int,
     val trophyGrid: List<TrophyCell>,
     val closestTrophy: String?,
     val memory: OnThisDayMemory?,
-    /** All-time cardio: non-rest sessions, active minutes, distance (km). */
-    val cardioSessions: Int = 0,
-    val cardioMinutes: Int = 0,
-    val cardioDistanceKm: Double = 0.0,
     /** Lifetime total sets logged — an All-Time tile alongside workouts/volume/PRs. */
     val totalSets: Int = 0,
     /** This-week vs last-week tallies (ISO weeks) — power the All-Time tiles' "vs last week" arrows. */
@@ -96,7 +83,7 @@ data class ProfileData(
 
 /**
  * Assembles the profile "You" hub: lifetime XP + rank (via [XpEngine] / [RankLadder]), the
- * offline standing estimate ([StandingEngine]), the signature lifts and the trophy-case grid —
+ * offline standing estimate ([StandingEngine]) and the trophy-case grid —
  * all derived from existing finished-session data, so there is no new schema.
  * Pure engines stay in `domain/rank`; this layer only does I/O + assembly (the AdaptationRepository
  * pattern). Loaded once per profile open.
@@ -105,7 +92,6 @@ data class ProfileData(
 class ProfileRepository @Inject constructor(
     private val sessionDao: SessionDao,
     private val loggedSetDao: LoggedSetDao,
-    private val cardioDao: CardioDao,
     private val trophyRepo: TrophyRepository,
     private val statsRepo: StatsRepository,
     private val settingsRepo: SettingsRepository,
@@ -126,7 +112,6 @@ class ProfileRepository @Inject constructor(
         val sessionsD = async { sessionDao.allFinished().filter { !it.isUntracked } }
         val unlockedDatesD = async { trophyRepo.unlockedDatesById() }
         val snapshotD = async { runCatching { trophyRepo.snapshot() }.getOrNull() }
-        val topLiftD = async { loggedSetDao.topLift() }
         val memoryD = async { runCatching { statsRepo.findOnThisDayMemory() }.getOrNull() }
         // Focused streak read (two queries) rather than subscribing the whole weekly fan-out just
         // to pull one Int — see StatsRepository.currentStreakDays.
@@ -139,10 +124,6 @@ class ProfileRepository @Inject constructor(
                 loggedSetDao.bestE1rmLbSince(since90)
             }.getOrNull()
         }
-        // All-time cardio totals (non-rest), for the profile's CARDIO block.
-        val cardioSessionsD = async { runCatching { cardioDao.totalSessions() }.getOrDefault(0) }
-        val cardioMinutesD = async { runCatching { cardioDao.totalMinutes() }.getOrNull() ?: 0 }
-        val cardioDistanceD = async { runCatching { cardioDao.totalDistanceKm() }.getOrNull() ?: 0.0 }
         val sessions = sessionsD.await()
         val unlockedDates = unlockedDatesD.await()
         val unlockedIds = unlockedDates.keys
@@ -194,20 +175,6 @@ class ProfileRepository @Inject constructor(
             useKg
         )
 
-        // ── Signature ─────────────────────────────────────────────────────────────
-        val topLift = topLiftD.await()?.let { row ->
-            // Humanized (incl. seed split) so a signature lift never drops out or shows a raw id (C3).
-            SignatureLift(Program.exerciseDisplayName(row.exerciseId), row.weightLb)
-        }
-        val mostLoggedDay = sessions.groupingBy { it.dayKey }.eachCount().maxByOrNull { it.value }?.key
-            // dayOrNull (not day) so a since-deleted history key shows no name rather than the wrong
-            // day's name — Program.day would now substitute a real (but unrelated) day for a stale key.
-            ?.let { key -> Program.dayOrNull(key)?.defaultName }
-        val usualHour = sessions
-            .groupingBy { Instant.ofEpochMilli(it.startedAt).atZone(zone).hour }
-            .eachCount().maxByOrNull { it.value }?.key
-            ?.let { LocalTime.of(it, 0).format(HOUR_FMT) }
-
         // ── Trophy case ───────────────────────────────────────────────────────────
         val snapshot = snapshotD.await()
         val trophyGrid = curatedTrophyGrid(unlockedIds, unlockedDates, snapshot, useKg)
@@ -230,17 +197,11 @@ class ProfileRepository @Inject constructor(
             longestStreakDays = snapshot?.maxStreakEver ?: 0,
             sinceLabel = sessions.minOfOrNull { it.startedAt }
                 ?.let { Instant.ofEpochMilli(it).atZone(zone).format(SINCE_FMT).uppercase() } ?: "",
-            topLift = topLift,
-            mostLoggedDay = mostLoggedDay,
-            usualHour = usualHour,
             trophyUnlocked = unlockedIds.size,
             trophyTotal = Trophies.all.size,
             trophyGrid = trophyGrid,
             closestTrophy = closestTrophy,
             memory = memoryD.await(),
-            cardioSessions = cardioSessionsD.await(),
-            cardioMinutes = cardioMinutesD.await(),
-            cardioDistanceKm = cardioDistanceD.await(),
             totalSets = totalSets,
             workoutsThisWeek = workoutsThisWeek,
             workoutsLastWeek = workoutsLastWeek,
@@ -311,7 +272,6 @@ class ProfileRepository @Inject constructor(
         const val HARDEST_DONE = 3        // unlocked trophies shown (hardest first)
         const val TROPHY_HIGHLIGHTS = 9   // total cells (done + almost-complete + 0% fillers)
         val SINCE_FMT: DateTimeFormatter = DateTimeFormatter.ofPattern("MMM yyyy", Locale.getDefault())
-        val HOUR_FMT: DateTimeFormatter = DateTimeFormatter.ofPattern("h a", Locale.US)
     }
 }
 

@@ -90,7 +90,7 @@ class WeeklyReviewTest {
     @Test
     fun focusLineFollowsTheWeekShape() {
         val calm = WeeklyReview.assemble(snapshot(emptyList()), weekStart, 4, hasDeloadShadow = false)
-        assertTrue(calm.focusLine.contains("Keep doing"))
+        assertTrue(calm.focusLine, calm.focusLine.contains("quiet week"))
         val deload = WeeklyReview.assemble(snapshot(emptyList()), weekStart, 4, hasDeloadShadow = true)
         assertTrue(deload.focusLine.contains("Recovery"))
     }
@@ -113,10 +113,11 @@ class WeeklyReviewTest {
     }
 
     @Test
-    fun focusLine_staysGenericBelowTheDataGate() {
-        // Only 4 sessions — not enough block to name a phase, so the boring-good line holds.
+    fun focusLine_belowTheDataGateFallsToADataGroundedQuietLine() {
+        // Only 4 sessions — not enough block to name a phase, so a line grounded in the week's own
+        // numbers holds (here: 4 of 4 sessions in → the "every session" cue), never the old generic.
         val r = WeeklyReview.assemble(snapshot(blockSessions(firstDay = 49, count = 4)), weekStart, 4, hasDeloadShadow = false)
-        assertTrue(r.focusLine.contains("Keep doing"))
+        assertTrue(r.focusLine, r.focusLine.contains("Every session"))
     }
 
     @Test

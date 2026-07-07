@@ -245,6 +245,8 @@ class MainActivity : ComponentActivity() {
                     s.copy(overviewTileOrder = order)
                 }.combine(settingsRepo.accentColorHex) { s, v ->
                     s.copy(accentColorHex = v)
+                }.combine(settingsRepo.accentEnabled) { s, v ->
+                    s.copy(accentEnabled = v)
                 }.combine(settingsRepo.plateWeightLb) { s, v ->
                     s.copy(plateWeightLb = v)
                 }.combine(settingsRepo.firstWorkoutDone) { s, v ->
@@ -260,7 +262,8 @@ class MainActivity : ComponentActivity() {
             CompositionLocalProvider(LocalForgeSettings provides uiSettings) {
                 ForgeTheme(
                     amoledMode     = uiSettings.amoledMode,
-                    accentColorHex = uiSettings.accentColorHex
+                    accentColorHex = uiSettings.accentColorHex,
+                    accentEnabled  = uiSettings.accentEnabled
                 ) {
                     // One app-level touch-exploration observer feeds every bounceClick (A11y).
                     ProvideTouchExploration {

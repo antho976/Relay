@@ -51,7 +51,6 @@ import kotlinx.coroutines.flow.flowOn
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
-import java.time.temporal.ChronoUnit
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -86,7 +85,6 @@ class StatsRepository @Inject constructor(
         val cardioMinutes: Int = 0,
         val totalFinishedSessions: Int = 0,
         val streakDays: Int = 0,
-        val daysSinceLastSession: Int? = null,
         val firstFinishedSessionMs: Long? = null,
         /** Highest single-session volume (lb) in the current ISO week; null when none logged yet. */
         val bestSessionThisWeekLb: Double? = null,
@@ -152,7 +150,6 @@ class StatsRepository @Inject constructor(
                 cardioMinutes = cardio ?: 0,
                 totalFinishedSessions = totalFinished,
                 streakDays = 0,
-                daysSinceLastSession = computeDaysSinceLast(finishedAts),
                 bestSessionThisWeekLb = bestSessionThisWeekLb,
                 weekDaysTrained = weekDaysTrained,
                 nextUpDayKey = nextUpDayKey,
@@ -206,13 +203,6 @@ class StatsRepository @Inject constructor(
         val finishedAts = sessionDao.observeRecent(120).first().mapNotNull { it.finishedAt }
         val periods = vacationDao.all()
         return computeStreak(finishedAts, com.forge.app.domain.vacation.VacationCalendar.onVacation(periods))
-    }
-
-    private fun computeDaysSinceLast(finishedAts: List<Long>): Int? {
-        val latest = finishedAts.maxOrNull() ?: return null
-        val zone = ZoneId.systemDefault()
-        val lastDay = Instant.ofEpochMilli(latest).atZone(zone).toLocalDate()
-        return ChronoUnit.DAYS.between(lastDay, LocalDate.now(zone)).toInt()
     }
 
     // ─── History / comparison helpers ─────────────────────────────────────────

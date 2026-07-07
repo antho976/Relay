@@ -121,9 +121,11 @@ class ForgeWidget : GlanceAppWidget() {
         // Theme-matched colours: honour the user's AMOLED + accent choices (the same Pearl palette the
         // app uses) instead of a hardcoded black + Material purple, so the widget reads as one app.
         val amoled = settings.amoledMode.first()
-        val accentArgb = settings.accentColorHex.first().takeIf { it.isNotBlank() }
-            ?.let { runCatching { android.graphics.Color.parseColor(it) }.getOrNull() }
-            ?: AccentNavy.toArgb()
+        // Accent off ⇒ the widget goes monochrome too (near-white highlight), matching the app.
+        val accentArgb = if (!settings.accentEnabled.first()) PearlOnBg.toArgb()
+            else settings.accentColorHex.first().takeIf { it.isNotBlank() }
+                ?.let { runCatching { android.graphics.Color.parseColor(it) }.getOrNull() }
+                ?: AccentNavy.toArgb()
         val bgArgb = if (amoled) android.graphics.Color.BLACK else PearlBackground.toArgb()
         val onBgArgb = PearlOnBg.toArgb()
         val mutedArgb = PearlMuted.toArgb()

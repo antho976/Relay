@@ -1,7 +1,9 @@
 package com.forge.app.ui.settings
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -9,24 +11,41 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.forge.app.ui.common.clickableLabeled
+import com.forge.app.ui.nav.NavIcons
 
 @Composable
 internal fun MainList(
     state: SettingsUiState,
-    displayRows: List<SettingsRow>,
     searchQuery: String,
     modifier: Modifier,
+    onSearchChange: (String) -> Unit,
     onOpenPage: (SettingsPage) -> Unit,
     onOpenCoachBrief: () -> Unit,
     onOpenDataDialog: () -> Unit,
@@ -34,71 +53,149 @@ internal fun MainList(
     onOpenResetMenu: () -> Unit
 ) {
     LazyColumn(modifier = modifier, contentPadding = PaddingValues(bottom = 56.dp)) {
+        // Persistent search field at the top of the list (modern-phone-settings pattern) — replaces
+        // the old top-bar magnifier toggle. Always visible, in both the grouped and results states.
+        item("search") { SettingsSearchField(searchQuery, onSearchChange) }
         if (searchQuery.isBlank()) {
-            displayRows.forEach { row ->
-                item(row.page.name) {
-                    SettingsNavRow(row.label, rowSubtitle(row.page, state)) { onOpenPage(row.page) }
-                    SectionDivider()
-                }
+            // Grouped under quiet mono anchors, separated by air alone — no per-row hairlines
+            // (DESIGN §1/§7: lines mean data; sections separate by whitespace + their header). Each
+            // row carries a muted leading glyph from the nav-bar family (SettingsIcons) for wayfinding.
+            item("general") {
+                SettingsSectionHeader("General", top = 8.dp)
+                SettingsNavRow("Appearance", rowSubtitle(SettingsPage.Appearance, state), SettingsIcons.Appearance) { onOpenPage(SettingsPage.Appearance) }
+                SettingsNavRow("Units & format", rowSubtitle(SettingsPage.Format, state), SettingsIcons.Units) { onOpenPage(SettingsPage.Format) }
+                SettingsNavRow("Notifications", rowSubtitle(SettingsPage.Notifications, state), SettingsIcons.Notifications) { onOpenPage(SettingsPage.Notifications) }
             }
-            // Persistent Coach entry: the Overview banner is conditional (no new brief ⇒ no banner),
-            // so Settings is the one always-available door to the coach (its brief + what it's learning).
-            // Hidden for freestyle users — there's no plan to coach against, matching the hub tab.
-            if (!state.freestyleMode) {
-                item("coach") {
-                    SectionLabel("COACH")
-                    SettingsNavRow("Your coach", "This week's brief · what it's tracking") { onOpenCoachBrief() }
-                    SectionDivider()
-                }
+            item("training") {
+                SettingsSectionHeader("Training")
+                SettingsNavRow("Program & equipment", rowSubtitle(SettingsPage.Program, state), SettingsIcons.Program) { onOpenPage(SettingsPage.Program) }
+                SettingsNavRow("Session", rowSubtitle(SettingsPage.Session, state), SettingsIcons.Session) { onOpenPage(SettingsPage.Session) }
+                SettingsNavRow("Exercise likes", rowSubtitle(SettingsPage.ExercisePrefs, state), SettingsIcons.Likes) { onOpenPage(SettingsPage.ExercisePrefs) }
             }
-            item("vacation") {
-                SettingsNavRow("Holiday / Vacation", "Pause your streak during a holiday") { onOpenPage(SettingsPage.Vacation) }
-                SectionDivider()
+            item("coach") {
+                SettingsSectionHeader("Coach")
+                // The always-available door to the coach page (brief link + on/off + mode + trust +
+                // history). Hidden for freestyle users — no plan to coach against (matches the hub tab);
+                // Recovery + Holiday stay, they aren't coach-only.
+                if (!state.freestyleMode) {
+                    SettingsNavRow("Your coach", rowSubtitle(SettingsPage.Coach, state), NavIcons.Coach) { onOpenPage(SettingsPage.Coach) }
+                }
+                SettingsNavRow("Recovery", rowSubtitle(SettingsPage.Recovery, state), SettingsIcons.Recovery) { onOpenPage(SettingsPage.Recovery) }
+                SettingsNavRow("Holiday / Vacation", "Pause your streak during a holiday", SettingsIcons.Holiday) { onOpenPage(SettingsPage.Vacation) }
             }
             item("data") {
-                SectionLabel("DATA")
-                SettingsNavRow("Export data", "Sessions · weekly · full backup · PDF") { onOpenDataDialog() }
-                SectionDivider()
+                SettingsSectionHeader("Data")
+                SettingsNavRow("Export data", "Sessions · weekly · full backup · PDF", SettingsIcons.Export) { onOpenDataDialog() }
             }
             item("reset") {
-                SectionLabel("RESET")
+                SettingsSectionHeader("Reset")
                 // One umbrella entry opens a chooser for the targeted resets…
                 DestructiveRow("Reset…") { onOpenResetMenu() }
                 // …and a factory reset stays a separate, clearly more dangerous button.
                 DestructiveRow(ResetTarget.FACTORY.label, isFactory = true) { onResetTarget(ResetTarget.FACTORY) }
-                Spacer(Modifier.height(16.dp))
-                // About Forge is now a quiet footer link at the very bottom of the app.
+                Spacer(Modifier.height(20.dp))
+                // About Forge is a quiet footer link at the very bottom of the app.
                 AboutLink { onOpenPage(SettingsPage.About) }
                 Spacer(Modifier.height(8.dp))
             }
         } else {
-            val q = searchQuery.lowercase()
-            val grouped = ALL_ITEMS
-                .filter { q in it.name.lowercase() || q in it.tags }
-                .groupBy { it.page }
-                .entries
-                .sortedBy { it.key.ordinal }
-            val dialogMatches = DIALOG_ENTRIES.filter { q in it.name.lowercase() || q in it.tags }
+            // Flat, ranked, individually-tappable results (modern phone-settings search): every
+            // matched setting is its own row — page glyph + name (matched span emphasized) + its
+            // location + tap straight to the destination. Name-prefix hits rank first, then substring,
+            // then tag-only matches; the whole thing sorts by rank, then alphabetically.
+            val q = searchQuery.trim()
+            val ql = q.lowercase()
+            val results = buildList {
+                // Whole-page hits first ("app" → Appearance) …
+                PAGE_ENTRIES.forEach { pe ->
+                    if (ql in pe.page.title.lowercase() || ql in pe.tags) {
+                        add(SearchResult(pe.page.title, pageSection(pe.page), pageGlyph(pe.page), "→", searchRank(pe.page.title, ql)) {
+                            onOpenPage(pe.page)
+                        })
+                    }
+                }
+                // … then individual settings within a page.
+                ALL_ITEMS.forEach { item ->
+                    if (ql in item.name.lowercase() || ql in item.tags) {
+                        add(SearchResult(item.name, item.page.title, pageGlyph(item.page), "→", searchRank(item.name, ql)) {
+                            onOpenPage(item.page)
+                        })
+                    }
+                }
+                ACTION_ENTRIES.forEach { e ->
+                    val hidden = e.action == SearchAction.COACH && state.freestyleMode
+                    if (!hidden && (ql in e.name.lowercase() || ql in e.tags)) {
+                        val onClick: () -> Unit = when (e.action) {
+                            SearchAction.DATA -> onOpenDataDialog
+                            SearchAction.RESET -> onOpenResetMenu
+                            SearchAction.COACH -> onOpenCoachBrief
+                        }
+                        add(SearchResult(e.name, e.where, actionGlyph(e.action), "↗", searchRank(e.name, ql), onClick))
+                    }
+                }
+            }.sortedWith(compareBy({ it.rank }, { it.name.lowercase() }))
 
-            if (grouped.isEmpty() && dialogMatches.isEmpty()) {
-                item("empty") {
-                    Text("No results", style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
-                        fontStyle = FontStyle.Italic,
-                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 24.dp))
-                }
+            if (results.isEmpty()) {
+                item("empty") { NoSearchResults(q) }
             } else {
-                grouped.forEach { (page, items) ->
-                    item("group-${page.name}") {
-                        SearchPageGroup(page = page, items = items, onClick = { onOpenPage(page) })
-                    }
-                }
-                dialogMatches.forEach { entry ->
-                    item("dialog-${entry.name}") {
-                        SearchDialogGroup(entry = entry, onClick = onOpenDataDialog)
-                    }
+                item("count") { SearchCount(results.size) }
+                itemsIndexed(results, key = { i, _ -> "res-$i" }) { _, r ->
+                    SearchResultRow(r, q)
                 }
             }
+        }
+    }
+}
+
+/**
+ * The settings search bar — a filled, rounded field with a leading magnifier and a trailing clear,
+ * the shape most phone settings use. Interactive, so a surface fill + rounded corners are earned
+ * (DESIGN §1/§13). Sits at the top of the list, always visible, in place of the old top-bar toggle.
+ */
+@Composable
+private fun SettingsSearchField(query: String, onQueryChange: (String) -> Unit) {
+    val onBg = MaterialTheme.colorScheme.onBackground
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 24.dp, end = 24.dp, top = 12.dp, bottom = 4.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Icon(Icons.Filled.Search, contentDescription = null, tint = muted, modifier = Modifier.size(20.dp))
+        BasicTextField(
+            value = query,
+            onValueChange = onQueryChange,
+            textStyle = MaterialTheme.typography.bodyMedium.copy(color = onBg),
+            cursorBrush = SolidColor(onBg),
+            singleLine = true,
+            modifier = Modifier.weight(1f),
+            decorationBox = { inner ->
+                Box {
+                    if (query.isEmpty()) {
+                        Text(
+                            "Search settings",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = muted.copy(alpha = 0.6f)
+                        )
+                    }
+                    inner()
+                }
+            }
+        )
+        if (query.isNotEmpty()) {
+            Icon(
+                Icons.Filled.Close,
+                contentDescription = "Clear search",
+                tint = muted,
+                modifier = Modifier
+                    .size(18.dp)
+                    .clickableLabeled("Clear search") { onQueryChange("") }
+            )
         }
     }
 }
@@ -118,44 +215,114 @@ private fun AboutLink(onClick: () -> Unit) {
     )
 }
 
-@Composable
-internal fun SearchPageGroup(page: SettingsPage, items: List<SettingsItem>, onClick: () -> Unit) {
-    val onBg = MaterialTheme.colorScheme.onBackground
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val outline = MaterialTheme.colorScheme.outline
-    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(top = 20.dp, bottom = 8.dp)) {
-        Row(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 8.dp),
-            horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Text(page.title.uppercase(), style = MaterialTheme.typography.labelSmall, color = onBg, letterSpacing = 1.5.sp)
-            Text("→", style = MaterialTheme.typography.bodyMedium, color = muted)
-        }
-        HorizontalDivider(color = outline.copy(alpha = 0.25f))
-        items.forEach { item ->
-            Text(item.name, style = MaterialTheme.typography.bodySmall, color = muted.copy(alpha = 0.75f),
-                fontStyle = FontStyle.Italic, modifier = Modifier.padding(top = 8.dp, start = 4.dp))
-        }
+/** One resolved search hit: its display fields, a leading glyph, a trailing marker and where it goes. */
+private class SearchResult(
+    val name: String,
+    val where: String,
+    val glyph: ImageVector?,
+    val trailing: String,
+    val rank: Int,
+    val onClick: () -> Unit
+)
+
+/** Relevance: name-prefix (0) beats a name substring (1) beats a tag-only match (2). */
+private fun searchRank(name: String, ql: String): Int {
+    val n = name.lowercase()
+    return when {
+        n.startsWith(ql) -> 0
+        ql in n -> 1
+        else -> 2
     }
 }
 
-/**
- * Search result card for a [SettingsDialogEntry] — tapping it opens a dialog instead of
- * navigating to a settings page. Visually matches [SearchPageGroup] so results feel consistent.
- */
+/** The section a page sits under in the main list — a page result's breadcrumb. */
+private fun pageSection(page: SettingsPage): String = when (page) {
+    SettingsPage.Appearance, SettingsPage.Format, SettingsPage.Notifications -> "General"
+    SettingsPage.Program, SettingsPage.Session, SettingsPage.ExercisePrefs -> "Training"
+    SettingsPage.Coach, SettingsPage.Recovery, SettingsPage.Vacation -> "Coach"
+    SettingsPage.About -> "About"
+}
+
+/** The leading glyph for a page's results — the same family the nav rows use. */
+private fun pageGlyph(page: SettingsPage): ImageVector? = when (page) {
+    SettingsPage.Appearance -> SettingsIcons.Appearance
+    SettingsPage.Format -> SettingsIcons.Units
+    SettingsPage.Session -> SettingsIcons.Session
+    SettingsPage.Notifications -> SettingsIcons.Notifications
+    SettingsPage.Program -> SettingsIcons.Program
+    SettingsPage.Coach -> NavIcons.Coach
+    SettingsPage.Recovery -> SettingsIcons.Recovery
+    SettingsPage.ExercisePrefs -> SettingsIcons.Likes
+    SettingsPage.Vacation -> SettingsIcons.Holiday
+    SettingsPage.About -> null
+}
+
+private fun actionGlyph(action: SearchAction): ImageVector? = when (action) {
+    SearchAction.DATA -> SettingsIcons.Export
+    SearchAction.COACH -> NavIcons.Coach
+    SearchAction.RESET -> null
+}
+
+/** Bold the matched span within a result name so it's clear WHY the row surfaced. */
+private fun highlightMatch(name: String, query: String): AnnotatedString = buildAnnotatedString {
+    val idx = if (query.isEmpty()) -1 else name.indexOf(query, ignoreCase = true)
+    if (idx < 0) {
+        append(name)
+    } else {
+        append(name.substring(0, idx))
+        withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(name.substring(idx, idx + query.length)) }
+        append(name.substring(idx + query.length))
+    }
+}
+
+/** A single search result: leading glyph · name (matched span bold) + location · trailing marker. */
 @Composable
-internal fun SearchDialogGroup(entry: SettingsDialogEntry, onClick: () -> Unit) {
+private fun SearchResultRow(result: SearchResult, query: String) {
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val outline = MaterialTheme.colorScheme.outline
-    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(top = 20.dp, bottom = 8.dp)) {
-        Row(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 8.dp),
-            horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Text(entry.name.uppercase(), style = MaterialTheme.typography.labelSmall, color = onBg, letterSpacing = 1.5.sp)
-            Text("↗", style = MaterialTheme.typography.bodyMedium, color = muted)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = result.onClick)
+            .padding(horizontal = 24.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        // Keep the text column aligned whether or not this hit has a glyph (Reset actions don't).
+        if (result.glyph != null) {
+            Icon(result.glyph, contentDescription = null, tint = muted, modifier = Modifier.size(20.dp))
+        } else {
+            Spacer(Modifier.size(20.dp))
         }
-        HorizontalDivider(color = outline.copy(alpha = 0.25f))
-        Text(entry.hint, style = MaterialTheme.typography.bodySmall, color = muted.copy(alpha = 0.75f),
-            fontStyle = FontStyle.Italic, modifier = Modifier.padding(top = 8.dp, start = 4.dp))
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(highlightMatch(result.name, query), style = MaterialTheme.typography.bodyMedium, color = onBg)
+            Text(result.where, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp)
+        }
+        Text(result.trailing, style = MaterialTheme.typography.bodyMedium, color = muted)
     }
+}
+
+/** A quiet count line above the results. */
+@Composable
+private fun SearchCount(n: Int) {
+    Text(
+        "$n ${if (n == 1) "result" else "results"}",
+        style = MaterialTheme.typography.labelSmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        letterSpacing = 1.sp,
+        modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 16.dp, bottom = 4.dp)
+    )
+}
+
+@Composable
+private fun NoSearchResults(query: String) {
+    Text(
+        "No settings match “$query”",
+        style = MaterialTheme.typography.bodyMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
+        fontStyle = FontStyle.Italic,
+        modifier = Modifier.padding(horizontal = 24.dp, vertical = 28.dp)
+    )
 }
 
 internal fun rowSubtitle(page: SettingsPage, s: SettingsUiState): String = when (page) {
@@ -174,6 +341,11 @@ internal fun rowSubtitle(page: SettingsPage, s: SettingsUiState): String = when 
         else on
     }
     SettingsPage.Program -> "${s.daysPerWeek} days/week · ${if (s.availableEquipment.isEmpty()) "all equipment" else "${s.availableEquipment.size} equipment"}"
+    SettingsPage.Coach -> when {
+        !s.coachEnabled -> "Off"
+        s.coachMode == "auto" -> "On · earning auto-apply"
+        else -> "On · suggest mode"
+    }
     SettingsPage.Recovery -> "Health Connect · sleep & resting HR"
     SettingsPage.ExercisePrefs -> "${s.liked.size} liked · ${s.disliked.size} disliked"
     // Reached via a dedicated MainList row, not the search/nav grid — subtitle unused.

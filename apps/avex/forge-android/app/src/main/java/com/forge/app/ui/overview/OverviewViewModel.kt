@@ -48,6 +48,7 @@ class OverviewViewModel @Inject constructor(
     private val workoutRepo: WorkoutRepository,
     private val goalRepo: com.forge.app.data.repo.GoalRepository,
     private val extendedGoalRepo: com.forge.app.data.repo.ExtendedGoalRepository,
+    private val bodyweightRepo: com.forge.app.data.repo.BodyweightRepository,
     private val sessionDao: SessionDao,
     private val sampleDataSeeder: com.forge.app.data.repo.SampleDataSeeder,
     private val adaptationRepo: com.forge.app.data.repo.AdaptationRepository,
@@ -65,9 +66,6 @@ class OverviewViewModel @Inject constructor(
 
     /** Sub-threshold fatigue nudge (Tier 3) — null unless the active coach is quiet but fatigue builds. */
     private val _coachFatigue = MutableStateFlow<com.forge.app.ui.overview.state.FatigueHint?>(null)
-
-    /** Recovery snapshot (HC) — null unless resting HR is elevated vs the user's own baseline. */
-    private val _recoveryAlert = MutableStateFlow<com.forge.app.ui.overview.state.RecoveryAlert?>(null)
 
     /** "New report ready" banner (auto-coach) — null when this week's brief has been seen. */
     private val _coachBanner = MutableStateFlow<com.forge.app.data.repo.CoachBanner?>(null)
@@ -97,12 +95,26 @@ class OverviewViewModel @Inject constructor(
 
     private val weekStartMs = clock.nowMs() - 7L * 24 * 60 * 60 * 1000
 
-    /** Goals for the Home preview, recomputed whenever a goal is added/edited/removed OR a session
-     *  lands (which shifts lift bests + weekly tallies). Both reads are cheap aggregate queries. */
+    /** Goals for the Home preview, recomputed whenever a goal is added/edited/removed OR one of the
+     *  progress INPUTS moves: a session finishes (lift bests + weekly tallies), cardio is logged or
+     *  edited, or a new weigh-in lands. The input tables are observed directly rather than
+     *  re-subscribing observeWeeklyStats() (which the main combine below already collects) — that
+     *  double subscription recomputed goals on stats ticks yet still missed bodyweight logs, leaving
+     *  a bodyweight goal line stale until an unrelated event. All reads are cheap aggregate queries. */
     private val goalsFlow: kotlinx.coroutines.flow.Flow<Pair<List<com.forge.app.data.repo.GoalRepository.GoalProgress>, List<com.forge.app.data.repo.ExtendedGoalRepository.Progress>>> =
-        combine(goalRepo.observeAll(), extendedGoalRepo.observeAll(), statsRepo.observeWeeklyStats()) { _, _, _ ->
-            val lift = runCatching { goalRepo.goalsWithProgress() }.getOrDefault(emptyList())
-            val custom = runCatching { extendedGoalRepo.goalsWithProgress() }.getOrDefault(emptyList())
+        combine(
+            goalRepo.observeAll(),
+            extendedGoalRepo.observeAll(),
+            sessionDao.observeFinishedCount(),
+            cardioRepo.observeMinutesSince(0L),
+            bodyweightRepo.observeRecent(1)
+        ) { _, _, _, _, _ ->
+            // Fall back on real failures only — a swallowed CancellationException would let a
+            // cancelled recompute emit empty lists and blank the Home goal lines.
+            val lift = runCatching { goalRepo.goalsWithProgress() }
+                .getOrElse { if (it is kotlinx.coroutines.CancellationException) throw it else emptyList() }
+            val custom = runCatching { extendedGoalRepo.goalsWithProgress() }
+                .getOrElse { if (it is kotlinx.coroutines.CancellationException) throw it else emptyList() }
             lift to custom
         }.flowOn(Dispatchers.Default)
 
@@ -143,7 +155,6 @@ class OverviewViewModel @Inject constructor(
             trophiesUnlocked = unlockedIds.size,
             distanceKm = distanceKm,
             dayVolStats = dayVolStats,
-            nowMs = clock.nowMs(),
             cardioTargetMin = cardioTarget,
             useKg = useKg,
             useMiles = useMiles
@@ -162,8 +173,6 @@ class OverviewViewModel @Inject constructor(
         s.copy(coachLearning = hint)
     }.combine(_coachFatigue) { s, f ->
         s.copy(coachFatigue = f)
-    }.combine(_recoveryAlert) { s, alert ->
-        s.copy(recoveryAlert = alert)
     }.combine(settingsRepo.daysPerWeek) { s, days ->
         // The "of N target" denominator is the actual number of training days in the generated program
         // (the real weekly schedule), not a hardcoded 6 and not the raw days/week preference — the two
@@ -294,11 +303,6 @@ class OverviewViewModel @Inject constructor(
                 com.forge.app.ui.overview.state.FatigueHint(it.score, feed.fatigueThreshold, it.drivers.firstOrNull())
             }
         } else null
-        // Recovery snapshot (HC): independent of the coach gates — an elevated resting HR is worth
-        // surfacing on its own whether or not there's actionable advice this open.
-        _recoveryAlert.value = feed.restingHrSpike?.let {
-            com.forge.app.ui.overview.state.RecoveryAlert(it.windowBpm, it.baselineBpm, it.deltaBpm)
-        }
     }
 
     /**

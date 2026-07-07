@@ -103,17 +103,23 @@ object WeeklyReview {
             .filter { it.date in lastWeekStart until weekStartMs && it.type != CardioType.REST.code }
             .sumOf { it.durationMin }
 
+        val lastVol = lastWeek.sumOf { it.totalVolumeLb ?: 0.0 }
+        val priorVol = priorWeek.sumOf { it.totalVolumeLb ?: 0.0 }
+
         val focus = when {
-            hasDeloadShadow -> "Recovery is the work this week — go lighter, sleep more, and let the numbers reset."
-            stalled > 0 -> "Chase the top of your rep ranges on the stalled lifts — finishing the range is what restarts progress."
+            hasDeloadShadow -> "Recovery is the work this week. Go lighter, sleep more, and let the numbers reset."
+            stalled > 0 -> "Chase the top of your rep ranges on the stalled lifts. Finishing the range is what restarts progress."
+            // A real training block names its phase; otherwise a line grounded in the week's own
+            // numbers, never the same generic cue every quiet week.
             else -> mesocycleFocus(s, weekStartMs, t)
+                ?: quietFocus(lastWeek.size, sessionsTarget, prs, lastVol, priorVol)
         }
 
         return WeeklyReviewData(
             sessionsLastWeek = lastWeek.size,
             sessionsTarget = sessionsTarget,
-            volumeLastWeekLb = lastWeek.sumOf { it.totalVolumeLb ?: 0.0 },
-            volumePriorWeekLb = priorWeek.sumOf { it.totalVolumeLb ?: 0.0 },
+            volumeLastWeekLb = lastVol,
+            volumePriorWeekLb = priorVol,
             prsLastWeek = prs,
             trackedLifts = tracked,
             stalledLifts = stalled,
@@ -126,36 +132,49 @@ object WeeklyReview {
         )
     }
 
-    /** Generic "the boring weeks build the most" line — used when there isn't a real block to read. */
-    private const val GENERIC_FOCUS =
-        "Keep doing what you're doing — fill the rep range, then add weight. Boring weeks build the most."
+    /**
+     * A quiet-week cue grounded in the week's own numbers — used when there's no real block to
+     * name (§11: never the same generic line every calm week). Reads PRs, then the volume trend,
+     * then session pace, before a last-resort double-progression reminder.
+     */
+    private fun quietFocus(sessions: Int, target: Int, prs: Int, lastVol: Double, priorVol: Double): String {
+        val delta = if (priorVol > 0) (((lastVol - priorVol) / priorVol) * 100).toInt() else null
+        return when {
+            prs > 0 -> "$prs PR${if (prs == 1) "" else "s"} last week. Hold the approach and keep the ranges full."
+            delta != null && delta >= 5 -> "Volume climbed $delta% on the week before. Same plan, keep filling your ranges."
+            delta != null && delta <= -5 -> "Volume dipped ${-delta}%. Get the sessions in and finish every range."
+            target > 0 && sessions >= target -> "Every session in last week. Fill the top of each range, then add load."
+            target > 0 && sessions in 1 until target -> "${target - sessions} short of target last week. The plan works if you run it."
+            else -> "A quiet week. Fill each rep range, then add weight."
+        }
+    }
 
     /**
      * Mesocycle phase cue (auto-coach Phase 1 smarts): when nothing's stalled and no deload is due,
      * the most useful thing a coach can say tracks WHERE in the training block you are. The block is
      * anchored on the last deload (a tagged session, the in-place mark, or the persisted apply
      * marker), falling back to the first session; the week-in-block then maps to accumulate → build →
-     * peak → "ease off soon". Below the deload data gate, or in week 0 of a fresh block, there isn't
-     * enough of a block to name a phase, so it stays on the generic line.
+     * peak → "ease off soon". Returns null where there isn't enough of a block to name a phase (below
+     * the deload data gate, or week 0 of a fresh block); the caller falls back to [quietFocus].
      */
-    private fun mesocycleFocus(s: AdaptationSnapshot, weekStartMs: Long, t: AdaptThresholds): String {
-        if (s.sessions.size < t.deloadMinSessions) return GENERIC_FOCUS
+    private fun mesocycleFocus(s: AdaptationSnapshot, weekStartMs: Long, t: AdaptThresholds): String? {
+        if (s.sessions.size < t.deloadMinSessions) return null
         val anchor = listOfNotNull(
             s.sessions.lastOrNull { it.sessionType == SessionType.DELOAD.key || it.deloadMarkedHere }?.startedAt,
             s.prefs.lastDeloadAppliedMs,
             s.sessions.firstOrNull()?.startedAt
-        ).maxOrNull() ?: return GENERIC_FOCUS
+        ).maxOrNull() ?: return null
         val weeksIn = ((weekStartMs - anchor) / (7 * DAY_MS)).toInt()
         val meso = t.mesocycleWeeks
         return when {
-            weeksIn < 1 -> GENERIC_FOCUS
-            weeksIn == 1 -> "You're early in a fresh block — this is accumulation. Build reps and volume, keep the weights submaximal, and save the grinders for later."
+            weeksIn < 1 -> null
+            weeksIn == 1 -> "Early in a fresh block, this is accumulation. Build reps and volume, keep the weights submaximal."
             // No raw week count here: with no deload on record the anchor is the first session ever,
-            // so weeksIn can span the whole training history — "it's been a while" stays honest where
+            // so weeksIn can span the whole training history — "a long stretch" stays honest where
             // "you're 150 weeks into this block" would not.
-            weeksIn >= meso -> "It's been a good stretch with no down week — a lighter week soon will bank the gains; freshness is where they actually show up."
-            weeksIn >= meso - 1 -> "Peak week of the block — go after rep PRs and your heaviest clean sets. This is where the work you've banked cashes in."
-            else -> "Mid-block — the volume's in the bank, so intensify: finish the top of each range, then add load. This is the push phase."
+            weeksIn >= meso -> "A long stretch with no down week. A lighter week soon will bank the gains."
+            weeksIn >= meso - 1 -> "Peak week of the block. Go after rep PRs and your heaviest clean sets."
+            else -> "Mid-block: the volume is banked, so intensify. Finish the top of each range, then add load."
         }
     }
 }

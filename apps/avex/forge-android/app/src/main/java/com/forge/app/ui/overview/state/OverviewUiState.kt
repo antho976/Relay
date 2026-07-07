@@ -58,12 +58,6 @@ data class CoachLearningHint(val sessionsLogged: Int, val sessionsToGo: Int)
  */
 data class FatigueHint(val score: Int, val threshold: Int, val topDriver: String?)
 
-/**
- * "Recovery snapshot" (Health Connect): the user's recent resting HR is meaningfully above their
- * own baseline — a classic under-recovered tell. Shown as its own Overview card when present.
- */
-data class RecoveryAlert(val restingBpm: Int, val baselineBpm: Int, val deltaBpm: Int)
-
 @Immutable
 data class OverviewUiState(
     val workoutsThisWeek: Int = 0,
@@ -74,8 +68,6 @@ data class OverviewUiState(
     val cardioWeeklyTargetMin: Int = 0,
     val totalFinishedSessions: Int = 0,
     val streakDays: Int = 0,
-    /** Days since the last finished session (vacation-aware); null when no sessions yet. Drives the comeback nudge. */
-    val daysSinceLastSession: Int? = null,
     /** Highest single-session volume (lb) logged in the current ISO week; null/0 when none. */
     val bestSessionThisWeekLb: Double? = null,
     val pendingMilestone: MilestoneEvent? = null,
@@ -106,12 +98,6 @@ data class OverviewUiState(
     val coachLearning: CoachLearningHint? = null,
     /** Non-null only when [coach] is empty, the coach IS active, and fatigue is building (Tier 3). */
     val coachFatigue: FatigueHint? = null,
-    /** Non-null when Health Connect resting HR is elevated vs the user's baseline — recovery card. */
-    val recoveryAlert: RecoveryAlert? = null,
-    /** True when a big cardio block was logged in the last ~36h — drives a "go easier today" nudge. */
-    val heavyCardioRecent: Boolean = false,
-    /** The concrete block behind [heavyCardioRecent] — e.g. "Run · 63 min · yesterday" (null when none). */
-    val recentCardioLead: String? = null,
     /** Lift-target goals + auto-tracked custom goals (achieved-first/closest-first). Home previews the
      *  top few as progress lines — the ambient motivator that replaced the generic coach entry. */
     val goals: List<com.forge.app.data.repo.GoalRepository.GoalProgress> = emptyList(),
