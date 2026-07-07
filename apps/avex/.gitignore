@@ -1,4 +1,7 @@
-.claude/
 .codegraph/
-.claude
 .codegraph
+
+# Track .claude project config (DESIGN.md, skills, docs) in git so it moves
+# between machines, but never the ephemeral agent worktrees or the runtime lock.
+.claude/worktrees/
+.claude/scheduled_tasks.lock
