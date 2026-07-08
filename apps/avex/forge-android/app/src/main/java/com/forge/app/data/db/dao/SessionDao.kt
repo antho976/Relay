@@ -112,6 +112,12 @@ interface SessionDao {
     @Query("SELECT * FROM session WHERE finished_at IS NOT NULL AND started_at >= :fromMs AND started_at < :toMs ORDER BY started_at ASC")
     fun observeFinishedInRange(fromMs: Long, toMs: Long): Flow<List<Session>>
 
+    /** How many sessions already start at this exact epoch — the import duplicate guard (#GYMAP-17):
+     *  re-importing the same export won't double-insert workouts, since imported sessions carry the
+     *  source's stable start time. */
+    @Query("SELECT COUNT(*) FROM session WHERE started_at = :startedAt")
+    suspend fun countAtStart(startedAt: Long): Int
+
     /** Deletes all sessions (CASCADE removes LoggedExercise, LoggedSet, MoodEntry). For reset (#119). */
     @Query("DELETE FROM session")
     suspend fun deleteAll()

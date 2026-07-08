@@ -123,7 +123,6 @@ class OverviewViewModel @Inject constructor(
         cardioRepo.observeRecent(7),
         settingsRepo.shownMilestones,
         _onThisDayMemory,
-        settingsRepo.plannedNextDay,
         trophyRepo.observeUnlockedIds(),
         cardioRepo.observeDistanceKmSince(weekStartMs),
         statsRepo.observeDayVolumeStats(),
@@ -137,21 +136,19 @@ class OverviewViewModel @Inject constructor(
         @Suppress("UNCHECKED_CAST")
         val shown = args[2] as Set<String>
         val memory = args[3] as OnThisDayMemory?
-        val plannedDay = args[4] as String
-        val unlockedIds = args[5] as List<*>
-        val distanceKm = (args[6] as Double?) ?: 0.0
+        val unlockedIds = args[4] as List<*>
+        val distanceKm = (args[5] as Double?) ?: 0.0
         @Suppress("UNCHECKED_CAST")
-        val dayVolStats = args[7] as Map<String, SessionDao.DayVolumeStats>
-        val cardioTarget = args[8] as Int
-        val useKg = args[9] as Boolean
-        val useMiles = args[10] as Boolean
+        val dayVolStats = args[6] as Map<String, SessionDao.DayVolumeStats>
+        val cardioTarget = args[7] as Int
+        val useKg = args[8] as Boolean
+        val useMiles = args[9] as Boolean
 
         buildOverviewUiState(
             stats = stats,
             recentCardio = recentCardio,
             shown = shown,
             memory = memory,
-            plannedDay = plannedDay,
             trophiesUnlocked = unlockedIds.size,
             distanceKm = distanceKm,
             dayVolStats = dayVolStats,
@@ -345,15 +342,6 @@ class OverviewViewModel @Inject constructor(
 
     fun onMilestoneShown(milestoneId: String) {
         viewModelScope.launch { settingsRepo.markMilestoneShown(milestoneId) }
-    }
-
-    fun setPlanNextDay(dayKey: String) = viewModelScope.launch {
-        settingsRepo.setPlannedNextDay(dayKey)
-    }
-
-    /** Consume the "Train X today" override once a session is started, so it reverts to rotation. */
-    fun onSessionStarting() = viewModelScope.launch {
-        if (state.value.plannedNextDay.isNotBlank()) settingsRepo.setPlannedNextDay("")
     }
 
     private val _selectedItem = MutableStateFlow<OverviewRecentItem?>(null)

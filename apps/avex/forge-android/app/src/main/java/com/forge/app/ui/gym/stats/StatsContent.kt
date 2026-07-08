@@ -90,7 +90,7 @@ fun StatsContent(
     Column(modifier.fillMaxSize()) {
         if (state.loadError) {
             Text(
-                "Couldn't load your stats just now. Swipe away and back — if it keeps happening, restart the app.",
+                "Couldn't load your stats just now. Swipe away and back. If it keeps happening, restart the app.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.error,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = STATS_GUTTER, vertical = 12.dp)
@@ -105,46 +105,43 @@ fun StatsContent(
             if (state.isLoading) {
                 loadingSkeleton(c)
             } else {
-                val nothing = state.weekComparison == null && state.e1rmLifts.isEmpty() &&
-                    state.dailyActivity.isEmpty() && state.hallOfFame.isEmpty()
-                if (nothing) {
-                    tabEmpty("stats-empty", "Log a session and your stats fill in here.", c)
-                } else {
-                    // ── Hero — THIS WEEK figures + weekly muscle map + readiness line ──
-                    item("hero") {
-                        Column(
-                            Modifier.fillMaxWidth().statsEntrance(0)
-                                .padding(horizontal = STATS_GUTTER, vertical = 10.dp)
-                        ) {
-                            StatsHeroContent(state, useKg, c)
-                        }
+                // Always draw the page at zero — hero (honest-zero figures + muscle silhouette), lens
+                // pills, then each lens's own zero-state — so first-run Stats reads as data at zero,
+                // never a single blank hint (§12). Per-lens empties still fall to one InlineEmptyHint.
+                // ── Hero — THIS WEEK figures + weekly muscle map + readiness line ──
+                item("hero") {
+                    Column(
+                        Modifier.fillMaxWidth().statsEntrance(0)
+                            .padding(horizontal = STATS_GUTTER, vertical = 10.dp)
+                    ) {
+                        StatsHeroContent(state, useKg, c)
                     }
+                }
 
-                    // ── Lens pills — the session screen's metric picker, page-wide ──
-                    item("lens") {
-                        Column(
-                            Modifier.fillMaxWidth().statsEntrance(1)
-                                .padding(horizontal = STATS_GUTTER, vertical = 6.dp)
-                        ) {
-                            SegmentRow(
-                                items = StatsLens.entries,
-                                isSelected = { it == lens },
-                                label = { it.label },
-                                onSelect = { lens = it },
-                                onBg = c.onBg, muted = c.muted, accent = c.accent, outline = c.outline
-                            )
-                        }
-                    }
-
-                    when (lens) {
-                        StatsLens.STRENGTH -> strengthLens(
-                            state, useKg, c, focusLift, focusNonce,
-                            onOpenLift = { id -> focusLift = id; focusNonce++; lens = StatsLens.STRENGTH }
+                // ── Lens pills — the session screen's metric picker, page-wide ──
+                item("lens") {
+                    Column(
+                        Modifier.fillMaxWidth().statsEntrance(1)
+                            .padding(horizontal = STATS_GUTTER, vertical = 6.dp)
+                    ) {
+                        SegmentRow(
+                            items = StatsLens.entries,
+                            isSelected = { it == lens },
+                            label = { it.label },
+                            onSelect = { lens = it },
+                            onBg = c.onBg, muted = c.muted, accent = c.accent, outline = c.outline
                         )
-                        StatsLens.VOLUME -> volumeLens(state, useKg, c)
-                        StatsLens.EFFORT -> effortLens(state, c)
-                        StatsLens.DAYS -> daysLens(state, c, onDayTap = viewModel::openDay)
                     }
+                }
+
+                when (lens) {
+                    StatsLens.STRENGTH -> strengthLens(
+                        state, useKg, c, focusLift, focusNonce,
+                        onOpenLift = { id -> focusLift = id; focusNonce++; lens = StatsLens.STRENGTH }
+                    )
+                    StatsLens.VOLUME -> volumeLens(state, useKg, c)
+                    StatsLens.EFFORT -> effortLens(state, c)
+                    StatsLens.DAYS -> daysLens(state, c, onDayTap = viewModel::openDay)
                 }
             }
             item("bottom-gap") { Spacer(Modifier.height(24.dp)) }
@@ -202,7 +199,7 @@ private fun LazyListScope.strengthLens(
     item("str-lifts") {
         StatsCard(
             c, title = "Strength per lift",
-            caption = "Estimated 1RM, ranked — tap a lift for its trend, PRs and curve.",
+            caption = "Estimated 1RM, ranked. Tap a lift for its trend, PRs and curve.",
             index = 2
         ) {
             E1rmComparisonList(state.e1rmLifts, state.recentPrs, state.strengthCurves, useKg, c, focusLift, focusNonce)
@@ -217,7 +214,7 @@ private fun LazyListScope.strengthLens(
     // The hall of fame lives here — records ARE strength, and a tap expands that lift's row above.
     if (state.hallOfFame.isNotEmpty()) {
         item("str-records") {
-            StatsCard(c, title = "Records", caption = "Your heaviest set on each lift — tap one for its trend.", index = 4) {
+            StatsCard(c, title = "Records", caption = "Your heaviest set on each lift. Tap one for its trend.", index = 4) {
                 RecordsContent(state.hallOfFame, useKg, c, onOpenLift)
             }
         }
@@ -238,7 +235,7 @@ private fun LazyListScope.daysLens(state: StatsUiState, c: StatsColors, onDayTap
     // The prettiest chart, deliberately last — viz-only nerd candy, not a decision gate.
     if (state.dailyActivity.size >= 5) {
         item("days-banister") {
-            StatsCard(c, title = "Fitness vs fatigue", caption = "Banister model — viz only.", index = 3) {
+            StatsCard(c, title = "Fitness vs fatigue", caption = "Banister model · viz only.", index = 3) {
                 BanisterContent(state.dailyActivity, c)
             }
         }
@@ -256,14 +253,14 @@ private fun LazyListScope.volumeLens(state: StatsUiState, useKg: Boolean, c: Sta
     }
     if (state.weeklySetsByMuscle.isNotEmpty()) {
         item("vol-muscles") {
-            StatsCard(c, title = "Sets per muscle this week", caption = "Each track is that muscle's weekly target — fill it and you're on plan.", index = 2) {
+            StatsCard(c, title = "Sets per muscle this week", caption = "Each track is that muscle's weekly target. Fill it and you're on plan.", index = 2) {
                 SetsPerMuscleContent(state.weeklySetsByMuscle, state.plannedSetsByMuscle, c)
             }
         }
     }
     if (state.weeklyTonnage.size >= 2) {
         item("vol-tonnage") {
-            StatsCard(c, title = "Weekly volume", caption = "Total tonnage per week — is it holding?", index = 3) {
+            StatsCard(c, title = "Weekly volume", caption = "Total tonnage per week. Is it holding?", index = 3) {
                 TonnageTrendContent(state.weeklyTonnage, useKg, c)
             }
         }
@@ -272,7 +269,7 @@ private fun LazyListScope.volumeLens(state: StatsUiState, useKg: Boolean, c: Sta
     // otherwise the section is empty rows and noise percentages.
     if (state.balanceRatios.any { it.setsA + it.setsB >= MIN_BALANCE_SETS }) {
         item("vol-balance") {
-            StatsCard(c, title = "Balance", caption = "Push/pull and quad/ham — is the work even?", index = 4) {
+            StatsCard(c, title = "Balance", caption = "Push/pull and quad/ham. Is the work even?", index = 4) {
                 BalanceContent(state.balanceRatios, c)
             }
         }

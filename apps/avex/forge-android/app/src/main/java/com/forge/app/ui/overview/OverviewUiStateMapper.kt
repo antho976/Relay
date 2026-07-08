@@ -34,7 +34,6 @@ internal fun buildOverviewUiState(
     recentCardio: List<CardioEntry>,
     shown: Set<String>,
     memory: OnThisDayMemory?,
-    plannedDay: String,
     trophiesUnlocked: Int,
     distanceKm: Double,
     dayVolStats: Map<String, SessionDao.DayVolumeStats>,
@@ -117,11 +116,7 @@ internal fun buildOverviewUiState(
         bestSessionThisWeekLb = stats.bestSessionThisWeekLb,
         pendingMilestone = computePendingMilestone(stats, shown, useKg),
         onThisDayMemory = memory,
-        plannedNextDay = plannedDay,
-        // A user-chosen "Train X today" overrides the rotation default until it's consumed when a
-        // session starts. Ignore a stale key that isn't part of the current program.
-        nextUpDayKey = plannedDay.takeIf { it.isNotBlank() && Program.dayKeys.contains(it) }
-            ?: stats.nextUpDayKey,
+        nextUpDayKey = stats.nextUpDayKey,
         weekDaysTrained = stats.weekDaysTrained,
         cardioWeekDays = cardioWeekDays,
         recentItems = recentItems,

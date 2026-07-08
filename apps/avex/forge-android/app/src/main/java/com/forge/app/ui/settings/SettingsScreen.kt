@@ -55,7 +55,7 @@ enum class SettingsPage(val title: String) {
 internal data class SettingsItem(val name: String, val tags: String, val page: SettingsPage)
 
 /** What a non-page search hit does when tapped — fire an action (dialog/menu), not open a sub-page. */
-enum class SearchAction { DATA, RESET, COACH }
+enum class SearchAction { DATA, IMPORT, RESET, COACH }
 
 /** A search hit that triggers an [action] instead of navigating to a page. [where] is its breadcrumb. */
 internal data class SettingsActionEntry(val name: String, val where: String, val tags: String, val action: SearchAction)
@@ -63,6 +63,7 @@ internal data class SettingsActionEntry(val name: String, val where: String, val
 /** Search-reachable actions: the export/backup dialog, the reset menu, and the coach brief. */
 internal val ACTION_ENTRIES = listOf(
     SettingsActionEntry("Export data", "Data", "data export csv pdf weekly json sessions full", SearchAction.DATA),
+    SettingsActionEntry("Import data", "Data", "import data strong hevy fitnotes jefit csv json migrate from another app move history", SearchAction.IMPORT),
     SettingsActionEntry("Backup & restore", "Data", "backup restore database file save load import survive uninstall", SearchAction.DATA),
     SettingsActionEntry("Reset…", "Reset", "reset delete clear wipe erase sessions trophies cardio settings data", SearchAction.RESET),
     SettingsActionEntry("Factory reset", "Reset", "factory reset erase everything wipe delete all clean slate", SearchAction.RESET),
@@ -160,6 +161,7 @@ fun SettingsScreen(
     var confirmReset by remember { mutableStateOf<ResetTarget?>(null) }
     var showResetMenu by remember { mutableStateOf(false) }
     var showDataDialog by remember { mutableStateOf(false) }
+    var showImportDialog by remember { mutableStateOf(false) }
 
     // Complete DB backup & restore via the system file picker (survives uninstall).
     val context = LocalContext.current
@@ -179,6 +181,21 @@ fun SettingsScreen(
     val crashLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/zip")
     ) { uri -> uri?.let { viewModel.exportCrashLogs(it) } }
+    // Import from another gym app (#GYMAP-17) — same SAF pattern as restore, but merges instead of replaces.
+    val importResult by viewModel.importResult.collectAsStateWithLifecycle()
+    // Manual file pick — opens the picker already pointed at Downloads (where exports land) and
+    // filtered to CSV/JSON, so the right file is usually one tap away.
+    val importLauncher = rememberLauncherForActivityResult(
+        OpenImportDocument()
+    ) { uri -> uri?.let { viewModel.importData(it) } }
+    // CSV/JSON from other apps; some file pickers only tag them octet-stream, so accept broadly.
+    val launchImport: () -> Unit = {
+        importLauncher.launch(arrayOf("text/csv", "text/comma-separated-values", "application/json", "text/plain", "application/octet-stream", "*/*"))
+    }
+    // One-time folder grant (Downloads) so Import can auto-scan it for exports.
+    val folderGrantLauncher = rememberLauncherForActivityResult(
+        OpenDownloadsTree()
+    ) { uri -> uri?.let { viewModel.grantImportFolder(it) } }
     LaunchedEffect(restoreSucceeded) { if (restoreSucceeded) restartApp(context) }
 
     BackHandler(enabled = currentPage != null || searchQuery.isNotBlank()) {
@@ -247,6 +264,7 @@ fun SettingsScreen(
                     onOpenPage = { currentPage = it; programSection = null },
                     onOpenCoachBrief = onOpenCoachBrief,
                     onOpenDataDialog = { showDataDialog = true },
+                    onImportData = { showImportDialog = true },
                     onResetTarget = { confirmReset = it },
                     onOpenResetMenu = { showResetMenu = true }
                 )
@@ -285,6 +303,25 @@ fun SettingsScreen(
             onRestore = { restoreLauncher.launch(arrayOf("*/*")) },
             onExportCrashLogs = { crashLauncher.launch("forge_crash_logs_$dateStamp.zip") },
             onDismiss = { showDataDialog = false }
+        )
+    }
+
+    if (showImportDialog) {
+        ImportDialog(
+            viewModel = viewModel,
+            onGrantFolder = { folderGrantLauncher.launch(null) },
+            onManualPick = launchImport,
+            onImportFound = { viewModel.importData(it) },
+            onDismiss = { showImportDialog = false }
+        )
+    }
+
+    importResult?.let { msg ->
+        AlertDialog(
+            onDismissRequest = viewModel::clearImportResult,
+            title = { Text("Import") },
+            text = { Text(msg) },
+            confirmButton = { TextButton(onClick = viewModel::clearImportResult) { Text("OK") } }
         )
     }
 
@@ -370,6 +407,27 @@ fun SettingsScreen(
             photoWarning = photoWarning
         )
     }
+}
+
+/** URI that hints the document picker to open in the Downloads folder — where app exports land. Its
+ *  exact resolution varies by OEM; if a device doesn't honour it the picker just opens at its default. */
+private val DOWNLOADS_TREE_URI: android.net.Uri =
+    android.net.Uri.parse("content://com.android.externalstorage.documents/document/primary:Download")
+
+/** [ActivityResultContracts.OpenDocument] that starts in Downloads (via [DocumentsContract.EXTRA_INITIAL_URI]). */
+private class OpenImportDocument : ActivityResultContracts.OpenDocument() {
+    override fun createIntent(context: android.content.Context, input: Array<String>): android.content.Intent =
+        super.createIntent(context, input).apply {
+            putExtra(android.provider.DocumentsContract.EXTRA_INITIAL_URI, DOWNLOADS_TREE_URI)
+        }
+}
+
+/** [ActivityResultContracts.OpenDocumentTree] that starts at Downloads, for the one-time folder grant. */
+private class OpenDownloadsTree : ActivityResultContracts.OpenDocumentTree() {
+    override fun createIntent(context: android.content.Context, input: android.net.Uri?): android.content.Intent =
+        super.createIntent(context, input ?: DOWNLOADS_TREE_URI).apply {
+            putExtra(android.provider.DocumentsContract.EXTRA_INITIAL_URI, DOWNLOADS_TREE_URI)
+        }
 }
 
 /** Relaunch the app — used after a restore, since the database file was swapped underneath Room. */

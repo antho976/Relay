@@ -16,6 +16,10 @@ interface LoggedSetDao {
     @Insert
     suspend fun insert(set: LoggedSet): Long
 
+    /** Bulk insert — used by the workout importer, which writes a whole exercise's sets at once. */
+    @Insert
+    suspend fun insertAll(sets: List<LoggedSet>)
+
     @Update
     suspend fun update(set: LoggedSet)
 

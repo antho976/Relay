@@ -286,7 +286,7 @@ private fun LiftCurveChart(curve: StrengthCurve, useKg: Boolean, c: StatsColors)
     )
     Spacer(Modifier.height(4.dp))
     Text(
-        "every set · weight × reps — ● = projected 1-rep max (≈ ${e1.roundToInt()} $unit)",
+        "every set · weight × reps · ● = projected 1-rep max (≈ ${e1.roundToInt()} $unit)",
         style = MaterialTheme.typography.labelSmall, color = c.muted
     )
 }

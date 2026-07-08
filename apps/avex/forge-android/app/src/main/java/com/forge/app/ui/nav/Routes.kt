@@ -21,15 +21,11 @@ object Routes {
     const val GOALS = "goals"
     const val GOAL_EDITOR = "goals/editor?exerciseId={exerciseId}&customId={customId}"
     const val MIRROR_TEST = "mirror-test"
-    const val PROGRAM_EDITOR = "program-editor/{dayKey}"
-    const val PROGRAM_VIEWER = "program-viewer"
     const val PROGRAM_BUILDER = "program-builder?blank={blank}"
     const val FREESTYLE_LOG = "freestyle-log"
 
     const val ARG_BLANK = "blank"
     fun programBuilder(blank: Boolean = false) = "program-builder?blank=$blank"
-
-    fun programEditor(dayKey: String) = "program-editor/$dayKey"
 
     const val ARG_DAY_KEY = "dayKey"
     const val ARG_SKIP_WARMUP = "skipWarmup"

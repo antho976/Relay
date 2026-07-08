@@ -26,6 +26,8 @@ object CoachOutcome {
         }
         "skipped" -> "you skipped this"
         "reverted" -> "you undid this"
+        // Recorded while the coach was switched off — watched, never acted on (see ensureWeeklyPass).
+        "shadow" -> "observed while paused"
         else -> null
     }
 }

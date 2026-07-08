@@ -159,12 +159,36 @@ class CoachRepository @Inject constructor(
         private const val NONE = "∅"
     }
 
+    // Serialises the weekly pass so two concurrent callers (e.g. Overview load + Week Brief) can't
+    // both clear-and-regenerate a shadow pass: the loser waits, then sees the finished pass and
+    // returns it. Separate from lifecycleMutex — this path calls autoApplyEarnedTypes → applyDecision,
+    // which takes lifecycleMutex, so sharing one lock would self-deadlock.
+    private val weeklyPassMutex = Mutex()
+
     /** Run this week's pass if it hasn't run yet; return the (existing or fresh) record. */
-    suspend fun ensureWeeklyPass(): CoachPass {
+    suspend fun ensureWeeklyPass(): CoachPass = weeklyPassMutex.withLock {
         val zone = ZoneId.systemDefault()
         val today = Instant.ofEpochMilli(clock.nowMs()).atZone(zone).toLocalDate()
         val weekId = weekId(today)
-        coachDao.pass(weekId)?.let { return it }
+        val coachOff = !settings.coachEnabled.first()
+
+        // A pass already ran this ISO week — normally we're done (the week runs once). The exception:
+        // a pass recorded as inert SHADOW while the coach was OFF has no actionable proposals, so if
+        // the coach is now ON we clear it and regenerate a real proposal pass — otherwise re-enabling
+        // mid-week would leave the user with an empty read-only brief until the next ISO week.
+        coachDao.pass(weekId)?.let { existing ->
+            if (existing.status != STATUS_SHADOW || coachOff) return@withLock existing
+            coachDao.clearPass(weekId)
+        }
+
+        // Switched OFF, the coach keeps *watching* but goes silent: a weekly pass still runs and is
+        // recorded so the history stays continuous — a user who parks the coach for two months and
+        // turns it back on resumes a record with no gap — but it proposes, applies, and notifies
+        // nothing. Its would-be proposals are written inert (STATUS_SHADOW: never actionable, ignored
+        // by TrustLedger / CoachGenBias / the outcome watcher / the LIFO-undo guards) and the earned
+        // auto-apply step is skipped. Surfacing stays gated at the call sites (pendingBanner, the hub
+        // tab, the Overview sections). Freestyle bails before ever reaching here (its own gate).
+        val proposeStatus = if (coachOff) STATUS_SHADOW else STATUS_PROPOSED
 
         var decisions: List<CoachDecision> = emptyList()
         val pass = runCatching {
@@ -181,11 +205,11 @@ class CoachRepository @Inject constructor(
                             CoachDecision(
                                 weekId = weekId, type = it.type, targetKey = it.targetKey,
                                 targetName = it.targetName, summary = it.summary,
-                                reason = it.reason, status = STATUS_PROPOSED,
+                                reason = it.reason, status = proposeStatus,
                                 dayKey = it.dayKey, payload = it.payload
                             )
                         }
-                        CoachPass(weekId, clock.nowMs(), STATUS_PROPOSED, null)
+                        CoachPass(weekId, clock.nowMs(), proposeStatus, null)
                     }
                     else -> CoachPass(weekId, clock.nowMs(), STATUS_HOLD, result.holdReason)
                 }
@@ -203,8 +227,10 @@ class CoachRepository @Inject constructor(
         // concurrent caller that lost the race no-ops (no crash, no doubled decisions) and reads the
         // winner's row below instead.
         val won = coachDao.insertPassWithDecisions(pass, decisions)
-        if (won && decisions.isNotEmpty()) autoApplyEarnedTypes(weekId)
-        return coachDao.pass(weekId) ?: pass
+        // A switched-off coach records but never acts — shadow decisions aren't proposals, so there is
+        // nothing to auto-apply (and autoApplyEarnedTypes only touches STATUS_PROPOSED rows anyway).
+        if (won && decisions.isNotEmpty() && !coachOff) autoApplyEarnedTypes(weekId)
+        coachDao.pass(weekId) ?: pass
     }
 
     /**
@@ -576,7 +602,10 @@ class CoachRepository @Inject constructor(
                     s = snap,
                     weekStartMs = weekStartMs(),
                     sessionsTarget = settings.daysPerWeek.first(),
-                    hasDeloadShadow = decisions.any { it.type == "deload" }
+                    // Exclude inert SHADOW rows (recorded while the coach was off): they were never
+                    // proposed, so they mustn't make the review think a deload already exists and
+                    // suppress the real recommendation.
+                    hasDeloadShadow = decisions.any { it.type == "deload" && it.status != STATUS_SHADOW }
                 )
             }.getOrNull()
         }
@@ -712,12 +741,14 @@ class CoachRepository @Inject constructor(
      * the brief has been opened or the banner dismissed (both call [markSeen]).
      */
     suspend fun pendingBanner(): CoachBanner? {
-        // Nothing to coach without a plan (freestyle) and nothing to surface when the user declined the
-        // coach — bail before ensureWeeklyPass so no pass runs, no auto-apply fires, and no banner/push
-        // shows. The explicit Week Brief screen still runs its own pass; this only gates the passive
-        // Overview banner + the weekly coach-brief push (which both route through here).
-        if (settings.freestyleMode.first() || !settings.coachEnabled.first()) return null
+        // Nothing to coach without a plan (freestyle) — bail before ensureWeeklyPass so no pass runs.
+        if (settings.freestyleMode.first()) return null
+        // Run the weekly pass unconditionally so the coach's history keeps building in the background
+        // even while it's switched OFF (ensureWeeklyPass records those weeks observe-only — no
+        // proposals, no auto-apply). Only the passive Overview banner + weekly coach-brief push are
+        // gated on coach-enabled: a disabled coach records silently and surfaces nothing.
         val pass = ensureWeeklyPass()
+        if (!settings.coachEnabled.first()) return null
         if (pass.weekId == settings.lastSeenCoachWeekId.first()) return null
         // Stay silent while the coach is still pre-baseline (the first ~week after onboarding). The
         // brief is only a "still learning — N of M sessions" countdown then, so announcing it as

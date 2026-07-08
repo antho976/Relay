@@ -1,8 +1,10 @@
 package com.forge.app
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.database.ContentObserver
+import android.net.Uri
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Bundle
@@ -31,6 +33,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.Modifier
+import androidx.core.content.IntentCompat
+import com.forge.app.data.importer.ImportResult
+import com.forge.app.data.importer.WorkoutImportRepository
+import com.forge.app.data.importer.userMessage
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.service.AutoBackupWorker
 import com.forge.app.ui.common.AvexIntro
@@ -57,9 +63,58 @@ import javax.inject.Inject
 class MainActivity : ComponentActivity() {
 
     @Inject lateinit var settingsRepo: SettingsRepository
+    @Inject lateinit var importRepo: WorkoutImportRepository
+
+    /** Set when a shared/opened export file has been imported — shows a one-time result dialog (#GYMAP-17). */
+    private var shareImportMessage by mutableStateOf<String?>(null)
+
+    /**
+     * The widget deep-link day to open. State (not a local) because `launchMode=singleTask` delivers a
+     * widget tap while the app is already running via [onNewIntent], not a fresh [onCreate] — updating
+     * this recomposes the nav host so it opens the day, instead of the tap silently doing nothing.
+     */
+    private var pendingWidgetDayKey by mutableStateOf<String?>(null)
 
     /** Emits volume-down presses for the "log same as last set" shortcut (#151). */
     var onVolumeDown: (() -> Unit)? = null
+
+    /**
+     * A CSV/JSON export shared into or opened with Avex (#GYMAP-17): import it directly, no file
+     * browsing. The sender grants a one-shot read permission on the URI, so we read it immediately.
+     */
+    private fun handleImportIntent(intent: Intent?) {
+        val uri: Uri? = when (intent?.action) {
+            Intent.ACTION_SEND -> IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java)
+            Intent.ACTION_VIEW -> intent.data
+            else -> null
+        }
+        if (uri == null) return
+        lifecycleScope.launch {
+            val result = runCatching { importRepo.import(uri) }.getOrDefault(ImportResult.ReadError)
+            shareImportMessage = result.userMessage()
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleImportIntent(intent)
+        // singleTask reuse: a widget tap arrives here, not in onCreate — pick up the day so the nav
+        // host opens it (the deep-link would otherwise be dropped and the tap do nothing).
+        intent.getStringExtra(com.forge.app.widget.EXTRA_START_DAY_KEY)?.let { pendingWidgetDayKey = it }
+    }
+
+    /** One-time "here's what came in" dialog after a share-to-Avex import. */
+    @Composable
+    private fun ShareImportResultDialog() {
+        val msg = shareImportMessage ?: return
+        AlertDialog(
+            onDismissRequest = { shareImportMessage = null },
+            title = { Text("Import") },
+            text = { Text(msg) },
+            confirmButton = { TextButton(onClick = { shareImportMessage = null }) { Text("OK") } }
+        )
+    }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         if (keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
@@ -181,8 +236,12 @@ class MainActivity : ComponentActivity() {
         // Widget deep-link: a home-screen widget tap carries the day to open (the next-up day, or the
         // active session's day when one is in progress). Read it once on a fresh launch and hand it to
         // the nav host, which opens it on top of Overview so Back returns home.
-        val widgetDayKey = if (savedInstanceState == null)
-            intent?.getStringExtra(com.forge.app.widget.EXTRA_START_DAY_KEY) else null
+        if (savedInstanceState == null)
+            pendingWidgetDayKey = intent?.getStringExtra(com.forge.app.widget.EXTRA_START_DAY_KEY)
+
+        // A cold-start share/open of an export file (#GYMAP-17) — import it once, not again on a
+        // config-change recreate (the dialog's own state keeps the result visible across rotation).
+        if (savedInstanceState == null) handleImportIntent(intent)
 
         // Hold the splash until prefs resolve, so the bare theme gradient (the null onboarding state)
         // never flashes before the first real screen (P1). A 2s backstop releases it even if the prefs
@@ -278,13 +337,15 @@ class MainActivity : ComponentActivity() {
                             when (onboardingDone) {
                                 false -> OnboardingScreen(onFinished = {})
                                 true -> {
-                                    ForgeNavHost(initialDayKey = widgetDayKey)
+                                    ForgeNavHost(initialDayKey = pendingWidgetDayKey)
                                     NotifPermissionRationale()
                                     RestoreConfirmedDialog(restoreJustCompleted)
                                 }
                                 null -> {} // DataStore still loading; the theme's gradient shows briefly
                             }
                             if (showIntro) AvexIntro(onDone = { showIntro = false })
+                            // Result of a share-to-Avex import — shown over whatever screen is up.
+                            ShareImportResultDialog()
                         }
                     }
                 }

@@ -131,7 +131,7 @@ private fun BalanceRow(b: BalanceRatioUi, c: StatsColors) {
             val verdict = when (b.balanced) {
                 true -> "balanced"
                 false -> "leans ${(if (b.setsA >= b.setsB) b.labelA else b.labelB).lowercase()}"
-                null -> "—"
+                null -> "·"
             }
             Text(verdict, style = MaterialTheme.typography.labelSmall,
                 color = if (b.balanced == false) c.muted else c.accent)

@@ -2,6 +2,7 @@ package com.forge.app.ui.settings
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.forge.app.data.importer.userMessage
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.data.repo.BackupRepository.RestoreOutcome
 import com.forge.app.data.repo.ResetRepository
@@ -90,6 +91,7 @@ class SettingsViewModel @Inject constructor(
     private val settingsRepo: SettingsRepository,
     private val resetRepo: ResetRepository,
     private val backupRepo: com.forge.app.data.repo.BackupRepository,
+    private val importRepo: com.forge.app.data.importer.WorkoutImportRepository,
     private val sampleDataSeeder: com.forge.app.data.repo.SampleDataSeeder,
     private val photoRepo: com.forge.app.data.repo.ProgressPhotoRepository,
     private val pdfExport: com.forge.app.data.repo.PdfExportRepository,
@@ -468,6 +470,53 @@ class SettingsViewModel @Inject constructor(
         _exportPath.value = file.absolutePath
     }
     fun clearExportPath() { _exportPath.value = null }
+
+    // ── Import from another gym app (#GYMAP-17) ────────────────────────────────
+    /** A short message shown after an import finishes (success summary or a reason it didn't). */
+    private val _importResult = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
+    val importResult: StateFlow<String?> = _importResult.asStateFlow()
+    fun clearImportResult() { _importResult.value = null }
+
+    fun importData(uri: android.net.Uri) = viewModelScope.launch {
+        val result = runCatching { importRepo.import(uri) }
+            .getOrDefault(com.forge.app.data.importer.ImportResult.ReadError)
+        _importResult.value = result.userMessage()
+        // A successful merge changed the data set — refresh the backup nudge / db size readout, and
+        // rescan the folder so its found-file counts reflect what's now imported.
+        if (result is com.forge.app.data.importer.ImportResult.Success) {
+            refreshAutoBackupInfo()
+            scanImportFolder()
+        }
+    }
+
+    /** True once the user has granted a folder (Downloads) for the Import screen to auto-scan. */
+    val importFolderGranted: StateFlow<Boolean> =
+        settingsRepo.importFolderUri.map { it != null }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
+
+    /** Gym-app exports found in the granted folder, newest first — the one-tap import list. */
+    private val _foundImports =
+        MutableStateFlow<List<com.forge.app.data.importer.FoundImport>>(emptyList())
+    val foundImports: StateFlow<List<com.forge.app.data.importer.FoundImport>> = _foundImports.asStateFlow()
+
+    private val _scanningImports = MutableStateFlow(false)
+    val scanningImports: StateFlow<Boolean> = _scanningImports.asStateFlow()
+
+    /** Persist the folder the user just granted, then scan it. */
+    fun grantImportFolder(uri: android.net.Uri) = viewModelScope.launch {
+        importRepo.rememberFolder(uri)
+        scanImportFolder()
+    }
+
+    /** Scan the remembered folder for importable exports (no-op when no folder is granted yet). */
+    fun scanImportFolder() = viewModelScope.launch {
+        val folder = settingsRepo.importFolderUri.first()
+            ?: run { _foundImports.value = emptyList(); return@launch }
+        _scanningImports.value = true
+        _foundImports.value =
+            runCatching { importRepo.scanFolder(android.net.Uri.parse(folder)) }.getOrDefault(emptyList())
+        _scanningImports.value = false
+    }
 
     // ── Complete DB backup & restore (the real safety net) ─────────────────────
     private val _statusMessage = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)

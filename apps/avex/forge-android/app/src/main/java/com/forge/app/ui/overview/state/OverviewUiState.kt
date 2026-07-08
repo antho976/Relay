@@ -72,7 +72,6 @@ data class OverviewUiState(
     val bestSessionThisWeekLb: Double? = null,
     val pendingMilestone: MilestoneEvent? = null,
     val onThisDayMemory: OnThisDayMemory? = null,
-    val plannedNextDay: String = "",
     /** Next gym day in the rotation. */
     val nextUpDayKey: String = "upper-a",
     /** 0=Mon..6=Sun indices that had a gym session this ISO week. */

@@ -117,9 +117,9 @@ fun HubScreen(
                     onOpenHistory = { nav.navigate(Routes.SESSION_HISTORY) },
                     onOpenNotes = { nav.navigate(Routes.NOTES_SEARCH) },
                     onOpenRecap = { nav.navigate(Routes.RECAP) },
-                    // Long-press "Edit program for this day" → the per-day editor for that day (whole-plan
-                    // restructuring lives on the "Edit plan" / "Build a plan" buttons → the builder).
-                    onEditProgram = { dayKey -> nav.navigate(Routes.programEditor(dayKey)) },
+                    // Long-press "Edit program for this day" → the streamlined program builder (the same
+                    // editor Settings → Program opens), replacing the old per-day editor screen.
+                    onEditProgram = { _ -> nav.navigate(Routes.programBuilder()) },
                     onOpenCardio = { goToTab(BottomTab.CARDIO) },
                     onLogFreestyle = { nav.navigate(Routes.FREESTYLE_LOG) },
                     onBuildPlan = { nav.navigate(Routes.programBuilder()) },
@@ -133,7 +133,9 @@ fun HubScreen(
                     // A cardio "day" is logged on the Cardio page, so its start CTA swipes there.
                     onStartSession = { dayKey -> if (dayKey.startsWith("cardio")) goToTab(BottomTab.CARDIO) else nav.navigate(Routes.gymDay(dayKey)) },
                     onStartSessionSkipWarmup = { dayKey -> if (dayKey.startsWith("cardio")) goToTab(BottomTab.CARDIO) else nav.navigate(Routes.gymDay(dayKey, skipWarmup = true)) },
-                    onViewProgram = { nav.navigate(Routes.PROGRAM_VIEWER) },
+                    // "View program" opens the streamlined program builder (the same editor Settings →
+                    // Program opens), replacing the old temporary read-only viewer.
+                    onViewProgram = { nav.navigate(Routes.programBuilder()) },
                     onGoToCardio = { goToTab(BottomTab.CARDIO) },
                     onGoToTrophies = { nav.navigate(Routes.TROPHIES) },
                     onOpenNotes = { nav.navigate(Routes.NOTES_SEARCH) },

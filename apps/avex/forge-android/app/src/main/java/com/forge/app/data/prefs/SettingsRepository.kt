@@ -153,6 +153,15 @@ class SettingsRepository @Inject constructor(
     suspend fun setUseKg(value: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.USE_KG] = value }
 
+    /** Persisted folder the user granted Import to auto-scan (#GYMAP-17); null when none granted yet. */
+    val importFolderUri: Flow<String?> = context.forgePreferences.data
+        .map { it[PreferenceKeys.IMPORT_FOLDER_URI]?.takeIf { s -> s.isNotBlank() } }
+    suspend fun setImportFolderUri(uri: String?) =
+        context.forgePreferences.edit {
+            if (uri.isNullOrBlank()) it.remove(PreferenceKeys.IMPORT_FOLDER_URI)
+            else it[PreferenceKeys.IMPORT_FOLDER_URI] = uri
+        }
+
     /**
      * Cardio distance unit. When the user never made an explicit choice, it follows the weight unit
      * (lb→miles, kg→km) so a single "pounds + miles" / "kilos + km" mental model holds by default —
@@ -505,13 +514,6 @@ class SettingsRepository @Inject constructor(
         .map { it[PreferenceKeys.LAST_SEEN_COACH_WEEK_ID] ?: "" }
     suspend fun setLastSeenCoachWeekId(weekId: String) =
         context.forgePreferences.edit { it[PreferenceKeys.LAST_SEEN_COACH_WEEK_ID] = weekId }
-
-    // ─── Plan tomorrow (#147) ─────────────────────────────────────────────────
-
-    val plannedNextDay: Flow<String> = context.forgePreferences.data
-        .map { it[PreferenceKeys.PLANNED_NEXT_DAY] ?: "" }
-    suspend fun setPlannedNextDay(dayKey: String) =
-        context.forgePreferences.edit { it[PreferenceKeys.PLANNED_NEXT_DAY] = dayKey }
 
     // ─── Warmup disable (#156) ────────────────────────────────────────────────
 

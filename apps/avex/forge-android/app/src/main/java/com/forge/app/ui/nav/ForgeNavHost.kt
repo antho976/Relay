@@ -49,12 +49,10 @@ import com.forge.app.ui.gym.history.SessionHistoryScreen
 import com.forge.app.ui.gym.session.SessionDetailScreen
 import com.forge.app.ui.gym.notes.NotesSearchScreen
 import com.forge.app.ui.gym.train.DayListScreen
-import com.forge.app.ui.gym.train.ProgramViewerScreen
 import com.forge.app.ui.gym.train.DayScreen
 import com.forge.app.ui.goals.GoalEditorScreen
 import com.forge.app.ui.goals.GoalsScreen
 import com.forge.app.ui.profile.MirrorTestScreen
-import com.forge.app.ui.programeditor.ProgramEditorScreen
 import com.forge.app.ui.recap.RecapScreen
 import com.forge.app.ui.settings.SettingsScreen
 import com.forge.app.ui.theme.ForgeMotion
@@ -75,7 +73,7 @@ fun ForgeNavHost(initialDayKey: String? = null) {
     val rise: (Int) -> Int = { it / 4 }        // vertical distance for modal mode screens
     // The five hubs (Cardio/Stats/Overview/Coach/Profile) are pages of HubScreen's pager, reached by
     // swipe — they aren't nav destinations. Only the deep "mode" screens remain, and they RISE as modals.
-    val modalRoutes = setOf(Routes.GYM_DAY, Routes.RECAP, Routes.PROGRAM_EDITOR, Routes.PROGRAM_BUILDER, Routes.COACH_BRIEF, Routes.FREESTYLE_LOG)
+    val modalRoutes = setOf(Routes.GYM_DAY, Routes.RECAP, Routes.PROGRAM_BUILDER, Routes.COACH_BRIEF, Routes.FREESTYLE_LOG)
     // One-shot fade so the first screen eases in on cold launch instead of snapping on.
     var appeared by remember { mutableStateOf(false) }
     val rootAlpha by animateFloatAsState(
@@ -87,7 +85,8 @@ fun ForgeNavHost(initialDayKey: String? = null) {
 
     // Widget deep-link: a gym day opens on top of the hub (Back returns home). A cardio day instead
     // selects the hub's Cardio page via initialHubPage below — there's no separate cardio destination.
-    // Fires once — MainActivity only supplies a key on a fresh launch, not a config-change recreate.
+    // Re-fires whenever the key changes — a fresh launch, or a widget tap routed through onNewIntent
+    // while the app is already running (launchMode=singleTask); a config-change recreate supplies null.
     LaunchedEffect(initialDayKey) {
         val key = initialDayKey ?: return@LaunchedEffect
         if (key in com.forge.app.program.Program.dayKeys) nav.navigate(Routes.gymDay(key))
@@ -145,9 +144,6 @@ fun ForgeNavHost(initialDayKey: String? = null) {
                 pendingPage = pendingHubPage,
                 onPendingConsumed = { pendingHubPage = null }
             )
-        }
-        composable(Routes.PROGRAM_VIEWER) {
-            ProgramViewerScreen(onBack = { nav.popBackStack() })
         }
         composable(Routes.FREESTYLE_LOG) {
             FreestyleLogScreen(onBack = { nav.popBackStack() })
@@ -266,15 +262,6 @@ fun ForgeNavHost(initialDayKey: String? = null) {
         }
         composable(Routes.MIRROR_TEST) {
             MirrorTestScreen(onBack = { nav.popBackStack() })
-        }
-        composable(
-            route = Routes.PROGRAM_EDITOR,
-            arguments = listOf(navArgument("dayKey") { type = NavType.StringType })
-        ) { entry ->
-            ProgramEditorScreen(
-                dayKey = entry.arguments?.getString("dayKey").orEmpty(),
-                onBack = { nav.popBackStack() }
-            )
         }
     }
     }

@@ -150,6 +150,9 @@ dependencies {
     implementation("androidx.glance:glance-appwidget:1.1.1")
     implementation("androidx.glance:glance-material3:1.1.1")
 
+    // DocumentFile — enumerate a user-granted folder (Downloads) to auto-find gym-app exports (#GYMAP-17).
+    implementation("androidx.documentfile:documentfile:1.0.1")
+
     // Baseline Profile — installs the generated app/src/main/baseline-prof.txt at runtime (P2).
     // profileinstaller is a no-op until the profile is generated on a device.
     implementation(libs.androidx.profileinstaller)

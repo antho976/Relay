@@ -49,6 +49,7 @@ internal fun MainList(
     onOpenPage: (SettingsPage) -> Unit,
     onOpenCoachBrief: () -> Unit,
     onOpenDataDialog: () -> Unit,
+    onImportData: () -> Unit,
     onResetTarget: (ResetTarget) -> Unit,
     onOpenResetMenu: () -> Unit
 ) {
@@ -86,6 +87,7 @@ internal fun MainList(
             item("data") {
                 SettingsSectionHeader("Data")
                 SettingsNavRow("Export data", "Sessions · weekly · full backup · PDF", SettingsIcons.Export) { onOpenDataDialog() }
+                SettingsNavRow("Import data", "Strong · Hevy · FitNotes · CSV", SettingsIcons.Import) { onImportData() }
             }
             item("reset") {
                 SettingsSectionHeader("Reset")
@@ -127,6 +129,7 @@ internal fun MainList(
                     if (!hidden && (ql in e.name.lowercase() || ql in e.tags)) {
                         val onClick: () -> Unit = when (e.action) {
                             SearchAction.DATA -> onOpenDataDialog
+                            SearchAction.IMPORT -> onImportData
                             SearchAction.RESET -> onOpenResetMenu
                             SearchAction.COACH -> onOpenCoachBrief
                         }
@@ -259,6 +262,7 @@ private fun pageGlyph(page: SettingsPage): ImageVector? = when (page) {
 
 private fun actionGlyph(action: SearchAction): ImageVector? = when (action) {
     SearchAction.DATA -> SettingsIcons.Export
+    SearchAction.IMPORT -> SettingsIcons.Import
     SearchAction.COACH -> NavIcons.Coach
     SearchAction.RESET -> null
 }

@@ -17,7 +17,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -65,29 +64,30 @@ internal fun ColumnScope.StatsHeroContent(state: StatsUiState, useKg: Boolean, c
                     WeekMetric("${cmp.current.sets}", countDelta(cmp.current.sets - cmp.previous.sets), "sets", c, Modifier.weight(1f))
                 }
             } else {
-                Text(
-                    "Nothing logged yet this week.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = c.muted,
-                    fontStyle = FontStyle.Italic
-                )
+                // First run / a quiet week: honest zeros, drawn as the same three figures (§12) — never a
+                // dash or a bare sentence. Deltas are suppressed (no prior week to compare against yet).
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    WeekMetric(formatVolumeCompact(0.0, useKg, withUnit = false), null, unitLabel(useKg), c, Modifier.weight(1.1f))
+                    WeekMetric("0", null, "sessions", c, Modifier.weight(1f))
+                    WeekMetric("0", null, "sets", c, Modifier.weight(1f))
+                }
             }
         }
         // The weekly muscle map as the header's face — same spot as the session screen's body figure.
-        if (state.weeklySetsByMuscle.isNotEmpty()) {
-            Spacer(Modifier.width(14.dp))
-            BodyHeatmap(
-                setsByMuscle = state.weeklySetsByMuscle.associate { it.muscle to it.sets },
-                accent = c.accent,
-                faint = c.outline.copy(alpha = 0.34f),
-                silhouette = c.outline.copy(alpha = 0.26f),
-                labelColor = c.muted,
-                figureHeight = 96.dp,
-                showLegend = false,
-                showTitles = false,
-                modifier = Modifier.width(104.dp)
-            )
-        }
+        // Always drawn: at zero it's the faint silhouette (the section's own visual at zero), so the hero
+        // carries a mark before the first log instead of a gap (§12).
+        Spacer(Modifier.width(14.dp))
+        BodyHeatmap(
+            setsByMuscle = state.weeklySetsByMuscle.associate { it.muscle to it.sets },
+            accent = c.accent,
+            faint = c.outline.copy(alpha = 0.34f),
+            silhouette = c.outline.copy(alpha = 0.26f),
+            labelColor = c.muted,
+            figureHeight = 96.dp,
+            showLegend = false,
+            showTitles = false,
+            modifier = Modifier.width(104.dp)
+        )
     }
     if (state.readinessPulse != null && state.readinessThreshold != null) {
         Spacer(Modifier.height(14.dp))

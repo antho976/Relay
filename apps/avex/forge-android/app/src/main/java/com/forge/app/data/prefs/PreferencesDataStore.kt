@@ -60,6 +60,10 @@ object PreferenceKeys {
      *  session's estimated active calories to Health Connect (HC-4). Off by default — strictly opt-in. */
     val HC_WRITE_CALORIES = booleanPreferencesKey("hc_write_calories")
 
+    /** Persisted tree URI of a folder (usually Downloads) the user granted so Import can auto-scan it
+     *  for gym-app exports (#GYMAP-17). Empty/absent = no folder access granted yet. */
+    val IMPORT_FOLDER_URI = stringPreferencesKey("import_folder_uri")
+
     // ─── Appearance (#35a) ────────────────────────────────────────────────────
     val AMOLED_MODE = booleanPreferencesKey("amoled_mode")
     /** Stored hex string e.g. "#EF4444". Empty = use default. Reserved for UI pass. */
@@ -111,10 +115,6 @@ object PreferenceKeys {
      * screen all draw only from these ids.
      */
     val FROZEN_EXERCISE_IDS = stringSetPreferencesKey("frozen_exercise_ids")
-
-    // ─── Plan tomorrow (#147) ─────────────────────────────────────────────────
-    /** Day key the user intends to train next (e.g. "upper-a"). Empty = not set. */
-    val PLANNED_NEXT_DAY = stringPreferencesKey("planned_next_day")
 
     // ─── Privacy mode (#152) ──────────────────────────────────────────────────
     val PRIVACY_MODE = booleanPreferencesKey("privacy_mode")

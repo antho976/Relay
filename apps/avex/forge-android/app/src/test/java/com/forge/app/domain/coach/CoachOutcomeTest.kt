@@ -39,4 +39,10 @@ class CoachOutcomeTest {
     fun openProposal_addsNothing() {
         assertNull(CoachOutcome.label("proposed", "pending", null, now))
     }
+
+    @Test
+    fun shadow_readsAsObservedWhilePaused() {
+        // Recorded while the coach was switched off — watched, never acted on.
+        assertEquals("observed while paused", CoachOutcome.label("shadow", "pending", null, now))
+    }
 }

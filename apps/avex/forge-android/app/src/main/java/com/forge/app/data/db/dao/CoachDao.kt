@@ -114,6 +114,24 @@ interface CoachDao {
     @Query("SELECT * FROM coach_decision ORDER BY id")
     suspend fun allDecisions(): List<CoachDecision>
 
+    @Query("DELETE FROM coach_pass WHERE week_id = :weekId")
+    suspend fun deletePass(weekId: String)
+
+    @Query("DELETE FROM coach_decision WHERE week_id = :weekId")
+    suspend fun deleteDecisionsForWeek(weekId: String)
+
+    /**
+     * Drop a week's pass and its decisions so the coach can regenerate the week from scratch. Used
+     * when a pass recorded as inert SHADOW (coach switched off) must be re-run as a real proposal
+     * pass because the coach was switched back on mid-week. Shadow decisions are inert (no overlay,
+     * ignored by the watcher/ledger), so deleting them has no lingering effect.
+     */
+    @Transaction
+    suspend fun clearPass(weekId: String) {
+        deleteDecisionsForWeek(weekId)
+        deletePass(weekId)
+    }
+
     @Query("DELETE FROM coach_pass")
     suspend fun deleteAllPasses()
 

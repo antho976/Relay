@@ -60,7 +60,7 @@ internal fun ColumnScope.StrengthStandardsContent(
     val rated = lifts.filter { it.currentE1rm > 0 && it.history.size >= MIN_SESSIONS_FOR_TIER }.take(5)
     if (rated.isEmpty()) {
         Text(
-            "Still calibrating — a few more sessions of your main lifts and your tier locks in.",
+            "Still calibrating. A few more sessions of your main lifts and your tier locks in.",
             style = MaterialTheme.typography.bodySmall, color = c.muted, fontStyle = FontStyle.Italic
         )
         return

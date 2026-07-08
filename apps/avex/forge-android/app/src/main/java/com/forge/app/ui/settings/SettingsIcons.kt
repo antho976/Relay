@@ -142,6 +142,17 @@ object SettingsIcons {
             }
         }
     }
+
+    /** Import data — the mirror of [Export]: an arrow rising UP out of an open tray (data into the app). */
+    val Import: ImageVector by lazy {
+        icon("SetImport") {
+            strokePath(1.8f) {
+                moveTo(4.6f, 14f); lineTo(4.6f, 19f); lineTo(19.4f, 19f); lineTo(19.4f, 14f)
+                moveTo(12f, 15f); lineTo(12f, 4.4f)
+                moveTo(8f, 8.2f); lineTo(12f, 4.2f); lineTo(16f, 8.2f)
+            }
+        }
+    }
 }
 
 // --- builders (mirrors NavIcons, kept local so the two families evolve independently) -------------

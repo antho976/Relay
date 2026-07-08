@@ -175,7 +175,6 @@ fun OverviewScreen(
     val orphanNotice by viewModel.orphanNotice.collectAsStateWithLifecycle()
     val selectedItem by viewModel.selectedItem.collectAsStateWithLifecycle()
     val summaryLines by viewModel.sessionExerciseLines.collectAsStateWithLifecycle()
-    var showDayEdit by remember { mutableStateOf(false) }
     // A milestone "fires and vanishes" otherwise (it's marked shown immediately) — capture it into a
     // transient banner so the user actually sees it (#Overview pendingMilestone).
     var milestoneToast by remember { mutableStateOf<MilestoneEvent?>(null) }
@@ -213,14 +212,6 @@ fun OverviewScreen(
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val accent = MaterialTheme.colorScheme.primary
     val outline = MaterialTheme.colorScheme.outline
-
-    if (showDayEdit) {
-        DayEditSheet(
-            initialDayKey = state.nextUpDayKey,
-            onSelectAsToday = { dayKey -> viewModel.setPlanNextDay(dayKey) },
-            onDismiss = { showDayEdit = false }
-        )
-    }
 
     if (selectedItem != null) {
         val item = selectedItem!!
@@ -350,7 +341,7 @@ fun OverviewScreen(
                             // finish, resumeBannerKey is null, so a stray tap can't re-enter the
                             // just-completed session.
                             .clickableLabeled("Resume your workout") {
-                                resumeBannerKey?.let { viewModel.onSessionStarting(); onStartSession(it) }
+                                resumeBannerKey?.let { onStartSession(it) }
                             }
                             .padding(horizontal = 14.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -420,7 +411,7 @@ fun OverviewScreen(
                     color = onBg,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = if (nextDay != null) Modifier.clickableLabeled("Edit or swap this day") { showDayEdit = true } else Modifier
+                    modifier = if (nextDay != null) Modifier.clickableLabeled("Edit this day's program") { onBuildPlan() } else Modifier
                 )
                 if (nextDay != null) {
                     Spacer(Modifier.height(10.dp))
@@ -431,7 +422,7 @@ fun OverviewScreen(
                     )
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        "Tap the day name to edit or swap it",
+                        "Tap the day name to edit its program",
                         style = MaterialTheme.typography.labelSmall,
                         color = muted.copy(alpha = 0.7f)
                     )
@@ -444,7 +435,7 @@ fun OverviewScreen(
                 val ctaDayKey = resumeKey ?: state.nextUpDayKey
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Button(
-                        onClick = { viewModel.onSessionStarting(); onStartSession(ctaDayKey) },
+                        onClick = { onStartSession(ctaDayKey) },
                         shape = RoundedCornerShape(50),
                         colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
                         contentPadding = PaddingValues(horizontal = 32.dp, vertical = 18.dp)
@@ -460,7 +451,7 @@ fun OverviewScreen(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(50))
                                 .border(0.5.dp, muted.copy(alpha = 0.4f), RoundedCornerShape(50))
-                                .clickableLabeled("Start, skipping warmup") { val d = state.nextUpDayKey; viewModel.onSessionStarting(); onStartSessionSkipWarmup(d) }
+                                .clickableLabeled("Start, skipping warmup") { onStartSessionSkipWarmup(state.nextUpDayKey) }
                                 .padding(horizontal = 18.dp, vertical = 12.dp)
                         ) {
                             Text("skip warmup", style = MaterialTheme.typography.bodySmall, color = muted)
