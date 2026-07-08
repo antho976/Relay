@@ -6,7 +6,6 @@ import com.forge.app.data.db.entities.Session
 import com.forge.app.data.db.entities.durationMinutes
 import com.forge.app.data.repo.StatsRepository
 import com.forge.app.domain.session.SessionType
-import com.forge.app.domain.units.formatDistance
 import com.forge.app.program.Program
 import com.forge.app.ui.overview.state.MilestoneEvent
 import com.forge.app.ui.overview.state.OnThisDayMemory
@@ -78,10 +77,8 @@ internal fun buildOverviewUiState(
     }
     val cardioItems = recentCardio.map { entry ->
         val typeName = entry.type.replaceFirstChar { it.uppercase() }
-        val sub = listOfNotNull(
-            "${entry.durationMin} min",
-            entry.distanceKm?.takeIf { it > 0 }?.let { formatDistance(it, useMiles) }
-        ).joinToString(" · ")
+        // Distance renders in the row's right column (where gym volume sits), not the subtitle.
+        val sub = "${entry.durationMin} min"
         Pair(entry.date, OverviewRecentItem(
             dayLabel = relativeDay(entry.date),
             title = "Cardio · $typeName",

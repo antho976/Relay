@@ -1,7 +1,6 @@
 package com.forge.app.ui.cardio.components
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,8 +10,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -31,14 +28,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.data.db.entities.CardioEntry
+import com.forge.app.ui.common.clickableLabeled
 import com.forge.app.domain.cardio.CardioRestReason
 import com.forge.app.domain.cardio.CardioType
 import com.forge.app.domain.units.formatDistance
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.time.format.TextStyle
-import java.time.temporal.WeekFields
 import java.util.Locale
 
 /**
@@ -82,14 +80,14 @@ fun CardioEntryRow(
         backgroundContent = {
             Box(
                 Modifier.fillMaxSize()
-                    .background(if (swiping) MaterialTheme.colorScheme.error.copy(alpha = 0.8f) else Color.Transparent),
+                    .background(if (swiping) MaterialTheme.colorScheme.error else Color.Transparent),
                 contentAlignment = Alignment.CenterEnd
             ) {
                 if (swiping) {
-                    Icon(
-                        Icons.Default.Delete,
-                        contentDescription = "Delete",
-                        tint = MaterialTheme.colorScheme.onError,
+                    Text(
+                        "Delete",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onError,
                         modifier = Modifier.padding(end = 24.dp)
                     )
                 }
@@ -101,7 +99,7 @@ fun CardioEntryRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(MaterialTheme.colorScheme.background)
-                .clickable(onClick = onClick)
+                .clickableLabeled("View session details", onClick = onClick)
                 .padding(horizontal = 24.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -109,7 +107,7 @@ fun CardioEntryRow(
             Text(
                 dayLabel,
                 style = MaterialTheme.typography.labelMedium,
-                color = onBg.copy(alpha = 0.85f),
+                color = muted,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.width(56.dp)
@@ -117,7 +115,7 @@ fun CardioEntryRow(
             Icon(
                 type.icon,
                 contentDescription = null,
-                tint = onBg.copy(alpha = 0.9f),
+                tint = onBg,
                 modifier = Modifier.size(20.dp)
             )
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -132,7 +130,6 @@ fun CardioEntryRow(
                     )
                 }
             }
-            Text("›", style = MaterialTheme.typography.bodyLarge, color = muted.copy(alpha = 0.5f))
         }
     }
 }
@@ -147,8 +144,9 @@ private fun entryDayLabel(dateMs: Long, today: LocalDate, zone: ZoneId): String 
         !entryDate.isBefore(isoWeekStart) -> dayAbbr
         !entryDate.isBefore(lastWeekStart) -> "LAST $dayAbbr"
         else -> {
-            val wk = entryDate.get(WeekFields.ISO.weekOfWeekBasedYear())
-            "WK $wk · $dayAbbr"
+            // Older rows carry the human date, never a raw ISO week number (§11: translate the machine).
+            val fmt = DateTimeFormatter.ofPattern("MMM d", Locale.getDefault())
+            "$dayAbbr · ${entryDate.format(fmt).uppercase()}"
         }
     }
 }

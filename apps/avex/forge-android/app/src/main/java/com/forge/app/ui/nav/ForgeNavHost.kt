@@ -44,6 +44,7 @@ import com.forge.app.ui.coach.CoachLens
 import com.forge.app.ui.coach.CoachScreen
 import com.forge.app.ui.gym.freestyle.FreestyleLogScreen
 import com.forge.app.ui.programbuilder.ProgramBuilderScreen
+import com.forge.app.ui.common.ForgeWordmark
 import com.forge.app.ui.common.ProgramChangeGuardHost
 import com.forge.app.ui.gym.history.SessionHistoryScreen
 import com.forge.app.ui.gym.session.SessionDetailScreen
@@ -277,7 +278,8 @@ private fun NutritionPlaceholderScreen(onBack: () -> Unit) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = {},
+                // §2: wordmark + back in the chrome, never the screen's own name.
+                title = { ForgeWordmark() },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(
@@ -298,16 +300,16 @@ private fun NutritionPlaceholderScreen(onBack: () -> Unit) {
             modifier = Modifier.fillMaxSize().padding(inner).padding(horizontal = 32.dp),
             verticalArrangement = Arrangement.Center
         ) {
-            Text("Nutrition.", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onBackground)
+            Text("Nutrition", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onBackground)
             Spacer(Modifier.height(12.dp))
             Text(
-                "Coming in a future update — built like the rest of Avex: offline, on your device, no account, and no giant food database to wrestle with.",
+                "Coming in a future update. Built like the rest of Avex: offline, on your device, no account, and no giant food database to wrestle with.",
                 style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(Modifier.height(20.dp))
             Text("WHAT'S PLANNED", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(8.dp))
-            Text("•  Daily protein + calorie targets — just the numbers that move the needle.",
+            Text("•  Daily protein and calories, tracked simply.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(6.dp))
             Text("•  A bodyweight trend tied to your training volume.",

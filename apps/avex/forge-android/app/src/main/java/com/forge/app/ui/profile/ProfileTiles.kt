@@ -1,28 +1,24 @@
 package com.forge.app.ui.profile
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.forge.app.ui.common.bounceClick
+import com.forge.app.ui.common.EditorialHeader
+import com.forge.app.ui.common.EditorialLegend
 
 /**
  * The profile's shared building blocks, open-editorial edition: a quiet section header, big serif
@@ -32,9 +28,9 @@ import com.forge.app.ui.common.bounceClick
  */
 
 /**
- * A quiet small-caps section anchor (label + optional action). Spacing and the big figures
- * themselves carry the page structure — this is just the label. The action reads muted like the
- * label, not accent — same quiet register as RECENT's "view all" on Home.
+ * A quiet small-caps section anchor (label + optional action) — the shared [EditorialHeader]
+ * voice (mono labelLarge 13sp) with the profile's local inset kept. The action reads accent
+ * mono per §11 (actions are accent, labels are muted).
  */
 @Composable
 internal fun SectionHeader(
@@ -43,15 +39,14 @@ internal fun SectionHeader(
     action: String? = null,
     onAction: (() -> Unit)? = null
 ) {
-    Row(
-        Modifier.fillMaxWidth().then(if (onAction != null) Modifier.bounceClick { onAction() } else Modifier)
-            .padding(start = 2.dp, bottom = 12.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(label, style = MaterialTheme.typography.labelMedium, color = muted)
-        if (action != null) Text(action, style = MaterialTheme.typography.labelSmall, color = muted)
-    }
+    EditorialHeader(
+        label = label,
+        muted = muted,
+        accent = MaterialTheme.colorScheme.primary,
+        modifier = Modifier.padding(start = 2.dp, bottom = 12.dp),
+        action = action,
+        onAction = onAction
+    )
 }
 
 /** The data behind one [StatCell] — a big figure, its label, and an optional week-over-week delta. */
@@ -87,7 +82,7 @@ internal fun StatCell(
             )
             if (delta != null && delta != 0) {
                 Spacer(Modifier.width(6.dp))
-                DeltaBadge(delta, accent, onBg, Modifier.padding(top = 8.dp))
+                DeltaBadge(delta, accent, muted, onBg, Modifier.padding(top = 8.dp))
             }
         }
         Spacer(Modifier.height(2.dp))
@@ -96,18 +91,18 @@ internal fun StatCell(
 }
 
 /**
- * A "↑2 / ↓1" week-over-week badge. The arrow is always accent-tinted so it stays legible on the
- * dark page (a muted down-arrow was getting lost), and the count sits in the bright on-background
- * ink beside it; both a touch larger than the small-caps label so the change actually reads.
+ * A "↑2 / ↓1" week-over-week badge. Up reads accent, down reads muted (§11), and the count sits
+ * in the bright on-background ink beside it; both a touch larger than the small-caps label so
+ * the change actually reads.
  */
 @Composable
-private fun DeltaBadge(delta: Int, accent: Color, onBg: Color, modifier: Modifier = Modifier) {
+private fun DeltaBadge(delta: Int, accent: Color, muted: Color, onBg: Color, modifier: Modifier = Modifier) {
     val up = delta > 0
     Row(modifier, verticalAlignment = Alignment.CenterVertically) {
         Text(
             if (up) "↑" else "↓",
             style = MaterialTheme.typography.labelSmall,
-            color = accent,
+            color = if (up) accent else muted,
             fontSize = 13.sp
         )
         Text(
@@ -148,12 +143,8 @@ internal fun StatCellGrid(
     }
 }
 
-/** A dot-plus-caption legend line for the open full-width charts. */
+/** A dot-plus-caption legend line for the open full-width charts — the shared [EditorialLegend]. */
 @Composable
 internal fun ChartCaption(color: Color, label: String, muted: Color) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(6.dp).clip(RoundedCornerShape(50)).background(color))
-        Spacer(Modifier.width(5.dp))
-        Text(label, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 8.sp)
-    }
+    EditorialLegend(color, label, muted)
 }

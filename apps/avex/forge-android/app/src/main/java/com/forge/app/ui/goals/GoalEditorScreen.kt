@@ -1,7 +1,6 @@
 package com.forge.app.ui.goals
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,6 +11,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -19,15 +20,15 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -41,7 +42,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -55,9 +55,12 @@ import com.forge.app.domain.units.parseToKm
 import com.forge.app.domain.units.parseToLb
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.domain.units.weightInputValue
-import com.forge.app.ui.common.EditorialHairline
+import com.forge.app.ui.common.ExerciseIcons
+import com.forge.app.ui.common.ForgePrimaryCapsule
+import com.forge.app.ui.common.ForgeWordmark
+import com.forge.app.ui.common.SegmentPill
+import com.forge.app.ui.common.clickableLabeled
 import com.forge.app.ui.common.filterLibrary
-import com.forge.app.ui.settings.PillChip
 import com.forge.app.ui.theme.LocalForgeSettings
 
 /** Where the editor is in the add/edit flow. Editing an existing goal jumps straight to its form. */
@@ -142,7 +145,7 @@ fun GoalEditorScreen(
     BackHandler { goBack() }
 
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val outline = MaterialTheme.colorScheme.outline
+    val onBg = MaterialTheme.colorScheme.onBackground
     val title = when (val s = step) {
         null -> ""
         EditorStep.ChooseType -> "Add a goal"
@@ -155,7 +158,8 @@ fun GoalEditorScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(title, style = MaterialTheme.typography.headlineMedium) },
+                // §2: wordmark + back, never the step's name — the content title line below carries it.
+                title = { ForgeWordmark() },
                 navigationIcon = {
                     IconButton(onClick = { goBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
                 },
@@ -165,12 +169,14 @@ fun GoalEditorScreen(
         containerColor = Color.Transparent
     ) { inner ->
         Column(Modifier.fillMaxSize().padding(inner).padding(horizontal = 24.dp)) {
-            EditorialHairline(outline)
-            Spacer(Modifier.height(20.dp))
+            // The form would otherwise open unlabeled — the step names itself in content.
+            if (title.isNotBlank()) {
+                Text(title, style = MaterialTheme.typography.headlineSmall, color = onBg)
+                Spacer(Modifier.height(20.dp))
+            }
             when (val s = step) {
-                null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator()
-                }
+                // No spinners (§13): the edit target resolves instantly from the local DB.
+                null -> Box(Modifier.fillMaxSize())
                 EditorStep.ChooseType -> ChooseTypeStep(
                     muted = muted,
                     onPickLift = { step = EditorStep.LiftPicker },
@@ -210,17 +216,18 @@ fun GoalEditorScreen(
 @Composable
 private fun ChooseTypeStep(muted: Color, onPickLift: () -> Unit, onPickMetric: (GoalMetric) -> Unit) {
     val onBg = MaterialTheme.colorScheme.onBackground
+    val useMiles = LocalForgeSettings.current.useMiles
     Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
         GoalTypeOption("Lift target", "Hit a target weight on any exercise", onBg, muted, onPickLift)
         customGoalMetrics.forEach { m ->
-            GoalTypeOption(metricDisplayName(m), metricHint(m), onBg, muted) { onPickMetric(m) }
+            GoalTypeOption(metricDisplayName(m), metricHint(m, useMiles), onBg, muted) { onPickMetric(m) }
         }
     }
 }
 
-private fun metricHint(metric: GoalMetric): String = when (metric) {
-    GoalMetric.CARDIO_DISTANCE -> "e.g. 5 km this week — tracks your cardio"
-    GoalMetric.CARDIO_MINUTES -> "e.g. 90 min this week — tracks your cardio"
+private fun metricHint(metric: GoalMetric, useMiles: Boolean): String = when (metric) {
+    GoalMetric.CARDIO_DISTANCE -> "e.g. 5 ${distanceUnitLabel(useMiles)} this week, tracked from your cardio"
+    GoalMetric.CARDIO_MINUTES -> "e.g. 90 min this week, tracked from your cardio"
     GoalMetric.SESSIONS -> "e.g. train 4× this week"
     GoalMetric.VOLUME -> "total lifted this week or month"
     GoalMetric.BODYWEIGHT -> "reach a target bodyweight, up or down"
@@ -228,7 +235,7 @@ private fun metricHint(metric: GoalMetric): String = when (metric) {
 
 @Composable
 private fun GoalTypeOption(title: String, hint: String, onBg: Color, muted: Color, onClick: () -> Unit) {
-    Column(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 12.dp)) {
+    Column(Modifier.fillMaxWidth().clickableLabeled(title, onClick = onClick).padding(vertical = 12.dp)) {
         Text(title, style = MaterialTheme.typography.bodyLarge, color = onBg)
         Text(hint, style = MaterialTheme.typography.labelSmall, color = muted)
     }
@@ -253,11 +260,24 @@ private fun ColumnScope.LiftPickerStep(exclude: Set<String>, muted: Color, onPic
     Spacer(Modifier.height(8.dp))
     LazyColumn(Modifier.fillMaxWidth().weight(1f)) {
         items(results, key = { it.id }) { def ->
-            Column(
-                Modifier.fillMaxWidth().clickable { onPick(def.id, def.name) }.padding(vertical = 10.dp)
+            Row(
+                Modifier.fillMaxWidth()
+                    .clickableLabeled(def.name) { onPick(def.id, def.name) }
+                    .padding(vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(def.name, style = MaterialTheme.typography.bodyLarge, color = onBg)
-                Text(def.muscle.displayName, style = MaterialTheme.typography.labelSmall, color = muted)
+                // §8: picker rows lead with their equipment-class glyph for wayfinding.
+                Icon(
+                    ExerciseIcons.forEquipment(def.equipment),
+                    contentDescription = null,
+                    tint = muted,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(Modifier.width(12.dp))
+                Column {
+                    Text(def.name, style = MaterialTheme.typography.bodyLarge, color = onBg)
+                    Text(def.muscle.displayName, style = MaterialTheme.typography.labelSmall, color = muted)
+                }
             }
         }
         if (results.isEmpty()) {
@@ -292,19 +312,20 @@ private fun LiftWeightStep(step: EditorStep.LiftWeight, onSet: (Double) -> Unit,
             modifier = Modifier.fillMaxWidth()
         )
         Spacer(Modifier.height(24.dp))
-        // Quiet bordered action — a filled accent pill overpowers the open page.
-        OutlinedButton(
-            enabled = weightLb != null && weightLb > 0,
+        ForgePrimaryCapsule(
+            "Set goal",
             onClick = { weightLb?.let(onSet) },
-            modifier = Modifier.fillMaxWidth()
-        ) { Text("Set goal") }
+            modifier = Modifier.fillMaxWidth(),
+            enabled = weightLb != null && weightLb > 0
+        )
         if (step.currentTargetLb != null) {
             Spacer(Modifier.height(8.dp))
+            // Quiet error-colored text action: clearing a target is reversible (set it again).
             Text(
                 "Clear goal",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.clickable(onClick = onClear).padding(vertical = 8.dp)
+                modifier = Modifier.clickableLabeled("Clear goal", onClick = onClear).padding(vertical = 8.dp)
             )
         }
     }
@@ -331,7 +352,7 @@ private fun CustomNewStep(
     val target = parseCustomTarget(metric, valueText, settings.useKg, settings.useMiles)
 
     Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
-        Text(metricHint(metric), style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic)
+        Text(metricHint(metric, settings.useMiles), style = MaterialTheme.typography.bodySmall, color = muted)
         Spacer(Modifier.height(16.dp))
         CustomTargetField(metric, valueText) { valueText = it }
         if (metric.isCumulative) {
@@ -340,7 +361,15 @@ private fun CustomNewStep(
             Spacer(Modifier.height(6.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 GoalPeriod.entries.forEach { p ->
-                    PillChip(periodLabel(p), p == period) { period = p }
+                    SegmentPill(
+                        text = periodLabel(p),
+                        selected = p == period,
+                        onClick = { period = p },
+                        accent = MaterialTheme.colorScheme.primary,
+                        onBg = MaterialTheme.colorScheme.onBackground,
+                        muted = muted,
+                        outline = MaterialTheme.colorScheme.outline
+                    )
                 }
             }
         }
@@ -353,11 +382,12 @@ private fun CustomNewStep(
             modifier = Modifier.fillMaxWidth()
         )
         Spacer(Modifier.height(24.dp))
-        OutlinedButton(
-            enabled = target != null && target > 0,
+        ForgePrimaryCapsule(
+            "Add goal",
             onClick = { target?.let { onConfirm(period, it, name.trim()) } },
-            modifier = Modifier.fillMaxWidth()
-        ) { Text("Add goal") }
+            modifier = Modifier.fillMaxWidth(),
+            enabled = target != null && target > 0
+        )
     }
 }
 
@@ -381,20 +411,36 @@ private fun CustomEditStep(
     // Only persist a genuinely changed target: re-saving the untouched, unit-rounded seed would drift
     // the stored canonical value (e.g. 100 lb shown as "45.4" kg parses back to 100.09 lb).
     val changed = valueText.trim() != initial.trim()
+    var confirmDelete by rememberSaveable(goal) { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
         CustomTargetField(goal.metric, valueText) { valueText = it }
         Spacer(Modifier.height(24.dp))
-        OutlinedButton(
-            enabled = target != null && target > 0,
+        ForgePrimaryCapsule(
+            "Save",
             onClick = { if (changed) target?.let(onSave) else onUnchanged() },
-            modifier = Modifier.fillMaxWidth()
-        ) { Text("Save") }
+            modifier = Modifier.fillMaxWidth(),
+            enabled = target != null && target > 0
+        )
         Spacer(Modifier.height(8.dp))
+        // Quiet error-colored text action; the dialog below words the consequence (§13).
         Text(
             "Delete goal",
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.error,
-            modifier = Modifier.clickable(onClick = onDelete).padding(vertical = 8.dp)
+            modifier = Modifier.clickableLabeled("Delete goal") { confirmDelete = true }.padding(vertical = 8.dp)
+        )
+    }
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text("Delete this goal?") },
+            text = { Text("The goal and its progress are removed for good. What you logged stays.") },
+            confirmButton = {
+                TextButton(onClick = { confirmDelete = false; onDelete() }) { Text("Delete") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmDelete = false }) { Text("Cancel") }
+            }
         )
     }
 }
@@ -446,8 +492,9 @@ private fun customTargetInputValue(metric: GoalMetric, canonical: Double, useKg:
         GoalMetric.VOLUME, GoalMetric.BODYWEIGHT -> weightInputValue(canonical, useKg)
     }
 
+// §4: lens/segment pills take ONE short word.
 private fun periodLabel(period: GoalPeriod): String = when (period) {
-    GoalPeriod.WEEK -> "This week"
-    GoalPeriod.MONTH -> "This month"
-    GoalPeriod.ALL -> "All-time"
+    GoalPeriod.WEEK -> "Week"
+    GoalPeriod.MONTH -> "Month"
+    GoalPeriod.ALL -> "All"
 }

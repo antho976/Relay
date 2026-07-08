@@ -101,7 +101,7 @@ internal fun TrophyCaseSection(
         }
         if (unlocked == 0) {
             Spacer(Modifier.height(10.dp))
-            InlineEmptyHint("No trophies yet — finish your first workout to start unlocking them.", color = muted)
+            InlineEmptyHint("No trophies yet. Finish your first workout to start unlocking them.", color = muted)
         }
         if (closestTrophy != null) {
             Spacer(Modifier.height(10.dp))
@@ -140,7 +140,7 @@ private fun TrophyGridCell(
             if (!cell.unlocked && cell.progress > 0f) {
                 Canvas(Modifier.size(42.dp)) {
                     drawArc(
-                        color = accent.copy(alpha = 0.85f),
+                        color = accent,
                         startAngle = -90f,
                         sweepAngle = cell.progress * 360f,
                         useCenter = false,
@@ -165,7 +165,7 @@ private fun TrophyGridCell(
         }
         if (!cell.unlocked && cell.progress > 0f) {
             Spacer(Modifier.height(3.dp))
-            Text("${(cell.progress * 100).toInt()}%", style = MaterialTheme.typography.labelSmall, color = outline, fontSize = 8.sp)
+            Text("${(cell.progress * 100).toInt()}%", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 8.sp)
         }
     }
 }
@@ -198,7 +198,7 @@ private fun TrophyPopup(
                     .width(POPUP_WIDTH)
                     .clip(RoundedCornerShape(12.dp))
                     .background(surface)
-                    .border(1.dp, outline.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
+                    .border(1.dp, outline.copy(alpha = 0.35f), RoundedCornerShape(12.dp))
                     .padding(horizontal = 12.dp, vertical = 10.dp)
             ) {
                 Text(cell.name, style = MaterialTheme.typography.labelLarge, color = accent, fontWeight = FontWeight.SemiBold)

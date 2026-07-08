@@ -18,7 +18,6 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -40,7 +39,6 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.data.db.entities.CardioEntry
-import com.forge.app.domain.cardio.CardioCalorieEstimator
 import com.forge.app.domain.cardio.CardioEffort
 import com.forge.app.domain.cardio.CardioRestReason
 import com.forge.app.domain.cardio.CardioType
@@ -68,8 +66,6 @@ fun CardioLogSheet(
         hrZone: String?
     ) -> Unit,
     editing: CardioEntry? = null,
-    /** Latest logged bodyweight (lb) — scales the live calorie estimate; null hides it. */
-    bodyweightLb: Double? = null,
     /** Distance entry/pace unit — true = miles, false = km. The field stores km regardless. */
     useMiles: Boolean = false,
     /** Tapping the Avex wordmark — defaults to "go Home"; the cardio tab overrides it to close first. */
@@ -106,10 +102,13 @@ fun CardioLogSheet(
     val bg = MaterialTheme.colorScheme.background
     val accent = MaterialTheme.colorScheme.primary
 
+    // "MON · JUL 6" — the year only appears once it differs from today's (backdating that far is rare).
     val dateHeader = run {
         val d = Date(dateMs)
+        val sameYear = SimpleDateFormat("yyyy", Locale.getDefault()).format(d) ==
+            SimpleDateFormat("yyyy", Locale.getDefault()).format(Date())
         val day = SimpleDateFormat("EEE", Locale.getDefault()).format(d).uppercase().take(3)
-        val date = SimpleDateFormat("MMM d, yyyy", Locale.getDefault()).format(d).uppercase()
+        val date = SimpleDateFormat(if (sameYear) "MMM d" else "MMM d, yyyy", Locale.getDefault()).format(d).uppercase()
         "$day · $date"
     }
 
@@ -121,15 +120,6 @@ fun CardioLogSheet(
                     IconButton(onClick = onDismiss) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = muted)
                     }
-                },
-                actions = {
-                    Text(
-                        "NEW ENTRY",
-                        style = MaterialTheme.typography.labelSmall,
-                        letterSpacing = 2.sp,
-                        color = muted,
-                        modifier = Modifier.padding(end = 16.dp)
-                    )
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
             )
@@ -186,16 +176,13 @@ fun CardioLogSheet(
                                 modifier = Modifier.weight(1f)
                             )
                         }
-                        // Live readouts: calorie estimate (needs bodyweight) and pace (needs both fields).
-                        val kcal = CardioCalorieEstimator.estimate(type, durationInt, effort, bodyweightLb)
+                        // Live pace readout once both fields are in — the instant sanity check.
                         val pace = pacePerUnit(durationInt, distanceKm, useMiles)
-                        if (kcal != null || pace != null) {
+                        if (pace != null) {
                             Spacer(Modifier.height(8.dp))
-                            val parts = listOfNotNull(kcal?.let { "≈ $it kcal" }, pace?.let { "$it /${distanceUnitLabel(useMiles)}" })
-                            Text(parts.joinToString("  ·  "), style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp)
+                            Text("$pace /${distanceUnitLabel(useMiles)}", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp)
                         }
                         Spacer(Modifier.height(10.dp))
-                        HorizontalDivider(color = outline.copy(alpha = 0.15f))
                     }
                 }
 
@@ -275,7 +262,7 @@ fun CardioLogSheet(
                     )
                 },
                 onCancel = onDismiss,
-                onBg = onBg, muted = muted
+                onBg = onBg, bg = bg, muted = muted
             )
         }
     }

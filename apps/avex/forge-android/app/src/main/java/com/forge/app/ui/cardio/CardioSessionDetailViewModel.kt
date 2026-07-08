@@ -7,7 +7,6 @@ import androidx.lifecycle.viewModelScope
 import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.data.health.HealthConnectManager
 import com.forge.app.data.prefs.SettingsRepository
-import com.forge.app.data.repo.BodyweightRepository
 import com.forge.app.data.repo.CardioRepository
 import com.forge.app.domain.cardio.CardioEffort
 import com.forge.app.domain.cardio.CardioRestReason
@@ -34,7 +33,8 @@ import javax.inject.Inject
 data class CardioSessionDetailState(
     val loaded: Boolean = false,
     val entry: CardioEntry? = null,
-    val bodyweightLb: Double? = null,
+    /** Every logged entry — the compare pool for the detail sheet's best/previous reads. */
+    val allEntries: List<CardioEntry> = emptyList(),
     val editing: Boolean = false,
     val deleted: Boolean = false,
     val useMiles: Boolean = false,
@@ -56,7 +56,6 @@ data class CardioSessionDetailState(
 @HiltViewModel
 class CardioSessionDetailViewModel @Inject constructor(
     private val cardioRepo: CardioRepository,
-    bodyweightRepo: BodyweightRepository,
     settingsRepo: SettingsRepository,
     private val healthConnectManager: HealthConnectManager,
     savedStateHandle: SavedStateHandle
@@ -77,13 +76,19 @@ class CardioSessionDetailViewModel @Inject constructor(
     private val entryFlow = cardioRepo.observeAll().map { list -> list.firstOrNull { it.id == cardioId } }
 
     val state: StateFlow<CardioSessionDetailState> = combine(
-        entryFlow,
-        bodyweightRepo.observeRecent(1).map { it.firstOrNull()?.weightLb },
+        cardioRepo.observeAll(),
         editing,
         deleted,
         settingsRepo.useMiles
-    ) { entry, bodyweightLb, isEditing, isDeleted, useMiles ->
-        CardioSessionDetailState(loaded = true, entry = entry, bodyweightLb = bodyweightLb, editing = isEditing, deleted = isDeleted, useMiles = useMiles)
+    ) { all, isEditing, isDeleted, useMiles ->
+        CardioSessionDetailState(
+            loaded = true,
+            entry = all.firstOrNull { it.id == cardioId },
+            allEntries = all,
+            editing = isEditing,
+            deleted = isDeleted,
+            useMiles = useMiles
+        )
     }.combine(wearable) { st, w ->
         st.copy(wearable = w.day, route = w.route, routeConsentId = w.routeConsentId, stepsConnected = w.connected)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), CardioSessionDetailState())

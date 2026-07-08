@@ -1,7 +1,5 @@
 package com.forge.app.ui.goals
 
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -15,11 +13,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
@@ -34,7 +27,6 @@ import com.forge.app.domain.units.distanceUnitLabel
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.domain.units.weightInputValue
 import com.forge.app.ui.common.bounceClick
-import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.theme.LocalForgeSettings
 
 // ─── Metric metadata / formatting (shared by rows and the editor flow) ──────
@@ -87,11 +79,11 @@ internal fun customGoalValueLine(g: ExtendedGoalRepository.Progress, useKg: Bool
 // ─── The shared goal line ───────────────────────────────────────────────────
 
 /**
- * One goal as an open progress line — title and figure on one baseline, a bar sweeping in on
- * entrance underneath (staggered per [index]). The SAME component renders Home's GOALS teaser and
- * the Goals screen's rows, so the preview and the full list read as one surface. Achieved goals
- * tint title + figure gold with a leading check. [trailing] is the Goals screen's small right-edge
- * tag ("edit" / "reached"); Home passes none.
+ * One goal as an open progress line — title and figure on one baseline, a static bar underneath
+ * (the List archetype bans draw-in theatrics, §3; overview hosts animate at the section level).
+ * The SAME component renders Home's GOALS teaser and the Goals screen's rows, so the preview and
+ * the full list read as one surface. Achieved goals tint title + figure with the accent — the
+ * tint alone flags the state (§8: state is never rendered twice).
  */
 @Composable
 internal fun GoalProgressLine(
@@ -99,23 +91,11 @@ internal fun GoalProgressLine(
     valueLine: String,
     fraction: Float,
     achieved: Boolean,
-    index: Int,
+    @Suppress("UNUSED_PARAMETER") index: Int, // kept for call-site stability; the stagger it drove is gone
     onBg: Color, muted: Color, accent: Color, outline: Color,
-    trailing: String? = null,
     onClick: () -> Unit
 ) {
     val frac = fraction.coerceIn(0f, 1f)
-    var play by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) { play = true }
-    val w by animateFloatAsState(
-        targetValue = if (play) frac else 0f,
-        animationSpec = tween(
-            durationMillis = ForgeMotion.scaledDuration(ForgeMotion.DurationEmphasized),
-            delayMillis = ForgeMotion.scaledDuration(index * 90),
-            easing = ForgeMotion.Standard
-        ),
-        label = "goal-line"
-    )
     Column(Modifier.fillMaxWidth().bounceClick { onClick() }) {
         Row(Modifier.fillMaxWidth()) {
             Text(
@@ -126,20 +106,12 @@ internal fun GoalProgressLine(
             )
             Spacer(Modifier.width(12.dp))
             Text(
-                if (achieved) "✓ $valueLine" else valueLine,
+                valueLine,
                 style = MaterialTheme.typography.labelMedium,
                 color = if (achieved) accent else muted,
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.alignByBaseline()
             )
-            if (trailing != null) {
-                Spacer(Modifier.width(10.dp))
-                Text(
-                    trailing, style = MaterialTheme.typography.labelSmall,
-                    color = muted.copy(alpha = 0.7f),
-                    modifier = Modifier.alignByBaseline()
-                )
-            }
         }
         Spacer(Modifier.height(9.dp))
         Box(
@@ -147,7 +119,7 @@ internal fun GoalProgressLine(
                 .clip(RoundedCornerShape(50)).background(outline.copy(alpha = 0.35f))
         ) {
             Box(
-                Modifier.fillMaxWidth(w).fillMaxHeight()
+                Modifier.fillMaxWidth(frac).fillMaxHeight()
                     .clip(RoundedCornerShape(50)).background(accent)
             )
         }
@@ -171,7 +143,6 @@ internal fun LiftGoalRow(
         achieved = g.achieved,
         index = index,
         onBg = onBg, muted = muted, accent = accent, outline = outline,
-        trailing = if (g.achieved) "reached" else "edit",
         onClick = onClick
     )
 }
@@ -191,7 +162,6 @@ internal fun CustomGoalRow(
         achieved = g.achieved,
         index = index,
         onBg = onBg, muted = muted, accent = accent, outline = outline,
-        trailing = if (g.achieved) "reached" else "edit",
         onClick = onClick
     )
 }

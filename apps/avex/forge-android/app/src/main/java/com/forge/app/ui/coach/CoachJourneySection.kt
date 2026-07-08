@@ -117,6 +117,8 @@ private fun TrustRow(t: TypeTrust, c: CoachColors) {
  */
 @Composable
 private fun RecordWeekRow(week: CoachRepository.CoachHistoryEntry, now: Long, c: CoachColors) {
+    // §11: machine ids never render — an unparseable week id drops the row, never shows raw.
+    val weekLabel = coachWeekLabel(week.pass.weekId) ?: return
     val flagColor = when {
         week.pass.status == CoachRepository.STATUS_ERROR ||
             week.decisions.any { it.outcome == "failed" || it.status == "reverted" } -> c.error
@@ -128,14 +130,14 @@ private fun RecordWeekRow(week: CoachRepository.CoachHistoryEntry, now: Long, c:
     val callCount = week.decisions.size.takeIf { it > 0 }
         ?.let { "$it call${if (it == 1) "" else "s"}" }
 
-    Row(Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+    Row(Modifier.fillMaxWidth().padding(vertical = COACH_ROW_PAD)) {
         // The marker rides the first text line, not the row's centre, so multi-line weeks stay tidy.
         CoachFlagDot(flagColor, Modifier.padding(top = 6.dp))
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    coachWeekLabel(week.pass.weekId) ?: week.pass.weekId,
+                    weekLabel,
                     style = MaterialTheme.typography.bodyMedium,
                     color = c.onBg,
                     modifier = Modifier.weight(1f)

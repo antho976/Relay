@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -39,7 +38,6 @@ internal fun ImportDialog(
     Dialog(onDismissRequest = onDismiss) {
         val onBg = MaterialTheme.colorScheme.onBackground
         val muted = MaterialTheme.colorScheme.onSurfaceVariant
-        val outline = MaterialTheme.colorScheme.outline
         val bg = MaterialTheme.colorScheme.background
 
         val granted by viewModel.importFolderGranted.collectAsState()
@@ -62,7 +60,7 @@ internal fun ImportDialog(
             // ── Found files — the headline path ──────────────────────────────────
             if (!granted) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    PillChip("Find my exports", selected = false) { onGrantFolder() }
+                    SettingsOutlineAction("Find my exports") { onGrantFolder() }
                     Text(
                         "Point Avex at your Downloads folder once; it lists the exports it finds there.",
                         style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.7f), fontSize = 10.sp
@@ -88,8 +86,6 @@ internal fun ImportDialog(
                 }
             }
 
-            HorizontalDivider(color = outline.copy(alpha = 0.2f))
-
             // ── Fallbacks: pick a file, or share in from the other app ────────────
             Text(
                 "Choose a file",
@@ -102,7 +98,7 @@ internal fun ImportDialog(
             )
 
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp, Alignment.End)) {
-                Text("close", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.6f),
+                Text("close", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.65f),
                     modifier = Modifier.clickableLabeled("Close", onClick = onDismiss).padding(4.dp))
             }
         }

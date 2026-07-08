@@ -1,6 +1,7 @@
 package com.forge.app.ui.coach
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -239,7 +240,15 @@ private fun SignalRow(sig: RecoverySignal, c: CoachColors, onConnectHealth: (() 
     val connectable = !sig.active && onConnectHealth != null &&
         (sig.label == "Sleep" || sig.label.contains("heart", ignoreCase = true))
     Row(
-        Modifier.fillMaxWidth().padding(vertical = COACH_ROW_PAD),
+        Modifier
+            .fillMaxWidth()
+            .then(
+                // §8: the whole row is the tap target; the pill below is drawn, not clickable.
+                if (connectable) Modifier.clickableLabeled("Connect Health Connect for ${sig.label}") {
+                    onConnectHealth?.invoke()
+                } else Modifier
+            )
+            .padding(vertical = COACH_ROW_PAD),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
@@ -249,15 +258,15 @@ private fun SignalRow(sig: RecoverySignal, c: CoachColors, onConnectHealth: (() 
             modifier = Modifier.weight(1f)
         )
         if (connectable) {
-            // Inline (not CoachAction) so the link's padding stays at the §7 text-link vertical 2
-            // and doesn't inflate this row above its siblings — one row rhythm across the lens.
+            // §8: per-row do-it-now = right-aligned compact OUTLINED pill (a bare accent link
+            // is too dim against a muted accent), border only, onBg text, sentence case.
             Text(
-                "connect →",
+                "Connect",
                 style = MaterialTheme.typography.labelMedium,
-                color = c.accent,
+                color = c.onBg,
                 modifier = Modifier
-                    .clickableLabeled("Connect Health Connect for ${sig.label}") { onConnectHealth?.invoke() }
-                    .padding(vertical = 2.dp, horizontal = 2.dp)
+                    .border(1.dp, c.outline.copy(alpha = 0.35f), RoundedCornerShape(50))
+                    .padding(horizontal = 12.dp, vertical = 4.dp)
             )
         } else {
             Text(sig.detail, style = MaterialTheme.typography.labelSmall, color = c.muted)

@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -30,6 +29,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.forge.app.data.repo.ProgressPhoto
+import com.forge.app.ui.common.ForgePrimaryCapsule
 import com.forge.app.ui.common.bounceClick
 import java.io.File
 import java.text.SimpleDateFormat
@@ -71,7 +71,7 @@ internal fun CompareBar(
                 )
                 Spacer(Modifier.width(8.dp))
             }
-            Button(enabled = selectedCount == 2, onClick = onCompare) { Text("Compare") }
+            ForgePrimaryCapsule(label = "Compare", onClick = onCompare, enabled = selectedCount == 2)
         }
     }
 }

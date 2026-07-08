@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.time.LocalDate
@@ -43,19 +44,19 @@ class StatsViewModel @Inject constructor(
 ) : ViewModel() {
 
     /**
-     * The engine read is a whole-history snapshot fan-out — loaded ONCE per Stats open
-     * (the TrophiesViewModel pattern), never inside the reactive combine below, so it
-     * can't join the per-set hot path. Carries the insight observations too, so a single
-     * snapshot feeds the pulse, plateaus, ratios, AND insights (was a second snapshot run
-     * inside StatsRepository's combine on every emission).
+     * The engine read is a whole-history snapshot fan-out. Re-run it whenever the set of FINISHED
+     * sessions changes — a session finishes, or "Reset session data" / a delete wipes them — by
+     * keying off the finished-session COUNT, NOT the per-set reactive combine below, so it still
+     * can't join the per-set hot path (logging sets in an in-progress session leaves the count,
+     * and so this flow, untouched). A one-shot init load instead left the always-on balance ratios
+     * (push/pull, quad/ham) stale on the retained ViewModel after a reset — GYMAP-18. runCatching
+     * degrades a snapshot failure to null (no pulse/plateaus/insights) rather than crashing.
      */
-    private val engineFlow = MutableStateFlow<AdaptationRepository.EngineStatsRead?>(null)
-
-    init {
-        // Guard the whole-history snapshot fan-out: a failure here leaves the engine read null
-        // (no pulse/plateaus/insights) instead of an uncaught crash in viewModelScope.
-        viewModelScope.launch { engineFlow.value = runCatching { adaptationRepo.engineStatsRead() }.getOrNull() }
-    }
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private val engineFlow: StateFlow<AdaptationRepository.EngineStatsRead?> =
+        sessionDao.observeFinishedCount()
+            .mapLatest { runCatching { adaptationRepo.engineStatsRead() }.getOrNull() }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     /** Last Stats LENS the user settled on (by enum NAME), persisted so reopening Stats lands there
      *  (reuses the old sub-tab pref; retired tab names simply fall back to the default). Maps an

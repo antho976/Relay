@@ -1,123 +1,68 @@
-@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 package com.forge.app.ui.onboarding
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import com.forge.app.ui.common.EditorialHairline
-import com.forge.app.ui.common.ForgeSwitch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import com.forge.app.domain.units.fromDisplayWeight
 import com.forge.app.domain.units.toDisplayWeight
-import com.forge.app.program.Equipment
-import com.forge.app.program.EquipmentPreset
-import com.forge.app.program.ExerciseLibrary
-import com.forge.app.program.GeneratedDay
-import com.forge.app.program.ProblemArea
-import com.forge.app.program.equipmentPresets
 import kotlin.math.roundToInt
 
-/** Goal options with a one-line explanation of what each one changes (it only reshapes rep ranges). */
+/**
+ * Steps 0–5: who you are, how you measure, and how you want to train. One decision per screen;
+ * each page is `eyebrow → serif question → caption → content` (OnboardingPrimitives).
+ * Steps 6–11 (gym, tuning, preview) live in OnboardingGymSteps.kt.
+ */
+
+/** Goal options: key, label, what it changes, and the mono rep-range meta. */
 private val GOAL_DETAILS = listOf(
-    Triple("build_muscle", "Build muscle", "Moderate reps, around 8 to 12. Balanced for size and the default pick."),
-    Triple("get_stronger", "Get stronger", "Heavier, lower reps, around 4 to 6 on the big lifts. Strength first."),
-    Triple("lose_weight", "Lose weight", "Higher reps, around 12 to 20, with more conditioning."),
-    Triple("general_fitness", "General fitness", "Balanced moderate reps for all-round training.")
+    listOf("build_muscle", "Build muscle", "Balanced for size. The default pick.", "8-12 reps"),
+    listOf("get_stronger", "Get stronger", "Heavier work on the big lifts.", "4-6 reps"),
+    listOf("lose_weight", "Lose weight", "Higher reps with more conditioning.", "12-20 reps"),
+    listOf("general_fitness", "General fitness", "Balanced, all-round training.", "8-15 reps")
 )
 
-/**
- * Experience in plain language, mapped to the generator's level keys. The bands are non-overlapping
- * so the choice is unambiguous (the old "0–6 months" / "a few months in" pair overlapped).
- */
+/** Experience bands — non-overlapping, mapped to the generator's level keys. */
 private val EXPERIENCE_DETAILS = listOf(
-    Triple("beginner", "New to lifting", "Under 6 months. A bit less volume, and no advanced lifts yet."),
-    Triple("intermediate", "Got the basics down", "About 6 months to 2 years. Standard volume."),
-    Triple("advanced", "Experienced", "2+ years of consistent training. A touch more volume.")
+    listOf("beginner", "New to lifting", "A bit less volume, no advanced lifts yet.", "Under 6 mo"),
+    listOf("intermediate", "Got the basics down", "Standard volume.", "6 mo to 2 yr"),
+    listOf("advanced", "Experienced", "A touch more volume.", "2+ yr")
 )
 
-/**
- * Sex — only scales the bodyweight-relative strength standards on the Stats tab. Fully optional, so
- * an explicit "Prefer not to say" (stored as "") lets the user opt out instead of just skipping.
- */
-private val SEX_DETAILS = listOf(
-    Triple("male", "Male", null),
-    Triple("female", "Female", null),
-    Triple("", "Prefer not to say", null)
-)
-
-/** Plan source — generated, self-built in the editor, or no plan at all (freestyle logging). */
+/** Plan source — generated, self-built, or no plan at all. Each card carries its live vignette. */
 private val PLAN_MODE_DETAILS = listOf(
-    Triple("generated", "Build me a plan", "Avex picks your exercises from your gear and goal. Recommended."),
-    Triple("custom", "I'll make my own", "Set your goal, then build your own plan from scratch."),
-    Triple("freestyle", "Go with the flow", "No fixed plan. Just log what you did at the gym, whenever you want.")
+    Triple(PLAN_GENERATED, "Build me a plan", "Avex picks your exercises from your gear and goal."),
+    Triple(PLAN_CUSTOM, "I'll make my own", "Set your goal, then build your plan from scratch."),
+    Triple(PLAN_FREESTYLE, "Go with the flow", "No fixed plan. Log what you did, whenever.")
 )
 
 @Composable
-internal fun StepPlanMode(selected: String, onSelect: (String) -> Unit) {
+internal fun StepWelcome(name: String, onNameChange: (String) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Headline("How do you want to train?")
-        Caption("You can change this later in Settings. Nothing here is permanent.")
-        PLAN_MODE_DETAILS.forEach { (key, label, desc) -> SelectableRow(label, selected == key, desc) { onSelect(key) } }
-    }
-}
-
-/** Final step of the generated path: the live generated week with a re-roll. The exact week shown is
- *  what gets saved (edits live in the Program Editor, not here). */
-@Composable
-internal fun StepPreview(days: List<GeneratedDay>, onRegenerate: () -> Unit) {
-    Column(
-        modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Headline("Here's your week")
-        Caption("Built from your answers. Tap re-roll for a different set of moves, or start training. You can fine-tune it anytime in the editor.")
-        OnboardingChip("↻ Re-roll", selected = false, onClick = onRegenerate)
-        Spacer(Modifier.height(4.dp))
-        days.forEach { day ->
-            val cs = MaterialTheme.colorScheme
-            EditorialHairline(cs.outline)
-            Spacer(Modifier.height(10.dp))
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("•", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.secondary)
             Text(
-                "${day.name} · ${day.exercises.size} exercises",
-                style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold,
-                color = cs.onSurface
+                "Avex",
+                style = MaterialTheme.typography.bodyLarge,
+                fontStyle = FontStyle.Italic,
+                color = MaterialTheme.colorScheme.onBackground
             )
-            val names = day.exercises.joinToString(" · ") { ex ->
-                ExerciseLibrary.byId(ex.libId)?.name ?: ex.libId
-            }.ifBlank { "Cardio" }
-            Text(names, style = MaterialTheme.typography.bodySmall,
-                color = cs.onSurfaceVariant)
-            Spacer(Modifier.height(6.dp))
         }
-    }
-}
-
-@Composable
-internal fun StepName(name: String, onNameChange: (String) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Text("FORGE", style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
-        Headline("What do you go by?")
-        Caption("Optional. Leave it blank and tap Next to skip. Used only for the greeting.")
+        Spacer(Modifier.height(8.dp))
+        StepTitle("What do you go by?")
+        StepCaption("Optional, used only for the greeting.")
         OutlinedTextField(
             value = name, onValueChange = onNameChange,
             modifier = Modifier.fillMaxWidth(),
@@ -125,89 +70,53 @@ internal fun StepName(name: String, onNameChange: (String) -> Unit) {
             keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
             singleLine = true
         )
+        Spacer(Modifier.height(8.dp))
+        BrandAside("Everything stays on your phone. No account, no sign-up, no internet access.")
     }
 }
 
 @Composable
-internal fun StepUnits(useKg: Boolean, onToggle: (Boolean) -> Unit) {
+internal fun StepUnits(
+    useKg: Boolean,
+    onWeightToggle: (Boolean) -> Unit,
+    useMiles: Boolean,
+    onDistanceToggle: (Boolean) -> Unit
+) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Headline("Weight units")
-        Caption("All weights in the app use this unit. You can change it later in Settings.")
-        Row(
-            modifier = Modifier.fillMaxWidth()
-                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
-                .padding(horizontal = 14.dp, vertical = 12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(if (useKg) "Kilograms (kg)" else "Pounds (lb)",
-                style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.onSurface)
-            ForgeSwitch(checked = useKg, onCheckedChange = onToggle)
-        }
+        StepEyebrow("About you")
+        StepTitle("How do you measure?")
+        StepCaption("You can change both anytime in Settings.")
+        Spacer(Modifier.height(4.dp))
+        StepSectionLabel("Weight")
+        UnitSegment("Pounds · lb", "Kilograms · kg", secondSelected = useKg, onSelect = onWeightToggle)
+        Spacer(Modifier.height(8.dp))
+        StepSectionLabel("Distance")
+        UnitSegment("Kilometers · km", "Miles · mi", secondSelected = useMiles, onSelect = onDistanceToggle)
     }
 }
 
 @Composable
-internal fun StepDistanceUnits(useMiles: Boolean, onToggle: (Boolean) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Headline("Distance units")
-        Caption("For cardio distance and pace. Starts matched to your weight unit — flip it if you'd rather not. Change it anytime in Settings.")
-        Row(
-            modifier = Modifier.fillMaxWidth()
-                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), RoundedCornerShape(12.dp))
-                .padding(horizontal = 14.dp, vertical = 12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(if (useMiles) "Miles (mi)" else "Kilometers (km)",
-                style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.onSurface)
-            ForgeSwitch(checked = useMiles, onCheckedChange = onToggle)
-        }
-    }
-}
-
-@Composable
-internal fun StepGoal(selected: String, onSelect: (String) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Headline("What's your main goal?")
-        Caption("Same exercises, different loading. This only changes your rep ranges. Switch it anytime.")
-        GOAL_DETAILS.forEach { (key, label, desc) -> SelectableRow(label, selected == key, desc) { onSelect(key) } }
-    }
-}
-
-@Composable
-internal fun StepExperience(selected: String, onSelect: (String) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Headline("How long have you been training?")
-        Caption("Sets your training volume and which movements you're given.")
-        EXPERIENCE_DETAILS.forEach { (key, label, desc) -> SelectableRow(label, selected == key, desc) { onSelect(key) } }
-    }
-}
-
-@Composable
-internal fun StepSex(selected: String?, onSelect: (String) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Headline("Sex")
-        Caption("Only used to scale the bodyweight-relative strength standards on the Stats tab. Optional.")
-        SEX_DETAILS.forEach { (key, label, desc) -> SelectableRow(label, selected == key, desc) { onSelect(key) } }
-    }
-}
-
-@Composable
-internal fun StepBodyweight(input: String, useKg: Boolean, onInputChange: (String) -> Unit) {
+internal fun StepBody(
+    bodyweightInput: String,
+    useKg: Boolean,
+    onInputChange: (String) -> Unit,
+    sex: String?,
+    onSexSelect: (String) -> Unit
+) {
     val unitLabel = if (useKg) "kg" else "lb"
-    // A typed value that's blank-or-valid lets "Next" proceed; anything outside the plausible range
-    // would otherwise just disable Next with no hint, leaving the user stuck. Show why instead.
-    val invalid = input.isNotBlank() && parseSaneBodyweightLb(input, useKg) == null
+    // A typed value that's blank-or-valid lets "Continue" proceed; anything outside the plausible
+    // range would otherwise just disable it with no hint. Show why instead.
+    val invalid = bodyweightInput.isNotBlank() && parseSaneBodyweightLb(bodyweightInput, useKg) == null
     val minDisp = toDisplayWeight(MIN_BODYWEIGHT_LB, useKg).roundToInt()
     val maxDisp = toDisplayWeight(MAX_BODYWEIGHT_LB, useKg).roundToInt()
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Headline("Starting bodyweight")
-        Caption("Optional. Used for relative strength comparisons.")
+        StepEyebrow("About you")
+        StepTitle("About your body")
+        StepCaption("Both optional. They scale the strength standards on Stats.")
+        Spacer(Modifier.height(4.dp))
+        StepSectionLabel("Bodyweight")
         OutlinedTextField(
-            value = input, onValueChange = onInputChange,
+            value = bodyweightInput, onValueChange = onInputChange,
             modifier = Modifier.fillMaxWidth(),
             placeholder = { Text("e.g. 170") },
             suffix = { Text(unitLabel) },
@@ -218,84 +127,72 @@ internal fun StepBodyweight(input: String, useKg: Boolean, onInputChange: (Strin
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
             singleLine = true
         )
+        Spacer(Modifier.height(8.dp))
+        StepSectionLabel("Sex")
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ChoiceChip("Male", sex == "male", { onSexSelect("male") }, Modifier.weight(1f))
+            ChoiceChip("Female", sex == "female", { onSexSelect("female") }, Modifier.weight(1f))
+        }
+        ChoiceChip("Prefer not to say", sex == "", { onSexSelect("") }, Modifier.fillMaxWidth())
     }
 }
 
 @Composable
-internal fun StepDays(days: Int, onChange: (Int) -> Unit) {
+internal fun StepPlanMode(selected: String, onSelect: (String) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Headline("Days per week")
-        Caption("Your split adapts to this. 3 = Push/Pull/Legs, 4 = Upper/Lower, 7 adds an arms day. It's also your weekly target on the home screen.")
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            (1..7).forEach { n -> OnboardingChip("$n", days == n) { onChange(n) } }
+        StepEyebrow("Your plan")
+        StepTitle("How do you want to train?")
+        StepCaption("Nothing here is permanent. Change it later in Settings.")
+        Spacer(Modifier.height(2.dp))
+        PLAN_MODE_DETAILS.forEach { (key, label, desc) ->
+            OptionCard(
+                label = label,
+                description = desc,
+                selected = selected == key,
+                // Maturity tags: custom/freestyle ship earlier-stage than the generated path.
+                meta = when (key) {
+                    PLAN_GENERATED -> "Recommended"
+                    PLAN_CUSTOM -> "Beta"
+                    else -> "Alpha"
+                },
+                onClick = { onSelect(key) },
+                topContent = { PlanModeMedia(key) }
+            )
         }
     }
 }
 
 @Composable
-internal fun StepEquipment(
-    selected: Set<String>,
-    frozenIds: Set<String>?,
-    onToggle: (String) -> Unit,
-    onSelectPreset: (EquipmentPreset) -> Unit
-) {
+internal fun StepGoal(selected: String, onSelect: (String) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Headline("Your equipment")
-        Caption("Pick a preset, then fine-tune. Generated plans only use what's on.")
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            equipmentPresets.forEach { preset ->
-                val isSel = selected == preset.equipment && frozenIds == preset.frozenIds
-                OnboardingChip(preset.label, isSel) { onSelectPreset(preset) }
-            }
-        }
-        Spacer(Modifier.height(4.dp))
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Equipment.entries.forEach { e -> OnboardingChip(e.display, e.name in selected) { onToggle(e.name) } }
+        StepEyebrow("Goals")
+        StepTitle("What's your main goal?")
+        StepCaption("Same exercises, different loading. Switch it anytime.")
+        Spacer(Modifier.height(2.dp))
+        GOAL_DETAILS.forEach { (key, label, desc, meta) ->
+            OptionCard(
+                label = label, description = desc, meta = meta,
+                icon = OnboardingIcons.forGoal(key),
+                selected = selected == key,
+                onClick = { onSelect(key) }
+            )
         }
     }
 }
 
 @Composable
-internal fun StepPlateWeight(plateWeightLb: Double, useKg: Boolean, onSet: (Double) -> Unit) {
-    // Plate denominations in the user's OWN unit — a kg lifter shouldn't have to translate lb plates
-    // in their head. The value is always stored in lb (onSet); kg chips convert on the way in via the
-    // shared converter so the factor can't drift.
-    val plates = if (useKg) listOf(1.25, 2.5, 5.0, 10.0, 15.0, 20.0, 25.0) else listOf(5.0, 10.0, 15.0, 20.0, 25.0, 45.0)
-    val unit = if (useKg) "kg" else "lb"
+internal fun StepExperience(selected: String, onSelect: (String) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Headline("Weight per plate")
-        Caption("Only matters if your machine is loaded by counting plates (not a numbered stack). This is what one of those plates weighs. Not sure? Just leave the default. You can change it later.")
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            plates.forEach { value ->
-                val lb = fromDisplayWeight(value, useKg)
-                val label = if (value % 1.0 == 0.0) "${value.toInt()} $unit" else "$value $unit"
-                OnboardingChip(label, kotlin.math.abs(plateWeightLb - lb) < 0.05) { onSet(lb) }
-            }
-        }
-    }
-}
-
-@Composable
-internal fun StepProblemAreas(selected: Set<String>, onToggle: (String) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Headline("Any problem areas?")
-        Caption("Got a sore joint, an old injury, or something still healing? Flag it and the generator builds your plan around it, easing off movements that stress that area. Optional.")
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            ProblemArea.entries.forEach { a -> OnboardingChip(a.displayName, a.code in selected) { onToggle(a.code) } }
-        }
-    }
-}
-
-@Composable
-internal fun StepCadence(cadence: String, everyN: Int, onSet: (String, Int) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Headline("Auto-refresh your plan?")
-        Caption("Re-roll your exercises automatically after this many workouts. Same split, fresh moves. Change it anytime.")
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            OnboardingChip("Never", cadence == "never") { onSet("never", everyN) }
-            listOf(4, 8, 12).forEach { n ->
-                OnboardingChip("Every $n", cadence == "every_n" && everyN == n) { onSet("every_n", n) }
-            }
+        StepEyebrow("Goals")
+        StepTitle("How long have you been training?")
+        StepCaption("Sets your volume and which movements you're given.")
+        Spacer(Modifier.height(2.dp))
+        EXPERIENCE_DETAILS.forEach { (key, label, desc, meta) ->
+            OptionCard(
+                label = label, description = desc, meta = meta,
+                selected = selected == key,
+                onClick = { onSelect(key) }
+            )
         }
     }
 }

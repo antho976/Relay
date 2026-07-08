@@ -202,7 +202,7 @@ internal fun FolderGrid(
 
     if (folders.isEmpty()) {
         Text(
-            "No albums yet. Make one to group photos (e.g. Front, Back, a cut) — your photos stay in the main grid either way.",
+            "No albums yet. Albums group photos without moving them from the main grid.",
             style = MaterialTheme.typography.bodyMedium, color = muted
         )
         return
@@ -212,8 +212,8 @@ internal fun FolderGrid(
             row.forEach { folder ->
                 Column(Modifier.weight(1f).bounceClick { onOpen(folder.name) }) {
                     Box(
-                        Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(10.dp))
-                            .border(1.dp, outline.copy(alpha = 0.25f), RoundedCornerShape(10.dp))
+                        Modifier.fillMaxWidth().aspectRatio(1f).clip(RoundedCornerShape(12.dp))
+                            .border(1.dp, outline.copy(alpha = 0.25f), RoundedCornerShape(12.dp))
                     ) {
                         folder.cover?.let { ProgressPhotoImage(fileFor(it), Modifier.fillMaxSize()) }
                     }
@@ -258,7 +258,7 @@ internal fun AlbumPhotos(
     }
 
     if (photos.isEmpty()) {
-        Text("No photos in this album yet — tap + to add one.", style = MaterialTheme.typography.bodyMedium, color = muted)
+        Text("No photos in this album yet. Tap + to add one.", style = MaterialTheme.typography.bodyMedium, color = muted)
         return
     }
     MonthGroupedGrid(photos, columns, zone, fileFor, muted, accent, onView)
@@ -270,7 +270,7 @@ internal fun GalleryChip(label: String, selected: Boolean, onClick: () -> Unit) 
     val accent = MaterialTheme.colorScheme.primary
     val outline = MaterialTheme.colorScheme.outline
     val bg = if (selected) accent.copy(alpha = 0.15f) else Color.Transparent
-    val border = if (selected) accent else outline.copy(alpha = 0.4f)
+    val border = if (selected) accent else outline.copy(alpha = 0.35f)
     Text(
         label,
         style = MaterialTheme.typography.labelMedium,

@@ -172,8 +172,8 @@ internal fun GalleryStrip(
         Column(Modifier.padding(horizontal = 20.dp)) {
             Box(
                 Modifier.width(StripCellWidth).height(StripCellHeight)
-                    .clip(RoundedCornerShape(14.dp))
-                    .border(1.dp, outline.copy(alpha = 0.35f), RoundedCornerShape(14.dp))
+                    .clip(RoundedCornerShape(16.dp))
+                    .border(1.dp, outline.copy(alpha = 0.35f), RoundedCornerShape(16.dp))
                     .bounceClick { onAdd() },
                 contentAlignment = Alignment.Center
             ) {
@@ -211,7 +211,7 @@ internal fun GalleryStrip(
 private fun StripPhotoCell(photo: ProgressPhoto, file: File, onView: (ProgressPhoto) -> Unit) {
     Box(
         Modifier.width(StripCellWidth).height(StripCellHeight)
-            .clip(RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(16.dp))
             .bounceClick { onView(photo) }
     ) {
         ProgressPhotoImage(file, Modifier.fillMaxSize(), reqPx = 480)
@@ -236,8 +236,8 @@ private fun ViewAllCell(count: Int, onViewAll: () -> Unit, onBg: Color, muted: C
     // solid slab beside the photos.
     Box(
         Modifier.width(StripCellWidth).height(StripCellHeight)
-            .clip(RoundedCornerShape(14.dp))
-            .border(1.dp, outline.copy(alpha = 0.25f), RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(16.dp))
+            .border(1.dp, outline.copy(alpha = 0.25f), RoundedCornerShape(16.dp))
             .bounceClick { onViewAll() },
         contentAlignment = Alignment.Center
     ) {
@@ -256,7 +256,7 @@ private fun ViewAllCell(count: Int, onViewAll: () -> Unit, onBg: Color, muted: C
 @Composable
 private fun PrivateNote(muted: Color) {
     Text(
-        "Private — these never leave your phone.",
+        "Private · these never leave your phone.",
         style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic, fontSize = 10.sp
     )
 }
@@ -270,11 +270,11 @@ internal fun OnThisDaySection(memory: OnThisDayMemory, onBg: Color, muted: Color
     Row(Modifier.height(IntrinsicSize.Min)) {
         Box(
             Modifier.width(2.dp).fillMaxHeight()
-                .clip(RoundedCornerShape(50)).background(accent.copy(alpha = 0.7f))
+                .clip(RoundedCornerShape(50)).background(accent.copy(alpha = 0.6f))
         )
         Spacer(Modifier.width(12.dp))
         Text(
-            "$ago you trained ${memory.dayName} — ${formatVolume(memory.totalVolumeLb, useKg)} ${unitLabel(useKg)}" +
+            "$ago you trained ${memory.dayName} · ${formatVolume(memory.totalVolumeLb, useKg)} ${unitLabel(useKg)}" +
                 if (memory.prCount > 0) " · ${memory.prCount} PR${if (memory.prCount == 1) "" else "s"}" else "",
             style = MaterialTheme.typography.bodyMedium, color = onBg, fontStyle = FontStyle.Italic
         )

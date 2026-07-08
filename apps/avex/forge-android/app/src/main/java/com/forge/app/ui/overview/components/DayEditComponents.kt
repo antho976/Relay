@@ -157,7 +157,7 @@ internal fun AddWarmupRow(onAdd: (String) -> Unit, muted: Color, outline: Color,
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
             keyboardActions = KeyboardActions(onDone = { if (text.isNotBlank()) { onAdd(text); text = "" } }),
             modifier = Modifier.weight(1f)
-                .border(BorderStroke(0.5.dp, outline.copy(alpha = 0.3f)), RoundedCornerShape(4.dp))
+                .border(BorderStroke(0.5.dp, outline.copy(alpha = 0.35f)), RoundedCornerShape(4.dp))
                 .padding(horizontal = 10.dp, vertical = 8.dp),
             decorationBox = { inner ->
                 if (text.isEmpty()) Text("Add warmup item…", style = MaterialTheme.typography.bodySmall, color = muted.copy(alpha = 0.35f))
@@ -196,7 +196,7 @@ internal fun AddExerciseRow(onAdd: (String, MuscleGroup) -> Unit, muted: Color, 
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
             keyboardActions = KeyboardActions(onDone = { submit() }),
             modifier = Modifier.weight(1f)
-                .border(BorderStroke(0.5.dp, outline.copy(alpha = 0.3f)), RoundedCornerShape(4.dp))
+                .border(BorderStroke(0.5.dp, outline.copy(alpha = 0.35f)), RoundedCornerShape(4.dp))
                 .padding(horizontal = 10.dp, vertical = 8.dp),
             decorationBox = { inner ->
                 if (text.isEmpty()) Text("Add exercise…", style = MaterialTheme.typography.bodySmall, color = muted.copy(alpha = 0.35f))
@@ -209,7 +209,7 @@ internal fun AddExerciseRow(onAdd: (String, MuscleGroup) -> Unit, muted: Color, 
             color = muted,
             fontSize = 10.sp,
             modifier = Modifier
-                .border(BorderStroke(0.5.dp, outline.copy(alpha = 0.3f)), RoundedCornerShape(4.dp))
+                .border(BorderStroke(0.5.dp, outline.copy(alpha = 0.35f)), RoundedCornerShape(4.dp))
                 .clickableLabeled("Change muscle group") { muscleIdx = (muscleIdx + 1) % muscles.size }
                 .padding(horizontal = 8.dp, vertical = 8.dp)
         )

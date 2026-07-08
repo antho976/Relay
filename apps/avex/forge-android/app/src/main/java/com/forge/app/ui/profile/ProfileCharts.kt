@@ -76,7 +76,7 @@ internal fun ProfileSparkline(
                 }
                 drawPath(
                     area,
-                    Brush.verticalGradient(listOf(color.copy(alpha = 0.22f), Color.Transparent))
+                    Brush.verticalGradient(listOf(color.copy(alpha = 0.15f), Color.Transparent))
                 )
             }
             drawPath(line, color, style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round))

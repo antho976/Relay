@@ -1,15 +1,12 @@
 package com.forge.app.ui.gym.history
 
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -78,9 +75,15 @@ internal fun SessionRow(
                 // Day name — body text directly on page
                 Text(dayName, style = MaterialTheme.typography.bodyMedium, color = cs.onBackground)
                 if (tags.isNotEmpty()) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        tags.take(4).forEach { TagPill(it, muted, outline) }
-                    }
+                    // Passive tag metadata renders bare (§1: no box without interactivity) — mono,
+                    // muted, joined with the standard " · " meta separator.
+                    Text(
+                        tags.take(4).joinToString(" · ") { "#$it" },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = muted,
+                        fontSize = 9.sp,
+                        letterSpacing = 0.5.sp
+                    )
                 }
             }
             // Right-aligned figures: volume primary, duration secondary
@@ -185,28 +188,6 @@ internal fun CardioHistoryRow(
             }
         }
         EditorialHairline(outline = outline)
-    }
-}
-
-/**
- * Tag pill — a small bordered label (not a filled chip) that lives inside a row. Kept bordered
- * because it's display-only metadata that reads as a label, not an interactive control. Consistent
- * with the MiniChip in the Overview RECENT rows.
- */
-@Composable
-private fun TagPill(text: String, muted: Color, outline: Color) {
-    Box(
-        modifier = Modifier
-            .border(0.5.dp, outline.copy(alpha = 0.4f), RoundedCornerShape(3.dp))
-            .padding(horizontal = 6.dp, vertical = 2.dp)
-    ) {
-        Text(
-            "#$text",
-            style = MaterialTheme.typography.labelSmall,
-            color = muted.copy(alpha = 0.8f),
-            fontSize = 9.sp,
-            letterSpacing = 0.5.sp
-        )
     }
 }
 

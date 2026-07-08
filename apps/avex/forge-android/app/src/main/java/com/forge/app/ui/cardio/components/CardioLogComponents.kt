@@ -2,7 +2,6 @@ package com.forge.app.ui.cardio.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,8 +15,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -34,29 +31,34 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.domain.cardio.CardioType
+import com.forge.app.ui.common.bounceClick
+import com.forge.app.ui.common.clickableLabeled
 
 /**
- * The compact sheet header — a small date label that doubles as the date picker trigger (so there's
- * no separate "When?" section). Tapping anywhere on it opens the picker.
+ * The compact sheet header — the entry's date as a small outlined capsule that IS the date-picker
+ * trigger (interactive, so it earns its border; no separate "When?" section, no "· change" tag).
  */
 @Composable
 internal fun CardioLogHeroItem(dateHeader: String, muted: Color, onBg: Color, outline: Color, onPickDate: () -> Unit) {
-    Column(
-        modifier = Modifier
-            .clickable(onClick = onPickDate)
-            .padding(horizontal = 24.dp)
-            .padding(top = 8.dp, bottom = 4.dp)
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    Row(Modifier.padding(horizontal = 24.dp).padding(top = 8.dp, bottom = 4.dp)) {
+        Row(
+            modifier = Modifier
+                .clip(RoundedCornerShape(50))
+                .border(1.dp, outline.copy(alpha = 0.35f), RoundedCornerShape(50))
+                .bounceClick(onClick = onPickDate)
+                .padding(horizontal = 14.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
             Text(dateHeader, style = MaterialTheme.typography.labelMedium, color = onBg, letterSpacing = 1.sp)
-            Text("· change", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp)
+            Text("▾", style = MaterialTheme.typography.labelSmall, color = muted)
         }
-        Spacer(Modifier.height(12.dp))
-        HorizontalDivider(color = outline.copy(alpha = 0.25f))
     }
 }
 
@@ -77,9 +79,9 @@ internal fun ActivityDropdown(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(10.dp))
-                .border(1.dp, outline.copy(alpha = 0.4f), RoundedCornerShape(10.dp))
-                .clickable { open = true }
+                .clip(RoundedCornerShape(12.dp))
+                .border(1.dp, outline.copy(alpha = 0.35f), RoundedCornerShape(12.dp))
+                .bounceClick { open = true }
                 .padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
@@ -88,7 +90,12 @@ internal fun ActivityDropdown(
                 Icon(selected.icon, contentDescription = null, tint = onBg, modifier = Modifier.size(18.dp))
                 Text(selected.displayName, style = MaterialTheme.typography.bodyLarge, color = onBg)
             }
-            Icon(Icons.Filled.ArrowDropDown, contentDescription = "Choose activity", tint = muted)
+            Text(
+                "▾",
+                style = MaterialTheme.typography.labelSmall,
+                color = muted,
+                modifier = Modifier.semantics { contentDescription = "Choose activity" }
+            )
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             CardioType.entries.forEach { t ->
@@ -107,8 +114,8 @@ internal fun ActivityDropdown(
 }
 
 /**
- * A quiet, compact form group — a small uppercase label (vs the old big italic header) over its
- * content. Decluttered so the log sheet reads as a short form, not a stack of tall titled cards.
+ * A quiet, compact form group — a small uppercase label over its content, separated from its
+ * neighbours by air alone (form pages carry no dividers, §3).
  */
 @Composable
 internal fun FormSection(
@@ -120,23 +127,21 @@ internal fun FormSection(
     content: @Composable () -> Unit
 ) {
     Column(Modifier.padding(horizontal = 24.dp)) {
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(18.dp))
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(label.uppercase(), style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp, letterSpacing = 1.sp)
             if (optional) {
-                Text("OPTIONAL", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.4f), fontSize = 8.sp, letterSpacing = 1.sp)
+                Text("OPTIONAL", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.65f), fontSize = 8.sp, letterSpacing = 1.sp)
             }
         }
         Spacer(Modifier.height(8.dp))
         content()
-        Spacer(Modifier.height(10.dp))
-        HorizontalDivider(color = outline.copy(alpha = 0.15f))
     }
 }
 
 /**
  * A clickable section header that expands/collapses its body — used to tuck the optional
- * effort / HR-zone / interval inputs out of the default (short) form. Chevron rotates with state.
+ * effort / HR-zone / interval inputs out of the default (short) form.
  */
 @Composable
 internal fun ExpanderHeader(
@@ -148,9 +153,10 @@ internal fun ExpanderHeader(
     onToggle: () -> Unit
 ) {
     Column(Modifier.padding(horizontal = 24.dp)) {
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(18.dp))
         Row(
-            modifier = Modifier.fillMaxWidth().clickable(onClick = onToggle),
+            modifier = Modifier.fillMaxWidth()
+                .clickableLabeled(if (expanded) "Hide extra fields" else "Show extra fields", onClick = onToggle),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
@@ -158,7 +164,6 @@ internal fun ExpanderHeader(
             Text(if (expanded) "−" else "+", style = MaterialTheme.typography.bodyLarge, color = onBg)
         }
         Spacer(Modifier.height(if (expanded) 10.dp else 14.dp))
-        if (!expanded) HorizontalDivider(color = outline.copy(alpha = 0.15f))
     }
 }
 
@@ -206,7 +211,7 @@ internal fun CompactNumberField(
             Text(unit, style = MaterialTheme.typography.labelSmall, color = muted, modifier = Modifier.padding(bottom = 3.dp))
         }
         Spacer(Modifier.height(4.dp))
-        HorizontalDivider(thickness = 1.dp, color = outline.copy(alpha = 0.45f))
+        HorizontalDivider(thickness = 1.dp, color = outline.copy(alpha = 0.35f))
     }
 }
 
@@ -246,7 +251,7 @@ internal fun NumberInputRow(
             Text(unit, style = MaterialTheme.typography.bodyMedium, color = muted)
         }
         Spacer(Modifier.height(4.dp))
-        HorizontalDivider(thickness = 1.dp, color = outline.copy(alpha = 0.45f), modifier = Modifier.width(72.dp))
+        HorizontalDivider(thickness = 1.dp, color = outline.copy(alpha = 0.35f), modifier = Modifier.width(72.dp))
     }
 }
 
@@ -260,14 +265,16 @@ internal fun PillChip(
     muted: Color,
     outline: Color
 ) {
-    val bgColor = if (selected) onBg else Color.Transparent
-    val textColor = if (selected) bg else muted.copy(alpha = 0.65f)
-    val borderColor = if (selected) onBg else outline.copy(alpha = 0.4f)
+    // Selected = the §5 accent ladder (accent border over a primaryContainer wash), never a white fill.
+    val accent = MaterialTheme.colorScheme.primary
+    val bgColor = if (selected) accent.copy(alpha = 0.15f) else Color.Transparent
+    val textColor = if (selected) onBg else muted.copy(alpha = 0.65f)
+    val borderColor = if (selected) accent else outline.copy(alpha = 0.35f)
     Box(
         modifier = Modifier
             .border(1.dp, borderColor, RoundedCornerShape(4.dp))
             .background(bgColor, RoundedCornerShape(4.dp))
-            .clickable(onClick = onClick)
+            .bounceClick(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 7.dp),
         contentAlignment = Alignment.Center
     ) {

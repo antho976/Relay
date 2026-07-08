@@ -150,12 +150,13 @@ fun MirrorTestScreen(
     BackHandler(enabled = compareMode || showAlbums) { goBack() }
 
     val openName = openAlbum
+    // Serif titles take no terminal period (§11).
     val title = when {
-        compareMode -> "Compare."
-        !showAlbums -> "Gallery."
-        openName == null -> "Albums."
-        openName.isBlank() -> "Unsorted."
-        else -> "$openName."
+        compareMode -> "Compare"
+        !showAlbums -> "Gallery"
+        openName == null -> "Albums"
+        openName.isBlank() -> "Unsorted"
+        else -> openName
     }
     val showCompareToggle = !showAlbums && !compareMode && state.photos.size >= 2
     val showAdd = !compareMode && (!showAlbums || openName != null)
@@ -208,7 +209,7 @@ fun MirrorTestScreen(
             Modifier.fillMaxSize().padding(inner).verticalScroll(rememberScrollState()).padding(horizontal = 24.dp)
         ) {
             Text(
-                "Private — these never leave your phone.",
+                "Private · these never leave your phone.",
                 style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic, fontSize = 11.sp
             )
             Spacer(Modifier.height(16.dp))
@@ -360,7 +361,7 @@ private fun PhotosLevel(
 
     if (allPhotos.isEmpty()) {
         Spacer(Modifier.height(12.dp))
-        Text("No photos yet — tap + to add your first.", style = MaterialTheme.typography.bodyMedium, color = muted)
+        Text("No photos yet. Tap + to add your first.", style = MaterialTheme.typography.bodyMedium, color = muted)
         return
     }
 

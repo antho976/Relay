@@ -602,6 +602,15 @@ class SettingsRepository @Inject constructor(
             prefs[PreferenceKeys.PINNED_EXERCISES] = if (on) cur + libId else cur - libId
         }
 
+    // ─── Onboarding draft (resume after a full app kill) ─────────────────────
+
+    /** One-shot read of the saved mid-onboarding draft JSON, or null when there is none. */
+    suspend fun onboardingDraft(): String? =
+        context.forgePreferences.data.firstOrNull()?.get(PreferenceKeys.ONBOARDING_DRAFT)
+
+    suspend fun saveOnboardingDraft(json: String) =
+        context.forgePreferences.edit { it[PreferenceKeys.ONBOARDING_DRAFT] = json }
+
     /** [useMilesChoice] is null when the user left the distance step untouched — in that case
      *  USE_MILES is deliberately NOT persisted, so [useMiles] keeps deriving from the weight unit. */
     suspend fun completeOnboarding(
@@ -618,6 +627,8 @@ class SettingsRepository @Inject constructor(
             prefs[PreferenceKeys.USE_KG] = useKgChoice
             useMilesChoice?.let { prefs[PreferenceKeys.USE_MILES] = it }
             if (goal.isNotBlank()) prefs[PreferenceKeys.USER_GOAL] = goal
+            // Setup is done — drop the resume draft in the same atomic write.
+            prefs.remove(PreferenceKeys.ONBOARDING_DRAFT)
         }
     }
 

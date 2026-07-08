@@ -37,9 +37,10 @@ internal val STATS_HERO_CHART_H = 116.dp
 
 /**
  * Open editorial section — content sits directly on the near-black page (no card shell, no
- * background fill). A full-width hairline anchors the section, followed by a small-caps [title]
- * eyebrow (kept as a TalkBack heading) and optional [caption], then the body. Plays the one-shot
- * staggered [statsEntrance] keyed by [index] so sections settle in on first open.
+ * background fill). Air + the small-caps [title] eyebrow (kept as a TalkBack heading) anchor the
+ * section (§1/§7 — the old hairline anchor was a §14 defect), then the optional [caption] and the
+ * body. Plays the one-shot staggered [statsEntrance] keyed by [index] so sections settle in on
+ * first open.
  */
 @Composable
 internal fun StatsCard(
@@ -57,9 +58,8 @@ internal fun StatsCard(
             .fillMaxWidth()
             .statsEntrance(index)
     ) {
-        // Inset to the gutter like the Home-screen dividers (not full-bleed).
-        HorizontalDivider(Modifier.padding(horizontal = STATS_GUTTER), color = c.outline.copy(alpha = 0.25f))
-        Spacer(Modifier.height(18.dp))
+        // §7 air rhythm: the previous section's trailing 18dp + this 10dp ≈ the 28dp section gap.
+        Spacer(Modifier.height(10.dp))
         Column(
             Modifier
                 .padding(horizontal = STATS_GUTTER)

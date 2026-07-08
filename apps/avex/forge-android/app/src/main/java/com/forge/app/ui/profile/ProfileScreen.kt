@@ -22,7 +22,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -53,10 +52,9 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.Features
 import com.forge.app.data.repo.ProgressPhoto
 import com.forge.app.ui.common.ConfettiOverlay
-import com.forge.app.ui.common.FirstTouchTip
+import com.forge.app.ui.common.ForgeWordmark
 import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.gym.stats.components.statsEntrance
-import com.forge.app.ui.theme.LocalForgeSettings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -125,8 +123,8 @@ fun ProfileScreen(
         Scaffold(
             topBar = {
                 TopAppBar(
-                    // Title intentionally empty — the bumped avatar + name hero below *is* the title.
-                    title = {},
+                    // §2: wordmark in the chrome — the bumped avatar + name hero below stays the page's identity.
+                    title = { ForgeWordmark() },
                     navigationIcon = {
                         if (onBack != null) IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
                     },
@@ -183,16 +181,6 @@ fun ProfileScreen(
                 // Sections sit openly on the page. Each applies the side margins itself so the
                 // gallery filmstrip can break out and run edge-to-edge like the cover above.
                 val pad = Modifier.fillMaxWidth().padding(horizontal = 20.dp)
-
-                // First-touch (D1): a brand-new profile is all dashes and empty rings — say what fills it.
-                if (state.totalSessions == 0 && !LocalForgeSettings.current.firstWorkoutDone) {
-                    Spacer(Modifier.height(20.dp))
-                    FirstTouchTip(
-                        "Your profile starts with your first set.",
-                        "Log a workout and this page fills in — your lifetime totals, signature lifts and progress photos.",
-                        modifier = pad
-                    )
-                }
 
                 // ── Rank track (gamification, index 1) ───────────────────────────
                 if (Features.SHOW_GAMIFICATION) state.rank?.let { r ->
@@ -360,8 +348,7 @@ private fun PhotoViewerDialog(
                     modifier = Modifier.bounceClick { onDelete() }.padding(8.dp)
                 )
             }
-            Spacer(Modifier.height(2.dp))
-            HorizontalDivider(color = Color.Transparent)
+            Spacer(Modifier.height(4.dp))
         }
     }
 }

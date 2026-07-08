@@ -16,7 +16,6 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -31,8 +30,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.data.db.entities.VacationPeriod
+import com.forge.app.ui.common.InlineEmptyHint
 import com.forge.app.ui.common.clickableLabeled
 import java.time.Instant
 import java.time.LocalDate
@@ -47,7 +48,6 @@ internal fun VacationPage(vm: SettingsViewModel, modifier: Modifier = Modifier) 
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val onBg = MaterialTheme.colorScheme.onBackground
     val accent = MaterialTheme.colorScheme.primary
-    val outline = MaterialTheme.colorScheme.outline
     var showAdd by remember { mutableStateOf(false) }
 
     if (showAdd) {
@@ -58,6 +58,8 @@ internal fun VacationPage(vm: SettingsViewModel, modifier: Modifier = Modifier) 
     }
 
     LazyColumn(modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 56.dp)) {
+        // The top bar never names the screen (§2) — the page opens with its own mono anchor.
+        item("header") { SettingsSectionHeader("Holidays", top = 12.dp) }
         item("intro") {
             Text(
                 "Mark a holiday and those days won't break your training streak or count as missed.",
@@ -66,18 +68,18 @@ internal fun VacationPage(vm: SettingsViewModel, modifier: Modifier = Modifier) 
             )
         }
         item("add") {
+            // The accent mono action idiom (DESIGN §11) — same voice as SettingsActionLink.
             Text(
-                "+ Add holiday",
-                style = MaterialTheme.typography.bodyMedium, color = accent,
+                "+ add holiday",
+                style = MaterialTheme.typography.labelLarge, color = accent, letterSpacing = 0.3.sp,
                 modifier = Modifier.fillMaxWidth().clickableLabeled("Add holiday") { showAdd = true }.padding(horizontal = 24.dp, vertical = 14.dp)
             )
-            SectionDivider()
         }
         if (vacations.isEmpty()) {
             item("empty") {
-                Text(
-                    "No holidays added.",
-                    style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic,
+                InlineEmptyHint(
+                    "No holidays yet.",
+                    color = muted,
                     modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp)
                 )
             }
@@ -98,7 +100,6 @@ internal fun VacationPage(vm: SettingsViewModel, modifier: Modifier = Modifier) 
                         modifier = Modifier.clickableLabeled("Delete holiday") { vm.deleteVacation(v) }.padding(start = 16.dp)
                     )
                 }
-                HorizontalDivider(color = outline.copy(alpha = 0.12f), modifier = Modifier.padding(horizontal = 24.dp))
             }
         }
     }

@@ -5,7 +5,6 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.pdf.PdfDocument
-import com.forge.app.data.db.dao.BodyweightDao
 import com.forge.app.data.db.dao.CardioDao
 import com.forge.app.data.db.dao.LoggedExerciseDao
 import com.forge.app.data.db.dao.LoggedSetDao
@@ -38,7 +37,6 @@ class PdfExportRepository @Inject constructor(
     private val loggedSetDao: LoggedSetDao,
     private val moodDao: com.forge.app.data.db.dao.MoodDao,
     private val cardioDao: CardioDao,
-    private val bodyweightDao: BodyweightDao,
     private val settingsRepo: com.forge.app.data.prefs.SettingsRepository
 ) {
     private val zone = ZoneId.systemDefault()
@@ -152,7 +150,6 @@ class PdfExportRepository @Inject constructor(
         val weekCardio = cardioDao.between(weekStartMs, weekEndMs)
         if (weekCardio.isNotEmpty()) {
             if (y < 770f) {
-                val bodyweightLb = bodyweightDao.latest()?.weightLb
                 y += 6f
                 canvas.drawText("Cardio this week", margin, y, headerPaint)
                 y += 16f
@@ -160,7 +157,7 @@ class PdfExportRepository @Inject constructor(
                 for (c in weekCardio) {
                     if (y > 800f) break
                     val type = CardioType.fromCode(c.type)
-                    val parts = cardioDetailParts(c, type, bodyweightLb, includeEffort = true, useMiles = useMiles)
+                    val parts = cardioDetailParts(c, includeEffort = true, useMiles = useMiles)
                     canvas.drawText("  ${type.displayName}: ${parts.joinToString(" · ")}", margin + 8, y, bodyPaint)
                     y += 13f
                     if (!c.note.isNullOrBlank() && y < 805f) {

@@ -10,8 +10,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
@@ -48,8 +50,8 @@ fun filterLibrary(query: String, exclude: Set<String>): List<ExerciseDef> {
 /**
  * Searchable, multi-select picker over the exercise library (machines included; owner-only
  * plate-count stations and already-present moves filtered out). Shared by the onboarding "make my
- * own" flow, the Program Editor, and the freestyle logger. Pictures are deferred — the row leaves
- * room for a thumbnail later.
+ * own" flow, the Program Editor, and the freestyle logger. Rows lead with the [ExerciseIcons]
+ * equipment-class glyph; real pictures stay deferred.
  *
  * [title] heads the dialog; [confirmLabel] is the verb on the confirm button ("Add").
  */
@@ -94,6 +96,12 @@ fun ExerciseLibraryPicker(
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             Checkbox(checked = checked, onCheckedChange = { picked = if (it) picked + def.id else picked - def.id })
+                            Icon(
+                                ExerciseIcons.forEquipment(def.equipment),
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(20.dp)
+                            )
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(def.name, style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurface)

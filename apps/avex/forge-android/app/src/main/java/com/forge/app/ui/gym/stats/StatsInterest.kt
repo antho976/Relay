@@ -48,7 +48,7 @@ internal fun ColumnScope.RpeHistogramContent(buckets: List<RpeBucket>, avgRpe: D
                     Modifier
                         .width(16.dp)
                         .height((b.count.toFloat() / max * 52f).dp.coerceAtLeast(2.dp))
-                        .clip(RoundedCornerShape(topStart = 3.dp, topEnd = 3.dp))
+                        .clip(RoundedCornerShape(topStart = 4.dp, topEnd = 4.dp))
                         .background(c.accent.copy(alpha = 0.7f))
                 )
                 Spacer(Modifier.height(3.dp))

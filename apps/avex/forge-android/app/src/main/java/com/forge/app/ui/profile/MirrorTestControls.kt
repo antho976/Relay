@@ -152,7 +152,7 @@ private fun ControlPill(
         Modifier
             .clip(RoundedCornerShape(50))
             .background(Color.Transparent)
-            .border(1.dp, outline.copy(alpha = 0.4f), RoundedCornerShape(50))
+            .border(1.dp, outline.copy(alpha = 0.35f), RoundedCornerShape(50))
             .bounceClick { onClick() }
             .padding(horizontal = 12.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,

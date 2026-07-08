@@ -3,7 +3,6 @@ package com.forge.app.ui.profile
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,7 +15,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -37,7 +35,7 @@ import com.forge.app.domain.rank.StandingMetric
 import com.forge.app.domain.units.formatVolumeCompact
 import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.domain.units.unitLabel
-import com.forge.app.ui.common.InlineEmptyHint
+import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.theme.LocalForgeSettings
 import kotlin.math.roundToInt
@@ -58,11 +56,10 @@ internal fun ProfileBlock(
     compact: Boolean = false,
     content: @Composable ColumnScope.() -> Unit
 ) {
-    Spacer(Modifier.height(if (compact) 14.dp else 22.dp))
-    HorizontalDivider(color = outline.copy(alpha = 0.3f))
-    Spacer(Modifier.height(if (compact) 8.dp else 14.dp))
+    // Air + the mono header separate sections (§1) — no hairline strip.
+    Spacer(Modifier.height(if (compact) 22.dp else 28.dp))
     Row(
-        Modifier.fillMaxWidth().then(if (onAction != null) Modifier.clickable { onAction() } else Modifier),
+        Modifier.fillMaxWidth().then(if (onAction != null) Modifier.bounceClick { onAction() } else Modifier),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -95,17 +92,8 @@ internal fun AllTimeSection(
 ) {
     val useKg = LocalForgeSettings.current.useKg
     SectionHeader("ALL-TIME", muted)
-    if (sessions == 0) {
-        // Bare zeros read as "empty/broken" on a stranger's first open — name what fills them.
-        InlineEmptyHint(
-            if (Features.SHOW_GAMIFICATION)
-                "Finish your first workout — your lifetime workouts, volume, sets, PRs, and XP start tallying here."
-            else
-                "Finish your first workout — your lifetime workouts, volume, sets and PRs start tallying here.",
-            muted
-        )
-        return
-    }
+    // At zero sessions the grid still renders — honest zeros ARE the empty state (§12), the
+    // figures fill in from the first logged set.
     val specs = buildList {
         add(StatCellSpec("$sessions", "WORKOUTS", delta = workoutsDelta))
         add(StatCellSpec(formatVolume(volumeLb, useKg), "LIFETIME ${unitLabel(useKg).uppercase()}"))
@@ -178,8 +166,8 @@ internal fun StandingSection(
                     ),
                     label = "standing-bar"
                 )
-                Box(Modifier.weight(1f).height(2.dp).clip(RoundedCornerShape(50)).background(outline.copy(alpha = 0.2f))) {
-                    Box(Modifier.fillMaxWidth(w).fillMaxHeight().clip(RoundedCornerShape(50)).background(accent.copy(alpha = 0.8f)))
+                Box(Modifier.weight(1f).height(2.dp).clip(RoundedCornerShape(50)).background(outline.copy(alpha = 0.25f))) {
+                    Box(Modifier.fillMaxWidth(w).fillMaxHeight().clip(RoundedCornerShape(50)).background(accent))
                 }
                 Text(
                     "TOP ${m.topPercent}%", style = MaterialTheme.typography.labelSmall, color = onBg, fontSize = 10.sp,
@@ -189,8 +177,7 @@ internal fun StandingSection(
         }
         Spacer(Modifier.height(6.dp))
         Text(
-            "Estimated from your sessions per week, weekly volume, streak and best lift over the last 90 days — " +
-                "modelled, not a live leaderboard. Your data never leaves your device.",
+            "Modelled offline from your weekly sessions, volume, streak and best lift.",
             style = MaterialTheme.typography.bodySmall, color = muted.copy(alpha = 0.7f),
             fontStyle = FontStyle.Italic, fontSize = 10.sp
         )

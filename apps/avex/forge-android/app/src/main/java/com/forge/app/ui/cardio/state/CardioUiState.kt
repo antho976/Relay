@@ -1,6 +1,7 @@
 package com.forge.app.ui.cardio.state
 
 import com.forge.app.data.db.entities.CardioEntry
+import com.forge.app.data.repo.ExtendedGoalRepository
 import com.forge.app.domain.cardio.CardioWearableDay
 import com.forge.app.domain.cardio.RoutePoint
 
@@ -23,9 +24,11 @@ data class CardioUiState(
     val cardioStreakDays: Int = 0,
     /** Per-day Mon–Sun cells (index 0 = Monday); future days are empty. Drives the week row. */
     val weekDays: List<CardioDayCell> = emptyList(),
+    /** Total distance (km) across this week's active sessions — the hero's distance figure. */
+    val weekDistanceKm: Double = 0.0,
+    /** Custom goals on cardio metrics (distance / minutes) — the page's GOALS trim. */
+    val cardioGoals: List<ExtendedGoalRepository.Progress> = emptyList(),
     val entries: List<CardioEntry> = emptyList(),
-    /** Latest logged bodyweight (lb), or null — scales the per-entry calorie estimate. */
-    val bodyweightLb: Double? = null,
     val sheetOpen: Boolean = false,
     /** Non-null when the open sheet is editing an existing entry (vs logging a new one). */
     val editing: CardioEntry? = null,

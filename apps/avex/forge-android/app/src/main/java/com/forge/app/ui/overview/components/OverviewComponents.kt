@@ -28,6 +28,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.forge.app.domain.units.formatDistance
 import com.forge.app.domain.units.formatVolume
 import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.overview.state.OverviewRecentItem
@@ -56,14 +57,14 @@ fun WeekDayBox(
         )
         val boxMod = Modifier.fillMaxWidth().aspectRatio(1f)
         when {
-            trained -> Box(boxMod.background(onBg.copy(alpha = 0.85f), RoundedCornerShape(6.dp)))
+            trained -> Box(boxMod.background(onBg.copy(alpha = 0.85f), RoundedCornerShape(8.dp)))
             isToday -> {
                 val dashColor = outlineColor.copy(alpha = 0.9f)
                 Box(
                     boxMod.drawBehind {
                         drawRoundRect(
                             color = dashColor,
-                            cornerRadius = CornerRadius(6.dp.toPx()),
+                            cornerRadius = CornerRadius(8.dp.toPx()),
                             style = Stroke(
                                 width = 1.5.dp.toPx(),
                                 pathEffect = PathEffect.dashPathEffect(
@@ -78,7 +79,7 @@ fun WeekDayBox(
                         color = outlineColor.copy(alpha = 0.9f))
                 }
             }
-            else -> Box(boxMod.border(BorderStroke(1.dp, outlineColor.copy(alpha = 0.55f)), RoundedCornerShape(6.dp)))
+            else -> Box(boxMod.border(BorderStroke(1.dp, outlineColor.copy(alpha = 0.55f)), RoundedCornerShape(8.dp)))
         }
     }
 }
@@ -101,7 +102,8 @@ fun RecentRow(
     outline: Color,
     onClick: () -> Unit = {}
 ) {
-    val useKg = LocalForgeSettings.current.useKg
+    val settings = LocalForgeSettings.current
+    val useKg = settings.useKg
     Column(
         modifier = Modifier.fillMaxWidth().bounceClick { onClick() },
         verticalArrangement = Arrangement.spacedBy(3.dp)
@@ -175,6 +177,12 @@ fun RecentRow(
                             color = onBg.copy(alpha = 0.6f), fontSize = 9.sp)
                     }
                 }
+            } else if (!item.isGym && item.distanceKm != null && item.distanceKm > 0) {
+                // Cardio's headline number sits where a gym row's volume does.
+                Spacer(Modifier.width(12.dp))
+                Text(formatDistance(item.distanceKm, settings.useMiles),
+                    style = MaterialTheme.typography.bodySmall, color = onBg,
+                    fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
             }
         }
     }
@@ -185,7 +193,7 @@ fun RecentRow(
 private fun MiniChip(text: String, color: Color, outline: Color) {
     Box(
         modifier = Modifier
-            .border(BorderStroke(0.5.dp, outline.copy(alpha = 0.4f)), RoundedCornerShape(3.dp))
+            .border(BorderStroke(0.5.dp, outline.copy(alpha = 0.35f)), RoundedCornerShape(4.dp))
             .padding(horizontal = 6.dp, vertical = 2.dp)
     ) {
         Text(text, style = MaterialTheme.typography.labelSmall,

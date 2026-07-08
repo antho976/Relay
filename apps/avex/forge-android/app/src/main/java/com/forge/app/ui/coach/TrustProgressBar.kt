@@ -40,7 +40,7 @@ fun TrustProgressBar(
     val animated by animateFloatAsState(
         targetValue = if (earned) 1f else fraction,
         // Routed through ForgeMotion so the system "Remove animations" preference collapses it to a snap.
-        animationSpec = ForgeMotion.standardTween(650),
+        animationSpec = ForgeMotion.drawTween(),
         label = "trustFill"
     )
     val accent = if (earned)
@@ -59,8 +59,8 @@ fun TrustProgressBar(
     LaunchedEffect(earned) {
         if (earned && !prevEarned && ForgeMotion.durationScale > 0f) {
             pulse.snapTo(1f)
-            pulse.animateTo(1.6f, ForgeMotion.standardTween(160))
-            pulse.animateTo(1f, ForgeMotion.standardTween(420))
+            pulse.animateTo(1.6f, ForgeMotion.standardTween(ForgeMotion.DurationFast))
+            pulse.animateTo(1f, ForgeMotion.standardTween(ForgeMotion.DurationEmphasized))
         }
         prevEarned = earned
     }

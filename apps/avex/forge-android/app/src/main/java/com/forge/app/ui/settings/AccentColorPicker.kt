@@ -119,7 +119,7 @@ internal fun AccentColorRow(currentHex: String, onSelect: (String) -> Unit) {
                     Text(
                         label,
                         style = MaterialTheme.typography.labelSmall,
-                        color = muted.copy(alpha = if (isSelected) 0.9f else 0.45f),
+                        color = muted.copy(alpha = if (isSelected) 1f else 0.65f),
                         fontSize = 9.sp
                     )
                 }
@@ -138,7 +138,7 @@ internal fun AccentColorRow(currentHex: String, onSelect: (String) -> Unit) {
         Text(
             "Enter a 6-digit #RRGGBB hex code, or tap the swatch for a color wheel.",
             style = MaterialTheme.typography.labelSmall,
-            color = muted.copy(alpha = 0.55f),
+            color = muted.copy(alpha = 0.65f),
             fontSize = 10.sp
         )
         AnimatedVisibility(visible = wheelVisible) {
@@ -185,6 +185,7 @@ private fun CustomHexInput(
     wheelVisible: Boolean,
     onToggleWheel: () -> Unit
 ) {
+    val outline = MaterialTheme.colorScheme.outline
     // Track the live (in-progress) pick so the field mirrors the wheel/slider during a drag — matching
     // the swatch — instead of lagging on the committed value. When idle livePreview == currentHex, and
     // it settles back to the committed hex on release, so typing/presets still round-trip cleanly.
@@ -228,7 +229,7 @@ private fun CustomHexInput(
             },
             modifier = Modifier
                 .clip(RoundedCornerShape(6.dp))
-                .border(1.dp, muted.copy(alpha = 0.4f), RoundedCornerShape(6.dp))
+                .border(1.dp, outline.copy(alpha = 0.35f), RoundedCornerShape(6.dp))
                 .padding(horizontal = 10.dp, vertical = 6.dp)
                 .size(width = 96.dp, height = 20.dp)
         )
@@ -241,7 +242,7 @@ private fun CustomHexInput(
                 .background(swatch ?: Color.Transparent)
                 .border(
                     width = if (wheelVisible) 2.dp else 1.dp,
-                    color = if (wheelVisible) onBg else muted.copy(alpha = 0.4f),
+                    color = if (wheelVisible) onBg else outline.copy(alpha = 0.35f),
                     shape = CircleShape
                 )
         )

@@ -7,15 +7,11 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -30,23 +26,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.ui.common.EditorialHeader
 import com.forge.app.ui.common.ForgeSwitch
+import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.common.clickableLabeled
-
-@Composable
-internal fun SectionLabel(title: String) {
-    Text(
-        title,
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        letterSpacing = 1.5.sp,
-        modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 20.dp, bottom = 8.dp)
-    )
-}
 
 /**
  * The shared Settings section anchor — mono 13sp ([EditorialHeader]) carrying the app's air rhythm
  * (DESIGN §7/§8), NO hairline beneath it. Used by the main list and the sub-pages so all of Settings
- * speaks one section-header voice (replaces the older 10sp [SectionLabel]/GroupHeader as pages migrate).
+ * speaks one section-header voice.
  */
 @Composable
 internal fun SettingsSectionHeader(label: String, top: Dp = 26.dp) {
@@ -55,14 +41,6 @@ internal fun SettingsSectionHeader(label: String, top: Dp = 26.dp) {
         muted = MaterialTheme.colorScheme.onSurfaceVariant,
         accent = MaterialTheme.colorScheme.primary,
         modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = top, bottom = 4.dp)
-    )
-}
-
-@Composable
-internal fun SectionDivider() {
-    HorizontalDivider(
-        modifier = Modifier.padding(horizontal = 24.dp),
-        color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)
     )
 }
 
@@ -120,12 +98,12 @@ internal fun ToggleRow(
         ForgeSwitch(
             checked = checked,
             onCheckedChange = onCheckedChange,
-            checkedTrackColor = onBg.copy(alpha = 0.85f),
+            checkedTrackColor = onBg,
             checkedThumbColor = bg,
             checkedBorderColor = Color.Transparent,
             uncheckedTrackColor = Color.Transparent,
             uncheckedThumbColor = outline,
-            uncheckedBorderColor = outline.copy(alpha = 0.5f)
+            uncheckedBorderColor = outline.copy(alpha = 0.35f)
         )
     }
 }
@@ -133,22 +111,24 @@ internal fun ToggleRow(
 @Composable
 internal fun PillChip(label: String, selected: Boolean, enabled: Boolean = true, onClick: () -> Unit) {
     val onBg = MaterialTheme.colorScheme.onBackground
-    val bg = MaterialTheme.colorScheme.background
+    val accent = MaterialTheme.colorScheme.primary
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val outline = MaterialTheme.colorScheme.outline
     val alpha = if (enabled) 1f else 0.3f
+    // §5 ladder: selected = accent border + accent@0.15 wash (one tile formula with
+    // onboarding's selectables) — never a white fill, which read as the do-it-now capsule.
     Box(
         modifier = Modifier
-            .border(1.dp, (if (selected) onBg else outline.copy(alpha = 0.4f)).copy(alpha = alpha), RoundedCornerShape(4.dp))
-            .background((if (selected) onBg else Color.Transparent).copy(alpha = alpha), RoundedCornerShape(4.dp))
-            .then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier)
+            .border(1.dp, (if (selected) accent else outline.copy(alpha = 0.35f)).copy(alpha = alpha), RoundedCornerShape(4.dp))
+            .background((if (selected) accent.copy(alpha = 0.15f) else Color.Transparent).copy(alpha = alpha), RoundedCornerShape(4.dp))
+            .then(if (enabled) Modifier.bounceClick(onClick = onClick) else Modifier)
             .padding(horizontal = 10.dp, vertical = 5.dp),
         contentAlignment = Alignment.Center
     ) {
         Text(
             label,
             style = MaterialTheme.typography.labelSmall,
-            color = (if (selected) bg else muted.copy(alpha = 0.65f)).copy(alpha = alpha),
+            color = (if (selected) onBg else muted.copy(alpha = 0.65f)).copy(alpha = alpha),
             letterSpacing = 0.5.sp
         )
     }
@@ -166,7 +146,7 @@ internal fun SettingsPrimaryAction(label: String, enabled: Boolean = true, onCli
     Box(
         modifier = Modifier
             .background(onBg.copy(alpha = if (enabled) 1f else 0.35f), RoundedCornerShape(50))
-            .then(if (enabled) Modifier.clickable(onClick = onClick) else Modifier)
+            .then(if (enabled) Modifier.bounceClick(onClick = onClick) else Modifier)
             .padding(horizontal = 16.dp, vertical = 9.dp),
         contentAlignment = Alignment.Center
     ) {
@@ -174,19 +154,21 @@ internal fun SettingsPrimaryAction(label: String, enabled: Boolean = true, onCli
     }
 }
 
-/** The outlined sidekick capsule (DESIGN §8 ②) that sits beside a [SettingsPrimaryAction]. */
+/** The outlined sidekick capsule (DESIGN §8 ②) that sits beside a [SettingsPrimaryAction].
+ *  Disabled = dimmed and inert, so it never looks tappable while doing nothing (§4.5). */
 @Composable
-internal fun SettingsOutlineAction(label: String, onClick: () -> Unit) {
+internal fun SettingsOutlineAction(label: String, enabled: Boolean = true, onClick: () -> Unit) {
     val onBg = MaterialTheme.colorScheme.onBackground
     val outline = MaterialTheme.colorScheme.outline
+    val alpha = if (enabled) 1f else 0.35f
     Box(
         modifier = Modifier
-            .border(1.dp, outline.copy(alpha = 0.5f), RoundedCornerShape(50))
-            .clickable(onClick = onClick)
+            .border(1.dp, outline.copy(alpha = 0.35f * alpha), RoundedCornerShape(50))
+            .then(if (enabled) Modifier.bounceClick(onClick = onClick) else Modifier)
             .padding(horizontal = 14.dp, vertical = 9.dp),
         contentAlignment = Alignment.Center
     ) {
-        Text(label, style = MaterialTheme.typography.labelMedium, color = onBg, letterSpacing = 0.3.sp)
+        Text(label, style = MaterialTheme.typography.labelMedium, color = onBg.copy(alpha = alpha), letterSpacing = 0.3.sp)
     }
 }
 
@@ -200,17 +182,6 @@ internal fun SettingsActionLink(label: String, onClick: () -> Unit) {
         color = MaterialTheme.colorScheme.primary,
         letterSpacing = 0.3.sp,
         modifier = Modifier.clickableLabeled(label, onClick = onClick).padding(horizontal = 24.dp, vertical = 8.dp)
-    )
-}
-
-@Composable
-internal fun SubSectionLabel(text: String) {
-    Text(
-        text,
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        letterSpacing = 1.sp,
-        modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 20.dp, bottom = 6.dp)
     )
 }
 
@@ -295,26 +266,4 @@ internal fun DestructiveRow(label: String, isFactory: Boolean = false, onClick: 
             color = if (isFactory) error.copy(alpha = 0.5f) else muted.copy(alpha = 0.4f)
         )
     }
-}
-
-// ─── Chip section helper (label + FlowRow of chips) ──────────────────────────
-
-@Composable
-internal fun ChipSection(
-    label: String,
-    options: List<Pair<String, String>>,
-    selected: String,
-    onSelect: (String) -> Unit
-) {
-    SubSectionLabel(label)
-    FlowRow(
-        modifier = Modifier.padding(horizontal = 24.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        options.forEach { (value, display) ->
-            PillChip(display.uppercase(), selected == value) { onSelect(value) }
-        }
-    }
-    Spacer(Modifier.height(8.dp))
 }

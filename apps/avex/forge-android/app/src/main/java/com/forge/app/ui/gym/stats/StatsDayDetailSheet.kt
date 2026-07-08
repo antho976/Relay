@@ -61,7 +61,7 @@ internal fun StatsDayDetailSheet(
                 letterSpacing = 1.sp
             )
             Spacer(Modifier.height(4.dp))
-            Text("That day.", style = MaterialTheme.typography.headlineSmall, color = cs.onBackground)
+            Text("That day", style = MaterialTheme.typography.headlineSmall, color = cs.onBackground)
             if (summary.isNotEmpty()) {
                 Spacer(Modifier.height(2.dp))
                 Text(summary, style = MaterialTheme.typography.bodySmall, color = cs.onSurfaceVariant)

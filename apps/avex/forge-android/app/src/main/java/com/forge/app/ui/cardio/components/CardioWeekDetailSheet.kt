@@ -1,6 +1,5 @@
 package com.forge.app.ui.cardio.components
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -11,8 +10,6 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.ChevronLeft
-import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -38,6 +35,7 @@ import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.domain.cardio.CardioType
 import com.forge.app.domain.cardio.CardioWearableDay
 import com.forge.app.domain.cardio.cardioWeekAggregate
+import com.forge.app.ui.common.clickableLabeled
 import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.LocalDate
@@ -60,7 +58,6 @@ fun CardioWeekDetailSheet(
     useMiles: Boolean,
     weekTargetMin: Int,
     cardioStreakDays: Int,
-    bodyweightLb: Double?,
     /** Watch-derived steps/route for the current week (today); null when none loaded. */
     wearable: CardioWearableDay?,
     /** Avex holds the steps grant — show the current-week steps section even before data syncs. */
@@ -116,9 +113,6 @@ fun CardioWeekDetailSheet(
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = muted)
                     }
                 },
-                actions = {
-                    Text("STATS", style = MaterialTheme.typography.labelSmall, letterSpacing = 2.sp, color = muted, modifier = Modifier.padding(end = 16.dp))
-                },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
             )
         },
@@ -135,16 +129,35 @@ fun CardioWeekDetailSheet(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                IconButton(onClick = { if (canGoOlder) scope.launch { pagerState.animateScrollToPage(headerPage - 1) } }, enabled = canGoOlder) {
-                    Icon(Icons.Filled.ChevronLeft, contentDescription = "Earlier week", tint = if (canGoOlder) onBg else outline.copy(alpha = 0.4f))
-                }
+                Text(
+                    "←",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = if (canGoOlder) onBg else outline.copy(alpha = 0.35f),
+                    modifier = Modifier
+                        .then(
+                            if (canGoOlder) Modifier.clickableLabeled("Earlier week") {
+                                scope.launch { pagerState.animateScrollToPage(headerPage - 1) }
+                            } else Modifier
+                        )
+                        // Padding, not glyph size, carries the ≥48dp touch target (§8).
+                        .padding(14.dp)
+                )
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(relativeWeekLabel(headerStart, currentMonday), style = MaterialTheme.typography.titleMedium, color = onBg)
                     Text(weekRangeLabel(headerStart), style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
                 }
-                IconButton(onClick = { if (canGoNewer) scope.launch { pagerState.animateScrollToPage(headerPage + 1) } }, enabled = canGoNewer) {
-                    Icon(Icons.Filled.ChevronRight, contentDescription = "Later week", tint = if (canGoNewer) onBg else outline.copy(alpha = 0.4f))
-                }
+                Text(
+                    "→",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = if (canGoNewer) onBg else outline.copy(alpha = 0.35f),
+                    modifier = Modifier
+                        .then(
+                            if (canGoNewer) Modifier.clickableLabeled("Later week") {
+                                scope.launch { pagerState.animateScrollToPage(headerPage + 1) }
+                            } else Modifier
+                        )
+                        .padding(14.dp)
+                )
             }
 
             HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
@@ -166,7 +179,6 @@ fun CardioWeekDetailSheet(
                     wearable = if (weeksAgoFor(page) == 0) wearable else null,
                     // Steps are only loaded for the current week, so the placeholder belongs there too.
                     wearableConnected = weeksAgoFor(page) == 0 && wearableConnected,
-                    bodyweightLb = bodyweightLb,
                     zone = zone,
                     onOpenSession = onOpenSession,
                     onBg = onBg, muted = muted, outline = outline, accent = accent
@@ -180,10 +192,11 @@ private fun relativeWeekLabel(weekStart: LocalDate, currentMonday: LocalDate): S
     when (ChronoUnit.WEEKS.between(weekStart, currentMonday)) {
         0L -> "This week"
         1L -> "Last week"
-        else -> "Week ${weekStart.get(java.time.temporal.WeekFields.ISO.weekOfWeekBasedYear())}"
+        // A raw ISO week number never renders (§11) — older weeks read as their human date.
+        else -> "Week of ${weekStart.format(DateTimeFormatter.ofPattern("MMM d", Locale.getDefault()))}"
     }
 
 private fun weekRangeLabel(weekStart: LocalDate): String {
     val fmt = DateTimeFormatter.ofPattern("MMM d", Locale.getDefault())
-    return "${weekStart.format(fmt)} — ${weekStart.plusDays(6).format(fmt)}".uppercase()
+    return "${weekStart.format(fmt)} – ${weekStart.plusDays(6).format(fmt)}".uppercase()
 }

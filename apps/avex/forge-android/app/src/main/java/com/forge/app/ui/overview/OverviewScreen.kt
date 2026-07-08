@@ -14,7 +14,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -31,9 +30,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -52,7 +48,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import com.forge.app.Features
+import com.forge.app.ui.common.bounceCombinedClick
 import com.forge.app.ui.common.clickableLabeled
+import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.overview.state.MilestoneEvent
 import com.forge.app.ui.overview.state.OnThisDayMemory
 import androidx.compose.ui.graphics.graphicsLayer
@@ -86,7 +84,7 @@ private fun DismissibleNotice(text: String, onBg: Color, muted: Color, onDismiss
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(12.dp))
             .background(muted.copy(alpha = 0.10f))
             .padding(start = 14.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -112,6 +110,21 @@ private fun DismissibleNotice(text: String, onBg: Color, muted: Color, onDismiss
     }
 }
 
+/** The freestyle/no-plan hero CTA — the same white-capsule idiom as Start session (§8/§9: bounce, no ripple). */
+@Composable
+private fun HeroCta(text: String, label: String, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(Color.White)
+            .bounceCombinedClick(onClickLabel = label, onClick = onClick)
+            .padding(horizontal = 32.dp, vertical = 18.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(text, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, color = Color.Black)
+    }
+}
+
 /** Top-bar icon with a ≥44dp tappable area + spoken label, while the glyph stays visually small. */
 @Composable
 private fun TopBarIconButton(icon: ImageVector, label: String, tint: Color, onClick: () -> Unit) {
@@ -133,9 +146,8 @@ private fun CoachHomeBlock(headline: String, body: String, clickLabel: String, o
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val onBg = MaterialTheme.colorScheme.onBackground
     val outline = MaterialTheme.colorScheme.outline
-    Spacer(Modifier.height(20.dp))
-    HorizontalDivider(color = outline.copy(alpha = 0.3f))
-    Spacer(Modifier.height(16.dp))
+    // §1/§14: sections separate by air + mono header alone — no hairline strips.
+    Spacer(Modifier.height(28.dp))
     Text("COACH", style = MaterialTheme.typography.labelMedium, color = muted)
     Spacer(Modifier.height(10.dp))
     Column(
@@ -270,7 +282,7 @@ fun OverviewScreen(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
+                        .clip(RoundedCornerShape(12.dp))
                         .background(accent.copy(alpha = 0.14f))
                         .clickableLabeled("Dismiss") { milestoneToast = null }
                         .padding(horizontal = 14.dp, vertical = 12.dp),
@@ -288,7 +300,7 @@ fun OverviewScreen(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
+                        .clip(RoundedCornerShape(12.dp))
                         .background(accent.copy(alpha = 0.12f))
                         .clickableLabeled("Open the week brief") { viewModel.dismissCoachBanner(); onOpenCoachBrief() }
                         .padding(start = 14.dp, end = 8.dp, top = 12.dp, bottom = 12.dp),
@@ -296,7 +308,7 @@ fun OverviewScreen(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Column(Modifier.weight(1f)) {
-                        Text("COACH BRIEF", style = MaterialTheme.typography.labelSmall, color = accent, fontSize = 10.sp)
+                        Text("COACH BRIEF", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp)
                         // banner.text is the brief's one-line summary (summaryFor) — drop its redundant
                         // "Coach · " prefix so it reads as a clean preview line under the eyebrow.
                         Text(banner.text.removePrefix("Coach · "), style = MaterialTheme.typography.bodyMedium, color = onBg)
@@ -325,8 +337,9 @@ fun OverviewScreen(
             if (resumeBannerKey != null) lastResumeKey = resumeBannerKey
             AnimatedVisibility(
                 visible = resumeBannerKey != null,
-                enter = fadeIn(tween(300)) + slideInVertically(tween(300)) { it / 3 },
-                exit = fadeOut(tween(200)) + slideOutVertically(tween(200)) { it / 3 }
+                enter = fadeIn(ForgeMotion.standardTween(ForgeMotion.DurationEmphasized)) +
+                    slideInVertically(ForgeMotion.standardTween(ForgeMotion.DurationEmphasized)) { it / 3 },
+                exit = fadeOut(ForgeMotion.standardTween()) + slideOutVertically(ForgeMotion.standardTween()) { it / 3 }
             ) {
                 val activeKey = (resumeBannerKey ?: lastResumeKey).orEmpty()
                 Column {
@@ -335,7 +348,7 @@ fun OverviewScreen(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(10.dp))
+                            .clip(RoundedCornerShape(12.dp))
                             .background(accent.copy(alpha = 0.12f))
                             // Gate on the LIVE key, not the held one: during the exit fade after a
                             // finish, resumeBannerKey is null, so a stray tap can't re-enter the
@@ -348,7 +361,7 @@ fun OverviewScreen(
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Column {
-                            Text("IN PROGRESS", style = MaterialTheme.typography.labelSmall, color = accent, fontSize = 10.sp)
+                            Text("IN PROGRESS", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp)
                             Text("$activeName · tap to resume", style = MaterialTheme.typography.bodyMedium, color = onBg)
                         }
                         Text("→", style = MaterialTheme.typography.bodyLarge, color = accent)
@@ -372,7 +385,7 @@ fun OverviewScreen(
                     style = MaterialTheme.typography.displayLarge, color = onBg)
                 Spacer(Modifier.height(10.dp))
                 Text(
-                    if (freestyleMode) "No fixed plan — just log whatever you trained, whenever you want."
+                    if (freestyleMode) "No fixed plan. Log whatever you trained, whenever you want."
                     else "Build your own plan and Avex will guide each session.",
                     style = MaterialTheme.typography.bodyMedium.copy(fontStyle = FontStyle.Italic), color = muted
                 )
@@ -380,23 +393,10 @@ fun OverviewScreen(
                 if (programEmpty && !freestyleMode) {
                     // Custom user hasn't built their plan yet — a single CTA into the builder. No
                     // "log a workout" fallback here: this mode is "make my plan", not the logger.
-                    Button(
-                        onClick = onBuildPlan,
-                        shape = RoundedCornerShape(50),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
-                        contentPadding = PaddingValues(horizontal = 32.dp, vertical = 18.dp)
-                    ) {
-                        Text("Build a plan →", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
-                    }
+                    // Same hero-CTA idiom as Start session below: bounce, no ripple (§8/§9).
+                    HeroCta("Build a plan →", "Build your plan", onBuildPlan)
                 } else {
-                    Button(
-                        onClick = onLogFreestyle,
-                        shape = RoundedCornerShape(50),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
-                        contentPadding = PaddingValues(horizontal = 32.dp, vertical = 18.dp)
-                    ) {
-                        Text("Log a workout →", style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
-                    }
+                    HeroCta("Log a workout →", "Log a workout", onLogFreestyle)
                 }
             } else {
                 // ── Next workout ─────────────────────────────────────────────────
@@ -433,36 +433,46 @@ fun OverviewScreen(
                 // ── Start / resume session + skip warmup ─────────────────────────
                 val resumeKey = state.activeSessionDayKey
                 val ctaDayKey = resumeKey ?: state.nextUpDayKey
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Button(
-                        onClick = { onStartSession(ctaDayKey) },
-                        shape = RoundedCornerShape(50),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black),
-                        contentPadding = PaddingValues(horizontal = 32.dp, vertical = 18.dp)
+                // The column wraps to the button's width, so the hint centres under the CTA. Tap starts
+                // the session; a long-press starts it and skips the warmup (fresh start only, not a resume).
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(Color.White)
+                            .bounceCombinedClick(
+                                onClick = { onStartSession(ctaDayKey) },
+                                onClickLabel = if (resumeKey != null) "Resume session" else "Start session",
+                                onLongClick = if (resumeKey == null) {
+                                    { onStartSessionSkipWarmup(state.nextUpDayKey) }
+                                } else null,
+                                onLongClickLabel = "Start, skipping warmup"
+                            )
+                            .padding(horizontal = 32.dp, vertical = 18.dp),
+                        contentAlignment = Alignment.Center
                     ) {
                         Text(
                             if (resumeKey != null) "Resume session →" else "Start session →",
-                            style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color.Black
                         )
                     }
-                    // Skipping the warmup only applies to a fresh start, not a resume.
+                    // Quiet hint just under the CTA — faint, no outline. Where the skip-warmup link used
+                    // to live; the hold gesture replaces it.
                     if (resumeKey == null) {
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(50))
-                                .border(0.5.dp, muted.copy(alpha = 0.4f), RoundedCornerShape(50))
-                                .clickableLabeled("Start, skipping warmup") { onStartSessionSkipWarmup(state.nextUpDayKey) }
-                                .padding(horizontal = 18.dp, vertical = 12.dp)
-                        ) {
-                            Text("skip warmup", style = MaterialTheme.typography.bodySmall, color = muted)
-                        }
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "Hold to skip warmup",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = muted.copy(alpha = 0.65f)
+                        )
                     }
                 }
             }
 
+            // §1/§14: air + the mono header separate sections — the hairlines are gone.
             Spacer(Modifier.height(28.dp))
-            HorizontalDivider(color = outline.copy(alpha = 0.3f))
-            Spacer(Modifier.height(20.dp))
 
             // ── This week ────────────────────────────────────────────────────
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
@@ -474,7 +484,7 @@ fun OverviewScreen(
                 if (!freestyleMode && !programEmpty) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text("${state.workoutsThisWeek} of ${state.weeklyWorkoutTarget} target", style = MaterialTheme.typography.labelSmall, color = muted)
-                        Text("·", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.5f))
+                        Text("·", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.65f))
                         Text("view program →", style = MaterialTheme.typography.labelMedium,
                             color = onBg,
                             modifier = Modifier.clickableLabeled("View your program") { onViewProgram() }.padding(vertical = 2.dp))
@@ -508,9 +518,7 @@ fun OverviewScreen(
             // Hidden in freestyle (no plan to coach against); shown for generated AND custom — custom
             // has a real plan, so fatigue/deload/swap advice all apply once they've trained.
             if (coachEnabled && !freestyleMode && state.coach.isNotEmpty()) {
-                Spacer(Modifier.height(20.dp))
-                HorizontalDivider(color = outline.copy(alpha = 0.3f))
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(28.dp))
                 Text("COACH", style = MaterialTheme.typography.labelMedium, color = muted)
                 Spacer(Modifier.height(10.dp))
                 // Each coach card cascades in (fade + settle-up), so the section reveals as a
@@ -551,8 +559,8 @@ fun OverviewScreen(
                 state.coachFatigue?.let { f ->
                     CoachHomeBlock(
                         "Recovery signals building.",
-                        "Fatigue ${f.score} of ${f.threshold}${f.topDriver?.let { " · $it" } ?: ""} — " +
-                            "not a deload yet, but easing up helps. See what it's tracking →",
+                        "Fatigue ${f.score} of ${f.threshold}${f.topDriver?.let { " · $it" } ?: ""}. " +
+                            "Not a deload yet, but easing up helps. See what it's tracking →",
                         clickLabel = "Open Coach Lab", onClick = onOpenCoachLab
                     )
                 }
@@ -566,9 +574,7 @@ fun OverviewScreen(
             Spacer(Modifier.height(26.dp))
             GoalLinesSection(state.goals, state.customGoals, onOpenGoals, onBg, muted, accent, outline)
 
-            Spacer(Modifier.height(20.dp))
-            HorizontalDivider(color = outline.copy(alpha = 0.3f))
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(28.dp))
 
             // ── Recent ───────────────────────────────────────────────────────
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
@@ -583,9 +589,9 @@ fun OverviewScreen(
                 // Point at whichever CTA this mode actually shows above, so the hint isn't a dead end.
                 InlineEmptyHint(
                     when {
-                        freestyleMode -> "No workouts yet — tap \"Log a workout\" above to log your first, and it'll show up here."
-                        programEmpty -> "No workouts yet — tap \"Build a plan\" above to set up your plan, then start training."
-                        else -> "No workouts yet — tap \"Start session\" above to log your first, and it'll show up here."
+                        freestyleMode -> "No workouts yet. Tap \"Log a workout\" above and your first shows up here."
+                        programEmpty -> "No workouts yet. Tap \"Build a plan\" above to set up your plan, then start training."
+                        else -> "No workouts yet. Tap \"Start session\" above and your first shows up here."
                     },
                     color = muted
                 )
@@ -604,9 +610,7 @@ fun OverviewScreen(
                 OnThisDayCard(memory = memory, onBg = onBg, muted = muted, accent = accent, outline = outline)
             }
 
-            Spacer(Modifier.height(20.dp))
-            HorizontalDivider(color = outline.copy(alpha = 0.3f))
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(28.dp))
 
             // ── Trophies (gamification only) ─────────────────────────────────
             // "Search notes" and the cardio "Moved today?" nudge have been pulled from the home
@@ -625,10 +629,10 @@ fun OverviewScreen(
                 Text(
                     "▲ NEXT TROPHY · $nudge",
                     style = MaterialTheme.typography.labelSmall,
-                    color = accent.copy(alpha = 0.9f),
+                    color = accent,
                     fontSize = 10.sp,
                     modifier = Modifier
-                        .clickableLabeled("Trophy almost unlocked — $nudge") { onGoToTrophies() }
+                        .clickableLabeled("Trophy almost unlocked, $nudge") { onGoToTrophies() }
                         .padding(vertical = 2.dp)
                 )
             }
@@ -664,14 +668,14 @@ private fun OnThisDayCard(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
-            .border(1.dp, outline.copy(alpha = 0.4f), RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(12.dp))
+            .border(1.dp, outline.copy(alpha = 0.35f), RoundedCornerShape(12.dp))
             .padding(horizontal = 14.dp, vertical = 12.dp)
     ) {
         Text("ON THIS DAY · $agoLabel", style = MaterialTheme.typography.labelSmall,
-            color = accent, fontSize = 10.sp)
+            color = muted, fontSize = 10.sp)
         Spacer(Modifier.height(2.dp))
-        Text("You trained ${memory.dayName} — $vol moved$prText",
+        Text("You trained ${memory.dayName} · $vol moved$prText",
             style = MaterialTheme.typography.bodyMedium, color = onBg)
     }
 }

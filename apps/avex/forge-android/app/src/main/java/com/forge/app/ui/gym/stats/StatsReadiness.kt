@@ -13,15 +13,18 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.ui.gym.stats.state.PulseBand
 import com.forge.app.ui.gym.stats.state.ReadinessPulse
+import com.forge.app.ui.theme.ForgeError
+import com.forge.app.ui.theme.ForgeSuccess
+import com.forge.app.ui.theme.ForgeWarning
 
-private val FRESH = Color(0xFF3FB950)
-private val BUILDING = Color(0xFFD29922)
-private val DELOAD = Color(0xFFE5534B)
+// §5 reserved true-state colors — never off-palette literals.
+private val FRESH = ForgeSuccess
+private val BUILDING = ForgeWarning
+private val DELOAD = ForgeError
 
 /**
  * Readiness demoted to a one-line STATUS under the Stats hero (2026-07-01 fusion) — a band-colored

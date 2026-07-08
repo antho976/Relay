@@ -11,6 +11,11 @@ import com.forge.app.program.GenerationParams
 import com.forge.app.program.ProblemArea
 import com.forge.app.program.ProgramGenerator
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -19,12 +24,47 @@ const val PLAN_GENERATED = "generated"
 const val PLAN_CUSTOM = "custom"
 const val PLAN_FREESTYLE = "freestyle"
 
+/** The saved resume draft, tri-state: don't compose the flow until the one-shot read lands. */
+internal sealed interface DraftLoad {
+    data object Loading : DraftLoad
+    data class Ready(val draft: OnboardingDraft?) : DraftLoad
+}
+
 @HiltViewModel
 class OnboardingViewModel @Inject constructor(
     private val settingsRepo: SettingsRepository,
     private val bodyweightRepo: BodyweightRepository,
     private val programRepository: ProgramRepository
 ) : ViewModel() {
+
+    private val _draftLoad = MutableStateFlow<DraftLoad>(DraftLoad.Loading)
+    internal val draftLoad: StateFlow<DraftLoad> = _draftLoad
+
+    private val pendingDraft = MutableStateFlow<OnboardingDraft?>(null)
+
+    /** Flipped off the moment [complete] runs so a conflated save can't resurrect the draft the
+     *  atomic completion write just removed. */
+    @Volatile
+    private var draftWritesEnabled = true
+
+    init {
+        viewModelScope.launch {
+            _draftLoad.value = DraftLoad.Ready(settingsRepo.onboardingDraft()?.let(OnboardingDraft::fromJson))
+        }
+        // Conflated autosave: rapid changes (typing a name) collapse into one write ~250ms after
+        // the last keystroke — collectLatest cancels the stale snapshots.
+        viewModelScope.launch {
+            pendingDraft.filterNotNull().collectLatest { draft ->
+                delay(250)
+                if (draftWritesEnabled) settingsRepo.saveOnboardingDraft(draft.toJson())
+            }
+        }
+    }
+
+    /** Queue the current answers for persistence (see init) — cheap to call on every change. */
+    internal fun saveDraft(draft: OnboardingDraft) {
+        pendingDraft.value = draft
+    }
 
     /** Pure, side-effect-free week for the preview step — the same [seed] is persisted on finish. */
     fun buildPreview(
@@ -69,6 +109,8 @@ class OnboardingViewModel @Inject constructor(
         frozenIds: Set<String>? = null,
         coachEnabled: Boolean = true
     ) {
+        // Stop the resume-draft autosaver before the completion write removes the draft.
+        draftWritesEnabled = false
         viewModelScope.launch {
             bodyweightLb?.let { bodyweightRepo.log(it) }
             settingsRepo.setPlateWeightLb(plateWeightLb)

@@ -33,7 +33,7 @@ import com.forge.app.domain.cardio.pacePerUnit
 import com.forge.app.domain.units.distanceUnitLabel
 import com.forge.app.domain.units.toDisplayDistance
 import com.forge.app.ui.common.EditorialFigure
-import com.forge.app.ui.common.EditorialHairline
+import com.forge.app.ui.common.EditorialHeader
 import java.time.ZoneId
 import java.util.Locale
 
@@ -54,7 +54,6 @@ internal fun CardioWeekStatsPage(
     wearable: CardioWearableDay?,
     /** Avex holds the steps grant — show the steps section (with a placeholder) even before data syncs. */
     wearableConnected: Boolean,
-    bodyweightLb: Double?,
     zone: ZoneId,
     onOpenSession: (Long) -> Unit,
     onBg: Color,
@@ -70,7 +69,7 @@ internal fun CardioWeekStatsPage(
         PerDayBars(
             perDayMinutes = agg.perDayMinutes,
             todayDow = if (isCurrentWeek) todayDow else -1,
-            onBg = onBg, muted = muted, outline = outline
+            onBg = onBg, muted = muted, outline = outline, accent = accent
         )
 
         // ── Open figures ── serif number + tiny mono label, no card shell ─────
@@ -83,8 +82,7 @@ internal fun CardioWeekStatsPage(
             if (agg.distanceKm > 0) add(String.format(Locale.US, "%.1f", toDisplayDistance(agg.distanceKm, useMiles)) to distUnit)
             if (avgPace != null) add(avgPace to "/$distUnit avg")
         }
-        EditorialHairline(outline = outline, modifier = Modifier.padding(horizontal = 24.dp))
-        Spacer(Modifier.height(14.dp))
+        Spacer(Modifier.height(8.dp))
         figures.chunked(3).forEach { rowFigs ->
             Row(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
@@ -97,24 +95,19 @@ internal fun CardioWeekStatsPage(
                         onBg = onBg, muted = muted, accent = accent,
                         modifier = Modifier.weight(1f)
                     )
-                    if (idx < rowFigs.lastIndex) {
-                        // Even 16dp on both sides so a long figure never touches the rule.
-                        Spacer(Modifier.width(16.dp))
-                        Box(Modifier.width(1.dp).height(40.dp).background(outline.copy(alpha = 0.25f)).align(Alignment.CenterVertically))
-                        Spacer(Modifier.width(16.dp))
-                    }
+                    // Whitespace separates figures — a line is data only (§1).
+                    if (idx < rowFigs.lastIndex) Spacer(Modifier.width(20.dp))
                 }
                 repeat(3 - rowFigs.size) { Spacer(Modifier.weight(1f)) }
             }
             Spacer(Modifier.height(14.dp))
         }
-        EditorialHairline(outline = outline, modifier = Modifier.padding(horizontal = 24.dp))
 
         // ── Activity breakdown graph ────────────────────────────────────────
         if (agg.minutesByType.isNotEmpty()) {
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(14.dp))
             Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
-                Text("BY ACTIVITY", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
+                EditorialHeader(label = "By activity", muted = muted, accent = accent)
                 Spacer(Modifier.height(10.dp))
                 val maxMin = agg.minutesByType.first().second.coerceAtLeast(1)
                 agg.minutesByType.forEach { (type, min) ->
@@ -123,13 +116,13 @@ internal fun CardioWeekStatsPage(
                         Box(
                             modifier = Modifier
                                 .weight(1f)
-                                .height(8.dp)
+                                .height(4.dp)
                                 .clip(RoundedCornerShape(4.dp))
-                                .background(outline.copy(alpha = 0.15f))
+                                .background(outline.copy(alpha = 0.25f))
                         ) {
                             Box(
-                                Modifier.fillMaxWidth(min.toFloat() / maxMin).height(8.dp)
-                                    .clip(RoundedCornerShape(4.dp)).background(accent.copy(alpha = 0.7f))
+                                Modifier.fillMaxWidth(min.toFloat() / maxMin).height(4.dp)
+                                    .clip(RoundedCornerShape(4.dp)).background(accent)
                             )
                         }
                         Text("$min", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp, modifier = Modifier.width(36.dp))
@@ -149,12 +142,12 @@ internal fun CardioWeekStatsPage(
                 }
                 if (weekTargetMin > 0) {
                     val frac = (agg.minutes.toFloat() / weekTargetMin).coerceIn(0f, 1f)
-                    Box(Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)).background(muted.copy(alpha = 0.2f))) {
-                        Box(Modifier.fillMaxWidth(frac).height(6.dp).clip(RoundedCornerShape(3.dp)).background(onBg))
+                    Box(Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(4.dp)).background(outline.copy(alpha = 0.25f))) {
+                        Box(Modifier.fillMaxWidth(frac).height(4.dp).clip(RoundedCornerShape(4.dp)).background(accent))
                     }
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        if (agg.minutes >= weekTargetMin) "Weekly goal hit — ${agg.minutes} / $weekTargetMin min"
+                        if (agg.minutes >= weekTargetMin) "Goal hit · ${agg.minutes} / $weekTargetMin min"
                         else "${agg.minutes} / $weekTargetMin min this week",
                         style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp
                     )
@@ -165,30 +158,25 @@ internal fun CardioWeekStatsPage(
         // ── Wearable steps (data, or a placeholder once connected) ──────────
         StepsByHourSection(wearable = wearable, connected = wearableConnected, onBg = onBg, muted = muted, outline = outline, accent = accent)
 
-        // ── That week's sessions ────────────────────────────────────────────
-        Spacer(Modifier.height(12.dp))
-        if (ordered.isEmpty()) {
-            Text(
-                "Nothing logged this week.",
-                style = MaterialTheme.typography.bodyMedium, color = muted,
-                modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
-            )
-        } else {
-            Text("SESSIONS", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp, modifier = Modifier.padding(horizontal = 24.dp))
+        // ── That week's sessions ── the ghost per-day bars + honest-zero figures
+        // already carry an empty week (§12), so the section simply doesn't render then.
+        if (ordered.isNotEmpty()) {
+            Spacer(Modifier.height(12.dp))
+            EditorialHeader(label = "Sessions", muted = muted, accent = accent, modifier = Modifier.padding(horizontal = 24.dp))
             Spacer(Modifier.height(4.dp))
             ordered.forEach { entry ->
                 SessionTimelineRow(
-                    entry = entry, bodyweightLb = bodyweightLb, useMiles = useMiles, zone = zone,
+                    entry = entry, useMiles = useMiles, zone = zone,
                     onBg = onBg, muted = muted, onClick = { onOpenSession(entry.id) }
                 )
-                HorizontalDivider(modifier = Modifier.padding(horizontal = 24.dp), color = outline.copy(alpha = 0.12f))
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 24.dp), color = outline.copy(alpha = 0.25f))
             }
         }
     }
 }
 
 @Composable
-private fun PerDayBars(perDayMinutes: List<Int>, todayDow: Int, onBg: Color, muted: Color, outline: Color) {
+private fun PerDayBars(perDayMinutes: List<Int>, todayDow: Int, onBg: Color, muted: Color, outline: Color, accent: Color) {
     val letters = listOf("M", "T", "W", "T", "F", "S", "S")
     val maxMin = (perDayMinutes.maxOrNull() ?: 0).coerceAtLeast(1)
     VerticalBarRow(
@@ -198,8 +186,8 @@ private fun PerDayBars(perDayMinutes: List<Int>, todayDow: Int, onBg: Color, mut
         bar = { i ->
             val mins = perDayMinutes.getOrElse(i) { 0 }
             val frac = (mins.toFloat() / maxMin).coerceIn(0f, 1f)
-            if (mins > 0) BarGeom(height = (8 + 48 * frac).dp, fill = onBg)
-            else BarGeom(height = 4.dp, fill = outline.copy(alpha = 0.3f))
+            if (mins > 0) BarGeom(height = (8 + 48 * frac).dp, fill = accent)
+            else BarGeom(height = 4.dp, fill = outline.copy(alpha = 0.35f))
         },
         top = { i ->
             val mins = perDayMinutes.getOrElse(i) { 0 }

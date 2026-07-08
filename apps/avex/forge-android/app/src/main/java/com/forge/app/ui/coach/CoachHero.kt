@@ -66,7 +66,8 @@ internal fun CoachHero(state: CoachViewModel.UiState, useKg: Boolean, c: CoachCo
         // carries a decision or result; status/anticipation ("Ready to coach") is never a
         // verdict (§3) — those states run eyebrow + aside and let the figures be the hero.
         val verdict = when {
-            brief.pass.status == CoachRepository.STATUS_ERROR -> "The pass failed"
+            // §11: a verdict states what it means for the user, not internal state ("pass").
+            brief.pass.status == CoachRepository.STATUS_ERROR -> "No call this week"
             staleLearning -> null
             hasOpenDeload -> "Deload week"
             open == 1 -> "One proposal"
@@ -84,11 +85,12 @@ internal fun CoachHero(state: CoachViewModel.UiState, useKg: Boolean, c: CoachCo
         // just restated the Next-brief countdown below, so the stale-learning hero drops the
         // line entirely and lets the figures be the hero.
         val sub = when {
+            // Stored reasons are machine prose — translated at the seam (§11), never raw.
             brief.pass.status == CoachRepository.STATUS_ERROR ->
-                brief.pass.holdReason ?: "Nothing was considered this week."
+                brief.pass.holdReason?.let(::recordHoldLine) ?: "Nothing was considered this week."
             staleLearning -> null
             // A quiet week needs no restatement — drop the line rather than echo the verdict (§4.4).
-            else -> brief.review?.focusLine ?: brief.pass.holdReason
+            else -> brief.review?.focusLine ?: brief.pass.holdReason?.let(::recordHoldLine)
         }
         if (sub != null) SubLine(sub, c)
 

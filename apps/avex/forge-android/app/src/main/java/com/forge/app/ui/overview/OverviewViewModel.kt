@@ -251,7 +251,7 @@ class OverviewViewModel @Inject constructor(
                 workoutRepo.resolveOrphanSession(com.forge.app.program.Program.dayKeys.toSet())
             }.getOrNull()?.let { res ->
                 _orphanNotice.value = if (res.finishedToHistory)
-                    "Saved an unfinished workout from a day that's no longer in your program — it's in your history now."
+                    "Saved an unfinished workout from a day that's no longer in your program. It's in your history now."
                 else
                     "Cleared an empty leftover session from a workout day that's no longer in your program."
             }

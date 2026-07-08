@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.FlowRowScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
@@ -29,19 +28,19 @@ import androidx.compose.ui.unit.dp
 import com.forge.app.domain.schedule.WeeklySchedule
 
 /**
- * The "Program & equipment" page — the workspace for building and editing a plan. A small menu of
- * focused sub-pages (Plan · Focus · Equipment), with the make/refresh-a-plan actions living at the
- * menu root, always one tap away. Coach configuration used to live here too but moved to its own
- * top-level page — this page is only the things that shape a plan. Nested navigation is local state
- * (mirrors the Exercise-likes page), hoisted to [SettingsScreen] so the top-bar back and system back
- * both return here (the menu) before exiting to Settings.
+ * The "Program & equipment" page — the workspace for building and editing a plan. Four focused
+ * sub-pages (Plan · Goal & experience · Emphasis & priorities · Equipment) rendered as menu rows
+ * carrying their live values, plus a nav link to the full plan builder; the make/refresh-a-plan
+ * actions group at the END of the menu root. Coach configuration used to live here too but moved to
+ * its own top-level page — this page is only the things that shape a plan. Nested navigation is
+ * local state (mirrors the Exercise-likes page), hoisted to [SettingsScreen] so the top-bar back and
+ * system back both return here (the menu) before exiting to Settings.
  */
 internal enum class ProgramSection(val title: String) {
     Plan("Plan"),
     Goal("Goal & experience"),
     Emphasis("Emphasis & priorities"),
-    Equipment("Equipment"),
-    Loading("Plates & dumbbells")
+    Equipment("Equipment")
 }
 
 @Composable
@@ -59,7 +58,6 @@ internal fun ProgramPage(
         ProgramSection.Goal -> ProgramSectionScaffold(modifier) { GoalExperienceSection(state, vm) }
         ProgramSection.Emphasis -> ProgramSectionScaffold(modifier) { EmphasisSection(state, vm) }
         ProgramSection.Equipment -> ProgramSectionScaffold(modifier) { EquipmentSection(state, vm) }
-        ProgramSection.Loading -> ProgramSectionScaffold(modifier) { LoadingSection(state, vm) }
     }
 }
 
@@ -73,27 +71,69 @@ private fun ProgramMenu(
     onOpenBuilder: () -> Unit,
     onOpen: (ProgramSection) -> Unit
 ) {
+    val scheduleMode by vm.scheduleMode.collectAsState()
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-        Spacer(Modifier.height(16.dp))
-        // Section nav as a compact pill row at the top (was a tall vertical nav-row list). Each pill
-        // drills into that section; current values live inside, so the menu itself stays short.
-        FlowRow(
-            modifier = Modifier.padding(horizontal = 24.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            ProgramSection.entries.forEach { s ->
-                SettingsOutlineAction(s.title) { onOpen(s) }
-            }
-            SettingsOutlineAction("Build / edit plan") { onOpenBuilder() }
-        }
-        // The auto-refresh setting sits with the config; the action buttons (Generate, manual
-        // re-roll/deload) group together at the very END of the page, never mid-scroll.
+        // The top bar never names the screen (§2) — the page opens with its own mono anchor.
+        SettingsSectionHeader("Program & equipment", top = 12.dp)
+        // Drill-ins as menu rows showing their live values (§3) — the same language as the main
+        // settings list, so they read as sub-pages (pills read as one-shot actions).
+        SettingsNavRow("Plan", planSummary(state, scheduleMode)) { onOpen(ProgramSection.Plan) }
+        SettingsNavRow("Goal & experience", goalSummary(state)) { onOpen(ProgramSection.Goal) }
+        SettingsNavRow("Emphasis & priorities", emphasisSummary(state)) { onOpen(ProgramSection.Emphasis) }
+        SettingsNavRow("Equipment", equipmentSummary(state)) { onOpen(ProgramSection.Equipment) }
+        // The builder is a routed screen, not a fifth sub-page — nav renders as an `action →` link (§8 ③).
+        Spacer(Modifier.height(4.dp))
+        SettingsActionLink("Open the plan builder →") { onOpenBuilder() }
+        // The auto-refresh setting sits with the config; the plan actions (Generate + its re-roll and
+        // deload sidekicks) group together at the very END of the page, never mid-scroll.
         AutoRefreshBlock(state, vm)
         GenerateBlock(state, vm)
-        ManualRefreshBlock(vm)
         Spacer(Modifier.height(24.dp))
     }
+}
+
+/** "4 days/week · in sequence" — the Plan row's live value. */
+private fun planSummary(state: SettingsUiState, scheduleMode: String): String = when {
+    state.freestyleMode -> "Freestyle · log as you go"
+    scheduleMode == WeeklySchedule.MODE_WEEKDAY -> "${state.daysPerWeek} days/week · by weekday"
+    else -> "${state.daysPerWeek} days/week · in sequence"
+}
+
+/** "Build muscle · Intermediate" — the Goal & experience row's live value. */
+private fun goalSummary(state: SettingsUiState): String {
+    val goal = when (state.userGoal) {
+        "get_stronger" -> "Get stronger"
+        "lose_weight" -> "Lose weight"
+        "general_fitness" -> "General fitness"
+        else -> "Build muscle"
+    }
+    return "$goal · ${state.experience.replaceFirstChar { it.uppercase() }}"
+}
+
+/** "Balanced · 2 prioritized" — the Emphasis & priorities row's live value. */
+private fun emphasisSummary(state: SettingsUiState): String {
+    val emphasis = when (state.programEmphasis) {
+        "upper" -> "Upper body"
+        "legs" -> "Legs"
+        "arms-shoulders" -> "Arms & shoulders"
+        else -> "Balanced"
+    }
+    return buildList {
+        add(emphasis)
+        if (state.priorityMuscles.isNotEmpty()) add("${state.priorityMuscles.size} prioritized")
+        if (state.problemAreas.isNotEmpty()) add("${state.problemAreas.size} flagged")
+    }.joinToString(" · ")
+}
+
+/** "4 selected · 45 lb plates" — the Equipment row's live value (preset name when one is active). */
+private fun equipmentSummary(state: SettingsUiState): String {
+    val preset = com.forge.app.program.equipmentPresets.firstOrNull {
+        state.availableEquipment == it.equipment && state.frozenExerciseIds == it.frozenIds
+    }
+    val base = preset?.label
+        ?: if (state.availableEquipment.isEmpty()) "All equipment"
+        else "${state.availableEquipment.size} selected"
+    return "$base · ${com.forge.app.domain.units.formatWeight(state.plateWeightLb, state.useKg)} plates"
 }
 
 // ─── Sections ──────────────────────────────────────────────────────────────────
@@ -206,7 +246,9 @@ private fun EmphasisSection(state: SettingsUiState, vm: SettingsViewModel) {
 
 /**
  * Equipment stays inside Program (the page is "Program & equipment"): the generator only picks
- * movements you can do with what's selected, plus the plate/dumbbell ceilings it loads against.
+ * movements you can do with what's selected, plus the plate/dumbbell ceilings it loads against
+ * (folded in here — they're equipment facts, not their own page). The one do-it-now action
+ * (Regenerate) sits at the END of the page (§8).
  */
 @Composable
 private fun EquipmentSection(state: SettingsUiState, vm: SettingsViewModel) {
@@ -244,27 +286,8 @@ private fun EquipmentSection(state: SettingsUiState, vm: SettingsViewModel) {
                 }
             }
         }
-        Spacer(Modifier.height(16.dp))
-        Text(
-            if (equipmentEdited) "Equipment changed. Regenerate so your plan uses only what you've got."
-            else "Changed your equipment? Regenerate so the plan matches it.",
-            style = MaterialTheme.typography.bodySmall,
-            color = if (equipmentEdited) accent else muted,
-            fontStyle = FontStyle.Italic,
-            modifier = Modifier.padding(horizontal = 24.dp)
-        )
-        Spacer(Modifier.height(10.dp))
-        ChipFlow {
-            SettingsPrimaryAction("Regenerate for this equipment") {
-                vm.generateProgram(state.daysPerWeek); equipmentEdited = false
-            }
-        }
     }
-}
 
-/** How your equipment loads — plate weight for plate-loaded machines, and the dumbbell ceiling. */
-@Composable
-private fun LoadingSection(state: SettingsUiState, vm: SettingsViewModel) {
     ProgramBlock("Weight per plate", "What one plate weighs, for plate-loaded machines.") {
         ChipFlow {
             listOf(5.0, 10.0, 15.0, 20.0, 25.0, 45.0).forEach { w ->
@@ -281,15 +304,34 @@ private fun LoadingSection(state: SettingsUiState, vm: SettingsViewModel) {
             }
         }
     }
+
+    Spacer(Modifier.height(20.dp))
+    Text(
+        if (equipmentEdited) "Equipment changed. Regenerate so your plan uses only what you've got."
+        else "Changed your equipment? Regenerate so the plan matches it.",
+        style = MaterialTheme.typography.bodySmall,
+        color = if (equipmentEdited) accent else muted,
+        fontStyle = FontStyle.Italic,
+        modifier = Modifier.padding(horizontal = 24.dp)
+    )
+    Spacer(Modifier.height(10.dp))
+    ChipFlow {
+        SettingsPrimaryAction("Regenerate for this equipment") {
+            vm.generateProgram(state.daysPerWeek); equipmentEdited = false
+        }
+    }
 }
 
 // ─── Generate / refresh cluster (menu root) ──────────────────────────────────
 
 @Composable
 private fun GenerateBlock(state: SettingsUiState, vm: SettingsViewModel) {
-    ProgramBlock("Generate", "Builds a fresh plan from your settings above, replacing the current one.") {
+    ProgramBlock("Generate", "Builds a fresh plan from these settings, replacing the current one.") {
         ChipFlow {
             SettingsPrimaryAction("Generate ${state.daysPerWeek}-day plan") { vm.generateProgram(state.daysPerWeek) }
+            // Lighter refreshes as sidekicks: re-roll swaps the exercises, deload halves the week.
+            SettingsOutlineAction("Re-roll exercises") { vm.rerollProgram() }
+            SettingsOutlineAction("Deload week") { vm.generateDeloadWeek() }
         }
     }
 }
@@ -309,21 +351,10 @@ private fun AutoRefreshBlock(state: SettingsUiState, vm: SettingsViewModel) {
     }
 }
 
-/** One-tap refreshes beside Generate: swap exercises now, or drop into a recovery week. */
-@Composable
-private fun ManualRefreshBlock(vm: SettingsViewModel) {
-    ProgramBlock("Manual refresh", "Re-roll swaps the exercises; deload rebuilds the week at half volume.") {
-        ChipFlow {
-            SettingsOutlineAction("Re-roll exercises") { vm.rerollProgram() }
-            SettingsOutlineAction("Deload week") { vm.generateDeloadWeek() }
-        }
-    }
-}
-
 // ─── Shared layout helpers ───────────────────────────────────────────────────
 
 /** A plain scrolling container for a Program sub-section. Back is the top-bar `←` alone (one per
- *  page, §2); the top bar's right label already names the section, so there's no in-page back row. */
+ *  page, §2); each section opens with its first block's mono anchor, so there's no in-page back row. */
 @Composable
 private fun ProgramSectionScaffold(modifier: Modifier, content: @Composable () -> Unit) {
     Column(modifier.fillMaxSize().verticalScroll(rememberScrollState())) {

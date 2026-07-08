@@ -1,6 +1,5 @@
 package com.forge.app.ui.cardio.components
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -27,6 +26,8 @@ import com.forge.app.domain.cardio.CardioRestReason
 import com.forge.app.domain.cardio.CardioType
 import com.forge.app.domain.cardio.CardioWearableDay
 import com.forge.app.domain.cardio.cardioDetailParts
+import com.forge.app.ui.common.EditorialHeader
+import com.forge.app.ui.common.clickableLabeled
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -37,7 +38,6 @@ import java.util.Locale
 @Composable
 internal fun SessionTimelineRow(
     entry: CardioEntry,
-    bodyweightLb: Double?,
     useMiles: Boolean,
     zone: ZoneId,
     onBg: Color,
@@ -55,15 +55,15 @@ internal fun SessionTimelineRow(
     val detail = if (type.isRest) {
         CardioRestReason.fromCode(entry.restReason)?.displayName ?: "Rest day"
     } else {
-        cardioDetailParts(entry, type, bodyweightLb, useMiles = useMiles).joinToString(" · ")
+        cardioDetailParts(entry, useMiles = useMiles).joinToString(" · ")
     }
     Row(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 24.dp, vertical = 12.dp),
+        modifier = Modifier.fillMaxWidth().clickableLabeled("View session details", onClick = onClick).padding(horizontal = 24.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Text(dayLabel, style = MaterialTheme.typography.labelMedium, color = onBg.copy(alpha = 0.85f), fontSize = 10.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.width(32.dp))
-        Icon(type.icon, contentDescription = null, tint = onBg.copy(alpha = 0.9f), modifier = Modifier.size(20.dp))
+        Text(dayLabel, style = MaterialTheme.typography.labelMedium, color = muted, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.width(32.dp))
+        Icon(type.icon, contentDescription = null, tint = onBg, modifier = Modifier.size(20.dp))
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(type.displayName, style = MaterialTheme.typography.bodyMedium, color = onBg)
@@ -75,7 +75,8 @@ internal fun SessionTimelineRow(
                 Text(detail, style = MaterialTheme.typography.labelSmall, color = muted, fontStyle = FontStyle.Italic, fontSize = 10.sp)
             }
         }
-        Text("stats ›", style = MaterialTheme.typography.labelSmall, color = onBg.copy(alpha = 0.7f), fontSize = 10.sp)
+        // §8 level ③ — navigation reads as the mono accent `action →` idiom.
+        Text("stats →", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, fontSize = 10.sp)
     }
 }
 
@@ -97,14 +98,24 @@ internal fun StepsByHourSection(
     val hasData = wearable != null && wearable.hasData
     if (!hasData && !connected) return
     Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp)) {
-        Text("STEPS THROUGH THE DAY", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
+        EditorialHeader(label = "Steps through the day", muted = muted, accent = accent)
         Spacer(Modifier.height(10.dp))
         if (hasData) {
             HourlyStepsBars(wearable!!, muted = muted, outline = outline, accent = accent)
         } else {
+            // Connected but nothing synced yet — the section's own mark at zero (§12): ghost hour bars.
+            VerticalBarRow(
+                count = 24,
+                trackHeight = 56.dp,
+                modifier = Modifier.fillMaxWidth(),
+                spacing = 2.dp,
+                corner = 4.dp,
+                bar = { BarGeom(height = 3.dp, fill = outline.copy(alpha = 0.25f)) }
+            )
+            Spacer(Modifier.height(8.dp))
             Text(
                 "No steps from your watch for this day yet.",
-                style = MaterialTheme.typography.bodySmall, color = muted
+                style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp
             )
         }
     }
@@ -128,12 +139,12 @@ private fun HourlyStepsBars(
             trackHeight = 56.dp,
             modifier = Modifier.fillMaxWidth(),
             spacing = 2.dp,
-            corner = 2.dp,
+            corner = 4.dp,
             bar = { i ->
                 val steps = byHour[i]
                 BarGeom(
                     height = (3 + (steps.toFloat() / max) * 52).dp,
-                    fill = if (steps > 0) accent.copy(alpha = 0.7f) else outline.copy(alpha = 0.25f)
+                    fill = if (steps > 0) accent else outline.copy(alpha = 0.25f)
                 )
             }
         )

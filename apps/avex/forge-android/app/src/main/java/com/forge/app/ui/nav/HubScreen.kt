@@ -109,7 +109,8 @@ fun HubScreen(
             when (tabs.getOrElse(page) { BottomTab.HOME }) {
                 BottomTab.CARDIO -> CardioScreen(
                     onOpenHistory = { nav.navigate(Routes.SESSION_HISTORY) },
-                    onConnectWearable = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) }
+                    onConnectWearable = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) },
+                    onOpenGoals = { nav.navigate(Routes.GOALS) }
                 )
                 BottomTab.STATS -> DayListScreen(
                     onOpenDay = { dayKey -> nav.navigate(Routes.gymDay(dayKey)) },

@@ -1,6 +1,5 @@
 package com.forge.app.ui.goals
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -13,7 +12,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -29,17 +27,17 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.forge.app.ui.common.EditorialHairline
-import com.forge.app.ui.common.FirstTouchTip
+import com.forge.app.ui.common.EditorialHeader
+import com.forge.app.ui.common.ForgeWordmark
+import com.forge.app.ui.common.InlineEmptyHint
+import com.forge.app.ui.common.clickableLabeled
 
 /**
  * The aggregated Goals list. Adding and editing happen on the routed [GoalEditorScreen] (a full
@@ -81,7 +79,8 @@ fun GoalsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Goals", style = MaterialTheme.typography.headlineMedium) },
+                // §2: the top bar never names the screen — wordmark + back; the serif hero below does.
+                title = { ForgeWordmark() },
                 navigationIcon = {
                     IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
                 },
@@ -91,21 +90,20 @@ fun GoalsScreen(
         containerColor = Color.Transparent
     ) { inner ->
         when {
-            state.loading -> Box(Modifier.fillMaxSize().padding(inner), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
-            }
+            // No spinners (§13): local DB is instant, the list simply appears when state lands.
+            state.loading -> Box(Modifier.fillMaxSize().padding(inner))
             else -> Column(
                 Modifier.fillMaxSize().padding(inner).verticalScroll(rememberScrollState()).padding(horizontal = 24.dp)
             ) {
                 Spacer(Modifier.height(4.dp))
+                Text("Goals", style = MaterialTheme.typography.headlineSmall, color = onBg)
+                Spacer(Modifier.height(8.dp))
                 Text(
-                    "A weight on a lift, a weekly cardio or workout target, or a bodyweight goal — " +
-                        "custom goals track themselves from what you log.",
-                    style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic,
+                    "A weight on a lift, a weekly cardio or workout target, or a bodyweight goal. " +
+                        "Custom goals track themselves from what you log.",
+                    style = MaterialTheme.typography.bodySmall, color = muted,
                     fontSize = 11.sp, lineHeight = 15.sp
                 )
-                Spacer(Modifier.height(14.dp))
-                EditorialHairline(outline)
                 Spacer(Modifier.height(16.dp))
 
                 if (searchVisible) {
@@ -121,11 +119,7 @@ fun GoalsScreen(
                 }
 
                 if (totalGoals == 0) {
-                    FirstTouchTip(
-                        "No goals yet.",
-                        "Tap + Add a goal below to pick a target — a lift weight, a weekly cardio/workout " +
-                            "target, or a bodyweight goal."
-                    )
+                    InlineEmptyHint("No goals yet. Add one below.", muted)
                 } else if (lifts.isEmpty() && customs.isEmpty()) {
                     Text(
                         "No goals match “$q”.",
@@ -134,14 +128,14 @@ fun GoalsScreen(
                     )
                 } else {
                     if (lifts.isNotEmpty()) {
-                        SectionLabel("LIFT TARGETS", muted)
+                        EditorialHeader("Lift targets", muted, accent, Modifier.padding(bottom = 12.dp))
                         lifts.forEachIndexed { i, g ->
                             LiftGoalRow(g, i, onBg, muted, accent, outline) { onEditLift(g.exerciseId) }
                             Spacer(Modifier.height(18.dp))
                         }
                     }
                     if (customs.isNotEmpty()) {
-                        SectionLabel("OTHER GOALS", muted)
+                        EditorialHeader("Other goals", muted, accent, Modifier.padding(bottom = 12.dp))
                         customs.forEachIndexed { i, g ->
                             // Stagger continues across the two sections so the whole list cascades once.
                             CustomGoalRow(g, lifts.size + i, onBg, muted, accent, outline) { onEditCustom(g.id) }
@@ -151,25 +145,15 @@ fun GoalsScreen(
                 }
 
                 Spacer(Modifier.height(8.dp))
+                // §11 "+ log" idiom: an accent mono action line, bounce over ripple.
                 Text(
-                    "+ Add a goal",
+                    "+ add goal",
                     style = MaterialTheme.typography.labelLarge,
-                    color = onBg,
-                    modifier = Modifier.clickable { onAddGoal() }.padding(vertical = 8.dp)
+                    color = accent,
+                    modifier = Modifier.clickableLabeled("Add a goal") { onAddGoal() }.padding(vertical = 12.dp)
                 )
                 Spacer(Modifier.height(40.dp))
             }
         }
     }
-}
-
-@Composable
-private fun SectionLabel(text: String, muted: Color) {
-    Text(
-        text,
-        style = MaterialTheme.typography.labelSmall,
-        color = muted,
-        fontSize = 11.sp,
-        modifier = Modifier.padding(bottom = 12.dp)
-    )
 }

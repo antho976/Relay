@@ -17,7 +17,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
@@ -170,7 +169,7 @@ internal fun RankSection(
                     drawCircle(tc, radius = if (isCur) curR else dotR, center = c)
                     if (isCur) drawCircle(tc.copy(alpha = 0.35f), radius = curR + 3.dp.toPx(), center = c, style = Stroke(width = 1.5.dp.toPx()))
                 } else {
-                    drawCircle(outline.copy(alpha = 0.40f), radius = dotR, center = c, style = Stroke(width = 1.5.dp.toPx()))
+                    drawCircle(outline.copy(alpha = 0.35f), radius = dotR, center = c, style = Stroke(width = 1.5.dp.toPx()))
                 }
             }
         }
@@ -181,7 +180,7 @@ internal fun RankSection(
         val barTarget = if (rank.isMax) 1f else withinTier
         val barFill = barTarget * enter
         Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-            Box(Modifier.fillMaxWidth(5f / 6f).height(4.dp).clip(RoundedCornerShape(50)).background(outline.copy(alpha = 0.2f))) {
+            Box(Modifier.fillMaxWidth(5f / 6f).height(4.dp).clip(RoundedCornerShape(50)).background(outline.copy(alpha = 0.25f))) {
                 Box(Modifier.fillMaxWidth(barFill).fillMaxHeight().clip(RoundedCornerShape(50)).background(tierColor))
             }
         }
@@ -221,7 +220,6 @@ internal fun RankInfoSheet(
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val accent = MaterialTheme.colorScheme.primary
-    val outline = MaterialTheme.colorScheme.outline
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 32.dp)) {
@@ -257,9 +255,8 @@ internal fun RankInfoSheet(
                 }
             }
 
-            Spacer(Modifier.height(18.dp))
-            HorizontalDivider(color = outline.copy(alpha = 0.3f))
-            Spacer(Modifier.height(14.dp))
+            // Air + the mono header separate the sheet's sections (§1) — no hairline strips.
+            Spacer(Modifier.height(28.dp))
             Text("HOW TO EARN MORE", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp)
             Spacer(Modifier.height(8.dp))
             val useKg = LocalForgeSettings.current.useKg
@@ -281,9 +278,7 @@ internal fun RankInfoSheet(
                 }
             }
 
-            Spacer(Modifier.height(18.dp))
-            HorizontalDivider(color = outline.copy(alpha = 0.3f))
-            Spacer(Modifier.height(14.dp))
+            Spacer(Modifier.height(28.dp))
             Text("THE LADDER", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp)
             Spacer(Modifier.height(8.dp))
             RankTier.entries.forEach { t ->

@@ -38,7 +38,7 @@ internal fun SegmentPill(
             .clip(RoundedCornerShape(50))
             .border(0.5.dp, if (selected) accent else outline.copy(alpha = 0.35f), RoundedCornerShape(50))
             .background(if (selected) accent.copy(alpha = 0.15f) else Color.Transparent)
-            .clickable { onClick() }
+            .bounceClick(onClick = onClick) // §9: press = bounce, no ripple
             .semantics { this.selected = selected } // TalkBack announces the active segment
             .padding(horizontal = 12.dp, vertical = 5.dp)
     ) {

@@ -176,7 +176,6 @@ private fun LazyListScope.loadingSkeleton(c: StatsColors) {
                     .fillMaxWidth()
                     .statsEntrance(i)
             ) {
-                HorizontalDivider(Modifier.padding(horizontal = STATS_GUTTER), color = c.outline.copy(alpha = 0.25f))
                 Spacer(Modifier.height(if (i == 0) 168.dp else 116.dp))
             }
         }

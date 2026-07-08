@@ -65,13 +65,16 @@ object SettingsIcons {
         }
     }
 
-    /** Program & equipment — a bold dumbbell: two chunky rounded weights joined by a solid bar. */
+    /** Program & equipment — a clipboard plan: stroked board, filled clip tab, and three plan
+     *  lines (the third shorter, so it reads as a program being written, not a text block). */
     val Program: ImageVector by lazy {
         icon("SetProgram") {
-            fillPath {
-                roundRect(3.6f, 6.6f, 6.6f, 17.4f, 1.3f)    // left weight
-                roundRect(6.6f, 10.6f, 17.4f, 13.4f, 1.2f)  // bar
-                roundRect(17.4f, 6.6f, 20.4f, 17.4f, 1.3f)  // right weight
+            strokePath(1.7f) { roundRect(5.2f, 4.6f, 18.8f, 20.2f, 2f) }
+            fillPath { roundRect(9.0f, 2.9f, 15.0f, 6.3f, 1.2f) }
+            strokePath(1.7f) {
+                moveTo(8.6f, 10.8f); lineTo(15.4f, 10.8f)
+                moveTo(8.6f, 14.2f); lineTo(15.4f, 14.2f)
+                moveTo(8.6f, 17.6f); lineTo(12.4f, 17.6f)
             }
         }
     }

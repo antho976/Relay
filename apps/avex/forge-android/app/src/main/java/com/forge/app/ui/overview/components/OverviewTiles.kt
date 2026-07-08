@@ -46,8 +46,8 @@ fun CardioTile(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .border(BorderStroke(0.5.dp, outline.copy(alpha = 0.35f)), RoundedCornerShape(10.dp))
-            .clip(RoundedCornerShape(10.dp))
+            .border(BorderStroke(0.5.dp, outline.copy(alpha = 0.35f)), RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(12.dp))
             .clickable { onClick() }
             .padding(horizontal = 16.dp, vertical = 14.dp)
     ) {
@@ -71,7 +71,7 @@ fun CardioTile(
                         Box(
                             modifier = Modifier.fillMaxWidth().height(36.dp).then(
                                 if (active) Modifier.background(onBg.copy(alpha = 0.82f), RoundedCornerShape(5.dp))
-                                else Modifier.border(BorderStroke(0.5.dp, outline.copy(alpha = 0.45f)), RoundedCornerShape(5.dp))
+                                else Modifier.border(BorderStroke(0.5.dp, outline.copy(alpha = 0.35f)), RoundedCornerShape(5.dp))
                             )
                         )
                         Text(letter, style = MaterialTheme.typography.labelSmall, fontSize = 8.sp,
@@ -111,8 +111,8 @@ fun StatsTile(
         // including at large font scales.
         modifier = modifier
             .heightIn(min = 108.dp)
-            .border(BorderStroke(0.5.dp, outline.copy(alpha = 0.35f)), RoundedCornerShape(10.dp))
-            .clip(RoundedCornerShape(10.dp))
+            .border(BorderStroke(0.5.dp, outline.copy(alpha = 0.35f)), RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(12.dp))
             .clickable { onClick() }
             .padding(horizontal = 14.dp, vertical = 12.dp)
     ) {
@@ -147,8 +147,8 @@ fun TrophiesTile(
     Box(
         modifier = modifier
             .height(108.dp)
-            .border(BorderStroke(0.5.dp, outline.copy(alpha = 0.35f)), RoundedCornerShape(10.dp))
-            .clip(RoundedCornerShape(10.dp))
+            .border(BorderStroke(0.5.dp, outline.copy(alpha = 0.35f)), RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(12.dp))
             .clickable { onClick() }
             .padding(horizontal = 14.dp, vertical = 12.dp)
     ) {

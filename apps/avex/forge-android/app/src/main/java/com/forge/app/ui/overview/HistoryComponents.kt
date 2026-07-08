@@ -15,6 +15,6 @@ import androidx.compose.ui.unit.sp
 internal fun SummaryStat(value: String, label: String, muted: Color, onBg: Color) {
     Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
         Text(value, style = MaterialTheme.typography.bodyMedium, color = onBg, fontWeight = FontWeight.Normal)
-        Text(label, style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.6f), fontSize = 9.sp, letterSpacing = 0.5.sp)
+        Text(label, style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.65f), fontSize = 9.sp, letterSpacing = 0.5.sp)
     }
 }

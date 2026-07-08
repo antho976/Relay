@@ -33,7 +33,6 @@ import com.forge.app.ui.common.clickableLabeled
  */
 @Composable
 internal fun AboutPage(modifier: Modifier = Modifier, viewModel: SettingsViewModel? = null) {
-    val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val context = LocalContext.current
     val version = remember {
@@ -65,18 +64,16 @@ internal fun AboutPage(modifier: Modifier = Modifier, viewModel: SettingsViewMod
             .verticalScroll(rememberScrollState())
             .padding(bottom = 56.dp)
     ) {
-        Column(Modifier.padding(start = 24.dp, end = 24.dp, top = 20.dp, bottom = 16.dp)) {
-            Text("FORGE", style = MaterialTheme.typography.headlineSmall, color = onBg)
-            Text(
-                if (version.isBlank()) "Offline strength tracker" else "Version $version · Offline strength tracker",
-                style = MaterialTheme.typography.labelSmall,
-                color = muted,
-                fontSize = 11.sp
-            )
-        }
-        SectionDivider()
+        SettingsSectionHeader("App", top = 12.dp)
+        Text(
+            if (version.isBlank()) "Offline strength tracker" else "Version $version · Offline strength tracker",
+            style = MaterialTheme.typography.labelSmall,
+            color = muted,
+            fontSize = 11.sp,
+            modifier = Modifier.padding(horizontal = 24.dp)
+        )
 
-        SectionLabel("YOUR DATA STAYS ON THIS DEVICE")
+        SettingsSectionHeader("Your data stays on this device")
         AboutParagraph(
             "Everything you log lives in a private database on this phone. There's no account and no " +
                 "sign-in — Avex doesn't even request the Internet permission, so it physically can't " +
@@ -92,9 +89,7 @@ internal fun AboutPage(modifier: Modifier = Modifier, viewModel: SettingsViewMod
                 "brings everything back. Turn on Privacy to block screenshots and hide the app preview in " +
                 "recent apps."
         )
-        SectionDivider()
-
-        SectionLabel("GESTURES & SHORTCUTS")
+        SettingsSectionHeader("Gestures & shortcuts")
         AboutCaption("Hidden gestures built into the training screen and workout logging.")
         GestureRow(
             gesture = "Long-press an exercise card",
@@ -116,9 +111,7 @@ internal fun AboutPage(modifier: Modifier = Modifier, viewModel: SettingsViewMod
             gesture = "Long-press a day card on the Gym list",
             action = "Change day color · re-roll exercises · edit program for this day"
         )
-        SectionDivider()
-
-        SectionLabel("ABOUT")
+        SettingsSectionHeader("About")
         AboutParagraph(
             "A personal gym companion — auto-generated programs, an adaptive coach, progress stats, " +
                 "trophies and a rank ladder. Built for lifting, not for the cloud."
@@ -133,9 +126,7 @@ internal fun AboutPage(modifier: Modifier = Modifier, viewModel: SettingsViewMod
                     .padding(horizontal = 24.dp, vertical = 10.dp)
             )
         }
-        SectionDivider()
-
-        SectionLabel("OPEN-SOURCE LICENSES")
+        SettingsSectionHeader("Open-source licenses")
         AboutParagraph(
             "Avex is built on open-source software. The anatomical muscle figures are adapted from " +
                 "react-native-body-highlighter (MIT License). The core libraries it's built on — Jetpack " +
@@ -152,7 +143,7 @@ internal fun AboutPage(modifier: Modifier = Modifier, viewModel: SettingsViewMod
         Text(
             "Avex · a solo-built, offline-first project.",
             style = MaterialTheme.typography.labelSmall,
-            color = muted.copy(alpha = 0.6f),
+            color = muted.copy(alpha = 0.65f),
             modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
         )
         Spacer(Modifier.height(8.dp))
@@ -195,7 +186,7 @@ private fun GestureRow(gesture: String, action: String) {
         Text(
             action,
             style = MaterialTheme.typography.labelSmall,
-            color = muted.copy(alpha = 0.6f),
+            color = muted.copy(alpha = 0.65f),
             fontSize = 10.sp
         )
     }
@@ -222,7 +213,7 @@ private fun CrashLogViewerDialog(
                     )
                 } else if (logs.isEmpty()) {
                     Text(
-                        "No crashes recorded — nice.",
+                        "No crashes recorded.",
                         style = MaterialTheme.typography.bodySmall,
                         color = muted
                     )

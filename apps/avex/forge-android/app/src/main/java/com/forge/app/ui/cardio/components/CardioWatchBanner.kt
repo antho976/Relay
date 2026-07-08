@@ -1,17 +1,11 @@
 package com.forge.app.ui.cardio.components
 
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Watch
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -21,6 +15,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.forge.app.ui.common.clickableLabeled
 
 /**
  * A quiet, dismissible top banner inviting the user to connect a watch/ring for steps + GPS. Tapping
@@ -41,29 +36,28 @@ internal fun CardioWatchBanner(
     Row(
         modifier = modifier
             .padding(horizontal = 24.dp, vertical = 8.dp)
-            .border(1.dp, outline.copy(alpha = 0.3f), RoundedCornerShape(12.dp))
+            .border(1.dp, outline.copy(alpha = 0.35f), RoundedCornerShape(12.dp))
             .clip(RoundedCornerShape(12.dp))
-            .clickable(onClick = onConnect)
+            .clickableLabeled("Connect a watch or ring", onClick = onConnect)
             .padding(start = 14.dp, end = 6.dp, top = 10.dp, bottom = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Icon(Icons.Filled.Watch, contentDescription = null, tint = muted, modifier = Modifier.size(20.dp))
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
             Text("Connect a watch or ring", style = MaterialTheme.typography.bodyMedium, color = onBg)
             Text(
-                "Steps by the hour and your route on each session — tap to set up.",
+                "Steps by the hour and your route on each session · tap to set up.",
                 style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp
             )
         }
-        Icon(
-            Icons.Filled.Close,
-            contentDescription = "Dismiss",
-            tint = muted,
+        Text(
+            "×",
+            style = MaterialTheme.typography.bodyLarge,
+            color = muted,
             modifier = Modifier
-                .clickable(onClick = onDismiss)
-                .padding(8.dp)
-                .size(18.dp)
+                .clickableLabeled("Dismiss", onClick = onDismiss)
+                // Padding, not glyph size, carries the ≥48dp touch target (§8).
+                .padding(14.dp)
         )
     }
 }

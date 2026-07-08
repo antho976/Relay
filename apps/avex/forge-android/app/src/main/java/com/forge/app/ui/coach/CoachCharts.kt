@@ -174,7 +174,8 @@ internal fun CoachFatigueMeter(score: Int, threshold: Int, c: CoachColors) {
 
 /**
  * The zero-shape of [CoachSparkline] (§12): a flat ghost line with a hollow end marker, drawn
- * on the hairline rung. Stands in for a lift whose trend hasn't formed yet.
+ * on the outline-border rung (0.35 — the 0.25 hairline vanishes at this stroke weight on
+ * near-black). Stands in for a lift whose trend hasn't formed yet.
  */
 @Composable
 internal fun CoachGhostSpark(
@@ -295,7 +296,7 @@ internal fun CoachSleepBars(hours: List<Float>, floorHours: Float, c: CoachColor
             Canvas(Modifier.fillMaxSize()) {
                 val y = size.height * (1f - (floorHours / max))
                 drawLine(
-                    color = c.outline.copy(alpha = 0.35f),
+                    color = c.outline.copy(alpha = 0.25f),
                     start = Offset(0f, y),
                     end = Offset(size.width, y),
                     strokeWidth = 1.dp.toPx()
@@ -327,7 +328,7 @@ internal fun CoachHrLine(values: List<Int>, baseline: Int?, c: CoachColors) {
                     val t = if (hi - lo < 1e-6f) 0.5f else (baseline - lo) / (hi - lo)
                     val y = vInset + (1f - t) * plotH
                     drawLine(
-                        color = c.outline.copy(alpha = 0.35f),
+                        color = c.outline.copy(alpha = 0.25f),
                         start = Offset(0f, y),
                         end = Offset(size.width, y),
                         strokeWidth = 1.dp.toPx()

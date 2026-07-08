@@ -52,7 +52,7 @@ fun ForgeBottomBar(
     val accent = MaterialTheme.colorScheme.primary
     val outline = MaterialTheme.colorScheme.outline
     Column(Modifier.fillMaxWidth()) {
-        HorizontalDivider(color = outline.copy(alpha = 0.3f))
+        HorizontalDivider(color = outline.copy(alpha = 0.25f))
         Row(
             Modifier
                 .fillMaxWidth()
@@ -63,7 +63,7 @@ fun ForgeBottomBar(
         ) {
             tabs.forEachIndexed { index, tab ->
                 val selected = index == selectedIndex
-                val color = if (selected) accent else muted.copy(alpha = 0.85f)
+                val color = if (selected) accent else muted
                 Column(
                     modifier = Modifier
                         .weight(1f)

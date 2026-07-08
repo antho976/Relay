@@ -13,8 +13,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -44,7 +42,6 @@ internal fun DataExportDialog(
     Dialog(onDismissRequest = onDismiss) {
         val onBg = MaterialTheme.colorScheme.onBackground
         val muted = MaterialTheme.colorScheme.onSurfaceVariant
-        val outline = MaterialTheme.colorScheme.outline
         val bg = MaterialTheme.colorScheme.background
 
         Column(
@@ -75,13 +72,13 @@ internal fun DataExportDialog(
                 // No backup yet, but there's data worth protecting — nudge toward "Back up" (#5 P1).
                 if (noBackupWarning) {
                     Text(
-                        "⚠ You haven't backed up yet — your training lives only on this phone. Back up now to be safe.",
+                        "You haven't backed up yet. Your training lives only on this phone, so back up now to be safe.",
                         style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, fontSize = 10.sp
                     )
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    PillChip("Back up", selected = false) { onBackup(); onDismiss() }
-                    PillChip("Restore", selected = false) { onRestore(); onDismiss() }
+                    SettingsPrimaryAction("Back up") { onBackup(); onDismiss() }
+                    SettingsOutlineAction("Restore") { onRestore(); onDismiss() }
                 }
                 // Recover from the silent weekly auto-backup without needing the file picker (#86).
                 autoBackupSavedAt?.let { savedAt ->
@@ -94,7 +91,7 @@ internal fun DataExportDialog(
                 // The weekly worker gave up (e.g. storage full) — say so instead of silently losing backups.
                 if (autoBackupFailed) {
                     Text(
-                        "⚠ Last auto-backup failed — free up storage, then back up manually above.",
+                        "Last auto-backup failed. Free up storage, then back up manually above.",
                         style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error, fontSize = 10.sp
                     )
                 }
@@ -111,18 +108,16 @@ internal fun DataExportDialog(
                 )
             }
 
-            HorizontalDivider(color = outline.copy(alpha = 0.2f))
-
             // ── Data stake indicator — DB size + what's at risk if this device is lost ─────
             val stakeLine = buildString {
-                append("Database · ${dbSize.ifBlank { "—" }}")
+                append("Database")
+                if (dbSize.isNotBlank()) append(" · $dbSize")
                 if (photoCount > 0) {
                     append(" · ${photoCountLabel(photoCount)}")
                     photoLastTakenMs?.let { append(" · last ${formatShortDate(it)}") }
                 }
             }
             Text(stakeLine, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp)
-            HorizontalDivider(color = outline.copy(alpha = 0.2f))
 
             // ── Quick export — one tap, format baked into each row ───────────────
             Text("Quick export", style = MaterialTheme.typography.bodyMedium, color = onBg)
@@ -133,8 +128,6 @@ internal fun DataExportDialog(
             ExportRow("Bodyweight", "CSV", "every weigh-in", onBg, muted) { viewModel.exportBodyweightCsv(); onDismiss() }
             ExportRow("Last session", "PDF", "printable session sheet", onBg, muted) { viewModel.exportLastSessionPdf(); onDismiss() }
             ExportRow("Crash logs", "ZIP", "diagnostics if something broke", onBg, muted) { onExportCrashLogs(); onDismiss() }
-
-            HorizontalDivider(color = outline.copy(alpha = 0.2f))
 
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp, Alignment.End)) {
                 Text("close", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.6f),
@@ -204,11 +197,9 @@ internal fun ResetConfirmDialog(
             }
         },
         confirmButton = {
-            Button(
-                onClick = onConfirm,
-                enabled = canConfirm,
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
-            ) { Text("Confirm") }
+            TextButton(onClick = onConfirm, enabled = canConfirm) {
+                Text("Confirm", color = MaterialTheme.colorScheme.error.copy(alpha = if (canConfirm) 1f else 0.35f))
+            }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )

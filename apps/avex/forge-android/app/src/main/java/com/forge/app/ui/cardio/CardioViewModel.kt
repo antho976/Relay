@@ -7,14 +7,15 @@ import com.forge.app.data.db.entities.CardioEntry
 import androidx.health.connect.client.records.ExerciseRoute
 import com.forge.app.data.health.HealthConnectManager
 import com.forge.app.data.prefs.SettingsRepository
-import com.forge.app.data.repo.BodyweightRepository
 import com.forge.app.data.repo.CardioRepository
+import com.forge.app.data.repo.ExtendedGoalRepository
 import com.forge.app.data.repo.TrophyRepository
 import com.forge.app.domain.cardio.CardioEffort
 import com.forge.app.domain.cardio.CardioRestReason
 import com.forge.app.domain.cardio.CardioType
 import com.forge.app.domain.cardio.CardioWearableDay
 import com.forge.app.domain.cardio.RoutePoint
+import com.forge.app.domain.goal.GoalMetric
 import com.forge.app.ui.cardio.state.CardioDayCell
 import com.forge.app.ui.cardio.state.CardioUiState
 import java.time.DayOfWeek
@@ -49,7 +50,7 @@ class CardioViewModel @Inject constructor(
     private val cardioRepo: CardioRepository,
     private val settingsRepo: SettingsRepository,
     private val trophyRepo: TrophyRepository,
-    private val bodyweightRepo: BodyweightRepository,
+    private val extendedGoalRepo: ExtendedGoalRepository,
     private val healthConnectManager: HealthConnectManager,
     private val clock: Clock
 ) : ViewModel() {
@@ -89,17 +90,31 @@ class CardioViewModel @Inject constructor(
             weekMinutes = weekMin ?: 0,
             cardioDaysThisWeek = countActiveDays(weekEntries, zone),
             cardioStreakDays = computeCardioStreak(all, zone),
-            weekDays = buildWeekDays(weekEntries)
+            weekDays = buildWeekDays(weekEntries),
+            weekDistanceKm = weekEntries
+                .filter { it.type != CardioType.REST.code }
+                .sumOf { it.distanceKm ?: 0.0 }
         )
     }.flowOn(Dispatchers.Default)
 
-    // Latest logged bodyweight, reactive — scales the calorie estimate on the log sheet + history rows.
-    private val bodyweightLbFlow = bodyweightRepo.observeRecent(1).map { it.firstOrNull()?.weightLb }
+    // The cardio-specific custom goals (distance / minutes), recomputed when a goal is added/edited
+    // or a cardio entry lands — the same observe-inputs pattern as Home's goalsFlow, filtered to the
+    // metrics this page owns. Home keeps the mixed top-3; this is the cardio lens on the same data.
+    private val cardioGoalsFlow = combine(
+        extendedGoalRepo.observeAll(),
+        cardioRepo.observeAll()
+    ) { _, _ ->
+        // Fall back on real failures only — a swallowed CancellationException would let a cancelled
+        // recompute emit an empty list and blank the goal lines.
+        runCatching { extendedGoalRepo.goalsWithProgress() }
+            .getOrElse { if (it is kotlinx.coroutines.CancellationException) throw it else emptyList() }
+            .filter { it.metric == GoalMetric.CARDIO_DISTANCE || it.metric == GoalMetric.CARDIO_MINUTES }
+    }.flowOn(Dispatchers.Default)
 
     val state: StateFlow<CardioUiState> = combine(
-        derivedFlow, transient, settingsRepo.cardioWeeklyTargetMin, bodyweightLbFlow,
-        settingsRepo.cardioWearableHintDismissed
-    ) { d, tr, target, bodyweightLb, hintDismissed ->
+        derivedFlow, transient, settingsRepo.cardioWeeklyTargetMin,
+        settingsRepo.cardioWearableHintDismissed, cardioGoalsFlow
+    ) { d, tr, target, hintDismissed, cardioGoals ->
         CardioUiState(
             isLoading = false,
             weekMinutes = d.weekMinutes,
@@ -107,8 +122,9 @@ class CardioViewModel @Inject constructor(
             weekTargetMin = target,
             cardioStreakDays = d.cardioStreakDays,
             weekDays = d.weekDays,
+            weekDistanceKm = d.weekDistanceKm,
+            cardioGoals = cardioGoals,
             entries = d.all,
-            bodyweightLb = bodyweightLb,
             sheetOpen = tr.sheetOpen,
             editing = tr.editing,
             pendingDeleteId = tr.pendingDeleteId,
@@ -279,7 +295,8 @@ class CardioViewModel @Inject constructor(
         val weekMinutes: Int,
         val cardioDaysThisWeek: Int,
         val cardioStreakDays: Int,
-        val weekDays: List<CardioDayCell>
+        val weekDays: List<CardioDayCell>,
+        val weekDistanceKm: Double
     )
 
     companion object {

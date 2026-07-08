@@ -28,12 +28,13 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.Icon
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -297,7 +298,6 @@ private fun TimezonePickerDialog(
 ) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val onBg = MaterialTheme.colorScheme.onBackground
-    val outline = MaterialTheme.colorScheme.outline
     var query by remember { mutableStateOf("") }
     val all = remember { allTimezones() }
     val allById = remember(all) { all.associate { it.id to it.label } }
@@ -409,10 +409,7 @@ private fun TimezonePickerDialog(
                                 onToggleFavorite = { onToggleFavorite(id) }
                             ) { onPick(id) }
                         }
-                        item("all-label") {
-                            HorizontalDivider(color = outline.copy(alpha = 0.12f), modifier = Modifier.padding(vertical = 4.dp))
-                            TzSectionLabel("All timezones")
-                        }
+                        item("all-label") { TzSectionLabel("All timezones") }
                         items(all, key = { it.id }) { e ->
                             TimezoneOption(
                                 e.label, selected = current == e.id,
@@ -478,40 +475,83 @@ private fun TimezoneOption(
 
 @Composable
 internal fun SessionPage(state: SettingsUiState, vm: SettingsViewModel, modifier: Modifier = Modifier) {
-    Column(modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-        ChipSection(
-            "Haptic feedback",
-            listOf("off" to "Off", "light" to "Light", "medium" to "Medium", "strong" to "Strong"),
-            state.hapticStrength, vm::setHapticStrength
+    Column(
+        modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(bottom = 24.dp)
+    ) {
+        // Grouped by quiet mono anchors + air, no per-row hairlines (DESIGN §1/§7) — the rhythm
+        // Appearance/Format/Notifications already migrated to.
+        SettingsSectionHeader("Haptics", top = 12.dp)
+        ChipField(
+            label = "Feedback strength",
+            explainer = "Buzzes when you log a set, hit a PR, or rest runs out.",
+            options = listOf("off" to "Off", "light" to "Light", "medium" to "Medium", "strong" to "Strong"),
+            selected = state.hapticStrength,
+            onSelect = vm::setHapticStrength
         )
-        SectionDivider()
-        ChipSection(
-            "Rest · compound lifts",
-            listOf("120" to "2:00", "150" to "2:30", "180" to "3:00", "210" to "3:30", "240" to "4:00", "300" to "5:00"),
-            state.restCompoundSeconds.toString()
-        ) { vm.setRestCompoundSeconds(it.toInt()) }
-        SectionDivider()
-        ChipSection(
-            "Rest · isolation lifts",
-            listOf("45" to "0:45", "60" to "1:00", "90" to "1:30", "120" to "2:00", "150" to "2:30"),
-            state.restIsolationSeconds.toString()
-        ) { vm.setRestIsolationSeconds(it.toInt()) }
-        SectionDivider()
-        Text(
-            "Your starting rest per set. The timer adapts from here — heavier sets and a brutal rating add time, " +
-                "and it learns how long you actually rest. Set a per-exercise override on its card mid-workout.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontStyle = FontStyle.Italic,
-            modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp)
+
+        SettingsSectionHeader("Rest timer")
+        ChipField(
+            label = "Compound lifts",
+            explainer = "Multi-joint lifts like squat, bench, deadlift, and rows.",
+            options = listOf("120" to "2:00", "150" to "2:30", "180" to "3:00", "210" to "3:30", "240" to "4:00", "300" to "5:00"),
+            selected = state.restCompoundSeconds.toString(),
+            onSelect = { vm.setRestCompoundSeconds(it.toInt()) }
         )
-        SectionDivider()
+        ChipField(
+            label = "Isolation lifts",
+            explainer = "Single-muscle lifts like curls, raises, and extensions.",
+            options = listOf("45" to "0:45", "60" to "1:00", "90" to "1:30", "120" to "2:00", "150" to "2:30"),
+            selected = state.restIsolationSeconds.toString(),
+            onSelect = { vm.setRestIsolationSeconds(it.toInt()) }
+        )
+        CardFootnote("Starting points · hard sets add time, and the timer learns your pace.")
+
+        SettingsSectionHeader("Note templates")
         NoteTemplatesEditor(state.noteTemplates, vm::addNoteTemplate, vm::removeNoteTemplate)
+
+        Spacer(Modifier.height(8.dp))
         SectionResetRow(com.forge.app.data.prefs.SettingsSection.SESSION, vm)
     }
 }
 
-/** Edit the quick-insert note templates shown under the note field when logging a set (#540). */
+/** A chip-group control: sans label (+ optional one-line explainer) over its option pills —
+ *  the label sits above because these option rows are too wide for the label-left layout. */
+@Composable
+private fun ChipField(
+    label: String,
+    explainer: String?,
+    options: List<Pair<String, String>>,
+    selected: String,
+    onSelect: (String) -> Unit
+) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 10.dp)) {
+        Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground)
+        if (explainer != null) {
+            Spacer(Modifier.height(2.dp))
+            Text(
+                explainer,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 10.sp
+            )
+        }
+        Spacer(Modifier.height(10.dp))
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            options.forEach { (value, display) ->
+                PillChip(display.uppercase(), selected == value) { onSelect(value) }
+            }
+        }
+    }
+}
+
+/**
+ * Edit the tap-to-insert note starters shown under the set note field (#540). Each template drops
+ * onto its own line in the note with the cursor parked after it, so prompt-style entries
+ * ("energy:", "tempo:") are the useful shape. Removing every template just leaves the field bare.
+ */
 @Composable
 private fun NoteTemplatesEditor(
     templates: Set<String>,
@@ -520,47 +560,65 @@ private fun NoteTemplatesEditor(
 ) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val onBg = MaterialTheme.colorScheme.onBackground
+    val outline = MaterialTheme.colorScheme.outline
     var input by remember { mutableStateOf("") }
-    Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp)) {
-        Text("NOTE TEMPLATES", style = MaterialTheme.typography.labelMedium, color = muted)
-        Spacer(Modifier.height(4.dp))
+    val sorted = remember(templates) {
+        templates.filter { it.isNotBlank() }.sortedBy { it.trim().lowercase() }
+    }
+    Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 10.dp)) {
         Text(
-            "Quick-insert chips that show under the note field when you log a set.",
-            style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic
+            "One-tap starters under the note field when you log a set.",
+            style = MaterialTheme.typography.labelSmall,
+            color = muted,
+            fontSize = 10.sp
         )
         Spacer(Modifier.height(10.dp))
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            templates.forEach { t ->
-                Row(
-                    Modifier
-                        .border(1.dp, muted.copy(alpha = 0.35f), RoundedCornerShape(50))
-                        .padding(start = 12.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    Text(t.trim(), style = MaterialTheme.typography.bodySmall, color = onBg)
-                    Text("✕", style = MaterialTheme.typography.labelSmall, color = muted,
-                        modifier = Modifier.clickableLabeled("Remove") { onRemove(t) }.padding(2.dp))
+        if (sorted.isEmpty()) {
+            Text(
+                "No templates · the note field starts blank.",
+                style = MaterialTheme.typography.bodySmall,
+                color = muted,
+                fontStyle = FontStyle.Italic
+            )
+        } else {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                sorted.forEach { t ->
+                    Row(
+                        Modifier
+                            .border(1.dp, outline.copy(alpha = 0.35f), RoundedCornerShape(50))
+                            .padding(start = 12.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(t.trim(), style = MaterialTheme.typography.bodySmall, color = onBg)
+                        Text(
+                            "✕", style = MaterialTheme.typography.labelSmall, color = muted,
+                            modifier = Modifier.clickableLabeled("Remove ${t.trim()}") { onRemove(t) }.padding(2.dp)
+                        )
+                    }
                 }
             }
         }
-        Spacer(Modifier.height(10.dp))
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Spacer(Modifier.height(12.dp))
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             OutlinedTextField(
                 value = input,
                 onValueChange = { input = it },
                 singleLine = true,
-                label = { Text("New template") },
+                textStyle = MaterialTheme.typography.bodyMedium,
+                placeholder = {
+                    Text(
+                        "Add a starter, e.g. tempo:",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = muted.copy(alpha = 0.5f)
+                    )
+                },
                 modifier = Modifier.weight(1f)
             )
-            Text(
-                "Add",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier
-                    .clickableLabeled("Add") { if (input.isNotBlank()) { onAdd(input); input = "" } }
-                    .padding(8.dp)
-            )
+            SettingsOutlineAction("Add", enabled = input.isNotBlank()) {
+                onAdd(input)
+                input = ""
+            }
         }
     }
 }
@@ -670,7 +728,6 @@ internal fun NotificationsPage(state: SettingsUiState, vm: SettingsViewModel, mo
 @Composable
 internal fun ExercisePrefsPage(state: SettingsUiState, vm: SettingsViewModel, modifier: Modifier = Modifier) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val outline = MaterialTheme.colorScheme.outline
     // Only show exercises the user can actually do — the available pool (curated freeze when a
     // preset like the Developer's is active, otherwise equipment-filtered). Muscle groups with no
     // available movement drop out entirely. An empty equipment set means "all" (no filter yet).
@@ -685,31 +742,83 @@ internal fun ExercisePrefsPage(state: SettingsUiState, vm: SettingsViewModel, mo
             .groupBy { it.muscle }
     }
 
-    // Search-first flat list: a search box + filter chips over one scrolling list with muscle
-    // sub-headers, plus a Custom section for user-created movements. No more drill-down.
+    // Search-first flat list: a search box + two independent filter dimensions — WHERE (a muscle,
+    // or your custom moves) and STATUS (preferred/hidden) — over one scrolling list with muscle
+    // sub-headers. Both combine, so "Chest + Preferred" or "Custom + Hidden" are one tap each.
     var query by remember { mutableStateOf("") }
-    var filter by remember { mutableStateOf(PrefFilter.ALL) }
+    var scope by remember { mutableStateOf<PrefScope>(PrefScope.All) }
+    var status by remember { mutableStateOf<Pref?>(null) }
     val q = query.trim()
 
-    val visibleByMuscle = remember(byMuscle, q, filter, state.liked, state.disliked) {
-        byMuscle
-            .mapValues { (_, defs) -> defs.filter { libVisible(it, q, filter, state.liked, state.disliked) } }
+    val visibleByMuscle = remember(byMuscle, q, scope, status, state.liked, state.disliked) {
+        if (scope == PrefScope.Custom) emptyMap()
+        else byMuscle
+            .filterKeys { m -> (scope as? PrefScope.Muscle)?.let { it.m == m } ?: true }
+            .mapValues { (_, defs) -> defs.filter { libVisible(it, q, status, state.liked, state.disliked) } }
             .filterValues { it.isNotEmpty() }
     }
-    val visibleCustom = remember(state.customExercises, q, filter, state.liked, state.disliked) {
-        state.customExercises.filter { customVisible(it, q, filter, state.liked, state.disliked) }
+    val visibleCustom = remember(state.customExercises, q, scope, status, state.liked, state.disliked) {
+        state.customExercises.filter { customVisible(it, q, scope, status, state.liked, state.disliked) }
     }
     val nothingMatches = visibleByMuscle.isEmpty() && visibleCustom.isEmpty()
 
     Column(modifier.fillMaxSize()) {
+        // The top bar never names the screen (§2) — the page opens with its own mono anchor.
+        SettingsSectionHeader("Exercise likes", top = 12.dp)
         PrefSearchField(query, onQuery = { query = it })
-        FlowRow(
+        // Two compact selectors — WHERE (muscle / custom) and STATUS (preferred / hidden). A chip
+        // per muscle turned into a wall that scrolled off screen; dropdowns keep both dimensions
+        // one tap deep and always fully visible.
+        val muscles = remember(byMuscle) { byMuscle.keys.toList() }
+        Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            PrefFilter.entries.forEach { f ->
-                PillChip(f.label, filter == f) { filter = f }
+            PrefSelector(
+                value = when (val s = scope) {
+                    PrefScope.All -> "Any muscle"
+                    is PrefScope.Muscle -> s.m.displayName
+                    PrefScope.Custom -> "Custom"
+                },
+                isDefault = scope == PrefScope.All,
+                options = buildList {
+                    add("Any muscle")
+                    addAll(muscles.map { it.displayName })
+                    if (state.customExercises.isNotEmpty()) add("Custom")
+                },
+                selectedIndex = when (val s = scope) {
+                    PrefScope.All -> 0
+                    is PrefScope.Muscle -> muscles.indexOf(s.m) + 1
+                    PrefScope.Custom -> muscles.size + 1
+                },
+                modifier = Modifier.weight(1f)
+            ) { i ->
+                scope = when {
+                    i == 0 -> PrefScope.All
+                    i <= muscles.size -> PrefScope.Muscle(muscles[i - 1])
+                    else -> PrefScope.Custom
+                }
+            }
+            PrefSelector(
+                value = when (status) {
+                    Pref.PREFERRED -> "Preferred"
+                    Pref.HIDDEN -> "Hidden"
+                    else -> "Any status"
+                },
+                isDefault = status == null,
+                options = listOf("Any status", "Preferred", "Hidden"),
+                selectedIndex = when (status) {
+                    Pref.PREFERRED -> 1
+                    Pref.HIDDEN -> 2
+                    else -> 0
+                },
+                modifier = Modifier.weight(1f)
+            ) { i ->
+                status = when (i) {
+                    1 -> Pref.PREFERRED
+                    2 -> Pref.HIDDEN
+                    else -> null
+                }
             }
         }
         Text(
@@ -732,6 +841,7 @@ internal fun ExercisePrefsPage(state: SettingsUiState, vm: SettingsViewModel, mo
                     ExercisePrefRow(
                         name = def.name,
                         subtitle = libSubtitle(def),
+                        icon = com.forge.app.ui.common.ExerciseIcons.forEquipment(def.equipment),
                         pref = pref,
                         onSet = { applyPref(it, pref, setOf(def.id), vm) }
                     )
@@ -756,6 +866,7 @@ internal fun ExercisePrefsPage(state: SettingsUiState, vm: SettingsViewModel, mo
                         // Null muscle ⇒ the stored code was missing/unparseable; show a plain "Custom"
                         // label rather than fabricating a (wrong) muscle.
                         subtitle = ref.muscle?.let { "Custom · ${it.displayName}" } ?: "Custom",
+                        icon = com.forge.app.ui.common.ExerciseIcons.Custom,
                         pref = pref,
                         onSet = { applyPref(it, pref, ref.ids, vm) }
                     )
@@ -764,7 +875,11 @@ internal fun ExercisePrefsPage(state: SettingsUiState, vm: SettingsViewModel, mo
             if (nothingMatches) {
                 item("empty") {
                     Text(
-                        if (q.isNotEmpty()) "No exercises match “$q”." else "No exercises here yet.",
+                        when {
+                            q.isNotEmpty() -> "No exercises match “$q”."
+                            status != null || scope != PrefScope.All -> "Nothing matches these filters."
+                            else -> "No exercises here yet."
+                        },
                         style = MaterialTheme.typography.bodyMedium,
                         color = muted,
                         textAlign = TextAlign.Center,
@@ -774,8 +889,7 @@ internal fun ExercisePrefsPage(state: SettingsUiState, vm: SettingsViewModel, mo
             }
             // The post-swap dislike prompt toggle lives here too — it's about likes/dislikes.
             item("swap-toggle") {
-                Spacer(Modifier.height(12.dp))
-                HorizontalDivider(color = outline.copy(alpha = 0.12f), modifier = Modifier.padding(horizontal = 24.dp))
+                Spacer(Modifier.height(24.dp))
                 ToggleRow(
                     label = "Ask to dislike after swapping",
                     subtitle = "After a \"Make default\" swap, offer to hide the old exercise.",
@@ -787,9 +901,11 @@ internal fun ExercisePrefsPage(state: SettingsUiState, vm: SettingsViewModel, mo
     }
 }
 
-/** Top-level filter for the Exercise likes list. */
-private enum class PrefFilter(val label: String) {
-    ALL("All"), LIKED("Preferred"), DISLIKED("Hidden"), CUSTOM("Custom")
+/** WHERE the Exercise likes list looks: the whole pool, one muscle, or the user's custom moves. */
+private sealed interface PrefScope {
+    data object All : PrefScope
+    data class Muscle(val m: com.forge.app.program.MuscleGroup) : PrefScope
+    data object Custom : PrefScope
 }
 
 /** The mutually-exclusive preference an exercise can carry (mirrors the liked/disliked data model). */
@@ -826,35 +942,42 @@ private fun applyPref(target: Pref, current: Pref, ids: Set<String>, vm: Setting
 private fun matchesQuery(name: String, q: String): Boolean =
     q.isEmpty() || name.contains(q, ignoreCase = true)
 
+/** Whether [status] (null = any) admits a row whose flags collapse to [pref]. */
+private fun matchesStatus(status: Pref?, pref: Pref): Boolean = status == null || status == pref
+
 private fun libVisible(
     def: com.forge.app.program.ExerciseDef,
     q: String,
-    filter: PrefFilter,
+    status: Pref?,
     liked: Set<String>,
     disliked: Set<String>
 ): Boolean {
-    if (!matchesQuery(def.name, q)) return false
-    return when (filter) {
-        PrefFilter.ALL -> true
-        PrefFilter.LIKED -> def.id in liked
-        PrefFilter.DISLIKED -> def.id in disliked
-        PrefFilter.CUSTOM -> false
-    }
+    // Search reaches past the name into what the user actually thinks in: the muscle
+    // ("chest") and the implement ("dumbbell") — GYMAP-13's findability complaint.
+    val hit = matchesQuery(def.name, q) ||
+        (q.isNotEmpty() && def.muscle.displayName.contains(q, ignoreCase = true)) ||
+        (q.isNotEmpty() && def.equipment.any { it.display.contains(q, ignoreCase = true) })
+    return hit && matchesStatus(status, prefOf(def.id in liked, def.id in disliked))
 }
 
 private fun customVisible(
     ref: com.forge.app.data.repo.CustomExerciseRef,
     q: String,
-    filter: PrefFilter,
+    scope: PrefScope,
+    status: Pref?,
     liked: Set<String>,
     disliked: Set<String>
 ): Boolean {
-    if (!matchesQuery(ref.name, q)) return false
-    return when (filter) {
-        PrefFilter.ALL, PrefFilter.CUSTOM -> true
-        PrefFilter.LIKED -> ref.ids.any { it in liked }
-        PrefFilter.DISLIKED -> ref.ids.any { it in disliked }
+    // A muscle scope includes custom moves OF that muscle — scoping to Chest should surface
+    // your custom chest move next to the library's, not hide it behind the Custom chip.
+    val inScope = when (scope) {
+        PrefScope.All, PrefScope.Custom -> true
+        is PrefScope.Muscle -> ref.muscle == scope.m
     }
+    if (!inScope) return false
+    val hit = matchesQuery(ref.name, q) ||
+        (q.isNotEmpty() && ref.muscle?.displayName?.contains(q, ignoreCase = true) == true)
+    return hit && matchesStatus(status, prefOf(ref.ids.any { it in liked }, ref.ids.any { it in disliked }))
 }
 
 /** Per-muscle header summary: preferred/hidden tallies, or a plain move count when neither is set. */
@@ -921,66 +1044,129 @@ private fun PrefSearchField(query: String, onQuery: (String) -> Unit) {
     }
 }
 
+/**
+ * One filter dimension as a compact dropdown — a bordered field (same rounded-8 language as the
+ * search box above it) showing the current pick, opening the [options] menu. [isDefault] = the
+ * dimension is not filtering; the value renders muted and the border stays quiet, so an ACTIVE
+ * filter is the visible exception (onBg text + border).
+ */
+@Composable
+private fun PrefSelector(
+    value: String,
+    options: List<String>,
+    selectedIndex: Int,
+    isDefault: Boolean,
+    modifier: Modifier = Modifier,
+    onSelect: (Int) -> Unit
+) {
+    val onBg = MaterialTheme.colorScheme.onBackground
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val outline = MaterialTheme.colorScheme.outline
+    var open by remember { mutableStateOf(false) }
+    Box(modifier) {
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .border(1.dp, if (isDefault) outline.copy(alpha = 0.4f) else onBg, RoundedCornerShape(8.dp))
+                .clickableLabeled("Change filter") { open = true }
+                .padding(horizontal = 12.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text(
+                value,
+                style = MaterialTheme.typography.bodySmall,
+                color = if (isDefault) muted else onBg,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            Text("▾", style = MaterialTheme.typography.labelMedium, color = muted.copy(alpha = 0.5f))
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            options.forEachIndexed { i, label ->
+                DropdownMenuItem(
+                    text = {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            // A leading dot marks the active pick; a blank keeps the labels aligned.
+                            Box(Modifier.width(8.dp)) {
+                                if (i == selectedIndex) Text("•", color = onBg)
+                            }
+                            Text(
+                                label,
+                                color = if (i == selectedIndex) onBg else muted,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
+                    },
+                    onClick = { onSelect(i); open = false }
+                )
+            }
+        }
+    }
+}
+
+// Air + the mono header ARE the separator (DESIGN §1/§7) — no hairline under the anchor.
 @Composable
 private fun PrefSectionHeader(title: String, summary: String) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val onBg = MaterialTheme.colorScheme.onBackground
-    val outline = MaterialTheme.colorScheme.outline
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 24.dp, end = 24.dp, top = 18.dp, bottom = 6.dp),
+            .padding(start = 24.dp, end = 24.dp, top = 22.dp, bottom = 4.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(title, style = MaterialTheme.typography.labelSmall, color = onBg)
         Text(summary, style = MaterialTheme.typography.labelSmall, color = muted)
     }
-    HorizontalDivider(color = outline.copy(alpha = 0.2f), modifier = Modifier.padding(horizontal = 24.dp))
 }
 
 @Composable
 private fun ExercisePrefRow(
     name: String,
     subtitle: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
     pref: Pref,
     onSet: (Pref) -> Unit
 ) {
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val outline = MaterialTheme.colorScheme.outline
     var menuOpen by remember { mutableStateOf(false) }
 
     Box {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable { menuOpen = true }
-                .padding(horizontal = 24.dp, vertical = 16.dp),
+                .clickableLabeled("Set preference") { menuOpen = true }
+                .padding(horizontal = 24.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            // Equipment glyph — quiet wayfinding (DESIGN §8), same muted tint as the subtitle.
+            Icon(icon, contentDescription = null, tint = muted, modifier = Modifier.size(20.dp))
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                 Text(name, style = MaterialTheme.typography.bodyMedium, color = onBg)
                 Text(subtitle, style = MaterialTheme.typography.labelSmall, color = muted)
             }
             // Editorial status: the current preference as a quiet word + a caret hinting it's tappable.
-            // Neutral reads as a faint em-dash so a "set" state still looks intentional, not empty.
+            // Neutral renders its honest word, dimmest of the three so the set states stand out.
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Text(
-                    when (pref) {
-                        Pref.PREFERRED -> "Preferred"
-                        Pref.HIDDEN -> "Hidden"
-                        Pref.NEUTRAL -> "—"
-                    },
+                    pref.label,
                     style = MaterialTheme.typography.labelMedium,
                     color = when (pref) {
                         Pref.PREFERRED -> onBg
                         Pref.HIDDEN -> muted
-                        Pref.NEUTRAL -> muted.copy(alpha = 0.4f)
+                        Pref.NEUTRAL -> muted.copy(alpha = 0.65f)
                     },
                     letterSpacing = 0.3.sp
                 )
@@ -1011,8 +1197,4 @@ private fun ExercisePrefRow(
             }
         }
     }
-    HorizontalDivider(
-        color = outline.copy(alpha = 0.1f),
-        modifier = Modifier.padding(horizontal = 24.dp)
-    )
 }

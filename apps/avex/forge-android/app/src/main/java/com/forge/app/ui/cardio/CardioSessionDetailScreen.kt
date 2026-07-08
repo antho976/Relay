@@ -60,13 +60,12 @@ fun CardioSessionDetailScreen(
             onDismiss = viewModel::closeEdit,
             onSave = viewModel::save,
             editing = entry,
-            bodyweightLb = state.bodyweightLb,
             useMiles = state.useMiles
         )
     } else {
         CardioSessionDetailSheet(
             entry = entry,
-            bodyweightLb = state.bodyweightLb,
+            allEntries = state.allEntries,
             useMiles = state.useMiles,
             route = state.route, // Matched watch GPS track, once available/consented (else null).
             onShowRoute = state.routeConsentId?.let { id -> { routeLauncher.launch(id) } },

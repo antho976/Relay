@@ -9,7 +9,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.IosShare
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -30,7 +29,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.ui.gym.session.state.SessionChartStyle
@@ -108,13 +106,6 @@ fun SessionDetailScreen(
                             Icon(Icons.Default.IosShare, contentDescription = "Save this session as JSON", tint = muted)
                         }
                     }
-                    Text(
-                        "SESSION",
-                        style = MaterialTheme.typography.labelSmall,
-                        letterSpacing = 2.sp,
-                        color = muted,
-                        modifier = Modifier.padding(end = 16.dp)
-                    )
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
             )
@@ -123,9 +114,8 @@ fun SessionDetailScreen(
     ) { inner ->
         val data = state.data
         when {
-            state.isLoading -> Box(Modifier.fillMaxSize().padding(inner), contentAlignment = Alignment.Center) {
-                CircularProgressIndicator(color = accent)
-            }
+            // No spinners (§13): local DB resolves instantly, the page appears with its cascade.
+            state.isLoading -> Box(Modifier.fillMaxSize().padding(inner))
             // A missing row (stale/broken link) is a different state from a real session that simply
             // logged nothing — say so distinctly instead of one catch-all message.
             data == null -> Box(Modifier.fillMaxSize().padding(inner), contentAlignment = Alignment.Center) {

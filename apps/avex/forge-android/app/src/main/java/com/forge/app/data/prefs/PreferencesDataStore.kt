@@ -128,6 +128,9 @@ object PreferenceKeys {
     val USER_NAME = stringPreferencesKey("user_name")
     /** Onboarding completed flag — distinct from WELCOMED which just tracks splash. */
     val ONBOARDING_DONE = booleanPreferencesKey("onboarding_done")
+    /** Mid-onboarding draft (every answer + the current page) as JSON, so a full app kill resumes
+     *  setup where it left off. Removed atomically when onboarding completes. */
+    val ONBOARDING_DRAFT = stringPreferencesKey("onboarding_draft")
     /** Set true the first (and only) time the default split is auto-seeded, so a deliberately empty
      *  plan (build-your-own / cleared) is never silently re-seeded on a later relaunch. */
     val PROGRAM_SEEDED = booleanPreferencesKey("program_seeded")

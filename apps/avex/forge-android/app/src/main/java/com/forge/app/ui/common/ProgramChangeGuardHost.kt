@@ -28,10 +28,10 @@ fun ProgramChangeGuardHost(
                     if (p.loggedSets > 0)
                         "You have a workout in progress with ${p.loggedSets} set" +
                             "${if (p.loggedSets == 1) "" else "s"} logged. Changing your program " +
-                            "discards that workout — this can't be undone."
+                            "discards that workout. This can't be undone."
                     else
-                        "You have a workout in progress. Changing your program discards it — " +
-                            "this can't be undone."
+                        "You have a workout in progress. Changing your program discards it. " +
+                            "This can't be undone."
                 )
             },
             confirmButton = {

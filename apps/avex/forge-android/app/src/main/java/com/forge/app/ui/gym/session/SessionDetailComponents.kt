@@ -1,7 +1,6 @@
 package com.forge.app.ui.gym.session
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -19,7 +18,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -48,6 +46,7 @@ import com.forge.app.domain.session.SessionType
 import com.forge.app.domain.units.formatVolume
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.program.MuscleGroup
+import com.forge.app.ui.common.EditorialHairline
 import com.forge.app.ui.common.rpeLabel
 import com.forge.app.ui.gym.session.state.ExerciseDetail
 import com.forge.app.ui.gym.session.state.SessionChartStyle
@@ -57,6 +56,9 @@ import com.forge.app.ui.gym.session.state.SetDetail
 import com.forge.app.ui.gym.stats.components.BodyHeatmap
 import com.forge.app.ui.gym.stats.state.MuscleSetCount
 import com.forge.app.ui.overview.SummaryStat
+import com.forge.app.ui.theme.ForgeError
+import com.forge.app.ui.theme.ForgeSuccess
+import com.forge.app.ui.theme.ForgeWarning
 import com.forge.app.ui.theme.LocalForgeSettings
 import java.time.Instant
 import java.time.ZoneId
@@ -171,7 +173,7 @@ private fun MuscleMapDialog(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(20.dp))
+                .clip(RoundedCornerShape(16.dp))
                 .background(MaterialTheme.colorScheme.surface)
                 .verticalScroll(rememberScrollState())
                 .padding(20.dp),
@@ -251,10 +253,11 @@ private fun TrendStat(value: String, label: String, trend: Trend?, muted: Color,
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(value, style = MaterialTheme.typography.bodyMedium, color = onBg, fontWeight = FontWeight.Normal)
             trend?.let {
-                // Shape carries the meaning (color is additive); a contentDescription gives TalkBack a word.
+                // §11 deltas: ↑ accent / ↓ muted — shape carries the direction, a contentDescription
+                // gives TalkBack a word.
                 val (glyph, color, desc) = when (it) {
-                    Trend.UP -> Triple("▲", Color(0xFF4CAF50), "up from last session")
-                    Trend.DOWN -> Triple("▼", Color(0xFFE53935), "down from last session")
+                    Trend.UP -> Triple("↑", MaterialTheme.colorScheme.primary, "up from last session")
+                    Trend.DOWN -> Triple("↓", muted, "down from last session")
                     Trend.SAME -> Triple("=", muted.copy(alpha = 0.7f), "same as last session")
                 }
                 Text(
@@ -266,7 +269,7 @@ private fun TrendStat(value: String, label: String, trend: Trend?, muted: Color,
                 )
             }
         }
-        Text(label, style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.6f), fontSize = 9.sp, letterSpacing = 0.5.sp)
+        Text(label, style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.65f), fontSize = 9.sp, letterSpacing = 0.5.sp)
     }
 }
 
@@ -325,14 +328,15 @@ private fun SetTable(sets: List<SetDetail>, onBg: Color, muted: Color, outline: 
     val useKg = LocalForgeSettings.current.useKg
     Column {
         sets.forEachIndexed { i, s ->
-            if (i > 0) HorizontalDivider(color = outline.copy(alpha = 0.1f))
+            // Table rule — one of the few sanctioned lines (§1: a line exists only as data).
+            if (i > 0) EditorialHairline(outline)
             Row(
                 modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("${s.number}", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.5f), fontSize = 10.sp, modifier = Modifier.width(14.dp))
+                    Text("${s.number}", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.65f), fontSize = 10.sp, modifier = Modifier.width(14.dp))
                     Text(
                         "${weightLabel(s, useKg)} × ${s.reps}",
                         style = MaterialTheme.typography.bodyMedium,
@@ -342,10 +346,10 @@ private fun SetTable(sets: List<SetDetail>, onBg: Color, muted: Color, outline: 
                     )
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    if (s.isAmrap) SetTag("AMRAP", muted, outline)
-                    if (s.toFailure) SetTag("FAIL", muted, outline)
-                    if (s.isAssisted) SetTag("ASSIST", muted, outline)
-                    if (!s.dropAnnotation.isNullOrBlank()) SetTag("DROP", muted, outline)
+                    if (s.isAmrap) SetTag("AMRAP", muted)
+                    if (s.toFailure) SetTag("FAIL", muted)
+                    if (s.isAssisted) SetTag("ASSIST", muted)
+                    if (!s.dropAnnotation.isNullOrBlank()) SetTag("DROP", muted)
                     s.rpe?.let {
                         Text("RPE ${rpeLabel(it)}", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
                     }
@@ -366,21 +370,20 @@ private fun Chip(text: String, fg: Color, bg: Color) {
     }
 }
 
+/** Passive set metadata — bare mono text, no box (§1: a border is earned by interactivity). */
 @Composable
-private fun SetTag(text: String, muted: Color, outline: Color) {
-    Box(
-        modifier = Modifier.border(0.5.dp, outline.copy(alpha = 0.3f), RoundedCornerShape(3.dp)).padding(horizontal = 4.dp, vertical = 1.dp)
-    ) {
-        Text(text, style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.6f), fontSize = 7.sp, letterSpacing = 0.5.sp)
-    }
+private fun SetTag(text: String, muted: Color) {
+    Text(text, style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.65f), fontSize = 8.sp, letterSpacing = 0.5.sp)
 }
 
 private fun weightLabel(s: SetDetail, useKg: Boolean): String =
     if (s.weightLb != null && s.weightLb > 0) formatWeight(s.weightLb, useKg) else s.weightText.ifBlank { "BW" }
 
+// §5 reserved state colors only — EASY and JUST_RIGHT are both healthy readings (success),
+// HARD cautions, BRUTAL alarms. Never raw literals here.
 private fun effortColor(effort: EffortRating): Color = when (effort) {
-    EffortRating.EASY -> Color(0xFF4CAF50)
-    EffortRating.JUST_RIGHT -> Color(0xFF2196F3)
-    EffortRating.HARD -> Color(0xFFFF9800)
-    EffortRating.BRUTAL -> Color(0xFFE53935)
+    EffortRating.EASY -> ForgeSuccess
+    EffortRating.JUST_RIGHT -> ForgeSuccess
+    EffortRating.HARD -> ForgeWarning
+    EffortRating.BRUTAL -> ForgeError
 }

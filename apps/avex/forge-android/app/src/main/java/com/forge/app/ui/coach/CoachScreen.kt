@@ -84,7 +84,7 @@ fun CoachScreen(
             // No spinners (§13): the page appears with its entrance cascade once the read lands.
             state.loading -> Box(Modifier.fillMaxSize().padding(inner))
             state.freestyle -> Box(
-                Modifier.fillMaxSize().padding(inner).padding(horizontal = 32.dp),
+                Modifier.fillMaxSize().padding(inner).padding(horizontal = COACH_GUTTER),
                 contentAlignment = Alignment.Center
             ) {
                 Text(

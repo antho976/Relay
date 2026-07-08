@@ -23,8 +23,8 @@ hero (Stats "Stats", Profile "Athlete") or not at all (Home "Pull B").
 
 - **Home** `ui/overview` — TODAY hero + Start session, week strip, goals, recent. Feel reference; defects (§14) fixed when touched.
 - **Stats** `ui/gym/stats` — one page: hero figures + muscle map → lens pills Strength/Volume/Effort/Days → drill rows → heatmap → records → Banister.
-- **Cardio** `ui/cardio` — slim hero, week-pager stats overlay, rows → session detail.
-- **Coach** `ui/coach` — lens pills Now/Signals/Journey (Now = call + watch + one road-ahead section: milestone rail + brief/verdict/autopilot bars; Signals = lifts + recovery + inputs + learned; Journey = record + trust; old Brief/Lab/Timeline routes = lens deep-links).
+- **Cardio** `ui/cardio` — THIS WEEK figures hero (days · min · dist · streak) + Mon–Sun accent bars + goal meter, GOALS trim (cardio-metric custom goals, shared `GoalProgressLine`, hidden at zero), week-pager stats overlay, recent rows (header carries a small filled `+` circle = log) → session detail (stat rows carry best-pace/longest compare meta + previous-session read).
+- **Coach** `ui/coach` — lens pills Now/Signals/Journey (Now = call + watch + one road-ahead section: milestone rail + brief/verdict/autopilot bars; Signals = lifts + recovery + inputs + learned; Journey = record + trust; old Brief/Lab/Timeline routes = lens deep-links). Coach content renders ONLY here — Settings→Coach is config alone (on/off switch + mode chips + a feeds on/off glance whose silent HC rows tap to Recovery), never a second brief/trust/history home.
 - **Profile** `ui/profile` — blending cover (**untouchable**), bodyweight-led, ALL-TIME 2×2, filmstrip.
 - **Routed** (`Routes.kt`): `GYM_DAY` (`ui/gym/train`, **untouchable**) · `SESSION_HISTORY` (gym+cardio) · `SESSION_DETAIL` · `CARDIO_SESSION` · `GOALS`/`GOAL_EDITOR` · `TROPHIES` (frozen) · `NUTRITION` · `SETTINGS?page=` · `RECAP` · `NOTES_SEARCH` · `PROGRAM_VIEWER/EDITOR/BUILDER` · `FREESTYLE_LOG` · `MIRROR_TEST`.
 - **Sheets**: SessionSummarySheet (minimal), CardioSessionDetailSheet, heatmap "That day", ExerciseLibraryPicker.
@@ -41,7 +41,7 @@ toolkit (a settings page with a serif hero + chart cascade is as wrong as a boxe
 | **Overview / dashboard** | Home, Stats, Coach, Cardio, Profile | Serif hero = mono eyebrow (identity + human date) over ONE serif line ONLY when it carries a decision/result (Coach "Deload week"), else the bare name; status/anticipation is never a verdict (drop the serif line, figures/mark become the hero); never a name over a verdict, never a filler headline. Aside line only for the screen's unique read (a cue no section repeats). 2–4 `EditorialFigure`s + exceptions as quiet lines + primary action above fold; lens pills; open charts; **≥1 mark that works at zero**; `statsEntrance` cascade; scroll ≤2–3 viewports | an all-text screen — every section leads with a mark (§12) |
 | **Detail page** | session/cardio detail, lift drill-down | Serif title + context, metric `SegmentPill`s, charts w/ draw-in, set tables; scoped to ONE item | dashboard figure walls, lens pills for unrelated views |
 | **List / browser** | History, Goals, Trophies, pickers | Search-first, trim rows, light stagger; tiny hero (title + ≤1–2 figures) | charts, big hero, draw-in theatrics |
-| **Settings / form / editor** | settings, goal/program editors, onboarding | Mono `SettingsSectionHeader` anchors + air, **no dividers**; each control gets a ≤1-line explainer; navigation = `action →` links, one-shot (do-it-now) actions = capsule buttons (filled · outlined sidekick) **grouped at the END of the page, never mid-scroll**; never toggle-chips; 44dp capsules. Keep each drill-in light — split a dense multi-block area into focused sub-pages, each menu row showing its live value | serif heroes, figures, lens pills, chart motion/stagger; section dividers; action buttons floating mid-page; actions as pill toggles; one long multi-block scroll |
+| **Settings / form / editor** | settings, goal/program editors, onboarding | Mono `SettingsSectionHeader` anchors + air, **no dividers**; each control gets a ≤1-line explainer; navigation = `action →` links, one-shot (do-it-now) actions = capsule buttons (filled · outlined sidekick) **grouped at the END of the page, never mid-scroll**; never toggle-chips; 44dp capsules. Keep each drill-in light — split a dense multi-block area into focused sub-pages, each menu row showing its live value. **Onboarding** (`ui/onboarding`): one decision per step; each page = mono chapter eyebrow → serif `headlineSmall` question (page-title voice, not a hero) → ≤1 caption → content; top chrome = `←` + 4dp accent progress rail + mono `skip →` (no wordmark pre-app); full-width filled capsule CTA; every selectable shares one tile formula (outline@0.35 border → accent border + accent@0.15 wash); plan-mode cards carry live looping Canvas vignettes (frozen at final frame under reduce-motion); equipment/preset/goal tiles use the `OnboardingIcons` matched glyph family | serif heroes, figures, lens pills, chart motion/stagger; section dividers; action buttons floating mid-page; actions as pill toggles; one long multi-block scroll |
 | **Live / flow** | live session, freestyle log | Function-first: big targets, timers, set-log haptics + `bouncy()`, confetti (PR only), keep-screen-on | presentational motion, figures, padding at the cost of reach |
 | **Modal** | sheets, dialogs | Surface fill, `large` top corners; dialogs = confirmations/tiny inputs only | open-editorial bare background |
 
@@ -118,19 +118,27 @@ captions on bottom scrims, full-bleed strips (Profile cover/filmstrip = referenc
 `EditorialHeader` (section anchor, mono labelLarge 13sp; onSurfaceVariant + primary) ·
 `EditorialHairline` (**data lines only** — chart threshold/table rule, never a section separator,
 §1) · `EditorialFigure` (serif number + mono caption + ↑/↓ delta) · `EditorialLegend` · `SegmentPill`
-(all filter/lens toggles) · `ForgeSwitch` · `InlineEmptyHint` (§12) · `ForgeWordmark` · `bounceClick` ·
-`clickableLabeled` (plain tappable + TalkBack label) · `ForgeShimmer` · `ConfettiOverlay` (only
-celebration) · `statsEntrance`. A pattern used on a 3rd screen gets promoted here the same turn.
+(all filter/lens toggles) · `ForgeSwitch` · `InlineEmptyHint` (§12) · `ForgeWordmark` · `bounceClick` / `bounceCombinedClick`
+(latter adds a long-press hook — Home CTA tap = start, hold = skip warmup) ·
+`clickableLabeled` (plain tappable + TalkBack label) · `ForgePrimaryCapsule`/`ForgeOutlineCapsule`
+(the ①/② capsules below — sheets/editors use these; settings/onboarding wrappers match them) ·
+`ForgeShimmer` · `ConfettiOverlay` (only celebration) · `statsEntrance`. A pattern used on a 3rd
+screen gets promoted here the same turn.
 
 **Buttons — three levels only**: ① filled light capsule = do-it-now, ≤1/section; ② outlined capsule =
 its sidekick; ③ mono accent `action →` = navigation. No M3 default/floating-text/icon buttons in content.
-Settings reuse `SettingsPrimaryAction` (do-it-now) / `SettingsOutlineAction` (sidekick) / `SettingsActionLink` (`action →` nav) from `SettingsPrimitives.kt`; group the action buttons at the END of the page, never mid-scroll.
+Settings reuse `SettingsPrimaryAction` (do-it-now) / `SettingsOutlineAction` (sidekick) / `SettingsActionLink` (`action →` nav) from `SettingsPrimitives.kt`; group the page-level action buttons at the END of the page, never mid-scroll.
+**Per-row action = compact OUTLINED pill, never filled.** A do-it-now action scoped to a single list row/integration (Recovery's Connect) renders as a right-aligned compact OUTLINED pill (`SettingsOutlineAction` weight — border only, onBg text, sentence case) with the WHOLE row as its tap target (the pill is drawn, not independently clickable — no nested tap). NEVER a filled-white capsule per row — five of those stack into a button wall (Recovery failed exactly this way); the ONE filled capsule stays page-level, grouped at the END (e.g. Get/Update Health Connect). A bare mono accent `connect →` link is too dim against a muted accent — prefer the pill. A connected row shows a passive `• ON` (accent disc + mono) on the right, and a list of connectables leads with its filled-disc/muted-ring dot rail (§12; ring at 1.5dp muted@0.55 so the empty state reads on near-black). Rows without a usable action render passive — no affordance that can't run.
 **Sizing — trim, never chunky** (48dp touch from padding, not visual size): hero CTA ~60dp (Home
 Start session only); standard capsules **44dp** (14sp); `ForgeSwitch` **40×24** track (thumb 14→17,
 press ~20); `SegmentPill` 12×5, 10sp.
 **Icons**: chrome (nav/gear/back/share) + a muted leading glyph on settings/list nav rows for
-wayfinding (matched custom family — `SettingsIcons`/`NavIcons`, never Material stock, never accent-
-tinted); elsewhere content is text-first, glyphs `→ ↑ ↓ △ • ·` carry meaning — no decorative icons/emoji.
+wayfinding. Row/content glyphs come from the matched custom families (`SettingsIcons`/`NavIcons`/
+`ExerciseIcons`), never Material stock, never accent-tinted; TOP-BAR chrome may use Material stock
+until a custom chrome set lands (content never). Exercise rows in browsers/pickers lead with their
+`ExerciseIcons.forEquipment` equipment-class glyph (one glyph per implement class, custom moves =
+pencil); elsewhere content is text-first, glyphs `→ ↑ ↓ △ • ·` carry meaning — no decorative
+icons/emoji. (Known gap: `CardioType.icon` still mixes Material stock into its custom family.)
 **Don't render state twice, and flag only exceptions.** A leading `•` dot is earned only when its
 COLOR flags something the eye should catch — a failure (error), a win/active (accent) — never the
 neutral/default/inactive majority (a column of identical grey dots is noise). Paint the dot only
@@ -204,7 +212,7 @@ data (bars/meters/sparklines/dot rows) at zero/ghost, never a list of status wor
 
 ## 13. Inputs, loading & feedback
 
-- **Text inputs** (interactive → bordered): `OutlinedTextField`, unfocused = outline rung, focused = accent, muted placeholder; search = leading magnifier + trailing clear, either bordered (History `SearchField`) or a filled rounded field (surfaceVariant — the standard phone-search look, Settings + timezone picker). Hot-path numbers = steppers + inline edit, never keyboard-first.
+- **Text inputs** (interactive → bordered): `OutlinedTextField`, unfocused = outline rung, focused = accent, muted placeholder (placeholder text is a ghost affordance — it may dim below the §5 muted floor); search = leading magnifier + trailing clear, either bordered (History `SearchField`) or a filled rounded field (surfaceVariant — the standard phone-search look, Settings + timezone picker). Hot-path numbers = steppers + inline edit, never keyboard-first.
 - **Loading**: local DB is instant — no spinners/blocking loads ever; screens appear with the entrance cascade; `ForgeShimmer` only for real latency (photos, Health Connect).
 - **Feedback**: undo over confirm — reversible acts get a short Undo snackbar ("Set logged · Undo"); dialogs only for destructive/irreversible acts (wording the consequence); no success toasts for what the UI already shows; errors = quiet inline line in error color, never banners.
 
@@ -212,7 +220,7 @@ data (bars/meters/sparklines/dot rows) at zero/ghost, never a list of status wor
 
 **Removed on purpose**: boxed cards for passive content · full-screen PR takeover (PR = confetti +
 gold row) · accent-tinted "important" prose · session-summary extras (share card/tags/ghost/vs-last/
-what's-next) · cardio big-number hero · new gamification surfaces (wait-listed) · Profile
+what's-next) · cardio big-number hero · cardio kcal estimates (return only with real watch burn data) · new gamification surfaces (wait-listed) · Profile
 identity-first restructure · mood/subjective coach drivers · Coach hero week-dot calendar, "Pulse",
 pass-square record strip · Coach status serif verdicts AND status/anticipation asides (status states
 = eyebrow + figures) · hairline section separators (§1) · the 9-row milestone ladder (→ rail + next, §4.10).
@@ -220,8 +228,10 @@ pass-square record strip · Coach status serif verdicts AND status/anticipation 
 portrait phone only (no adaptive/tablet/landscape).
 **Untouchable**: live-session screen · Profile blending cover · statsEntrance/draw tuning ·
 `BodyAnatomy.kt` (generated).
-**Known defects, fix when touched**: Home's accent-colored eyebrow labels (labels are muted per §5) ·
-Home's GOALS section placement · any screen still drawing section hairlines → migrate to air rhythm (§7).
+**Known defects, fix when touched**: Home's GOALS section placement · Stats' 16dp gutter (§7 says 24 —
+left because re-flowing the polished screen needs Antho's eyes) · any screen still drawing section
+hairlines → migrate to air rhythm (§7). (Home's accent eyebrows + the Home/Stats section hairlines
+were fixed 2026-07-08, GYMAP-4.)
 
 ## 15. Checklist before calling UI work done
 

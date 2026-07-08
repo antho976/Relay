@@ -34,8 +34,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
@@ -67,7 +65,7 @@ internal val ACTION_ENTRIES = listOf(
     SettingsActionEntry("Backup & restore", "Data", "backup restore database file save load import survive uninstall", SearchAction.DATA),
     SettingsActionEntry("Reset…", "Reset", "reset delete clear wipe erase sessions trophies cardio settings data", SearchAction.RESET),
     SettingsActionEntry("Factory reset", "Reset", "factory reset erase everything wipe delete all clean slate", SearchAction.RESET),
-    SettingsActionEntry("Your coach", "Coach", "coach brief tracking plan learning weekly review autopilot deload", SearchAction.COACH),
+    SettingsActionEntry("Your coach", "Coach", "coach brief tracking plan learning weekly review autopilot deload trust history record proposals undo", SearchAction.COACH),
 )
 
 /**
@@ -83,7 +81,7 @@ internal val PAGE_ENTRIES = listOf(
     SettingsPageEntry(SettingsPage.Session, "session haptic feedback vibration notes templates rest timer between sets compound isolation"),
     SettingsPageEntry(SettingsPage.Notifications, "notifications reminders quiet hours recap timer alerts notify suppress"),
     SettingsPageEntry(SettingsPage.Program, "program equipment generate auto split days routine rotate trainings workouts barbell dumbbell cable machine plate focus goal experience emphasis priority"),
-    SettingsPageEntry(SettingsPage.Coach, "coach weekly review autopilot auto-apply suggest trust brief tweaks proposals history undo"),
+    SettingsPageEntry(SettingsPage.Coach, "coach weekly review autopilot auto-apply suggest mode on off tweaks"),
     SettingsPageEntry(SettingsPage.Recovery, "recovery health connect sleep heart rate resting samsung watch coach deload steps bodyweight"),
     SettingsPageEntry(SettingsPage.ExercisePrefs, "exercise likes dislike favourite exclude preferences movements heart hidden preferred"),
     SettingsPageEntry(SettingsPage.Vacation, "holiday vacation pause streak break away travel"),
@@ -119,7 +117,7 @@ internal val ALL_ITEMS = listOf(
     SettingsItem("Exercise preferences", "exercise likes dislikes preferred hidden movements favourite heart", SettingsPage.ExercisePrefs),
     SettingsItem("Ask to dislike after swap", "swap dislike prompt hide exercise default", SettingsPage.ExercisePrefs),
     SettingsItem("Holiday mode", "holiday vacation pause streak break away travel", SettingsPage.Vacation),
-    SettingsItem("Coach mode", "coach mode suggest auto apply autopilot earn trust proposals history", SettingsPage.Coach),
+    SettingsItem("Coach mode", "coach mode suggest auto apply autopilot earn", SettingsPage.Coach),
 ) + com.forge.app.program.Equipment.entries.map { equip ->
     // Each piece of equipment is searchable by name, so a query like "kettlebell" surfaces it
     // (tagged to the Program & equipment page) instead of only the generic "Available equipment" row.
@@ -154,6 +152,11 @@ fun SettingsScreen(
     // Seeded with [initialPage] for a deep link; rememberSaveable keeps a later in-screen back/forward
     // navigation sticky rather than snapping back to the deep-linked page.
     var currentPage by rememberSaveable { mutableStateOf<SettingsPage?>(initialPage) }
+    // Deep-linked arrival (the cardio watch banner → Recovery): the user never saw the root list, so
+    // the FIRST back returns to the caller (the cardio tab), not "up" to a Settings root they didn't
+    // come from. The flag clears the moment they navigate anywhere else inside Settings.
+    var onDeepLinkedPage by rememberSaveable { mutableStateOf(initialPage != null) }
+    LaunchedEffect(currentPage) { if (currentPage != initialPage) onDeepLinkedPage = false }
     // The Program page's open sub-section is hoisted here so EVERY back affordance (top-bar arrow,
     // system back) returns to the Program menu first, then to Settings — never skipping a level.
     var programSection by rememberSaveable { mutableStateOf<ProgramSection?>(null) }
@@ -201,6 +204,7 @@ fun SettingsScreen(
     BackHandler(enabled = currentPage != null || searchQuery.isNotBlank()) {
         when {
             currentPage == SettingsPage.Program && programSection != null -> programSection = null
+            onDeepLinkedPage && currentPage != null -> onBack()
             currentPage != null -> { currentPage = null; programSection = null }
             else -> searchQuery = ""
         }
@@ -216,6 +220,7 @@ fun SettingsScreen(
                     IconButton(onClick = {
                         when {
                             currentPage == SettingsPage.Program && programSection != null -> programSection = null
+                            onDeepLinkedPage && currentPage != null -> onBack()
                             currentPage != null -> { currentPage = null; programSection = null }
                             searchQuery.isNotBlank() -> searchQuery = ""
                             else -> onBack()
@@ -223,22 +228,6 @@ fun SettingsScreen(
                     }) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = muted)
                     }
-                },
-                actions = {
-                    // The screen name sits as a quiet right-aligned label. Inside a Program sub-section,
-                    // name the section (Equipment, Coach…) so the header tracks how deep you are.
-                    val headerLabel = when {
-                        currentPage == SettingsPage.Program && programSection != null -> programSection!!.title
-                        currentPage != null -> currentPage!!.title
-                        else -> "Settings"
-                    }
-                    Text(
-                        headerLabel.uppercase(),
-                        style = MaterialTheme.typography.labelSmall,
-                        letterSpacing = if (currentPage == null) 2.sp else 1.5.sp,
-                        color = muted,
-                        modifier = Modifier.padding(end = 16.dp)
-                    )
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
             )
@@ -280,7 +269,11 @@ fun SettingsScreen(
                     modifier = Modifier.padding(inner),
                     onOpenBuilder = onOpenBuilder
                 )
-                SettingsPage.Coach -> CoachSettingsPage(state, viewModel, onOpenCoachBrief, Modifier.padding(inner))
+                SettingsPage.Coach -> CoachSettingsPage(
+                    state, viewModel,
+                    onOpenRecovery = { currentPage = SettingsPage.Recovery },
+                    modifier = Modifier.padding(inner)
+                )
                 SettingsPage.Recovery -> RecoveryPage(Modifier.padding(inner))
                 SettingsPage.ExercisePrefs -> ExercisePrefsPage(state, viewModel, Modifier.padding(inner))
                 SettingsPage.Vacation -> VacationPage(viewModel, Modifier.padding(inner))
@@ -343,8 +336,8 @@ fun SettingsScreen(
                 Text(
                     buildString {
                         append("This replaces ALL current data")
-                        if (!impact.isNullOrBlank()) append(" — your $impact")
-                        append(" — with the chosen backup, then restarts the app. It can't be undone; back up first if you're unsure.")
+                        if (!impact.isNullOrBlank()) append(", your $impact,")
+                        append(" with the chosen backup, then restarts the app. It can't be undone; back up first if you're unsure.")
                     }
                 )
             },

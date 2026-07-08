@@ -22,6 +22,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -31,6 +33,10 @@ import kotlinx.coroutines.delay
 /**
  * Multiline note field for an exercise. Includes quick-insert template chips (#113)
  * and a "Pin as cue" button (#112). Local state with 500ms commit debounce.
+ *
+ * Template behavior: each template starts its own line in the note with the cursor parked
+ * right after it, ready to type the answer; a chip disappears once its prompt is already
+ * in the note, so templates can't double-insert or mash together.
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -43,15 +49,24 @@ fun NoteField(
     modifier: Modifier = Modifier,
     settingsViewModel: SettingsViewModel = hiltViewModel()
 ) {
-    var text by rememberSaveable { mutableStateOf(initialNote.orEmpty()) }
+    var field by rememberSaveable(stateSaver = TextFieldValue.Saver) {
+        mutableStateOf(TextFieldValue(initialNote.orEmpty(), TextRange(initialNote.orEmpty().length)))
+    }
     val baseline = remember { initialNote.orEmpty() }
     val settingsState by settingsViewModel.state.collectAsStateWithLifecycle()
-    val templates = settingsState.noteTemplates
+    val templates = remember(settingsState.noteTemplates, field.text) {
+        settingsState.noteTemplates
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+            .distinctBy { it.lowercase() }
+            .filterNot { field.text.contains(it, ignoreCase = true) }
+            .sortedBy { it.lowercase() }
+    }
 
-    LaunchedEffect(text) {
-        if (text != baseline) {
+    LaunchedEffect(field.text) {
+        if (field.text != baseline) {
             delay(500)
-            onCommit(text)
+            onCommit(field.text)
         }
     }
 
@@ -61,7 +76,12 @@ fun NoteField(
                 templates.forEach { template ->
                     FilterChip(
                         selected = false,
-                        onClick = { text = text + template },
+                        onClick = {
+                            val next =
+                                if (field.text.isBlank()) "$template "
+                                else field.text.trimEnd() + "\n" + template + " "
+                            field = TextFieldValue(next, TextRange(next.length))
+                        },
                         label = { Text(template, style = MaterialTheme.typography.labelSmall) },
                         colors = FilterChipDefaults.filterChipColors(
                             containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
@@ -72,8 +92,8 @@ fun NoteField(
         }
 
         OutlinedTextField(
-            value = text,
-            onValueChange = { text = it },
+            value = field,
+            onValueChange = { field = it },
             modifier = modifier.fillMaxWidth().heightIn(min = 56.dp),
             label = { Text("Notes") },
             placeholder = {
@@ -83,10 +103,10 @@ fun NoteField(
             maxLines = 4
         )
 
-        if (text.isNotBlank()) {
+        if (field.text.isNotBlank()) {
             Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
-                TextButton(onClick = { onPinNote(if (currentPinnedNote == text.trim()) "" else text.trim()) }) {
-                    Text(if (currentPinnedNote == text.trim()) "Unpin cue" else "Pin as cue")
+                TextButton(onClick = { onPinNote(if (currentPinnedNote == field.text.trim()) "" else field.text.trim()) }) {
+                    Text(if (currentPinnedNote == field.text.trim()) "Unpin cue" else "Pin as cue")
                 }
             }
         }

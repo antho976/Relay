@@ -105,28 +105,23 @@ class SettingsViewModel @Inject constructor(
 
     // ─── Coach (auto-coach Phase 4) ───────────────────────────────────────────
 
+    // Trust feeds only the coach-settings "auto isn't active yet" note; the ledger, history and
+    // undo render on the Coach tab (CoachViewModel owns them).
     private val _coachTrust = MutableStateFlow<List<com.forge.app.domain.coach.TypeTrust>>(emptyList())
     val coachTrust: StateFlow<List<com.forge.app.domain.coach.TypeTrust>> = _coachTrust.asStateFlow()
 
-    private val _coachHistory =
-        MutableStateFlow<List<com.forge.app.data.repo.CoachRepository.CoachHistoryEntry>>(emptyList())
-    val coachHistory: StateFlow<List<com.forge.app.data.repo.CoachRepository.CoachHistoryEntry>> =
-        _coachHistory.asStateFlow()
+    // The coach's input feeds (check-ins, rest flags, sleep, resting HR) with their live/silent
+    // state — the settings page's at-a-glance "is everything it needs switched on".
+    private val _coachSignals = MutableStateFlow<List<com.forge.app.data.repo.RecoverySignal>>(emptyList())
+    val coachSignals: StateFlow<List<com.forge.app.data.repo.RecoverySignal>> = _coachSignals.asStateFlow()
 
-    /** Load the Coach page data (called when the section opens — not part of the big combine). */
+    /** Load the Coach page's data (called when the page opens — not part of the big combine). */
     fun loadCoachData() = viewModelScope.launch {
-        runCatching {
-            _coachTrust.value = coachRepo.trust()
-            _coachHistory.value = coachRepo.history()
-        }
+        runCatching { _coachTrust.value = coachRepo.trust() }
+        runCatching { _coachSignals.value = coachRepo.coachLab().recoverySignals }
     }
 
     fun setCoachMode(mode: String) = viewModelScope.launch { settingsRepo.setCoachMode(mode) }
-
-    fun undoCoachDecision(id: Long) = viewModelScope.launch {
-        runCatching { coachRepo.undoDecision(id) }
-        loadCoachData()
-    }
 
     // ─── Day-aware scheduling (weekly plan vs sequence) ───────────────────────
     val scheduleMode: StateFlow<String> = settingsRepo.scheduleMode
@@ -380,9 +375,9 @@ class SettingsViewModel @Inject constructor(
         )
         if (wasFreestyle) settingsRepo.setFreestyleMode(false)
         _statusMessage.value = if (wasFreestyle)
-            "Re-rolled — you're now following a plan. Open Gym to see it."
+            "Re-rolled. You're now following a plan. Open Gym to see it."
         else
-            "Re-rolled — same split, fresh exercises. Open Gym to see it."
+            "Re-rolled. Same split, fresh exercises. Open Gym to see it."
     }
 
     // Goal/experience/problem-areas/priority/pins are staged config — applied when the user taps
@@ -418,7 +413,7 @@ class SettingsViewModel @Inject constructor(
             )
             if (wasFreestyle) settingsRepo.setFreestyleMode(false)
             _statusMessage.value = if (wasFreestyle)
-                "New $days-day program generated — you're now following a plan. Open Gym to see it."
+                "New $days-day program generated. You're now following a plan. Open Gym to see it."
             else
                 "New $days-day program generated. Open Gym to see it."
         }
@@ -434,7 +429,7 @@ class SettingsViewModel @Inject constructor(
                 currentEquipment(), settingsRepo.likedExercises.first(), settingsRepo.dislikedExercises.first()
             )
             if (wasFreestyle) settingsRepo.setFreestyleMode(false)
-            _statusMessage.value = "Deload week generated — lighter volume. Open Gym to see it."
+            _statusMessage.value = "Deload week generated at lighter volume. Open Gym to see it."
         }
     }
     fun setAccentColorHex(hex: String) = viewModelScope.launch { settingsRepo.setAccentColorHex(hex) }
@@ -549,15 +544,15 @@ class SettingsViewModel @Inject constructor(
     private fun restoreFailureMessage(outcome: RestoreOutcome): String =
         when (outcome) {
             RestoreOutcome.NOT_A_BACKUP ->
-                "That file isn't a Avex backup — pick the .zip you exported from Avex."
+                "That file isn't an Avex backup. Pick the .zip you exported from Avex."
             RestoreOutcome.NEWER_VERSION ->
                 "That backup was made by a newer version of Avex. Update the app, then restore."
             RestoreOutcome.TOO_OLD ->
                 "That backup is too old to restore safely (made before this app's schema)."
             RestoreOutcome.CORRUPT ->
-                "That backup is corrupted or incomplete — try a different copy or re-export it."
+                "That backup is corrupted or incomplete. Try a different copy or re-export it."
             RestoreOutcome.TOO_LARGE ->
-                "That file is too large to be a Avex backup."
+                "That file is too large to be an Avex backup."
             RestoreOutcome.NO_BACKUP_FILE ->
                 "No auto-backup to restore yet."
             RestoreOutcome.IO_ERROR ->
@@ -639,7 +634,8 @@ class SettingsViewModel @Inject constructor(
         runCatching { backupRepo.exportCrashLogsToUri(uri) }
             .onSuccess { n ->
                 _statusMessage.value =
-                    if (n == 0) "No crash logs yet — nothing to export." else "Exported $n crash log(s)."
+                    if (n == 0) "No crash logs yet, nothing to export."
+                    else "Exported $n crash log${if (n == 1) "" else "s"}."
             }
             .onFailure { _statusMessage.value = "Crash log export failed: ${it.message}" }
     }

@@ -167,6 +167,7 @@ internal fun ColumnScope.RecordsContent(
                 color = c.accent
             )
         }
-        if (i < shown.lastIndex) androidx.compose.material3.HorizontalDivider(color = c.outline.copy(alpha = 0.18f))
+        // Table rule between record rows — a data line on the §5 hairline rung.
+        if (i < shown.lastIndex) androidx.compose.material3.HorizontalDivider(color = c.outline.copy(alpha = 0.25f))
     }
 }

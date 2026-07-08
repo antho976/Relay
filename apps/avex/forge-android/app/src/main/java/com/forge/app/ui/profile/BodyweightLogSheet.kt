@@ -5,13 +5,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -25,6 +23,8 @@ import androidx.compose.ui.unit.dp
 import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.domain.units.weightInputValue
+import com.forge.app.ui.common.ForgeOutlineCapsule
+import com.forge.app.ui.common.ForgePrimaryCapsule
 import com.forge.app.ui.onboarding.MAX_BODYWEIGHT_LB
 import com.forge.app.ui.onboarding.MIN_BODYWEIGHT_LB
 import com.forge.app.ui.onboarding.parseSaneBodyweightLb
@@ -80,18 +80,23 @@ internal fun BodyweightLogSheet(
                 singleLine = true,
                 isError = invalid,
                 supportingText = {
-                    Text(if (invalid) "Enter $minDisp–$maxDisp ${unitLabel(useKg)}." else "One entry per day — saving replaces today's.")
+                    Text(if (invalid) "Enter $minDisp–$maxDisp ${unitLabel(useKg)}." else "One entry per day, saving replaces today's.")
                 },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                 modifier = Modifier.fillMaxWidth()
             )
-            Button(onClick = { parsed?.let(onSave) }, enabled = parsed != null, modifier = Modifier.fillMaxWidth()) {
-                Text("Save")
-            }
+            ForgePrimaryCapsule(
+                label = "Save",
+                onClick = { parsed?.let(onSave) },
+                enabled = parsed != null,
+                modifier = Modifier.fillMaxWidth()
+            )
             if (canImport) {
-                TextButton(onClick = onImport, modifier = Modifier.fillMaxWidth()) {
-                    Text("Import latest from Health Connect")
-                }
+                ForgeOutlineCapsule(
+                    label = "Import latest from Health Connect",
+                    onClick = onImport,
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
             message?.let {
                 Text(it, style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic)

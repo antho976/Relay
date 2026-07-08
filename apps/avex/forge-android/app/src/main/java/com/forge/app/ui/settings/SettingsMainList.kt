@@ -1,7 +1,6 @@
 package com.forge.app.ui.settings
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -75,9 +74,9 @@ internal fun MainList(
             }
             item("coach") {
                 SettingsSectionHeader("Coach")
-                // The always-available door to the coach page (brief link + on/off + mode + trust +
-                // history). Hidden for freestyle users — no plan to coach against (matches the hub tab);
-                // Recovery + Holiday stay, they aren't coach-only.
+                // Coach CONFIGURATION only (on/off + mode) — the brief, trust and history live on
+                // the Coach tab. Hidden for freestyle users — no plan to coach against (matches the
+                // hub tab); Recovery + Holiday stay, they aren't coach-only.
                 if (!state.freestyleMode) {
                     SettingsNavRow("Your coach", rowSubtitle(SettingsPage.Coach, state), NavIcons.Coach) { onOpenPage(SettingsPage.Coach) }
                 }
@@ -213,7 +212,7 @@ private fun AboutLink(onClick: () -> Unit) {
         textAlign = TextAlign.Center,
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .clickableLabeled("About Avex", onClick = onClick)
             .padding(vertical = 12.dp)
     )
 }
@@ -287,7 +286,7 @@ private fun SearchResultRow(result: SearchResult, query: String) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = result.onClick)
+            .clickableLabeled(result.name, onClick = result.onClick)
             .padding(horizontal = 24.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(16.dp)

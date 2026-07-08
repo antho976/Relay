@@ -3,7 +3,9 @@ package com.forge.app.ui.common
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.material3.ripple
@@ -47,6 +49,44 @@ fun Modifier.bounceClick(
             interactionSource = interactionSource,
             indication = if (touchExploration) ripple() else null,
             enabled = enabled,
+            onClick = onClick
+        )
+}
+
+/**
+ * [bounceClick] with a long-press hook. Use when a single control carries a primary tap and a
+ * secondary hold (e.g. Start session vs. hold-to-skip-warmup). Same bounce-no-ripple feel; the
+ * click/long-click labels feed TalkBack so both actions are announced.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+fun Modifier.bounceCombinedClick(
+    pressedScale: Float = 0.97f,
+    enabled: Boolean = true,
+    onClickLabel: String? = null,
+    onLongClickLabel: String? = null,
+    onLongClick: (() -> Unit)? = null,
+    onClick: () -> Unit
+): Modifier = composed {
+    val interactionSource = remember { MutableInteractionSource() }
+    val isPressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (isPressed && enabled) pressedScale else 1f,
+        animationSpec = spring(
+            dampingRatio = Spring.DampingRatioMediumBouncy,
+            stiffness = Spring.StiffnessMediumLow
+        ),
+        label = "bounce-scale"
+    )
+    val touchExploration = LocalTouchExplorationEnabled.current
+    Modifier
+        .graphicsLayer { scaleX = scale; scaleY = scale }
+        .combinedClickable(
+            interactionSource = interactionSource,
+            indication = if (touchExploration) ripple() else null,
+            enabled = enabled,
+            onClickLabel = onClickLabel,
+            onLongClickLabel = onLongClickLabel,
+            onLongClick = onLongClick,
             onClick = onClick
         )
 }

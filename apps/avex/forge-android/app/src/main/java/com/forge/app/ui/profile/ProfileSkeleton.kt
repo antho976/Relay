@@ -74,7 +74,7 @@ internal fun ProfileSkeleton(modifier: Modifier = Modifier, topInset: Dp = 0.dp)
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             repeat(3) {
-                Box(Modifier.width(132.dp).height(176.dp).clip(RoundedCornerShape(14.dp)).forgeShimmer())
+                Box(Modifier.width(132.dp).height(176.dp).clip(RoundedCornerShape(16.dp)).forgeShimmer())
             }
         }
         Spacer(Modifier.height(40.dp))
