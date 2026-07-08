@@ -500,15 +500,15 @@ class SettingsViewModel @Inject constructor(
     private fun restoreFailureMessage(outcome: RestoreOutcome): String =
         when (outcome) {
             RestoreOutcome.NOT_A_BACKUP ->
-                "That file isn't a Forge backup — pick the .zip you exported from Forge."
+                "That file isn't a Avex backup — pick the .zip you exported from Avex."
             RestoreOutcome.NEWER_VERSION ->
-                "That backup was made by a newer version of Forge. Update the app, then restore."
+                "That backup was made by a newer version of Avex. Update the app, then restore."
             RestoreOutcome.TOO_OLD ->
                 "That backup is too old to restore safely (made before this app's schema)."
             RestoreOutcome.CORRUPT ->
                 "That backup is corrupted or incomplete — try a different copy or re-export it."
             RestoreOutcome.TOO_LARGE ->
-                "That file is too large to be a Forge backup."
+                "That file is too large to be a Avex backup."
             RestoreOutcome.NO_BACKUP_FILE ->
                 "No auto-backup to restore yet."
             RestoreOutcome.IO_ERROR ->

@@ -27,7 +27,7 @@ object PrMilestone {
         val crossed = MILESTONES.lastOrNull { it in (before + 1)..lifetimePrCount } ?: return null
         return Nudge(
             title = "$crossed personal records!",
-            body = "That's $crossed all-time PRs logged in Forge. The work is showing — keep chasing them."
+            body = "That's $crossed all-time PRs logged in Avex. The work is showing — keep chasing them."
         )
     }
 }

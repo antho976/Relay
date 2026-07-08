@@ -19,7 +19,7 @@ import androidx.compose.ui.unit.dp
 val LocalGoHome = staticCompositionLocalOf<() -> Unit> { {} }
 
 /**
- * The "• Forge" wordmark that sits in nav top bars. It's now a shortcut Home button: tapping it
+ * The "• Avex" wordmark that sits in nav top bars. It's now a shortcut Home button: tapping it
  * pops back to the hub and selects Home, so the user never has to back out screen-by-screen. By
  * default it fires [LocalGoHome]; the cardio in-screen overlays pass a custom [onClick] that also
  * closes the overlay first.
@@ -37,6 +37,6 @@ fun ForgeWordmark(
         horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         Text("•", style = MaterialTheme.typography.bodyMedium, color = accent)
-        Text("Forge", style = MaterialTheme.typography.bodyMedium, color = onBg, fontStyle = FontStyle.Italic)
+        Text("Avex", style = MaterialTheme.typography.bodyMedium, color = onBg, fontStyle = FontStyle.Italic)
     }
 }

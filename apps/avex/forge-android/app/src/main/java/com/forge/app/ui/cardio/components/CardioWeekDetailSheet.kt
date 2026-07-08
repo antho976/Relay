@@ -63,13 +63,13 @@ fun CardioWeekDetailSheet(
     bodyweightLb: Double?,
     /** Watch-derived steps/route for the current week (today); null when none loaded. */
     wearable: CardioWearableDay?,
-    /** Forge holds the steps grant — show the current-week steps section even before data syncs. */
+    /** Avex holds the steps grant — show the current-week steps section even before data syncs. */
     wearableConnected: Boolean,
     todayDow: Int,
     zone: ZoneId,
     onOpenSession: (Long) -> Unit,
     onBack: () -> Unit,
-    /** Tapping the Forge wordmark — defaults to "go Home"; the cardio tab overrides it to close first. */
+    /** Tapping the Avex wordmark — defaults to "go Home"; the cardio tab overrides it to close first. */
     onHome: () -> Unit = com.forge.app.ui.common.LocalGoHome.current
 ) {
     val onBg = MaterialTheme.colorScheme.onBackground

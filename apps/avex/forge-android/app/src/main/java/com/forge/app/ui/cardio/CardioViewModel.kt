@@ -55,7 +55,7 @@ class CardioViewModel @Inject constructor(
 ) : ViewModel() {
 
     private val transient = MutableStateFlow(TransientState())
-    // Which Health Connect grants Forge actually holds — re-checked on init and on every resume (the
+    // Which Health Connect grants Avex actually holds — re-checked on init and on every resume (the
     // user may grant them in the HC app and return). Drives the banner's auto-hide and the "connected
     // but no data yet" steps placeholder. A one-shot read, not a flow: HC has no permission-change
     // observable, so we poll it at the moments it can change (resume) rather than continuously.
@@ -257,7 +257,7 @@ class CardioViewModel @Inject constructor(
         }
     }
 
-    /** The Health Connect grants Forge holds for the cardio screen's wearable data. */
+    /** The Health Connect grants Avex holds for the cardio screen's wearable data. */
     private data class WearableConnection(val steps: Boolean = false, val routes: Boolean = false)
 
     private data class TransientState(

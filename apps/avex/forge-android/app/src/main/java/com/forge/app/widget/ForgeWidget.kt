@@ -206,9 +206,9 @@ class ForgeWidget : GlanceAppWidget() {
                         // and for a custom user who hasn't built a plan yet, so don't claim "your program
                         // is ready". Branch on the actual mode / program state.
                         val (head, sub) = when {
-                            freestyleMode -> "Tap to log a workout" to "No fixed plan — open Forge to log your session."
-                            Program.dayKeys.isEmpty() -> "Tap to build your plan" to "Set up your program in Forge to get started."
-                            else -> "Tap to start your first workout" to "Your program is ready — open Forge to begin."
+                            freestyleMode -> "Tap to log a workout" to "No fixed plan — open Avex to log your session."
+                            Program.dayKeys.isEmpty() -> "Tap to build your plan" to "Set up your program in Avex to get started."
+                            else -> "Tap to start your first workout" to "Your program is ready — open Avex to begin."
                         }
                         Text(
                             head,

@@ -7,7 +7,7 @@ package com.forge.app.domain.health
  *
  * The model is the standard MET formula: `kcal = MET × bodyweightKg × hours`. The MET is chosen
  * from the session's logged intensity (compendium values for weight training: light/moderate ≈ 3.5,
- * vigorous ≈ 6.0). It's deliberately an *estimate* — Forge has no heart-rate stream — so it's only
+ * vigorous ≈ 6.0). It's deliberately an *estimate* — Avex has no heart-rate stream — so it's only
  * ever written to HC as a manual entry, and only when the user has opted in.
  *
  * Returns null when the inputs can't support an estimate (no logged bodyweight, or a zero-length

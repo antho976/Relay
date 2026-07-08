@@ -34,17 +34,17 @@ class HealthConnectViewModel @Inject constructor(
         val needsUpdate: Boolean = false,
         /** Every recovery permission is granted. */
         val granted: Boolean = false,
-        /** Bodyweight READ permission is granted — Forge may import a scale value (HC-2). */
+        /** Bodyweight READ permission is granted — Avex may import a scale value (HC-2). */
         val weightGranted: Boolean = false,
         /** Write-back opt-in: mirror each weigh-in to Health Connect (HC-3). */
         val writeBodyweight: Boolean = false,
-        /** Active-calorie WRITE permission is granted — Forge may write session calories (HC-4). */
+        /** Active-calorie WRITE permission is granted — Avex may write session calories (HC-4). */
         val calorieGranted: Boolean = false,
         /** Write opt-in: mirror each finished session's estimated active calories to HC (HC-4). */
         val writeCalories: Boolean = false,
-        /** Steps READ permission is granted — Forge may read a watch's step counts for the cardio graph. */
+        /** Steps READ permission is granted — Avex may read a watch's step counts for the cardio graph. */
         val stepsGranted: Boolean = false,
-        /** Exercise-session READ permission is granted — Forge may find watch sessions to offer GPS routes. */
+        /** Exercise-session READ permission is granted — Avex may find watch sessions to offer GPS routes. */
         val exerciseGranted: Boolean = false,
         /** Transient one-tap-import result line, cleared on the next refresh. */
         val importMessage: String? = null

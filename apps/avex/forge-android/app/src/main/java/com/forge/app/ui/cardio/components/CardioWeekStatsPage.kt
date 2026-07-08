@@ -52,7 +52,7 @@ internal fun CardioWeekStatsPage(
     weekTargetMin: Int,
     cardioStreakDays: Int,
     wearable: CardioWearableDay?,
-    /** Forge holds the steps grant — show the steps section (with a placeholder) even before data syncs. */
+    /** Avex holds the steps grant — show the steps section (with a placeholder) even before data syncs. */
     wearableConnected: Boolean,
     bodyweightLb: Double?,
     zone: ZoneId,

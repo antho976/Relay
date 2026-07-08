@@ -535,7 +535,7 @@ class BackupRepository @Inject constructor(
     }
 
     /**
-     * Replace the live database with the backup at [uri]. Validates it's a real Forge DB
+     * Replace the live database with the backup at [uri]. Validates it's a real Avex DB
      * first; only then stages the swap. Returns a [RestoreOutcome] — on SUCCESS the caller
      * MUST restart the app afterward (the file is swapped at next boot).
      */
@@ -578,7 +578,7 @@ class BackupRepository @Inject constructor(
     }
 
     /**
-     * Validate [incoming] and, if it's a real Forge backup, STAGE the DB, prefs and progress photos
+     * Validate [incoming] and, if it's a real Avex backup, STAGE the DB, prefs and progress photos
      * as pending files that [com.forge.app.ForgeApp.applyPendingRestore] swaps in atomically at next
      * boot — DB, prefs and photos together, so a kill or copy failure can never leave the live DB and
      * photo folder from different backups. Returns a [RestoreOutcome]. Deletes [incoming].
@@ -706,9 +706,9 @@ class BackupRepository @Inject constructor(
     }
 
     /**
-     * Sanity check that a candidate file is a SQLite DB containing Forge's core tables.
+     * Sanity check that a candidate file is a SQLite DB containing Avex's core tables.
      * Checking only `session` let any SQLite DB from another app pass validation and get swapped in.
-     * We now require all three tables that every real Forge backup must contain — so picking the wrong
+     * We now require all three tables that every real Avex backup must contain — so picking the wrong
      * app's DB fails with NOT_A_BACKUP / CORRUPT instead of silently replacing your data.
      */
     private fun isForgeDatabase(file: File): Boolean = runCatching {

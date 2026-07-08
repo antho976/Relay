@@ -32,7 +32,7 @@ fun DislikeSwapPromptDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
-                    "You swapped it out. Dislike it and Forge won't suggest it in swaps or new programs.",
+                    "You swapped it out. Dislike it and Avex won't suggest it in swaps or new programs.",
                     style = MaterialTheme.typography.bodyMedium
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

@@ -72,7 +72,7 @@ fun CardioLogSheet(
     bodyweightLb: Double? = null,
     /** Distance entry/pace unit — true = miles, false = km. The field stores km regardless. */
     useMiles: Boolean = false,
-    /** Tapping the Forge wordmark — defaults to "go Home"; the cardio tab overrides it to close first. */
+    /** Tapping the Avex wordmark — defaults to "go Home"; the cardio tab overrides it to close first. */
     onHome: () -> Unit = com.forge.app.ui.common.LocalGoHome.current
 ) {
     // Keyed on the edited entry's id so the form re-seeds if the sheet is ever reused for a different

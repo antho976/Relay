@@ -28,8 +28,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.Modifier
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.service.AutoBackupWorker
+import com.forge.app.ui.common.AvexIntro
 import com.forge.app.ui.common.ProvideTouchExploration
 import com.forge.app.ui.nav.ForgeNavHost
 import com.forge.app.ui.onboarding.OnboardingScreen
@@ -132,7 +136,7 @@ class MainActivity : ComponentActivity() {
             title = { Text("Stay on track?") },
             text = {
                 Text(
-                    "Forge can nudge you to train, send a weekly recap, and alert you when your rest ends. " +
+                    "Avex can nudge you to train, send a weekly recap, and alert you when your rest ends. " +
                         "You can turn each off any time in Settings → Notifications."
                 )
             },
@@ -267,14 +271,20 @@ class MainActivity : ComponentActivity() {
                 ) {
                     // One app-level touch-exploration observer feeds every bounceClick (A11y).
                     ProvideTouchExploration {
-                        when (onboardingDone) {
-                            false -> OnboardingScreen(onFinished = {})
-                            true -> {
-                                ForgeNavHost(initialDayKey = widgetDayKey)
-                                NotifPermissionRationale()
-                                RestoreConfirmedDialog(restoreJustCompleted)
+                        // Launch wordmark plays once per cold launch, over the first screen composed
+                        // beneath it. rememberSaveable so a rotation mid-intro doesn't replay it.
+                        var showIntro by rememberSaveable { mutableStateOf(true) }
+                        Box(Modifier.fillMaxSize()) {
+                            when (onboardingDone) {
+                                false -> OnboardingScreen(onFinished = {})
+                                true -> {
+                                    ForgeNavHost(initialDayKey = widgetDayKey)
+                                    NotifPermissionRationale()
+                                    RestoreConfirmedDialog(restoreJustCompleted)
+                                }
+                                null -> {} // DataStore still loading; the theme's gradient shows briefly
                             }
-                            null -> {} // DataStore still loading; the theme's gradient shows briefly
+                            if (showIntro) AvexIntro(onDone = { showIntro = false })
                         }
                     }
                 }

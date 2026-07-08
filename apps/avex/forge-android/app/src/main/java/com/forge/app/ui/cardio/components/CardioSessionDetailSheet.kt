@@ -70,12 +70,12 @@ fun CardioSessionDetailSheet(
     onShowRoute: (() -> Unit)? = null,
     /** Watch-derived steps for the session's day; null until loaded / when none. */
     wearable: CardioWearableDay? = null,
-    /** Forge holds the steps grant — show the steps section (with a placeholder) even before data syncs. */
+    /** Avex holds the steps grant — show the steps section (with a placeholder) even before data syncs. */
     wearableConnected: Boolean = false,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
     onBack: () -> Unit,
-    /** Tapping the Forge wordmark — defaults to "go Home"; the cardio tab overrides it to close first. */
+    /** Tapping the Avex wordmark — defaults to "go Home"; the cardio tab overrides it to close first. */
     onHome: () -> Unit = com.forge.app.ui.common.LocalGoHome.current
 ) {
     val type = CardioType.fromCode(entry.type)

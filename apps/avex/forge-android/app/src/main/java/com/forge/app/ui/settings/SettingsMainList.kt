@@ -94,7 +94,7 @@ internal fun MainList(
                 // …and a factory reset stays a separate, clearly more dangerous button.
                 DestructiveRow(ResetTarget.FACTORY.label, isFactory = true) { onResetTarget(ResetTarget.FACTORY) }
                 Spacer(Modifier.height(20.dp))
-                // About Forge is a quiet footer link at the very bottom of the app.
+                // About Avex is a quiet footer link at the very bottom of the app.
                 AboutLink { onOpenPage(SettingsPage.About) }
                 Spacer(Modifier.height(8.dp))
             }
@@ -204,7 +204,7 @@ private fun SettingsSearchField(query: String, onQueryChange: (String) -> Unit) 
 @Composable
 private fun AboutLink(onClick: () -> Unit) {
     Text(
-        "About Forge",
+        "About Avex",
         style = MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
         textAlign = TextAlign.Center,

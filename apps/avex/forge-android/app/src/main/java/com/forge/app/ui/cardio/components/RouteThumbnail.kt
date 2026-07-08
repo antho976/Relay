@@ -13,7 +13,7 @@ import com.forge.app.domain.cardio.RoutePoint
 
 /**
  * An offline, shape-only render of a recorded GPS track — the path's outline drawn as a
- * polyline on a plain canvas. Forge has no internet, so there is deliberately **no basemap
+ * polyline on a plain canvas. Avex has no internet, so there is deliberately **no basemap
  * / map tiles**: this is the route's *shape*, not a map (think a Strava thumbnail with the
  * streets removed). Points are normalised into the canvas box; renders nothing for an
  * empty / single-point route, so a wearable-less entry simply shows no thumbnail.

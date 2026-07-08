@@ -211,7 +211,7 @@ fun OnboardingScreen(
                                     onToggle = { useMilesChoice = it; distanceTouched = true }
                                 )
                                 Text(
-                                    "Everything stays on your phone. No account, no sign-up. Forge has no internet access, so it can't send your data anywhere.",
+                                    "Everything stays on your phone. No account, no sign-up. Avex has no internet access, so it can't send your data anywhere.",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -262,7 +262,7 @@ fun OnboardingScreen(
             // equipment selected, so this guards the skip rather than leaving the button silently greyed.
             if (page == PAGE_GYM && equipment.isEmpty()) {
                 Text(
-                    "Pick at least one. Forge can't build your plan without knowing what you can train with.",
+                    "Pick at least one. Avex can't build your plan without knowing what you can train with.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

@@ -24,8 +24,8 @@ import androidx.compose.ui.unit.sp
 
 /**
  * A quiet, dismissible top banner inviting the user to connect a watch/ring for steps + GPS. Tapping
- * the strip opens Settings → Recovery to grant Forge the steps/GPS read (connecting a watch to Samsung
- * Health only feeds Health Connect — Forge still needs its own per-type grant). Tapping the × removes it
+ * the strip opens Settings → Recovery to grant Avex the steps/GPS read (connecting a watch to Samsung
+ * Health only feeds Health Connect — Avex still needs its own per-type grant). Tapping the × removes it
  * for good (the caller persists the dismissal); the caller also hides it automatically once a grant
  * exists, so it never nags after you're connected. Deliberately unobtrusive — a thin outlined strip.
  */

@@ -80,8 +80,8 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
             statusLabel = recoveryStatus,
             connected = recoveryConnected,
             details = "Health Connect is Android's on-device hub — apps like Samsung Health and your " +
-                "watch write to it, and Forge only reads sleep and resting heart rate. Nothing leaves " +
-                "your phone; Forge still has no Internet permission. Optional and additive: skip it and " +
+                "watch write to it, and Avex only reads sleep and resting heart rate. Nothing leaves " +
+                "your phone; Avex still has no Internet permission. Optional and additive: skip it and " +
                 "the coach works exactly as before, and you can disconnect any time from the Health " +
                 "Connect app."
         ) {
@@ -102,9 +102,9 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
                 title = "Bodyweight sync",
                 statusLabel = if (state.weightGranted) "On" else "Off",
                 connected = state.weightGranted,
-                details = "Forge reads your latest weight from a smart scale that writes to Health " +
+                details = "Avex reads your latest weight from a smart scale that writes to Health " +
                     "Connect, so your bodyweight trend stays current without typing it. Turn on " +
-                    "write-back and your Forge weigh-ins flow back to Health Connect for other apps to see."
+                    "write-back and your Avex weigh-ins flow back to Health Connect for other apps to see."
             ) {
                 CardText("Keep your weight trend current from a smart scale — both directions.")
                 if (state.weightGranted) {
@@ -125,9 +125,9 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
                 title = "Workout calories",
                 statusLabel = if (state.calorieGranted) "On" else "Off",
                 connected = state.calorieGranted,
-                details = "Forge writes each finished session's estimated active calories so your daily " +
+                details = "Avex writes each finished session's estimated active calories so your daily " +
                     "energy total includes lifting. It's an estimate from session length, your intensity, " +
-                    "and your latest logged bodyweight — Forge has no heart-rate stream."
+                    "and your latest logged bodyweight — Avex has no heart-rate stream."
             ) {
                 CardText("Add each session's estimated burn to your daily energy total.")
                 if (state.calorieGranted) {
@@ -147,8 +147,8 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
                 statusLabel = if (state.stepsGranted) "On" else "Off",
                 connected = state.stepsGranted,
                 details = "Connect a watch or ring (via Samsung Health, Fitbit, etc.) that writes steps " +
-                    "to Health Connect and Forge shows your steps-through-the-day graph on a cardio " +
-                    "session and the current week. Read-only — Forge never writes your steps anywhere."
+                    "to Health Connect and Avex shows your steps-through-the-day graph on a cardio " +
+                    "session and the current week. Read-only — Avex never writes your steps anywhere."
             ) {
                 CardText("Show your steps-through-the-day graph on cardio sessions.")
                 if (state.stepsGranted) {
@@ -163,9 +163,9 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
                 title = "GPS routes",
                 statusLabel = if (state.exerciseGranted) "On" else "Off",
                 connected = state.exerciseGranted,
-                details = "If your watch records outdoor runs or rides with GPS, Forge draws the route's " +
+                details = "If your watch records outdoor runs or rides with GPS, Avex draws the route's " +
                     "shape on the matching cardio session. There's no map — just the path, offline. " +
-                    "Health Connect asks you to confirm each route the first time Forge draws it."
+                    "Health Connect asks you to confirm each route the first time Avex draws it."
             ) {
                 CardText("Draw your outdoor run or ride's route shape on its session.")
                 if (state.exerciseGranted) {

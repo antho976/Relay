@@ -100,7 +100,7 @@ fun ForgeNavHost(initialDayKey: String? = null) {
     // hub, which animates to the page then clears it via onPendingConsumed.
     var pendingHubPage by remember { mutableStateOf<Int?>(null) }
 
-    // Tapping the Forge wordmark anywhere returns Home in one tap: pop every deep route back to the
+    // Tapping the Avex wordmark anywhere returns Home in one tap: pop every deep route back to the
     // hub and select Home. No-op-safe when already on the hub (popBackStack just returns false).
     val goHome: () -> Unit = {
         pendingHubPage = BottomTab.HOME.ordinal
@@ -314,7 +314,7 @@ private fun NutritionPlaceholderScreen(onBack: () -> Unit) {
             Text("Nutrition.", style = MaterialTheme.typography.headlineMedium, color = MaterialTheme.colorScheme.onBackground)
             Spacer(Modifier.height(12.dp))
             Text(
-                "Coming in a future update — built like the rest of Forge: offline, on your device, no account, and no giant food database to wrestle with.",
+                "Coming in a future update — built like the rest of Avex: offline, on your device, no account, and no giant food database to wrestle with.",
                 style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(Modifier.height(20.dp))

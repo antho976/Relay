@@ -28,7 +28,7 @@ import com.forge.app.ui.common.clickableLabeled
 
 /**
  * Settings → About. Shows the real installed version (read from PackageManager, so no BuildConfig
- * feature needed) and the app's privacy stance: Forge is fully offline and holds no INTERNET
+ * feature needed) and the app's privacy stance: Avex is fully offline and holds no INTERNET
  * permission, so every claim below is verifiable from the manifest.
  */
 @Composable
@@ -79,7 +79,7 @@ internal fun AboutPage(modifier: Modifier = Modifier, viewModel: SettingsViewMod
         SectionLabel("YOUR DATA STAYS ON THIS DEVICE")
         AboutParagraph(
             "Everything you log lives in a private database on this phone. There's no account and no " +
-                "sign-in — Forge doesn't even request the Internet permission, so it physically can't " +
+                "sign-in — Avex doesn't even request the Internet permission, so it physically can't " +
                 "upload your data anywhere."
         )
         AboutParagraph(
@@ -137,7 +137,7 @@ internal fun AboutPage(modifier: Modifier = Modifier, viewModel: SettingsViewMod
 
         SectionLabel("OPEN-SOURCE LICENSES")
         AboutParagraph(
-            "Forge is built on open-source software. The anatomical muscle figures are adapted from " +
+            "Avex is built on open-source software. The anatomical muscle figures are adapted from " +
                 "react-native-body-highlighter (MIT License). The core libraries it's built on — Jetpack " +
                 "Compose, Room, Hilt and Health Connect — are under the Apache License 2.0."
         )
@@ -150,7 +150,7 @@ internal fun AboutPage(modifier: Modifier = Modifier, viewModel: SettingsViewMod
                 .padding(horizontal = 24.dp, vertical = 10.dp)
         )
         Text(
-            "Forge · a solo-built, offline-first project.",
+            "Avex · a solo-built, offline-first project.",
             style = MaterialTheme.typography.labelSmall,
             color = muted.copy(alpha = 0.6f),
             modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)

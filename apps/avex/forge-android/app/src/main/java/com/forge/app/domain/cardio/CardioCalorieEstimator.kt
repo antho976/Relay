@@ -8,7 +8,7 @@ import kotlin.math.roundToInt
  * gym side uses ([com.forge.app.domain.health.ActiveCalorieEstimator]), but with a per-activity
  * base MET instead of an intensity bucket: `kcal = MET × bodyweightKg × hours`.
  *
- * It's deliberately an estimate (Forge logs cardio by hand, with no heart-rate stream), so it only
+ * It's deliberately an estimate (Avex logs cardio by hand, with no heart-rate stream), so it only
  * ever shows as an "≈" readout. Returns null when no honest estimate is possible — a rest day, a
  * zero-length entry, or no logged bodyweight to scale by — rather than inventing a number.
  */

@@ -4,8 +4,8 @@ package com.forge.app.domain.health
 data class SessionWindow(val index: Int, val startMs: Long, val endMs: Long)
 
 /**
- * Pick the [SessionWindow] that best corresponds to a Forge cardio entry, or null if none is close
- * enough. Forge cardio is logged by hand (the user picks a time and a duration), so it rarely lines
+ * Pick the [SessionWindow] that best corresponds to a Avex cardio entry, or null if none is close
+ * enough. Avex cardio is logged by hand (the user picks a time and a duration), so it rarely lines
  * up exactly with a watch's recorded session — we match on **time overlap** first, then fall back to
  * the nearest start within [toleranceMs] when nothing overlaps (e.g. the user logged a round time
  * after the run). Returns the winning session's [SessionWindow.index].

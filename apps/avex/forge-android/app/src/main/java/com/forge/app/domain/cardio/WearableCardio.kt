@@ -18,7 +18,7 @@ data class HourlySteps(val hour: Int, val steps: Int)
 
 /**
  * One sample of a recorded GPS track. Rendered offline as a shape-only polyline
- * ([com.forge.app.ui.cardio.components.RouteThumbnail]) — Forge has no internet, so there
+ * ([com.forge.app.ui.cardio.components.RouteThumbnail]) — Avex has no internet, so there
  * is deliberately no basemap; only the path's shape is drawn.
  */
 data class RoutePoint(val lat: Double, val lng: Double)

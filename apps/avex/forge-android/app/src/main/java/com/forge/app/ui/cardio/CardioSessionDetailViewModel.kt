@@ -44,7 +44,7 @@ data class CardioSessionDetailState(
     val route: List<RoutePoint>? = null,
     /** A matching watch session has a route needing Health Connect consent; this is its record id. */
     val routeConsentId: String? = null,
-    /** Forge holds the steps grant — show the steps section (with a placeholder) even before data syncs. */
+    /** Avex holds the steps grant — show the steps section (with a placeholder) even before data syncs. */
     val stepsConnected: Boolean = false
 )
 

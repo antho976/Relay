@@ -263,7 +263,7 @@ fun OverviewScreen(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.size(5.dp).background(accent, CircleShape))
                     Spacer(Modifier.width(6.dp))
-                    Text("Forge", style = MaterialTheme.typography.bodyMedium,
+                    Text("Avex", style = MaterialTheme.typography.bodyMedium,
                         fontStyle = FontStyle.Italic, color = onBg)
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -382,7 +382,7 @@ fun OverviewScreen(
                 Spacer(Modifier.height(10.dp))
                 Text(
                     if (freestyleMode) "No fixed plan — just log whatever you trained, whenever you want."
-                    else "Build your own plan and Forge will guide each session.",
+                    else "Build your own plan and Avex will guide each session.",
                     style = MaterialTheme.typography.bodyMedium.copy(fontStyle = FontStyle.Italic), color = muted
                 )
                 Spacer(Modifier.height(20.dp))
@@ -557,14 +557,6 @@ fun OverviewScreen(
             // (Tier 3), or a persistent "quiet but reachable" entry (D3). All share CoachHomeBlock. ──
             // Same gate as the actionable coach above: present for generated/custom, hidden in freestyle.
             if (coachEnabled && !freestyleMode) {
-                state.coachLearning?.let { hint ->
-                    CoachHomeBlock(
-                        "Still learning your training.",
-                        "${hint.sessionsToGo} more session${if (hint.sessionsToGo == 1) "" else "s"} and it starts " +
-                            "calling weekly adjustments. See what it's tracking →",
-                        clickLabel = "Open Coach Lab", onClick = onOpenCoachLab
-                    )
-                }
                 state.coachFatigue?.let { f ->
                     CoachHomeBlock(
                         "Recovery signals building.",

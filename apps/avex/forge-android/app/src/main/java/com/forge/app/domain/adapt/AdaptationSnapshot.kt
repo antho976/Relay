@@ -46,7 +46,7 @@ data class AdaptationSnapshot(
 )
 
 /**
- * Recovery telemetry mirrored out of Health Connect (the only external source Forge reads).
+ * Recovery telemetry mirrored out of Health Connect (the only external source Avex reads).
  * Kept as plain Kotlin — no androidx.health types leak into the engine — so advisors stay pure
  * and unit tests build these from fake data exactly like [AdaptationSnapshot.moods]/[AdaptationSnapshot.cardio].
  */

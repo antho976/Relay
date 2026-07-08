@@ -81,7 +81,7 @@ internal fun SessionTimelineRow(
 
 /**
  * The watch-only "steps through the day" graph. Shows the hourly bars when a wearable actually fed
- * data; once Forge holds the steps grant ([connected]) but that day has none synced yet, shows a quiet
+ * data; once Avex holds the steps grant ([connected]) but that day has none synced yet, shows a quiet
  * "no data yet" placeholder so the feature reads as live. When NOT connected it renders nothing — the
  * invitation to connect lives in the dismissible banner, not here.
  */

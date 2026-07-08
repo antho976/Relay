@@ -34,27 +34,27 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Forge's single touchpoint with Health Connect — the only external data source the app reads.
+ * Avex's single touchpoint with Health Connect — the only external data source the app reads.
  * Everything here is gated and fail-soft: if HC isn't installed, the user hasn't granted access,
  * or a read throws, we return an empty [HealthSnap] and the coach behaves exactly as it does with
  * no health data at all (the recovery drivers are purely additive).
  *
  * No INTERNET permission is involved: [HealthConnectClient] talks to the on-device Health Connect
- * app over IPC, so connecting it does NOT change Forge's "nothing leaves the device" stance.
+ * app over IPC, so connecting it does NOT change Avex's "nothing leaves the device" stance.
  */
 @Singleton
 class HealthConnectManager @Inject constructor(
     @ApplicationContext private val context: Context
 ) {
-    /** The read-only recovery permissions Forge requests (sleep + resting heart rate). */
+    /** The read-only recovery permissions Avex requests (sleep + resting heart rate). */
     val permissions: Set<String> = setOf(
         HealthPermission.getReadPermission(SleepSessionRecord::class),
         HealthPermission.getReadPermission(RestingHeartRateRecord::class)
     )
 
     /**
-     * Bodyweight permissions (HC-2/HC-3) — read so a smart-scale value can flow INTO Forge, write so
-     * a Forge weigh-in can flow BACK to Health Connect. Kept as a SEPARATE set from [permissions] so
+     * Bodyweight permissions (HC-2/HC-3) — read so a smart-scale value can flow INTO Avex, write so
+     * a Avex weigh-in can flow BACK to Health Connect. Kept as a SEPARATE set from [permissions] so
      * each integration is independently opt-in: connecting recovery never silently asks for weight,
      * and vice-versa.
      */
@@ -64,7 +64,7 @@ class HealthConnectManager @Inject constructor(
     )
 
     /**
-     * Active-calorie permission (HC-4) — write only, so a Forge session can flow OUT to Health
+     * Active-calorie permission (HC-4) — write only, so a Avex session can flow OUT to Health
      * Connect's daily energy total. Its own set, like [weightPermissions]: enabling calorie sync
      * never silently asks for sleep/HR or weight, and vice-versa.
      */
@@ -82,7 +82,7 @@ class HealthConnectManager @Inject constructor(
     )
 
     /**
-     * Exercise-session read permission — lets Forge find the watch session that matches a cardio
+     * Exercise-session read permission — lets Avex find the watch session that matches a cardio
      * entry so it can offer that session's GPS route. The route DATA itself isn't covered by any
      * blanket permission in connect-client 1.1.0; it's released one session at a time through Health
      * Connect's own consent screen ([androidx.health.connect.client.contracts.ExerciseRouteRequestContract]).
@@ -129,11 +129,11 @@ class HealthConnectManager @Inject constructor(
     /** True only when every recovery permission is granted. */
     suspend fun hasAllPermissions(): Boolean = grantedPermissions().containsAll(permissions)
 
-    /** True when Forge may READ bodyweight from Health Connect (HC-2). */
+    /** True when Avex may READ bodyweight from Health Connect (HC-2). */
     suspend fun canReadWeight(): Boolean =
         grantedPermissions().contains(HealthPermission.getReadPermission(WeightRecord::class))
 
-    /** True when Forge may WRITE bodyweight back to Health Connect (HC-3). */
+    /** True when Avex may WRITE bodyweight back to Health Connect (HC-3). */
     suspend fun canWriteWeight(): Boolean =
         grantedPermissions().contains(HealthPermission.getWritePermission(WeightRecord::class))
 
@@ -183,7 +183,7 @@ class HealthConnectManager @Inject constructor(
         } ?: false
     }
 
-    /** True when Forge may WRITE active calories to Health Connect (HC-4). */
+    /** True when Avex may WRITE active calories to Health Connect (HC-4). */
     suspend fun canWriteActiveCalories(): Boolean =
         grantedPermissions().contains(HealthPermission.getWritePermission(ActiveCaloriesBurnedRecord::class))
 
@@ -245,7 +245,7 @@ class HealthConnectManager @Inject constructor(
         } ?: HealthSnap()
     }
 
-    /** True when Forge may READ steps from Health Connect. */
+    /** True when Avex may READ steps from Health Connect. */
     suspend fun canReadSteps(): Boolean =
         grantedPermissions().contains(HealthPermission.getReadPermission(StepsRecord::class))
 
@@ -266,7 +266,7 @@ class HealthConnectManager @Inject constructor(
         } ?: CardioWearableDay()
     }
 
-    /** True when Forge may READ exercise sessions from Health Connect. */
+    /** True when Avex may READ exercise sessions from Health Connect. */
     suspend fun canReadExercise(): Boolean =
         grantedPermissions().contains(HealthPermission.getReadPermission(ExerciseSessionRecord::class))
 
@@ -309,7 +309,7 @@ class HealthConnectManager @Inject constructor(
         }
     }
 
-    /** Flatten a Health Connect [ExerciseRoute] to Forge's Android-free [RoutePoint]s (lat/lng only). */
+    /** Flatten a Health Connect [ExerciseRoute] to Avex's Android-free [RoutePoint]s (lat/lng only). */
     fun routePoints(route: ExerciseRoute?): List<RoutePoint> =
         route?.route?.map { RoutePoint(lat = it.latitude, lng = it.longitude) }.orEmpty()
 

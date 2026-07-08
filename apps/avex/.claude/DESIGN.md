@@ -17,7 +17,7 @@ something. Surfaces/borders are **earned by interactivity**: can't tap it, no bo
 ## 2. App map
 
 Hub = swipeable 5-tab pager + `ForgeBottomBar`: **Cardio · Stats · Home · Coach · Profile**. Top bar
-everywhere = `←` (sub-screens) + `• Forge` wordmark (`ForgeWordmark`, taps→Home) + ≤1 action,
+everywhere = `←` (sub-screens) + `• Avex` wordmark (`ForgeWordmark`, taps→Home) + ≤1 action,
 **never the screen's own name** (no `TopAppBar` title); **one back affordance per page — the top-bar `←` alone, never a second in-page back arrow**. A screen names itself with a serif content
 hero (Stats "Stats", Profile "Athlete") or not at all (Home "Pull B").
 
@@ -148,6 +148,7 @@ Decelerate-in / Accelerate-out / Standard / DrawDecelerate (chart reveals). Spri
 - **Press = bounce everywhere** (scale 0.97, no ripple; auto-ripple under TalkBack); migrate rippling M3 buttons when touched.
 - Feel (don't retune casually): bounceClick MediumBouncy/MediumLow; ForgeSwitch position 0.68/900, thumb resize no-bounce/1400 + press-stretch.
 - **Haptics rare** (`forgeHaptic`): set logged, PR/finish, timer ticks — nothing else.
+- **Launch**: `AvexIntro` settles the serif "Avex" wordmark once per cold launch over the first screen, then the plate fades to reveal it. The system splash is background-only (`splash_blank`, no icon) so the wordmark is the single brand beat; honors reduce-motion (short still hold, no fade). The launcher/adaptive icon stays the emblem (`ic_launcher_foreground`).
 
 ## 10. Charts (overview/detail archetypes)
 
@@ -183,7 +184,7 @@ reading, never a duplicated state word — §8.)
 
 **Glyphs & numbers.** Mono small-caps section headers, else sentence case (buttons included). Actions
 end ` →` / `+ log` (accent mono); meta joins with `·`; deltas `↑`(accent)/`↓`(muted), `△ LAST`;
-wordmark = "• Forge" via `ForgeWordmark()`. Numbers k-abbrev ≥10,000 ("4.5k"); RPE/RIR via
+wordmark = "• Avex" via `ForgeWordmark()`. Numbers k-abbrev ≥10,000 ("4.5k"); RPE/RIR via
 `Format.kt` (no ".0"); weights honor the unit setting (never hardcode lb/kg; unit suffix uppercase
 only in mono captions). Coach lines = quiet italic asides, never banners.
 

@@ -156,7 +156,7 @@ class ForgeApp : Application(), Configuration.Provider {
         val dir = File(filesDir, "crashes").apply { mkdirs() }
         val trace = StringWriter().also { t.printStackTrace(PrintWriter(it)) }.toString()
         File(dir, "crash_${System.currentTimeMillis()}.txt")
-            .writeText("Forge crash @ ${Date()}\n\n$trace")
+            .writeText("Avex crash @ ${Date()}\n\n$trace")
         // Keep only the 10 most recent crash logs.
         dir.listFiles()
             ?.sortedByDescending { it.lastModified() }

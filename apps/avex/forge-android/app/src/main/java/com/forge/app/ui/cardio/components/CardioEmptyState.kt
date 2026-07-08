@@ -46,7 +46,7 @@ internal fun CardioEmptyState(
         }
         Spacer(Modifier.height(10.dp))
         Text(
-            "Log a run, walk, ride or swim. Forge tracks your days this week, your streak, and how it all trends — no account, all on your phone.",
+            "Log a run, walk, ride or swim. Avex tracks your days this week, your streak, and how it all trends — no account, all on your phone.",
             style = MaterialTheme.typography.bodyMedium,
             color = muted
         )

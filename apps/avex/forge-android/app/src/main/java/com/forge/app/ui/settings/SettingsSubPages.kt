@@ -616,7 +616,7 @@ private fun NotificationsBlockedBanner() {
         Text("Notifications are turned off", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground)
         Spacer(Modifier.height(2.dp))
         Text(
-            "Forge can't send any of the below until you turn them on for the app. Tap to open system settings →",
+            "Avex can't send any of the below until you turn them on for the app. Tap to open system settings →",
             style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
@@ -629,7 +629,7 @@ internal fun NotificationsPage(state: SettingsUiState, vm: SettingsViewModel, mo
         NotificationsBlockedBanner()
 
         // Quiet mono anchors + air, no per-row hairlines (DESIGN §1/§7) — same rhythm as Format.
-        // "Alerts" (what Forge sends) reads cleaner than echoing the page name "Notifications" (§2).
+        // "Alerts" (what Avex sends) reads cleaner than echoing the page name "Notifications" (§2).
         SettingsSectionHeader("Alerts", top = 12.dp)
         ToggleRow(
             "Training reminders",

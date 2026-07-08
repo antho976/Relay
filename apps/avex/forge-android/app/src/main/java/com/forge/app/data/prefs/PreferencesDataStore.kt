@@ -53,10 +53,10 @@ object PreferenceKeys {
     val USE_MILES = booleanPreferencesKey("use_miles")
 
     // ─── Health Connect bodyweight sync (HC-3) ────────────────────────────────
-    /** When ON (and the WeightRecord write permission is granted), Forge mirrors each weigh-in to
+    /** When ON (and the WeightRecord write permission is granted), Avex mirrors each weigh-in to
      *  Health Connect. Off by default — write-back is strictly opt-in. */
     val HC_WRITE_BODYWEIGHT = booleanPreferencesKey("hc_write_bodyweight")
-    /** When ON (and the ActiveCaloriesBurned write permission is granted), Forge writes each finished
+    /** When ON (and the ActiveCaloriesBurned write permission is granted), Avex writes each finished
      *  session's estimated active calories to Health Connect (HC-4). Off by default — strictly opt-in. */
     val HC_WRITE_CALORIES = booleanPreferencesKey("hc_write_calories")
 
@@ -177,7 +177,7 @@ object PreferenceKeys {
     val LIKED_EXERCISES = stringSetPreferencesKey("liked_exercises")
     /** ExerciseLibrary ids the user DISLIKES — excluded from generation + swaps. */
     val DISLIKED_EXERCISES = stringSetPreferencesKey("disliked_exercises")
-    /** Whether, after a "Make default" swap, Forge offers to dislike the swapped-out exercise.
+    /** Whether, after a "Make default" swap, Avex offers to dislike the swapped-out exercise.
      *  Default ON; the prompt's "Never ask" button or the Settings toggle turns it off. */
     val SWAP_DISLIKE_PROMPT_ENABLED = booleanPreferencesKey("swap_dislike_prompt_enabled")
 

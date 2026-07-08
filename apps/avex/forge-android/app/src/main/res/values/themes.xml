@@ -19,7 +19,7 @@
     -->
     <style name="Theme.Forge.Splash" parent="Theme.SplashScreen">
         <item name="windowSplashScreenBackground">@color/forge_background</item>
-        <item name="windowSplashScreenAnimatedIcon">@drawable/ic_launcher_foreground</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/splash_blank</item>
         <item name="postSplashScreenTheme">@style/Theme.Forge</item>
     </style>
 </resources>

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Intentionally empty. The Android-12 launch screen only shows the brand background; the "Avex"
+    wordmark intro is drawn in Compose (AvexIntro) once the first frame is ready, so the system
+    splash hands off with no icon rather than double-branding.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="1dp"
+    android:height="1dp"
+    android:viewportWidth="1"
+    android:viewportHeight="1" />

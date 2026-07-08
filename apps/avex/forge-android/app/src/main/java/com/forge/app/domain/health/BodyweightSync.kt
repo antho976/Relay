@@ -1,7 +1,7 @@
 package com.forge.app.domain.health
 
 /**
- * Pure decision rules for the Health Connect ⇄ Forge bodyweight bridge (HC-2). The Android-bound
+ * Pure decision rules for the Health Connect ⇄ Avex bodyweight bridge (HC-2). The Android-bound
  * read/write lives in [com.forge.app.data.health.HealthConnectManager]; this is the testable core
  * so the "only import something newer" rule can't silently regress.
  */
