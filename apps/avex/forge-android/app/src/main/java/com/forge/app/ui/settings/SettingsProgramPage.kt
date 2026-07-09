@@ -253,7 +253,6 @@ private fun EmphasisSection(state: SettingsUiState, vm: SettingsViewModel) {
 @Composable
 private fun EquipmentSection(state: SettingsUiState, vm: SettingsViewModel) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val accent = MaterialTheme.colorScheme.primary
     // Becomes true once equipment is touched this visit, so the regenerate prompt only nags after a change.
     var equipmentEdited by remember { mutableStateOf(false) }
 
@@ -310,7 +309,7 @@ private fun EquipmentSection(state: SettingsUiState, vm: SettingsViewModel) {
         if (equipmentEdited) "Equipment changed. Regenerate so your plan uses only what you've got."
         else "Changed your equipment? Regenerate so the plan matches it.",
         style = MaterialTheme.typography.bodySmall,
-        color = if (equipmentEdited) accent else muted,
+        color = muted,
         fontStyle = FontStyle.Italic,
         modifier = Modifier.padding(horizontal = 24.dp)
     )

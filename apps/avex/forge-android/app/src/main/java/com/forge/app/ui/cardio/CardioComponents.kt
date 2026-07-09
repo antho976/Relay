@@ -13,6 +13,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -172,9 +173,11 @@ internal fun CardioGoalsSection(
         )
         Spacer(Modifier.height(12.dp))
         // In-progress goals lead (closest-first), then achieved — same ordering as Home's trim.
-        val preview = goals
-            .sortedWith(compareBy<ExtendedGoalRepository.Progress> { it.achieved }.thenByDescending { it.fraction })
-            .take(3)
+        val preview = remember(goals) {
+            goals
+                .sortedWith(compareBy<ExtendedGoalRepository.Progress> { it.achieved }.thenByDescending { it.fraction })
+                .take(3)
+        }
         Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
             preview.forEachIndexed { i, g ->
                 GoalProgressLine(

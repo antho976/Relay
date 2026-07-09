@@ -1007,7 +1007,7 @@ private fun PrefSearchField(query: String, onQuery: (String) -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 24.dp, vertical = 12.dp)
-            .border(1.dp, outline.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
+            .border(1.dp, outline.copy(alpha = 0.35f), RoundedCornerShape(8.dp))
             .padding(horizontal = 14.dp, vertical = 11.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -1068,7 +1068,7 @@ private fun PrefSelector(
             Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(8.dp))
-                .border(1.dp, if (isDefault) outline.copy(alpha = 0.4f) else onBg, RoundedCornerShape(8.dp))
+                .border(1.dp, if (isDefault) outline.copy(alpha = 0.35f) else onBg, RoundedCornerShape(8.dp))
                 .clickableLabeled("Change filter") { open = true }
                 .padding(horizontal = 12.dp, vertical = 9.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -1082,7 +1082,7 @@ private fun PrefSelector(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f)
             )
-            Text("▾", style = MaterialTheme.typography.labelMedium, color = muted.copy(alpha = 0.5f))
+            Text("▾", style = MaterialTheme.typography.labelMedium, color = muted.copy(alpha = 0.65f))
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             options.forEachIndexed { i, label ->
@@ -1170,7 +1170,7 @@ private fun ExercisePrefRow(
                     },
                     letterSpacing = 0.3.sp
                 )
-                Text("▾", style = MaterialTheme.typography.labelMedium, color = muted.copy(alpha = 0.5f))
+                Text("▾", style = MaterialTheme.typography.labelMedium, color = muted.copy(alpha = 0.65f))
             }
         }
         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {

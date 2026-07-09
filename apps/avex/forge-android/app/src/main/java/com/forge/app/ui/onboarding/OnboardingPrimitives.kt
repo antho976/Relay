@@ -30,6 +30,8 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.forge.app.ui.common.ForgeOutlineCapsule
+import com.forge.app.ui.common.ForgePrimaryCapsule
 import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.common.clickableLabeled
 import com.forge.app.ui.theme.ForgeMotion
@@ -304,41 +306,20 @@ internal fun ProgressRail(fraction: Float, modifier: Modifier = Modifier) {
     }
 }
 
-/** §8 level ① — the filled light do-it-now capsule (Continue / Let's go). */
+/** §8 level ① — the filled light do-it-now capsule (Continue / Let's go). Onboarding's full-width CTA
+ *  is the shared [ForgePrimaryCapsule] under an onboarding-local name, so the two can't drift. */
 @Composable
 internal fun PrimaryCapsule(
     label: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true
-) {
-    val onBg = MaterialTheme.colorScheme.onBackground
-    Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(50))
-            .background(onBg.copy(alpha = if (enabled) 1f else 0.35f))
-            .bounceClick(enabled = enabled, onClick = onClick)
-            .padding(vertical = 13.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(label, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.background)
-    }
-}
+) = ForgePrimaryCapsule(label = label, onClick = onClick, modifier = modifier, enabled = enabled)
 
-/** §8 level ② — the outlined sidekick capsule (Re-roll). */
+/** §8 level ② — the outlined sidekick capsule (Re-roll). Delegates to the shared [ForgeOutlineCapsule]. */
 @Composable
-internal fun OutlineCapsule(label: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
-    Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(50))
-            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f), RoundedCornerShape(50))
-            .bounceClick(onClick = onClick)
-            .padding(horizontal = 18.dp, vertical = 13.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(label, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onBackground)
-    }
-}
+internal fun OutlineCapsule(label: String, onClick: () -> Unit, modifier: Modifier = Modifier) =
+    ForgeOutlineCapsule(label = label, onClick = onClick, modifier = modifier)
 
 /** §8 level ③ — the mono accent navigation link (skip →). */
 @Composable

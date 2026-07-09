@@ -42,17 +42,13 @@ import com.forge.app.ui.common.clickableLabeled
  */
 @Composable
 internal fun RecoveryConnectionRail(states: List<Boolean>) {
-    val accent = MaterialTheme.colorScheme.primary
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     Row(
         modifier = Modifier.padding(horizontal = 24.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        states.forEach { on ->
-            if (on) Box(Modifier.size(10.dp).background(accent, CircleShape))
-            else Box(Modifier.size(10.dp).border(1.5.dp, muted.copy(alpha = 0.55f), CircleShape))
-        }
+        states.forEach { on -> StatusDot(on, size = 10.dp) }
         Spacer(Modifier.width(6.dp))
         Text(
             "${states.count { it }} OF ${states.size} CONNECTED",
@@ -80,8 +76,6 @@ internal fun RecoveryRow(
 ) {
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val accent = MaterialTheme.colorScheme.primary
-    val outline = MaterialTheme.colorScheme.outline
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -102,17 +96,10 @@ internal fun RecoveryRow(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Box(Modifier.size(7.dp).background(accent, CircleShape))
+                StatusDot(active = true, size = 7.dp)
                 Text("ON", style = MaterialTheme.typography.labelMedium, color = onBg, letterSpacing = 1.sp)
             }
-            connectable -> Box(
-                modifier = Modifier
-                    .border(1.dp, outline.copy(alpha = 0.35f), RoundedCornerShape(50))
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text("Connect", style = MaterialTheme.typography.labelMedium, color = onBg, letterSpacing = 0.3.sp)
-            }
+            connectable -> ConnectPill()
         }
     }
 }

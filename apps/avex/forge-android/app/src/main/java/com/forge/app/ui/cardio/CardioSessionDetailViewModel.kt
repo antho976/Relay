@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -73,17 +74,24 @@ class CardioSessionDetailViewModel @Inject constructor(
     // newer result. loadWearable fires from both the entry-change collector and every ON_RESUME.
     private var wearableJob: Job? = null
 
-    private val entryFlow = cardioRepo.observeAll().map { list -> list.firstOrNull { it.id == cardioId } }
+    // One shared subscription to the full history — the detail state (entry + compare pool) and the
+    // wearable-reload trigger both read it, so an edit runs the whole-history query once, not twice.
+    private val entriesFlow = cardioRepo.observeAll()
+        .shareIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), replay = 1)
+
+    // This screen's entry, resolved once off the shared history — also the wearable-reload trigger.
+    private val entryFlow = entriesFlow.map { list -> list.firstOrNull { it.id == cardioId } }
 
     val state: StateFlow<CardioSessionDetailState> = combine(
-        cardioRepo.observeAll(),
+        entriesFlow,
+        entryFlow,
         editing,
         deleted,
         settingsRepo.useMiles
-    ) { all, isEditing, isDeleted, useMiles ->
+    ) { all, entry, isEditing, isDeleted, useMiles ->
         CardioSessionDetailState(
             loaded = true,
-            entry = all.firstOrNull { it.id == cardioId },
+            entry = entry,
             allEntries = all,
             editing = isEditing,
             deleted = isDeleted,

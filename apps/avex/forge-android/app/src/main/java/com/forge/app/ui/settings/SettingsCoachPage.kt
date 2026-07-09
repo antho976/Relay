@@ -114,10 +114,7 @@ private val HC_FEEDS = setOf("Sleep", "Resting heart rate")
  */
 @Composable
 private fun CoachFeedRow(label: String, active: Boolean, onConnect: (() -> Unit)?) {
-    val accent = MaterialTheme.colorScheme.primary
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val onBg = MaterialTheme.colorScheme.onBackground
-    val outline = MaterialTheme.colorScheme.outline
     val tappable = onConnect != null && !active
     Row(
         modifier = Modifier
@@ -129,8 +126,7 @@ private fun CoachFeedRow(label: String, active: Boolean, onConnect: (() -> Unit)
             .padding(horizontal = 24.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        if (active) Box(Modifier.size(8.dp).background(accent, CircleShape))
-        else Box(Modifier.size(8.dp).border(1.5.dp, muted.copy(alpha = 0.55f), CircleShape))
+        StatusDot(active)
         Spacer(Modifier.width(12.dp))
         Text(
             label,
@@ -138,15 +134,6 @@ private fun CoachFeedRow(label: String, active: Boolean, onConnect: (() -> Unit)
             color = onBg,
             modifier = Modifier.weight(1f)
         )
-        if (tappable) {
-            Box(
-                modifier = Modifier
-                    .border(1.dp, outline.copy(alpha = 0.6f), RoundedCornerShape(50))
-                    .padding(horizontal = 14.dp, vertical = 6.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text("Connect", style = MaterialTheme.typography.labelMedium, color = onBg, letterSpacing = 0.3.sp)
-            }
-        }
+        if (tappable) ConnectPill()
     }
 }

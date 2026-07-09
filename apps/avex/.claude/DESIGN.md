@@ -128,7 +128,7 @@ screen gets promoted here the same turn.
 **Buttons — three levels only**: ① filled light capsule = do-it-now, ≤1/section; ② outlined capsule =
 its sidekick; ③ mono accent `action →` = navigation. No M3 default/floating-text/icon buttons in content.
 Settings reuse `SettingsPrimaryAction` (do-it-now) / `SettingsOutlineAction` (sidekick) / `SettingsActionLink` (`action →` nav) from `SettingsPrimitives.kt`; group the page-level action buttons at the END of the page, never mid-scroll.
-**Per-row action = compact OUTLINED pill, never filled.** A do-it-now action scoped to a single list row/integration (Recovery's Connect) renders as a right-aligned compact OUTLINED pill (`SettingsOutlineAction` weight — border only, onBg text, sentence case) with the WHOLE row as its tap target (the pill is drawn, not independently clickable — no nested tap). NEVER a filled-white capsule per row — five of those stack into a button wall (Recovery failed exactly this way); the ONE filled capsule stays page-level, grouped at the END (e.g. Get/Update Health Connect). A bare mono accent `connect →` link is too dim against a muted accent — prefer the pill. A connected row shows a passive `• ON` (accent disc + mono) on the right, and a list of connectables leads with its filled-disc/muted-ring dot rail (§12; ring at 1.5dp muted@0.55 so the empty state reads on near-black). Rows without a usable action render passive — no affordance that can't run.
+**Per-row action = compact OUTLINED pill, never filled.** A do-it-now action scoped to a single list row/integration (Recovery's Connect) renders as a right-aligned compact OUTLINED pill (`SettingsOutlineAction` weight — border only, onBg text, sentence case) with the WHOLE row as its tap target (the pill is drawn, not independently clickable — no nested tap). NEVER a filled-white capsule per row — five of those stack into a button wall (Recovery failed exactly this way); the ONE filled capsule stays page-level, grouped at the END (e.g. Get/Update Health Connect). A bare mono accent `connect →` link is too dim against a muted accent — prefer the pill. A connected row shows a passive `• ON` (accent disc + mono) on the right, and a list of connectables leads with its filled-disc/muted-ring dot rail (§12; ring at 1.5dp muted@0.55 so the empty state reads on near-black). Rows without a usable action render passive — no affordance that can't run. Coach + Recovery draw this dot and pill through the shared `StatusDot` / `ConnectPill` (`SettingsPrimitives.kt`) — reuse them, don't redraw.
 **Sizing — trim, never chunky** (48dp touch from padding, not visual size): hero CTA ~60dp (Home
 Start session only); standard capsules **44dp** (14sp); `ForgeSwitch` **40×24** track (thumb 14→17,
 press ~20); `SegmentPill` 12×5, 10sp.
@@ -138,7 +138,9 @@ wayfinding. Row/content glyphs come from the matched custom families (`SettingsI
 until a custom chrome set lands (content never). Exercise rows in browsers/pickers lead with their
 `ExerciseIcons.forEquipment` equipment-class glyph (one glyph per implement class, custom moves =
 pencil); elsewhere content is text-first, glyphs `→ ↑ ↓ △ • ·` carry meaning — no decorative
-icons/emoji. (Known gap: `CardioType.icon` still mixes Material stock into its custom family.)
+icons/emoji. (Known gap: `CardioType.icon` still mixes Material stock into its custom family.) The
+families share only their builder plumbing via `VectorBuilders.kt` (icon/fillPath/strokePath/circle/
+roundRect); glyph shapes stay per-family so each still evolves on its own.
 **Don't render state twice, and flag only exceptions.** A leading `•` dot is earned only when its
 COLOR flags something the eye should catch — a failure (error), a win/active (accent) — never the
 neutral/default/inactive majority (a column of identical grey dots is noise). Paint the dot only
