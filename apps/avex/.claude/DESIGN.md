@@ -25,9 +25,9 @@ hero (Stats "Stats", Profile "Athlete") or not at all (Home "Pull B").
 - **Stats** `ui/gym/stats` — one page: hero figures + muscle map → lens pills Strength/Volume/Effort/Days → drill rows → heatmap → records → Banister.
 - **Cardio** `ui/cardio` — THIS WEEK figures hero (days · min · dist · streak) + Mon–Sun accent bars + goal meter, GOALS trim (cardio-metric custom goals, shared `GoalProgressLine`, hidden at zero), week-pager stats overlay, recent rows (header carries a small filled `+` circle = log) → session detail (stat rows carry best-pace/longest compare meta + previous-session read).
 - **Coach** `ui/coach` — lens pills Now/Signals/Journey (Now = call + watch + one road-ahead section: milestone rail + brief/verdict/autopilot bars; Signals = lifts + recovery + inputs + learned; Journey = record + trust; old Brief/Lab/Timeline routes = lens deep-links). Coach content renders ONLY here — Settings→Coach is config alone (on/off switch + mode chips + a feeds on/off glance whose silent HC rows tap to Recovery), never a second brief/trust/history home.
-- **Profile** `ui/profile` — blending cover (**untouchable**), bodyweight-led, ALL-TIME 2×2, filmstrip.
+- **Profile** `ui/profile` — blending cover (**untouchable**; a random default is seeded on first run so it's never empty, tap → `AvatarPickerSheet`), bodyweight-led, ALL-TIME 2×2, filmstrip.
 - **Routed** (`Routes.kt`): `GYM_DAY` (`ui/gym/train`, **untouchable**) · `SESSION_HISTORY` (gym+cardio) · `SESSION_DETAIL` · `CARDIO_SESSION` · `GOALS`/`GOAL_EDITOR` · `TROPHIES` (frozen) · `NUTRITION` · `SETTINGS?page=` · `RECAP` · `NOTES_SEARCH` · `PROGRAM_VIEWER/EDITOR/BUILDER` · `FREESTYLE_LOG` · `MIRROR_TEST`.
-- **Sheets**: SessionSummarySheet (minimal), CardioSessionDetailSheet, heatmap "That day", ExerciseLibraryPicker.
+- **Sheets**: SessionSummarySheet (minimal), CardioSessionDetailSheet, heatmap "That day", ExerciseLibraryPicker, AvatarPickerSheet (profile cover — "select your own" + provided default covers by category, `DefaultAvatars`; picked default is baked into `avatar.jpg`).
 
 Check this map + `ui/common/` before inventing; update it when screens change.
 
@@ -158,7 +158,7 @@ Decelerate-in / Accelerate-out / Standard / DrawDecelerate (chart reveals). Spri
 - **Press = bounce everywhere** (scale 0.97, no ripple; auto-ripple under TalkBack); migrate rippling M3 buttons when touched.
 - Feel (don't retune casually): bounceClick MediumBouncy/MediumLow; ForgeSwitch position 0.68/900, thumb resize no-bounce/1400 + press-stretch.
 - **Haptics rare** (`forgeHaptic`): set logged, PR/finish, timer ticks — nothing else.
-- **Launch**: `AvexIntro` settles the serif "Avex" wordmark once per cold launch over the first screen, then the plate fades to reveal it. The system splash is background-only (`splash_blank`, no icon) so the wordmark is the single brand beat; honors reduce-motion (short still hold, no fade). The launcher/adaptive icon stays the emblem (`ic_launcher_foreground`).
+- **Launch**: `AvexIntro` settles the serif "Avex" wordmark once per cold launch over the first screen, then the plate fades to reveal it. The system splash is background-only (`splash_blank`, no icon) so the wordmark is the brand beat; honors reduce-motion (short still hold, no fade). **The intro themes to the chosen app icon**: family = effect STYLE, icon = its full PALETTE (`AppIcon.launchPalette`, sky→horizon), drawn as a translucent backdrop confined away from the centred wordmark (never the hero); the effect RECREATES what the family names in the icon's colours, not an abstract wash; reduce-motion → still frame; kept inside the existing ~700ms budget (launch is seen every cold start — no theatrics, §14). Aurora is wired (`AuroraSky`: undulating curtain-ray ribbon + horizon glow); other families fall through to the bare wordmark until built. This deliberately spends colour off the one-accent rule (§1/§5) for a pre-app moment only. The launcher/adaptive icon **defaults** to the emblem (`ic_launcher_foreground`) but is user-selectable (Appearance → App icon, GYMAP-icons): one `.icon.*` `activity-alias` per icon, exactly one enabled at a time via `AppIconManager` (`PackageManager` component toggle). A settings row shows the current icon + name and opens a `ModalBottomSheet` grid (mirrors `AvatarPickerSheet`: family `EditorialHeader`s, ring the current pick, scroll edge-fade); warns it "updates after a moment" (OEM-launcher lag).
 
 ## 10. Charts (overview/detail archetypes)
 
@@ -225,7 +225,9 @@ gold row) · accent-tinted "important" prose · session-summary extras (share ca
 what's-next) · cardio big-number hero · cardio kcal estimates (return only with real watch burn data) · new gamification surfaces (wait-listed) · Profile
 identity-first restructure · mood/subjective coach drivers · Coach hero week-dot calendar, "Pulse",
 pass-square record strip · Coach status serif verdicts AND status/anticipation asides (status states
-= eyebrow + figures) · hairline section separators (§1) · the 9-row milestone ladder (→ rail + next, §4.10).
+= eyebrow + figures) · Coach pre-baseline signal dot-checklist in the hero (→ one labeled Baseline
+bar in the "Coming up" idiom; the effort/HC inputs it spelled out live in Signals only, §4.3,
+GYMAP-24) · hairline section separators (§1) · the 9-row milestone ladder (→ rail + next, §4.10).
 **Facts**: dark-only (Indigo light scheme in `Color.kt` unshipped — never build light variants);
 portrait phone only (no adaptive/tablet/landscape).
 **Untouchable**: live-session screen · Profile blending cover · statsEntrance/draw tuning ·
