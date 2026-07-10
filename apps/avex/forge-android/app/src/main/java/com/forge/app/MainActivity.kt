@@ -35,6 +35,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.Modifier
 import androidx.core.content.IntentCompat
 import com.forge.app.data.importer.ImportResult
+import com.forge.app.appicon.AppIcon
+import com.forge.app.appicon.AppIconManager
 import com.forge.app.data.importer.WorkoutImportRepository
 import com.forge.app.data.importer.userMessage
 import com.forge.app.data.prefs.SettingsRepository
@@ -64,6 +66,7 @@ class MainActivity : ComponentActivity() {
 
     @Inject lateinit var settingsRepo: SettingsRepository
     @Inject lateinit var importRepo: WorkoutImportRepository
+    @Inject lateinit var appIconManager: AppIconManager
 
     /** Set when a shared/opened export file has been imported — shows a one-time result dialog (#GYMAP-17). */
     private var shareImportMessage by mutableStateOf<String?>(null)
@@ -77,6 +80,17 @@ class MainActivity : ComponentActivity() {
 
     /** Emits volume-down presses for the "log same as last set" shortcut (#151). */
     var onVolumeDown: (() -> Unit)? = null
+
+    /** The chosen app-icon key, seeded in onCreate and kept live by a collector so [onStop] never has to
+     *  block on a DataStore read. @Volatile because onStop (main thread) reads what the collector writes. */
+    @Volatile private var appIconKey: String = ""
+
+    /** True only when the user themselves sent the app to the background (Home/Recents) — set by
+     *  [onUserLeaveHint], which the framework does NOT call when WE launch a sub-activity (the system
+     *  photo picker, share sheet, export/file picker). [onStop] fires for those overlays too, so gating
+     *  the icon-alias swap on this flag keeps the swap out of the mid-session overlay case that can tear
+     *  the task down on some OEMs (see [AppIconManager]). */
+    private var userLeaving = false
 
     /**
      * A CSV/JSON export shared into or opened with Avex (#GYMAP-17): import it directly, no file
@@ -121,6 +135,36 @@ class MainActivity : ComponentActivity() {
             onVolumeDown?.invoke()?.let { return true }
         }
         return super.onKeyDown(keyCode, event)
+    }
+
+    /** The user pressed Home/Recents — the app is genuinely leaving the foreground (not just being
+     *  covered by a sub-activity we launched). This is the safe moment to flip the launcher alias. */
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        userLeaving = true
+    }
+
+    override fun onResume() {
+        super.onResume()
+        userLeaving = false
+    }
+
+    /**
+     * Swap the home-screen launcher icon to the saved pick now that the USER has backgrounded us — the
+     * only safe time to flip the `.icon.*` aliases. Doing it while the app is still foreground, OR while
+     * a sub-activity WE launched (system photo picker, share sheet, export/file picker) covers us, can
+     * tear the task down on some OEMs (e.g. Samsung) even with DONT_KILL_APP. onStop fires for those
+     * overlays too, so we gate on [userLeaving] ([onUserLeaveHint], which the framework does not call for
+     * self-launched sub-activities) and skip [isChangingConfigurations] (rotation). Done SYNCHRONOUSLY so
+     * the swap lands before the process can be reaped (a swipe-away from recents kills us moments after
+     * onStop); reads the collector-cached [appIconKey] (no blocking DataStore read on the main thread),
+     * and the toggle only runs when the pick actually changed. Wrapped so a failure can't crash onStop.
+     */
+    override fun onStop() {
+        super.onStop()
+        if (isChangingConfigurations || !userLeaving) return
+        userLeaving = false
+        runCatching { appIconManager.reconcileTo(AppIcon.fromKey(appIconKey)) }
     }
 
     /** The system animation-scale (0 when "Remove animations" is on) — single read used at startup
@@ -268,12 +312,20 @@ class MainActivity : ComponentActivity() {
         // theme in the same pass so the post-splash "UI not loaded" frame never flashes an off-theme
         // color — it tracks the live amoled setting, so a later theme change adapts the boot
         // background on its own (no XML edit needed).
-        runBlocking {
+        // Also read the chosen app icon here so the launch intro can theme itself to it on the very
+        // first frame (no plain→themed pop). One cached DataStore read, same pass as privacy/amoled.
+        val introIconKey = runBlocking {
             applyPrivacyMode(settingsRepo.privacyMode.first())
             applyAdaptiveWindowBackground(settingsRepo.amoledMode.first())
+            settingsRepo.appIcon.first()
         }
+        appIconKey = introIconKey
         lifecycleScope.launch {
             settingsRepo.privacyMode.collect { enabled -> applyPrivacyMode(enabled) }
+        }
+        // Keep the icon pick live so onStop can read it without blocking on DataStore (and never stale).
+        lifecycleScope.launch {
+            settingsRepo.appIcon.collect { appIconKey = it }
         }
 
         setContent {
@@ -343,7 +395,7 @@ class MainActivity : ComponentActivity() {
                                 }
                                 null -> {} // DataStore still loading; the theme's gradient shows briefly
                             }
-                            if (showIntro) AvexIntro(onDone = { showIntro = false })
+                            if (showIntro) AvexIntro(iconKey = introIconKey, onDone = { showIntro = false })
                             // Result of a share-to-Avex import — shown over whatever screen is up.
                             ShareImportResultDialog()
                         }

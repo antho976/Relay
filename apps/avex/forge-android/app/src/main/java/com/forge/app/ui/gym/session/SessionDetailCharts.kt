@@ -97,7 +97,7 @@ internal fun PerExerciseSetChart(
     if (values.isEmpty() || values.none { it > 0.0 }) {
         Text(
             "No ${metric.label.lowercase()} logged for this exercise.",
-            style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.6f),
+            style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.65f),
             fontStyle = FontStyle.Italic, fontSize = 10.sp
         )
         return
@@ -154,8 +154,9 @@ private fun PerSetLine(values: List<Double>, metric: SessionMetric, accent: Colo
         }
         val clip = (size.width * progress.coerceIn(0f, 1f)).coerceAtLeast(0.01f)
         clipRect(right = clip) {
-            drawPath(fill, brush = Brush.verticalGradient(listOf(accent.copy(alpha = 0.30f), accent.copy(alpha = 0f))))
-            drawPath(line, color = accent.copy(alpha = 0.16f), style = Stroke(width = 7.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
+            // §10: area fades to transparent from a ≤0.15 top stop.
+            drawPath(fill, brush = Brush.verticalGradient(listOf(accent.copy(alpha = 0.15f), accent.copy(alpha = 0f))))
+            drawPath(line, color = accent.copy(alpha = 0.15f), style = Stroke(width = 7.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
             drawPath(line, color = accent, style = Stroke(width = 2.5.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
             pts.forEachIndexed { i, p ->
                 val last = i == pts.lastIndex
@@ -207,6 +208,8 @@ private fun SinglePointMark(accent: Color) {
 @Composable
 private fun SetBars(values: List<Double>, metric: SessionMetric, accent: Color) {
     val max = (values.maxOrNull() ?: 0.0).coerceAtLeast(1.0)
+    // §5: earlier sets take the accent-0.6 rung (secondary), the latest set full accent.
+    val secondary = MaterialTheme.colorScheme.secondary
     // Keyed by metric so the first draw animates in. The play-once motion kit doesn't replay on a
     // later metric switch, so BARS (like the LINE branch) just snap to the new values — matching Stats.
     // The slow draw curve grows the bars in gently rather than snapping them to height.
@@ -221,7 +224,7 @@ private fun SetBars(values: List<Double>, metric: SessionMetric, accent: Color) 
             Box(
                 modifier = Modifier.weight(1f).fillMaxHeight(frac)
                     .clip(RoundedCornerShape(topStart = 3.dp, topEnd = 3.dp))
-                    .background(if (i == values.lastIndex) accent else accent.copy(alpha = 0.5f))
+                    .background(if (i == values.lastIndex) accent else secondary)
             )
         }
     }

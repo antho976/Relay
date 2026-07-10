@@ -30,6 +30,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -75,12 +76,17 @@ class CardioViewModel @Inject constructor(
         )
     }
 
+    // One shared subscription to the full history — both the derived aggregates and the cardio-goals
+    // recompute read it, so a cardio write runs the whole-history query once, not once per consumer.
+    private val entriesFlow = cardioRepo.observeAll()
+        .shareIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), replay = 1)
+
     // All DB-derived aggregates (streak, weekly/last-week totals, the Mon–Sun cells) are computed
     // here off the DB flow and on Dispatchers.Default — NOT in the combine with `transient` below,
     // so toggling the sheet (a pure UI event) never re-runs the full-history streak/day passes, and
     // none of it runs on the main thread.
     private val derivedFlow = combine(
-        cardioRepo.observeAll(),
+        entriesFlow,
         cardioRepo.observeMinutesSince(weekStartMs),
         cardioRepo.observeSince(weekStartMs)
     ) { all, weekMin, weekEntries ->
@@ -102,7 +108,7 @@ class CardioViewModel @Inject constructor(
     // metrics this page owns. Home keeps the mixed top-3; this is the cardio lens on the same data.
     private val cardioGoalsFlow = combine(
         extendedGoalRepo.observeAll(),
-        cardioRepo.observeAll()
+        entriesFlow
     ) { _, _ ->
         // Fall back on real failures only — a swallowed CancellationException would let a cancelled
         // recompute emit an empty list and blank the goal lines.

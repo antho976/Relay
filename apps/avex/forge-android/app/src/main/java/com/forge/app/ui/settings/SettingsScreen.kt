@@ -76,7 +76,7 @@ internal val ACTION_ENTRIES = listOf(
 internal data class SettingsPageEntry(val page: SettingsPage, val tags: String)
 
 internal val PAGE_ENTRIES = listOf(
-    SettingsPageEntry(SettingsPage.Appearance, "appearance amoled dark theme accent color compact logging display privacy look"),
+    SettingsPageEntry(SettingsPage.Appearance, "appearance amoled dark theme accent color compact logging display privacy look app icon launcher home screen"),
     SettingsPageEntry(SettingsPage.Format, "units format kg lb weight date time week timezone locale distance strength standards sex"),
     SettingsPageEntry(SettingsPage.Session, "session haptic feedback vibration notes templates rest timer between sets compound isolation"),
     SettingsPageEntry(SettingsPage.Notifications, "notifications reminders quiet hours recap timer alerts notify suppress"),
@@ -91,6 +91,7 @@ internal val ALL_ITEMS = listOf(
     SettingsItem("AMOLED mode", "amoled black dark theme display", SettingsPage.Appearance),
     SettingsItem("Compact set logging", "compact logging display density", SettingsPage.Appearance),
     SettingsItem("Accent color", "color accent theme tint", SettingsPage.Appearance),
+    SettingsItem("App icon", "app icon launcher home screen change alternate", SettingsPage.Appearance),
     SettingsItem("Weight unit", "kg lb weight unit pounds kilograms", SettingsPage.Format),
     SettingsItem("Distance unit", "km mi miles kilometers distance cardio pace", SettingsPage.Format),
     SettingsItem("Date format", "date format dd mm yyyy", SettingsPage.Format),

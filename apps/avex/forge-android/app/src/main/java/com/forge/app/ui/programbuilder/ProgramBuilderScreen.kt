@@ -18,13 +18,11 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -48,6 +46,10 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.ui.common.DraggableItem
+import com.forge.app.ui.common.ForgeOutlineCapsule
+import com.forge.app.ui.common.ForgePrimaryCapsule
+import com.forge.app.ui.common.ForgeWordmark
+import com.forge.app.ui.common.GlyphButton
 import com.forge.app.ui.common.dragContainer
 import com.forge.app.ui.common.rememberDragDropState
 
@@ -99,26 +101,23 @@ fun ProgramBuilderScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = {
-                    Column {
-                        Text("BUILD YOUR PLAN", style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text("Your days", style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground)
-                    }
-                },
+                // §2: wordmark + back, never the screen's name — "Your days" heads the content.
+                title = { ForgeWordmark() },
                 navigationIcon = { IconButton(onClick = { attemptClose() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
-                actions = {
-                    TextButton(onClick = { attemptSave() }, enabled = !viewModel.saving) {
-                        Text("Save", fontWeight = FontWeight.SemiBold)
-                    }
-                },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
             )
         },
         bottomBar = {
-            Button(onClick = { viewModel.addDay() }, modifier = Modifier.fillMaxWidth().padding(16.dp)) {
-                Icon(Icons.Default.Add, null); Text("  Add day")
+            // §8: the page-level actions group at the END — filled do-it-now + its outlined sidekick.
+            Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp)) {
+                ForgeOutlineCapsule("+ Add day", onClick = { viewModel.addDay() }, modifier = Modifier.fillMaxWidth())
+                Spacer(Modifier.height(8.dp))
+                ForgePrimaryCapsule(
+                    "Save",
+                    onClick = { attemptSave() },
+                    enabled = !viewModel.saving,
+                    modifier = Modifier.fillMaxWidth()
+                )
             }
         },
         containerColor = Color.Transparent
@@ -137,12 +136,18 @@ fun ProgramBuilderScreen(
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize().padding(inner).dragContainer(dragState),
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                contentPadding = PaddingValues(horizontal = 24.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
+                // ONE leading item (headline + hint) so firstDraggableIndex = 1 stays true.
                 item {
-                    Text("Tap a day to edit it. Press and hold to drag it into order.",
-                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Column {
+                        Text("Your days", style = MaterialTheme.typography.headlineSmall,
+                            color = MaterialTheme.colorScheme.onBackground)
+                        Spacer(Modifier.height(8.dp))
+                        Text("Tap a day to edit it. Press and hold to drag it into order.",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
                 itemsIndexed(days, key = { _, d -> d.uid }) { index, d ->
                     DraggableItem(dragState, index) { dragging ->
@@ -209,15 +214,15 @@ private fun DayRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        Icon(Icons.Default.DragHandle, "Drag to reorder", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        // Text glyph over a stock icon (§8) — the whole row long-presses to drag.
+        Text("≡", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Box(Modifier.size(10.dp).clip(CircleShape).background(accent))
         Column(Modifier.weight(1f)) {
             Text(name, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurface)
             Text(subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        IconButton(onClick = onDelete) {
-            Icon(Icons.Default.Delete, "Remove day", tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f))
-        }
+        // Error at full strength (§5: error mirrors accent, no dimmed decoration); ≥48dp target.
+        GlyphButton("×", "Remove day", MaterialTheme.colorScheme.error, onClick = onDelete)
     }
 }

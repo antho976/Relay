@@ -38,7 +38,7 @@ class CardioCompareTest {
         val slowerRun = entry(3, 100, durationMin = 40, distanceKm = 5.0)    // 8:00 /km
         val cmp = compareCardioSession(run, listOf(run, fasterWalk, slowerRun))!!
         assertTrue(cmp.isPaceBest)
-        assertEquals(8 * 60, cmp.bestOtherPaceSecPerKm)
+        assertEquals(slowerRun.id, cmp.bestPaceEntry?.id)
         assertEquals(slowerRun.id, cmp.previous?.id)
     }
 
@@ -48,7 +48,7 @@ class CardioCompareTest {
         val fastRun = entry(2, 100, durationMin = 25, distanceKm = 5.0)      // 5:00 /km
         val cmp = compareCardioSession(run, listOf(run, fastRun))!!
         assertFalse(cmp.isPaceBest)
-        assertEquals(5 * 60, cmp.bestOtherPaceSecPerKm)
+        assertEquals(fastRun.id, cmp.bestPaceEntry?.id)
     }
 
     @Test
@@ -84,7 +84,15 @@ class CardioCompareTest {
         assertNull(paceSecPerKm(0, 5.0))
         assertNull(paceSecPerKm(30, null))
         assertEquals("6:00", formatPaceSec(360))
-        assertEquals(579, paceSecPerUnit(360, useMiles = true))
-        assertEquals(360, paceSecPerUnit(360, useMiles = false))
+        assertEquals(579, paceSecPerUnit(30, 5.0, useMiles = true))
+        assertEquals(360, paceSecPerUnit(30, 5.0, useMiles = false))
+    }
+
+    @Test
+    fun `mile pace rounds once from the raw session, not twice through sec-per-km`() {
+        // 31 min over 8.3 km: converting distance first and rounding once gives 6:01/mi; rounding
+        // sec/km first (round(224) = 224) then scaling gave 6:00/mi. Both the pace chip and the
+        // compare read go through paceSecPerUnit now, so they land on the same 361s.
+        assertEquals(361, paceSecPerUnit(31, 8.3, useMiles = true))
     }
 }

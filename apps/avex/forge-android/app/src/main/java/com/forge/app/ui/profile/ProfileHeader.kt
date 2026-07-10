@@ -57,7 +57,7 @@ private val BannerHeight = 240.dp
 private val EdgeFade = Brush.verticalGradient(
     0f to Color.Transparent,
     0.16f to Color.Black,
-    0.82f to Color.Black,
+    0.60f to Color.Black,
     1f to Color.Transparent
 )
 
@@ -128,7 +128,9 @@ internal fun ProfileHeaderCard(
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        "TAP TO ADD A PHOTO",
+                        // Fallback only — a default cover is normally seeded so this rarely shows; the tap
+                        // now opens the chooser (own photo + provided covers), not the system picker (GYMAP-22).
+                        "TAP TO CHOOSE A PHOTO",
                         style = MaterialTheme.typography.labelSmall,
                         color = muted.copy(alpha = 0.7f), fontSize = 10.sp, letterSpacing = 2.sp
                     )
@@ -136,15 +138,17 @@ internal fun ProfileHeaderCard(
             }
         }
 
-        // Text-protection scrim — a strong bottom gradient OUTSIDE the fade mask, so it stays fully
-        // opaque under the name/meta (inside the mask its bottom would fade away right where the text
-        // sits). Its dark bottom meets the dark page below, so it adds no visible edge.
+        // Text-protection scrim — a bottom gradient OUTSIDE the fade mask. It PEAKS under the name/since
+        // then eases back toward transparent at the very bottom edge, so the banner's lip lands on the
+        // bare page background (identical to the content below) instead of a solid 0.82 black band that
+        // sat darker than the page and read as a hard seam where the cover met it (Antho 2026-07-09).
         Box(
             Modifier.fillMaxSize().background(
                 Brush.verticalGradient(
                     0f to Color.Transparent,
                     0.42f to Color.Transparent,
-                    1f to Color.Black.copy(alpha = 0.82f)
+                    0.86f to Color.Black.copy(alpha = 0.85f),
+                    1f to Color.Transparent
                 )
             )
         )
@@ -153,25 +157,24 @@ internal fun ProfileHeaderCard(
         Column(
             Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp)
         ) {
-            // Meta line: "SINCE … · BEST n-DAY STREAK" + the gold current-streak chip when active.
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                val metaParts = buildList {
-                    if (sinceLabel.isNotBlank()) add("SINCE ${sinceLabel.uppercase()}")
-                    if (longestStreakDays >= 2) add("BEST $longestStreakDays-DAY STREAK")
+            // Streak meta (achievements): "BEST n-DAY STREAK" + the gold current-streak chip when
+            // active. "Since …" moved out to below the name (GYMAP-23), so this row is streaks alone.
+            if (longestStreakDays >= 2 || streakDays >= 2) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (longestStreakDays >= 2) {
+                        Text(
+                            "BEST $longestStreakDays-DAY STREAK",
+                            style = MaterialTheme.typography.labelSmall.copy(shadow = MetaShadow),
+                            color = Color.White.copy(alpha = 0.9f),
+                            fontSize = 9.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                        if (streakDays >= 2) Spacer(Modifier.width(10.dp))
+                    }
+                    if (streakDays >= 2) StreakChip(streakDays, accent)
                 }
-                if (metaParts.isNotEmpty()) {
-                    Text(
-                        metaParts.joinToString("  ·  "),
-                        style = MaterialTheme.typography.labelSmall.copy(shadow = MetaShadow),
-                        color = Color.White.copy(alpha = 0.9f),
-                        fontSize = 9.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false)
-                    )
-                    if (streakDays >= 2) Spacer(Modifier.width(10.dp))
-                }
-                if (streakDays >= 2) StreakChip(streakDays, accent)
+                Spacer(Modifier.height(6.dp))
             }
-            Spacer(Modifier.height(6.dp))
             // Name — tap to edit. Its own click consumes the tap so it doesn't also open the photo picker.
             if (editing) {
                 val focus = remember { FocusRequester() }
@@ -202,6 +205,16 @@ internal fun ProfileHeaderCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.bounceClick { input = name; editing = true }
+                )
+            }
+            // "Since {month year}" — when you started (your first session), sitting under the name (GYMAP-23).
+            if (sinceLabel.isNotBlank()) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "SINCE ${sinceLabel.uppercase()}",
+                    style = MaterialTheme.typography.labelSmall.copy(shadow = MetaShadow),
+                    color = Color.White.copy(alpha = 0.9f),
+                    fontSize = 9.sp, letterSpacing = 1.sp, maxLines = 1
                 )
             }
         }

@@ -76,12 +76,12 @@ internal fun AboutPage(modifier: Modifier = Modifier, viewModel: SettingsViewMod
         SettingsSectionHeader("Your data stays on this device")
         AboutParagraph(
             "Everything you log lives in a private database on this phone. There's no account and no " +
-                "sign-in — Avex doesn't even request the Internet permission, so it physically can't " +
+                "sign-in. Avex doesn't even request the Internet permission, so it physically can't " +
                 "upload your data anywhere."
         )
         AboutParagraph(
-            "No servers, no analytics, no tracking. Your data only moves when you choose to move it — " +
-                "exporting or sharing a file, or saving a backup — and it goes exactly where you point it " +
+            "No servers, no analytics, no tracking. Your data only moves when you choose to move it, " +
+                "exporting or sharing a file or saving a backup, and it goes exactly where you point it " +
                 "through Android's own share / file picker."
         )
         AboutParagraph(
@@ -113,7 +113,7 @@ internal fun AboutPage(modifier: Modifier = Modifier, viewModel: SettingsViewMod
         )
         SettingsSectionHeader("About")
         AboutParagraph(
-            "A personal gym companion — auto-generated programs, an adaptive coach, progress stats, " +
+            "A personal gym companion: auto-generated programs, an adaptive coach, progress stats, " +
                 "trophies and a rank ladder. Built for lifting, not for the cloud."
         )
         if (viewModel != null) {
@@ -129,8 +129,8 @@ internal fun AboutPage(modifier: Modifier = Modifier, viewModel: SettingsViewMod
         SettingsSectionHeader("Open-source licenses")
         AboutParagraph(
             "Avex is built on open-source software. The anatomical muscle figures are adapted from " +
-                "react-native-body-highlighter (MIT License). The core libraries it's built on — Jetpack " +
-                "Compose, Room, Hilt and Health Connect — are under the Apache License 2.0."
+                "react-native-body-highlighter (MIT License). The core libraries it's built on (Jetpack " +
+                "Compose, Room, Hilt and Health Connect) are under the Apache License 2.0."
         )
         Text(
             "View licenses",

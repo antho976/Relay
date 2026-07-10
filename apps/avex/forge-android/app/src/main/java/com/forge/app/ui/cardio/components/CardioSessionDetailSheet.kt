@@ -39,7 +39,6 @@ import com.forge.app.domain.cardio.RoutePoint
 import com.forge.app.domain.cardio.cardioDetailParts
 import com.forge.app.domain.cardio.compareCardioSession
 import com.forge.app.domain.cardio.formatPaceSec
-import com.forge.app.domain.cardio.paceSecPerKm
 import com.forge.app.domain.cardio.paceSecPerUnit
 import com.forge.app.domain.cardio.pacePerUnit
 import com.forge.app.domain.units.distanceUnitLabel
@@ -152,7 +151,9 @@ fun CardioSessionDetailSheet(
                         val prevDate = remember(prev.date) {
                             SimpleDateFormat("MMM d", Locale.getDefault()).format(Date(prev.date))
                         }
-                        val parts = cardioDetailParts(prev, useMiles = useMiles).joinToString(" · ")
+                        val parts = remember(prev, useMiles) {
+                            cardioDetailParts(prev, useMiles = useMiles).joinToString(" · ")
+                        }
                         Text(
                             if (parts.isBlank()) prevDate else "$prevDate · $parts",
                             style = MaterialTheme.typography.bodyMedium, color = onBg
@@ -276,10 +277,9 @@ private fun paceCompareMeta(
     compare: CardioSessionCompare?,
     useMiles: Boolean
 ): Pair<String?, Boolean> {
-    val bestKm = compare?.bestOtherPaceSecPerKm ?: return null to false
-    val myKm = paceSecPerKm(entry.durationMin, entry.distanceKm) ?: return null to false
-    val best = paceSecPerUnit(bestKm, useMiles)
-    val mine = paceSecPerUnit(myKm, useMiles)
+    val bestEntry = compare?.bestPaceEntry ?: return null to false
+    val best = paceSecPerUnit(bestEntry.durationMin, bestEntry.distanceKm, useMiles) ?: return null to false
+    val mine = paceSecPerUnit(entry.durationMin, entry.distanceKm, useMiles) ?: return null to false
     return when {
         compare.isPaceBest -> "your fastest · prev ${formatPaceSec(best)}" to true
         else -> "best ${formatPaceSec(best)} · +${formatPaceSec((mine - best).coerceAtLeast(0))}" to false

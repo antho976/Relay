@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -169,6 +170,38 @@ internal fun SettingsOutlineAction(label: String, enabled: Boolean = true, onCli
         contentAlignment = Alignment.Center
     ) {
         Text(label, style = MaterialTheme.typography.labelMedium, color = onBg.copy(alpha = alpha), letterSpacing = 0.3.sp)
+    }
+}
+
+/**
+ * The §12 status dot shared by the settings feed / connection rows — a solid accent disc when the
+ * feed is live, a clearly-drawn muted ring (1.5dp @0.55, legible on near-black) when silent. One
+ * drawing so Coach and Recovery can't disagree on how connected-vs-silent reads.
+ */
+@Composable
+internal fun StatusDot(active: Boolean, size: Dp = 8.dp) {
+    val accent = MaterialTheme.colorScheme.primary
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    if (active) Box(Modifier.size(size).background(accent, CircleShape))
+    else Box(Modifier.size(size).border(1.5.dp, muted.copy(alpha = 0.55f), CircleShape))
+}
+
+/**
+ * The compact OUTLINED "Connect" pill (§8 ② weight — border only, onBg label, sentence case) drawn
+ * inside a whole-row tap target. NOT independently clickable — the row owns the tap — so it never
+ * nests a second click. Shared by the Coach feed glance and the Recovery integration rows.
+ */
+@Composable
+internal fun ConnectPill(label: String = "Connect") {
+    val onBg = MaterialTheme.colorScheme.onBackground
+    val outline = MaterialTheme.colorScheme.outline
+    Box(
+        modifier = Modifier
+            .border(1.dp, outline.copy(alpha = 0.35f), RoundedCornerShape(50))
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(label, style = MaterialTheme.typography.labelMedium, color = onBg, letterSpacing = 0.3.sp)
     }
 }
 

@@ -22,12 +22,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.DragHandle
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -51,6 +46,11 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.forge.app.ui.common.DraggableItem
 import com.forge.app.ui.common.ExerciseLibraryPicker
+import com.forge.app.ui.common.ForgeOutlineCapsule
+import com.forge.app.ui.common.ForgeWordmark
+import com.forge.app.ui.common.GlyphButton
+import com.forge.app.ui.common.SegmentPill
+import com.forge.app.ui.common.clickableLabeled
 import com.forge.app.ui.common.dragContainer
 import com.forge.app.ui.common.rememberDragDropState
 
@@ -71,44 +71,56 @@ fun ProgramBuilderDayDetail(
     var editExercise by remember { mutableStateOf<BuilderExercise?>(null) }
 
     val listState = rememberLazyListState()
-    // Three leading items (TYPE picker, COLOR picker, hint) sit above the draggable exercise rows.
-    val dragState = rememberDragDropState(listState, firstDraggableIndex = 3) { from, to -> onMoveExercise(from, to) }
+    // Four leading items (day name, TYPE picker, COLOR picker, hint) sit above the draggable exercise rows.
+    val dragState = rememberDragDropState(listState, firstDraggableIndex = 4) { from, to -> onMoveExercise(from, to) }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = {
-                    Column(Modifier.clickable { showRename = true }) {
-                        Text("EDIT DAY", style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Text(day.name, style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onBackground)
-                    }
-                },
+                // §2: wordmark + back, never the screen's name — the day name heads the content.
+                title = { ForgeWordmark() },
                 navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
-                actions = { TextButton(onClick = { showRename = true }) { Text("Rename") } },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
             )
         },
         bottomBar = {
-            Button(onClick = { showPicker = true }, modifier = Modifier.fillMaxWidth().padding(16.dp)) {
-                Icon(Icons.Default.Add, null); Text("  Add exercise")
-            }
+            ForgeOutlineCapsule(
+                "+ Add exercise",
+                onClick = { showPicker = true },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp)
+            )
         },
         containerColor = Color.Transparent
     ) { inner ->
         LazyColumn(
             state = listState,
             modifier = Modifier.fillMaxSize().padding(inner).dragContainer(dragState),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+            contentPadding = PaddingValues(horizontal = 24.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            item {
+                // One affordance: the name itself renames (the old separate Rename button doubled it).
+                Text(
+                    day.name,
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    modifier = Modifier.clickableLabeled("Rename day") { showRename = true }.padding(vertical = 4.dp)
+                )
+            }
             item {
                 Text("TYPE", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     DAY_TYPES.forEach { (key, label, _) ->
-                        // Normalize so a stored "upper-a"/"lower-b" still selects its base-type chip.
-                        FilterChip(selected = baseArchetype(day.archetype) == key, onClick = { onSetType(key) }, label = { Text(label) })
+                        // Normalize so a stored "upper-a"/"lower-b" still selects its base-type pill.
+                        SegmentPill(
+                            text = label,
+                            selected = baseArchetype(day.archetype) == key,
+                            onClick = { onSetType(key) },
+                            accent = MaterialTheme.colorScheme.primary,
+                            onBg = MaterialTheme.colorScheme.onBackground,
+                            muted = MaterialTheme.colorScheme.onSurfaceVariant,
+                            outline = MaterialTheme.colorScheme.outline
+                        )
                     }
                 }
             }
@@ -131,7 +143,7 @@ fun ProgramBuilderDayDetail(
             }
             item {
                 Text(
-                    if (day.exercises.isEmpty()) "No exercises yet — add some below."
+                    if (day.exercises.isEmpty()) "No exercises yet. Add one below."
                     else "Tap an exercise for sets/reps. Press and hold to drag it into order.",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 6.dp)
@@ -148,16 +160,19 @@ fun ProgramBuilderDayDetail(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Icon(Icons.Default.DragHandle, "Drag to reorder", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        // Text glyph over a stock icon (§8) — the whole row long-presses to drag.
+                        Text("≡", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Column(Modifier.weight(1f)) {
                             Text(e.name, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold,
                                 color = MaterialTheme.colorScheme.onSurface)
                             Text("${e.muscle} · ${e.sets} sets · ${e.reps}",
                                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
-                        IconButton(onClick = { onRemoveExercise(e.uid) }) {
-                            Icon(Icons.Default.Delete, "Remove ${e.name}", tint = MaterialTheme.colorScheme.error.copy(alpha = 0.7f))
-                        }
+                        // Error at full strength (§5); GlyphButton guarantees the ≥48dp touch target.
+                        GlyphButton(
+                            "×", "Remove ${e.name}", MaterialTheme.colorScheme.error,
+                            onClick = { onRemoveExercise(e.uid) }
+                        )
                     }
                 }
             }

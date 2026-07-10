@@ -88,17 +88,33 @@ class ProfileViewModel @Inject constructor(
     private fun load() = viewModelScope.launch {
         val name = settingsRepo.userName.first()
         val photos = photoRepo.photos()
+
+        // ── Avatar (GYMAP-22) ──────────────────────────────────────────────────
+        // AvatarRepository owns the file + its paired pref: ensureSeeded assigns a random default the
+        // first time no avatar exists (one-shot, guarded), so the identity cover is never empty and the
+        // ringed default stays in sync with the cover on disk.
+        val defaultKey = avatarRepo.ensureSeeded(DefaultAvatars.all.map { it.key to it.resId })
         val hasAvatar = avatarRepo.exists()
         val avatarStamp = if (hasAvatar) avatarRepo.file.lastModified() else 0L
+        // The one-time "tap to change" hint teaches the tap (the old "tap to add a photo" placeholder is
+        // gone now a default is always present); shows only over an un-personalised default, once.
+        val showHint = defaultKey != null && !settingsRepo.avatarEditHintShown.first()
+
         // Instant first paint on re-entry: render the last-assembled data while the fresh fan-out runs (P3).
         val cached = profileRepo.cached()
-        _state.value = if (cached != null) buildState(cached, name, photos, hasAvatar, avatarStamp)
-            else _state.value.copy(name = name, photos = photos, hasAvatar = hasAvatar, avatarStamp = avatarStamp)
+        _state.value = if (cached != null) buildState(cached, name, photos, hasAvatar, avatarStamp, defaultKey, showHint)
+            else _state.value.copy(
+                name = name, photos = photos, hasAvatar = hasAvatar, avatarStamp = avatarStamp,
+                avatarDefaultKey = defaultKey, showAvatarHint = showHint
+            )
         val data = profileRepo.load()
         // Merge the fresh fan-out but keep the user-editable fields from current state, so a rename /
         // photo-note / avatar change made while the (slow) fan-out ran isn't reverted by the pre-load
         // snapshot — the edit fns persist then update _state, so reading them back here is correct.
-        _state.value = buildState(data, _state.value.name, _state.value.photos, _state.value.hasAvatar, _state.value.avatarStamp)
+        _state.value = buildState(
+            data, _state.value.name, _state.value.photos, _state.value.hasAvatar, _state.value.avatarStamp,
+            _state.value.avatarDefaultKey, _state.value.showAvatarHint
+        )
 
         // ── Rank-up celebration detection ─────────────────────────────────────
         // Compare the current tier to the last-seen tier ordinal. A higher ordinal = tier upgrade.
@@ -123,7 +139,9 @@ class ProfileViewModel @Inject constructor(
         name: String,
         photos: List<ProgressPhoto>,
         hasAvatar: Boolean,
-        avatarStamp: Long
+        avatarStamp: Long,
+        avatarDefaultKey: String?,
+        showAvatarHint: Boolean
     ) = ProfileUiState(
         loading = false,
         name = name,
@@ -146,6 +164,8 @@ class ProfileViewModel @Inject constructor(
         photos = photos,
         hasAvatar = hasAvatar,
         avatarStamp = avatarStamp,
+        avatarDefaultKey = avatarDefaultKey,
+        showAvatarHint = showAvatarHint,
         trophyUnlocked = data.trophyUnlocked,
         trophyTotal = data.trophyTotal,
         trophyGrid = data.trophyGrid,
@@ -188,9 +208,29 @@ class ProfileViewModel @Inject constructor(
 
     fun avatarFile(): File = avatarRepo.file
 
+    /** The user's own photo (system Photo Picker) — clears any active default and the edit hint. */
     fun setAvatar(uri: Uri) = viewModelScope.launch {
-        if (avatarRepo.set(uri)) {
-            _state.value = _state.value.copy(hasAvatar = true, avatarStamp = System.currentTimeMillis())
+        if (avatarRepo.adoptOwn(uri)) {
+            _state.value = _state.value.copy(
+                hasAvatar = true, avatarStamp = System.currentTimeMillis(),
+                avatarDefaultKey = null, showAvatarHint = false
+            )
         }
     }
+
+    /** Adopt one of the app's bundled default covers (GYMAP-22) — baked into avatar.jpg. */
+    fun setAvatarFromDefault(avatar: DefaultAvatars.Item) = viewModelScope.launch {
+        if (avatarRepo.adoptDefault(avatar.key, avatar.resId)) {
+            _state.value = _state.value.copy(
+                hasAvatar = true, avatarStamp = System.currentTimeMillis(),
+                avatarDefaultKey = avatar.key, showAvatarHint = false
+            )
+        }
+    }
+
+    /** Persist that the one-time edit hint has been seen — it stays visible this session, gone next. */
+    fun markAvatarHintSeen() = viewModelScope.launch { settingsRepo.setAvatarEditHintShown() }
+
+    /** Hide the edit hint now (the user opened the picker). */
+    fun dismissAvatarHint() { _state.value = _state.value.copy(showAvatarHint = false) }
 }

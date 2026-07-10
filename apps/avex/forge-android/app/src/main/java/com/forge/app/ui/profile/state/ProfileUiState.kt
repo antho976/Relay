@@ -45,6 +45,10 @@ data class ProfileUiState(
     // Avatar (app-private file)
     val hasAvatar: Boolean = false,
     val avatarStamp: Long = 0L,
+    // Key of the provided default currently in use (GYMAP-22), null when it's the user's own photo —
+    // lets the picker ring the active default. `showAvatarHint` = the one-time "tap to change" nudge.
+    val avatarDefaultKey: String? = null,
+    val showAvatarHint: Boolean = false,
 
     // Trophy case
     val trophyUnlocked: Int = 0,

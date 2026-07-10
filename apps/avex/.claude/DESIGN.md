@@ -25,9 +25,9 @@ hero (Stats "Stats", Profile "Athlete") or not at all (Home "Pull B").
 - **Stats** `ui/gym/stats` — one page: hero figures + muscle map → lens pills Strength/Volume/Effort/Days → drill rows → heatmap → records → Banister.
 - **Cardio** `ui/cardio` — THIS WEEK figures hero (days · min · dist · streak) + Mon–Sun accent bars + goal meter, GOALS trim (cardio-metric custom goals, shared `GoalProgressLine`, hidden at zero), week-pager stats overlay, recent rows (header carries a small filled `+` circle = log) → session detail (stat rows carry best-pace/longest compare meta + previous-session read).
 - **Coach** `ui/coach` — lens pills Now/Signals/Journey (Now = call + watch + one road-ahead section: milestone rail + brief/verdict/autopilot bars; Signals = lifts + recovery + inputs + learned; Journey = record + trust; old Brief/Lab/Timeline routes = lens deep-links). Coach content renders ONLY here — Settings→Coach is config alone (on/off switch + mode chips + a feeds on/off glance whose silent HC rows tap to Recovery), never a second brief/trust/history home.
-- **Profile** `ui/profile` — blending cover (**untouchable**), bodyweight-led, ALL-TIME 2×2, filmstrip.
+- **Profile** `ui/profile` — blending cover (**untouchable** compositing approach — its edge-fade + text-scrim STOPS were retuned 2026-07-09 (Antho) to remove a hard seam where the cover met the page; the masking technique itself stays frozen; a random default is seeded on first run so it's never empty, tap → `AvatarPickerSheet`), bodyweight-led, ALL-TIME 2×2, filmstrip.
 - **Routed** (`Routes.kt`): `GYM_DAY` (`ui/gym/train`, **untouchable**) · `SESSION_HISTORY` (gym+cardio) · `SESSION_DETAIL` · `CARDIO_SESSION` · `GOALS`/`GOAL_EDITOR` · `TROPHIES` (frozen) · `NUTRITION` · `SETTINGS?page=` · `RECAP` · `NOTES_SEARCH` · `PROGRAM_VIEWER/EDITOR/BUILDER` · `FREESTYLE_LOG` · `MIRROR_TEST`.
-- **Sheets**: SessionSummarySheet (minimal), CardioSessionDetailSheet, heatmap "That day", ExerciseLibraryPicker.
+- **Sheets**: SessionSummarySheet (minimal), CardioSessionDetailSheet, heatmap "That day", ExerciseLibraryPicker, AvatarPickerSheet (profile cover — "select your own" + provided default covers by category, `DefaultAvatars`; picked default is baked into `avatar.jpg`).
 
 Check this map + `ui/common/` before inventing; update it when screens change.
 
@@ -128,7 +128,7 @@ screen gets promoted here the same turn.
 **Buttons — three levels only**: ① filled light capsule = do-it-now, ≤1/section; ② outlined capsule =
 its sidekick; ③ mono accent `action →` = navigation. No M3 default/floating-text/icon buttons in content.
 Settings reuse `SettingsPrimaryAction` (do-it-now) / `SettingsOutlineAction` (sidekick) / `SettingsActionLink` (`action →` nav) from `SettingsPrimitives.kt`; group the page-level action buttons at the END of the page, never mid-scroll.
-**Per-row action = compact OUTLINED pill, never filled.** A do-it-now action scoped to a single list row/integration (Recovery's Connect) renders as a right-aligned compact OUTLINED pill (`SettingsOutlineAction` weight — border only, onBg text, sentence case) with the WHOLE row as its tap target (the pill is drawn, not independently clickable — no nested tap). NEVER a filled-white capsule per row — five of those stack into a button wall (Recovery failed exactly this way); the ONE filled capsule stays page-level, grouped at the END (e.g. Get/Update Health Connect). A bare mono accent `connect →` link is too dim against a muted accent — prefer the pill. A connected row shows a passive `• ON` (accent disc + mono) on the right, and a list of connectables leads with its filled-disc/muted-ring dot rail (§12; ring at 1.5dp muted@0.55 so the empty state reads on near-black). Rows without a usable action render passive — no affordance that can't run.
+**Per-row action = compact OUTLINED pill, never filled.** A do-it-now action scoped to a single list row/integration (Recovery's Connect) renders as a right-aligned compact OUTLINED pill (`SettingsOutlineAction` weight — border only, onBg text, sentence case) with the WHOLE row as its tap target (the pill is drawn, not independently clickable — no nested tap). NEVER a filled-white capsule per row — five of those stack into a button wall (Recovery failed exactly this way); the ONE filled capsule stays page-level, grouped at the END (e.g. Get/Update Health Connect). A bare mono accent `connect →` link is too dim against a muted accent — prefer the pill. A connected row shows a passive `• ON` (accent disc + mono) on the right, and a list of connectables leads with its filled-disc/muted-ring dot rail (§12; ring at 1.5dp muted@0.55 so the empty state reads on near-black). Rows without a usable action render passive — no affordance that can't run. Coach + Recovery draw this dot and pill through the shared `StatusDot` / `ConnectPill` (`SettingsPrimitives.kt`) — reuse them, don't redraw.
 **Sizing — trim, never chunky** (48dp touch from padding, not visual size): hero CTA ~60dp (Home
 Start session only); standard capsules **44dp** (14sp); `ForgeSwitch` **40×24** track (thumb 14→17,
 press ~20); `SegmentPill` 12×5, 10sp.
@@ -138,7 +138,9 @@ wayfinding. Row/content glyphs come from the matched custom families (`SettingsI
 until a custom chrome set lands (content never). Exercise rows in browsers/pickers lead with their
 `ExerciseIcons.forEquipment` equipment-class glyph (one glyph per implement class, custom moves =
 pencil); elsewhere content is text-first, glyphs `→ ↑ ↓ △ • ·` carry meaning — no decorative
-icons/emoji. (Known gap: `CardioType.icon` still mixes Material stock into its custom family.)
+icons/emoji. (Known gap: `CardioType.icon` still mixes Material stock into its custom family.) The
+families share only their builder plumbing via `VectorBuilders.kt` (icon/fillPath/strokePath/circle/
+roundRect); glyph shapes stay per-family so each still evolves on its own.
 **Don't render state twice, and flag only exceptions.** A leading `•` dot is earned only when its
 COLOR flags something the eye should catch — a failure (error), a win/active (accent) — never the
 neutral/default/inactive majority (a column of identical grey dots is noise). Paint the dot only
@@ -156,7 +158,7 @@ Decelerate-in / Accelerate-out / Standard / DrawDecelerate (chart reveals). Spri
 - **Press = bounce everywhere** (scale 0.97, no ripple; auto-ripple under TalkBack); migrate rippling M3 buttons when touched.
 - Feel (don't retune casually): bounceClick MediumBouncy/MediumLow; ForgeSwitch position 0.68/900, thumb resize no-bounce/1400 + press-stretch.
 - **Haptics rare** (`forgeHaptic`): set logged, PR/finish, timer ticks — nothing else.
-- **Launch**: `AvexIntro` settles the serif "Avex" wordmark once per cold launch over the first screen, then the plate fades to reveal it. The system splash is background-only (`splash_blank`, no icon) so the wordmark is the single brand beat; honors reduce-motion (short still hold, no fade). The launcher/adaptive icon stays the emblem (`ic_launcher_foreground`).
+- **Launch**: `AvexIntro` settles the serif "Avex" wordmark once per cold launch over the first screen, then the plate fades to reveal it. The system splash is background-only (`splash_blank`, no icon) so the wordmark is the brand beat; honors reduce-motion (short still hold, no fade). **The intro themes to the chosen app icon through the WORDMARK itself** (`AvexWordmark`): the name has a narrative arc in the icon's palette (`AppIcon.launchPalette`, deep→mid→bright) inside the stock envelope — it ENTERS with the family's verb (Metal sheen-sweep · Gem glint + jagged crystal chunks GROWING out of the letterforms, stroke-scale, staggered (probe shader, 33+) · Aurora northern lights RISING out of the glyph tops, waving + hue-shifting (probe shader, 33+; pre-33 drifting fill) · Nebula weightless float · Molten white-hot heat-shimmer (AGSL `RenderEffect`, 33+) · Solid plate-colour wipe · Stealth slow HUD flicker-in (~14Hz over ~1s) · Default plain), holds legible, then DIES the family's death overlapping the plate fade (Molten MELTS decelerating over 650ms, smooth slump + thin drip streams · Nebula is dragged into a BLACK HOLE vortex, modest twist (33+; pre-33 spin-shrink) · Solid wipes back out · Metal/Gem/Aurora/Stealth fade). Reduce-motion = settled still, plain fade. Full-screen launch SCENES (`ui/common/LaunchScenes.kt`: family→AGSL registry, per-pixel `RuntimeShader`, Aurora/Nebula/Molten/Gem device-approved + Stealth radar) are deliberately UNWIRED (2026-07-10 — every-launch spectacle wears out) but kept intact; re-wire via `IconLaunchScene` behind the wordmark + the 950ms themed hold. This deliberately spends colour off the one-accent rule (§1/§5) for a pre-app moment only. The launcher/adaptive icon **defaults** to the emblem (`ic_launcher_foreground`) but is user-selectable (Appearance → App icon, GYMAP-icons): one `.icon.*` `activity-alias` per icon, exactly one enabled at a time via `AppIconManager` (`PackageManager` component toggle). A settings row shows the current icon + name and opens a `ModalBottomSheet` grid (mirrors `AvatarPickerSheet`: family `EditorialHeader`s, ring the current pick, scroll edge-fade); warns it "updates after a moment" (OEM-launcher lag).
 
 ## 10. Charts (overview/detail archetypes)
 
@@ -223,11 +225,13 @@ gold row) · accent-tinted "important" prose · session-summary extras (share ca
 what's-next) · cardio big-number hero · cardio kcal estimates (return only with real watch burn data) · new gamification surfaces (wait-listed) · Profile
 identity-first restructure · mood/subjective coach drivers · Coach hero week-dot calendar, "Pulse",
 pass-square record strip · Coach status serif verdicts AND status/anticipation asides (status states
-= eyebrow + figures) · hairline section separators (§1) · the 9-row milestone ladder (→ rail + next, §4.10).
+= eyebrow + figures) · Coach pre-baseline signal dot-checklist in the hero (→ one labeled Baseline
+bar in the "Coming up" idiom; the effort/HC inputs it spelled out live in Signals only, §4.3,
+GYMAP-24) · hairline section separators (§1) · the 9-row milestone ladder (→ rail + next, §4.10).
 **Facts**: dark-only (Indigo light scheme in `Color.kt` unshipped — never build light variants);
 portrait phone only (no adaptive/tablet/landscape).
-**Untouchable**: live-session screen · Profile blending cover · statsEntrance/draw tuning ·
-`BodyAnatomy.kt` (generated).
+**Untouchable**: live-session screen · Profile blending cover (compositing approach; edge-fade/scrim
+stops retuned 2026-07-09) · statsEntrance/draw tuning · `BodyAnatomy.kt` (generated).
 **Known defects, fix when touched**: Home's GOALS section placement · Stats' 16dp gutter (§7 says 24 —
 left because re-flowing the polished screen needs Antho's eyes) · any screen still drawing section
 hairlines → migrate to air rhythm (§7). (Home's accent eyebrows + the Home/Stats section hairlines

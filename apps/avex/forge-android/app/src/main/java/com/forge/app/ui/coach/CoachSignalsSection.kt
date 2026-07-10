@@ -139,13 +139,19 @@ internal fun LazyListScope.coachSignalsLens(
             // all read quiet. "No data" checks (disconnected sleep/HR) are left to "What it reads".
             val panel = watch.fatigueChecks.filter { it.reading != "no data" }
             if (panel.isNotEmpty()) {
+                // §4.9: this panel of named checks is DATA, not §12 repetition — each renders its OWN
+                // reading from session one (below its gate that reading is progress toward it, e.g.
+                // "0 of 6 rated sets"), never collapsed to a countless "still building" line. Ordered
+                // live-first (§4.10): a check that has woken surfaces above ones still short of a gate.
+                val (dormant, live) = panel.partition { it.gated }
                 Spacer(Modifier.height(12.dp))
-                panel.forEach { FatigueCheckRow(it, c) }
-                // One closing line so the readings aren't unexplained (§13) — what they build toward.
+                live.forEach { FatigueCheckRow(it, c) }
+                dormant.forEach { FatigueCheckRow(it, c) }
+                // One muted line so the readings aren't unexplained (§4.9) — what they build toward.
                 if (!muted) {
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        "The coach weighs these together; a deload week is called when enough cross their line.",
+                        "A deload is called when enough cross their line.",
                         style = MaterialTheme.typography.bodySmall,
                         color = c.muted
                     )

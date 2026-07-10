@@ -1,8 +1,6 @@
 package com.forge.app.domain.cardio
 
 import com.forge.app.data.db.entities.CardioEntry
-import java.util.Locale
-import kotlin.math.roundToInt
 
 /**
  * How one active session stands against the rest of its activity type — the fastest pace and the
@@ -12,8 +10,10 @@ import kotlin.math.roundToInt
  * (a ride's pace against a run's pace means nothing).
  */
 data class CardioSessionCompare(
-    /** Fastest same-type pace among OTHER sessions (sec per km), or null when none has a pace. */
-    val bestOtherPaceSecPerKm: Int?,
+    /** The OTHER same-type session with the fastest pace, or null when none has a pace. Carried as the
+     *  entry (not a pre-rounded figure) so its pace formats through the same one-rounding path as its
+     *  own detail row and the two screens can't disagree. */
+    val bestPaceEntry: CardioEntry?,
     /** True when this session's pace beats (or matches) every other same-type session. */
     val isPaceBest: Boolean,
     /** Longest same-type distance among OTHER sessions (km), or null when none has a distance. */
@@ -25,17 +25,8 @@ data class CardioSessionCompare(
 )
 
 /** Average pace in seconds per kilometre, or null when duration or distance is missing. */
-fun paceSecPerKm(durationMin: Int, distanceKm: Double?): Int? {
-    if (distanceKm == null || distanceKm <= 0.0 || durationMin <= 0) return null
-    return (durationMin * 60.0 / distanceKm).roundToInt()
-}
-
-/** "M:SS" for a pace reading or gap in seconds. Locale.US — a stopwatch reading never localises. */
-fun formatPaceSec(sec: Int): String = String.format(Locale.US, "%d:%02d", sec / 60, sec % 60)
-
-/** A sec-per-km pace reading converted to seconds per display unit (km or mile). */
-fun paceSecPerUnit(secPerKm: Int, useMiles: Boolean): Int =
-    if (useMiles) (secPerKm * 1.609344).roundToInt() else secPerKm
+fun paceSecPerKm(durationMin: Int, distanceKm: Double?): Int? =
+    paceSecPerUnit(durationMin, distanceKm, useMiles = false)
 
 /**
  * Compare [entry] against every other logged session of the same activity type. Returns null when
@@ -47,13 +38,16 @@ fun compareCardioSession(entry: CardioEntry, all: List<CardioEntry>): CardioSess
     if (others.isEmpty()) return null
 
     val myPace = paceSecPerKm(entry.durationMin, entry.distanceKm)
-    val bestOtherPace = others.mapNotNull { paceSecPerKm(it.durationMin, it.distanceKm) }.minOrNull()
+    // Rank in sec/km (unit-independent); keep the winning entry so the UI formats its pace from raw.
+    val bestPace = others
+        .mapNotNull { e -> paceSecPerKm(e.durationMin, e.distanceKm)?.let { e to it } }
+        .minByOrNull { it.second }
     val myDistance = entry.distanceKm?.takeIf { it > 0.0 }
     val bestOtherDistance = others.mapNotNull { it.distanceKm?.takeIf { d -> d > 0.0 } }.maxOrNull()
 
     return CardioSessionCompare(
-        bestOtherPaceSecPerKm = bestOtherPace,
-        isPaceBest = myPace != null && (bestOtherPace == null || myPace <= bestOtherPace),
+        bestPaceEntry = bestPace?.first,
+        isPaceBest = myPace != null && (bestPace == null || myPace <= bestPace.second),
         bestOtherDistanceKm = bestOtherDistance,
         isDistanceBest = myDistance != null && (bestOtherDistance == null || myDistance >= bestOtherDistance),
         previous = others.filter { it.date < entry.date }.maxByOrNull { it.date }

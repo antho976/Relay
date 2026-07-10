@@ -54,6 +54,8 @@ data class SettingsUiState(
     val accentColorHex: String = "",
     /** When false the accent is disabled app-wide — monochrome, neutral highlights. */
     val accentEnabled: Boolean = true,
+    /** Selected launcher-icon enum name; "" = default emblem. Rings the current choice in the picker. */
+    val appIconKey: String = "",
     val timezone: String = java.util.TimeZone.getDefault().id,
     /** IANA zone ids the user has starred — pinned to the top of the timezone picker. */
     val favoriteTimezones: Set<String> = emptySet(),
@@ -100,7 +102,7 @@ class SettingsViewModel @Inject constructor(
     private val vacationRepo: com.forge.app.data.repo.VacationRepository,
     private val coachRepo: com.forge.app.data.repo.CoachRepository,
     private val reminderScheduler: com.forge.app.service.ReminderScheduler,
-    private val programChangeGuard: com.forge.app.ui.common.ProgramChangeGuard
+    private val programChangeGuard: com.forge.app.ui.common.ProgramChangeGuard,
 ) : ViewModel() {
 
     // ─── Coach (auto-coach Phase 4) ───────────────────────────────────────────
@@ -206,6 +208,8 @@ class SettingsViewModel @Inject constructor(
         s.copy(accentColorHex = v)
     }.combine(settingsRepo.accentEnabled) { s, v ->
         s.copy(accentEnabled = v)
+    }.combine(settingsRepo.appIcon) { s, v ->
+        s.copy(appIconKey = v)
     }.combine(settingsRepo.timezone) { s, v ->
         s.copy(timezone = v)
     }.combine(settingsRepo.favoriteTimezones) { s, v ->
@@ -434,6 +438,14 @@ class SettingsViewModel @Inject constructor(
     }
     fun setAccentColorHex(hex: String) = viewModelScope.launch { settingsRepo.setAccentColorHex(hex) }
     fun setAccentEnabled(enabled: Boolean) = viewModelScope.launch { settingsRepo.setAccentEnabled(enabled) }
+
+    /** Persist the pick, which rings it in the picker immediately. The actual launcher-alias swap is
+     *  deferred to a user-initiated app-background by [com.forge.app.MainActivity]'s onStop (gated on
+     *  onUserLeaveHint): toggling the alias here, in the foreground, disables the alias backing the
+     *  current task and closes the app on some OEMs. See [com.forge.app.appicon.AppIconManager]. */
+    fun setAppIcon(icon: com.forge.app.appicon.AppIcon) = viewModelScope.launch {
+        settingsRepo.setAppIcon(icon.name)
+    }
     fun setTimezone(id: String) = viewModelScope.launch { settingsRepo.setTimezone(id) }
     fun toggleFavoriteTimezone(id: String) = viewModelScope.launch { settingsRepo.toggleFavoriteTimezone(id) }
     fun exportLastSessionPdf() = viewModelScope.launch {

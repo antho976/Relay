@@ -55,7 +55,12 @@ class StatsViewModel @Inject constructor(
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private val engineFlow: StateFlow<AdaptationRepository.EngineStatsRead?> =
         sessionDao.observeFinishedCount()
-            .mapLatest { runCatching { adaptationRepo.engineStatsRead() }.getOrNull() }
+            .mapLatest {
+                // Degrade a real snapshot failure to null (no pulse/plateaus/insights), but let a
+                // mapLatest cancellation propagate — swallowing it could emit a stale null.
+                runCatching { adaptationRepo.engineStatsRead() }
+                    .getOrElse { if (it is kotlinx.coroutines.CancellationException) throw it else null }
+            }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     /** Last Stats LENS the user settled on (by enum NAME), persisted so reopening Stats lands there

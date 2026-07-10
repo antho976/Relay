@@ -34,9 +34,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.domain.units.formatVolumeCompact
 import com.forge.app.ui.common.EditorialFigure
-import com.forge.app.ui.common.EditorialHairline
 import com.forge.app.ui.common.EditorialHeader
-import com.forge.app.ui.common.InlineEmptyHint
+import com.forge.app.ui.common.ForgeWordmark
 import com.forge.app.ui.common.forgeShimmer
 import com.forge.app.ui.theme.LocalForgeSettings
 
@@ -52,14 +51,14 @@ fun RecapScreen(
     val muted = cs.onSurfaceVariant
     val accent = cs.primary
     val onBg = cs.onBackground
-    val outline = cs.outline
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("RECAP", style = MaterialTheme.typography.headlineLarge) },
+                // §2: wordmark + back, never the screen's name — the serif hero below carries it.
+                title = { ForgeWordmark() },
                 navigationIcon = {
-                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) }
+                    IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
             )
@@ -69,7 +68,7 @@ fun RecapScreen(
         if (state.isLoading) {
             // A skeleton that mirrors the two recap sections anchors the layout, so content swaps in
             // without a jump — beats a generic spinner that teaches the user nothing (#404).
-            RecapSkeleton(Modifier.fillMaxSize().padding(inner).padding(horizontal = 16.dp, vertical = 8.dp))
+            RecapSkeleton(Modifier.fillMaxSize().padding(inner).padding(horizontal = 24.dp, vertical = 8.dp))
             return@Scaffold
         }
 
@@ -78,14 +77,17 @@ fun RecapScreen(
                 .fillMaxSize()
                 .padding(inner)
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .padding(horizontal = 24.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(0.dp)
         ) {
+            // A tiny serif hero names the screen in content (§2).
+            Text("Recap", style = MaterialTheme.typography.headlineSmall, color = onBg)
+            Spacer(Modifier.height(20.dp))
             // Monthly recap section (#32)
             state.monthRecap?.let { recap ->
                 RecapSection(
                     title = "THIS MONTH · ${recap.month.month.name.lowercase().replaceFirstChar { it.uppercase() }} ${recap.month.year}",
-                    muted = muted, accent = accent, outline = outline
+                    muted = muted, accent = accent
                 ) {
                     RecapFiguresRow(
                         figures = listOf(
@@ -100,13 +102,17 @@ fun RecapScreen(
                     if (recap.avgDurationMin > 0) RecapRow("Avg session", "${recap.avgDurationMin} min", onBg, muted)
                     if (recap.bestDayName != null) RecapRow("Best PR day", recap.bestDayName, onBg, muted)
                 }
-            } ?: run {
-                Spacer(Modifier.height(24.dp))
-                EditorialHairline(outline)
-                Spacer(Modifier.height(14.dp))
-                EditorialHeader(label = "THIS MONTH", muted = muted, accent = accent)
-                Spacer(Modifier.height(12.dp))
-                InlineEmptyHint("No sessions this month yet.", muted)
+            } ?: RecapSection(title = "THIS MONTH", muted = muted, accent = accent) {
+                // §12: an empty period shows the same figures at honest zeros, never a hidden section.
+                RecapFiguresRow(
+                    figures = listOf(
+                        Pair("0", "workouts"),
+                        Pair(formatRecapVolume(0.0, useKg), "total volume"),
+                        Pair("0", "prs"),
+                        Pair("0", "sets")
+                    ),
+                    onBg = onBg, muted = muted, accent = accent
+                )
             }
 
             Spacer(Modifier.height(28.dp))
@@ -115,7 +121,7 @@ fun RecapScreen(
             state.yearRecap?.let { recap ->
                 RecapSection(
                     title = "${recap.year} IN REVIEW",
-                    muted = muted, accent = accent, outline = outline
+                    muted = muted, accent = accent
                 ) {
                     RecapFiguresRow(
                         figures = listOf(
@@ -130,12 +136,17 @@ fun RecapScreen(
                     if (recap.topExercise != null) RecapRow("Most trained exercise", recap.topExercise, onBg, muted)
                     if (recap.bestMonthName != null) RecapRow("Best month", recap.bestMonthName, onBg, muted)
                 }
-            } ?: run {
-                EditorialHairline(outline)
-                Spacer(Modifier.height(14.dp))
-                EditorialHeader(label = "THIS YEAR", muted = muted, accent = accent)
-                Spacer(Modifier.height(12.dp))
-                InlineEmptyHint("No sessions this year yet.", muted)
+            } ?: RecapSection(title = "THIS YEAR", muted = muted, accent = accent) {
+                // §12: honest zeros, same vocabulary as the populated section.
+                RecapFiguresRow(
+                    figures = listOf(
+                        Pair("0", "workouts"),
+                        Pair(formatRecapVolume(0.0, useKg), "total volume"),
+                        Pair("0", "prs"),
+                        Pair("0d", "streak")
+                    ),
+                    onBg = onBg, muted = muted, accent = accent
+                )
             }
 
             Spacer(Modifier.height(16.dp))
@@ -167,17 +178,15 @@ private fun RecapSkeleton(modifier: Modifier = Modifier) {
     }
 }
 
-/** Open editorial section: hairline → small-caps label → content, directly on the page background. */
+/** Open editorial section: small-caps label → content, directly on the page background — air alone
+ *  separates sections (§1: no hairline strips). */
 @Composable
 private fun RecapSection(
     title: String,
     muted: Color,
     accent: Color,
-    outline: Color,
     content: @Composable () -> Unit
 ) {
-    EditorialHairline(outline)
-    Spacer(Modifier.height(14.dp))
     EditorialHeader(label = title, muted = muted, accent = accent)
     Spacer(Modifier.height(16.dp))
     content()

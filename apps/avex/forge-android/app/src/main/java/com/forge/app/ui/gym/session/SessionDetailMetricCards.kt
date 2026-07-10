@@ -13,11 +13,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -36,7 +33,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.forge.app.ui.common.EditorialHairline
 import com.forge.app.ui.common.rpeLabel
 import com.forge.app.ui.gym.session.state.ExerciseDetail
 import com.forge.app.ui.gym.session.state.SessionChartStyle
@@ -49,9 +45,10 @@ import com.forge.app.ui.theme.LocalForgeSettings
 // ─── Open section anchor + style toggle ────────────────────────────────────────
 
 /**
- * Open editorial section for a metric: hairline above, small-caps mono label on the left, the
- * bars/line style toggle right-aligned, then content directly on the page — no card shell, no fill,
- * no border. The accent wash on tappable expand/collapse rows inside [content] remains.
+ * Open editorial section for a metric: small-caps mono label on the left, the bars/line style
+ * toggle right-aligned, then content directly on the page — no card shell, no fill, no border,
+ * no hairline (§1: air separates sections). The accent wash on tappable expand/collapse rows
+ * inside [content] remains.
  */
 @Composable
 private fun MetricCardShell(
@@ -67,8 +64,6 @@ private fun MetricCardShell(
     // One Column root: call sites wrap this in a Box (statsEntrance), where loose siblings would
     // stack on top of each other instead of flowing vertically.
     Column(Modifier.fillMaxWidth()) {
-        EditorialHairline(outline)
-        Spacer(Modifier.height(12.dp))
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -185,8 +180,8 @@ private fun ExerciseDrillRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(8.dp))
-                // Open rows get an accent wash so it's obvious which one is expanded.
-                .background(if (expanded) accent.copy(alpha = 0.10f) else Color.Transparent)
+                // Open rows get an accent wash so it's obvious which one is expanded (§5 primaryContainer rung).
+                .background(if (expanded) accent.copy(alpha = 0.15f) else Color.Transparent)
                 .clickable(
                     onClickLabel = if (expanded) "Collapse ${ex.name}" else "Expand ${ex.name}",
                     role = Role.Button
@@ -215,7 +210,7 @@ private fun ExerciseDrillRow(
             val frac = (value / rawMax).toFloat() * barProgress
             Box(
                 modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(50))
-                    .background(outline.copy(alpha = 0.18f))
+                    .background(outline.copy(alpha = 0.25f))
             ) {
                 Box(
                     modifier = Modifier.fillMaxWidth(frac.coerceIn(0f, 1f)).fillMaxHeight()
@@ -293,9 +288,9 @@ private fun ExercisePicker(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(10.dp))
-                .border(1.dp, outline.copy(alpha = 0.4f), RoundedCornerShape(10.dp))
-                .clickable { open = true }
+                .clip(RoundedCornerShape(12.dp))
+                .border(1.dp, outline.copy(alpha = 0.35f), RoundedCornerShape(12.dp))
+                .clickable(onClickLabel = "Choose exercise") { open = true }
                 .padding(horizontal = 14.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -305,7 +300,7 @@ private fun ExercisePicker(
                 style = MaterialTheme.typography.bodyMedium, color = onBg,
                 maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f)
             )
-            Icon(Icons.Filled.ArrowDropDown, contentDescription = "Choose exercise", tint = muted)
+            Text("▾", style = MaterialTheme.typography.labelMedium, color = muted)
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
             items.forEachIndexed { i, name ->

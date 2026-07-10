@@ -50,6 +50,9 @@ object DeloadAdvisor {
         val reading: String,
         val points: Int,
         val fired: Boolean,
+        /** True while the check is still short of its OWN data gate, so [reading] is progress toward
+         *  it ("0 of 6 rated sets") rather than a live measurement — the UI collapses these. */
+        val gated: Boolean = false,
         /** The full driver sentence when [fired] (feeds the deload reason); null when quiet. */
         val driver: String? = null
     )
@@ -130,13 +133,14 @@ object DeloadAdvisor {
         val priorVolume = sessions
             .filter { it.startedAt >= windowStart - t.deloadWindowDays * DAY_MS && it.startedAt < windowStart }
             .sumOf { it.totalVolumeLb ?: 0.0 }
-        val effortFired = rated.size >= t.deloadMinRatedBouts &&
+        val effortGated = rated.size < t.deloadMinRatedBouts
+        val effortFired = !effortGated &&
             hardShare >= t.deloadEffortShare && priorVolume > 0 && windowVolume <= priorVolume
         checks += FatigueCheck(
             "Effort inflation",
-            if (rated.size < t.deloadMinRatedBouts) "${rated.size} of ${t.deloadMinRatedBouts} rated sets"
+            if (effortGated) "${rated.size} of ${t.deloadMinRatedBouts} rated sets"
             else "${(hardShare * 100).roundToInt()}% hard",
-            POINTS_EFFORT_INFLATION, effortFired,
+            POINTS_EFFORT_INFLATION, effortFired, gated = effortGated,
             driver = if (effortFired) "${(hardShare * 100).roundToInt()}% of recent sets rated hard/brutal at flat volume" else null
         )
 
@@ -149,12 +153,13 @@ object DeloadAdvisor {
             (first - sets.last().reps).toDouble() / first
         }
         val dropAvg = if (dropoffs.isEmpty()) 0.0 else dropoffs.average()
-        val dropFired = dropoffs.size >= t.deloadMinDropoffBouts && dropAvg >= t.deloadDropoffThreshold
+        val dropGated = dropoffs.size < t.deloadMinDropoffBouts
+        val dropFired = !dropGated && dropAvg >= t.deloadDropoffThreshold
         checks += FatigueCheck(
             "Rep drop-off",
-            if (dropoffs.size < t.deloadMinDropoffBouts) "${dropoffs.size} of ${t.deloadMinDropoffBouts} bouts"
+            if (dropGated) "${dropoffs.size} of ${t.deloadMinDropoffBouts} bouts"
             else "~${(dropAvg * 100).roundToInt()}% fade",
-            POINTS_REP_DROPOFF, dropFired,
+            POINTS_REP_DROPOFF, dropFired, gated = dropGated,
             driver = if (dropFired) "reps dropping ~${(dropAvg * 100).roundToInt()}% within sessions" else null
         )
 
@@ -194,15 +199,16 @@ object DeloadAdvisor {
         // enough nights in the window to mean something — no HC data, no driver, no behavior change.
         val windowSleep = s.health.sleepNights.filter { it.endedAtMs >= windowStart }
         val sleepAvgMin = if (windowSleep.isEmpty()) 0.0 else windowSleep.map { it.durationMin }.average()
+        val sleepGated = windowSleep.isNotEmpty() && windowSleep.size < t.deloadMinSleepNights
         val sleepFired = windowSleep.size >= t.deloadMinSleepNights && sleepAvgMin <= t.deloadSleepDebtMinutes
         checks += FatigueCheck(
             "Sleep debt",
             when {
                 windowSleep.isEmpty() -> "no data"
-                windowSleep.size < t.deloadMinSleepNights -> "${windowSleep.size} of ${t.deloadMinSleepNights} nights"
+                sleepGated -> "${windowSleep.size} of ${t.deloadMinSleepNights} nights"
                 else -> "${String.format(java.util.Locale.US, "%.1f", sleepAvgMin / 60.0)}h avg"
             },
-            POINTS_SLEEP_DEBT, sleepFired,
+            POINTS_SLEEP_DEBT, sleepFired, gated = sleepGated,
             // Locale.US so the decimal point matches the app's English copy (fr devices use ',').
             driver = if (sleepFired) "averaging ${String.format(java.util.Locale.US, "%.1f", sleepAvgMin / 60.0)}h sleep over ${windowSleep.size} nights" else null
         )
@@ -215,14 +221,15 @@ object DeloadAdvisor {
         val hrGated = windowHr.size >= t.deloadMinRestingHrSamples && priorHr.size >= t.deloadMinRestingHrSamples
         val hrDelta = if (hrGated) windowHr.map { it.bpm }.average() - priorHr.map { it.bpm }.average() else 0.0
         val hrFired = hrGated && priorHr.map { it.bpm }.average() > 0 && hrDelta >= t.deloadRestingHrDeltaBpm
+        val hrBuilding = windowHr.isNotEmpty() && !hrGated
         checks += FatigueCheck(
             "Resting heart rate",
             when {
                 windowHr.isEmpty() -> "no data"
-                !hrGated -> "${windowHr.size} of ${t.deloadMinRestingHrSamples} readings"
+                hrBuilding -> "${windowHr.size} of ${t.deloadMinRestingHrSamples} readings"
                 else -> "${if (hrDelta >= 0) "+" else ""}${hrDelta.roundToInt()} bpm"
             },
-            POINTS_RESTING_HR, hrFired,
+            POINTS_RESTING_HR, hrFired, gated = hrBuilding,
             driver = if (hrFired) "resting HR up ${hrDelta.roundToInt()} bpm vs your baseline" else null
         )
 

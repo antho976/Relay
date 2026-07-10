@@ -1,6 +1,5 @@
 package com.forge.app.ui.common
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -11,14 +10,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.size
-import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -27,6 +24,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -89,8 +87,11 @@ fun ExerciseLibraryPicker(
                     items(results, key = { it.id }) { def ->
                         val checked = def.id in picked
                         Row(
-                            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp))
-                                .clickable { picked = if (checked) picked - def.id else picked + def.id }
+                            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
+                                // The whole row toggles selection — announced as a checkbox for TalkBack.
+                                .clickableLabeled(def.name, role = Role.Checkbox) {
+                                    picked = if (checked) picked - def.id else picked + def.id
+                                }
                                 .padding(vertical = 4.dp, horizontal = 4.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -120,13 +121,16 @@ fun ExerciseLibraryPicker(
                 }
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    TextButton(onClick = onDismiss) { Text("Cancel") }
-                    Button(enabled = picked.isNotEmpty(), onClick = { onConfirm(picked) }) {
-                        Text(if (picked.isEmpty()) confirmLabel else "$confirmLabel ${picked.size}")
-                    }
+                    // §8 capsule pair: outlined sidekick + filled do-it-now, bounce over ripple.
+                    ForgeOutlineCapsule("Cancel", onClick = onDismiss)
+                    ForgePrimaryCapsule(
+                        if (picked.isEmpty()) confirmLabel else "$confirmLabel ${picked.size}",
+                        onClick = { onConfirm(picked) },
+                        enabled = picked.isNotEmpty()
+                    )
                 }
             }
         }
