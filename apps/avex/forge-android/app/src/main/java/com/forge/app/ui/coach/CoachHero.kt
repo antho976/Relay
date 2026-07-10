@@ -163,7 +163,7 @@ private fun SubLine(text: String, c: CoachColors) {
     )
 }
 
-/** The pre-baseline hero: a countdown with the concrete signals that sharpen the picture. */
+/** The pre-baseline hero: the baseline meter as one labeled bar in the shared "Coming up" idiom. */
 @Composable
 private fun LearningHero(
     brief: com.forge.app.data.repo.CoachBrief?,
@@ -174,34 +174,17 @@ private fun LearningHero(
     val needed = (watch?.minSessions ?: brief?.minSessions ?: 0).coerceAtLeast(1)
     val toGo = (needed - logged).coerceAtLeast(0)
 
-    // Learning is a status, not a verdict (§3): no serif headline, and no anticipation aside
-    // (§3/§14) — the progress bar and the signal dots below ARE the hero, the first dot naming
-    // the countdown the aside used to spell out.
-    Spacer(Modifier.height(10.dp))
-    TrustProgressBar(
-        streak = logged.coerceAtMost(needed),
-        required = needed,
-        earned = toGo == 0,
-        modifier = Modifier.fillMaxWidth()
+    // Learning is a status, not a verdict (§3/§14): no serif headline, no anticipation aside. The
+    // baseline meter IS the hero — ONE labeled bar in the shared "Coming up" language (§4.10) with
+    // its own count as the caption. The effort + Health Connect inputs this used to spell out as a
+    // floating dot checklist live in the Signals lens (§4.3), never restated here (GYMAP-24).
+    Spacer(Modifier.height(14.dp))
+    CoachProgressRow(
+        label = "Baseline",
+        value = "$logged of $needed",
+        c = c,
+        segments = logged.coerceAtMost(needed) to needed,
+        sub = if (toGo > 0) "$toGo more session${if (toGo == 1) "" else "s"} to your first call"
+        else "Your first call lands with the next brief."
     )
-
-    if (watch != null) {
-        Spacer(Modifier.height(14.dp))
-        val effortActive = watch.recoverySignals.firstOrNull { it.label.startsWith("Effort") }?.active == true
-        val healthActive = watch.recoverySignals.any {
-            (it.label.startsWith("Sleep") || it.label.contains("heart")) && it.active
-        }
-        CoachDotRow(
-            if (toGo > 0) "$toGo more session${if (toGo == 1) "" else "s"} for a baseline" else "Baseline reached",
-            active = toGo == 0, c = c
-        )
-        CoachDotRow(
-            if (effortActive) "Session effort ratings are coming in" else "Rate how sessions feel at the finish",
-            active = effortActive, c = c
-        )
-        CoachDotRow(
-            if (healthActive) "Health Connect is feeding sleep and heart rate" else "Connect Health Connect for sleep and heart rate",
-            active = healthActive, c = c
-        )
-    }
 }

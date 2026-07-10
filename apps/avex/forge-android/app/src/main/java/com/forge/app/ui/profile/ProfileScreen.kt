@@ -86,6 +86,10 @@ fun ProfileScreen(
     var viewing by remember { mutableStateOf<ProgressPhoto?>(null) }
     var showXpInfo by remember { mutableStateOf(false) }
     var showWeightSheet by remember { mutableStateOf(false) }
+    var showAvatarSheet by remember { mutableStateOf(false) }
+
+    // Persist the one-time edit hint as soon as it surfaces — it stays visible this session, gone next.
+    LaunchedEffect(state.showAvatarHint) { if (state.showAvatarHint) viewModel.markAvatarHintSeen() }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val haptic = LocalHapticFeedback.current
@@ -172,9 +176,21 @@ fun ProfileScreen(
                         avatarFile = viewModel.avatarFile(),
                         avatarStamp = state.avatarStamp,
                         onSetName = viewModel::setUserName,
-                        onPickAvatar = { pickAvatar() },
+                        // GYMAP-22: the cover tap now opens the photo picker sheet (own photo + provided
+                        // defaults), not the system picker directly; dismiss the one-time hint on tap.
+                        onPickAvatar = { viewModel.dismissAvatarHint(); showAvatarSheet = true },
                         onBg = onBg, muted = muted, accent = accent,
                         topInset = inner.calculateTopPadding()
+                    )
+                }
+
+                // One-time nudge teaching the (now photo-seeded) cover is tappable to change (GYMAP-22).
+                if (state.showAvatarHint) {
+                    Text(
+                        "Tap your photo to change it",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = muted, fontStyle = FontStyle.Italic,
+                        modifier = Modifier.padding(horizontal = 20.dp).padding(top = 8.dp)
                     )
                 }
 
@@ -298,6 +314,16 @@ fun ProfileScreen(
                 showWeightSheet = false
                 viewModel.clearBodyweightMessage()
             }
+        )
+    }
+
+    if (showAvatarSheet) {
+        AvatarPickerSheet(
+            selectedKey = state.avatarDefaultKey,
+            // "Select your own" hands off to the system Photo Picker (the pre-GYMAP-22 behaviour).
+            onPickOwn = { showAvatarSheet = false; pickAvatar() },
+            onSelectDefault = { showAvatarSheet = false; viewModel.setAvatarFromDefault(it) },
+            onDismiss = { showAvatarSheet = false }
         )
     }
 }

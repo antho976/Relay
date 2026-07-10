@@ -7,10 +7,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 
 /**
@@ -63,5 +66,32 @@ fun ForgeOutlineCapsule(
             style = MaterialTheme.typography.titleSmall,
             color = MaterialTheme.colorScheme.onBackground.copy(alpha = alpha)
         )
+    }
+}
+
+/**
+ * A tappable text-glyph action — the §8 idiom of a plain glyph ("×" to remove, etc.) over a stock
+ * M3 [androidx.compose.material3.IconButton]. Centralises what a bare Text + padding kept getting
+ * wrong: it guarantees the ≥48dp interactive target (via [minimumInteractiveComponentSize], which a
+ * padded glyph fell short of) and the TalkBack label, so every remove-glyph is reachable and
+ * announced the same way. Disabled = dimmed to the shared §4.5 inert level and non-clickable.
+ */
+@Composable
+fun GlyphButton(
+    glyph: String,
+    label: String,
+    tint: Color,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    style: TextStyle = MaterialTheme.typography.titleMedium,
+) {
+    Box(
+        modifier = modifier
+            .minimumInteractiveComponentSize()
+            .then(if (enabled) Modifier.clickableLabeled(label, onClick = onClick) else Modifier),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(glyph, style = style, color = if (enabled) tint else tint.copy(alpha = 0.35f))
     }
 }

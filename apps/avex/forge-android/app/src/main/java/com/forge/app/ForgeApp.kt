@@ -63,6 +63,10 @@ class ForgeApp : Application(), Configuration.Provider {
         val pendingPhotos = File(filesDir, "pending_restore_photos")
         val pendingAvatar = File(filesDir, "pending_restore_avatar.jpg")
         if (!pending.exists() && !pendingPrefs.exists() && !pendingPhotos.exists() && !pendingAvatar.exists()) return
+        // Captured before the prefs swap deletes it: a restore that carries prefs but no avatar must
+        // end with NO live avatar (see the avatar block below), so the restored avatarDefaultId pref
+        // can't be left pointing at nothing while a previously-seeded cover lingers (a file/pref desync).
+        val restoringPrefs = pendingPrefs.exists()
         // A backup always contains the DB, so a successful DB swap is the signal that "a restore landed";
         // MainActivity reads the flag below to confirm it to the user on this launch. We only confirm
         // "restored successfully" when EVERY staged component swapped — a failed sub-swap (kept for a
@@ -107,6 +111,12 @@ class ForgeApp : Application(), Configuration.Provider {
             // Must match AvatarRepository.FILE_NAME.
             if (swapStagedFile(pendingAvatar, File(filesDir, "avatar.jpg"))) pendingAvatar.delete()
             else anyFailed = true
+        } else if (restoringPrefs && !anyFailed) {
+            // The restore replaced the prefs but carried no avatar → the restored state has none. Clear
+            // any live avatar so a previously-seeded default cover can't outlive the (now blank)
+            // avatarDefaultId — otherwise the cover shows but the picker rings nothing. The one-time
+            // seed re-runs cleanly on next Profile open. Gated on a clean prefs swap (!anyFailed).
+            runCatching { File(filesDir, "avatar.jpg").delete() }
         }
         // One-shot flag so MainActivity can confirm the restore landed on this launch — the swap runs at
         // boot before any UI exists, and the staging path restarts the process silently otherwise. Only

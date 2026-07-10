@@ -161,21 +161,6 @@ internal fun CoachFlagDot(color: Color?, modifier: Modifier = Modifier) {
     }
 }
 
-/** Row with a leading marker then full-width text. The marker paints only for an active signal
- *  (§8) — an inactive row reserves the gutter but shows no dot. */
-@Composable
-internal fun CoachDotRow(text: String, active: Boolean, c: CoachColors) {
-    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = COACH_ROW_PAD)) {
-        CoachFlagDot(if (active) c.accent else null)
-        Spacer(Modifier.width(10.dp))
-        Text(
-            text,
-            style = MaterialTheme.typography.bodySmall,
-            color = if (active) c.onBg else c.muted
-        )
-    }
-}
-
 /** A muted mono micro-caption above a chart ("ESTIMATED 1RM · LAST 9 SESSIONS"). */
 @Composable
 internal fun CoachChartLabel(text: String, c: CoachColors) {

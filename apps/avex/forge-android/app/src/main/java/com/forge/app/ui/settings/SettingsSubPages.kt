@@ -77,6 +77,7 @@ private val TIMEZONE_OPTIONS = listOf(
 
 @Composable
 internal fun AppearancePage(state: SettingsUiState, vm: SettingsViewModel, modifier: Modifier = Modifier) {
+    var showAppIconSheet by remember { mutableStateOf(false) }
     Column(
         modifier
             .fillMaxSize()
@@ -102,8 +103,19 @@ internal fun AppearancePage(state: SettingsUiState, vm: SettingsViewModel, modif
             AccentColorRow(state.accentColorHex, vm::setAccentColorHex)
         }
 
+        SettingsSectionHeader("App icon")
+        AppIconRow(state.appIconKey) { showAppIconSheet = true }
+
         Spacer(Modifier.height(8.dp))
         SectionResetRow(com.forge.app.data.prefs.SettingsSection.APPEARANCE, vm)
+    }
+
+    if (showAppIconSheet) {
+        AppIconPickerSheet(
+            selectedKey = state.appIconKey,
+            onSelect = { vm.setAppIcon(it); showAppIconSheet = false },
+            onDismiss = { showAppIconSheet = false },
+        )
     }
 }
 

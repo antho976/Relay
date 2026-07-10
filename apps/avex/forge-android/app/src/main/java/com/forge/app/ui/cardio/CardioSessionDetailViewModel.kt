@@ -79,19 +79,21 @@ class CardioSessionDetailViewModel @Inject constructor(
     private val entriesFlow = cardioRepo.observeAll()
         .shareIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), replay = 1)
 
-    // This screen's entry, resolved once off the shared history — also the wearable-reload trigger.
+    // This screen's entry, resolved once off the shared history — the wearable-reload trigger only.
+    // NOTE: state.entry is derived INSIDE the state combine below from the same `all` list, not from
+    // this flow, so the entry and the compare pool can never be paired one emission out of step.
     private val entryFlow = entriesFlow.map { list -> list.firstOrNull { it.id == cardioId } }
 
     val state: StateFlow<CardioSessionDetailState> = combine(
         entriesFlow,
-        entryFlow,
         editing,
         deleted,
         settingsRepo.useMiles
-    ) { all, entry, isEditing, isDeleted, useMiles ->
+    ) { all, isEditing, isDeleted, useMiles ->
         CardioSessionDetailState(
             loaded = true,
-            entry = entry,
+            // Derived from `all` in the same emission — always consistent with allEntries.
+            entry = all.firstOrNull { it.id == cardioId },
             allEntries = all,
             editing = isEditing,
             deleted = isDeleted,

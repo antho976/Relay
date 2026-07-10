@@ -15,16 +15,12 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -43,8 +39,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.domain.units.parseToLb
 import com.forge.app.program.ExerciseLibrary
 import com.forge.app.program.ExerciseUnit
-import com.forge.app.ui.common.EditorialHairline
 import com.forge.app.ui.common.ExerciseLibraryPicker
+import com.forge.app.ui.common.ForgeOutlineCapsule
+import com.forge.app.ui.common.ForgePrimaryCapsule
+import com.forge.app.ui.common.ForgeWordmark
+import com.forge.app.ui.common.GlyphButton
+import com.forge.app.ui.common.clickableLabeled
 
 private data class FsSet(val weight: String = "", val reps: String = "")
 private data class FsExercise(
@@ -92,7 +92,8 @@ fun FreestyleLogScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Log a workout") },
+                // §2: wordmark + back, never the screen's name (live-flow screen, no hero needed).
+                title = { ForgeWordmark() },
                 navigationIcon = {
                     IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
                 },
@@ -100,17 +101,18 @@ fun FreestyleLogScreen(
             )
         },
         bottomBar = {
-            Button(
+            ForgePrimaryCapsule(
+                "Save workout",
                 onClick = { save() },
                 enabled = canSave,
-                modifier = Modifier.fillMaxWidth().padding(16.dp)
-            ) { Text("Save workout") }
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp)
+            )
         },
         containerColor = Color.Transparent
     ) { inner ->
         LazyColumn(
             modifier = Modifier.fillMaxSize().padding(inner),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+            contentPadding = PaddingValues(horizontal = 24.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(0.dp)
         ) {
             item {
@@ -135,9 +137,7 @@ fun FreestyleLogScreen(
                 )
             }
             item {
-                OutlinedButton(onClick = { showPicker = true }, modifier = Modifier.fillMaxWidth()) {
-                    Text("+ Add exercise")
-                }
+                ForgeOutlineCapsule("+ Add exercise", onClick = { showPicker = true }, modifier = Modifier.fillMaxWidth())
             }
         }
     }
@@ -168,7 +168,7 @@ private fun FsExerciseCard(
     onRemoveSet: (Int) -> Unit
 ) {
     val cs = MaterialTheme.colorScheme
-    EditorialHairline(cs.outline)
+    // Air alone separates exercise blocks (§1: no section hairlines).
     Spacer(Modifier.height(12.dp))
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -181,7 +181,8 @@ private fun FsExerciseCard(
         ) {
             Text(exercise.name, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold,
                 color = cs.onSurface, modifier = Modifier.weight(1f))
-            IconButton(onClick = onRemove) { Icon(Icons.Default.Close, "Remove exercise") }
+            // Text glyph over a stock icon (§8); GlyphButton guarantees the ≥48dp touch target.
+            GlyphButton("×", "Remove exercise", cs.onSurfaceVariant, onClick = onRemove)
         }
         exercise.sets.forEachIndexed { setIdx, set ->
             Row(
@@ -209,15 +210,21 @@ private fun FsExerciseCard(
                     singleLine = true,
                     modifier = Modifier.weight(1f)
                 )
-                IconButton(onClick = { onRemoveSet(setIdx) }, enabled = exercise.sets.size > 1) {
-                    Icon(Icons.Default.Close, "Remove set",
-                        tint = cs.onSurfaceVariant)
-                }
+                // Text glyph over a stock icon (§8); inert + dimmed when it's the only set.
+                GlyphButton(
+                    "×", "Remove set", cs.onSurfaceVariant,
+                    onClick = { onRemoveSet(setIdx) },
+                    enabled = exercise.sets.size > 1
+                )
             }
         }
-        TextButton(onClick = onAddSet, contentPadding = PaddingValues(horizontal = 0.dp, vertical = 4.dp)) {
-            Text("+ Add set")
-        }
+        // §11 "+ log" idiom: an accent mono action line.
+        Text(
+            "+ add set",
+            style = MaterialTheme.typography.labelLarge,
+            color = cs.primary,
+            modifier = Modifier.clickableLabeled("Add set", onClick = onAddSet).padding(vertical = 8.dp)
+        )
         Spacer(Modifier.height(8.dp))
     }
 }

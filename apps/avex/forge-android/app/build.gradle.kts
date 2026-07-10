@@ -33,11 +33,11 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.forge.app"
+        applicationId = "com.quietsoftware.avex"
         minSdk = 26
         targetSdk = 35
-        versionCode = 85
-        versionName = "0.8.5"
+        versionCode = 88
+        versionName = "0.8.8.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }

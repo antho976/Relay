@@ -204,6 +204,14 @@ class SettingsRepository @Inject constructor(
     suspend fun setAccentEnabled(value: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.ACCENT_ENABLED] = value }
 
+    /** Selected launcher-icon enum name; "" = default emblem. Deliberately NOT in the APPEARANCE
+     *  reset set — the enabled activity-alias is the real state, so clearing this pref alone would
+     *  desync the ringed choice from the icon actually on the home screen. */
+    val appIcon: Flow<String> = context.forgePreferences.data
+        .map { it[PreferenceKeys.APP_ICON] ?: "" }
+    suspend fun setAppIcon(key: String) =
+        context.forgePreferences.edit { it[PreferenceKeys.APP_ICON] = key }
+
     val fontChoice: Flow<String> = context.forgePreferences.data
         .map { it[PreferenceKeys.FONT_CHOICE] ?: "default" }
 
@@ -543,6 +551,23 @@ class SettingsRepository @Inject constructor(
         .map { it[PreferenceKeys.USER_NAME] ?: "" }
     suspend fun setUserName(name: String) =
         context.forgePreferences.edit { it[PreferenceKeys.USER_NAME] = name }
+
+    // ─── Profile avatar defaults (GYMAP-22) ───────────────────────────────────
+    /** Whether a random provided default has ever been auto-assigned — guards the one-shot seed. */
+    val avatarDefaultSeeded: Flow<Boolean> = context.forgePreferences.data
+        .map { it[PreferenceKeys.AVATAR_DEFAULT_SEEDED] ?: false }
+    suspend fun setAvatarDefaultSeeded(v: Boolean) =
+        context.forgePreferences.edit { it[PreferenceKeys.AVATAR_DEFAULT_SEEDED] = v }
+    /** Key of the active provided default ("mountain_1"), or empty when the avatar is the user's own. */
+    val avatarDefaultId: Flow<String> = context.forgePreferences.data
+        .map { it[PreferenceKeys.AVATAR_DEFAULT_ID] ?: "" }
+    suspend fun setAvatarDefaultId(id: String) =
+        context.forgePreferences.edit { it[PreferenceKeys.AVATAR_DEFAULT_ID] = id }
+    /** Whether the one-time "tap your photo to change it" hint has been shown. */
+    val avatarEditHintShown: Flow<Boolean> = context.forgePreferences.data
+        .map { it[PreferenceKeys.AVATAR_EDIT_HINT_SHOWN] ?: false }
+    suspend fun setAvatarEditHintShown() =
+        context.forgePreferences.edit { it[PreferenceKeys.AVATAR_EDIT_HINT_SHOWN] = true }
     val userGoal: Flow<String> = context.forgePreferences.data
         .map { it[PreferenceKeys.USER_GOAL] ?: "" }
     suspend fun setUserGoal(goal: String) =

@@ -72,6 +72,10 @@ object PreferenceKeys {
     val ACCENT_ENABLED = booleanPreferencesKey("accent_enabled")
     /** Font choice key. Reserved for UI pass. */
     val FONT_CHOICE = stringPreferencesKey("font_choice")
+    /** Selected home-screen launcher icon, stored by [com.forge.app.appicon.AppIcon] enum NAME
+     *  (stable across builds). Empty/absent = the default emblem. The live source of truth is the
+     *  enabled activity-alias; this only lets the picker ring the current choice. */
+    val APP_ICON = stringPreferencesKey("app_icon")
 
     // ─── Locale (#116) ────────────────────────────────────────────────────────
     /** "MM/dd/yyyy" or "dd/MM/yyyy" */
@@ -221,4 +225,16 @@ object PreferenceKeys {
      *  silently restore the wrong one (an ordinal Int would shift). Reopening Stats deep-links here (S4).
      *  (The legacy ordinal key `last_stats_tab` is intentionally abandoned — unset here just lands on Overview.) */
     val LAST_STATS_TAB_NAME = stringPreferencesKey("last_stats_tab_name")
+
+    // ─── Profile avatar defaults (GYMAP-22) ───────────────────────────────────
+    /** Set true the first (and only) time a random provided default is auto-assigned as the avatar, so
+     *  a user who later has no avatar (e.g. a future remove action) is never silently re-seeded. */
+    val AVATAR_DEFAULT_SEEDED = booleanPreferencesKey("avatar_default_seeded")
+    /** Stable key of the provided default currently in use (e.g. "mountain_1"), so the picker can ring
+     *  the active one. Empty = the avatar is the user's own photo (or none). Stored as a NAME, not a
+     *  resource id, since R ids aren't stable across builds. */
+    val AVATAR_DEFAULT_ID = stringPreferencesKey("avatar_default_id")
+    /** Whether the one-time "tap your photo to change it" hint has been shown — it teaches the tap now
+     *  that the old "tap to add a photo" placeholder no longer appears (a default is always assigned). */
+    val AVATAR_EDIT_HINT_SHOWN = booleanPreferencesKey("avatar_edit_hint_shown")
 }
