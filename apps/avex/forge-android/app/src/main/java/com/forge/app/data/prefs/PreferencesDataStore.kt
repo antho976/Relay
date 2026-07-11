@@ -59,6 +59,10 @@ object PreferenceKeys {
     /** When ON (and the ActiveCaloriesBurned write permission is granted), Avex writes each finished
      *  session's estimated active calories to Health Connect (HC-4). Off by default — strictly opt-in. */
     val HC_WRITE_CALORIES = booleanPreferencesKey("hc_write_calories")
+    /** Which watch the user wears ([com.forge.app.domain.health.WearableBrand] key: "galaxy" /
+     *  "pixel" / "none"; absent = never asked). Advisory only — tailors the Recovery page's setup
+     *  pointers; every Health Connect read stays vendor-neutral. */
+    val WEARABLE_BRAND = stringPreferencesKey("wearable_brand")
 
     /** Persisted tree URI of a folder (usually Downloads) the user granted so Import can auto-scan it
      *  for gym-app exports (#GYMAP-17). Empty/absent = no folder access granted yet. */
@@ -76,6 +80,9 @@ object PreferenceKeys {
      *  (stable across builds). Empty/absent = the default emblem. The live source of truth is the
      *  enabled activity-alias; this only lets the picker ring the current choice. */
     val APP_ICON = stringPreferencesKey("app_icon")
+    /** When ON (default), the cold-launch intro themes the Avex wordmark to the chosen app icon's
+     *  family (sheen/crystals/aurora/melt/…). OFF plays the plain black-and-white Avex settle instead. */
+    val THEMED_LAUNCH_INTRO = booleanPreferencesKey("themed_launch_intro")
 
     // ─── Locale (#116) ────────────────────────────────────────────────────────
     /** "MM/dd/yyyy" or "dd/MM/yyyy" */

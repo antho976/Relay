@@ -61,10 +61,15 @@ internal fun RecoveryConnectionRail(states: List<Boolean>) {
 
 /**
  * One Health Connect integration as a quiet row: title + one-line explainer, and on the right its
- * state — connected = passive accent dot + mono ON; connectable = a compact OUTLINED "Connect" pill
- * (a clear affordance without the filled-white weight, §8 ②), the WHOLE row as its tap target. The
- * pill is drawn, not independently clickable, so it never nests inside the row's tap. Rows render
+ * state — connected = passive accent dot + a mono reading; connectable = a compact OUTLINED "Connect"
+ * pill (a clear affordance without the filled-white weight, §8 ②), the WHOLE row as its tap target.
+ * The pill is drawn, not independently clickable, so it never nests inside the row's tap. Rows render
  * passive while loading or without a provider, so nothing promises an action that can't run.
+ *
+ * [receiving] is the post-connect "is data actually arriving" reading (§9 — show the reading, not just
+ * the conclusion): true → RECEIVING, false → NOTHING YET (granted but silent — usually the companion
+ * app's Health Connect sharing is off), null → not probed yet or a write-only signal, so the dot's ON
+ * stands alone. The dot already carries "connected", so the word carries only the reading.
  */
 @Composable
 internal fun RecoveryRow(
@@ -72,7 +77,8 @@ internal fun RecoveryRow(
     explainer: String,
     connected: Boolean,
     connectable: Boolean,
-    onConnect: () -> Unit
+    onConnect: () -> Unit,
+    receiving: Boolean? = null
 ) {
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
@@ -97,7 +103,14 @@ internal fun RecoveryRow(
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 StatusDot(active = true, size = 7.dp)
-                Text("ON", style = MaterialTheme.typography.labelMedium, color = onBg, letterSpacing = 1.sp)
+                // "nothing yet" stays muted (it's ambiguous — maybe nothing's synced yet), so it
+                // reads as a quiet nudge to check sharing, not a false alarm; "receiving"/"on" are onBg.
+                val (label, tone) = when (receiving) {
+                    true -> "RECEIVING" to onBg
+                    false -> "NOTHING YET" to muted
+                    null -> "ON" to onBg
+                }
+                Text(label, style = MaterialTheme.typography.labelMedium, color = tone, letterSpacing = 1.sp)
             }
             connectable -> ConnectPill()
         }

@@ -25,6 +25,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.forge.app.domain.schedule.WeeklySchedule
 
 /**
@@ -273,15 +274,26 @@ private fun EquipmentSection(state: SettingsUiState, vm: SettingsViewModel) {
                 modifier = Modifier.padding(horizontal = 24.dp)
             )
         }
-        Spacer(Modifier.height(12.dp))
-        ChipFlow {
-            com.forge.app.program.Equipment.entries.forEach { equip ->
-                val selected = equip.name in state.availableEquipment
-                PillChip(equip.display.uppercase(), selected) {
-                    val current = state.availableEquipment.toMutableSet()
-                    if (selected) current.remove(equip.name) else current.add(equip.name)
-                    vm.setAvailableEquipment(current)
-                    equipmentEdited = true
+        // Gear grouped the same way onboarding's fine-tune page groups it (shared equipmentGroups).
+        com.forge.app.program.equipmentGroups.forEach { (group, items) ->
+            Spacer(Modifier.height(12.dp))
+            Text(
+                group.uppercase(),
+                style = MaterialTheme.typography.labelSmall,
+                color = muted,
+                letterSpacing = 1.sp,
+                modifier = Modifier.padding(horizontal = 24.dp)
+            )
+            Spacer(Modifier.height(6.dp))
+            ChipFlow {
+                items.forEach { equip ->
+                    val selected = equip.name in state.availableEquipment
+                    PillChip(equip.display.uppercase(), selected) {
+                        val current = state.availableEquipment.toMutableSet()
+                        if (selected) current.remove(equip.name) else current.add(equip.name)
+                        vm.setAvailableEquipment(current)
+                        equipmentEdited = true
+                    }
                 }
             }
         }

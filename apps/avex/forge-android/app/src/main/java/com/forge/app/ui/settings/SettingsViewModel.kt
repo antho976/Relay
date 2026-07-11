@@ -56,6 +56,8 @@ data class SettingsUiState(
     val accentEnabled: Boolean = true,
     /** Selected launcher-icon enum name; "" = default emblem. Rings the current choice in the picker. */
     val appIconKey: String = "",
+    /** Theme the cold-launch Avex intro to the chosen app icon (default on); off = plain B&W Avex. */
+    val themedLaunchIntro: Boolean = true,
     val timezone: String = java.util.TimeZone.getDefault().id,
     /** IANA zone ids the user has starred — pinned to the top of the timezone picker. */
     val favoriteTimezones: Set<String> = emptySet(),
@@ -210,6 +212,8 @@ class SettingsViewModel @Inject constructor(
         s.copy(accentEnabled = v)
     }.combine(settingsRepo.appIcon) { s, v ->
         s.copy(appIconKey = v)
+    }.combine(settingsRepo.themedLaunchIntro) { s, v ->
+        s.copy(themedLaunchIntro = v)
     }.combine(settingsRepo.timezone) { s, v ->
         s.copy(timezone = v)
     }.combine(settingsRepo.favoriteTimezones) { s, v ->
@@ -446,6 +450,7 @@ class SettingsViewModel @Inject constructor(
     fun setAppIcon(icon: com.forge.app.appicon.AppIcon) = viewModelScope.launch {
         settingsRepo.setAppIcon(icon.name)
     }
+    fun setThemedLaunchIntro(v: Boolean) = viewModelScope.launch { settingsRepo.setThemedLaunchIntro(v) }
     fun setTimezone(id: String) = viewModelScope.launch { settingsRepo.setTimezone(id) }
     fun toggleFavoriteTimezone(id: String) = viewModelScope.launch { settingsRepo.toggleFavoriteTimezone(id) }
     fun exportLastSessionPdf() = viewModelScope.launch {

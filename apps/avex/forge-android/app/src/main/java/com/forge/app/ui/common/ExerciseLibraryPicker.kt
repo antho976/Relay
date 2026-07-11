@@ -1,5 +1,6 @@
 package com.forge.app.ui.common
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -24,6 +25,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -52,6 +54,8 @@ fun filterLibrary(query: String, exclude: Set<String>): List<ExerciseDef> {
  * equipment-class glyph; real pictures stay deferred.
  *
  * [title] heads the dialog; [confirmLabel] is the verb on the confirm button ("Add").
+ * [singleSelect] makes it a radio-style choose-one (the program editor's swap): picking a row
+ * replaces the previous pick, rows mark selection with the accent wash instead of a checkbox.
  */
 @Composable
 fun ExerciseLibraryPicker(
@@ -59,7 +63,8 @@ fun ExerciseLibraryPicker(
     onDismiss: () -> Unit,
     onConfirm: (Set<String>) -> Unit,
     title: String = "Add an exercise",
-    confirmLabel: String = "Add"
+    confirmLabel: String = "Add",
+    singleSelect: Boolean = false
 ) {
     var query by remember { mutableStateOf("") }
     var picked by remember { mutableStateOf(emptySet<String>()) }
@@ -88,15 +93,26 @@ fun ExerciseLibraryPicker(
                         val checked = def.id in picked
                         Row(
                             modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp))
-                                // The whole row toggles selection — announced as a checkbox for TalkBack.
-                                .clickableLabeled(def.name, role = Role.Checkbox) {
-                                    picked = if (checked) picked - def.id else picked + def.id
+                                // Single-select rows carry the pick as the §3 tile wash (radio for
+                                // TalkBack); multi-select keeps the checkbox column.
+                                .background(
+                                    if (singleSelect && checked) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                                    else Color.Transparent
+                                )
+                                .clickableLabeled(def.name, role = if (singleSelect) Role.RadioButton else Role.Checkbox) {
+                                    picked = when {
+                                        checked -> picked - def.id
+                                        singleSelect -> setOf(def.id)
+                                        else -> picked + def.id
+                                    }
                                 }
                                 .padding(vertical = 4.dp, horizontal = 4.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Checkbox(checked = checked, onCheckedChange = { picked = if (it) picked + def.id else picked - def.id })
+                            if (!singleSelect) {
+                                Checkbox(checked = checked, onCheckedChange = { picked = if (it) picked + def.id else picked - def.id })
+                            }
                             Icon(
                                 ExerciseIcons.forEquipment(def.equipment),
                                 contentDescription = null,
@@ -127,7 +143,8 @@ fun ExerciseLibraryPicker(
                     // §8 capsule pair: outlined sidekick + filled do-it-now, bounce over ripple.
                     ForgeOutlineCapsule("Cancel", onClick = onDismiss)
                     ForgePrimaryCapsule(
-                        if (picked.isEmpty()) confirmLabel else "$confirmLabel ${picked.size}",
+                        // Choose-one needs no running count on the verb.
+                        if (picked.isEmpty() || singleSelect) confirmLabel else "$confirmLabel ${picked.size}",
                         onClick = { onConfirm(picked) },
                         enabled = picked.isNotEmpty()
                     )

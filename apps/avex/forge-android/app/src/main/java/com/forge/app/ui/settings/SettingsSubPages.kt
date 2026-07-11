@@ -105,6 +105,12 @@ internal fun AppearancePage(state: SettingsUiState, vm: SettingsViewModel, modif
 
         SettingsSectionHeader("App icon")
         AppIconRow(state.appIconKey) { showAppIconSheet = true }
+        ToggleRow(
+            "Custom startup animation",
+            "Off shows the plain black-and-white Avex instead of the icon-themed launch.",
+            state.themedLaunchIntro,
+            vm::setThemedLaunchIntro
+        )
 
         Spacer(Modifier.height(8.dp))
         SectionResetRow(com.forge.app.data.prefs.SettingsSection.APPEARANCE, vm)

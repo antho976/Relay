@@ -151,10 +151,14 @@ fun ForgeNavHost(initialDayKey: String? = null) {
         }
         composable(
             route = Routes.PROGRAM_BUILDER,
-            arguments = listOf(navArgument(Routes.ARG_BLANK) { type = NavType.BoolType; defaultValue = false })
+            arguments = listOf(
+                navArgument(Routes.ARG_BLANK) { type = NavType.BoolType; defaultValue = false },
+                navArgument(Routes.ARG_VIEW) { type = NavType.BoolType; defaultValue = false }
+            )
         ) { entry ->
             ProgramBuilderScreen(
                 blank = entry.arguments?.getBoolean(Routes.ARG_BLANK) ?: false,
+                startInView = entry.arguments?.getBoolean(Routes.ARG_VIEW) ?: false,
                 onClose = { nav.popBackStack() }
             )
         }

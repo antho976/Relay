@@ -134,9 +134,9 @@ fun HubScreen(
                     // A cardio "day" is logged on the Cardio page, so its start CTA swipes there.
                     onStartSession = { dayKey -> if (dayKey.startsWith("cardio")) goToTab(BottomTab.CARDIO) else nav.navigate(Routes.gymDay(dayKey)) },
                     onStartSessionSkipWarmup = { dayKey -> if (dayKey.startsWith("cardio")) goToTab(BottomTab.CARDIO) else nav.navigate(Routes.gymDay(dayKey, skipWarmup = true)) },
-                    // "View program" opens the streamlined program builder (the same editor Settings →
-                    // Program opens), replacing the old temporary read-only viewer.
-                    onViewProgram = { nav.navigate(Routes.programBuilder()) },
+                    // "View program" opens the program screen read-only — the top-bar pencil
+                    // unlocks the same editor Settings → Program opens (GYMAP-28).
+                    onViewProgram = { nav.navigate(Routes.programBuilder(view = true)) },
                     onGoToCardio = { goToTab(BottomTab.CARDIO) },
                     onGoToTrophies = { nav.navigate(Routes.TROPHIES) },
                     onOpenNotes = { nav.navigate(Routes.NOTES_SEARCH) },

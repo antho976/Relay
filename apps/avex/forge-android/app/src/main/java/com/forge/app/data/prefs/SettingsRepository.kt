@@ -20,7 +20,10 @@ enum class SettingsSection(val keys: List<Preferences.Key<*>>) {
     APPEARANCE(
         listOf(
             PreferenceKeys.AMOLED_MODE, PreferenceKeys.COMPACT_SET_LOGGING,
-            PreferenceKeys.ACCENT_COLOR_HEX, PreferenceKeys.ACCENT_ENABLED, PreferenceKeys.FONT_CHOICE
+            PreferenceKeys.ACCENT_COLOR_HEX, PreferenceKeys.ACCENT_ENABLED, PreferenceKeys.FONT_CHOICE,
+            PreferenceKeys.THEMED_LAUNCH_INTRO
+            // APP_ICON is deliberately excluded — the enabled activity-alias is the real state, so
+            // clearing the pref alone would desync the ringed choice from the on-device icon.
         )
     ),
     FORMAT(
@@ -186,6 +189,13 @@ class SettingsRepository @Inject constructor(
     suspend fun setHcWriteCalories(value: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.HC_WRITE_CALORIES] = value }
 
+    /** Which watch the user wears ([com.forge.app.domain.health.WearableBrand] key; "" = never
+     *  asked). Advisory only — tailors Recovery's setup pointers, never gates a read. */
+    val wearableBrand: Flow<String> = context.forgePreferences.data
+        .map { it[PreferenceKeys.WEARABLE_BRAND] ?: "" }
+    suspend fun setWearableBrand(value: String) =
+        context.forgePreferences.edit { it[PreferenceKeys.WEARABLE_BRAND] = value }
+
     // ─── Appearance (#35a) ────────────────────────────────────────────────────
 
     val amoledMode: Flow<Boolean> = context.forgePreferences.data
@@ -211,6 +221,13 @@ class SettingsRepository @Inject constructor(
         .map { it[PreferenceKeys.APP_ICON] ?: "" }
     suspend fun setAppIcon(key: String) =
         context.forgePreferences.edit { it[PreferenceKeys.APP_ICON] = key }
+
+    /** Theme the cold-launch Avex intro to the chosen app icon's family (default on). Off = the plain
+     *  black-and-white Avex settle, no icon-family effect. */
+    val themedLaunchIntro: Flow<Boolean> = context.forgePreferences.data
+        .map { it[PreferenceKeys.THEMED_LAUNCH_INTRO] ?: true }
+    suspend fun setThemedLaunchIntro(value: Boolean) =
+        context.forgePreferences.edit { it[PreferenceKeys.THEMED_LAUNCH_INTRO] = value }
 
     val fontChoice: Flow<String> = context.forgePreferences.data
         .map { it[PreferenceKeys.FONT_CHOICE] ?: "default" }

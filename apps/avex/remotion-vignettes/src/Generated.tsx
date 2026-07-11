@@ -1,58 +1,62 @@
 import React from 'react';
 import {AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig} from 'remotion';
-import {ACCENT_A60, MUTED, ON_BG, OUTLINE_A35} from './theme';
+import {ACCENT, ACCENT_A60, MUTED, ON_BG, OUTLINE_A35} from './theme';
 
 /**
- * "Build me a plan" — the informative version. Beat 1: the three inputs Avex asks for (gear ·
- * goal · days) spring in as pills. Beat 2: they resolve into a real 3-day Push/Pull/Legs week
- * with named exercises and set×rep schemes (reps shaped by the goal — that's the pitch: answer
- * three questions, get a full week). Fades to empty so the loop is seamless.
+ * "Build me a plan" — answer three questions, get a whole week. The loop is SEAMLESS: frame 0 and
+ * the final frame are BOTH the finished week, held still, so the restart never jumps. In between the
+ * week clears, the three inputs (gear · goal · days) spring in, and a real 3-day Push/Pull/Legs week
+ * redraws itself left-to-right. The card plays this twice then FREEZES on that finished week.
  *
- * 180 frames @ 30fps = 6s. Videos for the other modes must reuse this length and beat timing.
+ * 240 frames @ 30fps = 8s. Custom.tsx shares this length + held-first / held-last shape so the two
+ * cards start, loop, and freeze together.
  */
 
 const INPUT_PILLS = ['FULL GYM', 'BUILD MUSCLE', '3 DAYS'];
 
-const WEEK: {day: string; lines: [string, string][]}[] = [
-  {day: 'PUSH', lines: [['Bench press', '3×8'], ['Incline press', '3×10'], ['Lateral raise', '3×12'], ['Pushdown', '3×12']]},
-  {day: 'PULL', lines: [['Lat pulldown', '3×10'], ['Seated row', '3×10'], ['Face pull', '3×15'], ['Biceps curl', '3×12']]},
-  {day: 'LEGS', lines: [['Squat', '4×6'], ['Leg press', '3×10'], ['Leg curl', '3×12'], ['Calf raise', '3×15']]},
+// Three days, three exercises each — reps shaped by the goal (that's the point of the pills). Short
+// names so nothing truncates at strip size.
+const WEEK: {day: string; ex: [string, string][]}[] = [
+  {day: 'PUSH', ex: [['Bench', '3×8'], ['Incline', '3×10'], ['Lateral', '3×12']]},
+  {day: 'PULL', ex: [['Pulldown', '3×10'], ['Row', '3×10'], ['Curl', '3×12']]},
+  {day: 'LEGS', ex: [['Squat', '4×6'], ['Leg press', '3×10'], ['Calf', '3×15']]},
 ];
 
-// Beat timeline (frames) — retimed slower (240f = 8s) so the pills and the week are comfortably
-// readable; the springs stay snappy, only the dwells stretched.
-const PILLS_IN = 10;       // first pill enters
-const PILL_STAGGER = 8;
-const PILLS_OUT = 74;      // pills start leaving
-const PILLS_GONE = 88;
-const CARDS_IN = 80;       // first day card enters
-const CARD_STAGGER = 6;
-const LINES_IN = 96;       // first exercise line enters
-const LINE_STAGGER = 7;    // per line, sweeping left-to-right across the week
-const FADE_START = 222;
-const FADE_END = 236;
+// Phase timeline (frames @ 30fps). Opens HELD on the week, clears it, runs the inputs → rebuild, then
+// closes HELD on the week — so the loop seam (last frame → frame 0) is week → week, no jump.
+const CLEAR_START = 34; // the opening week starts to clear
+const CLEAR_END = 50;
+const PILLS_IN = 56; // first input pill enters
+const PILL_STAGGER = 7;
+const PILLS_OUT = 92; // pills start lifting away
+const PILLS_GONE = 104;
+const CARDS_IN = 100; // first day frame redraws (overlaps the pills leaving)
+const CARD_STAGGER = 8;
+const LINES_IN = 124; // first exercise line; sweeps left-to-right across the week
+const LINE_STAGGER = 6;
 
-const GAP = 32;            // 8dp @ 4x
+const GAP = 24; // between day columns
 const RADIUS = 16;
-const CARD_PAD = 24;
+const PAD = 22;
+
+/** 1 while the opening week is held, 1→0 as it clears, 0 thereafter. */
+const heldOut = (frame: number): number =>
+  interpolate(frame, [CLEAR_START, CLEAR_END], [1, 0], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'});
 
 export const Generated: React.FC = () => {
   const frame = useCurrentFrame();
   const {fps, width, height} = useVideoConfig();
-  const cardW = (width - GAP * (WEEK.length - 1)) / WEEK.length;
+  const colW = (width - GAP * (WEEK.length - 1)) / WEEK.length;
+  const held = heldOut(frame);
 
-  const sceneOpacity = interpolate(frame, [FADE_START, FADE_END], [1, 0], {
-    extrapolateLeft: 'clamp',
-    extrapolateRight: 'clamp',
-  });
   const pillsLeave = interpolate(frame, [PILLS_OUT, PILLS_GONE], [0, 1], {
     extrapolateLeft: 'clamp',
     extrapolateRight: 'clamp',
   });
 
   return (
-    <AbsoluteFill style={{opacity: sceneOpacity}}>
-      {/* Beat 1 — the inputs. Centered pill row; the goal pill carries the accent. */}
+    <AbsoluteFill>
+      {/* Interlude — the three inputs. Hidden while the week is held (before the clear) and once gone. */}
       {pillsLeave < 1 && (
         <AbsoluteFill
           style={{
@@ -61,7 +65,7 @@ export const Generated: React.FC = () => {
             justifyContent: 'center',
             gap: 28,
             opacity: 1 - pillsLeave,
-            transform: `translateY(${-28 * pillsLeave}px)`,
+            transform: `translateY(${-30 * pillsLeave}px)`,
           }}
         >
           {INPUT_PILLS.map((label, i) => {
@@ -77,13 +81,13 @@ export const Generated: React.FC = () => {
                 style={{
                   border: `3px solid ${isGoal ? ACCENT_A60 : OUTLINE_A35}`,
                   borderRadius: 999,
-                  padding: '16px 32px',
+                  padding: '16px 34px',
                   fontFamily: 'monospace',
-                  fontSize: 36,
+                  fontSize: 38,
                   letterSpacing: 3,
                   color: isGoal ? ON_BG : MUTED,
                   opacity: enter,
-                  transform: `scale(${0.8 + 0.2 * enter})`,
+                  transform: `scale(${0.82 + 0.18 * enter})`,
                 }}
               >
                 {label}
@@ -93,57 +97,58 @@ export const Generated: React.FC = () => {
         </AbsoluteFill>
       )}
 
-      {/* Beat 2 — the week those inputs build. */}
-      {WEEK.map((card, c) => {
-        const enter = spring({
-          frame: frame - (CARDS_IN + c * CARD_STAGGER),
-          fps,
-          config: {damping: 16, stiffness: 130},
-        });
-        if (enter <= 0) return null;
-        // While this card's lines land, its frame warms toward the accent (the "writing" cue).
-        const firstLine = LINES_IN + c * card.lines.length * LINE_STAGGER;
-        const lastDone = firstLine + card.lines.length * LINE_STAGGER + 12;
+      {/* The week — held at both ends, cleared + rebuilt in the middle. */}
+      {WEEK.map((col, c) => {
+        // appear: 1 held, 0 cleared, springs back to 1 on rebuild, 1 held again — frame 0 and the
+        // last frame both land on 1, so the seam and the freeze are the same finished week.
+        const rebuild = spring({frame: frame - (CARDS_IN + c * CARD_STAGGER), fps, config: {damping: 18, stiffness: 130}});
+        const appear = Math.min(1, held + rebuild);
+        if (appear <= 0) return null;
+        const firstLine = LINES_IN + c * col.ex.length * LINE_STAGGER;
+        const lastLine = firstLine + (col.ex.length - 1) * LINE_STAGGER;
+        // The frame warms to the accent only while this day is being (re)written, calm at both holds.
         const writing = interpolate(
           frame,
-          [firstLine - 4, firstLine, lastDone, lastDone + 10],
+          [firstLine - 6, firstLine + 4, lastLine + 10, lastLine + 24],
           [0, 1, 1, 0],
           {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'}
         );
         return (
           <div
-            key={card.day}
+            key={col.day}
             style={{
               position: 'absolute',
-              left: c * (cardW + GAP),
+              left: c * (colW + GAP),
               top: 0,
-              width: cardW,
+              width: colW,
               height,
               borderRadius: RADIUS,
               border: `4px solid ${writing > 0.5 ? ACCENT_A60 : OUTLINE_A35}`,
-              padding: CARD_PAD,
+              padding: PAD,
               boxSizing: 'border-box',
-              opacity: enter,
-              transform: `translateY(${(1 - enter) * 24}px)`,
+              display: 'flex',
+              flexDirection: 'column',
+              opacity: appear,
+              transform: `translateY(${(1 - appear) * 22}px)`,
             }}
           >
-            <div
-              style={{
-                fontFamily: 'monospace',
-                fontSize: 28,
-                letterSpacing: 4,
-                color: MUTED,
-                marginBottom: 12,
-              }}
-            >
-              {card.day}
+            <div style={{display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14}}>
+              <span
+                style={{
+                  fontFamily: 'monospace',
+                  fontSize: 27,
+                  letterSpacing: 5,
+                  color: ACCENT,
+                  opacity: 0.55 + 0.45 * appear,
+                }}
+              >
+                {col.day}
+              </span>
+              <div style={{flex: 1, height: 2, background: ACCENT, opacity: 0.25 + 0.4 * writing}} />
             </div>
-            {card.lines.map(([name, sets], i) => {
-              const lineIn = spring({
-                frame: frame - (firstLine + i * LINE_STAGGER),
-                fps,
-                config: {damping: 15, stiffness: 140},
-              });
+            {col.ex.map(([name, sets], i) => {
+              const rowRebuild = spring({frame: frame - (firstLine + i * LINE_STAGGER), fps, config: {damping: 16, stiffness: 150}});
+              const rowAppear = Math.min(1, held + rowRebuild);
               return (
                 <div
                   key={name}
@@ -151,31 +156,17 @@ export const Generated: React.FC = () => {
                     display: 'flex',
                     justifyContent: 'space-between',
                     alignItems: 'baseline',
-                    marginBottom: 8,
-                    opacity: lineIn,
-                    transform: `translateX(${(1 - lineIn) * 16}px)`,
+                    flex: 1,
+                    opacity: rowAppear,
+                    transform: `translateX(${(1 - rowAppear) * 18}px)`,
                   }}
                 >
                   <span
-                    style={{
-                      fontFamily: 'sans-serif',
-                      fontSize: 32,
-                      color: ON_BG,
-                      whiteSpace: 'nowrap',
-                      overflow: 'hidden',
-                    }}
+                    style={{fontFamily: 'sans-serif', fontSize: 34, color: ON_BG, whiteSpace: 'nowrap', overflow: 'hidden'}}
                   >
                     {name}
                   </span>
-                  <span
-                    style={{
-                      fontFamily: 'monospace',
-                      fontSize: 26,
-                      color: MUTED,
-                      marginLeft: 12,
-                      flexShrink: 0,
-                    }}
-                  >
+                  <span style={{fontFamily: 'monospace', fontSize: 27, color: MUTED, marginLeft: 12, flexShrink: 0}}>
                     {sets}
                   </span>
                 </div>

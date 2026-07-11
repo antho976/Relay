@@ -2,6 +2,7 @@ package com.forge.app.ui.settings
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.forge.app.core.time.Clock
 import com.forge.app.data.health.HealthConnectManager
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.data.repo.BodyweightRepository
@@ -23,7 +24,8 @@ import javax.inject.Inject
 class HealthConnectViewModel @Inject constructor(
     private val manager: HealthConnectManager,
     private val settingsRepo: SettingsRepository,
-    private val bodyweightRepo: BodyweightRepository
+    private val bodyweightRepo: BodyweightRepository,
+    private val clock: Clock
 ) : ViewModel() {
 
     data class UiState(
@@ -46,6 +48,12 @@ class HealthConnectViewModel @Inject constructor(
         val stepsGranted: Boolean = false,
         /** Exercise-session READ permission is granted — Avex may find watch sessions to offer GPS routes. */
         val exerciseGranted: Boolean = false,
+        /** The user's watch ([com.forge.app.domain.health.WearableBrand] key; "" = never picked).
+         *  Advisory — tailors the page's setup pointers, never gates a read. */
+        val wearableBrand: String = "",
+        /** Per-signal "is data actually arriving" reading (null until the probe resolves) — lets each
+         *  granted row read "receiving" vs "nothing yet" instead of a bare "ON". */
+        val signalFlow: HealthConnectManager.SignalFlow? = null,
         /** Transient one-tap-import result line, cleared on the next refresh. */
         val importMessage: String? = null
     )
@@ -79,6 +87,7 @@ class HealthConnectViewModel @Inject constructor(
         val exerciseGranted = if (available) manager.canReadExercise() else false
         val writeBodyweight = settingsRepo.hcWriteBodyweight.first()
         val writeCalories = settingsRepo.hcWriteCalories.first()
+        val wearableBrand = settingsRepo.wearableBrand.first()
         _state.value = _state.value.copy(
             loading = false,
             available = available,
@@ -89,10 +98,21 @@ class HealthConnectViewModel @Inject constructor(
             calorieGranted = calorieGranted,
             writeCalories = writeCalories,
             stepsGranted = stepsGranted,
-            exerciseGranted = exerciseGranted
-            // importMessage preserved (copy, not a fresh UiState) so a just-shown import result line
-            // isn't wiped by a lifecycle-driven refresh before the user can read it.
+            exerciseGranted = exerciseGranted,
+            wearableBrand = wearableBrand
+            // importMessage + signalFlow preserved (copy, not a fresh UiState): the import line so a
+            // just-shown result isn't wiped by a lifecycle refresh; the prior reading so rows keep
+            // "receiving"/"nothing yet" until the fresh probe below resolves, instead of flickering to "ON".
         )
+        // Then probe what's actually arriving (a cheap single-row read per granted type) and fill the
+        // reading in. Separate step so the grant state — and the whole page — renders without waiting on it.
+        val flow = if (available) manager.probeSignalFlow(clock.nowMs()) else null
+        _state.value = _state.value.copy(signalFlow = flow)
+    }
+
+    fun setWearableBrand(key: String) = viewModelScope.launch {
+        settingsRepo.setWearableBrand(key)
+        _state.value = _state.value.copy(wearableBrand = key)
     }
 
     fun setWriteBodyweight(value: Boolean) = viewModelScope.launch {

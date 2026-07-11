@@ -43,21 +43,23 @@ import com.forge.app.ui.common.clickableLabeled
 import com.forge.app.ui.theme.ForgeMotion
 import kotlin.random.Random
 
-// Page indices — one light decision per screen (MacroFactor pacing). After the plan-mode step (3):
-// "generated" continues through the plan-building pages (4-11); "custom"/"freestyle" stop at
-// Experience (5), having picked a goal + experience (which steer the coach), then finish.
+// Page indices — one light decision per screen (MacroFactor pacing). After the plan-mode step (4):
+// "generated" continues through the plan-building pages (5-12); "custom"/"freestyle" stop at
+// Experience (6), having picked a goal + experience (which steer the coach), then finish.
 private const val PAGE_WELCOME = 0
 private const val PAGE_UNITS = 1
 private const val PAGE_BODY = 2
-private const val PAGE_PLAN_MODE = 3
-private const val PAGE_GOAL = 4
-private const val PAGE_EXPERIENCE = 5
-private const val PAGE_DAYS = 6
-private const val PAGE_EQUIPMENT = 7
-private const val PAGE_PLATE = 8
-private const val PAGE_AREAS = 9
-private const val PAGE_CADENCE = 10
-private const val PAGE_PREVIEW = 11
+private const val PAGE_WEARABLE = 3
+private const val PAGE_PLAN_MODE = 4
+private const val PAGE_GOAL = 5
+private const val PAGE_EXPERIENCE = 6
+private const val PAGE_DAYS = 7
+private const val PAGE_EQUIPMENT = 8
+private const val PAGE_FINE_TUNE = 9
+private const val PAGE_PLATE = 10
+private const val PAGE_AREAS = 11
+private const val PAGE_CADENCE = 12
+private const val PAGE_PREVIEW = 13
 
 /** Most of the world lifts in kg; the US (and Liberia / Myanmar) use lb. Seed the onboarding unit
  *  from the device locale so a non-US user isn't forced to flip a toggle on the very first screen.
@@ -117,6 +119,8 @@ fun OnboardingScreen(
     // Sex is optional and drives only the Stats strength standards — null until the user picks
     // (an explicit "Prefer not to say" stores "").
     var sex by remember { mutableStateOf(draft?.sex) }
+    // Wearable brand (WearableBrand key) — advisory; tailors Settings → Recovery's sync pointers.
+    var wearable by remember { mutableStateOf(draft?.wearable ?: "") }
     var daysPerWeek by remember { mutableIntStateOf(draft?.daysPerWeek ?: 0) }
     var equipment by remember { mutableStateOf(draft?.equipment ?: emptySet()) }
     // Non-null when a curated preset (e.g. Developer's) is picked — locks the exercise pool.
@@ -138,8 +142,8 @@ fun OnboardingScreen(
     // removes it atomically, so a finished user never resumes into a stale setup.
     val snapshot = OnboardingDraft(
         page, planMode, name, useKg, useMilesChoice, distanceTouched, goal, experience,
-        bodyweightInput, sex, daysPerWeek, equipment, frozenIds, plateWeightLb, problemAreas,
-        cadence, everyN, previewSeed
+        bodyweightInput, sex, wearable, daysPerWeek, equipment, frozenIds, plateWeightLb,
+        problemAreas, cadence, everyN, previewSeed
     )
     LaunchedEffect(snapshot) { viewModel.saveDraft(snapshot) }
 
@@ -168,7 +172,7 @@ fun OnboardingScreen(
         viewModel.complete(
             planMode = planMode, name = name.trim(), useKg = useKg,
             useMiles = if (distanceTouched) useMilesChoice else null,
-            sex = sex ?: "", bodyweightLb = bwLb,
+            sex = sex ?: "", wearable = wearable, bodyweightLb = bwLb,
             goal = goal, daysPerWeek = daysPerWeek, equipment = equipment,
             cadence = cadence.ifEmpty { "never" }, everyN = everyN, experience = experience,
             problemAreas = problemAreas, seed = previewSeed,
@@ -240,21 +244,25 @@ fun OnboardingScreen(
                                 onInputChange = { bodyweightInput = it },
                                 sex = sex, onSexSelect = { sex = it }
                             )
+                            PAGE_WEARABLE -> StepWearable(selected = wearable, onSelect = { wearable = it })
                             PAGE_PLAN_MODE -> StepPlanMode(selected = planMode, onSelect = { planMode = it })
                             PAGE_GOAL -> StepGoal(selected = goal, onSelect = { goal = it })
                             PAGE_EXPERIENCE -> StepExperience(selected = experience, onSelect = { experience = it })
                             PAGE_DAYS -> StepDays(days = daysPerWeek, onChange = { daysPerWeek = it })
-                            PAGE_EQUIPMENT -> StepEquipment(
+                            PAGE_EQUIPMENT -> StepGymPresets(
                                 selected = equipment,
                                 frozenIds = frozenIds,
+                                onSelectPreset = { preset ->
+                                    equipment = preset.equipment
+                                    frozenIds = preset.frozenIds
+                                }
+                            )
+                            PAGE_FINE_TUNE -> StepFineTune(
+                                selected = equipment,
                                 onToggle = { code ->
                                     equipment = if (code in equipment) equipment - code else equipment + code
                                     // Hand-editing equipment leaves any curated preset.
                                     frozenIds = null
-                                },
-                                onSelectPreset = { preset ->
-                                    equipment = preset.equipment
-                                    frozenIds = preset.frozenIds
                                 }
                             )
                             PAGE_PLATE -> StepPlateWeight(plateWeightLb = plateWeightLb, useKg = useKg, onSet = { plateWeightLb = it })
@@ -272,18 +280,20 @@ fun OnboardingScreen(
             // Gate "Continue" on the pages whose choices the generator needs.
             val canAdvance = when (page) {
                 PAGE_BODY -> bodyweightInput.isBlank() || parseSaneBodyweightLb(bodyweightInput, useKg) != null
+                // Wearable is advisory-only (like sex) — never block Continue; "" just leaves it unset.
                 PAGE_PLAN_MODE -> planMode.isNotEmpty()
                 PAGE_GOAL -> goal.isNotEmpty()
                 PAGE_EXPERIENCE -> experience.isNotEmpty()
                 PAGE_DAYS -> daysPerWeek in 1..7
-                PAGE_EQUIPMENT -> equipment.isNotEmpty()
+                PAGE_EQUIPMENT, PAGE_FINE_TUNE -> equipment.isNotEmpty()
                 else -> true
             }
-            // Explain why "Continue" is held on the gym page — the generator can't build a plan with
+            // Explain why "Continue" is held on the gym pages — the generator can't build a plan with
             // no equipment selected, so this guards the gate instead of a silently greyed button.
-            if (page == PAGE_EQUIPMENT && equipment.isEmpty()) {
+            if ((page == PAGE_EQUIPMENT || page == PAGE_FINE_TUNE) && equipment.isEmpty()) {
                 Text(
-                    "Pick at least one. Avex can't build your plan without knowing what you can train with.",
+                    if (page == PAGE_EQUIPMENT) "Pick a setup. Avex can't build your plan without knowing your gear."
+                    else "Keep at least one piece on. Avex can't build your plan with nothing to train on.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                 )
@@ -340,6 +350,8 @@ fun OnboardingScreen(
                         viewModel.complete(
                             planMode = effectiveMode, name = name.trim(), useKg = useKg, sex = sex ?: "",
                             useMiles = if (distanceTouched) useMilesChoice else null,
+                            // Honor a wearable picked before skipping, like the mode above.
+                            wearable = wearable,
                             bodyweightLb = bwLb, goal = "build_muscle", daysPerWeek = 4,
                             equipment = setOf(Equipment.BODYWEIGHT_ONLY.name), experience = "intermediate",
                             // Skipping bypasses the coach-ask dialog — keep coach ON only for the generated

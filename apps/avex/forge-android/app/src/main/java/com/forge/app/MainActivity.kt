@@ -313,11 +313,13 @@ class MainActivity : ComponentActivity() {
         // color — it tracks the live amoled setting, so a later theme change adapts the boot
         // background on its own (no XML edit needed).
         // Also read the chosen app icon here so the launch intro can theme itself to it on the very
-        // first frame (no plain→themed pop). One cached DataStore read, same pass as privacy/amoled.
-        val introIconKey = runBlocking {
+        // first frame (no plain→themed pop), plus the "Custom startup animation" setting so a user who
+        // turned it off goes straight to the plain black-and-white Avex with no themed flash. One cached
+        // DataStore read pass, same as privacy/amoled.
+        val (introIconKey, themedIntro) = runBlocking {
             applyPrivacyMode(settingsRepo.privacyMode.first())
             applyAdaptiveWindowBackground(settingsRepo.amoledMode.first())
-            settingsRepo.appIcon.first()
+            settingsRepo.appIcon.first() to settingsRepo.themedLaunchIntro.first()
         }
         appIconKey = introIconKey
         lifecycleScope.launch {
@@ -395,7 +397,7 @@ class MainActivity : ComponentActivity() {
                                 }
                                 null -> {} // DataStore still loading; the theme's gradient shows briefly
                             }
-                            if (showIntro) AvexIntro(iconKey = introIconKey, onDone = { showIntro = false })
+                            if (showIntro) AvexIntro(iconKey = introIconKey, themed = themedIntro, onDone = { showIntro = false })
                             // Result of a share-to-Avex import — shown over whatever screen is up.
                             ShareImportResultDialog()
                         }

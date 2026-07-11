@@ -44,6 +44,10 @@ class ProgramBuilderViewModel @Inject constructor(
 
     private var loaded = false
 
+    /** Inverse of the last destructive remove — re-inserts just that item at its original slot, so a
+     *  snackbar Undo never rolls back edits made in between (§13: undo over confirm). */
+    private var undoRemoval: (() -> Unit)? = null
+
     private fun uid() = UUID.randomUUID().toString().take(8)
 
     /** Load once: blank for build-your-own, or the current program's rows for editing. */
@@ -51,21 +55,29 @@ class ProgramBuilderViewModel @Inject constructor(
         if (loaded) return
         loaded = true
         if (blank) { days = emptyList(); return }
-        viewModelScope.launch {
-            days = programRepository.currentDayRows().map { pd ->
-                val slots = programRepository.slotRowsForDay(pd.id)
-                BuilderDay(
-                    uid = uid(), key = pd.id, name = pd.name, archetype = pd.archetype,
-                    accentHex = pd.accentHex, word = pd.word,
-                    exercises = slots.map { s ->
-                        val def = ExerciseLibrary.byId(s.exerciseLibId)
-                        BuilderExercise(uid(), s.exerciseLibId, def?.name ?: s.exerciseLibId,
-                            def?.muscle?.displayName ?: "", s.sets, s.reps)
-                    }
-                )
-            }
-        }
+        viewModelScope.launch { days = loadDays() }
     }
+
+    /** Drop unsaved edits and reload the persisted program — Back out of a pen-edit into view mode. */
+    fun discardEdits() {
+        dirty = false
+        undoRemoval = null
+        viewModelScope.launch { days = loadDays() }
+    }
+
+    private suspend fun loadDays(): List<BuilderDay> =
+        programRepository.currentDayRows().map { pd ->
+            val slots = programRepository.slotRowsForDay(pd.id)
+            BuilderDay(
+                uid = uid(), key = pd.id, name = pd.name, archetype = pd.archetype,
+                accentHex = pd.accentHex, word = pd.word,
+                exercises = slots.map { s ->
+                    val def = ExerciseLibrary.byId(s.exerciseLibId)
+                    BuilderExercise(uid(), s.exerciseLibId, def?.name ?: s.exerciseLibId,
+                        def?.muscle?.displayName ?: "", s.sets, s.reps)
+                }
+            )
+        }
 
     private fun mutate(block: (List<BuilderDay>) -> List<BuilderDay>) {
         days = block(days)
@@ -82,7 +94,28 @@ class ProgramBuilderViewModel @Inject constructor(
         )
     }
 
-    fun removeDay(dayUid: String) = mutate { it.filterNot { d -> d.uid == dayUid } }
+    fun removeDay(dayUid: String) {
+        val index = days.indexOfFirst { it.uid == dayUid }
+        if (index < 0) return
+        val removed = days[index]
+        mutate { it.filterNot { d -> d.uid == dayUid } }
+        // Undo re-inserts only this day at its old slot, so edits made while the snackbar showed survive.
+        undoRemoval = { mutate { list -> list.toMutableList().apply { add(index.coerceAtMost(size), removed) } } }
+    }
+
+    /** Insert a copy of the day (fresh uids/key, "Name 2") right after the original. */
+    fun duplicateDay(dayUid: String) = mutate { list ->
+        val i = list.indexOfFirst { it.uid == dayUid }
+        if (i < 0) return@mutate list
+        val src = list[i]
+        val copy = src.copy(
+            uid = uid(), key = "day-${uid()}",
+            name = copyName(src.name, list.map { it.name }.toSet()),
+            exercises = src.exercises.map { it.copy(uid = uid()) }
+        )
+        list.toMutableList().apply { add(i + 1, copy) }
+    }
+
     fun renameDay(dayUid: String, name: String) = mutateDay(dayUid) { it.copy(name = name) }
     fun setDayType(dayUid: String, archetype: String) = mutateDay(dayUid) { it.copy(archetype = archetype) }
     fun setDayAccent(dayUid: String, hex: String) = mutateDay(dayUid) { it.copy(accentHex = hex) }
@@ -96,11 +129,36 @@ class ProgramBuilderViewModel @Inject constructor(
         day.copy(exercises = day.exercises + added)
     }
 
-    fun removeExercise(dayUid: String, exUid: String) =
+    fun removeExercise(dayUid: String, exUid: String) {
+        val day = days.firstOrNull { it.uid == dayUid } ?: return
+        val index = day.exercises.indexOfFirst { it.uid == exUid }
+        if (index < 0) return
+        val removed = day.exercises[index]
         mutateDay(dayUid) { it.copy(exercises = it.exercises.filterNot { e -> e.uid == exUid }) }
+        // Undo re-inserts only this exercise at its old slot, leaving any later edits intact.
+        undoRemoval = {
+            mutateDay(dayUid) { d ->
+                d.copy(exercises = d.exercises.toMutableList().apply { add(index.coerceAtMost(size), removed) })
+            }
+        }
+    }
+
+    /** Re-apply the last remove's inverse (snackbar Undo); a no-op once consumed or superseded. */
+    fun undoRemove() {
+        undoRemoval?.invoke()
+        undoRemoval = null
+    }
 
     fun setExercise(dayUid: String, exUid: String, sets: Int, reps: String) = mutateDay(dayUid) { day ->
         day.copy(exercises = day.exercises.map { if (it.uid == exUid) it.copy(sets = sets, reps = reps) else it })
+    }
+
+    /** Replace the exercise in place — same slot, same sets × reps, new movement. */
+    fun swapExercise(dayUid: String, exUid: String, newLibId: String) = mutateDay(dayUid) { day ->
+        val def = ExerciseLibrary.byId(newLibId) ?: return@mutateDay day
+        day.copy(exercises = day.exercises.map {
+            if (it.uid == exUid) it.copy(libId = def.id, name = def.name, muscle = def.muscle.displayName) else it
+        })
     }
 
     fun moveExercise(dayUid: String, from: Int, to: Int) =

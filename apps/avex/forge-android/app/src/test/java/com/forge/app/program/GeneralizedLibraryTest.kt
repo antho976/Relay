@@ -7,8 +7,8 @@ import org.junit.Test
 /**
  * Tests for the generalized library (2026-06-11) — equipment beyond the owner's MWM-989 home gym.
  * Ordinary (non-curated) pools must exclude the owner-only plate-count stations, the new equipment
- * must be fully usable (every chip has movements; the commercial/home-barbell presets produce
- * complete plans), and only the owner's preset stays curated. The owner's frozen preset itself is
+ * must be fully usable (every chip has movements; every preset in the picker produces a complete
+ * plan), and only the owner's preset stays curated. The owner's frozen preset itself is
  * covered by [FrozenPresetTest].
  */
 class GeneralizedLibraryTest {
@@ -17,8 +17,8 @@ class GeneralizedLibraryTest {
         equipmentPresets.first { it.id == presetId }.equipment
             .mapNotNull { runCatching { Equipment.valueOf(it) }.getOrNull() }.toSet()
 
-    private val commercial = gearOf("commercial")
-    private val homeBarbell = gearOf("home-barbell")
+    private val commercial = gearOf("everything")
+    private val homeBig = gearOf("home-big")
 
     @Test
     fun ordinaryPoolsNeverIncludeCuratedStations() {
@@ -57,13 +57,27 @@ class GeneralizedLibraryTest {
     }
 
     @Test
-    fun homeBarbellPlanUsesBarbellMovementsAndCoversEveryMuscle() {
+    fun homeBigPlanUsesBarbellMovementsAndCoversEveryMuscle() {
         val defs = ProgramGenerator
-            .generate(GenerationParams(4), homeBarbell, emptySet(), emptySet(), seed = 3L)
+            .generate(GenerationParams(4), homeBig, emptySet(), emptySet(), seed = 3L)
             .flatMap { it.exercises }.mapNotNull { ExerciseLibrary.byId(it.libId) }
         assertEquals(MuscleGroup.entries.toSet(), defs.map { it.muscle }.toSet())
-        assertTrue("a barbell home-gym plan should use at least one barbell lift",
+        assertTrue("a big home-gym plan should use at least one barbell lift",
             defs.any { Equipment.BARBELL in it.equipment })
+    }
+
+    @Test
+    fun everyPresetGeneratesAFullMusclePlan() {
+        // Every preset in the picker must produce a complete 4-day plan — a preset that starves a
+        // muscle ships a broken first program (GYMAP-20; minimal setups lean on bodyweight fallbacks).
+        equipmentPresets.forEach { preset ->
+            val gear = gearOf(preset.id)
+            val muscles = ProgramGenerator
+                .generate(GenerationParams(4, frozenIds = preset.frozenIds), gear, emptySet(), emptySet(), seed = 5L)
+                .flatMap { it.exercises }.mapNotNull { ExerciseLibrary.byId(it.libId)?.muscle }.toSet()
+            assertEquals("preset '${preset.id}' should cover every muscle",
+                MuscleGroup.entries.toSet(), muscles)
+        }
     }
 
     @Test
@@ -81,8 +95,9 @@ class GeneralizedLibraryTest {
     @Test
     fun newPresetsExistAndOnlyDeveloperIsCurated() {
         val ids = equipmentPresets.map { it.id }.toSet()
-        assertTrue(ids.containsAll(
-            setOf("developer", "commercial", "home-barbell", "db-bench", "dumbbells", "bodyweight")))
+        assertTrue(ids.containsAll(setOf(
+            "everything", "basic-gym", "home-big", "home-small",
+            "developer", "dumbbells", "bands-bw", "bodyweight")))
         assertEquals("only the developer preset is frozen/curated",
             listOf("developer"), equipmentPresets.filter { it.frozenIds != null }.map { it.id })
     }

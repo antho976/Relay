@@ -82,7 +82,7 @@ internal val PAGE_ENTRIES = listOf(
     SettingsPageEntry(SettingsPage.Notifications, "notifications reminders quiet hours recap timer alerts notify suppress"),
     SettingsPageEntry(SettingsPage.Program, "program equipment generate auto split days routine rotate trainings workouts barbell dumbbell cable machine plate focus goal experience emphasis priority"),
     SettingsPageEntry(SettingsPage.Coach, "coach weekly review autopilot auto-apply suggest mode on off tweaks"),
-    SettingsPageEntry(SettingsPage.Recovery, "recovery health connect sleep heart rate resting samsung watch coach deload steps bodyweight"),
+    SettingsPageEntry(SettingsPage.Recovery, "recovery health connect sleep heart rate resting samsung galaxy pixel fitbit wearable watch ring coach deload steps bodyweight"),
     SettingsPageEntry(SettingsPage.ExercisePrefs, "exercise likes dislike favourite exclude preferences movements heart hidden preferred"),
     SettingsPageEntry(SettingsPage.Vacation, "holiday vacation pause streak break away travel"),
 )
@@ -111,6 +111,7 @@ internal val ALL_ITEMS = listOf(
     SettingsItem("Weekly recap", "weekly recap summary notification report", SettingsPage.Notifications),
     SettingsItem("Rest timer alerts", "rest timer alert notification background buzz vibrate", SettingsPage.Notifications),
     SettingsItem("Health Connect", "health connect recovery sync samsung google fit permissions wearable watch", SettingsPage.Recovery),
+    SettingsItem("Wearable", "wearable watch galaxy pixel fitbit samsung ring band tracker", SettingsPage.Recovery),
     SettingsItem("Sleep", "sleep recovery hours health connect rest coach deload", SettingsPage.Recovery),
     SettingsItem("Resting heart rate", "resting heart rate hr recovery health connect coach", SettingsPage.Recovery),
     SettingsItem("Steps", "steps recovery health connect cardio wearable daily", SettingsPage.Recovery),
