@@ -9,6 +9,7 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -44,9 +45,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.lerp
@@ -68,12 +71,32 @@ import com.forge.app.ui.common.ForgePrimaryCapsule
 import com.forge.app.ui.common.ForgeWordmark
 import com.forge.app.ui.common.GlyphButton
 import com.forge.app.ui.common.clickableLabeled
+import com.forge.app.ui.common.rirLabel
+import com.forge.app.ui.common.rpeLabel
 import com.forge.app.ui.gym.stats.components.MuscleFigure
 import com.forge.app.ui.theme.ForgeMotion
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import java.util.Locale
 
-private data class FsSet(val weight: String = "", val reps: String = "")
+private data class FsSet(
+    val weight: String = "",
+    val reps: String = "",
+    val setType: String? = null,       // null | "warmup" | "drop" — the mutually-exclusive shape
+    val isAmrap: Boolean = false,
+    val toFailure: Boolean = false,
+    val rpe: Double? = null
+) {
+    val hasTags: Boolean get() = setType != null || isAmrap || toFailure || rpe != null
+
+    /** Terse mono badges for a folded set, mirroring the session-detail set-table words (GYMAP-46). */
+    fun tagLabels(): List<String> = buildList {
+        when (setType) { "warmup" -> add("WARM"); "drop" -> add("DROP") }
+        if (isAmrap) add("AMRAP")
+        if (toFailure) add("FAIL")
+        rpe?.let { add("RPE ${rpeLabel(it)}") }
+    }
+}
 private data class FsExercise(
     val libId: String,
     val name: String,
@@ -81,6 +104,53 @@ private data class FsExercise(
     val bodyweight: Boolean,
     val sets: List<FsSet> = listOf(FsSet())
 )
+
+/** Snapshot the current log into a resumable draft (raw typed text is preserved verbatim). */
+private fun draftFrom(items: List<FsExercise>, openedAtMs: Long): FreestyleDraft =
+    FreestyleDraft(
+        openedAtMs = openedAtMs,
+        exercises = items.map { ex ->
+            FreestyleDraftExercise(ex.libId, ex.sets.map {
+                FreestyleDraftSet(it.weight, it.reps, it.setType, it.isAmrap, it.toFailure, it.rpe)
+            })
+        }
+    )
+
+/** Rebuild the in-memory log from a draft, re-deriving name/muscle/bodyweight from the library and
+ *  dropping any exercise whose library id no longer exists. */
+private fun draftToItems(draft: FreestyleDraft): List<FsExercise> =
+    draft.exercises.mapNotNull { de ->
+        val def = ExerciseLibrary.byId(de.libId) ?: return@mapNotNull null
+        FsExercise(
+            libId = def.id,
+            name = def.name,
+            muscle = def.muscle,
+            bodyweight = def.unit == ExerciseUnit.BODYWEIGHT,
+            sets = de.sets.map { FsSet(it.weight, it.reps, it.setType, it.isAmrap, it.toFailure, it.rpe) }
+                .ifEmpty { listOf(FsSet()) }
+        )
+    }
+
+/** Map a picked past-session template into the logger's in-memory shape (GYMAP-48): sets pre-filled
+ *  from that session and converted to the display unit, name/muscle/bodyweight re-derived from the
+ *  library, and any move no longer in the library dropped — mirrors [draftToItems]. */
+private fun List<FreestyleTemplateExercise>.toItems(useKg: Boolean): List<FsExercise> =
+    mapNotNull { te ->
+        val def = ExerciseLibrary.byId(te.libId) ?: return@mapNotNull null
+        val bodyweight = def.unit == ExerciseUnit.BODYWEIGHT
+        FsExercise(
+            libId = def.id,
+            name = def.name,
+            muscle = def.muscle,
+            bodyweight = bodyweight,
+            sets = te.sets.map { s ->
+                FsSet(
+                    weight = if (bodyweight) "" else s.weightLb?.let { weightInputValue(it, useKg) } ?: "",
+                    reps = s.reps.toString()
+                )
+            }.ifEmpty { listOf(FsSet()) }
+        )
+    }
 
 /** Volume of one set in lb (weight × reps); bodyweight moves contribute no external load. */
 private fun FsExercise.setVolumeLb(set: FsSet, useKg: Boolean): Double {
@@ -116,20 +186,50 @@ private fun formatElapsed(ms: Long): String {
 @Composable
 fun FreestyleLogScreen(
     onBack: () -> Unit,
-    viewModel: FreestyleLogViewModel = hiltViewModel()
+    viewModel: FreestyleLogViewModel = hiltViewModel(),
+    templateViewModel: FreestyleTemplateViewModel = hiltViewModel()
 ) {
     val useKg by viewModel.useKg.collectAsStateWithLifecycle()
     val unitLabel = if (useKg) "kg" else "lb"
     var items by remember { mutableStateOf<List<FsExercise>>(emptyList()) }
     var showBrowser by remember { mutableStateOf(false) }
-    // When the logger was opened — becomes the saved session's start so its duration isn't ~0.
-    val openedAtMs = remember { System.currentTimeMillis() }
+    // "Start from a past workout" (GYMAP-48): every finished session as a reusable template. Offered
+    // only on the empty logger (below), and seeds the log with that session's exercises + sets.
+    val templates by templateViewModel.templates.collectAsStateWithLifecycle()
+    var showTemplates by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    // When the logger was opened — becomes the saved session's start so its duration isn't ~0. Mutable
+    // so resuming a draft rewinds it to the original open time (the recorded duration stays honest).
+    var openedAtMs by remember { mutableStateOf(System.currentTimeMillis()) }
     val elapsedMs by produceState(0L, openedAtMs) {
         while (true) { value = System.currentTimeMillis() - openedAtMs; delay(1000) }
     }
 
+    // Draft persistence: on open, offer to resume an unsaved log; while editing, autosave (debounced).
+    var pendingDraft by remember { mutableStateOf<FreestyleDraft?>(null) }
+    var draftChecked by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        viewModel.loadDraft()?.takeIf { draftToItems(it).isNotEmpty() }?.let { pendingDraft = it }
+        draftChecked = true
+    }
+    LaunchedEffect(items, openedAtMs, pendingDraft, draftChecked) {
+        // Hold off until the resume choice is settled so we never overwrite the draft before offering it.
+        if (!draftChecked || pendingDraft != null) return@LaunchedEffect
+        if (items.isEmpty()) { viewModel.clearDraft(); return@LaunchedEffect }
+        delay(600)   // debounce: only persist once a burst of edits settles
+        viewModel.saveDraft(draftFrom(items, openedAtMs))
+    }
+
     fun updateExercise(i: Int, transform: (FsExercise) -> FsExercise) {
         items = items.mapIndexed { idx, e -> if (idx == i) transform(e) else e }
+    }
+
+    // Flush the latest edits before leaving, so a back within the debounce window still keeps the draft.
+    fun leave() {
+        if (draftChecked && pendingDraft == null && items.isNotEmpty()) {
+            viewModel.saveDraft(draftFrom(items, openedAtMs))
+        }
+        onBack()
     }
 
     val totalVolumeLb = items.sumOf { ex -> ex.sets.sumOf { ex.setVolumeLb(it, useKg) } }
@@ -141,7 +241,15 @@ fun FreestyleLogScreen(
             val sets = ex.sets.mapNotNull { s ->
                 val reps = s.reps.toIntOrNull()?.takeIf { it > 0 } ?: return@mapNotNull null
                 val weightLb = if (ex.bodyweight) null else parseToLb(s.weight, useKg)
-                FreestyleSetInput(weightText = if (ex.bodyweight) "" else s.weight.trim(), weightLb = weightLb, reps = reps)
+                FreestyleSetInput(
+                    weightText = if (ex.bodyweight) "" else s.weight.trim(),
+                    weightLb = weightLb,
+                    reps = reps,
+                    setType = s.setType,
+                    isAmrap = s.isAmrap,
+                    toFailure = s.toFailure,
+                    rpe = s.rpe
+                )
             }
             if (sets.isEmpty()) null else FreestyleExerciseInput(ex.libId, sets)
         }
@@ -155,7 +263,7 @@ fun FreestyleLogScreen(
                     // §2: wordmark + back, never the screen's name (live-flow screen, no hero needed).
                     title = { ForgeWordmark() },
                     navigationIcon = {
-                        IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+                        IconButton(onClick = { leave() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
                 )
@@ -176,14 +284,31 @@ fun FreestyleLogScreen(
                 verticalArrangement = Arrangement.spacedBy(0.dp)
             ) {
                 item {
-                    FsSessionHeader(
-                        elapsedMs = elapsedMs,
-                        exerciseCount = items.size,
-                        setCount = loggedSets,
-                        totalVolumeLb = totalVolumeLb,
-                        useKg = useKg,
-                        empty = items.isEmpty()
-                    )
+                    val draft = pendingDraft
+                    if (draft != null) {
+                        // An unsaved log is waiting — offer resume before anything else (items is empty here).
+                        FsResumePrompt(
+                            exerciseCount = draftToItems(draft).size,
+                            onResume = {
+                                items = draftToItems(draft)
+                                openedAtMs = draft.openedAtMs
+                                pendingDraft = null
+                            },
+                            onStartFresh = {
+                                viewModel.clearDraft()
+                                pendingDraft = null
+                            }
+                        )
+                    } else {
+                        FsSessionHeader(
+                            elapsedMs = elapsedMs,
+                            exerciseCount = items.size,
+                            setCount = loggedSets,
+                            totalVolumeLb = totalVolumeLb,
+                            useKg = useKg,
+                            empty = items.isEmpty()
+                        )
+                    }
                 }
                 itemsIndexed(items, key = { _, ex -> ex.libId }) { i, ex ->
                     FsExerciseCard(
@@ -200,12 +325,42 @@ fun FreestyleLogScreen(
                         onReplaceSets = { newSets -> updateExercise(i) { e -> e.copy(sets = newSets) } }
                     )
                 }
-                item {
-                    Spacer(Modifier.height(16.dp))
-                    ForgeOutlineCapsule("+ Add exercise", onClick = { showBrowser = true }, modifier = Modifier.fillMaxWidth())
-                    Spacer(Modifier.height(8.dp))
+                if (pendingDraft == null) {
+                    item {
+                        Spacer(Modifier.height(16.dp))
+                        ForgeOutlineCapsule("+ Add exercise", onClick = { showBrowser = true }, modifier = Modifier.fillMaxWidth())
+                        // Reuse-a-session shortcut — only on the empty log (seeding over a started log is odd)
+                        // and only when there's history to reuse (§12: no dead-end entry into an empty picker).
+                        if (items.isEmpty() && templates.isNotEmpty()) {
+                            Spacer(Modifier.height(12.dp))
+                            Text(
+                                "start from a past workout →",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier
+                                    .clickableLabeled("Start from a past workout") { showTemplates = true }
+                                    .padding(vertical = 8.dp)
+                            )
+                        }
+                        Spacer(Modifier.height(8.dp))
+                    }
                 }
             }
+        }
+
+        if (showTemplates) {
+            FreestyleTemplatePicker(
+                templates = templates,
+                onClose = { showTemplates = false },
+                onPick = { sessionId ->
+                    scope.launch {
+                        // Seed the log from the past session and (re)start the clock from now.
+                        items = templateViewModel.loadTemplate(sessionId).toItems(useKg)
+                        openedAtMs = System.currentTimeMillis()
+                        showTemplates = false
+                    }
+                }
+            )
         }
 
         if (showBrowser) {
@@ -262,6 +417,37 @@ private fun FsSessionHeader(
     }
 }
 
+/**
+ * The freestyle logger's "Resume workout?" gate. An unsaved log is autosaved as a draft that survives
+ * navigate-away and app kills, so on reopening we let the user pick up where they left off or start over.
+ */
+@Composable
+private fun FsResumePrompt(
+    exerciseCount: Int,
+    onResume: () -> Unit,
+    onStartFresh: () -> Unit
+) {
+    val cs = MaterialTheme.colorScheme
+    Column {
+        Text(
+            "UNFINISHED LOG",
+            style = MaterialTheme.typography.labelMedium,
+            color = cs.onSurfaceVariant,
+            letterSpacing = 1.sp
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "$exerciseCount ${if (exerciseCount == 1) "exercise" else "exercises"} from a log you didn't save.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = cs.onSurface
+        )
+        Spacer(Modifier.height(16.dp))
+        ForgePrimaryCapsule("Resume", onClick = onResume, modifier = Modifier.fillMaxWidth())
+        Spacer(Modifier.height(8.dp))
+        ForgeOutlineCapsule("Start fresh", onClick = onStartFresh, modifier = Modifier.fillMaxWidth())
+    }
+}
+
 @Composable
 private fun FsExerciseCard(
     exercise: FsExercise,
@@ -283,6 +469,8 @@ private fun FsExerciseCard(
     var lastSets by remember(exercise.libId) { mutableStateOf<List<LoggedSet>>(emptyList()) }
     var showLast by remember(exercise.libId) { mutableStateOf(false) }
     var expanded by remember(exercise.libId) { mutableStateOf(true) }
+    // Which set (if any) has its tag editor folded open — one at a time keeps the card compact.
+    var openSetIdx by remember(exercise.libId) { mutableStateOf<Int?>(null) }
     LaunchedEffect(exercise.libId) { lastSets = lastSetsProvider(exercise.libId) }
 
     // Air alone separates exercise blocks (§1: no section hairlines).
@@ -365,42 +553,80 @@ private fun FsExerciseCard(
         Spacer(Modifier.height(4.dp))
 
         exercise.sets.forEachIndexed { setIdx, set ->
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Box(modifier = Modifier.width(24.dp)) {
-                    Text("%02d".format(setIdx + 1), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, fontSize = 9.sp)
-                }
-                if (exercise.bodyweight) {
-                    Text("BW", style = MaterialTheme.typography.headlineSmall, color = cs.onSurface, modifier = Modifier.weight(1f))
-                } else {
-                    StepBtn("−", "Decrease weight") { onSetChange(setIdx, set.copy(weight = stepWeightStr(set.weight, -weightStep))) }
+            val tagsOpen = openSetIdx == setIdx
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(modifier = Modifier.width(24.dp)) {
+                        Text("%02d".format(setIdx + 1), style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, fontSize = 9.sp)
+                    }
+                    if (exercise.bodyweight) {
+                        Text("BW", style = MaterialTheme.typography.headlineSmall, color = cs.onSurface, modifier = Modifier.weight(1f))
+                    } else {
+                        StepBtn("−", "Decrease weight") { onSetChange(setIdx, set.copy(weight = stepWeightStr(set.weight, -weightStep))) }
+                        FsUnderlineField(
+                            value = set.weight,
+                            onValueChange = { onSetChange(setIdx, set.copy(weight = it)) },
+                            placeholder = "0",
+                            keyboardType = KeyboardType.Decimal,
+                            modifier = Modifier.weight(1f)
+                        )
+                        StepBtn("+", "Increase weight") { onSetChange(setIdx, set.copy(weight = stepWeightStr(set.weight, weightStep))) }
+                    }
+                    Spacer(Modifier.width(6.dp))
+                    StepBtn("−", "Decrease reps") { onSetChange(setIdx, set.copy(reps = stepRepsStr(set.reps, -1))) }
                     FsUnderlineField(
-                        value = set.weight,
-                        onValueChange = { onSetChange(setIdx, set.copy(weight = it)) },
+                        value = set.reps,
+                        onValueChange = { new -> onSetChange(setIdx, set.copy(reps = new.filter { it.isDigit() })) },
                         placeholder = "0",
-                        keyboardType = KeyboardType.Decimal,
-                        modifier = Modifier.weight(1f)
+                        keyboardType = KeyboardType.Number,
+                        modifier = Modifier.width(36.dp)
                     )
-                    StepBtn("+", "Increase weight") { onSetChange(setIdx, set.copy(weight = stepWeightStr(set.weight, weightStep))) }
+                    StepBtn("+", "Increase reps") { onSetChange(setIdx, set.copy(reps = stepRepsStr(set.reps, 1))) }
+                    // Set-type tags (warmup/drop/AMRAP/failure/RPE) fold behind this ⋯ toggle so the
+                    // weight×reps entry stays the big primary target (§3 live/flow).
+                    FsTagToggle { openSetIdx = if (tagsOpen) null else setIdx }
+                    // Text glyph over a stock icon (§8); inert + dimmed when it's the only set.
+                    GlyphButton(
+                        "×", "Remove set", cs.onSurfaceVariant,
+                        onClick = {
+                            if (openSetIdx == setIdx) openSetIdx = null
+                            onRemoveSet(setIdx)
+                        },
+                        enabled = exercise.sets.size > 1
+                    )
                 }
-                Spacer(Modifier.width(6.dp))
-                StepBtn("−", "Decrease reps") { onSetChange(setIdx, set.copy(reps = stepRepsStr(set.reps, -1))) }
-                FsUnderlineField(
-                    value = set.reps,
-                    onValueChange = { new -> onSetChange(setIdx, set.copy(reps = new.filter { it.isDigit() })) },
-                    placeholder = "0",
-                    keyboardType = KeyboardType.Number,
-                    modifier = Modifier.width(36.dp)
-                )
-                StepBtn("+", "Increase reps") { onSetChange(setIdx, set.copy(reps = stepRepsStr(set.reps, 1))) }
-                // Text glyph over a stock icon (§8); inert + dimmed when it's the only set.
-                GlyphButton(
-                    "×", "Remove set", cs.onSurfaceVariant,
-                    onClick = { onRemoveSet(setIdx) },
-                    enabled = exercise.sets.size > 1
-                )
+                // Folded set with tags → a terse badge line so it reads at a glance without opening each
+                // (passive metadata, bare text, §1). The open editor already shows the same state.
+                if (!tagsOpen && set.hasTags) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        modifier = Modifier.padding(start = 24.dp, bottom = 4.dp)
+                    ) {
+                        set.tagLabels().forEach {
+                            Text(
+                                it,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = cs.onSurfaceVariant.copy(alpha = 0.7f),
+                                fontSize = 9.sp,
+                                letterSpacing = 0.5.sp
+                            )
+                        }
+                    }
+                }
+                AnimatedVisibility(
+                    visible = tagsOpen,
+                    enter = expandVertically(ForgeMotion.enterTween()) + fadeIn(ForgeMotion.enterTween()),
+                    exit = shrinkVertically(ForgeMotion.exitTween()) + fadeOut(ForgeMotion.exitTween())
+                ) {
+                    FsSetTagPicker(
+                        set = set,
+                        onChange = { onSetChange(setIdx, it) },
+                        onClose = { openSetIdx = null }
+                    )
+                }
             }
         }
         // §11 "+ log" idiom: an accent mono action line.
@@ -438,6 +664,108 @@ private fun LastTimePanel(sets: List<LoggedSet>, useKg: Boolean, onCopy: () -> U
         Spacer(Modifier.height(10.dp))
         ForgeOutlineCapsule("Copy to sets", onClick = onCopy)
     }
+}
+
+/** A compact ⋯ tap target (StepBtn-sized) that folds a set's tag editor open/closed. */
+@Composable
+private fun FsTagToggle(onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Box(
+        modifier = Modifier.sizeIn(minWidth = 32.dp, minHeight = 44.dp).clickableLabeled("Set tags", onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Text("⋯", style = MaterialTheme.typography.titleLarge, color = cs.onSurfaceVariant)
+    }
+}
+
+/**
+ * Per-set tag editor (GYMAP-46): the mutually-exclusive shape (normal/warmup/drop), the independent
+ * AMRAP + failure flags, and RPE (6→10, each chip read as both RPE and reps-in-reserve). Slides in
+ * under the set row — the row's ⋯ toggles it; every edit flows straight back through [onChange].
+ */
+@Composable
+private fun FsSetTagPicker(set: FsSet, onChange: (FsSet) -> Unit, onClose: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val curRpe = set.rpe
+    val rpeOptions = generateSequence(6.0) { it + 0.5 }.takeWhile { it <= 10.0 }.toList()
+    Column(modifier = Modifier.fillMaxWidth().padding(start = 24.dp, top = 6.dp, bottom = 10.dp)) {
+        Text("TYPE", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, fontSize = 9.sp)
+        Spacer(Modifier.height(6.dp))
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            // Shape is single-select: tapping the active one clears back to normal.
+            FsTagChip("Normal", selected = set.setType == null) { onChange(set.copy(setType = null)) }
+            FsTagChip("Warmup", selected = set.setType == "warmup") {
+                onChange(set.copy(setType = if (set.setType == "warmup") null else "warmup"))
+            }
+            FsTagChip("Drop", selected = set.setType == "drop") {
+                onChange(set.copy(setType = if (set.setType == "drop") null else "drop"))
+            }
+        }
+        Spacer(Modifier.height(12.dp))
+        Text("FLAGS", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, fontSize = 9.sp)
+        Spacer(Modifier.height(6.dp))
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            FsTagChip("AMRAP", selected = set.isAmrap) { onChange(set.copy(isAmrap = !set.isAmrap)) }
+            FsTagChip("Failure", selected = set.toFailure) { onChange(set.copy(toFailure = !set.toFailure)) }
+        }
+        Spacer(Modifier.height(12.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("EFFORT · RPE / REPS IN RESERVE", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, fontSize = 9.sp)
+            // Clears the RPE when one's set, otherwise just closes the editor — never a stuck-open panel.
+            Text(
+                if (curRpe != null) "clear" else "done",
+                style = MaterialTheme.typography.labelSmall,
+                color = cs.onSurfaceVariant.copy(alpha = 0.7f),
+                fontSize = 10.sp,
+                modifier = Modifier
+                    .clickableLabeled(if (curRpe != null) "Clear RPE" else "Close set tags") {
+                        if (curRpe != null) onChange(set.copy(rpe = null)) else onClose()
+                    }
+                    .padding(horizontal = 4.dp, vertical = 2.dp)
+            )
+        }
+        Spacer(Modifier.height(6.dp))
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            rpeOptions.forEach { v ->
+                val selected = curRpe != null && kotlin.math.abs(curRpe - v) < 0.01
+                Column(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .then(if (selected) Modifier.background(cs.primaryContainer) else Modifier)
+                        .border(1.dp, if (selected) cs.primary else cs.outline.copy(alpha = 0.35f), RoundedCornerShape(6.dp))
+                        .clickableLabeled("RPE ${rpeLabel(v)}, ${rirLabel(v)} reps in reserve") { onChange(set.copy(rpe = v)) }
+                        .sizeIn(minWidth = 44.dp)
+                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                ) {
+                    Text(rpeLabel(v), style = MaterialTheme.typography.bodyLarge, color = if (selected) cs.onSurface else cs.onSurfaceVariant)
+                    Text("${rirLabel(v)} RIR", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant.copy(alpha = 0.6f), fontSize = 8.sp)
+                }
+            }
+        }
+    }
+}
+
+/** A pill toggle for one set tag — accent border + wash when on, muted outline when off (§5 ladder). */
+@Composable
+private fun FsTagChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Text(
+        label,
+        style = MaterialTheme.typography.labelMedium,
+        color = if (selected) cs.onSurface else cs.onSurfaceVariant,
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .then(if (selected) Modifier.background(cs.primaryContainer) else Modifier)
+            .border(1.dp, if (selected) cs.primary else cs.outline.copy(alpha = 0.35f), RoundedCornerShape(50))
+            .clickableLabeled(label, onClick = onClick)
+            .sizeIn(minWidth = 44.dp)
+            .padding(horizontal = 14.dp, vertical = 7.dp)
+    )
 }
 
 /** A compact −/+ tap target (≥44dp) that nudges a set field without opening the keyboard. */

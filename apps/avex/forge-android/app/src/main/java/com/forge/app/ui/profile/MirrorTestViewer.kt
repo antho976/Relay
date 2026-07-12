@@ -123,11 +123,16 @@ internal fun GalleryViewerPager(
         val trimmed = noteInput.trim()
         noteOverride[editingFile] = trimmed
         if (trimmed != original.note) onSaveNote(original, trimmed)
-        val parsed = weightInput.trim().ifBlank { null }?.let { parseToLb(it, useKg) }
-        weightOverride[editingFile] = parsed
-        val prev = original.weightLb
-        val changed = if (parsed == null || prev == null) parsed != prev else kotlin.math.abs(parsed - prev) > 0.05
-        if (changed) onSetWeight(original, parsed)
+        // Compare in DISPLAY units, not lb: weightInput was seeded via weightInputValue (which rounds to
+        // the display step), so a 0.1-kg rounding is ~0.11 lb and an untouched field would trip a raw-lb
+        // threshold and silently rewrite the snapshot. Same display text as seeded ⇒ untouched ⇒ no write.
+        val prevDisplay = original.weightLb?.let { weightInputValue(it, useKg) } ?: ""
+        val curDisplay = weightInput.trim()
+        if (curDisplay != prevDisplay) {
+            val parsed = curDisplay.ifBlank { null }?.let { parseToLb(it, useKg) }
+            weightOverride[editingFile] = parsed
+            onSetWeight(original, parsed)
+        }
     }
     LaunchedEffect(pagerState.currentPage) {
         if (current.fileName != editingFile) {
@@ -278,7 +283,13 @@ internal fun GalleryViewerPager(
  * so the viewer never cuts off the top/bottom of a physique shot.
  */
 @Composable
-internal fun GalleryFullImage(file: File, modifier: Modifier = Modifier, reqPx: Int = 1400, alpha: Float = 1f) {
+internal fun GalleryFullImage(
+    file: File,
+    modifier: Modifier = Modifier,
+    reqPx: Int = 1400,
+    alpha: Float = 1f,
+    contentScale: ContentScale = ContentScale.Fit
+) {
     val bitmap by produceState<ImageBitmap?>(initialValue = null, file.path, reqPx) {
         value = withContext(Dispatchers.IO) { decodeFittedBitmap(file, reqPx)?.asImageBitmap() }
     }
@@ -288,7 +299,7 @@ internal fun GalleryFullImage(file: File, modifier: Modifier = Modifier, reqPx: 
             bitmap = bmp,
             contentDescription = "Progress photo",
             modifier = modifier,
-            contentScale = ContentScale.Fit,
+            contentScale = contentScale,
             alpha = alpha,
             filterQuality = FilterQuality.High
         )

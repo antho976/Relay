@@ -170,12 +170,25 @@ class MigrationTest {
     }
 
     @Test
-    fun migrateFullChain12To23_runsEveryStepInOrder() {
+    fun migrate23To24_addsBodyMeasurementTable() {
+        helper.createDatabase(dbName, 23).close()
+        val db = helper.runMigrationsAndValidate(dbName, 24, true, MIGRATION_23_24)
+
+        db.query("SELECT name FROM sqlite_master WHERE type='table' AND name = 'body_measurement'")
+            .use { assertEquals("body_measurement should exist after 23→24", 1, it.count) }
+        db.query(
+            "SELECT name FROM sqlite_master WHERE type='index' " +
+                "AND name = 'index_body_measurement_type_date_key'"
+        ).use { assertEquals("unique (type, date_key) index should exist after 23→24", 1, it.count) }
+    }
+
+    @Test
+    fun migrateFullChain12To24_runsEveryStepInOrder() {
         // The pairwise tests above each validate one hop. This runs the WHOLE locked chain in a
         // single pass — a real v12 install upgrading straight to today's schema — so a gap or an
         // out-of-order/incompatible step between any two versions is caught, not just each hop alone.
         helper.createDatabase(dbName, 12).close()
-        helper.runMigrationsAndValidate(dbName, 23, true, *ALL_MIGRATIONS)
+        helper.runMigrationsAndValidate(dbName, 24, true, *ALL_MIGRATIONS)
     }
 
     @Test

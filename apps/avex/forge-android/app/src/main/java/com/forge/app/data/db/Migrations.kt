@@ -228,6 +228,28 @@ val MIGRATION_22_23 = object : Migration(22, 23) {
     }
 }
 
+/**
+ * v23 → v24: body measurements (GYMAP-52). `body_measurement` holds per-type circumference readings
+ * (waist/chest/arms/thighs/hips), one row per (type, day) via the unique index. New empty table —
+ * additive, no existing data touched.
+ */
+val MIGRATION_23_24 = object : Migration(23, 24) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `body_measurement` (" +
+                "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "`type` TEXT NOT NULL, " +
+                "`date_key` TEXT NOT NULL, " +
+                "`value_cm` REAL NOT NULL, " +
+                "`recorded_at` INTEGER NOT NULL)"
+        )
+        db.execSQL(
+            "CREATE UNIQUE INDEX IF NOT EXISTS `index_body_measurement_type_date_key` " +
+                "ON `body_measurement` (`type`, `date_key`)"
+        )
+    }
+}
+
 /** All migrations, in order. Register every new one here. */
 val ALL_MIGRATIONS: Array<Migration> = arrayOf(
     MIGRATION_12_13,
@@ -240,5 +262,6 @@ val ALL_MIGRATIONS: Array<Migration> = arrayOf(
     MIGRATION_19_20,
     MIGRATION_20_21,
     MIGRATION_21_22,
-    MIGRATION_22_23
+    MIGRATION_22_23,
+    MIGRATION_23_24
 )

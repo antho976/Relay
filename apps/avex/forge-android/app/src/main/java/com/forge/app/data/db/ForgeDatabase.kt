@@ -3,6 +3,7 @@ package com.forge.app.data.db
 import androidx.room.Database
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
+import com.forge.app.data.db.dao.BodyMeasurementDao
 import com.forge.app.data.db.dao.BodyweightDao
 import com.forge.app.data.db.dao.CardioDao
 import com.forge.app.data.db.dao.DayNameOverrideDao
@@ -26,6 +27,7 @@ import com.forge.app.data.db.dao.SessionSegmentDao
 import com.forge.app.data.db.dao.WarmupRoutineDao
 import com.forge.app.data.db.dao.SessionBreakDao
 import com.forge.app.data.db.dao.VacationDao
+import com.forge.app.data.db.entities.BodyMeasurementEntry
 import com.forge.app.data.db.entities.BodyweightEntry
 import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.data.db.entities.DayNameOverride
@@ -53,8 +55,9 @@ import com.forge.app.data.db.entities.SessionBreak
 import com.forge.app.data.db.entities.VacationPeriod
 
 /**
- * Schema is v23 (v23 added `cardio_entry.interval_count` + `cardio_entry.hr_zone` for cardio depth —
- * HIIT interval counts + manual HR-zone tags;
+ * Schema is v24 (v24 added `body_measurement` — per-type circumference history for GYMAP-52, a new
+ * empty table, additive; v23 added `cardio_entry.interval_count` + `cardio_entry.hr_zone` for cardio
+ * depth — HIIT interval counts + manual HR-zone tags;
  * v22 added `logged_exercise.slot_id` + `exercise_customization.swapped_exercise_id`
  * for swap re-attribution, so a swapped entry's `exercise_id` becomes the real exercise performed and
  * its PRs/stats attribute correctly; v21 added the `source` origin tag to program_customization +
@@ -87,6 +90,7 @@ import com.forge.app.data.db.entities.VacationPeriod
         RestDayEntry::class,
         TrophyNearMiss::class,
         BodyweightEntry::class,
+        BodyMeasurementEntry::class,
         VacationPeriod::class,
         ExtendedGoal::class,
         SessionBreak::class,
@@ -101,7 +105,7 @@ import com.forge.app.data.db.entities.VacationPeriod
         SuggestionOutcome::class,
         SessionSegment::class
     ],
-    version = 23,
+    version = 24,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -118,6 +122,7 @@ abstract class ForgeDatabase : RoomDatabase() {
     abstract fun restDayDao(): RestDayDao
     abstract fun trophyNearMissDao(): TrophyNearMissDao
     abstract fun bodyweightDao(): BodyweightDao
+    abstract fun bodyMeasurementDao(): BodyMeasurementDao
     abstract fun vacationDao(): VacationDao
     abstract fun extendedGoalDao(): ExtendedGoalDao
     abstract fun sessionBreakDao(): SessionBreakDao

@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.room.Room
 import com.forge.app.data.db.ALL_MIGRATIONS
 import com.forge.app.data.db.ForgeDatabase
+import com.forge.app.data.db.dao.BodyMeasurementDao
 import com.forge.app.data.db.dao.BodyweightDao
 import com.forge.app.data.db.dao.CardioDao
 import com.forge.app.data.db.dao.DayNameOverrideDao
@@ -50,6 +51,7 @@ object DatabaseModule {
     @Provides fun provideRestDayDao(db: ForgeDatabase): RestDayDao = db.restDayDao()
     @Provides fun provideTrophyNearMissDao(db: ForgeDatabase): TrophyNearMissDao = db.trophyNearMissDao()
     @Provides fun provideBodyweightDao(db: ForgeDatabase): BodyweightDao = db.bodyweightDao()
+    @Provides fun provideBodyMeasurementDao(db: ForgeDatabase): BodyMeasurementDao = db.bodyMeasurementDao()
     @Provides fun provideVacationDao(db: ForgeDatabase): com.forge.app.data.db.dao.VacationDao = db.vacationDao()
     @Provides fun provideExtendedGoalDao(db: ForgeDatabase): com.forge.app.data.db.dao.ExtendedGoalDao = db.extendedGoalDao()
     @Provides fun provideSessionBreakDao(db: ForgeDatabase): com.forge.app.data.db.dao.SessionBreakDao = db.sessionBreakDao()

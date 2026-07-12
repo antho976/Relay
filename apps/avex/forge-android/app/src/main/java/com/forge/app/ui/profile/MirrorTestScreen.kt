@@ -383,6 +383,15 @@ private fun OverviewLevel(
         BodyweightSparkline(bodyweight, photos, useKg, onBg, muted, accent)
     }
 
+    // Auto-paired "scale held, body changed" shots — excludes the band pair so it never echoes it.
+    val samePairs = remember(photos) {
+        sameWeightPairs(photos, zone, setOfNotNull(before?.fileName, after?.fileName))
+    }
+    if (samePairs.isNotEmpty()) {
+        Spacer(Modifier.height(24.dp))
+        SameWeightSection(samePairs, zone, useKg, fileFor, onBandCompare, muted)
+    }
+
     // ── Pose lens + tool row ──────────────────────────────────────────────────
     Spacer(Modifier.height(24.dp))
     val poses = remember(photos) { posesPresent(photos) }

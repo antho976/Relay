@@ -47,6 +47,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -89,6 +90,7 @@ fun ProgressCameraScreen(
     var showGhost by remember { mutableStateOf(true) }
     var timerOn by remember { mutableStateOf(false) }
     var countdown by remember { mutableIntStateOf(0) }
+    var capturing by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
 
     var hasPermission by remember {
@@ -112,17 +114,22 @@ fun ProgressCameraScreen(
     }
 
     fun capture() {
+        capturing = true
         val temp = File(context.cacheDir, "cap_${System.nanoTime()}.jpg")
         val opts = ImageCapture.OutputFileOptions.Builder(temp).build()
         controller.takePicture(opts, executor, object : ImageCapture.OnImageSavedCallback {
+            // Save first, navigate back only once the write lands (onBack clears the VM + cancels its
+            // scope, so firing it before the save could drop the photo).
             override fun onImageSaved(result: ImageCapture.OutputFileResults) {
-                viewModel.addCaptured(temp, pose.name); onBack()
+                viewModel.addCaptured(temp, pose.name) { onBack() }
             }
-            override fun onError(exc: ImageCaptureException) { error = "Couldn't save the photo." }
+            override fun onError(exc: ImageCaptureException) { capturing = false; error = "Couldn't save the photo." }
         })
     }
     fun onShutter() {
-        if (countdown > 0) return
+        // Guard against a re-tap while a countdown runs or a capture is already in flight (a fresh shot
+        // navigates away on success, so `capturing` only ever resets on the error path).
+        if (countdown > 0 || capturing) return
         if (timerOn) scope.launch {
             for (i in 3 downTo 1) { countdown = i; delay(1000) }
             countdown = 0; capture()
@@ -135,7 +142,12 @@ fun ProgressCameraScreen(
         if (hasPermission) {
             AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize())
             if (showGhost && ghost != null) {
-                GalleryFullImage(viewModel.fileFor(ghost), Modifier.fillMaxSize(), reqPx = 900, alpha = 0.28f)
+                // Crop-to-fill so the ghost frames the same way the FILL_CENTER preview does — a Fit
+                // ghost would letterbox and no longer line up with the live subject it's an aid for.
+                GalleryFullImage(
+                    viewModel.fileFor(ghost), Modifier.fillMaxSize(),
+                    reqPx = 900, alpha = 0.28f, contentScale = ContentScale.Crop
+                )
             }
             if (showGrid) ThirdsGrid()
             if (countdown > 0) {

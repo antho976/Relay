@@ -51,6 +51,9 @@ object PreferenceKeys {
     /** Cardio distance/pace in miles. ABSENT = derive from [USE_KG] (lb→miles, kg→km); only an
      *  explicit pick in onboarding or Settings persists this and breaks the tie to the weight unit. */
     val USE_MILES = booleanPreferencesKey("use_miles")
+    /** Body measurements (GYMAP-52) in cm vs inches. ABSENT = derive from [USE_KG] (kg→cm, lb→in);
+     *  an explicit pick in Settings persists this and breaks the tie to the weight unit. */
+    val USE_CM = booleanPreferencesKey("use_cm")
 
     // ─── Health Connect bodyweight sync (HC-3) ────────────────────────────────
     /** When ON (and the WeightRecord write permission is granted), Avex mirrors each weigh-in to
@@ -145,6 +148,9 @@ object PreferenceKeys {
     /** Mid-onboarding draft (every answer + the current page) as JSON, so a full app kill resumes
      *  setup where it left off. Removed atomically when onboarding completes. */
     val ONBOARDING_DRAFT = stringPreferencesKey("onboarding_draft")
+    /** In-progress freestyle log (exercises/sets typed so far + when it was opened) as JSON, so a
+     *  navigate-away or app kill can resume it. Removed when the workout is saved or discarded. */
+    val FREESTYLE_DRAFT = stringPreferencesKey("freestyle_draft")
     /** Set true the first (and only) time the default split is auto-seeded, so a deliberately empty
      *  plan (build-your-own / cleared) is never silently re-seeded on a later relaunch. */
     val PROGRAM_SEEDED = booleanPreferencesKey("program_seeded")

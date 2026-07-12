@@ -10,7 +10,11 @@ enum class PhotoPose(val label: String) {
     BACK("Back"),
     SIDE("Side"),
     LEGS("Legs"),
-    ARMS("Arms");
+    ARMS("Arms"),
+    CHEST("Chest"),
+    SHOULDERS("Shoulders"),
+    ABS("Abs"),
+    GLUTES("Glutes");
 
     companion object {
         /** Resolve a stored pose string to its enum, or null for untagged / unknown values. */

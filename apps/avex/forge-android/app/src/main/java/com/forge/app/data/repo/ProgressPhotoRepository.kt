@@ -1,14 +1,16 @@
 package com.forge.app.data.repo
 
 import android.content.Context
-import android.media.ExifInterface
 import android.net.Uri
+import androidx.exifinterface.media.ExifInterface
 import com.forge.app.data.db.dao.BodyweightDao
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -63,6 +65,12 @@ class ProgressPhotoRepository @Inject constructor(
     val revision: StateFlow<Long> = _revision.asStateFlow()
     private fun bump() { _revision.value += 1 }
 
+    // Serializes every read-modify-write on index.json / albums.json. Without it, two concurrent edits
+    // (e.g. a pose tap + the deferred note/weight commit firing together from the viewer) each read the
+    // index, mutate their copy, and the last writer clobbers the other's change. Non-reentrant, so only
+    // the leaf mutators lock — callers (add/addCaptured) never lock and then call a locking helper.
+    private val writeMutex = Mutex()
+
     /** All photos, newest first. */
     suspend fun photos(): List<ProgressPhoto> = withContext(Dispatchers.IO) {
         readIndex().sortedByDescending { it.takenAtMs }
@@ -111,16 +119,21 @@ class ProgressPhotoRepository @Inject constructor(
 
     /** Append a copied-in file to the index, snapshotting the nearest bodyweight for its date. */
     private suspend fun index(fileName: String, takenAtMs: Long, note: String, album: String, pose: String): ProgressPhoto {
+        // Snapshot outside the lock (canonicalAlbum + the bodyweight read don't touch the index).
         val photo = ProgressPhoto(fileName, takenAtMs, note, canonicalAlbum(album), pose, nearestBodyweightLb(takenAtMs))
-        writeIndex(readIndex() + photo)
-        bump()
+        writeMutex.withLock {
+            writeIndex(readIndex() + photo)
+            bump()
+        }
         return photo
     }
 
     suspend fun delete(photo: ProgressPhoto) = withContext(Dispatchers.IO) {
         File(dir, photo.fileName).delete()
-        writeIndex(readIndex().filterNot { it.fileName == photo.fileName })
-        bump()
+        writeMutex.withLock {
+            writeIndex(readIndex().filterNot { it.fileName == photo.fileName })
+            bump()
+        }
     }
 
     suspend fun setNote(photo: ProgressPhoto, note: String) = updatePhoto(photo) { it.copy(note = note) }
@@ -140,8 +153,10 @@ class ProgressPhotoRepository @Inject constructor(
 
     private suspend fun updatePhoto(photo: ProgressPhoto, transform: (ProgressPhoto) -> ProgressPhoto) =
         withContext(Dispatchers.IO) {
-            writeIndex(readIndex().map { if (it.fileName == photo.fileName) transform(it) else it })
-            bump()
+            writeMutex.withLock {
+                writeIndex(readIndex().map { if (it.fileName == photo.fileName) transform(it) else it })
+                bump()
+            }
         }
 
     // ── Albums ───────────────────────────────────────────────────────────────
@@ -154,11 +169,13 @@ class ProgressPhotoRepository @Inject constructor(
     suspend fun createAlbum(name: String): String = withContext(Dispatchers.IO) {
         val n = name.trim()
         if (n.isEmpty()) return@withContext ""
-        val current = readAlbums()
-        val existing = current.firstOrNull { it.equals(n, ignoreCase = true) }
-        if (existing != null) return@withContext existing
-        writeAlbums(current + n)
-        bump()
+        writeMutex.withLock {
+            val current = readAlbums()
+            val existing = current.firstOrNull { it.equals(n, ignoreCase = true) }
+            if (existing != null) return@withContext existing
+            writeAlbums(current + n)
+            bump()
+        }
         n
     }
 
@@ -166,17 +183,21 @@ class ProgressPhotoRepository @Inject constructor(
     suspend fun renameAlbum(old: String, new: String) = withContext(Dispatchers.IO) {
         val n = new.trim()
         if (n.isEmpty() || old.isBlank()) return@withContext
-        writeAlbums(readAlbums().map { if (it.equals(old, ignoreCase = true)) n else it }.distinct())
-        writeIndex(readIndex().map { if (it.album.equals(old, ignoreCase = true)) it.copy(album = n) else it })
-        bump()
+        writeMutex.withLock {
+            writeAlbums(readAlbums().map { if (it.equals(old, ignoreCase = true)) n else it }.distinct())
+            writeIndex(readIndex().map { if (it.album.equals(old, ignoreCase = true)) it.copy(album = n) else it })
+            bump()
+        }
     }
 
     /** Delete an album — its photos fall back to Unsorted (the images themselves are kept). Case-insensitive. */
     suspend fun deleteAlbum(name: String) = withContext(Dispatchers.IO) {
         if (name.isBlank()) return@withContext
-        writeAlbums(readAlbums().filterNot { it.equals(name, ignoreCase = true) })
-        writeIndex(readIndex().map { if (it.album.equals(name, ignoreCase = true)) it.copy(album = "") else it })
-        bump()
+        writeMutex.withLock {
+            writeAlbums(readAlbums().filterNot { it.equals(name, ignoreCase = true) })
+            writeIndex(readIndex().map { if (it.album.equals(name, ignoreCase = true)) it.copy(album = "") else it })
+            bump()
+        }
     }
 
     /** Resolve [name] to the canonical album casing — the existing album that matches case-insensitively,
@@ -190,9 +211,11 @@ class ProgressPhotoRepository @Inject constructor(
 
     /** Wipe every progress photo + the index — called by factory reset (these files live outside the DB). */
     suspend fun deleteAll() = withContext(Dispatchers.IO) {
-        dir.deleteRecursively()
-        dir.mkdirs()
-        bump()
+        writeMutex.withLock {
+            dir.deleteRecursively()
+            dir.mkdirs()
+            bump()
+        }
     }
 
     // ── Metadata helpers ───────────────────────────────────────────────────────
@@ -205,12 +228,25 @@ class ProgressPhotoRepository @Inject constructor(
             ?.weightLb
     }
 
-    /** The image's EXIF capture date in epoch millis (local zone), or null if absent/unparseable. */
+    /**
+     * The image's EXIF capture date in epoch millis, or null if absent/implausible. AndroidX
+     * ExifInterface so HEIC (iPhone transfers, most modern phones), PNG and WebP dates are read on
+     * every API level, not just JPEG. The timestamp is interpreted in the device's current zone —
+     * EXIF times are camera-local and near-always shot on this same phone; being wrong by a zone
+     * beats every photo landing on import day. A fresh non-lenient format per call ("0000:00:00…"
+     * placeholders must fail to parse; SimpleDateFormat isn't thread-safe), then a plausibility
+     * window so corrupt EXIF can't file a photo in 1970 or the future.
+     */
     private fun exifTakenAtMs(file: File): Long? = runCatching {
-        val raw = ExifInterface(file.path).getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL)
-            ?: ExifInterface(file.path).getAttribute(ExifInterface.TAG_DATETIME)
+        val exif = ExifInterface(file)
+        val raw = exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL)
+            ?: exif.getAttribute(ExifInterface.TAG_DATETIME_DIGITIZED)
+            ?: exif.getAttribute(ExifInterface.TAG_DATETIME)
             ?: return null
-        EXIF_DATE_FMT.parse(raw)?.time
+        SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US)
+            .apply { isLenient = false }
+            .parse(raw)?.time
+            ?.takeIf { it in EXIF_MIN_MS..(System.currentTimeMillis() + EXIF_CLOCK_SLACK_MS) }
     }.getOrNull()
 
     private fun readIndex(): List<ProgressPhoto> {
@@ -267,6 +303,9 @@ class ProgressPhotoRepository @Inject constructor(
     private companion object {
         // A weigh-in this close to the shot is treated as "the weight at that time".
         const val NEAR_WINDOW_MS = 14L * 24 * 60 * 60 * 1000
-        val EXIF_DATE_FMT = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US)
+        // Plausible capture dates: 2000-01-01 up to now + a day of camera-clock slack. Outside this,
+        // the EXIF value is treated as corrupt and the import falls back to override/now.
+        const val EXIF_MIN_MS = 946_684_800_000L
+        const val EXIF_CLOCK_SLACK_MS = 24L * 60 * 60 * 1000
     }
 }

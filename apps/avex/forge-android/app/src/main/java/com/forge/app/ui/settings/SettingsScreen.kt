@@ -94,6 +94,7 @@ internal val ALL_ITEMS = listOf(
     SettingsItem("App icon", "app icon launcher home screen change alternate", SettingsPage.Appearance),
     SettingsItem("Weight unit", "kg lb weight unit pounds kilograms", SettingsPage.Format),
     SettingsItem("Distance unit", "km mi miles kilometers distance cardio pace", SettingsPage.Format),
+    SettingsItem("Length unit", "cm in inches centimeters length body measurements waist chest", SettingsPage.Format),
     SettingsItem("Date format", "date format dd mm yyyy", SettingsPage.Format),
     SettingsItem("Time format", "time 12h 24h clock hour", SettingsPage.Format),
     SettingsItem("First day of week", "week start monday sunday", SettingsPage.Format),

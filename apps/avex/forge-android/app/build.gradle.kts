@@ -108,6 +108,9 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.activity.compose)
+    // AndroidX ExifInterface — reads capture dates from HEIC/PNG/WebP on every supported API level;
+    // the framework class misses those on older devices, losing the real date of gallery imports.
+    implementation(libs.androidx.exifinterface)
 
     // Compose (BOM-pinned)
     implementation(platform(libs.compose.bom))

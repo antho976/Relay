@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -30,6 +31,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -37,7 +39,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -49,11 +53,15 @@ import com.forge.app.domain.units.formatWeightDelta
 import com.forge.app.ui.common.ForgePrimaryCapsule
 import com.forge.app.ui.common.SegmentPill
 import com.forge.app.ui.common.bounceClick
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.SimpleDateFormat
 import java.time.ZoneId
 import java.util.Date
 import java.util.Locale
+import kotlin.math.abs
 
 /**
  * The sticky bar shown at the bottom while compare mode is on: it counts the selection (max 2) and
@@ -120,6 +128,11 @@ internal fun CompareSheet(
     val accent = MaterialTheme.colorScheme.primary
     val outline = MaterialTheme.colorScheme.outline
 
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var sharing by remember { mutableStateOf(false) }
+    val accentArgb = accent.toArgb()
+
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Column(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.95f))) {
             // Top row: close + Slider/Split toggle.
@@ -134,7 +147,37 @@ internal fun CompareSheet(
                         SegmentPill(m.label, selected = m == mode, onClick = { mode = m }, accent, Color.White, muted, outline)
                     }
                 }
-                Spacer(Modifier.width(8.dp))
+                IconButton(onClick = {
+                    if (sharing) return@IconButton
+                    sharing = true
+                    scope.launch {
+                        val uri = withContext(Dispatchers.Default) {
+                            val span = gallerySpanLabel(before.takenAtMs, after.takenAtMs, zone)
+                            val bw = before.weightLb
+                            val aw = after.weightLb
+                            // Delta-only (GYMAP-55): the change, never the absolute bodyweight, on a public card.
+                            val delta = if (bw != null && aw != null && abs(aw - bw) >= 0.1) {
+                                val d = aw - bw
+                                (if (d > 0) "+" else "−") + formatWeightDelta(abs(d), useKg)
+                            } else null
+                            val bp = PhotoPose.fromKey(before.pose)
+                            val ap = PhotoPose.fromKey(after.pose)
+                            val poseLine = when {
+                                bp != null && bp == ap -> bp.label.uppercase()
+                                bp != null && ap != null -> "${bp.label} → ${ap.label}".uppercase()
+                                else -> null
+                            }
+                            BeforeAfterCardRenderer.render(
+                                context, fileFor(before), fileFor(after),
+                                before.takenAtMs, after.takenAtMs, span, delta, poseLine, accentArgb
+                            )
+                        }
+                        sharing = false
+                        uri?.let { BeforeAfterCardRenderer.share(context, it) }
+                    }
+                }) {
+                    Icon(Icons.Filled.Share, contentDescription = "Share", tint = if (sharing) muted else Color.White)
+                }
             }
 
             Box(Modifier.fillMaxWidth().weight(1f)) {

@@ -40,7 +40,15 @@ class ProgressCameraViewModel @Inject constructor(
         _newest.value = photos.firstOrNull()
     }
 
-    fun addCaptured(temp: File, poseKey: String) = viewModelScope.launch { photoRepo.addCaptured(temp, poseKey) }
+    /**
+     * Persist a fresh capture, then invoke [onSaved] (the screen's back-navigation). [onSaved] runs
+     * INSIDE the coroutine after the write completes, so popping the screen — which clears this VM and
+     * cancels [viewModelScope] — can't race the save and drop the photo.
+     */
+    fun addCaptured(temp: File, poseKey: String, onSaved: () -> Unit) = viewModelScope.launch {
+        photoRepo.addCaptured(temp, poseKey)
+        onSaved()
+    }
 
     fun fileFor(photo: ProgressPhoto): File = photoRepo.fileFor(photo)
 }

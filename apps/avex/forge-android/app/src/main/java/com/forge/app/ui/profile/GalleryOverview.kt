@@ -64,11 +64,6 @@ internal fun GalleryHero(photos: List<ProgressPhoto>, zone: ZoneId, onBg: Color,
     Spacer(Modifier.height(4.dp))
     // Serif hero — the screen names itself here, so the top bar carries only the wordmark (§2). No period.
     Text("Gallery", style = MaterialTheme.typography.headlineLarge, color = onBg)
-    Spacer(Modifier.height(6.dp))
-    Text(
-        "Private · these never leave your phone.",
-        style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic, fontSize = 11.sp
-    )
 }
 
 // ── Progress band (the signature mark) ───────────────────────────────────────

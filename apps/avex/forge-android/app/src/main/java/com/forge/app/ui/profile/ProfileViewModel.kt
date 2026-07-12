@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -87,8 +88,10 @@ class ProfileViewModel @Inject constructor(
         load()
         // Keep the filmstrip fresh when the photo store changes elsewhere — most importantly a shot
         // taken in the in-app camera (a separate screen), but also edits made in the full gallery.
+        // drop(1): load() already reads the current photos, so skip the revision StateFlow's replayed
+        // initial value and react only to later bumps — no duplicate startup read of the index.
         viewModelScope.launch {
-            photoRepo.revision.collect { _state.value = _state.value.copy(photos = photoRepo.photos()) }
+            photoRepo.revision.drop(1).collect { _state.value = _state.value.copy(photos = photoRepo.photos()) }
         }
     }
 

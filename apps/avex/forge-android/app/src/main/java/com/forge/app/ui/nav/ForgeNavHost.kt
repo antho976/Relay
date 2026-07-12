@@ -53,6 +53,7 @@ import com.forge.app.ui.gym.train.DayListScreen
 import com.forge.app.ui.gym.train.DayScreen
 import com.forge.app.ui.goals.GoalEditorScreen
 import com.forge.app.ui.goals.GoalsScreen
+import com.forge.app.ui.profile.BodyMeasurementsScreen
 import com.forge.app.ui.profile.MirrorTestScreen
 import com.forge.app.ui.profile.ProgressCameraScreen
 import com.forge.app.ui.recap.RecapScreen
@@ -274,6 +275,9 @@ fun ForgeNavHost(initialDayKey: String? = null) {
         }
         composable(Routes.PROGRESS_CAMERA) {
             ProgressCameraScreen(onBack = { nav.popBackStack() })
+        }
+        composable(Routes.BODY_MEASUREMENTS) {
+            BodyMeasurementsScreen(onBack = { nav.popBackStack() })
         }
     }
     }

@@ -148,10 +148,16 @@ internal fun FormatPage(state: SettingsUiState, vm: SettingsViewModel, modifier:
             listOf("km" to "km", "mi" to "mi"),
             if (state.useMiles) "mi" else "km"
         ) { vm.setUseMiles(it == "mi") }
+        InlineChipRow(
+            "Length",
+            listOf("cm" to "cm", "in" to "in"),
+            if (state.useCm) "cm" else "in"
+        ) { vm.setUseCm(it == "cm") }
         // Live preview — updates the moment a unit is switched.
         CardFootnote(
             "e.g. ${com.forge.app.domain.units.formatWeight(135.0, state.useKg)} · " +
-                com.forge.app.domain.units.formatDistance(5.0, state.useMiles)
+                "${com.forge.app.domain.units.formatDistance(5.0, state.useMiles)} · " +
+                com.forge.app.domain.units.formatLength(90.0, state.useCm)
         )
 
         SettingsSectionHeader("Date & time")

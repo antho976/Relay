@@ -346,10 +346,13 @@ private fun SetTable(sets: List<SetDetail>, onBg: Color, muted: Color, outline: 
                     )
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (s.setType == "warmup") SetTag("WARM", muted)
                     if (s.isAmrap) SetTag("AMRAP", muted)
                     if (s.toFailure) SetTag("FAIL", muted)
                     if (s.isAssisted) SetTag("ASSIST", muted)
-                    if (!s.dropAnnotation.isNullOrBlank()) SetTag("DROP", muted)
+                    // A drop set is marked by set_type; the annotation (drop weight/reps) is optional
+                    // extra detail, so the badge keys off either (freestyle drops carry no annotation).
+                    if (s.setType == "drop" || !s.dropAnnotation.isNullOrBlank()) SetTag("DROP", muted)
                     s.rpe?.let {
                         Text("RPE ${rpeLabel(it)}", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
                     }

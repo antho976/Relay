@@ -187,8 +187,6 @@ internal fun GalleryStrip(
                     )
                 }
             }
-            Spacer(Modifier.height(10.dp))
-            PrivateNote(muted)
         }
         return
     }
@@ -203,8 +201,6 @@ internal fun GalleryStrip(
             ViewAllCell(photos.size, onViewAll, onBg, muted, outline)
         }
     }
-    Spacer(Modifier.height(10.dp))
-    Box(Modifier.padding(horizontal = 20.dp)) { PrivateNote(muted) }
 }
 
 /** One filmstrip photo — portrait crop, date overlaid on a soft bottom scrim. */
@@ -260,15 +256,6 @@ private fun ViewAllCell(count: Int, onViewAll: () -> Unit, onBg: Color, muted: C
             )
         }
     }
-}
-
-/** The data-safety reassurance line under the strip. */
-@Composable
-private fun PrivateNote(muted: Color) {
-    Text(
-        "Private · these never leave your phone.",
-        style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic, fontSize = 10.sp
-    )
 }
 
 /** ON THIS DAY — a single-line throwback to a workout from a previous month, set like a pull quote. */

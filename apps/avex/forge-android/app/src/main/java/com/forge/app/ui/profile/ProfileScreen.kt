@@ -77,6 +77,7 @@ fun ProfileScreen(
     onOpenTrophies: () -> Unit,
     onOpenPhotoGallery: () -> Unit = {},
     onOpenCamera: () -> Unit = {},
+    onOpenMeasurements: () -> Unit = {},
     viewModel: ProfileViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -239,6 +240,13 @@ fun ProfileScreen(
                         Spacer(Modifier.height(28.dp))
                         LifetimeVolumeGraph(state.lifetimeVolumeSeriesLb, muted, accent)
                     }
+                }
+
+                // ── Body measurements (GYMAP-52) — sits in the "your body" cluster, next to
+                //    bodyweight; its own hiltViewModel so ProfileViewModel stays untouched.
+                Spacer(Modifier.height(28.dp))
+                Column(pad.statsEntrance(3)) {
+                    MeasurementsHubCard(onOpen = onOpenMeasurements)
                 }
 
                 if (Features.SHOW_GAMIFICATION) {

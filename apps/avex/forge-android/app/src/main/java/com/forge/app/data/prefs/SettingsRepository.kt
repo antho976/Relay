@@ -177,6 +177,16 @@ class SettingsRepository @Inject constructor(
     suspend fun setUseMiles(value: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.USE_MILES] = value }
 
+    /**
+     * Body-measurement length unit (GYMAP-52). When the user never made an explicit choice, it
+     * follows the weight unit (kg→cm, lb→in) so one metric/imperial mental model holds by default;
+     * an explicit pick in Settings breaks the tie.
+     */
+    val useCm: Flow<Boolean> = context.forgePreferences.data
+        .map { it[PreferenceKeys.USE_CM] ?: (it[PreferenceKeys.USE_KG] ?: false) }
+    suspend fun setUseCm(value: Boolean) =
+        context.forgePreferences.edit { it[PreferenceKeys.USE_CM] = value }
+
     // ─── Health Connect bodyweight sync (HC-3) ────────────────────────────────
 
     /** Mirror weigh-ins to Health Connect. Off by default — write-back is strictly opt-in. */
@@ -667,6 +677,18 @@ class SettingsRepository @Inject constructor(
 
     suspend fun saveOnboardingDraft(json: String) =
         context.forgePreferences.edit { it[PreferenceKeys.ONBOARDING_DRAFT] = json }
+
+    // ─── Freestyle draft (resume an unsaved in-progress log) ─────────────────
+
+    /** One-shot read of the saved in-progress freestyle log JSON, or null when there is none. */
+    suspend fun freestyleDraft(): String? =
+        context.forgePreferences.data.firstOrNull()?.get(PreferenceKeys.FREESTYLE_DRAFT)
+
+    suspend fun saveFreestyleDraft(json: String) =
+        context.forgePreferences.edit { it[PreferenceKeys.FREESTYLE_DRAFT] = json }
+
+    suspend fun clearFreestyleDraft() =
+        context.forgePreferences.edit { it.remove(PreferenceKeys.FREESTYLE_DRAFT) }
 
     /** [useMilesChoice] is null when the user left the distance step untouched — in that case
      *  USE_MILES is deliberately NOT persisted, so [useMiles] keeps deriving from the weight unit. */

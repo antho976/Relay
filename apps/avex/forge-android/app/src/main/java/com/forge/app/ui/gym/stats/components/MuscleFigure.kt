@@ -47,6 +47,23 @@ private fun parsePath(d: String): Path = PathParser().parsePathString(d).toPath(
 private class FigureGeometry(val regions: List<Pair<MuscleGroup?, Path>>, val outline: Path)
 
 /**
+ * Compiled geometry is IDENTICAL for every figure of the same orientation (all front figures share
+ * ANATOMY_FRONT, all back figures share ANATOMY_BACK), so it's parsed at most once per orientation for
+ * the whole process — a grid of tiles no longer re-parses the multi-KB path set per instance. Keyed by
+ * `back`; the "All" full-body figure shares the front entry.
+ */
+private val geometryCache = java.util.concurrent.ConcurrentHashMap<Boolean, FigureGeometry>()
+
+private fun buildGeometry(back: Boolean): FigureGeometry {
+    val parts = if (back) ANATOMY_BACK else ANATOMY_FRONT
+    val outlineStr = if (back) ANATOMY_BACK_OUTLINE else ANATOMY_FRONT_OUTLINE
+    return FigureGeometry(
+        regions = parts.flatMap { part -> part.paths.map { part.group to parsePath(it) } },
+        outline = parsePath(outlineStr)
+    )
+}
+
+/**
  * A single anatomy figure (front or back) drawn small: the whole musculature rendered as faint
  * [detail] relief over the [body] silhouette, with the target [muscle] lit in [lit] on top. Drawing
  * every region — not just the target — is what makes a back view read as a back (you see lats, traps
@@ -63,19 +80,14 @@ internal fun MuscleFigure(
     modifier: Modifier = Modifier
 ) {
     val back = muscle.usesBackView()
-    val parts = if (back) ANATOMY_BACK else ANATOMY_FRONT
-    val outlineStr = if (back) ANATOMY_BACK_OUTLINE else ANATOMY_FRONT_OUTLINE
     val originX = if (back) ANATOMY_BACK_ORIGIN_X else 0f
 
     // Same off-thread compile guard as BodyHeatmap — the outline d-string is kilobytes; parsing it on
-    // the main thread janked the first frame. Stable inputs, so it runs once per muscle per process.
-    val geometry by produceState<FigureGeometry?>(initialValue = null, muscle) {
-        value = withContext(Dispatchers.Default) {
-            FigureGeometry(
-                regions = parts.flatMap { part -> part.paths.map { part.group to parsePath(it) } },
-                outline = parsePath(outlineStr)
-            )
-        }
+    // the main thread janked the first frame. A process cache keyed by orientation means the parse runs
+    // once per front/back, not once per tile — a warm cache paints on the first frame with no dispatch.
+    val geometry by produceState<FigureGeometry?>(initialValue = geometryCache[back], back) {
+        geometryCache[back]?.let { value = it; return@produceState }
+        value = withContext(Dispatchers.Default) { geometryCache.getOrPut(back) { buildGeometry(back) } }
     }
 
     val cw = muscle.cropWindow()
@@ -114,13 +126,9 @@ internal fun FullBodyFigure(
     detail: Color,
     modifier: Modifier = Modifier
 ) {
-    val geometry by produceState<FigureGeometry?>(initialValue = null) {
-        value = withContext(Dispatchers.Default) {
-            FigureGeometry(
-                regions = ANATOMY_FRONT.flatMap { part -> part.paths.map { part.group to parsePath(it) } },
-                outline = parsePath(ANATOMY_FRONT_OUTLINE)
-            )
-        }
+    // Shares the front-orientation entry with every front MuscleFigure (identical geometry).
+    val geometry by produceState<FigureGeometry?>(initialValue = geometryCache[false]) {
+        if (value == null) value = withContext(Dispatchers.Default) { geometryCache.getOrPut(false) { buildGeometry(false) } }
     }
     Canvas(modifier.clipToBounds()) {
         val g = geometry ?: return@Canvas
