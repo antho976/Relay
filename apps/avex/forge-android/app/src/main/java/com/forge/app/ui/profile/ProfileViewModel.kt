@@ -6,23 +6,26 @@ import androidx.lifecycle.viewModelScope
 import com.forge.app.data.db.entities.BodyweightEntry
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.data.repo.BodyweightRepository
+import com.forge.app.data.repo.ExtendedGoalRepository
 import com.forge.app.data.repo.ProfileData
 import com.forge.app.data.repo.ProfileRepository
 import com.forge.app.data.repo.AvatarRepository
 import com.forge.app.data.repo.ProgressPhoto
 import com.forge.app.data.repo.ProgressPhotoRepository
+import com.forge.app.domain.goal.GoalMetric
+import com.forge.app.domain.goal.parseGoalType
 import com.forge.app.ui.profile.state.ProfileUiState
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.io.File
+import java.time.LocalDate
 import javax.inject.Inject
 
 /**
@@ -37,7 +40,8 @@ class ProfileViewModel @Inject constructor(
     private val settingsRepo: SettingsRepository,
     private val photoRepo: ProgressPhotoRepository,
     private val avatarRepo: AvatarRepository,
-    private val bodyweightRepo: BodyweightRepository
+    private val bodyweightRepo: BodyweightRepository,
+    private val extendedGoalRepo: ExtendedGoalRepository
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(ProfileUiState())
@@ -51,6 +55,17 @@ class ProfileViewModel @Inject constructor(
             .map { entries -> entries.sortedBy { it.recordedAt } }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    /** The active bodyweight goal target in lb (canonical), or null when none is set — feeds the
+     *  chart's dashed target line. Reads just the goal's target; progress is computed elsewhere. */
+    val bodyweightGoalLb: StateFlow<Double?> =
+        extendedGoalRepo.observeAll()
+            .map { goals ->
+                goals.firstNotNullOfOrNull { g ->
+                    if (parseGoalType(g.goalType)?.metric == GoalMetric.BODYWEIGHT) g.targetValue else null
+                }
+            }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
     /** Whether the quick-log should offer "Import from Health Connect" (read granted). */
     private val _weightConnected = MutableStateFlow(false)
     val weightConnected: StateFlow<Boolean> = _weightConnected.asStateFlow()
@@ -59,9 +74,9 @@ class ProfileViewModel @Inject constructor(
     private val _bodyweightMessage = MutableStateFlow<String?>(null)
     val bodyweightMessage: StateFlow<String?> = _bodyweightMessage.asStateFlow()
 
-    /** Save a typed weigh-in (lb); the trend updates reactively via observeRecent. */
-    fun logBodyweight(weightLb: Double) = viewModelScope.launch {
-        bodyweightRepo.log(weightLb)
+    /** Save a typed weigh-in (lb) for [date] with an optional [note]; the trend updates reactively. */
+    fun logBodyweight(weightLb: Double, date: LocalDate, note: String?) = viewModelScope.launch {
+        bodyweightRepo.log(weightLb, date, note)
         _bodyweightMessage.value = "Saved."
     }
 
@@ -88,10 +103,11 @@ class ProfileViewModel @Inject constructor(
         load()
         // Keep the filmstrip fresh when the photo store changes elsewhere — most importantly a shot
         // taken in the in-app camera (a separate screen), but also edits made in the full gallery.
-        // drop(1): load() already reads the current photos, so skip the revision StateFlow's replayed
-        // initial value and react only to later bumps — no duplicate startup read of the index.
+        // Collect from the start (no drop): the replayed initial revision costs one redundant photos()
+        // read that matches load()'s, but dropping it risks losing a bump that lands between load()'s
+        // read and this collector subscribing (that bump would BE the replayed value we'd skip).
         viewModelScope.launch {
-            photoRepo.revision.drop(1).collect { _state.value = _state.value.copy(photos = photoRepo.photos()) }
+            photoRepo.revision.collect { _state.value = _state.value.copy(photos = photoRepo.photos()) }
         }
     }
 
@@ -181,7 +197,8 @@ class ProfileViewModel @Inject constructor(
         trophyGrid = data.trophyGrid,
         closestTrophy = data.closestTrophy,
         memory = data.memory,
-        lifetimeVolumeSeriesLb = data.lifetimeVolumeSeriesLb
+        lifetimeVolumeSeriesLb = data.lifetimeVolumeSeriesLb,
+        activityByDay = data.activityByDay
     )
 
     /** Called by the UI after the one-shot celebration has played so it never replays on recompose. */

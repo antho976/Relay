@@ -157,6 +157,21 @@ class SettingsViewModel @Inject constructor(
     fun deleteVacation(period: com.forge.app.data.db.entities.VacationPeriod) =
         viewModelScope.launch { vacationRepo.delete(period) }
 
+    // ─── Custom cardio activity types (GYMAP-37) ──────────────────────────────
+    // A standalone StateFlow (not the big combine) — list data managed like vacations above.
+    val customCardioTypes: StateFlow<List<com.forge.app.domain.cardio.CustomCardioType>> =
+        settingsRepo.customCardioTypes
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    fun addCustomCardioType(type: com.forge.app.domain.cardio.CustomCardioType) =
+        viewModelScope.launch { settingsRepo.addCustomCardioType(type) }
+
+    fun updateCustomCardioType(type: com.forge.app.domain.cardio.CustomCardioType) =
+        viewModelScope.launch { settingsRepo.updateCustomCardioType(type) }
+
+    fun deleteCustomCardioType(code: String) =
+        viewModelScope.launch { settingsRepo.deleteCustomCardioType(code) }
+
     val state: StateFlow<SettingsUiState> = combine(
         settingsRepo.amoledMode,
         settingsRepo.useKg,

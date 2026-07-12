@@ -60,5 +60,9 @@ data class ProfileUiState(
     val memory: OnThisDayMemory? = null,
 
     // Cumulative lifted volume (lb), one point per finished session, oldest → newest — the All-Time graph.
-    val lifetimeVolumeSeriesLb: List<Double> = emptyList()
+    val lifetimeVolumeSeriesLb: List<Double> = emptyList(),
+
+    // Times trained each calendar day this year (gym + cardio), keyed by epoch-day — the THIS YEAR
+    // consistency grid. Empty ⇒ no activity yet this year (the section hides).
+    val activityByDay: Map<Long, Int> = emptyMap()
 )

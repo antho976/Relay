@@ -32,8 +32,8 @@ import androidx.compose.ui.unit.sp
 import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.domain.cardio.CardioEffort
 import com.forge.app.domain.cardio.CardioRestReason
+import com.forge.app.domain.cardio.CardioActivity
 import com.forge.app.domain.cardio.CardioSessionCompare
-import com.forge.app.domain.cardio.CardioType
 import com.forge.app.domain.cardio.CardioWearableDay
 import com.forge.app.domain.cardio.RoutePoint
 import com.forge.app.domain.cardio.cardioDetailParts
@@ -81,7 +81,7 @@ fun CardioSessionDetailSheet(
     /** Tapping the Avex wordmark — defaults to "go Home"; the cardio tab overrides it to close first. */
     onHome: () -> Unit = com.forge.app.ui.common.LocalGoHome.current
 ) {
-    val type = CardioType.fromCode(entry.type)
+    val activity = CardioActivity.resolve(entry.type, com.forge.app.ui.cardio.LocalCardioTypes.current)
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val outline = MaterialTheme.colorScheme.outline
@@ -115,14 +115,14 @@ fun CardioSessionDetailSheet(
                 Column(Modifier.padding(horizontal = 24.dp).padding(top = 8.dp)) {
                     Text(dateLine.uppercase(), style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
                     Spacer(Modifier.height(8.dp))
-                    Text(type.displayName, style = MaterialTheme.typography.displaySmall, color = onBg)
+                    Text(activity.displayName, style = MaterialTheme.typography.displaySmall, color = onBg)
                     Spacer(Modifier.height(16.dp))
                 }
             }
 
             item("stats") {
                 Column(Modifier.padding(horizontal = 24.dp, vertical = 8.dp)) {
-                    if (type.isRest) {
+                    if (activity.isRest) {
                         StatRow("Rest", CardioRestReason.fromCode(entry.restReason)?.displayName ?: "Rest day", onBg, muted, outline)
                     } else {
                         val unit = distanceUnitLabel(useMiles)
@@ -146,7 +146,7 @@ fun CardioSessionDetailSheet(
             compare?.previous?.let { prev ->
                 item("previous") {
                     Column(Modifier.padding(horizontal = 24.dp, vertical = 8.dp)) {
-                        EditorialHeader(label = "Previous ${type.displayName}", muted = muted, accent = accent)
+                        EditorialHeader(label = "Previous ${activity.displayName}", muted = muted, accent = accent)
                         Spacer(Modifier.height(8.dp))
                         val prevDate = remember(prev.date) {
                             SimpleDateFormat("MMM d", Locale.getDefault()).format(Date(prev.date))
@@ -165,12 +165,12 @@ fun CardioSessionDetailSheet(
             // Wearable steps — shown when a watch fed data, or as a quiet placeholder once connected
             // (so a connected user sees the section is live before that day's steps sync). Hidden
             // entirely on a rest day, and when nothing's connected (the banner carries the invite).
-            if (!type.isRest && (wearable?.hasData == true || wearableConnected)) {
+            if (!activity.isRest && (wearable?.hasData == true || wearableConnected)) {
                 item("steps") {
                     StepsByHourSection(wearable = wearable, connected = wearableConnected, onBg = onBg, muted = muted, outline = outline, accent = accent)
                 }
             }
-            if (!type.isRest && route != null && route.size >= 2) {
+            if (!activity.isRest && route != null && route.size >= 2) {
                 item("route") {
                     Column(Modifier.padding(horizontal = 24.dp, vertical = 8.dp)) {
                         EditorialHeader(label = "Route", muted = muted, accent = accent)
@@ -182,7 +182,7 @@ fun CardioSessionDetailSheet(
                         }
                     }
                 }
-            } else if (!type.isRest && onShowRoute != null) {
+            } else if (!activity.isRest && onShowRoute != null) {
                 // A matching watch session has a route, but Health Connect needs per-route consent first.
                 item("route-cta") {
                     Column(Modifier.padding(horizontal = 24.dp, vertical = 8.dp)) {

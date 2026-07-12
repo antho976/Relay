@@ -177,6 +177,14 @@ private fun formatElapsed(ms: Long): String {
 }
 
 /**
+ * Longest gap for which resuming a draft rewinds the session clock to the draft's original open time
+ * (keeping a quick navigate-away duration honest). A draft survives app kills, so one picked up hours
+ * or days later would otherwise record the whole away time as a single multi-day "workout"; past this
+ * window we start the clock fresh from now instead.
+ */
+private const val MAX_RESUME_REWIND_MS = 6L * 60 * 60 * 1000
+
+/**
  * Dedicated freestyle ("go with the flow") logger: log what you did at the gym after the fact, with
  * no fixed plan. Add exercises from the browser, type or step weight × reps per set, and save — it
  * persists as a normal finished session (history/stats/PRs all pick it up). Live/flow archetype: serif
@@ -199,7 +207,8 @@ fun FreestyleLogScreen(
     var showTemplates by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     // When the logger was opened — becomes the saved session's start so its duration isn't ~0. Mutable
-    // so resuming a draft rewinds it to the original open time (the recorded duration stays honest).
+    // so resuming a draft can rewind it to the original open time (bounded by MAX_RESUME_REWIND_MS on
+    // resume, so a long app-kill gap doesn't inflate the recorded duration).
     var openedAtMs by remember { mutableStateOf(System.currentTimeMillis()) }
     val elapsedMs by produceState(0L, openedAtMs) {
         while (true) { value = System.currentTimeMillis() - openedAtMs; delay(1000) }
@@ -208,13 +217,19 @@ fun FreestyleLogScreen(
     // Draft persistence: on open, offer to resume an unsaved log; while editing, autosave (debounced).
     var pendingDraft by remember { mutableStateOf<FreestyleDraft?>(null) }
     var draftChecked by remember { mutableStateOf(false) }
+    // Set the moment we commit to leaving (save or back). Kills the debounced autosave so it can't fire
+    // after viewModel.save() has cleared the draft — otherwise a late write would resurrect a resume
+    // draft for an already-saved workout (offering to log it twice). A key of the autosave effect so
+    // flipping it cancels any in-flight delay.
+    var leaving by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         viewModel.loadDraft()?.takeIf { draftToItems(it).isNotEmpty() }?.let { pendingDraft = it }
         draftChecked = true
     }
-    LaunchedEffect(items, openedAtMs, pendingDraft, draftChecked) {
-        // Hold off until the resume choice is settled so we never overwrite the draft before offering it.
-        if (!draftChecked || pendingDraft != null) return@LaunchedEffect
+    LaunchedEffect(items, openedAtMs, pendingDraft, draftChecked, leaving) {
+        // Hold off until the resume choice is settled so we never overwrite the draft before offering it,
+        // and once we're leaving so a debounced save can't outlive the session-save's draft clear.
+        if (leaving || !draftChecked || pendingDraft != null) return@LaunchedEffect
         if (items.isEmpty()) { viewModel.clearDraft(); return@LaunchedEffect }
         delay(600)   // debounce: only persist once a burst of edits settles
         viewModel.saveDraft(draftFrom(items, openedAtMs))
@@ -226,6 +241,7 @@ fun FreestyleLogScreen(
 
     // Flush the latest edits before leaving, so a back within the debounce window still keeps the draft.
     fun leave() {
+        leaving = true
         if (draftChecked && pendingDraft == null && items.isNotEmpty()) {
             viewModel.saveDraft(draftFrom(items, openedAtMs))
         }
@@ -253,7 +269,10 @@ fun FreestyleLogScreen(
             }
             if (sets.isEmpty()) null else FreestyleExerciseInput(ex.libId, sets)
         }
-        if (payload.isNotEmpty()) viewModel.save(payload, openedAtMs) { onBack() }
+        if (payload.isNotEmpty()) {
+            leaving = true   // stop the debounced autosave from re-writing the draft after save clears it
+            viewModel.save(payload, openedAtMs) { onBack() }
+        }
     }
 
     Box(Modifier.fillMaxSize()) {
@@ -291,7 +310,12 @@ fun FreestyleLogScreen(
                             exerciseCount = draftToItems(draft).size,
                             onResume = {
                                 items = draftToItems(draft)
-                                openedAtMs = draft.openedAtMs
+                                // Rewind to the original open time so a quick navigate-away keeps the
+                                // duration honest — but only within a sane window. Past it (an app-kill
+                                // gap of hours/days) the original time is meaningless, so start fresh
+                                // rather than record the whole away time as workout duration.
+                                val now = System.currentTimeMillis()
+                                openedAtMs = draft.openedAtMs.takeIf { now - it <= MAX_RESUME_REWIND_MS } ?: now
                                 pendingDraft = null
                             },
                             onStartFresh = {

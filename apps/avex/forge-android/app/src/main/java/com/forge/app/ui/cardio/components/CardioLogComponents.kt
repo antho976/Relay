@@ -36,6 +36,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.forge.app.domain.cardio.CardioActivity
 import com.forge.app.domain.cardio.CardioType
 import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.common.clickableLabeled
@@ -64,17 +65,21 @@ internal fun CardioLogHeroItem(dateHeader: String, muted: Color, onBg: Color, ou
 
 /**
  * The activity-type selector — shows the current pick (icon + name) and opens a dropdown of all
- * types. A compact single-row control in place of the old 12-pill grid.
+ * types: the built-in [CardioType]s, then the user's custom activities (GYMAP-37), then an
+ * "add custom activity" row that opens the create dialog. A compact single-row control.
  */
 @Composable
 internal fun ActivityDropdown(
-    selected: CardioType,
-    onSelect: (CardioType) -> Unit,
+    selected: CardioActivity,
+    onSelect: (CardioActivity) -> Unit,
+    onAddCustom: () -> Unit,
     onBg: Color,
     muted: Color,
     outline: Color
 ) {
     var open by remember { mutableStateOf(false) }
+    val customs = com.forge.app.ui.cardio.LocalCardioTypes.current
+    val accent = MaterialTheme.colorScheme.primary
     Box {
         Row(
             modifier = Modifier
@@ -98,17 +103,29 @@ internal fun ActivityDropdown(
             )
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            CardioType.entries.forEach { t ->
+            val builtins = CardioType.entries.map { CardioActivity.Builtin(it) }
+            val customActivities = customs.map { CardioActivity.Custom(it) }
+            (builtins + customActivities).forEach { activity ->
                 DropdownMenuItem(
                     text = {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Icon(t.icon, contentDescription = null, tint = onBg, modifier = Modifier.size(18.dp))
-                            Text(t.displayName, color = onBg)
+                            Icon(activity.icon, contentDescription = null, tint = onBg, modifier = Modifier.size(18.dp))
+                            Text(activity.displayName, color = onBg)
                         }
                     },
-                    onClick = { onSelect(t); open = false }
+                    onClick = { onSelect(activity); open = false }
                 )
             }
+            HorizontalDivider(color = outline.copy(alpha = 0.25f))
+            DropdownMenuItem(
+                text = {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("+", style = MaterialTheme.typography.titleMedium, color = accent)
+                        Text("Add custom activity", color = accent)
+                    }
+                },
+                onClick = { open = false; onAddCustom() }
+            )
         }
     }
 }

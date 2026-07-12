@@ -27,6 +27,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -109,7 +111,15 @@ fun ForgeNavHost(initialDayKey: String? = null) {
         nav.popBackStack(Routes.OVERVIEW, false)
     }
 
-    CompositionLocalProvider(com.forge.app.ui.common.LocalGoHome provides goHome) {
+    // User-defined cardio activities, fed once here so every cardio surface can resolve a `custom_`
+    // code to its name + glyph without per-screen plumbing (GYMAP-37).
+    val cardioTypesVm: com.forge.app.ui.cardio.CardioTypesViewModel = hiltViewModel()
+    val cardioTypes by cardioTypesVm.types.collectAsStateWithLifecycle()
+
+    CompositionLocalProvider(
+        com.forge.app.ui.common.LocalGoHome provides goHome,
+        com.forge.app.ui.cardio.LocalCardioTypes provides cardioTypes
+    ) {
     NavHost(
         navController = nav,
         startDestination = Routes.OVERVIEW,

@@ -8,9 +8,9 @@ import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.data.health.HealthConnectManager
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.data.repo.CardioRepository
+import com.forge.app.domain.cardio.CardioActivity
 import com.forge.app.domain.cardio.CardioEffort
 import com.forge.app.domain.cardio.CardioRestReason
-import com.forge.app.domain.cardio.CardioType
 import com.forge.app.domain.cardio.CardioWearableDay
 import com.forge.app.domain.cardio.RoutePoint
 import com.forge.app.ui.nav.Routes
@@ -57,7 +57,7 @@ data class CardioSessionDetailState(
 @HiltViewModel
 class CardioSessionDetailViewModel @Inject constructor(
     private val cardioRepo: CardioRepository,
-    settingsRepo: SettingsRepository,
+    private val settingsRepo: SettingsRepository,
     private val healthConnectManager: HealthConnectManager,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
@@ -147,6 +147,11 @@ class CardioSessionDetailViewModel @Inject constructor(
     fun openEdit() { editing.value = true }
     fun closeEdit() { editing.value = false }
 
+    /** Persist a custom activity created inline while editing this session (GYMAP-37). */
+    fun addCustomType(type: com.forge.app.domain.cardio.CustomCardioType) = viewModelScope.launch {
+        settingsRepo.addCustomCardioType(type)
+    }
+
     fun delete() {
         val entry = state.value.entry ?: return
         viewModelScope.launch {
@@ -156,7 +161,7 @@ class CardioSessionDetailViewModel @Inject constructor(
     }
 
     fun save(
-        type: CardioType,
+        activity: CardioActivity,
         durationMin: Int,
         distanceKm: Double?,
         effort: CardioEffort?,
@@ -172,14 +177,14 @@ class CardioSessionDetailViewModel @Inject constructor(
                 CardioEntry(
                     id = current.id,
                     date = dateMs,
-                    type = type.code,
+                    type = activity.code,
                     durationMin = durationMin.coerceAtLeast(0),
-                    distanceKm = if (type.isRest) null else distanceKm,
-                    effort = if (type.isRest) null else effort?.code,
-                    restReason = if (type.isRest) restReason?.code else null,
+                    distanceKm = if (activity.isRest) null else distanceKm,
+                    effort = if (activity.isRest) null else effort?.code,
+                    restReason = if (activity.isRest) restReason?.code else null,
                     note = note?.takeIf { it.isNotBlank() },
-                    intervalCount = if (type == CardioType.HIIT) intervalCount?.takeIf { it > 0 } else null,
-                    hrZone = if (type.isRest) null else hrZone
+                    intervalCount = if (activity.isHiit) intervalCount?.takeIf { it > 0 } else null,
+                    hrZone = if (activity.isRest) null else hrZone
                 )
             )
             editing.value = false

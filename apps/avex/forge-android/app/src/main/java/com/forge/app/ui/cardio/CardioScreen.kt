@@ -117,6 +117,7 @@ fun CardioScreen(
         state.sheetOpen -> CardioLogSheet(
             onDismiss = viewModel::closeSheet,
             onSave = viewModel::saveEntry,
+            onCreateCustom = viewModel::addCustomType,
             editing = state.editing,
             useMiles = state.useMiles,
             onHome = { viewModel.closeSheet(); goHome() }

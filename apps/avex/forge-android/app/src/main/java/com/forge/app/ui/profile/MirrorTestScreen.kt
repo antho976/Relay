@@ -39,6 +39,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -57,6 +58,8 @@ import com.forge.app.ui.common.ForgeWordmark
 import com.forge.app.ui.common.SegmentPill
 import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.theme.LocalForgeSettings
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.time.ZoneId
 
 /** A frozen snapshot of the list the viewer pages through, plus the index it opened on. */
@@ -384,8 +387,12 @@ private fun OverviewLevel(
     }
 
     // Auto-paired "scale held, body changed" shots — excludes the band pair so it never echoes it.
-    val samePairs = remember(photos) {
-        sameWeightPairs(photos, zone, setOfNotNull(before?.fileName, after?.fileName))
+    // Pairing is O(n²) over every weighed photo, so it runs off the main thread (like the figure/decode
+    // paths) to keep the overview from janking on large galleries; empty until the first pass lands.
+    val samePairs by produceState(emptyList<SameWeightPair>(), photos, before, after) {
+        value = withContext(Dispatchers.Default) {
+            sameWeightPairs(photos, zone, setOfNotNull(before?.fileName, after?.fileName))
+        }
     }
     if (samePairs.isNotEmpty()) {
         Spacer(Modifier.height(24.dp))

@@ -516,6 +516,36 @@ class SettingsRepository @Inject constructor(
     suspend fun setCardioWearableHintDismissed() =
         context.forgePreferences.edit { it[PreferenceKeys.CARDIO_WEARABLE_HINT_DISMISSED] = true }
 
+    // ─── Custom cardio activity types (GYMAP-37) ──────────────────────────────
+    /** The user's defined cardio activities, decoded from the JSON blob (empty when none). */
+    val customCardioTypes: Flow<List<com.forge.app.domain.cardio.CustomCardioType>> =
+        context.forgePreferences.data
+            .map { com.forge.app.domain.cardio.CustomCardioType.listFromJson(it[PreferenceKeys.CUSTOM_CARDIO_TYPES]) }
+
+    /** Append a new activity (deduped by code — its code is freshly minted so this is just a guard). */
+    suspend fun addCustomCardioType(type: com.forge.app.domain.cardio.CustomCardioType) =
+        context.forgePreferences.edit { prefs ->
+            val cur = com.forge.app.domain.cardio.CustomCardioType.listFromJson(prefs[PreferenceKeys.CUSTOM_CARDIO_TYPES])
+            prefs[PreferenceKeys.CUSTOM_CARDIO_TYPES] =
+                com.forge.app.domain.cardio.CustomCardioType.listToJson(cur.filter { it.code != type.code } + type)
+        }
+
+    /** Replace an existing activity in place (rename / change glyph) — matched by its stable code. */
+    suspend fun updateCustomCardioType(type: com.forge.app.domain.cardio.CustomCardioType) =
+        context.forgePreferences.edit { prefs ->
+            val cur = com.forge.app.domain.cardio.CustomCardioType.listFromJson(prefs[PreferenceKeys.CUSTOM_CARDIO_TYPES])
+            prefs[PreferenceKeys.CUSTOM_CARDIO_TYPES] =
+                com.forge.app.domain.cardio.CustomCardioType.listToJson(cur.map { if (it.code == type.code) type else it })
+        }
+
+    /** Forget an activity. Sessions already logged against its code keep the code and render as "Other". */
+    suspend fun deleteCustomCardioType(code: String) =
+        context.forgePreferences.edit { prefs ->
+            val cur = com.forge.app.domain.cardio.CustomCardioType.listFromJson(prefs[PreferenceKeys.CUSTOM_CARDIO_TYPES])
+            prefs[PreferenceKeys.CUSTOM_CARDIO_TYPES] =
+                com.forge.app.domain.cardio.CustomCardioType.listToJson(cur.filter { it.code != code })
+        }
+
     // ─── Plate weight (machine/cable plate-loaded exercises) ──────────────────
     /** Weight of one plate in lb. Plate-loaded exercises are entered/shown as a plate count. */
     val plateWeightLb: Flow<Double> = context.forgePreferences.data

@@ -83,6 +83,7 @@ fun ProfileScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val showRankUpCelebration by viewModel.showRankUpCelebration.collectAsStateWithLifecycle()
     val bodyweight by viewModel.bodyweight.collectAsStateWithLifecycle()
+    val bodyweightGoalLb by viewModel.bodyweightGoalLb.collectAsStateWithLifecycle()
     val weightConnected by viewModel.weightConnected.collectAsStateWithLifecycle()
     val bodyweightMessage by viewModel.bodyweightMessage.collectAsStateWithLifecycle()
     var viewing by remember { mutableStateOf<ProgressPhoto?>(null) }
@@ -227,6 +228,7 @@ fun ProfileScreen(
                     Spacer(Modifier.height(28.dp))
                     BodySection(
                         entries = bodyweight,
+                        goalLb = bodyweightGoalLb,
                         onLog = {
                             // Fresh sheet: drop any prior result line and re-check HC permission so a
                             // grant made in Settings since this screen opened surfaces the import option.
@@ -239,6 +241,16 @@ fun ProfileScreen(
                     if (state.lifetimeVolumeSeriesLb.size >= 2) {
                         Spacer(Modifier.height(28.dp))
                         LifetimeVolumeGraph(state.lifetimeVolumeSeriesLb, muted, accent)
+                    }
+                }
+
+                // ── This year's consistency (gym + cardio) — a whole-calendar-year glance, a
+                //    DIFFERENT mark from the Stats 26-week load heatmap (§4.3). Hidden until the
+                //    year has any activity, so a new user never sees a dead grid (§12).
+                if (state.activityByDay.isNotEmpty()) {
+                    Spacer(Modifier.height(28.dp))
+                    Column(pad.statsEntrance(3)) {
+                        YearConsistencySection(state.activityByDay, muted, accent)
                     }
                 }
 
@@ -312,11 +324,11 @@ fun ProfileScreen(
 
     if (showWeightSheet) {
         BodyweightLogSheet(
-            latestLb = bodyweight.lastOrNull()?.weightLb,
+            entries = bodyweight,
             canImport = weightConnected,
             message = bodyweightMessage,
-            onSave = { lb ->
-                viewModel.logBodyweight(lb)
+            onSave = { lb, date, note ->
+                viewModel.logBodyweight(lb, date, note)
                 showWeightSheet = false
             },
             onImport = { viewModel.importBodyweight() },  // stays open so the result line shows

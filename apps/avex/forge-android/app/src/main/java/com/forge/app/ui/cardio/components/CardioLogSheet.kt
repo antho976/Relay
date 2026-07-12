@@ -39,9 +39,10 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.data.db.entities.CardioEntry
+import com.forge.app.domain.cardio.CardioActivity
 import com.forge.app.domain.cardio.CardioEffort
 import com.forge.app.domain.cardio.CardioRestReason
-import com.forge.app.domain.cardio.CardioType
+import com.forge.app.domain.cardio.CustomCardioType
 import com.forge.app.domain.cardio.pacePerUnit
 import com.forge.app.domain.units.distanceInputValue
 import com.forge.app.domain.units.distanceUnitLabel
@@ -55,7 +56,7 @@ import java.util.Locale
 fun CardioLogSheet(
     onDismiss: () -> Unit,
     onSave: (
-        type: CardioType,
+        activity: CardioActivity,
         durationMin: Int,
         distanceKm: Double?,
         effort: CardioEffort?,
@@ -65,6 +66,9 @@ fun CardioLogSheet(
         intervalCount: Int?,
         hrZone: String?
     ) -> Unit,
+    /** Persist a just-created custom activity (GYMAP-37) — wired to the VM so it lands in DataStore
+     *  and the picker/rows pick it up reactively. */
+    onCreateCustom: (CustomCardioType) -> Unit = {},
     editing: CardioEntry? = null,
     /** Distance entry/pace unit — true = miles, false = km. The field stores km regardless. */
     useMiles: Boolean = false,
@@ -74,7 +78,13 @@ fun CardioLogSheet(
     // Keyed on the edited entry's id so the form re-seeds if the sheet is ever reused for a different
     // entry without leaving composition — fields can't carry over from the previously-opened entry.
     val editKey = editing?.id
-    var type by remember(editKey) { mutableStateOf(editing?.let { CardioType.fromCode(it.type) } ?: CardioType.RUN) }
+    // The selected activity — a built-in type or a user's custom one (GYMAP-37). Seeded by resolving
+    // the edited entry's stored code against the custom list; a new entry defaults to Run.
+    val customTypes = com.forge.app.ui.cardio.LocalCardioTypes.current
+    var type by remember(editKey) {
+        mutableStateOf(editing?.let { CardioActivity.resolve(it.type, customTypes) } ?: CardioActivity.RUN)
+    }
+    var showCreateCustom by remember { mutableStateOf(false) }
     var durationText by remember(editKey) { mutableStateOf(editing?.durationMin?.takeIf { it > 0 }?.toString() ?: "") }
     var distanceText by remember(editKey) { mutableStateOf(editing?.distanceKm?.let { distanceInputValue(it, useMiles) } ?: "") }
     var effort by remember(editKey) { mutableStateOf(editing?.let { CardioEffort.fromCode(it.effort) }) }
@@ -143,6 +153,7 @@ fun CardioLogSheet(
                     ActivityDropdown(
                         selected = type,
                         onSelect = { type = it },
+                        onAddCustom = { showCreateCustom = true },
                         onBg = onBg, muted = muted, outline = outline
                     )
                 }
@@ -190,7 +201,7 @@ fun CardioLogSheet(
                 cardioMoreItems(
                     moreOpen = moreOpen,
                     onToggleMore = { moreOpen = !moreOpen },
-                    type = type,
+                    activity = type,
                     effort = effort, onEffort = { effort = it },
                     hrZone = hrZone, onHrZone = { hrZone = it },
                     intervalText = intervalText,
@@ -246,7 +257,7 @@ fun CardioLogSheet(
 
             cardioSaveActionsItem(
                 editing = editing != null,
-                type = type,
+                activity = type,
                 canSubmit = canSubmit,
                 onSubmit = {
                     onSave(
@@ -257,7 +268,7 @@ fun CardioLogSheet(
                         if (type.isRest) restReason else null,
                         note.ifBlank { null },
                         dateMs,
-                        if (type == CardioType.HIIT) intervalInt else null,
+                        if (type.isHiit) intervalInt else null,
                         if (type.isRest) null else hrZone
                     )
                 },
@@ -272,6 +283,18 @@ fun CardioLogSheet(
             dateMs = dateMs,
             onPicked = { dateMs = it },
             onDismiss = { showDatePicker = false }
+        )
+    }
+
+    if (showCreateCustom) {
+        CustomActivityDialog(
+            initial = null,
+            onDismiss = { showCreateCustom = false },
+            onConfirm = { created ->
+                onCreateCustom(created)      // persist so it lands in the list for next time
+                type = CardioActivity.Custom(created)  // and select it now
+                showCreateCustom = false
+            }
         )
     }
 }

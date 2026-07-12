@@ -20,8 +20,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import com.forge.app.domain.cardio.CardioActivity
 import com.forge.app.domain.cardio.CardioEffort
-import com.forge.app.domain.cardio.CardioType
 import com.forge.app.ui.common.ForgeOutlineCapsule
 import com.forge.app.ui.common.ForgePrimaryCapsule
 import java.time.Instant
@@ -35,7 +35,7 @@ import java.time.ZoneOffset
 internal fun LazyListScope.cardioMoreItems(
     moreOpen: Boolean,
     onToggleMore: () -> Unit,
-    type: CardioType,
+    activity: CardioActivity,
     effort: CardioEffort?,
     onEffort: (CardioEffort?) -> Unit,
     hrZone: String?,
@@ -90,7 +90,7 @@ internal fun LazyListScope.cardioMoreItems(
     }
 
     // Interval count — only meaningful for HIIT / interval work.
-    if (type == CardioType.HIIT) {
+    if (activity.isHiit) {
         item("intervals") {
             FormSection(label = "Intervals", optional = true, muted = muted, onBg = onBg, outline = outline) {
                 NumberInputRow(
@@ -109,7 +109,7 @@ internal fun LazyListScope.cardioMoreItems(
 /** The save / cancel action row at the foot of the cardio log sheet. */
 internal fun LazyListScope.cardioSaveActionsItem(
     editing: Boolean,
-    type: CardioType,
+    activity: CardioActivity,
     canSubmit: Boolean,
     onSubmit: () -> Unit,
     onCancel: () -> Unit,
@@ -128,7 +128,7 @@ internal fun LazyListScope.cardioSaveActionsItem(
             ForgePrimaryCapsule(
                 label = when {
                     editing -> "Save changes"
-                    type.isRest -> "Save rest day"
+                    activity.isRest -> "Save rest day"
                     else -> "Save entry"
                 },
                 onClick = onSubmit,

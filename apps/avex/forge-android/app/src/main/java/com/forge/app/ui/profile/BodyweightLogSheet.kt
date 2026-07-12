@@ -3,13 +3,21 @@ package com.forge.app.ui.profile
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SelectableDates
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -20,53 +28,98 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import com.forge.app.data.db.entities.BodyweightEntry
 import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.domain.units.weightInputValue
 import com.forge.app.ui.common.ForgeOutlineCapsule
 import com.forge.app.ui.common.ForgePrimaryCapsule
+import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.onboarding.MAX_BODYWEIGHT_LB
 import com.forge.app.ui.onboarding.MIN_BODYWEIGHT_LB
 import com.forge.app.ui.onboarding.parseSaneBodyweightLb
 import com.forge.app.ui.theme.LocalForgeSettings
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
+import java.time.format.TextStyle
+import java.util.Locale
 import kotlin.math.roundToInt
 
 /**
  * Quick-log sheet for bodyweight — lives on the Profile's BODYWEIGHT section (moved from the old
- * Stats Body tab 2026-07-01), and is the only place to record bodyweight after onboarding. Type
- * today's value (validated against the same sane range as onboarding) or, when Health Connect is
- * connected, pull the latest reading with one tap. Saving closes the sheet; importing keeps it open
- * so the result line is visible.
+ * Stats Body tab 2026-07-01), and is the only place to record bodyweight after onboarding. Type a
+ * value (validated against the same sane range as onboarding), optionally backdate to any past day
+ * (GYMAP-54 — the day's existing weigh-in re-seeds the fields so a missed day round-trips), and add
+ * an optional note. When Health Connect is connected AND you're on today, pull the latest reading
+ * with one tap. Saving closes the sheet; importing keeps it open so the result line is visible.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun BodyweightLogSheet(
-    latestLb: Double?,
+    entries: List<BodyweightEntry>,
     canImport: Boolean,
     message: String?,
-    onSave: (Double) -> Unit,
+    onSave: (weightLb: Double, date: LocalDate, note: String?) -> Unit,
     onImport: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val useKg = LocalForgeSettings.current.useKg
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val accent = MaterialTheme.colorScheme.primary
     val sheetState = rememberModalBottomSheetState()
-    // Keyed on latestLb so the prefill lands even if the flow emits the latest weight just AFTER the
-    // sheet opens; also on useKg so flipping the unit while the sheet is open re-seeds the field in
-    // the new unit instead of leaving a stale value that fails validation and locks Save.
-    var input by remember(latestLb, useKg) { mutableStateOf(latestLb?.let { weightInputValue(it, useKg) } ?: "") }
+
+    val today = remember { LocalDate.now() }
+    var date by remember { mutableStateOf(today) }
+    var showDatePicker by remember { mutableStateOf(false) }
+
+    // The weigh-in already on the selected day (if any) — editing a past day shows what's there.
+    val entryForDate = remember(entries, date) { entries.lastOrNull { it.dateKey == date.toString() } }
+    // Seed the field from that day's entry, falling back to the latest weight (entries are oldest→newest).
+    val seedLb = entryForDate?.weightLb ?: entries.lastOrNull()?.weightLb
+
+    // Keyed on the day + seed + unit so switching date re-seeds from that day, a late flow emission
+    // still lands the prefill, and flipping cm/kg re-seeds in the new unit instead of leaving a stale
+    // value that fails validation and locks Save.
+    var input by remember(seedLb, useKg, date) {
+        mutableStateOf(seedLb?.let { weightInputValue(it, useKg) } ?: "")
+    }
+    var note by remember(date) { mutableStateOf(entryForDate?.note ?: "") }
+
     val parsed = parseSaneBodyweightLb(input, useKg)
     val invalid = input.isNotBlank() && parsed == null
     val minDisp = toDisplayWeight(MIN_BODYWEIGHT_LB, useKg).roundToInt()
     val maxDisp = toDisplayWeight(MAX_BODYWEIGHT_LB, useKg).roundToInt()
 
+    val isToday = date == today
+    val dateLabel = remember(date, today) {
+        val md = date.format(
+            DateTimeFormatter.ofPattern(if (date.year == today.year) "MMM d" else "MMM d, yyyy", Locale.getDefault())
+        ).uppercase()
+        if (isToday) "TODAY · $md"
+        else "${date.dayOfWeek.getDisplayName(TextStyle.SHORT, Locale.getDefault()).uppercase()} · $md"
+    }
+
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         Column(
-            Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 32.dp),
+            Modifier.fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .imePadding()
+                .padding(horizontal = 24.dp)
+                .padding(bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Text("Log bodyweight", style = MaterialTheme.typography.headlineSmall, color = onBg)
+            // Accent mono = the tappable idiom (§5): tap to backdate to any past day.
+            Text(
+                dateLabel,
+                style = MaterialTheme.typography.labelMedium,
+                color = accent,
+                modifier = Modifier.bounceClick { showDatePicker = true }.padding(vertical = 6.dp)
+            )
             OutlinedTextField(
                 value = input,
                 onValueChange = { v ->
@@ -80,18 +133,32 @@ internal fun BodyweightLogSheet(
                 singleLine = true,
                 isError = invalid,
                 supportingText = {
-                    Text(if (invalid) "Enter $minDisp–$maxDisp ${unitLabel(useKg)}." else "One entry per day, saving replaces today's.")
+                    Text(
+                        when {
+                            invalid -> "Enter $minDisp–$maxDisp ${unitLabel(useKg)}."
+                            isToday -> "One entry per day, saving replaces today's."
+                            else -> "One entry per day, saving replaces this day's."
+                        }
+                    )
                 },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                 modifier = Modifier.fillMaxWidth()
             )
+            OutlinedTextField(
+                value = note,
+                onValueChange = { note = it.take(140) },
+                label = { Text("Note (optional)") },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
             ForgePrimaryCapsule(
                 label = "Save",
-                onClick = { parsed?.let(onSave) },
+                onClick = { parsed?.let { onSave(it, date, note) } },
                 enabled = parsed != null,
                 modifier = Modifier.fillMaxWidth()
             )
-            if (canImport) {
+            // Import pulls the newest HC reading (dated by HC) — only meaningful on today, hidden while backdating.
+            if (canImport && isToday) {
                 ForgeOutlineCapsule(
                     label = "Import latest from Health Connect",
                     onClick = onImport,
@@ -101,6 +168,36 @@ internal fun BodyweightLogSheet(
             message?.let {
                 Text(it, style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic)
             }
+        }
+    }
+
+    if (showDatePicker) {
+        // No future days — a weigh-in can't be recorded ahead, and a future date would distort the trend.
+        val maxDateMs = remember { System.currentTimeMillis() }
+        val dpState = rememberDatePickerState(
+            initialSelectedDateMillis = date.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli(),
+            selectableDates = remember(maxDateMs) {
+                object : SelectableDates {
+                    override fun isSelectableDate(utcTimeMillis: Long) = utcTimeMillis <= maxDateMs
+                    override fun isSelectableYear(year: Int) =
+                        year <= Instant.ofEpochMilli(maxDateMs).atZone(ZoneId.systemDefault()).year
+                }
+            }
+        )
+        DatePickerDialog(
+            onDismissRequest = { showDatePicker = false },
+            confirmButton = {
+                TextButton(onClick = {
+                    // DatePicker returns UTC midnight — map that calendar day to a LocalDate.
+                    dpState.selectedDateMillis?.let { picked ->
+                        date = Instant.ofEpochMilli(picked).atZone(ZoneOffset.UTC).toLocalDate()
+                    }
+                    showDatePicker = false
+                }) { Text("OK") }
+            },
+            dismissButton = { TextButton(onClick = { showDatePicker = false }) { Text("Cancel") } }
+        ) {
+            DatePicker(state = dpState)
         }
     }
 }

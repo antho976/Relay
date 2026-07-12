@@ -214,6 +214,11 @@ object PreferenceKeys {
      *  never reappears. Lives in DataStore so it survives a DB wipe/restore. */
     val CARDIO_WEARABLE_HINT_DISMISSED = booleanPreferencesKey("cardio_wearable_hint_dismissed")
 
+    /** User-defined cardio activity types (GYMAP-37) as one JSON blob — see
+     *  [com.forge.app.domain.cardio.CustomCardioType]. A small config list, so it lives here rather
+     *  than the (schema-locked) Room DB; a logged session references one only by its stable code. */
+    val CUSTOM_CARDIO_TYPES = stringPreferencesKey("custom_cardio_types")
+
     /** Default rest between sets (seconds), per movement type — the base the RestAdvisor builds on.
      *  Absent ⇒ the canonical 180 (compound) / 90 (isolation). */
     val REST_COMPOUND_SECONDS = intPreferencesKey("rest_compound_seconds")

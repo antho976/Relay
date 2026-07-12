@@ -3,6 +3,7 @@ package com.forge.app.data.repo
 import com.forge.app.core.time.Clock
 import com.forge.app.data.db.dao.LoggedSetDao
 import com.forge.app.data.db.dao.SessionDao
+import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.data.db.entities.Session
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.domain.rank.RankInfo
@@ -78,7 +79,10 @@ data class ProfileData(
     val prsLastWeek: Int = 0,
     /** Cumulative lifted volume (lb), one point per finished session, oldest → newest — drives the
      *  All-Time graph. Single-point until a second lifting workout exists. */
-    val lifetimeVolumeSeriesLb: List<Double> = emptyList()
+    val lifetimeVolumeSeriesLb: List<Double> = emptyList(),
+    /** How many times you trained each calendar day THIS YEAR (gym sessions + non-rest cardio),
+     *  keyed by epoch-day — feeds the THIS YEAR consistency grid. Empty ⇒ no activity yet this year. */
+    val activityByDay: Map<Long, Int> = emptyMap()
 )
 
 /**
@@ -94,6 +98,7 @@ class ProfileRepository @Inject constructor(
     private val loggedSetDao: LoggedSetDao,
     private val trophyRepo: TrophyRepository,
     private val statsRepo: StatsRepository,
+    private val cardioRepo: CardioRepository,
     private val settingsRepo: SettingsRepository,
     private val clock: Clock
 ) {
@@ -107,6 +112,10 @@ class ProfileRepository @Inject constructor(
         val memberSinceMs = settingsRepo.memberSinceMs.first()
         val zone = ZoneId.systemDefault()
         val nowMs = clock.nowMs()
+        // Calendar-year bounds (system zone) for the THIS YEAR consistency grid's cardio read.
+        val zonedToday = Instant.ofEpochMilli(nowMs).atZone(zone).toLocalDate()
+        val yearStartMs = zonedToday.withDayOfYear(1).atStartOfDay(zone).toInstant().toEpochMilli()
+        val yearEndMs = zonedToday.withDayOfYear(1).plusYears(1).atStartOfDay(zone).toInstant().toEpochMilli()
         coroutineScope {
         // Fire the independent DAO reads concurrently — the trophy snapshot's 13+ queries are the
         // long pole, so overlapping it with the rest is the main win for profile-open latency (#8).
@@ -125,6 +134,8 @@ class ProfileRepository @Inject constructor(
                 loggedSetDao.bestE1rmLbSince(since90)
             }.getOrNull()
         }
+        // This year's non-rest cardio, for the consistency grid (a "showed up" day is gym OR cardio).
+        val cardioYearD = async { runCatching { cardioRepo.entriesInRange(yearStartMs, yearEndMs) }.getOrDefault(emptyList()) }
         val sessions = sessionsD.await()
         val unlockedDates = unlockedDatesD.await()
         val unlockedIds = unlockedDates.keys
@@ -210,7 +221,8 @@ class ProfileRepository @Inject constructor(
             setsLastWeek = setsLastWeek,
             prsThisWeek = prsThisWeek,
             prsLastWeek = prsLastWeek,
-            lifetimeVolumeSeriesLb = cumulativeSessionVolumeLb(sessions)
+            lifetimeVolumeSeriesLb = cumulativeSessionVolumeLb(sessions),
+            activityByDay = buildYearActivity(sessions, cardioYearD.await(), zone, today.year)
         )
         }.also { lastData = it }
     }
@@ -302,5 +314,30 @@ internal fun cumulativeSessionVolumeLb(sessions: List<Session>): List<Double> {
     if (sessions.isEmpty()) return emptyList()
     var cumulative = 0.0
     return sessions.sortedBy { it.startedAt }.map { cumulative += it.totalVolumeLb ?: 0.0; cumulative }
+}
+
+/**
+ * Per-day training count for [year] — how many times you trained each calendar day (finished gym
+ * sessions + non-rest cardio), keyed by epoch-day (system zone). Only days with activity are present,
+ * so the map's size is the year's active-day count. Feeds the profile's THIS YEAR consistency grid.
+ * Pure (no DAO/DI), mirroring [cumulativeSessionVolumeLb].
+ */
+internal fun buildYearActivity(
+    sessions: List<Session>,
+    cardio: List<CardioEntry>,
+    zone: ZoneId,
+    year: Int
+): Map<Long, Int> {
+    val counts = HashMap<Long, Int>()
+    fun bump(ms: Long) {
+        val date = Instant.ofEpochMilli(ms).atZone(zone).toLocalDate()
+        if (date.year == year) {
+            val key = date.toEpochDay()
+            counts[key] = (counts[key] ?: 0) + 1
+        }
+    }
+    sessions.forEach { bump(it.startedAt) }
+    cardio.forEach { bump(it.date) }
+    return counts
 }
 

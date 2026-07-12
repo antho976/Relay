@@ -59,6 +59,7 @@ fun CardioSessionDetailScreen(
         CardioLogSheet(
             onDismiss = viewModel::closeEdit,
             onSave = viewModel::save,
+            onCreateCustom = viewModel::addCustomType,
             editing = entry,
             useMiles = state.useMiles
         )

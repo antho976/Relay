@@ -46,6 +46,7 @@ enum class SettingsPage(val title: String) {
     Coach("Coach"),
     Recovery("Recovery"),
     ExercisePrefs("Exercise likes"),
+    CardioActivities("Cardio activities"),
     Vacation("Holiday / Vacation"),
     About("About")
 }
@@ -84,6 +85,7 @@ internal val PAGE_ENTRIES = listOf(
     SettingsPageEntry(SettingsPage.Coach, "coach weekly review autopilot auto-apply suggest mode on off tweaks"),
     SettingsPageEntry(SettingsPage.Recovery, "recovery health connect sleep heart rate resting samsung galaxy pixel fitbit wearable watch ring coach deload steps bodyweight"),
     SettingsPageEntry(SettingsPage.ExercisePrefs, "exercise likes dislike favourite exclude preferences movements heart hidden preferred"),
+    SettingsPageEntry(SettingsPage.CardioActivities, "cardio custom activity activities types padel kayak sport add own create running walking"),
     SettingsPageEntry(SettingsPage.Vacation, "holiday vacation pause streak break away travel"),
 )
 
@@ -279,6 +281,7 @@ fun SettingsScreen(
                 )
                 SettingsPage.Recovery -> RecoveryPage(Modifier.padding(inner))
                 SettingsPage.ExercisePrefs -> ExercisePrefsPage(state, viewModel, Modifier.padding(inner))
+                SettingsPage.CardioActivities -> CardioActivitiesPage(viewModel, Modifier.padding(inner))
                 SettingsPage.Vacation -> VacationPage(viewModel, Modifier.padding(inner))
                 SettingsPage.About -> AboutPage(Modifier.padding(inner), viewModel)
             }

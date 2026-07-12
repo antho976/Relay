@@ -250,6 +250,17 @@ val MIGRATION_23_24 = object : Migration(23, 24) {
     }
 }
 
+/**
+ * v24 → v25: bodyweight notes (GYMAP-54). `bodyweight_entry.note` holds an optional freeform note
+ * per weigh-in. Additive nullable column — pre-existing rows read null. Backdating needs no schema
+ * change: `date_key` already keys one entry per day, so upserting a past day just replaces it.
+ */
+val MIGRATION_24_25 = object : Migration(24, 25) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `bodyweight_entry` ADD COLUMN `note` TEXT")
+    }
+}
+
 /** All migrations, in order. Register every new one here. */
 val ALL_MIGRATIONS: Array<Migration> = arrayOf(
     MIGRATION_12_13,
@@ -263,5 +274,6 @@ val ALL_MIGRATIONS: Array<Migration> = arrayOf(
     MIGRATION_20_21,
     MIGRATION_21_22,
     MIGRATION_22_23,
-    MIGRATION_23_24
+    MIGRATION_23_24,
+    MIGRATION_24_25
 )

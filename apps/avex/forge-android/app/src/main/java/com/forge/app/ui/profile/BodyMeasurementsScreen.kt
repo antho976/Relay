@@ -177,7 +177,9 @@ private fun MeasurementRow(
             Text(series.type.label.uppercase(), style = MaterialTheme.typography.labelMedium, color = muted)
             Spacer(Modifier.weight(1f))
             deltaCm?.let {
-                if (abs(it) >= 0.05) Text(
+                // Gate on the DISPLAY-unit magnitude, not cm — a sub-0.05-inch wobble that rounds to
+                // "0.0 in" shouldn't render as "↑ 0.0 in".
+                if (toDisplayLength(abs(it), useCm) >= 0.05) Text(
                     "${if (it > 0) "↑" else "↓"} ${formatLengthDelta(abs(it), useCm)}",
                     style = MaterialTheme.typography.labelSmall,
                     color = muted,

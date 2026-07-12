@@ -19,7 +19,7 @@ import androidx.compose.ui.unit.sp
 import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.data.db.entities.Session
 import com.forge.app.data.db.entities.durationMinutes
-import com.forge.app.domain.cardio.CardioType
+import com.forge.app.domain.cardio.CardioActivity
 import com.forge.app.domain.units.formatDistance
 import com.forge.app.domain.units.formatVolume
 import com.forge.app.program.Program
@@ -128,7 +128,7 @@ internal fun CardioHistoryRow(
 ) {
     val cs = MaterialTheme.colorScheme
     val muted = cs.onSurfaceVariant
-    val type = CardioType.fromCode(entry.type)
+    val activity = CardioActivity.resolve(entry.type, com.forge.app.ui.cardio.LocalCardioTypes.current)
     val useMiles = LocalForgeSettings.current.useMiles
 
     Column(modifier = modifier.fillMaxWidth()) {
@@ -146,7 +146,7 @@ internal fun CardioHistoryRow(
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Icon(
-                    type.icon,
+                    activity.icon,
                     contentDescription = null,
                     tint = muted,
                     modifier = Modifier.size(20.dp)
@@ -162,7 +162,7 @@ internal fun CardioHistoryRow(
                     )
                     // Activity name directly on page
                     Text(
-                        type.displayName,
+                        activity.displayName,
                         style = MaterialTheme.typography.bodyMedium,
                         color = cs.onBackground
                     )

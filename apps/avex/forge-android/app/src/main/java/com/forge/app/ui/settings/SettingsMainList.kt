@@ -71,6 +71,7 @@ internal fun MainList(
                 SettingsNavRow("Program & equipment", rowSubtitle(SettingsPage.Program, state), SettingsIcons.Program) { onOpenPage(SettingsPage.Program) }
                 SettingsNavRow("Session", rowSubtitle(SettingsPage.Session, state), SettingsIcons.Session) { onOpenPage(SettingsPage.Session) }
                 SettingsNavRow("Exercise likes", rowSubtitle(SettingsPage.ExercisePrefs, state), SettingsIcons.Likes) { onOpenPage(SettingsPage.ExercisePrefs) }
+                SettingsNavRow("Cardio activities", "Your own cardio activities", NavIcons.Cardio) { onOpenPage(SettingsPage.CardioActivities) }
             }
             item("coach") {
                 SettingsSectionHeader("Coach")
@@ -240,7 +241,7 @@ private fun searchRank(name: String, ql: String): Int {
 /** The section a page sits under in the main list — a page result's breadcrumb. */
 private fun pageSection(page: SettingsPage): String = when (page) {
     SettingsPage.Appearance, SettingsPage.Format, SettingsPage.Notifications -> "General"
-    SettingsPage.Program, SettingsPage.Session, SettingsPage.ExercisePrefs -> "Training"
+    SettingsPage.Program, SettingsPage.Session, SettingsPage.ExercisePrefs, SettingsPage.CardioActivities -> "Training"
     SettingsPage.Coach, SettingsPage.Recovery, SettingsPage.Vacation -> "Coach"
     SettingsPage.About -> "About"
 }
@@ -255,6 +256,7 @@ private fun pageGlyph(page: SettingsPage): ImageVector? = when (page) {
     SettingsPage.Coach -> NavIcons.Coach
     SettingsPage.Recovery -> SettingsIcons.Recovery
     SettingsPage.ExercisePrefs -> SettingsIcons.Likes
+    SettingsPage.CardioActivities -> NavIcons.Cardio
     SettingsPage.Vacation -> SettingsIcons.Holiday
     SettingsPage.About -> null
 }
@@ -351,6 +353,8 @@ internal fun rowSubtitle(page: SettingsPage, s: SettingsUiState): String = when 
     }
     SettingsPage.Recovery -> "Health Connect · sleep & resting HR"
     SettingsPage.ExercisePrefs -> "${s.liked.size} liked · ${s.disliked.size} disliked"
+    // Count lives on its own StateFlow (not SettingsUiState), so search shows a static subtitle.
+    SettingsPage.CardioActivities -> "Your own cardio activities"
     // Reached via a dedicated MainList row, not the search/nav grid — subtitle unused.
     SettingsPage.Vacation -> "Pause your streak during a holiday"
     SettingsPage.About -> "Version · privacy · what's stored"

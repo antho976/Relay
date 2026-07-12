@@ -55,7 +55,8 @@ import com.forge.app.data.db.entities.SessionBreak
 import com.forge.app.data.db.entities.VacationPeriod
 
 /**
- * Schema is v24 (v24 added `body_measurement` — per-type circumference history for GYMAP-52, a new
+ * Schema is v25 (v25 added `bodyweight_entry.note` — an optional per-weigh-in note for GYMAP-54, an
+ * additive nullable column; v24 added `body_measurement` — per-type circumference history for GYMAP-52, a new
  * empty table, additive; v23 added `cardio_entry.interval_count` + `cardio_entry.hr_zone` for cardio
  * depth — HIIT interval counts + manual HR-zone tags;
  * v22 added `logged_exercise.slot_id` + `exercise_customization.swapped_exercise_id`
@@ -105,7 +106,7 @@ import com.forge.app.data.db.entities.VacationPeriod
         SuggestionOutcome::class,
         SessionSegment::class
     ],
-    version = 24,
+    version = 25,
     exportSchema = true
 )
 @TypeConverters(Converters::class)

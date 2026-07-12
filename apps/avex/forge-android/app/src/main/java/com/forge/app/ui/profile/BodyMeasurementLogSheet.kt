@@ -44,14 +44,18 @@ internal fun BodyMeasurementLogSheet(
     val sheetState = rememberModalBottomSheetState()
     val unit = lengthUnitLabel(useCm)
 
-    // Per-type field text, seeded from the latest reading. Re-keyed on the unit so flipping cm/in
-    // while the sheet is open re-seeds every field in the new unit instead of leaving stale values.
-    val inputs = remember(series, useCm) {
-        mutableStateMapOf<BodyMeasurementType, String>().apply {
-            series.forEach { s ->
-                put(s.type, s.entries.lastOrNull()?.let { lengthInputValue(it.valueCm, useCm) } ?: "")
-            }
+    // The value each field is SEEDED with (latest reading, or "" if never logged). Kept separate from
+    // the live edits so Save can skip untouched fields — otherwise opening the sheet to log one
+    // measurement would silently re-record every other tracked measurement (with its old value) as a
+    // fresh entry dated today, distorting each series' trend/delta. Re-keyed on the unit so flipping
+    // cm/in re-seeds in the new unit instead of leaving stale values.
+    val seeded = remember(series, useCm) {
+        series.associate { s ->
+            s.type to (s.entries.lastOrNull()?.let { lengthInputValue(it.valueCm, useCm) } ?: "")
         }
+    }
+    val inputs = remember(series, useCm) {
+        mutableStateMapOf<BodyMeasurementType, String>().apply { putAll(seeded) }
     }
 
     fun parsedCm(type: BodyMeasurementType): Double? =
@@ -64,7 +68,12 @@ internal fun BodyMeasurementLogSheet(
         return raw.isNotBlank() && parsedCm(type) == null
     }
 
-    val toSave = BodyMeasurementType.entries.mapNotNull { t -> parsedCm(t)?.let { t to it } }
+    // Only fields the user actually changed from their seed — an untouched field is left as-is.
+    fun isChanged(type: BodyMeasurementType): Boolean = inputs[type].orEmpty() != seeded[type].orEmpty()
+
+    val toSave = BodyMeasurementType.entries
+        .filter { isChanged(it) }
+        .mapNotNull { t -> parsedCm(t)?.let { t to it } }
     val canSave = toSave.isNotEmpty() && BodyMeasurementType.entries.none { isInvalid(it) }
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {

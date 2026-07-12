@@ -10,10 +10,12 @@ import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.data.repo.CardioRepository
 import com.forge.app.data.repo.ExtendedGoalRepository
 import com.forge.app.data.repo.TrophyRepository
+import com.forge.app.domain.cardio.CardioActivity
 import com.forge.app.domain.cardio.CardioEffort
 import com.forge.app.domain.cardio.CardioRestReason
 import com.forge.app.domain.cardio.CardioType
 import com.forge.app.domain.cardio.CardioWearableDay
+import com.forge.app.domain.cardio.CustomCardioType
 import com.forge.app.domain.cardio.RoutePoint
 import com.forge.app.domain.goal.GoalMetric
 import com.forge.app.ui.cardio.state.CardioDayCell
@@ -245,7 +247,7 @@ class CardioViewModel @Inject constructor(
      * Distance / effort / restReason are nullable; pass null when the form skipped them.
      */
     fun saveEntry(
-        type: CardioType,
+        activity: CardioActivity,
         durationMin: Int,
         distanceKm: Double?,
         effort: CardioEffort?,
@@ -260,15 +262,15 @@ class CardioViewModel @Inject constructor(
             val entry = CardioEntry(
                 id = editingId ?: 0,
                 date = dateMs,
-                type = type.code,
+                type = activity.code,
                 durationMin = durationMin.coerceAtLeast(0),
-                distanceKm = if (type.isRest) null else distanceKm,
-                effort = if (type.isRest) null else effort?.code,
-                restReason = if (type.isRest) restReason?.code else null,
+                distanceKm = if (activity.isRest) null else distanceKm,
+                effort = if (activity.isRest) null else effort?.code,
+                restReason = if (activity.isRest) restReason?.code else null,
                 note = note?.takeIf { it.isNotBlank() },
                 // Interval count only applies to HIIT; HR zone to any active session. Cleared for rest.
-                intervalCount = if (type == CardioType.HIIT) intervalCount?.takeIf { it > 0 } else null,
-                hrZone = if (type.isRest) null else hrZone
+                intervalCount = if (activity.isHiit) intervalCount?.takeIf { it > 0 } else null,
+                hrZone = if (activity.isRest) null else hrZone
             )
             if (editingId != null) cardioRepo.update(entry) else cardioRepo.add(entry)
             transient.update { it.copy(sheetOpen = false, editing = null) }
@@ -277,6 +279,12 @@ class CardioViewModel @Inject constructor(
             // critical path (it's a ~14-query snapshot) so the sheet closes immediately, not after it.
             viewModelScope.launch { runCatching { trophyRepo.evaluateAndUnlockNew() } }
         }
+    }
+
+    /** Persist a custom activity created inline from the log sheet (GYMAP-37). The picker + rows pick
+     *  it up reactively via [LocalCardioTypes]; the sheet also selects it optimistically. */
+    fun addCustomType(type: CustomCardioType) = viewModelScope.launch {
+        settingsRepo.addCustomCardioType(type)
     }
 
     /** The Health Connect grants Avex holds for the cardio screen's wearable data. */

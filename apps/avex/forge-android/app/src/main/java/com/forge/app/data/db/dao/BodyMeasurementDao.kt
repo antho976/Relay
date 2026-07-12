@@ -21,10 +21,6 @@ interface BodyMeasurementDao {
     @Query("SELECT * FROM body_measurement WHERE type = :type ORDER BY date_key DESC, recorded_at DESC LIMIT 1")
     suspend fun latest(type: String): BodyMeasurementEntry?
 
-    /** Every reading, newest first — for CSV export. */
-    @Query("SELECT * FROM body_measurement ORDER BY type ASC, date_key DESC, recorded_at DESC")
-    suspend fun all(): List<BodyMeasurementEntry>
-
     @Query("DELETE FROM body_measurement WHERE id = :id")
     suspend fun delete(id: Long)
 
