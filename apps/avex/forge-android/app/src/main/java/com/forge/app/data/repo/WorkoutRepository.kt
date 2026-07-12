@@ -140,6 +140,16 @@ class WorkoutRepository @Inject constructor(
     }
 
     /**
+     * The sets from the most recent OTHER time this exercise was performed — powers the freestyle
+     * logger's "copy last time" panel. Empty when it has never been logged before. excludeSessionId is
+     * -1 because a freestyle log has no persisted session id while it's being filled in.
+     */
+    suspend fun lastPerformanceSets(exerciseId: String): List<LoggedSet> {
+        val last = loggedExerciseDao.lastLoggedBefore(exerciseId, -1L) ?: return emptyList()
+        return loggedSetDao.forLoggedExercise(last.id).sortedBy { it.setIndex }
+    }
+
+    /**
      * Freestyle logging persists sets directly via [logSet], bypassing the live day screen's PR pass,
      * so flag [LoggedExercise.wasPr] here the same way the day screen does: compare each just-logged
      * set for [loggedExerciseId] against the all-time rep-max frontier for [exerciseId] (excluding this

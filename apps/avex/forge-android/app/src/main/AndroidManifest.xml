@@ -11,6 +11,12 @@
     <!-- Timer vibration -->
     <uses-permission android:name="android.permission.VIBRATE" />
 
+    <!-- In-app guided progress-photo camera. Captured shots are written straight to app-private
+         storage (never the camera roll); no INTERNET permission, so they never leave the device.
+         The camera is optional — the gallery still imports from the photo picker without it. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
+
     <!-- Health Connect: read-only recovery signals (sleep, resting HR) feed the coach. These are
          on-device permissions granted via the Health Connect app; Forge holds NO internet permission,
          so the data never leaves the device. -->

@@ -1,8 +1,11 @@
 package com.forge.app.ui.profile
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -10,8 +13,11 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Icon
@@ -20,16 +26,28 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.forge.app.data.repo.ProgressPhoto
+import com.forge.app.domain.photo.PhotoPose
+import com.forge.app.domain.units.formatWeight
+import com.forge.app.domain.units.formatWeightDelta
 import com.forge.app.ui.common.ForgePrimaryCapsule
+import com.forge.app.ui.common.SegmentPill
 import com.forge.app.ui.common.bounceClick
 import java.io.File
 import java.text.SimpleDateFormat
@@ -76,13 +94,18 @@ internal fun CompareBar(
     }
 }
 
+private enum class CompareMode(val label: String) { SLIDER("Slider"), SPLIT("Split") }
+
 /**
- * Full-screen before/after comparison of [pair] (exactly two photos). They're ordered oldest→newest
- * so the left pane is always "before", and the gap between their dates is shown at the bottom.
+ * Full-screen comparison of [pair] (exactly two photos), ordered oldest→newest so "before" is always
+ * the older shot. A Slider view overlays the two with a draggable reveal handle; a Split view sets
+ * them side by side. The bottom readout carries the time apart, the weight change and the pose.
  */
 @Composable
 internal fun CompareSheet(
     pair: List<ProgressPhoto>,
+    zone: ZoneId,
+    useKg: Boolean,
     fileFor: (ProgressPhoto) -> File,
     onDismiss: () -> Unit
 ) {
@@ -90,38 +113,83 @@ internal fun CompareSheet(
     val ordered = remember(pair) { pair.sortedBy { it.takenAtMs } }
     val before = ordered[0]
     val after = ordered[1]
-    val zone = remember { ZoneId.systemDefault() }
-    val apart = remember(before, after) {
-        val span = gallerySpanLabel(before.takenAtMs, after.takenAtMs, zone)
-        if (span.isEmpty()) "Same day" else "$span apart"
-    }
+    var mode by remember { mutableStateOf(CompareMode.SLIDER) }
+
+    val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val accent = MaterialTheme.colorScheme.primary
+    val outline = MaterialTheme.colorScheme.outline
 
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Column(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.94f))) {
+        Column(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.95f))) {
+            // Top row: close + Slider/Split toggle.
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                IconButton(onClick = onDismiss) {
-                    Icon(Icons.Filled.Close, contentDescription = "Close", tint = Color.White)
+                IconButton(onClick = onDismiss) { Icon(Icons.Filled.Close, contentDescription = "Close", tint = Color.White) }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    CompareMode.entries.forEach { m ->
+                        SegmentPill(m.label, selected = m == mode, onClick = { mode = m }, accent, Color.White, muted, outline)
+                    }
                 }
-                Text("Before / After", style = MaterialTheme.typography.labelMedium, color = Color.White.copy(alpha = 0.85f))
-                Spacer(Modifier.width(48.dp))
+                Spacer(Modifier.width(8.dp))
             }
 
-            Row(Modifier.fillMaxWidth().weight(1f)) {
-                ComparePane("BEFORE", before, fileFor, accent, muted, Modifier.weight(1f))
-                Box(Modifier.fillMaxHeight().width(1.dp).background(Color.White.copy(alpha = 0.15f)))
-                ComparePane("AFTER", after, fileFor, accent, muted, Modifier.weight(1f))
+            Box(Modifier.fillMaxWidth().weight(1f)) {
+                when (mode) {
+                    CompareMode.SLIDER -> SliderCompare(before, after, fileFor, accent)
+                    CompareMode.SPLIT -> Row(Modifier.fillMaxSize()) {
+                        ComparePane("BEFORE", before, fileFor, accent, muted, Modifier.weight(1f))
+                        Box(Modifier.fillMaxHeight().width(1.dp).background(Color.White.copy(alpha = 0.15f)))
+                        ComparePane("AFTER", after, fileFor, accent, muted, Modifier.weight(1f))
+                    }
+                }
             }
 
-            Box(Modifier.fillMaxWidth().padding(vertical = 16.dp), contentAlignment = Alignment.Center) {
-                Text(apart, style = MaterialTheme.typography.titleMedium, color = Color.White)
-            }
+            CompareReadout(before, after, zone, useKg, onBg = Color.White, muted = muted, accent = accent)
         }
+    }
+}
+
+/** The slider view: [after] fills the frame, [before] is clipped to a draggable left fraction. */
+@Composable
+private fun SliderCompare(
+    before: ProgressPhoto,
+    after: ProgressPhoto,
+    fileFor: (ProgressPhoto) -> File,
+    accent: Color
+) {
+    var fraction by remember { mutableFloatStateOf(0.5f) }
+    BoxWithConstraints(
+        Modifier.fillMaxSize()
+            .pointerInput(Unit) { detectTapGestures { fraction = (it.x / size.width).coerceIn(0f, 1f) } }
+            .pointerInput(Unit) { detectDragGestures { change, _ -> fraction = (change.position.x / size.width).coerceIn(0f, 1f) } }
+    ) {
+        val w = maxWidth
+        GalleryFullImage(fileFor(after), Modifier.fillMaxSize())
+        // Draw `before` at full size but clip its paint to the left fraction, so both stay aligned.
+        GalleryFullImage(
+            fileFor(before),
+            Modifier.fillMaxSize().drawWithContent {
+                clipRect(right = size.width * fraction) { this@drawWithContent.drawContent() }
+            }
+        )
+        // Divider + knob.
+        Box(Modifier.align(Alignment.CenterStart).offset(x = w * fraction - 1.dp).fillMaxHeight().width(2.dp).background(Color.White.copy(alpha = 0.85f)))
+        Box(
+            Modifier.align(Alignment.CenterStart).offset(x = w * fraction - 17.dp).size(34.dp)
+                .clip(CircleShape).background(Color.Black.copy(alpha = 0.55f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Text("↔", style = MaterialTheme.typography.titleMedium, color = Color.White)
+        }
+        // Corner tags.
+        Text("BEFORE", style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.85f),
+            modifier = Modifier.align(Alignment.TopStart).padding(12.dp))
+        Text("AFTER", style = MaterialTheme.typography.labelSmall, color = accent,
+            modifier = Modifier.align(Alignment.TopEnd).padding(12.dp))
     }
 }
 
@@ -142,5 +210,49 @@ private fun ComparePane(
         )
         Spacer(Modifier.height(8.dp))
         GalleryFullImage(fileFor(photo), Modifier.fillMaxWidth().weight(1f))
+    }
+}
+
+/** The bottom line under either compare view: time apart · weight change · pose. */
+@Composable
+private fun CompareReadout(
+    before: ProgressPhoto,
+    after: ProgressPhoto,
+    zone: ZoneId,
+    useKg: Boolean,
+    onBg: Color,
+    muted: Color,
+    accent: Color
+) {
+    val span = gallerySpanLabel(before.takenAtMs, after.takenAtMs, zone)
+    val apart = if (span.isEmpty()) "Same day" else "$span apart"
+    val bw = before.weightLb
+    val aw = after.weightLb
+    val weightLine = if (bw != null && aw != null) {
+        val d = aw - bw
+        if (kotlin.math.abs(d) < 0.1) "${formatWeight(aw, useKg)} · no change"
+        else "${formatWeight(bw, useKg)} → ${formatWeight(aw, useKg)} · ${formatWeightDelta(d, useKg)}"
+    } else null
+    val bp = PhotoPose.fromKey(before.pose)
+    val ap = PhotoPose.fromKey(after.pose)
+    val poseLine = when {
+        bp != null && bp == ap -> bp.label
+        bp != null && ap != null -> "${bp.label} → ${ap.label}"
+        else -> null
+    }
+
+    Column(
+        Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(apart, style = MaterialTheme.typography.titleMedium, color = onBg)
+        if (weightLine != null) {
+            Spacer(Modifier.height(4.dp))
+            Text(weightLine, style = MaterialTheme.typography.labelMedium, color = muted)
+        }
+        if (poseLine != null) {
+            Spacer(Modifier.height(2.dp))
+            Text(poseLine.uppercase(), style = MaterialTheme.typography.labelSmall, color = accent)
+        }
     }
 }

@@ -139,6 +139,9 @@ object PreferenceKeys {
     val USER_NAME = stringPreferencesKey("user_name")
     /** Onboarding completed flag — distinct from WELCOMED which just tracks splash. */
     val ONBOARDING_DONE = booleanPreferencesKey("onboarding_done")
+    /** When onboarding finished (epoch ms) — the profile's stable "member since" date, so the SINCE
+     *  line shows from setup onward instead of only appearing after the first logged workout. */
+    val MEMBER_SINCE_MS = longPreferencesKey("member_since_ms")
     /** Mid-onboarding draft (every answer + the current page) as JSON, so a full app kill resumes
      *  setup where it left off. Removed atomically when onboarding completes. */
     val ONBOARDING_DRAFT = stringPreferencesKey("onboarding_draft")
@@ -169,6 +172,8 @@ object PreferenceKeys {
     val PRIORITY_MUSCLES = stringSetPreferencesKey("priority_muscles")
     /** Pinned exercise library ids — kept across regenerations when their muscle is trained. */
     val PINNED_EXERCISES = stringSetPreferencesKey("pinned_exercises")
+    /** Bookmarked exercise ids — surfaced first in the exercise browser's Favorites filter. */
+    val FAVORITE_EXERCISES = stringSetPreferencesKey("favorite_exercises")
     /** Rotation cadence: "never" | "every_n". */
     val ROTATION_CADENCE = stringPreferencesKey("rotation_cadence")
     /** Day-aware scheduling: "sequence" (legacy day-after-last) | "weekday" (fixed weekly plan). */

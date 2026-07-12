@@ -21,6 +21,7 @@ object Routes {
     const val GOALS = "goals"
     const val GOAL_EDITOR = "goals/editor?exerciseId={exerciseId}&customId={customId}"
     const val MIRROR_TEST = "mirror-test"
+    const val PROGRESS_CAMERA = "progress-camera"
     const val PROGRAM_BUILDER = "program-builder?blank={blank}&view={view}"
     const val FREESTYLE_LOG = "freestyle-log"
 

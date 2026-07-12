@@ -36,8 +36,8 @@ android {
         applicationId = "com.quietsoftware.avex"
         minSdk = 26
         targetSdk = 35
-        versionCode = 88
-        versionName = "0.8.8.1"
+        versionCode = 89
+        versionName = "0.8.8.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
@@ -137,6 +137,13 @@ dependencies {
     // Health Connect — on-device IPC for recovery signals (sleep, resting HR). No INTERNET; the
     // data is read from the Health Connect system app and never leaves the device.
     implementation(libs.androidx.health.connect)
+
+    // CameraX — in-app guided progress-photo camera (preview + capture; pose-ghost alignment overlay).
+    // Photos are written straight to app-private storage, never the camera roll.
+    implementation(libs.androidx.camera.core)
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view)
 
     // Coroutines
     implementation(libs.kotlinx.coroutines.android)

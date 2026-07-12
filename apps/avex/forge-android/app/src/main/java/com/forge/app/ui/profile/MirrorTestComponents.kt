@@ -35,6 +35,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.data.repo.ProgressPhoto
+import com.forge.app.domain.photo.PhotoPose
 import com.forge.app.ui.common.bounceClick
 import java.io.File
 import java.text.SimpleDateFormat
@@ -147,8 +148,19 @@ internal fun PhotoCell(
     selectionIndex: Int? = null
 ) {
     val selected = selectionIndex != null
+    val pose = PhotoPose.fromKey(photo.pose)
     Box(modifier.aspectRatio(1f).clip(RoundedCornerShape(8.dp)).bounceClick { onClick(photo) }) {
         ProgressPhotoImage(fileFor(photo), Modifier.fillMaxSize(), reqPx = reqPx)
+        // Pose tag (top-start) — a faint dark chip so it reads over any shot.
+        if (pose != null && !selectable) {
+            Text(
+                pose.label.uppercase(),
+                style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.92f), fontSize = 8.sp,
+                modifier = Modifier.align(Alignment.TopStart).padding(5.dp)
+                    .clip(RoundedCornerShape(4.dp)).background(Color.Black.copy(alpha = 0.4f))
+                    .padding(horizontal = 5.dp, vertical = 2.dp)
+            )
+        }
         if (showDate) {
             Box(
                 Modifier.matchParentSize().background(

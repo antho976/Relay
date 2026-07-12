@@ -34,10 +34,10 @@ import kotlinx.coroutines.withContext
  * and the first frames while the WebP decodes off the main thread.
  *
  * The videos don't loop forever: each loops [PLAN_LOOPS] times then FREEZES on its last frame. The
- * compositions are authored so frame 0 and the last frame are the SAME finished plan (a built week /
- * a hand-built day), so the loop restart is seamless (no jump) AND the freeze lands on that plan
- * instead of endlessly rebuilding. A shared [PlanModeSync] gates the videos so both start (and
- * therefore loop and freeze) on the same frame.
+ * compositions are authored so frame 0 and the last frame are the SAME finished plan (a built week ·
+ * a hand-built day · a caught freestyle log), so the loop restart is seamless (no jump) AND the freeze
+ * lands on that plan instead of endlessly rebuilding. A shared [PlanModeSync] gates the videos so they
+ * all start (and therefore loop and freeze) on the same frame.
  */
 
 /** 1128×288 — the Remotion canvas (282×72dp at 4x). One aspect for video AND Canvas fallback. */
@@ -54,7 +54,8 @@ private const val PLAN_LOOPS = 2
 private fun rawFor(mode: String): Int? = when (mode) {
     PLAN_GENERATED -> R.raw.planmode_generated
     PLAN_CUSTOM -> R.raw.planmode_custom
-    else -> null // freestyle keeps its live Canvas vignette (the "log whenever" scatter suits a loop)
+    PLAN_FREESTYLE -> R.raw.planmode_freestyle
+    else -> null
 }
 
 /** True for the modes backed by a rendered video — [StepPlanMode] counts these to size [PlanModeSync]. */

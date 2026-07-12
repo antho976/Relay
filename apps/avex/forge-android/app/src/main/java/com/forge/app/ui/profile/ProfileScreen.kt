@@ -76,6 +76,7 @@ fun ProfileScreen(
     onBack: (() -> Unit)? = null,
     onOpenTrophies: () -> Unit,
     onOpenPhotoGallery: () -> Unit = {},
+    onOpenCamera: () -> Unit = {},
     viewModel: ProfileViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -87,6 +88,7 @@ fun ProfileScreen(
     var showXpInfo by remember { mutableStateOf(false) }
     var showWeightSheet by remember { mutableStateOf(false) }
     var showAvatarSheet by remember { mutableStateOf(false) }
+    var addChooser by remember { mutableStateOf(false) }
 
     // Persist the one-time edit hint as soon as it surfaces — it stays visible this session, gone next.
     LaunchedEffect(state.showAvatarHint) { if (state.showAvatarHint) viewModel.markAvatarHintSeen() }
@@ -253,7 +255,7 @@ fun ProfileScreen(
                 // ── Gallery filmstrip (index 4) — full-bleed, pads itself ────────
                 Spacer(Modifier.height(28.dp))
                 Column(Modifier.fillMaxWidth().statsEntrance(4)) {
-                    GalleryStrip(state.photos, viewModel::fileFor, onAdd = { pickPhoto() }, onView = { viewing = it }, onViewAll = onOpenPhotoGallery, onBg, muted, outline)
+                    GalleryStrip(state.photos, viewModel::fileFor, onAdd = { addChooser = true }, onView = { viewing = it }, onViewAll = onOpenPhotoGallery, onBg, muted, outline)
                 }
 
                 state.memory?.let { m ->
@@ -314,6 +316,14 @@ fun ProfileScreen(
                 showWeightSheet = false
                 viewModel.clearBodyweightMessage()
             }
+        )
+    }
+
+    if (addChooser) {
+        AddPhotoChooser(
+            onCamera = { addChooser = false; onOpenCamera() },
+            onImport = { addChooser = false; pickPhoto() },
+            onDismiss = { addChooser = false }
         )
     }
 

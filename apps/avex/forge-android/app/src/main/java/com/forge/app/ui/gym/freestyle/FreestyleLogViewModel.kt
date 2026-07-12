@@ -32,6 +32,10 @@ class FreestyleLogViewModel @Inject constructor(
     val useKg: StateFlow<Boolean> =
         settingsRepo.useKg.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
+    /** The most recent other performance's sets for an exercise — the "copy last time" panel. */
+    suspend fun lastSets(exerciseId: String): List<com.forge.app.data.db.entities.LoggedSet> =
+        workoutRepo.lastPerformanceSets(exerciseId)
+
     /**
      * Persist the workout as a finished freestyle session, then invoke [onSaved] on the main thread.
      * [startedAtMs] is when the logger was opened — it becomes the session start so the recorded

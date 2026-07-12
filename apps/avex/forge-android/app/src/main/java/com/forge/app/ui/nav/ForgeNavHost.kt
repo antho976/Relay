@@ -54,6 +54,7 @@ import com.forge.app.ui.gym.train.DayScreen
 import com.forge.app.ui.goals.GoalEditorScreen
 import com.forge.app.ui.goals.GoalsScreen
 import com.forge.app.ui.profile.MirrorTestScreen
+import com.forge.app.ui.profile.ProgressCameraScreen
 import com.forge.app.ui.recap.RecapScreen
 import com.forge.app.ui.settings.SettingsScreen
 import com.forge.app.ui.theme.ForgeMotion
@@ -266,7 +267,13 @@ fun ForgeNavHost(initialDayKey: String? = null) {
             )
         }
         composable(Routes.MIRROR_TEST) {
-            MirrorTestScreen(onBack = { nav.popBackStack() })
+            MirrorTestScreen(
+                onBack = { nav.popBackStack() },
+                onOpenCamera = { nav.navigate(Routes.PROGRESS_CAMERA) }
+            )
+        }
+        composable(Routes.PROGRESS_CAMERA) {
+            ProgressCameraScreen(onBack = { nav.popBackStack() })
         }
     }
     }

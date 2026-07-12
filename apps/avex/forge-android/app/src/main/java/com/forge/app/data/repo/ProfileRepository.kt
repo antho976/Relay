@@ -104,6 +104,7 @@ class ProfileRepository @Inject constructor(
 
     suspend fun load(): ProfileData = withContext(Dispatchers.IO) {
         val useKg = settingsRepo.useKg.first()
+        val memberSinceMs = settingsRepo.memberSinceMs.first()
         val zone = ZoneId.systemDefault()
         val nowMs = clock.nowMs()
         coroutineScope {
@@ -195,7 +196,7 @@ class ProfileRepository @Inject constructor(
             totalPrs = totalPrs,
             streakDays = streakD.await(),
             longestStreakDays = snapshot?.maxStreakEver ?: 0,
-            sinceLabel = sessions.minOfOrNull { it.startedAt }
+            sinceLabel = sinceMs(memberSinceMs, sessions)
                 ?.let { Instant.ofEpochMilli(it).atZone(zone).format(SINCE_FMT).uppercase() } ?: "",
             trophyUnlocked = unlockedIds.size,
             trophyTotal = Trophies.all.size,
@@ -215,6 +216,22 @@ class ProfileRepository @Inject constructor(
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────────
+
+    /**
+     * The "member since" instant (epoch ms) for the profile's SINCE line, or null when there's nothing
+     * to anchor it to yet. Prefers the onboarding date ([memberSinceMs], stamped when setup finished) so
+     * the line shows from day one — even with zero workouts — instead of only after the first session.
+     * When a logged session predates onboarding (imported history), the earlier of the two wins so
+     * "since" reflects when the user actually started. Pre-onboarding-stamp users (memberSinceMs == 0)
+     * fall back to their earliest session, preserving the old behaviour for them.
+     */
+    private fun sinceMs(memberSinceMs: Long, sessions: List<Session>): Long? {
+        val earliestSession = sessions.minOfOrNull { it.startedAt }
+        return when {
+            memberSinceMs > 0L -> minOf(memberSinceMs, earliestSession ?: Long.MAX_VALUE)
+            else -> earliestSession
+        }
+    }
 
     /**
      * The profile's curated trophy-case highlight (NOT the full catalog — that's one tap away):

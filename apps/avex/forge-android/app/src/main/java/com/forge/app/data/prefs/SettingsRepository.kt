@@ -3,6 +3,7 @@ package com.forge.app.data.prefs
 import android.content.Context
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
+import com.forge.app.core.time.Clock
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.firstOrNull
@@ -57,7 +58,8 @@ enum class SettingsSection(val keys: List<Preferences.Key<*>>) {
  */
 @Singleton
 class SettingsRepository @Inject constructor(
-    @ApplicationContext private val context: Context
+    @ApplicationContext private val context: Context,
+    private val clock: Clock
 ) {
     val shownMilestones: Flow<Set<String>> = context.forgePreferences.data
         .map { prefs -> prefs[PreferenceKeys.SHOWN_MILESTONES] ?: emptySet() }
@@ -558,6 +560,10 @@ class SettingsRepository @Inject constructor(
 
     val onboardingDone: Flow<Boolean> = context.forgePreferences.data
         .map { it[PreferenceKeys.ONBOARDING_DONE] ?: false }
+    /** When the user joined (onboarding finished), epoch ms — 0 if never stamped (pre-existing users
+     *  who onboarded before this was tracked). Drives the profile's stable "member since" date. */
+    val memberSinceMs: Flow<Long> = context.forgePreferences.data
+        .map { it[PreferenceKeys.MEMBER_SINCE_MS] ?: 0L }
     /** Whether the default split has ever been auto-seeded — gates [ensureLoaded] so a deliberately
      *  empty plan (build-your-own / cleared) is never re-seeded after onboarding finishes. */
     val programSeeded: Flow<Boolean> = context.forgePreferences.data
@@ -644,6 +650,15 @@ class SettingsRepository @Inject constructor(
             prefs[PreferenceKeys.PINNED_EXERCISES] = if (on) cur + libId else cur - libId
         }
 
+    /** Bookmarked exercise ids — the exercise browser's Favorites filter + per-card bookmark. */
+    val favoriteExercises: Flow<Set<String>> = context.forgePreferences.data
+        .map { it[PreferenceKeys.FAVORITE_EXERCISES] ?: emptySet() }
+    suspend fun toggleFavorite(libId: String, on: Boolean) =
+        context.forgePreferences.edit { prefs ->
+            val cur = prefs[PreferenceKeys.FAVORITE_EXERCISES] ?: emptySet()
+            prefs[PreferenceKeys.FAVORITE_EXERCISES] = if (on) cur + libId else cur - libId
+        }
+
     // ─── Onboarding draft (resume after a full app kill) ─────────────────────
 
     /** One-shot read of the saved mid-onboarding draft JSON, or null when there is none. */
@@ -665,6 +680,10 @@ class SettingsRepository @Inject constructor(
         context.forgePreferences.edit { prefs ->
             prefs[PreferenceKeys.ONBOARDING_DONE] = true
             prefs[PreferenceKeys.WELCOMED] = true
+            // Stamp the "member since" date the moment setup finishes, so the profile's SINCE line has
+            // a stable anchor from day one. putIfAbsent-style: a re-run of onboarding that didn't wipe
+            // prefs keeps the original join date.
+            if (prefs[PreferenceKeys.MEMBER_SINCE_MS] == null) prefs[PreferenceKeys.MEMBER_SINCE_MS] = clock.nowMs()
             if (name.isNotBlank()) prefs[PreferenceKeys.USER_NAME] = name
             prefs[PreferenceKeys.USE_KG] = useKgChoice
             useMilesChoice?.let { prefs[PreferenceKeys.USE_MILES] = it }
@@ -688,6 +707,7 @@ class SettingsRepository @Inject constructor(
         context.forgePreferences.edit { prefs ->
             val onboarding = prefs[PreferenceKeys.ONBOARDING_DONE]
             val welcomed = prefs[PreferenceKeys.WELCOMED]
+            val memberSince = prefs[PreferenceKeys.MEMBER_SINCE_MS]
             val name = prefs[PreferenceKeys.USER_NAME]
             val goal = prefs[PreferenceKeys.USER_GOAL]
             // Training mode is identity-like too — wiping it would silently flip a "go with the flow"
@@ -699,6 +719,7 @@ class SettingsRepository @Inject constructor(
             prefs.clear()
             onboarding?.let { prefs[PreferenceKeys.ONBOARDING_DONE] = it }
             welcomed?.let { prefs[PreferenceKeys.WELCOMED] = it }
+            memberSince?.let { prefs[PreferenceKeys.MEMBER_SINCE_MS] = it }
             name?.let { prefs[PreferenceKeys.USER_NAME] = it }
             goal?.let { prefs[PreferenceKeys.USER_GOAL] = it }
             freestyle?.let { prefs[PreferenceKeys.FREESTYLE_MODE] = it }

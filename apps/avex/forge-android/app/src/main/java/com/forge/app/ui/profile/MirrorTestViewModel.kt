@@ -3,24 +3,32 @@ package com.forge.app.ui.profile
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.forge.app.data.db.entities.BodyweightEntry
+import com.forge.app.data.repo.BodyweightRepository
 import com.forge.app.data.repo.ProgressPhoto
 import com.forge.app.data.repo.ProgressPhotoRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.io.File
 import javax.inject.Inject
 
 /**
- * The full "Mirror test" gallery (reached from the Profile teaser's "view all"). Photos are grouped
- * into albums — one album per photo, with an implicit "Unsorted" bucket for the rest. Pure local,
- * app-private files; see [ProgressPhotoRepository].
+ * The full photo Gallery (reached from the Profile teaser's "view all"). Photos carry a date, an
+ * optional pose tag, the bodyweight nearest that date, a note and an album — the metadata that makes
+ * two shots comparable over time. Reloads reactively off [ProgressPhotoRepository.revision], so a
+ * capture from the in-app camera (a different screen) refreshes the grid. Pure local, app-private
+ * files; see [ProgressPhotoRepository].
  */
 @HiltViewModel
 class MirrorTestViewModel @Inject constructor(
-    private val photoRepo: ProgressPhotoRepository
+    private val photoRepo: ProgressPhotoRepository,
+    bodyweightRepo: BodyweightRepository
 ) : ViewModel() {
 
     /** One album folder for the gallery's top level — its photo count and newest-photo cover. */
@@ -48,9 +56,17 @@ class MirrorTestViewModel @Inject constructor(
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
 
-    init { reload() }
+    /** Weigh-ins over the past year, oldest → newest — the bodyweight-through-time sparkline series. */
+    val bodyweight: StateFlow<List<BodyweightEntry>> =
+        bodyweightRepo.observeRecent(365)
+            .map { entries -> entries.sortedBy { it.recordedAt } }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    private fun reload() = viewModelScope.launch {
+    // Reload whenever the store changes. StateFlow emits its current value on subscribe, so this also
+    // does the initial load — no separate init { reload() }.
+    init { viewModelScope.launch { photoRepo.revision.collect { reload() } } }
+
+    private suspend fun reload() {
         val photos = photoRepo.photos()
         val albumNames = photoRepo.albums()
         _state.value = UiState(loading = false, photos = photos, albumNames = albumNames, folders = foldersOf(photos, albumNames))
@@ -71,17 +87,20 @@ class MirrorTestViewModel @Inject constructor(
         else namedFolders + AlbumFolder("", "Unsorted", unsorted.size, unsorted.firstOrNull())
     }
 
-    fun createAlbum(name: String) = viewModelScope.launch { photoRepo.createAlbum(name); reload() }
-    fun renameAlbum(old: String, new: String) = viewModelScope.launch { photoRepo.renameAlbum(old, new); reload() }
-    fun deleteAlbum(name: String) = viewModelScope.launch { photoRepo.deleteAlbum(name); reload() }
+    fun createAlbum(name: String) = viewModelScope.launch { photoRepo.createAlbum(name) }
+    fun renameAlbum(old: String, new: String) = viewModelScope.launch { photoRepo.renameAlbum(old, new) }
+    fun deleteAlbum(name: String) = viewModelScope.launch { photoRepo.deleteAlbum(name) }
 
-    fun addPhoto(uri: Uri, album: String) = viewModelScope.launch {
-        photoRepo.add(uri, System.currentTimeMillis(), album = album); reload()
+    fun addPhoto(uri: Uri, album: String, pose: String = "") = viewModelScope.launch {
+        photoRepo.add(uri, album = album, pose = pose)
     }
 
-    fun setAlbum(photo: ProgressPhoto, album: String) = viewModelScope.launch { photoRepo.setAlbum(photo, album); reload() }
-    fun setNote(photo: ProgressPhoto, note: String) = viewModelScope.launch { photoRepo.setNote(photo, note); reload() }
-    fun deletePhoto(photo: ProgressPhoto) = viewModelScope.launch { photoRepo.delete(photo); reload() }
+    fun setAlbum(photo: ProgressPhoto, album: String) = viewModelScope.launch { photoRepo.setAlbum(photo, album) }
+    fun setNote(photo: ProgressPhoto, note: String) = viewModelScope.launch { photoRepo.setNote(photo, note) }
+    fun setPose(photo: ProgressPhoto, pose: String) = viewModelScope.launch { photoRepo.setPose(photo, pose) }
+    fun setWeight(photo: ProgressPhoto, weightLb: Double?) = viewModelScope.launch { photoRepo.setWeight(photo, weightLb) }
+    fun setTakenAt(photo: ProgressPhoto, takenAtMs: Long) = viewModelScope.launch { photoRepo.setTakenAt(photo, takenAtMs) }
+    fun deletePhoto(photo: ProgressPhoto) = viewModelScope.launch { photoRepo.delete(photo) }
 
     fun fileFor(photo: ProgressPhoto): File = photoRepo.fileFor(photo)
 }

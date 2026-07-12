@@ -21,6 +21,9 @@ datastore = "1.1.1"
 # Health Connect (on-device recovery signals — sleep, resting HR — for the coach)
 health-connect = "1.1.0"
 
+# CameraX (in-app guided progress-photo capture with a pose-ghost overlay)
+camerax = "1.4.2"
+
 # Async
 coroutines = "1.9.0"
 
@@ -74,6 +77,12 @@ androidx-datastore-preferences = { group = "androidx.datastore", name = "datasto
 
 # Health Connect
 androidx-health-connect = { group = "androidx.health.connect", name = "connect-client", version.ref = "health-connect" }
+
+# CameraX
+androidx-camera-core = { group = "androidx.camera", name = "camera-core", version.ref = "camerax" }
+androidx-camera-camera2 = { group = "androidx.camera", name = "camera-camera2", version.ref = "camerax" }
+androidx-camera-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", version.ref = "camerax" }
+androidx-camera-view = { group = "androidx.camera", name = "camera-view", version.ref = "camerax" }
 
 # Coroutines
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }

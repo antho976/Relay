@@ -221,11 +221,12 @@ internal fun StepPlanMode(selected: String, onSelect: (String) -> Unit) {
                 label = label,
                 description = desc,
                 selected = selected == key,
-                // Maturity tags: custom/freestyle ship earlier-stage than the generated path.
+                // Maturity tags: the generated path is the pick; custom has shipped (no tag);
+                // freestyle is still earlier-stage but out of alpha now.
                 meta = when (key) {
                     PLAN_GENERATED -> "Recommended"
-                    PLAN_CUSTOM -> "Beta"
-                    else -> "Alpha"
+                    PLAN_CUSTOM -> null
+                    else -> "Beta"
                 },
                 onClick = { onSelect(key) },
                 topContent = { PlanModeMedia(key, videoSync) }

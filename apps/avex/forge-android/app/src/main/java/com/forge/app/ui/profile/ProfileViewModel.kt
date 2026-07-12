@@ -83,7 +83,14 @@ class ProfileViewModel @Inject constructor(
     private val _showRankUpCelebration = MutableStateFlow(false)
     val showRankUpCelebration: StateFlow<Boolean> = _showRankUpCelebration.asStateFlow()
 
-    init { load() }
+    init {
+        load()
+        // Keep the filmstrip fresh when the photo store changes elsewhere — most importantly a shot
+        // taken in the in-app camera (a separate screen), but also edits made in the full gallery.
+        viewModelScope.launch {
+            photoRepo.revision.collect { _state.value = _state.value.copy(photos = photoRepo.photos()) }
+        }
+    }
 
     private fun load() = viewModelScope.launch {
         val name = settingsRepo.userName.first()
@@ -197,8 +204,8 @@ class ProfileViewModel @Inject constructor(
     fun fileFor(photo: ProgressPhoto) = photoRepo.fileFor(photo)
 
     fun addPhoto(uri: Uri) = viewModelScope.launch {
-        photoRepo.add(uri, System.currentTimeMillis())
-        _state.value = _state.value.copy(photos = photoRepo.photos())
+        // Dated by EXIF capture time inside the repo; the revision collector refreshes the strip.
+        photoRepo.add(uri)
     }
 
     fun deletePhoto(photo: ProgressPhoto) = viewModelScope.launch {

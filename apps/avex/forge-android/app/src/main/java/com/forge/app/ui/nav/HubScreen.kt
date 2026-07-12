@@ -159,7 +159,8 @@ fun HubScreen(
                 )
                 BottomTab.PROFILE -> ProfileScreen(
                     onOpenTrophies = { nav.navigate(Routes.TROPHIES) },
-                    onOpenPhotoGallery = { nav.navigate(Routes.MIRROR_TEST) }
+                    onOpenPhotoGallery = { nav.navigate(Routes.MIRROR_TEST) },
+                    onOpenCamera = { nav.navigate(Routes.PROGRESS_CAMERA) }
                 )
             }
         }

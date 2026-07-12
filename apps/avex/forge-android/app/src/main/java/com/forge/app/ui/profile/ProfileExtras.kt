@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.sp
 import com.forge.app.data.repo.ExtendedGoalRepository
 import com.forge.app.data.repo.GoalRepository
 import com.forge.app.data.repo.ProgressPhoto
+import com.forge.app.domain.photo.PhotoPose
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.domain.units.weightInputValue
 import com.forge.app.ui.common.bounceClick
@@ -220,6 +221,15 @@ private fun StripPhotoCell(photo: ProgressPhoto, file: File, onView: (ProgressPh
                 Brush.verticalGradient(0.62f to Color.Transparent, 1f to Color.Black.copy(alpha = 0.55f))
             )
         )
+        PhotoPose.fromKey(photo.pose)?.let { pose ->
+            Text(
+                pose.label.uppercase(),
+                style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.92f), fontSize = 8.sp,
+                modifier = Modifier.align(Alignment.TopStart).padding(8.dp)
+                    .clip(RoundedCornerShape(4.dp)).background(Color.Black.copy(alpha = 0.4f))
+                    .padding(horizontal = 5.dp, vertical = 2.dp)
+            )
+        }
         Text(
             SimpleDateFormat("MMM d", Locale.getDefault()).format(Date(photo.takenAtMs)).uppercase(),
             style = MaterialTheme.typography.labelSmall,
