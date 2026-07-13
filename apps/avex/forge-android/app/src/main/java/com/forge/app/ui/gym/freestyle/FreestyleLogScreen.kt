@@ -41,6 +41,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -54,6 +55,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -83,6 +85,7 @@ import com.forge.app.ui.common.rirLabel
 import com.forge.app.ui.common.rpeLabel
 import com.forge.app.ui.gym.stats.components.MuscleFigure
 import com.forge.app.ui.theme.ForgeMotion
+import com.forge.app.ui.theme.LocalForgeSettings
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.Locale
@@ -184,6 +187,17 @@ private fun stepWeightStr(cur: String, delta: Double): String {
 private fun stepRepsStr(cur: String, delta: Int): String =
     ((cur.toIntOrNull() ?: 0) + delta).coerceAtLeast(0).toString()
 
+/** Keep digits + a single colon (mm:ss) for a hold field (GYMAP-51) — a stray second colon would make
+ *  [com.forge.app.domain.units.parseHold] reject the value and silently drop the set. Mirrors the
+ *  cardio duration field's `sanitizeDuration`. */
+private fun sanitizeHoldText(input: String): String {
+    val filtered = input.filter { it.isDigit() || it == ':' }
+    val firstColon = filtered.indexOf(':')
+    val collapsed = if (firstColon < 0) filtered
+    else filtered.substring(0, firstColon + 1) + filtered.substring(firstColon + 1).replace(":", "")
+    return collapsed.take(5)
+}
+
 /** mm:ss, or h:mm:ss past an hour — the running session clock. */
 private fun formatElapsed(ms: Long): String {
     val s = ms / 1000
@@ -227,6 +241,15 @@ fun FreestyleLogScreen(
     var openedAtMs by remember { mutableStateOf(System.currentTimeMillis()) }
     val elapsedMs by produceState(0L, openedAtMs) {
         while (true) { value = System.currentTimeMillis() - openedAtMs; delay(1000) }
+    }
+
+    // Keep the screen awake while freestyle logging so it doesn't lock mid-set (GYMAP-74, mirrors the
+    // live session). Gated on the Session setting (default on); released when the screen leaves.
+    val view = LocalView.current
+    val keepScreenOn = LocalForgeSettings.current.keepScreenOn
+    DisposableEffect(keepScreenOn) {
+        view.keepScreenOn = keepScreenOn
+        onDispose { view.keepScreenOn = false }
     }
 
     // Draft persistence: on open, offer to resume an unsaved log; while editing, autosave (debounced).
@@ -636,7 +659,9 @@ private fun FsExerciseCard(
                                 FsSet(
                                     weight = if (exercise.timed) "" else s.weightLb?.let { lb -> weightInputValue(lb, useKg) } ?: "",
                                     reps = if (exercise.timed) "" else s.reps.toString(),
-                                    hold = if (exercise.timed) s.durationSeconds?.let { formatHold(it) } ?: "" else ""
+                                    // Legacy holds store the seconds in `reps` (null duration column), so
+                                    // fall back to that when copying rather than seeding an empty hold.
+                                    hold = if (exercise.timed) formatHold(s.durationSeconds ?: s.reps) else ""
                                 )
                             }
                         )
@@ -688,7 +713,7 @@ private fun FsExerciseCard(
                         // Timed hold (GYMAP-51): a manual mm:ss field (or bare seconds) in place of reps.
                         FsUnderlineField(
                             value = set.hold,
-                            onValueChange = { new -> onSetChange(setIdx, set.copy(hold = new.filter { it.isDigit() || it == ':' })) },
+                            onValueChange = { new -> onSetChange(setIdx, set.copy(hold = sanitizeHoldText(new))) },
                             placeholder = "0:00",
                             keyboardType = KeyboardType.Text,
                             modifier = Modifier.width(64.dp)
@@ -771,8 +796,10 @@ private fun LastTimePanel(sets: List<LoggedSet>, useKg: Boolean, timed: Boolean 
             sets.forEach { s ->
                 val w = s.weightLb?.let { formatWeight(it, useKg) } ?: s.weightText.ifBlank { "BW" }
                 Text(
-                    // Timed holds show their held time; every other set shows "weight × reps".
-                    if (timed) formatHold(s.durationSeconds ?: 0) else "$w × ${s.reps}",
+                    // Timed holds show their held time; every other set shows "weight × reps". Legacy
+                    // holds (e.g. plank logged before the duration column) carry the seconds in `reps`,
+                    // so fall back to that rather than rendering a real hold as "0:00".
+                    if (timed) formatHold(s.durationSeconds ?: s.reps) else "$w × ${s.reps}",
                     style = MaterialTheme.typography.labelMedium,
                     color = cs.onSurface,
                     modifier = Modifier

@@ -49,6 +49,8 @@ internal fun CardioWeekStatsPage(
     weekEntries: List<CardioEntry>,
     useMiles: Boolean,
     isCurrentWeek: Boolean,
+    /** Per-activity pace series (GYMAP-35); non-empty only on the current-week page (cross-week data). */
+    paceSeries: List<com.forge.app.domain.cardio.CardioPaceSeries>,
     todayDow: Int,
     weekTargetMin: Int,
     cardioStreakDays: Int,
@@ -159,6 +161,15 @@ internal fun CardioWeekStatsPage(
                     style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp
                 )
             }
+        }
+
+        // ── Pace trend ── cross-week, so it rides the current-week page alone and never repeats (§4.3).
+        if (isCurrentWeek && paceSeries.isNotEmpty()) {
+            Spacer(Modifier.height(14.dp))
+            CardioPaceTrendSection(
+                series = paceSeries, useMiles = useMiles,
+                onBg = onBg, muted = muted, outline = outline, accent = accent
+            )
         }
 
         // ── Wearable steps (data, or a placeholder once connected) ──────────

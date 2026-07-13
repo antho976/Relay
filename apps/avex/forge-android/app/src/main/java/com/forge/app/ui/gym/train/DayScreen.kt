@@ -93,10 +93,11 @@ fun DayScreen(
     }
 
     // Keep the screen awake while a session is in progress so the phone doesn't lock mid-rest and
-    // force a PIN/biometric unlock between sets. Released the moment the session finishes or the
-    // screen leaves composition.
-    DisposableEffect(state.isFinished) {
-        view.keepScreenOn = !state.isFinished
+    // force a PIN/biometric unlock between sets. Gated on the Session setting (GYMAP-74, default on);
+    // released the moment the session finishes, the setting turns off, or the screen leaves composition.
+    val keepScreenOn = LocalForgeSettings.current.keepScreenOn
+    DisposableEffect(state.isFinished, keepScreenOn) {
+        view.keepScreenOn = keepScreenOn && !state.isFinished
         onDispose { view.keepScreenOn = false }
     }
 

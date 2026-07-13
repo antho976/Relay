@@ -154,6 +154,23 @@ object SettingsIcons {
             }
         }
     }
+
+    /** What's new — a four-point sparkle (thin concave points) for release notes. */
+    val WhatsNew: ImageVector by lazy {
+        icon("SetWhatsNew") {
+            fillPath {
+                moveTo(12f, 3.5f)
+                lineTo(13.7f, 10.3f)
+                lineTo(20.5f, 12f)
+                lineTo(13.7f, 13.7f)
+                lineTo(12f, 20.5f)
+                lineTo(10.3f, 13.7f)
+                lineTo(3.5f, 12f)
+                lineTo(10.3f, 10.3f)
+                close()
+            }
+        }
+    }
 }
 
 // Vector-builder plumbing (icon/fillPath/strokePath/circle/roundRect) lives in VectorBuilders.kt,

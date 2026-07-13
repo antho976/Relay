@@ -48,6 +48,7 @@ enum class SettingsPage(val title: String) {
     ExercisePrefs("Exercise likes"),
     CardioActivities("Cardio activities"),
     Vacation("Holiday / Vacation"),
+    WhatsNew("What's new"),
     About("About")
 }
 
@@ -87,6 +88,7 @@ internal val PAGE_ENTRIES = listOf(
     SettingsPageEntry(SettingsPage.ExercisePrefs, "exercise likes dislike favourite exclude preferences movements heart hidden preferred"),
     SettingsPageEntry(SettingsPage.CardioActivities, "cardio custom activity activities types padel kayak sport add own create running walking"),
     SettingsPageEntry(SettingsPage.Vacation, "holiday vacation pause streak break away travel"),
+    SettingsPageEntry(SettingsPage.WhatsNew, "what's new whats new changelog release notes updates version history latest build recent changes"),
 )
 
 internal val ALL_ITEMS = listOf(
@@ -102,6 +104,7 @@ internal val ALL_ITEMS = listOf(
     SettingsItem("First day of week", "week start monday sunday", SettingsPage.Format),
     SettingsItem("Timezone", "timezone locale region", SettingsPage.Format),
     SettingsItem("Haptic feedback", "haptic vibration strength", SettingsPage.Session),
+    SettingsItem("Keep screen on", "keep screen on awake display lock timeout sleep session logging", SettingsPage.Session),
     SettingsItem("Rest times", "rest timer seconds between sets compound isolation default", SettingsPage.Session),
     SettingsItem("Note templates", "notes templates prompts form energy pain focus", SettingsPage.Session),
     SettingsItem("Training reminders", "reminder notify nudge daily streak train schedule engagement", SettingsPage.Notifications),
@@ -283,6 +286,7 @@ fun SettingsScreen(
                 SettingsPage.ExercisePrefs -> ExercisePrefsPage(state, viewModel, Modifier.padding(inner))
                 SettingsPage.CardioActivities -> CardioActivitiesPage(viewModel, Modifier.padding(inner))
                 SettingsPage.Vacation -> VacationPage(viewModel, Modifier.padding(inner))
+                SettingsPage.WhatsNew -> WhatsNewPage(Modifier.padding(inner))
                 SettingsPage.About -> AboutPage(Modifier.padding(inner), viewModel)
             }
         }

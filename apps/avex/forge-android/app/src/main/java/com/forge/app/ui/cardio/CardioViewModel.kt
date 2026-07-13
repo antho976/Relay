@@ -12,6 +12,8 @@ import com.forge.app.data.repo.ExtendedGoalRepository
 import com.forge.app.data.repo.TrophyRepository
 import com.forge.app.domain.cardio.CardioActivity
 import com.forge.app.domain.cardio.CardioCondition
+import com.forge.app.domain.cardio.cardioActivityRecords
+import com.forge.app.domain.cardio.cardioPaceSeries
 import com.forge.app.domain.cardio.CardioEffort
 import com.forge.app.domain.cardio.CardioField
 import com.forge.app.domain.cardio.CardioRestReason
@@ -72,12 +74,14 @@ class CardioViewModel @Inject constructor(
 
     init { refreshConnection() }
 
-    /** Re-read whether the steps / exercise grants are held (call on resume — grants change in the HC app). */
+    /** Re-read whether the steps / exercise grants are held (call on resume — grants change in the HC app).
+     *  Also refreshes today's step total for the hero line (GYMAP-64) so it tracks steps taken while away. */
     fun refreshConnection() = viewModelScope.launch {
-        connection.value = WearableConnection(
-            steps = healthConnectManager.canReadSteps(),
-            routes = healthConnectManager.canReadExercise()
-        )
+        val steps = healthConnectManager.canReadSteps()
+        val routes = healthConnectManager.canReadExercise()
+        // Read today's steps only when granted; fail-soft to null so a read error just hides the line.
+        val todaySteps = if (steps) runCatching { loadStepsForDay(clock.nowMs()).totalSteps }.getOrNull() else null
+        connection.value = WearableConnection(steps = steps, routes = routes, todaySteps = todaySteps)
     }
 
     // One shared subscription to the full history — both the derived aggregates and the cardio-goals
@@ -103,7 +107,11 @@ class CardioViewModel @Inject constructor(
             weekDays = buildWeekDays(weekEntries),
             weekDistanceKm = weekEntries
                 .filter { it.type != CardioType.REST.code }
-                .sumOf { it.distanceKm ?: 0.0 }
+                .sumOf { it.distanceKm ?: 0.0 },
+            // All-time per-activity bests (GYMAP-34) — off the full history, on this same background pass.
+            records = cardioActivityRecords(all),
+            // Per-activity pace series (GYMAP-35) for the trend chart in the week overlay's current page.
+            paceSeries = cardioPaceSeries(all)
         )
     }.flowOn(Dispatchers.Default)
 
@@ -133,6 +141,8 @@ class CardioViewModel @Inject constructor(
             cardioStreakDays = d.cardioStreakDays,
             weekDays = d.weekDays,
             weekDistanceKm = d.weekDistanceKm,
+            cardioRecords = d.records,
+            cardioPaceSeries = d.paceSeries,
             cardioGoals = cardioGoals,
             entries = d.all,
             sheetOpen = tr.sheetOpen,
@@ -150,7 +160,7 @@ class CardioViewModel @Inject constructor(
     }.combine(settingsRepo.useMiles) { st, useMiles ->
         st.copy(useMiles = useMiles)
     }.combine(connection) { st, conn ->
-        st.copy(stepsConnected = conn.steps, routesConnected = conn.routes)
+        st.copy(stepsConnected = conn.steps, routesConnected = conn.routes, todaySteps = conn.todaySteps)
     }.combine(settingsRepo.lastCardioType) { st, lastType ->
         st.copy(lastCardioType = lastType)
     }.stateIn(
@@ -306,7 +316,7 @@ class CardioViewModel @Inject constructor(
     }
 
     /** The Health Connect grants Avex holds for the cardio screen's wearable data. */
-    private data class WearableConnection(val steps: Boolean = false, val routes: Boolean = false)
+    private data class WearableConnection(val steps: Boolean = false, val routes: Boolean = false, val todaySteps: Int? = null)
 
     private data class TransientState(
         val sheetOpen: Boolean = false,
@@ -328,7 +338,9 @@ class CardioViewModel @Inject constructor(
         val cardioDaysThisWeek: Int,
         val cardioStreakDays: Int,
         val weekDays: List<CardioDayCell>,
-        val weekDistanceKm: Double
+        val weekDistanceKm: Double,
+        val records: List<com.forge.app.domain.cardio.CardioActivityRecord>,
+        val paceSeries: List<com.forge.app.domain.cardio.CardioPaceSeries>
     )
 
     companion object {

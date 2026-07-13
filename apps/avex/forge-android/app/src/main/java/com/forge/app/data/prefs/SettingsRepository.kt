@@ -38,7 +38,8 @@ enum class SettingsSection(val keys: List<Preferences.Key<*>>) {
     ),
     SESSION(
         listOf(
-            PreferenceKeys.HAPTIC_STRENGTH, PreferenceKeys.REST_COMPOUND_SECONDS,
+            PreferenceKeys.HAPTIC_STRENGTH, PreferenceKeys.KEEP_SCREEN_ON,
+            PreferenceKeys.REST_COMPOUND_SECONDS,
             PreferenceKeys.REST_ISOLATION_SECONDS, PreferenceKeys.NOTE_TEMPLATES
         )
     ),
@@ -281,6 +282,12 @@ class SettingsRepository @Inject constructor(
         .map { it[PreferenceKeys.HAPTIC_STRENGTH] ?: "strong" }
     suspend fun setHapticStrength(value: String) =
         context.forgePreferences.edit { it[PreferenceKeys.HAPTIC_STRENGTH] = value }
+
+    // Keep-screen-on while logging (GYMAP-74) — default on so a session never locks mid-rest.
+    val keepScreenOn: Flow<Boolean> = context.forgePreferences.data
+        .map { it[PreferenceKeys.KEEP_SCREEN_ON] ?: true }
+    suspend fun setKeepScreenOn(v: Boolean) =
+        context.forgePreferences.edit { it[PreferenceKeys.KEEP_SCREEN_ON] = v }
 
     // ─── Notifications (#122) ─────────────────────────────────────────────────
 

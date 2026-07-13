@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.forge.app.data.repo.BackupRepository
 import com.forge.app.data.repo.StatsRepository
+import com.forge.app.data.repo.WorkoutRepository
 import com.forge.app.ui.gym.session.state.SessionDetailUiState
 import com.forge.app.ui.nav.Routes
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -24,6 +25,7 @@ import javax.inject.Inject
 class SessionDetailViewModel @Inject constructor(
     private val statsRepo: StatsRepository,
     private val backupRepo: BackupRepository,
+    private val workoutRepo: WorkoutRepository,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
@@ -35,6 +37,10 @@ class SessionDetailViewModel @Inject constructor(
     /** Path of the just-written per-session JSON export — the screen opens the share sheet on it. */
     private val _exportPath = MutableStateFlow<String?>(null)
     val exportPath: StateFlow<String?> = _exportPath.asStateFlow()
+
+    /** Id of the session just created by "Log again today" — drives the screen's Undo snackbar (GYMAP-36). */
+    private val _reLoggedSessionId = MutableStateFlow<Long?>(null)
+    val reLoggedSessionId: StateFlow<Long?> = _reLoggedSessionId.asStateFlow()
 
     init {
         viewModelScope.launch {
@@ -55,4 +61,26 @@ class SessionDetailViewModel @Inject constructor(
     }
 
     fun clearExportPath() { _exportPath.value = null }
+
+    /** In-flight re-log so a double-tap can't create two copies of the same session. */
+    private var reLogJob: Job? = null
+
+    /**
+     * "Log again today" (GYMAP-36): duplicate this finished session as a fresh session dated now,
+     * then surface the new id so the screen can offer an Undo. No-op when the source has nothing to
+     * copy (the repo returns null and the button is only shown for a session with logged exercises).
+     */
+    fun reLogToday() {
+        if (sessionId < 0 || reLogJob?.isActive == true) return
+        reLogJob = viewModelScope.launch {
+            workoutRepo.reLogSession(sessionId)?.let { _reLoggedSessionId.value = it }
+        }
+    }
+
+    /** Reverse a just-created re-log (Undo) — CASCADE removes its copied exercises and sets. */
+    fun undoReLog(newSessionId: Long) {
+        viewModelScope.launch { workoutRepo.discardSession(newSessionId) }
+    }
+
+    fun clearReLoggedSessionId() { _reLoggedSessionId.value = null }
 }

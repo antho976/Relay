@@ -27,6 +27,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -34,6 +35,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -96,6 +98,15 @@ fun CardioLogSheet(
         val seed = editing?.type ?: lastUsedType?.takeIf { it.isNotBlank() }
         mutableStateOf(seed?.let { CardioActivity.resolve(it, customTypes) } ?: CardioActivity.RUN)
     }
+    // For a NEW entry, the last-used activity (GYMAP-40) can arrive from DataStore just AFTER the sheet
+    // composes (lastUsedType null at first read → seeded to Run). Apply it once it lands — but never
+    // after the user has picked, so a late emission can't clobber a manual choice. Editing ignores it.
+    var typePicked by remember(editKey) { mutableStateOf(false) }
+    LaunchedEffect(editKey, lastUsedType) {
+        if (editing == null && !typePicked && !lastUsedType.isNullOrBlank()) {
+            type = CardioActivity.resolve(lastUsedType, customTypes)
+        }
+    }
     var showCreateCustom by remember { mutableStateOf(false) }
     var durationText by remember(editKey) { mutableStateOf(editing?.durationMin?.takeIf { it > 0 }?.toString() ?: "") }
     var distanceText by remember(editKey) { mutableStateOf(editing?.distanceKm?.let { distanceInputValue(it, useMiles) } ?: "") }
@@ -113,6 +124,8 @@ fun CardioLogSheet(
     var conditions by remember(editKey) { mutableStateOf(CardioCondition.decode(editing?.conditions)) }
     var dateMs by remember(editKey) { mutableStateOf(editing?.date ?: System.currentTimeMillis()) }
     var showDatePicker by remember { mutableStateOf(false) }
+    // The entry's start time (GYMAP-33) is the time-of-day of the same [dateMs] — no separate column.
+    var showTimePicker by remember { mutableStateOf(false) }
     // Optional details (effort / HR zone / intervals / per-type fields / conditions) start tucked away —
     // opened by default only when editing an entry that already has one, so they're never silently hidden.
     var moreOpen by remember(editKey) {
@@ -151,6 +164,9 @@ fun CardioLogSheet(
         val date = SimpleDateFormat(if (sameYear) "MMM d" else "MMM d, yyyy", Locale.getDefault()).format(d).uppercase()
         "$day · $date"
     }
+    // "7:24 AM" (GYMAP-33) — honors the device's 12/24-hour format, matching the time picker.
+    val context = LocalContext.current
+    val timeHeader = android.text.format.DateFormat.getTimeFormat(context).format(Date(dateMs)).uppercase()
 
     Scaffold(
         topBar = {
@@ -173,8 +189,11 @@ fun CardioLogSheet(
             item("hero") {
                 CardioLogHeroItem(
                     dateHeader = dateHeader,
+                    timeHeader = timeHeader,
+                    showTime = !type.isRest,
                     muted = muted, onBg = onBg, outline = outline,
-                    onPickDate = { showDatePicker = true }
+                    onPickDate = { showDatePicker = true },
+                    onPickTime = { showTimePicker = true }
                 )
             }
 
@@ -182,7 +201,7 @@ fun CardioLogSheet(
                 FormSection(label = "Activity", optional = false, muted = muted, onBg = onBg, outline = outline) {
                     ActivityDropdown(
                         selected = type,
-                        onSelect = { type = it },
+                        onSelect = { type = it; typePicked = true },
                         onAddCustom = { showCreateCustom = true },
                         onBg = onBg, muted = muted, outline = outline
                     )
@@ -327,6 +346,14 @@ fun CardioLogSheet(
             dateMs = dateMs,
             onPicked = { dateMs = it },
             onDismiss = { showDatePicker = false }
+        )
+    }
+
+    if (showTimePicker) {
+        CardioTimePickerDialog(
+            dateMs = dateMs,
+            onPicked = { dateMs = it },
+            onDismiss = { showTimePicker = false }
         )
     }
 

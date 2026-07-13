@@ -58,6 +58,8 @@ fun CardioWeekDetailSheet(
     useMiles: Boolean,
     weekTargetMin: Int,
     cardioStreakDays: Int,
+    /** Per-activity pace series (GYMAP-35) — rendered only on the current-week page (cross-week data). */
+    paceSeries: List<com.forge.app.domain.cardio.CardioPaceSeries>,
     /** Watch-derived steps/route for the current week (today); null when none loaded. */
     wearable: CardioWearableDay?,
     /** Avex holds the steps grant — show the current-week steps section even before data syncs. */
@@ -173,6 +175,8 @@ fun CardioWeekDetailSheet(
                     weekEntries = weekEntries,
                     useMiles = useMiles,
                     isCurrentWeek = weeksAgoFor(page) == 0,
+                    // Cross-week pace trend belongs to the current-week page alone, so it never repeats (§4.3).
+                    paceSeries = if (weeksAgoFor(page) == 0) paceSeries else emptyList(),
                     todayDow = todayDow,
                     weekTargetMin = weekTargetMin,
                     cardioStreakDays = cardioStreakDays,

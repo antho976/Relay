@@ -42,24 +42,54 @@ import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.common.clickableLabeled
 
 /**
- * The compact sheet header — the entry's date as a small outlined capsule that IS the date-picker
- * trigger (interactive, so it earns its border; no separate "When?" section, no "· change" tag).
+ * The compact sheet header — the entry's date and start time as small outlined capsules that ARE the
+ * date / time-picker triggers (interactive, so they earn their border; no separate "When?" section, no
+ * "· change" tag). The time capsule (GYMAP-33) is hidden on rest days, which have no start time.
  */
 @Composable
-internal fun CardioLogHeroItem(dateHeader: String, muted: Color, onBg: Color, outline: Color, onPickDate: () -> Unit) {
-    Row(Modifier.padding(horizontal = 24.dp).padding(top = 8.dp, bottom = 4.dp)) {
-        Row(
-            modifier = Modifier
-                .clip(RoundedCornerShape(50))
-                .border(1.dp, outline.copy(alpha = 0.35f), RoundedCornerShape(50))
-                .bounceClick(onClick = onPickDate)
-                .padding(horizontal = 14.dp, vertical = 9.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Text(dateHeader, style = MaterialTheme.typography.labelMedium, color = onBg, letterSpacing = 1.sp)
-            Text("▾", style = MaterialTheme.typography.labelSmall, color = muted)
+internal fun CardioLogHeroItem(
+    dateHeader: String,
+    timeHeader: String,
+    showTime: Boolean,
+    muted: Color, onBg: Color, outline: Color,
+    onPickDate: () -> Unit,
+    onPickTime: () -> Unit
+) {
+    Row(
+        Modifier.padding(horizontal = 24.dp).padding(top = 8.dp, bottom = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        HeroPickerCapsule(text = dateHeader, label = "Pick date", muted = muted, onBg = onBg, outline = outline, onClick = onPickDate)
+        if (showTime) {
+            HeroPickerCapsule(text = timeHeader, label = "Pick start time", muted = muted, onBg = onBg, outline = outline, onClick = onPickTime)
         }
+    }
+}
+
+@Composable
+private fun HeroPickerCapsule(
+    text: String,
+    label: String,
+    muted: Color, onBg: Color, outline: Color,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .border(1.dp, outline.copy(alpha = 0.35f), RoundedCornerShape(50))
+            .bounceClick(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            text,
+            style = MaterialTheme.typography.labelMedium,
+            color = onBg,
+            letterSpacing = 1.sp,
+            modifier = Modifier.semantics { contentDescription = label }
+        )
+        Text("▾", style = MaterialTheme.typography.labelSmall, color = muted)
     }
 }
 

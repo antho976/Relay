@@ -100,6 +100,10 @@ object PreferenceKeys {
     /** "off" | "light" | "medium" | "strong" */
     val HAPTIC_STRENGTH = stringPreferencesKey("haptic_strength")
 
+    // ─── Keep screen on while logging (GYMAP-74) ──────────────────────────────
+    /** Hold the screen awake during an active session so it doesn't lock between sets. Default on. */
+    val KEEP_SCREEN_ON = booleanPreferencesKey("keep_screen_on")
+
     // ─── Notifications (#122) ─────────────────────────────────────────────────
     val QUIET_HOURS_ENABLED = booleanPreferencesKey("quiet_hours_enabled")
     val QUIET_HOURS_START = intPreferencesKey("quiet_hours_start")  // 0–23

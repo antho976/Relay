@@ -1,25 +1,32 @@
 package com.forge.app.ui.cardio.components
 
+import android.text.format.DateFormat
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.SelectableDates
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TimePicker
 import androidx.compose.material3.rememberDatePickerState
+import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.forge.app.domain.cardio.CardioActivity
@@ -266,4 +273,45 @@ private fun combineDay(pickedUtcMidnightMs: Long, keepTimeFromMs: Long): Long {
     val day = Instant.ofEpochMilli(pickedUtcMidnightMs).atZone(ZoneOffset.UTC).toLocalDate()
     val time = Instant.ofEpochMilli(keepTimeFromMs).atZone(zone).toLocalTime()
     return day.atTime(time).atZone(zone).toInstant().toEpochMilli()
+}
+
+/**
+ * The cardio start-time picker (GYMAP-33) — sets the time-of-day of the entry's timestamp (there is
+ * no separate start-time column; the entry's [dateMs] already carries the clock). [onPicked] returns
+ * the same calendar day with the chosen time. Honors the device's 12/24-hour format.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun CardioTimePickerDialog(dateMs: Long, onPicked: (Long) -> Unit, onDismiss: () -> Unit) {
+    val time = remember(dateMs) { Instant.ofEpochMilli(dateMs).atZone(ZoneId.systemDefault()).toLocalTime() }
+    val tpState = rememberTimePickerState(
+        initialHour = time.hour,
+        initialMinute = time.minute,
+        is24Hour = DateFormat.is24HourFormat(LocalContext.current)
+    )
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextButton(onClick = {
+                onPicked(combineTime(tpState.hour, tpState.minute, dateMs))
+                onDismiss()
+            }) { Text("OK") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        text = {
+            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                TimePicker(state = tpState)
+            }
+        }
+    )
+}
+
+/**
+ * Keep the calendar day from [keepDayFromMs] and replace only the time-of-day with the picked
+ * [hour]:[minute] — the inverse of [combineDay], so setting the start time never shifts the date.
+ */
+private fun combineTime(hour: Int, minute: Int, keepDayFromMs: Long): Long {
+    val zone = ZoneId.systemDefault()
+    val day = Instant.ofEpochMilli(keepDayFromMs).atZone(zone).toLocalDate()
+    return day.atTime(hour, minute).atZone(zone).toInstant().toEpochMilli()
 }

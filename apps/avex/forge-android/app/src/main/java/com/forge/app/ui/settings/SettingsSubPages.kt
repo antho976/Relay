@@ -516,6 +516,14 @@ internal fun SessionPage(state: SettingsUiState, vm: SettingsViewModel, modifier
             onSelect = vm::setHapticStrength
         )
 
+        SettingsSectionHeader("Screen")
+        ToggleRow(
+            "Keep screen on",
+            "Keeps the display awake while logging so it won't lock between sets.",
+            state.keepScreenOn,
+            vm::setKeepScreenOn
+        )
+
         SettingsSectionHeader("Rest timer")
         ChipField(
             label = "Compound lifts",

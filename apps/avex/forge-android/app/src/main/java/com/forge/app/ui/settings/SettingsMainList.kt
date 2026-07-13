@@ -95,8 +95,13 @@ internal fun MainList(
                 DestructiveRow("Reset…") { onOpenResetMenu() }
                 // …and a factory reset stays a separate, clearly more dangerous button.
                 DestructiveRow(ResetTarget.FACTORY.label, isFactory = true) { onResetTarget(ResetTarget.FACTORY) }
+            }
+            item("about") {
+                SettingsSectionHeader("About")
+                // What's new (GYMAP-71) — subtitle carries the live app version; taps to the changelog.
+                SettingsNavRow("What's new", rowSubtitle(SettingsPage.WhatsNew, state), SettingsIcons.WhatsNew) { onOpenPage(SettingsPage.WhatsNew) }
                 Spacer(Modifier.height(20.dp))
-                // About Avex is a quiet footer link at the very bottom of the app.
+                // About Avex stays a quiet footer link at the very bottom of the app.
                 AboutLink { onOpenPage(SettingsPage.About) }
                 Spacer(Modifier.height(8.dp))
             }
@@ -243,7 +248,7 @@ private fun pageSection(page: SettingsPage): String = when (page) {
     SettingsPage.Appearance, SettingsPage.Format, SettingsPage.Notifications -> "General"
     SettingsPage.Program, SettingsPage.Session, SettingsPage.ExercisePrefs, SettingsPage.CardioActivities -> "Training"
     SettingsPage.Coach, SettingsPage.Recovery, SettingsPage.Vacation -> "Coach"
-    SettingsPage.About -> "About"
+    SettingsPage.WhatsNew, SettingsPage.About -> "About"
 }
 
 /** The leading glyph for a page's results — the same family the nav rows use. */
@@ -258,6 +263,7 @@ private fun pageGlyph(page: SettingsPage): ImageVector? = when (page) {
     SettingsPage.ExercisePrefs -> SettingsIcons.Likes
     SettingsPage.CardioActivities -> NavIcons.Cardio
     SettingsPage.Vacation -> SettingsIcons.Holiday
+    SettingsPage.WhatsNew -> SettingsIcons.WhatsNew
     SettingsPage.About -> null
 }
 
@@ -357,6 +363,8 @@ internal fun rowSubtitle(page: SettingsPage, s: SettingsUiState): String = when 
     SettingsPage.CardioActivities -> "Your own cardio activities"
     // Reached via a dedicated MainList row, not the search/nav grid — subtitle unused.
     SettingsPage.Vacation -> "Pause your streak during a holiday"
+    // The live app version — the built VERSION_NAME, so the row reads current at a glance.
+    SettingsPage.WhatsNew -> "Version ${com.forge.app.BuildConfig.VERSION_NAME}"
     SettingsPage.About -> "Version · privacy · what's stored"
 }
 

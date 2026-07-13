@@ -33,6 +33,8 @@ data class SettingsUiState(
     val timeFormat24h: Boolean = false,
     val firstDayMonday: Boolean = true,
     val hapticStrength: String = "strong",
+    /** Hold the screen awake during an active session (GYMAP-74). Default on. */
+    val keepScreenOn: Boolean = true,
     /** Default rest bases (seconds) per movement type — the Session-settings rest override. */
     val restCompoundSeconds: Int = 180,
     val restIsolationSeconds: Int = 90,
@@ -200,6 +202,8 @@ class SettingsViewModel @Inject constructor(
         s.copy(hiddenOverviewTiles = hidden)
     }.combine(settingsRepo.compactSetLogging) { s, v ->
         s.copy(compactSetLogging = v)
+    }.combine(settingsRepo.keepScreenOn) { s, v ->
+        s.copy(keepScreenOn = v)
     }.combine(settingsRepo.overviewTileOrder) { s, order ->
         s.copy(overviewTileOrder = order)
     }.combine(settingsRepo.privacyMode) { s, v ->
@@ -297,6 +301,7 @@ class SettingsViewModel @Inject constructor(
     fun setTimeFormat24h(v: Boolean) = viewModelScope.launch { settingsRepo.setTimeFormat24h(v) }
     fun setFirstDayMonday(v: Boolean) = viewModelScope.launch { settingsRepo.setFirstDayMonday(v) }
     fun setHapticStrength(v: String) = viewModelScope.launch { settingsRepo.setHapticStrength(v) }
+    fun setKeepScreenOn(v: Boolean) = viewModelScope.launch { settingsRepo.setKeepScreenOn(v) }
     fun setRestCompoundSeconds(s: Int) = viewModelScope.launch { settingsRepo.setRestCompoundSeconds(s) }
     fun setRestIsolationSeconds(s: Int) = viewModelScope.launch { settingsRepo.setRestIsolationSeconds(s) }
     fun addNoteTemplate(t: String) = viewModelScope.launch { settingsRepo.addNoteTemplate(t) }

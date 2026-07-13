@@ -142,6 +142,7 @@ fun CardioScreen(
             useMiles = state.useMiles,
             weekTargetMin = state.weekTargetMin,
             cardioStreakDays = state.cardioStreakDays,
+            paceSeries = state.cardioPaceSeries,
             wearable = state.weekWearable, // Today's watch steps on the current-week page (null when none).
             wearableConnected = state.stepsConnected, // Show an empty placeholder once connected.
             todayDow = todayDow,
@@ -242,6 +243,7 @@ private fun CardioListContent(
                     weekMinutes = state.weekMinutes,
                     weekDistanceKm = state.weekDistanceKm,
                     streakDays = state.cardioStreakDays,
+                    todaySteps = state.todaySteps,
                     weekTargetMin = state.weekTargetMin,
                     useMiles = state.useMiles,
                     days = state.weekDays,
@@ -260,6 +262,20 @@ private fun CardioListContent(
                     CardioGoalsSection(
                         goals = state.cardioGoals,
                         onOpenGoals = onOpenGoals,
+                        onBg = onBg, muted = muted, accent = accent, outline = outline
+                    )
+                }
+            }
+
+            // RECORDS — per-activity all-time bests (GYMAP-34). Hidden until a distance session exists;
+            // the hero already carries the zero state, so there's no empty records shell here (§12).
+            if (state.cardioRecords.isNotEmpty()) {
+                item("records") {
+                    Spacer(Modifier.height(28.dp))
+                    CardioRecordsSection(
+                        records = state.cardioRecords,
+                        useMiles = state.useMiles,
+                        onOpenSession = onOpenSession,
                         onBg = onBg, muted = muted, accent = accent, outline = outline
                     )
                 }

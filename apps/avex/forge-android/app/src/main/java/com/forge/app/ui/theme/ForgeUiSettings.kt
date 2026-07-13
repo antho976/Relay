@@ -19,6 +19,7 @@ data class ForgeUiSettings(
     val timeFormat24h: Boolean = false,
     val firstDayMonday: Boolean = true,
     val hapticStrength: String = "strong",   // "off" | "light" | "medium" | "strong"
+    val keepScreenOn: Boolean = true,        // hold the display awake while logging (GYMAP-74)
     val quietHoursEnabled: Boolean = false,
     val quietHoursStart: Int = 22,
     val quietHoursEnd: Int = 7,

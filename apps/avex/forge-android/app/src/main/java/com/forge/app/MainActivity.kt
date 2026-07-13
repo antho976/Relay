@@ -358,6 +358,8 @@ class MainActivity : ComponentActivity() {
                     s.copy(hiddenOverviewTiles = hidden)
                 }.combine(settingsRepo.compactSetLogging) { s, v ->
                     s.copy(compactSetLogging = v)
+                }.combine(settingsRepo.keepScreenOn) { s, v ->
+                    s.copy(keepScreenOn = v)
                 }.combine(settingsRepo.overviewTileOrder) { s, order ->
                     s.copy(overviewTileOrder = order)
                 }.combine(settingsRepo.accentColorHex) { s, v ->
