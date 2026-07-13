@@ -63,6 +63,25 @@ object SettingsIcons {
         }
     }
 
+    /** Security — a padlock: a stroked shackle rising out of a filled body with a subtracted keyhole. */
+    val Security: ImageVector by lazy {
+        icon("SetSecurity") {
+            // shackle — an inverted U rising out of the lock body
+            strokePath(1.8f) {
+                moveTo(8.2f, 10.6f)
+                lineTo(8.2f, 8.2f)
+                arcToRelative(3.8f, 3.8f, 0f, false, true, 7.6f, 0f)
+                lineTo(15.8f, 10.6f)
+            }
+            // body with a subtracted keyhole (circle + a short stem)
+            fillPath(PathFillType.EvenOdd) {
+                roundRect(5.4f, 10.4f, 18.6f, 20.4f, 2.4f)
+                circle(12f, 14.4f, 1.5f)
+                roundRect(11.35f, 14.4f, 12.65f, 17.6f, 0.6f)
+            }
+        }
+    }
+
     /** Program & equipment — a clipboard plan: stroked board, filled clip tab, and three plan
      *  lines (the third shorter, so it reads as a program being written, not a text block). */
     val Program: ImageVector by lazy {

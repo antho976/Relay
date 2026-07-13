@@ -55,9 +55,11 @@ import com.forge.app.ui.gym.train.DayListScreen
 import com.forge.app.ui.gym.train.DayScreen
 import com.forge.app.ui.goals.GoalEditorScreen
 import com.forge.app.ui.goals.GoalsScreen
+import com.forge.app.security.LocalAppLock
 import com.forge.app.ui.profile.BodyMeasurementsScreen
 import com.forge.app.ui.profile.MirrorTestScreen
 import com.forge.app.ui.profile.ProgressCameraScreen
+import com.forge.app.ui.security.AppLockScreen
 import com.forge.app.ui.recap.RecapScreen
 import com.forge.app.ui.settings.SettingsScreen
 import com.forge.app.ui.theme.ForgeMotion
@@ -278,10 +280,23 @@ fun ForgeNavHost(initialDayKey: String? = null) {
             )
         }
         composable(Routes.MIRROR_TEST) {
-            MirrorTestScreen(
-                onBack = { nav.popBackStack() },
-                onOpenCamera = { nav.navigate(Routes.PROGRESS_CAMERA) }
-            )
+            // Gallery lock (GYMAP-69): gate the progress photos unless the session is already
+            // authenticated (unlocking the app satisfies this too — no second prompt). Cancel → back.
+            val appLock = LocalAppLock.current
+            val galleryLocked by appLock.galleryLocked.collectAsStateWithLifecycle()
+            if (galleryLocked) {
+                AppLockScreen(
+                    subtitle = "Unlock your progress photos",
+                    promptReady = true,
+                    onUnlocked = { appLock.markAuthenticated() },
+                    onCancel = { nav.popBackStack() }
+                )
+            } else {
+                MirrorTestScreen(
+                    onBack = { nav.popBackStack() },
+                    onOpenCamera = { nav.navigate(Routes.PROGRESS_CAMERA) }
+                )
+            }
         }
         composable(Routes.PROGRESS_CAMERA) {
             ProgressCameraScreen(onBack = { nav.popBackStack() })

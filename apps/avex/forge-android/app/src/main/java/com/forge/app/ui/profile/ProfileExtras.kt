@@ -151,9 +151,11 @@ private fun GoalLine(
 /**
  * GALLERY — a full-bleed horizontal filmstrip of the latest photos, echoing the cover photo's
  * edge-to-edge treatment instead of boxing thumbnails in a card. Dates sit on the photos over a
- * bottom scrim; the strip ends in a "view all" cell that opens the full Gallery. The section must be
- * composed OUTSIDE the page's side margins — it applies its own padding to header and caption and
- * lets the photos run to the screen edge.
+ * bottom scrim; the section header carries the "view all →" link into the full Gallery — the strip
+ * is the preview beside it (§4.2), so there's one view-all home, not a second tail cell. Adding a
+ * photo lives inside the Gallery (or the empty-state "first photo" cell here). The section must be
+ * composed OUTSIDE the page's side margins — it applies its own padding to the header and lets the
+ * photos run to the screen edge.
  */
 @Composable
 internal fun GalleryStrip(
@@ -162,12 +164,21 @@ internal fun GalleryStrip(
     onAdd: () -> Unit,
     onView: (ProgressPhoto) -> Unit,
     onViewAll: () -> Unit,
-    onBg: Color,
     muted: Color,
     outline: Color
 ) {
     Box(Modifier.padding(horizontal = 20.dp)) {
-        SectionHeader("GALLERY", muted, action = "+ add", onAction = onAdd)
+        // Mirrors GOALS (§4.2): the header link opens the full Gallery, folding in the count once
+        // the strip stops showing them all; empty = nothing to view, so no link.
+        SectionHeader(
+            "GALLERY", muted,
+            action = when {
+                photos.isEmpty() -> null
+                photos.size > 10 -> "all ${photos.size} →"
+                else -> "view all →"
+            },
+            onAction = if (photos.isNotEmpty()) onViewAll else null
+        )
     }
     if (photos.isEmpty()) {
         Column(Modifier.padding(horizontal = 20.dp)) {
@@ -196,9 +207,6 @@ internal fun GalleryStrip(
     ) {
         items(photos.take(10), key = { it.fileName }) { photo ->
             StripPhotoCell(photo, fileFor(photo), onView)
-        }
-        item(key = "view-all") {
-            ViewAllCell(photos.size, onViewAll, onBg, muted, outline)
         }
     }
 }
@@ -232,29 +240,6 @@ private fun StripPhotoCell(photo: ProgressPhoto, file: File, onView: (ProgressPh
             color = Color.White.copy(alpha = 0.92f), fontSize = 8.sp,
             modifier = Modifier.align(Alignment.BottomStart).padding(horizontal = 9.dp, vertical = 8.dp)
         )
-    }
-}
-
-/** The strip's tail cell — total count + a route into the full Gallery (albums, compare, search). */
-@Composable
-private fun ViewAllCell(count: Int, onViewAll: () -> Unit, onBg: Color, muted: Color, outline: Color) {
-    // No fill — just a hairline ghost cell, so it sits back into the page instead of reading as a
-    // solid slab beside the photos.
-    Box(
-        Modifier.width(StripCellWidth).height(StripCellHeight)
-            .clip(RoundedCornerShape(16.dp))
-            .border(1.dp, outline.copy(alpha = 0.25f), RoundedCornerShape(16.dp))
-            .bounceClick { onViewAll() },
-        contentAlignment = Alignment.Center
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text("$count", style = MaterialTheme.typography.headlineMedium, color = onBg)
-            Spacer(Modifier.height(4.dp))
-            Text(
-                "GALLERY →", style = MaterialTheme.typography.labelSmall,
-                color = muted, fontSize = 9.sp, letterSpacing = 1.5.sp
-            )
-        }
     }
 }
 

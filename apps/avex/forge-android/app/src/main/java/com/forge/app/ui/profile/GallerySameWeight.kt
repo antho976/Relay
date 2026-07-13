@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.sp
 import com.forge.app.data.repo.ProgressPhoto
 import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.formatWeight
+import com.forge.app.ui.common.EditorialHeader
 import com.forge.app.ui.common.bounceClick
 import java.io.File
 import java.text.SimpleDateFormat
@@ -118,11 +119,12 @@ internal fun SameWeightSection(
     weightUnit: WeightUnit,
     fileFor: (ProgressPhoto) -> File,
     onCompare: (ProgressPhoto, ProgressPhoto) -> Unit,
-    muted: Color
+    muted: Color,
+    accent: Color
 ) {
     if (pairs.isEmpty()) return
-    // Mono anchor matches the sibling "BODYWEIGHT" label; the phrase carries the concept, so no caption.
-    Text("SAME WEIGHT, DIFFERENT BODY", style = MaterialTheme.typography.labelMedium, color = muted, letterSpacing = 1.sp)
+    // The standard section anchor; the phrase carries the concept, so no caption (§4.3).
+    EditorialHeader("Same weight, different body", muted, accent)
     Spacer(Modifier.height(10.dp))
     Row(
         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),

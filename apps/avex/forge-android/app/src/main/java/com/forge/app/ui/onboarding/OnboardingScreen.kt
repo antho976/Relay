@@ -43,23 +43,25 @@ import com.forge.app.ui.common.clickableLabeled
 import com.forge.app.ui.theme.ForgeMotion
 import kotlin.random.Random
 
-// Page indices — one light decision per screen (MacroFactor pacing). After the plan-mode step (4):
-// "generated" continues through the plan-building pages (5-12); "custom"/"freestyle" stop at
-// Experience (6), having picked a goal + experience (which steer the coach), then finish.
+// Page indices — one light decision per screen (MacroFactor pacing). The app-lock opt-in (4) sits in
+// the shared "about you" block so every path sees it. After the plan-mode step (5): "generated"
+// continues through the plan-building pages (6-13); "custom"/"freestyle" stop at Experience (7),
+// having picked a goal + experience (which steer the coach), then finish.
 private const val PAGE_WELCOME = 0
 private const val PAGE_UNITS = 1
 private const val PAGE_BODY = 2
 private const val PAGE_WEARABLE = 3
-private const val PAGE_PLAN_MODE = 4
-private const val PAGE_GOAL = 5
-private const val PAGE_EXPERIENCE = 6
-private const val PAGE_DAYS = 7
-private const val PAGE_EQUIPMENT = 8
-private const val PAGE_FINE_TUNE = 9
-private const val PAGE_PLATE = 10
-private const val PAGE_AREAS = 11
-private const val PAGE_CADENCE = 12
-private const val PAGE_PREVIEW = 13
+private const val PAGE_APP_LOCK = 4
+private const val PAGE_PLAN_MODE = 5
+private const val PAGE_GOAL = 6
+private const val PAGE_EXPERIENCE = 7
+private const val PAGE_DAYS = 8
+private const val PAGE_EQUIPMENT = 9
+private const val PAGE_FINE_TUNE = 10
+private const val PAGE_PLATE = 11
+private const val PAGE_AREAS = 12
+private const val PAGE_CADENCE = 13
+private const val PAGE_PREVIEW = 14
 
 /** Most of the world lifts in kg; the US (and Liberia / Myanmar) use lb. Seed the onboarding unit
  *  from the device locale so a non-US user isn't forced to flip a toggle on the very first screen.
@@ -121,6 +123,8 @@ fun OnboardingScreen(
     var sex by remember { mutableStateOf(draft?.sex) }
     // Wearable brand (WearableBrand key) — advisory; tailors Settings → Recovery's sync pointers.
     var wearable by remember { mutableStateOf(draft?.wearable ?: "") }
+    // App-lock opt-in (GYMAP-69) — advisory; never blocks Continue. "" of the boolean world = off.
+    var appLock by remember { mutableStateOf(draft?.appLock ?: false) }
     var daysPerWeek by remember { mutableIntStateOf(draft?.daysPerWeek ?: 0) }
     var equipment by remember { mutableStateOf(draft?.equipment ?: emptySet()) }
     // Non-null when a curated preset (e.g. Developer's) is picked — locks the exercise pool.
@@ -143,7 +147,7 @@ fun OnboardingScreen(
     val snapshot = OnboardingDraft(
         page, planMode, name, useKg, useMilesChoice, distanceTouched, goal, experience,
         bodyweightInput, sex, wearable, daysPerWeek, equipment, frozenIds, plateWeightLb,
-        problemAreas, cadence, everyN, previewSeed
+        problemAreas, cadence, everyN, previewSeed, appLock
     )
     LaunchedEffect(snapshot) { viewModel.saveDraft(snapshot) }
 
@@ -176,7 +180,8 @@ fun OnboardingScreen(
             goal = goal, daysPerWeek = daysPerWeek, equipment = equipment,
             cadence = cadence.ifEmpty { "never" }, everyN = everyN, experience = experience,
             problemAreas = problemAreas, seed = previewSeed,
-            plateWeightLb = plateWeightLb, frozenIds = frozenIds, coachEnabled = coachEnabled
+            plateWeightLb = plateWeightLb, frozenIds = frozenIds, coachEnabled = coachEnabled,
+            appLock = appLock
         )
         onFinished(planMode)
     }
@@ -245,6 +250,7 @@ fun OnboardingScreen(
                                 sex = sex, onSexSelect = { sex = it }
                             )
                             PAGE_WEARABLE -> StepWearable(selected = wearable, onSelect = { wearable = it })
+                            PAGE_APP_LOCK -> StepAppLock(enabled = appLock, onToggle = { appLock = it })
                             PAGE_PLAN_MODE -> StepPlanMode(selected = planMode, onSelect = { planMode = it })
                             PAGE_GOAL -> StepGoal(selected = goal, onSelect = { goal = it })
                             PAGE_EXPERIENCE -> StepExperience(selected = experience, onSelect = { experience = it })
@@ -356,7 +362,9 @@ fun OnboardingScreen(
                             equipment = setOf(Equipment.BODYWEIGHT_ONLY.name), experience = "intermediate",
                             // Skipping bypasses the coach-ask dialog — keep coach ON only for the generated
                             // default; custom/freestyle (where the dialog would have asked) default to OFF.
-                            coachEnabled = effectiveMode == PLAN_GENERATED
+                            coachEnabled = effectiveMode == PLAN_GENERATED,
+                            // Honor an app-lock opt-in made before skipping (the step precedes plan-mode).
+                            appLock = appLock
                         )
                         onFinished(effectiveMode)
                     }) { Text("Skip anyway") }

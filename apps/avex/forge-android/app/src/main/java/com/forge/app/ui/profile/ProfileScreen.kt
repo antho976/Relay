@@ -230,27 +230,25 @@ fun ProfileScreen(
                         onBg = onBg, muted = muted, accent = accent
                     )
                     Spacer(Modifier.height(28.dp))
-                    BodySection(
-                        entries = bodyweight,
-                        goalLb = bodyweightGoalLb,
-                        onLog = {
+                    // BODY (Antho 2026-07-13) — bodyweight, body fat and measurements merged into one
+                    // compact stack so the "your body" cluster reads as a single section, not three.
+                    BodyMetricsSection(
+                        bodyweight = bodyweight,
+                        bodyweightGoalLb = bodyweightGoalLb,
+                        bodyFat = bodyFat,
+                        onLogWeight = {
                             // Fresh sheet: drop any prior result line and re-check HC permission so a
                             // grant made in Settings since this screen opened surfaces the import option.
                             viewModel.clearBodyweightMessage()
                             viewModel.refreshWeightConnected()
                             showWeightSheet = true
                         },
-                        onBg = onBg, muted = muted, accent = accent
-                    )
-                    // Body fat sits directly beside bodyweight — the same scale often reports both.
-                    Spacer(Modifier.height(28.dp))
-                    BodyFatSection(
-                        entries = bodyFat,
-                        onLog = {
+                        onLogBodyFat = {
                             viewModel.clearBodyFatMessage()
                             viewModel.refreshBodyFatConnected()
                             showBodyFatSheet = true
                         },
+                        onOpenMeasurements = onOpenMeasurements,
                         onBg = onBg, muted = muted, accent = accent
                     )
                     if (state.lifetimeVolumeSeriesLb.size >= 2) {
@@ -269,13 +267,6 @@ fun ProfileScreen(
                     }
                 }
 
-                // ── Body measurements (GYMAP-52) — sits in the "your body" cluster, next to
-                //    bodyweight; its own hiltViewModel so ProfileViewModel stays untouched.
-                Spacer(Modifier.height(28.dp))
-                Column(pad.statsEntrance(3)) {
-                    MeasurementsHubCard(onOpen = onOpenMeasurements)
-                }
-
                 if (Features.SHOW_GAMIFICATION) {
                     Spacer(Modifier.height(28.dp))
                     Column(pad.statsEntrance(3)) {
@@ -290,7 +281,7 @@ fun ProfileScreen(
                 // ── Gallery filmstrip (index 4) — full-bleed, pads itself ────────
                 Spacer(Modifier.height(28.dp))
                 Column(Modifier.fillMaxWidth().statsEntrance(4)) {
-                    GalleryStrip(state.photos, viewModel::fileFor, onAdd = { addChooser = true }, onView = { viewing = it }, onViewAll = onOpenPhotoGallery, onBg, muted, outline)
+                    GalleryStrip(state.photos, viewModel::fileFor, onAdd = { addChooser = true }, onView = { viewing = it }, onViewAll = onOpenPhotoGallery, muted, outline)
                 }
 
                 state.memory?.let { m ->

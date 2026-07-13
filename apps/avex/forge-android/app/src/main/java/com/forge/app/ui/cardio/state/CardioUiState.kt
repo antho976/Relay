@@ -39,7 +39,6 @@ data class CardioUiState(
     val sheetOpen: Boolean = false,
     /** Non-null when the open sheet is editing an existing entry (vs logging a new one). */
     val editing: CardioEntry? = null,
-    val pendingDeleteId: Long? = null,
     /** The swipeable week-stats overlay (per-week bars, graphs, numbers). */
     val detailOpen: Boolean = false,
     /** Non-null → the per-session stats overlay is open for this entry id. */

@@ -1,11 +1,10 @@
-@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 
 package com.forge.app.ui.profile
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -258,60 +257,6 @@ private fun GhostFlatLine(muted: Color, modifier: Modifier = Modifier) {
     }
 }
 
-/**
- * The Profile-hub MEASUREMENTS card — a trim of the destination (§4.2): each tracked measurement's
- * latest value as a small serif figure, or the drawn tracked-rail + hint at zero. Uses its own
- * [BodyMeasurementsViewModel] so the hub needs no changes to ProfileViewModel. Header "open →" and
- * the trim both drill into [BodyMeasurementsScreen].
- */
-@Composable
-internal fun MeasurementsHubCard(
-    onOpen: () -> Unit,
-    viewModel: BodyMeasurementsViewModel = hiltViewModel()
-) {
-    val state by viewModel.state.collectAsStateWithLifecycle()
-    val onBg = MaterialTheme.colorScheme.onBackground
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val accent = MaterialTheme.colorScheme.primary
-
-    SectionHeader("MEASUREMENTS", muted, action = "open →", onAction = onOpen)
-    if (!state.anyData) {
-        TrackedRail(state, muted, accent)
-        Spacer(Modifier.height(12.dp))
-        InlineEmptyHint("Track waist, chest, arms, thighs and hips.", muted)
-        return
-    }
-    val unit = lengthUnitLabel(state.useCm)
-    FlowRow(
-        Modifier.fillMaxWidth().bounceClick(onClick = onOpen),
-        horizontalArrangement = Arrangement.spacedBy(24.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
-        state.series.filter { it.entries.isNotEmpty() }.forEach { series ->
-            Column {
-                Row(verticalAlignment = Alignment.Bottom) {
-                    Text(
-                        lengthInputValue(series.entries.last().valueCm, state.useCm),
-                        style = MaterialTheme.typography.headlineSmall,
-                        color = onBg
-                    )
-                    Spacer(Modifier.width(3.dp))
-                    Text(
-                        unit,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = muted,
-                        fontSize = 9.sp,
-                        modifier = Modifier.padding(bottom = 3.dp)
-                    )
-                }
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    series.type.label.uppercase(),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = muted,
-                    fontSize = 9.sp
-                )
-            }
-        }
-    }
-}
+// The Profile-hub MEASUREMENTS trim now lives in the merged BODY section ([BodyMetricsSection] in
+// ProfileBody.kt) as the "SIZES" row — bodyweight, body fat and measurements were folded into one
+// compact Profile cluster (Antho 2026-07-13). The full screen above is unchanged.

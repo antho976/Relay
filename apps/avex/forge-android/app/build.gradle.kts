@@ -148,6 +148,11 @@ dependencies {
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)
 
+    // Biometric — BiometricPrompt (fingerprint/face + device PIN/pattern/password fallback) for the
+    // app & photo-gallery lock (GYMAP-69). No app PIN is stored; the OS owns the credential. Requires
+    // MainActivity to be a FragmentActivity.
+    implementation(libs.androidx.biometric)
+
     // Coroutines
     implementation(libs.kotlinx.coroutines.android)
 

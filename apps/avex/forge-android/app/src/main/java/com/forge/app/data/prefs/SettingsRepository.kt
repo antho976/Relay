@@ -683,6 +683,24 @@ class SettingsRepository @Inject constructor(
     suspend fun setPrivacyMode(v: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.PRIVACY_MODE] = v }
 
+    // ─── App & gallery lock (GYMAP-69) ────────────────────────────────────────
+
+    val appLockEnabled: Flow<Boolean> = context.forgePreferences.data
+        .map { it[PreferenceKeys.APP_LOCK_ENABLED] ?: false }
+    suspend fun setAppLockEnabled(v: Boolean) =
+        context.forgePreferences.edit { it[PreferenceKeys.APP_LOCK_ENABLED] = v }
+
+    val galleryLockEnabled: Flow<Boolean> = context.forgePreferences.data
+        .map { it[PreferenceKeys.GALLERY_LOCK_ENABLED] ?: false }
+    suspend fun setGalleryLockEnabled(v: Boolean) =
+        context.forgePreferences.edit { it[PreferenceKeys.GALLERY_LOCK_ENABLED] = v }
+
+    /** Background grace before re-locking, in seconds (0 = immediately). */
+    val appLockTimeoutSec: Flow<Int> = context.forgePreferences.data
+        .map { it[PreferenceKeys.APP_LOCK_TIMEOUT_SEC] ?: 0 }
+    suspend fun setAppLockTimeoutSec(v: Int) =
+        context.forgePreferences.edit { it[PreferenceKeys.APP_LOCK_TIMEOUT_SEC] = v }
+
     // ─── Onboarding (#1) ──────────────────────────────────────────────────────
 
     val onboardingDone: Flow<Boolean> = context.forgePreferences.data

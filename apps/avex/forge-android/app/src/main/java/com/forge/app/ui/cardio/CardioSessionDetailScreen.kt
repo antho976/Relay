@@ -1,9 +1,6 @@
 package com.forge.app.ui.cardio
 
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -25,7 +22,6 @@ fun CardioSessionDetailScreen(
     viewModel: CardioSessionDetailViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    var confirmDelete by remember { mutableStateOf(false) }
     var leaving by remember { mutableStateOf(false) }
 
     // Health Connect's per-route consent screen — hands back the chosen session's GPS track (or null).
@@ -73,20 +69,9 @@ fun CardioSessionDetailScreen(
             wearable = state.wearable, // That day's watch steps (null until loaded / when none).
             wearableConnected = state.stepsConnected, // Show an empty placeholder once connected.
             onEdit = viewModel::openEdit,
-            onDelete = { confirmDelete = true },
+            // §13 undo over confirm: delete now, offer an Undo on the History list we pop back to.
+            onDelete = viewModel::delete,
             onBack = onBack
-        )
-    }
-
-    if (confirmDelete) {
-        AlertDialog(
-            onDismissRequest = { confirmDelete = false },
-            title = { Text("Delete entry?") },
-            text = { Text("This can't be undone.") },
-            confirmButton = {
-                TextButton(onClick = { confirmDelete = false; viewModel.delete() }) { Text("Delete") }
-            },
-            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } }
         )
     }
 }

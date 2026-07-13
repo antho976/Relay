@@ -8,6 +8,7 @@ import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.data.health.HealthConnectManager
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.data.repo.CardioRepository
+import com.forge.app.ui.common.SnackbarController
 import com.forge.app.domain.cardio.CardioActivity
 import com.forge.app.domain.cardio.CardioCondition
 import com.forge.app.domain.cardio.CardioEffort
@@ -61,6 +62,7 @@ class CardioSessionDetailViewModel @Inject constructor(
     private val cardioRepo: CardioRepository,
     private val settingsRepo: SettingsRepository,
     private val healthConnectManager: HealthConnectManager,
+    private val snackbar: SnackbarController,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
@@ -154,11 +156,15 @@ class CardioSessionDetailViewModel @Inject constructor(
         settingsRepo.addCustomCardioType(type)
     }
 
+    /** Delete now and offer an Undo (§13). The screen pops on [deleted]; the undo snackbar is hosted
+     *  at the app root, so it rides over the History list we land back on and re-inserts the captured
+     *  row (original id preserved) if tapped. */
     fun delete() {
         val entry = state.value.entry ?: return
         viewModelScope.launch {
             cardioRepo.delete(entry)
             deleted.value = true
+            snackbar.showUndo("Entry deleted") { cardioRepo.add(entry) }
         }
     }
 

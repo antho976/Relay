@@ -20,11 +20,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.CompareArrows
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -42,7 +39,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Color
@@ -53,11 +49,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.data.repo.ProgressPhoto
 import com.forge.app.domain.photo.PhotoPose
 import com.forge.app.domain.units.WeightUnit
+import com.forge.app.ui.common.EditorialHeader
 import com.forge.app.ui.common.ForgeOutlineCapsule
 import com.forge.app.ui.common.ForgePrimaryCapsule
 import com.forge.app.ui.common.ForgeWordmark
 import com.forge.app.ui.common.SegmentPill
-import com.forge.app.ui.common.bounceClick
+import com.forge.app.ui.gym.stats.components.statsEntrance
 import com.forge.app.ui.theme.LocalForgeSettings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -68,11 +65,11 @@ private data class ViewerTarget(val photos: List<ProgressPhoto>, val index: Int)
 
 /**
  * The photo "Gallery" (reached from the Profile teaser's "view all"). Overview-first: a serif hero,
- * a first↔latest progress band that opens the slider compare, a bodyweight-through-time line, then
- * pose lens pills over a chronological month-grouped grid. Search / range / density are revealed from
- * a slim tool row; albums are tucked behind "Albums →". Tapping a photo opens a swipeable full-screen
- * viewer + metadata editor. Private, app-private files only (see [MirrorTestViewModel] /
- * [com.forge.app.data.repo.ProgressPhotoRepository]).
+ * a first↔latest progress band that opens the slider compare, a bodyweight-through-time line, then a
+ * TIMELINE section (pose lens pills + search/filters/compare text pills) over a chronological
+ * month-grouped grid; "Albums →" rides the TIMELINE header. Sections cascade in via [statsEntrance].
+ * Tapping a photo opens a swipeable full-screen viewer + metadata editor. Private, app-private files
+ * only (see [MirrorTestViewModel] / [com.forge.app.data.repo.ProgressPhotoRepository]).
  */
 @Composable
 fun MirrorTestScreen(
@@ -369,22 +366,26 @@ private fun OverviewLevel(
     fileFor: (ProgressPhoto) -> java.io.File,
     onBg: Color, muted: Color, accent: Color, outline: Color
 ) {
-    GalleryHero(photos, zone, onBg, muted)
-    Spacer(Modifier.height(20.dp))
-
-    // Signature mark — works at zero (ghost frames + add prompt), so no separate empty text row (§12).
     val (before, after) = remember(photos) { bestComparePair(photos) }
-    ProgressBand(
-        before = before, after = after, zone = zone, weightUnit = weightUnit, fileFor = fileFor,
-        onCompare = onBandCompare, onAdd = onAdd,
-        onBg = onBg, muted = muted, accent = accent, outline = outline
-    )
+
+    Column(Modifier.fillMaxWidth().statsEntrance(0)) {
+        GalleryHero(photos, zone, onBg, muted)
+        Spacer(Modifier.height(20.dp))
+        // Signature mark — works at zero (ghost frames + add prompt), so no separate empty text row (§12).
+        ProgressBand(
+            before = before, after = after, zone = zone, weightUnit = weightUnit, fileFor = fileFor,
+            onCompare = onBandCompare, onAdd = onAdd,
+            onBg = onBg, muted = muted, accent = accent, outline = outline
+        )
+    }
 
     if (photos.isEmpty()) return
 
     if (bodyweight.size >= 2) {
-        Spacer(Modifier.height(24.dp))
-        BodyweightSparkline(bodyweight, photos, weightUnit, onBg, muted, accent)
+        Spacer(Modifier.height(28.dp))
+        Column(Modifier.fillMaxWidth().statsEntrance(1)) {
+            BodyweightSparkline(bodyweight, photos, weightUnit, onBg, muted, accent)
+        }
     }
 
     // Auto-paired "scale held, body changed" shots — excludes the band pair so it never echoes it.
@@ -396,76 +397,76 @@ private fun OverviewLevel(
         }
     }
     if (samePairs.isNotEmpty()) {
-        Spacer(Modifier.height(24.dp))
-        SameWeightSection(samePairs, zone, weightUnit, fileFor, onBandCompare, muted)
+        Spacer(Modifier.height(28.dp))
+        Column(Modifier.fillMaxWidth().statsEntrance(2)) {
+            SameWeightSection(samePairs, zone, weightUnit, fileFor, onBandCompare, muted, accent)
+        }
     }
 
-    // ── Pose lens + tool row ──────────────────────────────────────────────────
-    Spacer(Modifier.height(24.dp))
-    val poses = remember(photos) { posesPresent(photos) }
-    if (poses.isNotEmpty()) {
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            SegmentPill("All", selected = poseFilter == null, onClick = { onPoseChange(null) }, accent, onBg, muted, outline)
-            poses.forEach { p ->
-                SegmentPill(p.label, selected = poseFilter == p, onClick = { onPoseChange(p) }, accent, onBg, muted, outline)
+    // ── Timeline: header + pose lens + tool pills over the month-grouped grid ──
+    Spacer(Modifier.height(28.dp))
+    Column(Modifier.fillMaxWidth().statsEntrance(3)) {
+        EditorialHeader("Timeline", muted, accent, action = "Albums →", onAction = onOpenAlbums)
+        Spacer(Modifier.height(10.dp))
+
+        val poses = remember(photos) { posesPresent(photos) }
+        if (poses.isNotEmpty()) {
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                SegmentPill("All", selected = poseFilter == null, onClick = { onPoseChange(null) }, accent, onBg, muted, outline)
+                poses.forEach { p ->
+                    SegmentPill(p.label, selected = poseFilter == p, onClick = { onPoseChange(p) }, accent, onBg, muted, outline)
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+        }
+
+        // Tool pills — one pill vocabulary with the range chips below, no stock icons in content (§8).
+        val filtersActive = range != GalleryRange.ALL || sort != GallerySort.NEWEST || columns != 3
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            GalleryChip("Search", selected = searchOpen) { onToggleSearch() }
+            GalleryChip("Filters", selected = filtersOpen || filtersActive) { onToggleFilters() }
+            if (photos.size >= 2) GalleryChip("Compare", selected = false) { onStartCompare() }
+        }
+
+        // Revealed controls: the search field OR the range/sort/density panel — never both at once.
+        when {
+            searchOpen -> {
+                Spacer(Modifier.height(10.dp))
+                GallerySearchBar(query, onQueryChange, focusRequester = searchFocus)
+            }
+            filtersOpen -> {
+                Spacer(Modifier.height(10.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    GalleryRange.entries.forEach { r -> GalleryChip(r.label, selected = r == range) { onRangeChange(r) } }
+                }
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    GalleryChip(if (sort == GallerySort.NEWEST) "Newest first" else "Oldest first", selected = false) { onToggleSort() }
+                    GalleryChip("$columns across", selected = false) { onCycleColumns() }
+                }
             }
         }
-        Spacer(Modifier.height(12.dp))
     }
 
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onToggleSearch) {
-                Icon(Icons.Filled.Search, contentDescription = "Search photos", tint = if (searchOpen) accent else muted)
-            }
-            val filtersActive = range != GalleryRange.ALL || sort != GallerySort.NEWEST || columns != 3
-            IconButton(onClick = onToggleFilters) {
-                Icon(Icons.Filled.Tune, contentDescription = "Filter & sort", tint = if (filtersOpen || filtersActive) accent else muted)
-            }
-            if (photos.size >= 2) IconButton(onClick = onStartCompare) {
-                Icon(Icons.AutoMirrored.Filled.CompareArrows, contentDescription = "Compare photos", tint = muted)
+    Spacer(Modifier.height(16.dp))
+    Column(Modifier.fillMaxWidth().statsEntrance(4)) {
+        when {
+            visiblePhotos.isEmpty() -> Text(
+                if (searching) "No photos match “$query”." else "No photos in this view.",
+                style = MaterialTheme.typography.bodyMedium, color = muted
+            )
+            else -> {
+                if (searching) {
+                    Text(
+                        "${visiblePhotos.size} result${if (visiblePhotos.size == 1) "" else "s"}",
+                        style = MaterialTheme.typography.labelMedium, color = muted
+                    )
+                    Spacer(Modifier.height(12.dp))
+                }
+                MonthGroupedGrid(visiblePhotos, columns, zone, fileFor, muted, accent, onView)
             }
         }
-        Text(
-            "Albums →", style = MaterialTheme.typography.labelMedium, color = accent,
-            modifier = Modifier.bounceClick { onOpenAlbums() }.padding(vertical = 8.dp)
-        )
     }
-
-    // Revealed controls: the search field OR the range/sort/density panel — never both at once.
-    when {
-        searchOpen -> {
-            Spacer(Modifier.height(4.dp))
-            GallerySearchBar(query, onQueryChange, focusRequester = searchFocus)
-            Spacer(Modifier.height(14.dp))
-        }
-        filtersOpen -> {
-            Spacer(Modifier.height(4.dp))
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                GalleryRange.entries.forEach { r -> GalleryChip(r.label, selected = r == range) { onRangeChange(r) } }
-            }
-            Spacer(Modifier.height(12.dp))
-            GalleryControlsRow(sort, onToggleSort, columns, onCycleColumns, muted, outline)
-            Spacer(Modifier.height(16.dp))
-        }
-        else -> Spacer(Modifier.height(4.dp))
-    }
-
-    if (visiblePhotos.isEmpty()) {
-        Text(
-            if (searching) "No photos match “$query”." else "No photos in this view.",
-            style = MaterialTheme.typography.bodyMedium, color = muted
-        )
-        return
-    }
-    if (searching) {
-        Text(
-            "${visiblePhotos.size} result${if (visiblePhotos.size == 1) "" else "s"}",
-            style = MaterialTheme.typography.labelMedium, color = muted
-        )
-        Spacer(Modifier.height(12.dp))
-    }
-    MonthGroupedGrid(visiblePhotos, columns, zone, fileFor, muted, accent, onView)
 }
 
 /** Compare mode: an instruction line then a selectable grid of every photo (newest first). */

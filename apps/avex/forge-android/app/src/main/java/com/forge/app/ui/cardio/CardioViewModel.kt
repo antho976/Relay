@@ -24,6 +24,7 @@ import com.forge.app.domain.cardio.RoutePoint
 import com.forge.app.domain.goal.GoalMetric
 import com.forge.app.ui.cardio.state.CardioDayCell
 import com.forge.app.ui.cardio.state.CardioUiState
+import com.forge.app.ui.common.SnackbarController
 import java.time.DayOfWeek
 import java.time.Instant
 import java.time.LocalDate
@@ -59,6 +60,7 @@ class CardioViewModel @Inject constructor(
     private val trophyRepo: TrophyRepository,
     private val extendedGoalRepo: ExtendedGoalRepository,
     private val healthConnectManager: HealthConnectManager,
+    private val snackbar: SnackbarController,
     private val clock: Clock
 ) : ViewModel() {
 
@@ -147,7 +149,6 @@ class CardioViewModel @Inject constructor(
             entries = d.all,
             sheetOpen = tr.sheetOpen,
             editing = tr.editing,
-            pendingDeleteId = tr.pendingDeleteId,
             detailOpen = tr.detailOpen,
             sessionDetailId = tr.sessionDetailId,
             sessionWearable = tr.sessionWearable,
@@ -243,16 +244,13 @@ class CardioViewModel @Inject constructor(
     /** Reveal the full history below the 5 most-recent entries on the main list (or collapse it). */
     fun toggleHistoryExpanded() = transient.update { it.copy(historyExpanded = !it.historyExpanded) }
 
-    fun requestDelete(id: Long) = transient.update { it.copy(pendingDeleteId = id) }
-    fun cancelDelete() = transient.update { it.copy(pendingDeleteId = null) }
-
-    fun confirmDelete() {
-        val id = transient.value.pendingDeleteId ?: return
-        viewModelScope.launch {
-            val entry = cardioRepo.get(id) ?: return@launch
-            cardioRepo.delete(entry)
-            transient.update { it.copy(pendingDeleteId = null) }
-        }
+    /** Delete an entry now and offer an Undo (§13 undo over confirm) — the captured row re-inserts
+     *  with its original id, so an undo restores it exactly. The row's reactive disappearance from the
+     *  list (and the auto-close of an open session overlay) is the confirmation; no dialog. */
+    fun deleteEntry(id: Long) = viewModelScope.launch {
+        val entry = cardioRepo.get(id) ?: return@launch
+        cardioRepo.delete(entry)
+        snackbar.showUndo("Entry deleted") { cardioRepo.add(entry) }
     }
 
     /**
@@ -321,7 +319,6 @@ class CardioViewModel @Inject constructor(
     private data class TransientState(
         val sheetOpen: Boolean = false,
         val editing: CardioEntry? = null,
-        val pendingDeleteId: Long? = null,
         val detailOpen: Boolean = false,
         val sessionDetailId: Long? = null,
         val sessionWearable: CardioWearableDay? = null,

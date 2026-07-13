@@ -77,7 +77,16 @@ class ExtendedGoalRepository @Inject constructor(
         dao.updateTarget(id, targetValue)
     }
 
-    suspend fun delete(id: Long) = dao.deleteById(id)
+    /** Delete a custom goal, returning the removed row so a caller can offer an Undo (§13). */
+    suspend fun delete(id: Long): ExtendedGoal? {
+        val removed = dao.getById(id)
+        dao.deleteById(id)
+        return removed
+    }
+
+    /** Re-insert a previously deleted goal — its original id is preserved (insert REPLACEs by id), so
+     *  live progress reads resume exactly, baseline (stretch_value) and all. */
+    suspend fun restore(goal: ExtendedGoal) { dao.insert(goal) }
 
     /** Every custom goal with its live progress, achieved-first then closest-first. */
     suspend fun goalsWithProgress(): List<Progress> {

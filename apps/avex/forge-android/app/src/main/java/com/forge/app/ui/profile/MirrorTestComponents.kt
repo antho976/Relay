@@ -35,7 +35,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.data.repo.ProgressPhoto
-import com.forge.app.domain.photo.PhotoPose
 import com.forge.app.ui.common.bounceClick
 import java.io.File
 import java.text.SimpleDateFormat
@@ -97,7 +96,7 @@ internal fun MonthGroupedGrid(
         photos.groupBy { YearMonth.from(Instant.ofEpochMilli(it.takenAtMs).atZone(zone)) }
     }
     grouped.forEach { (month, monthPhotos) ->
-        Text(month.format(MONTH_HEADER_FMT).uppercase(), style = MaterialTheme.typography.labelMedium, color = muted)
+        Text(month.format(MONTH_HEADER_FMT).uppercase(), style = MaterialTheme.typography.labelMedium, color = muted, letterSpacing = 1.sp)
         Spacer(Modifier.height(8.dp))
         PhotoRows(monthPhotos, columns, fileFor, muted, accent, onPhotoClick, selectable, selectionIndexOf)
         Spacer(Modifier.height(16.dp))
@@ -132,7 +131,8 @@ internal fun PhotoRows(
 
 /**
  * A single square photo cell with its short date laid over a soft bottom scrim (matching the
- * Profile filmstrip), plus optional compare-selection chrome.
+ * Profile filmstrip), plus optional compare-selection chrome. Deliberately date-only — the pose
+ * lens pills group by pose, so a pose chip on every cell would be uniform noise (§8).
  */
 @Composable
 internal fun PhotoCell(
@@ -148,19 +148,8 @@ internal fun PhotoCell(
     selectionIndex: Int? = null
 ) {
     val selected = selectionIndex != null
-    val pose = PhotoPose.fromKey(photo.pose)
-    Box(modifier.aspectRatio(1f).clip(RoundedCornerShape(8.dp)).bounceClick { onClick(photo) }) {
+    Box(modifier.aspectRatio(1f).clip(RoundedCornerShape(12.dp)).bounceClick { onClick(photo) }) {
         ProgressPhotoImage(fileFor(photo), Modifier.fillMaxSize(), reqPx = reqPx)
-        // Pose tag (top-start) — a faint dark chip so it reads over any shot.
-        if (pose != null && !selectable) {
-            Text(
-                pose.label.uppercase(),
-                style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.92f), fontSize = 8.sp,
-                modifier = Modifier.align(Alignment.TopStart).padding(5.dp)
-                    .clip(RoundedCornerShape(4.dp)).background(Color.Black.copy(alpha = 0.4f))
-                    .padding(horizontal = 5.dp, vertical = 2.dp)
-            )
-        }
         if (showDate) {
             Box(
                 Modifier.matchParentSize().background(
@@ -175,7 +164,7 @@ internal fun PhotoCell(
         }
         if (selectable) {
             if (selected) {
-                Box(Modifier.matchParentSize().border(2.dp, accent, RoundedCornerShape(8.dp)))
+                Box(Modifier.matchParentSize().border(2.dp, accent, RoundedCornerShape(12.dp)))
                 Box(
                     Modifier.align(Alignment.TopEnd).padding(4.dp).size(20.dp).clip(CircleShape).background(accent),
                     contentAlignment = Alignment.Center

@@ -13,7 +13,6 @@ import android.os.Looper
 import android.provider.Settings
 import android.view.KeyEvent
 import android.view.WindowManager
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
@@ -34,17 +33,21 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.ui.Modifier
 import androidx.core.content.IntentCompat
+import androidx.fragment.app.FragmentActivity
 import com.forge.app.data.importer.ImportResult
 import com.forge.app.appicon.AppIcon
 import com.forge.app.appicon.AppIconManager
 import com.forge.app.data.importer.WorkoutImportRepository
 import com.forge.app.data.importer.userMessage
 import com.forge.app.data.prefs.SettingsRepository
+import com.forge.app.security.AppLockManager
+import com.forge.app.security.LocalAppLock
 import com.forge.app.service.AutoBackupWorker
 import com.forge.app.ui.common.AvexIntro
 import com.forge.app.ui.common.ProvideTouchExploration
 import com.forge.app.ui.nav.ForgeNavHost
 import com.forge.app.ui.onboarding.OnboardingScreen
+import com.forge.app.ui.security.AppLockScreen
 import androidx.compose.ui.graphics.toArgb
 import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.theme.ForgeTheme
@@ -62,11 +65,15 @@ import kotlinx.coroutines.runBlocking
 import javax.inject.Inject
 
 @AndroidEntryPoint
-class MainActivity : ComponentActivity() {
+// FragmentActivity (a superclass of ComponentActivity) is required by androidx.biometric's
+// BiometricPrompt, which drives the app / gallery lock (GYMAP-69). Everything else — Compose,
+// edge-to-edge, Hilt injection, the existing lifecycle callbacks — is unchanged.
+class MainActivity : FragmentActivity() {
 
     @Inject lateinit var settingsRepo: SettingsRepository
     @Inject lateinit var importRepo: WorkoutImportRepository
     @Inject lateinit var appIconManager: AppIconManager
+    @Inject lateinit var appLock: AppLockManager
 
     /** Set when a shared/opened export file has been imported — shows a one-time result dialog (#GYMAP-17). */
     private var shareImportMessage by mutableStateOf<String?>(null)
@@ -144,6 +151,14 @@ class MainActivity : ComponentActivity() {
         userLeaving = true
     }
 
+    override fun onStart() {
+        super.onStart()
+        // Re-evaluate the app lock as early as possible on return-to-foreground so a re-lock overlay is
+        // up before the first frame. On a cold start / rotation / picker-return this is a no-op (no
+        // genuine background was recorded), so it never spuriously re-locks.
+        appLock.onForeground()
+    }
+
     override fun onResume() {
         super.onResume()
         userLeaving = false
@@ -163,6 +178,9 @@ class MainActivity : ComponentActivity() {
     override fun onStop() {
         super.onStop()
         if (isChangingConfigurations || !userLeaving) return
+        // Genuine backgrounding (Home/Recents), not a self-launched picker/overlay: start the
+        // app-lock re-lock timer, then do the deferred icon-alias swap.
+        appLock.onGenuineBackground()
         userLeaving = false
         runCatching { appIconManager.reconcileTo(AppIcon.fromKey(appIconKey)) }
     }
@@ -317,13 +335,22 @@ class MainActivity : ComponentActivity() {
         // turned it off goes straight to the plain black-and-white Avex with no themed flash. One cached
         // DataStore read pass, same as privacy/amoled.
         val (introIconKey, themedIntro) = runBlocking {
-            applyPrivacyMode(settingsRepo.privacyMode.first())
+            val privacy = settingsRepo.privacyMode.first()
+            val lockEnabled = settingsRepo.appLockEnabled.first()
+            // Secure the window on the very first frame when EITHER privacy mode or the app lock is
+            // on, and seed the lock state synchronously so a locked cold start never flashes the
+            // content behind the gate (GYMAP-69).
+            applyPrivacyMode(privacy || lockEnabled)
+            appLock.primeEnabled(lockEnabled)
             applyAdaptiveWindowBackground(settingsRepo.amoledMode.first())
             settingsRepo.appIcon.first() to settingsRepo.themedLaunchIntro.first()
         }
         appIconKey = introIconKey
         lifecycleScope.launch {
-            settingsRepo.privacyMode.collect { enabled -> applyPrivacyMode(enabled) }
+            // FLAG_SECURE follows privacy mode OR the app lock — turning on a lock implies keeping the
+            // app out of the recents preview / screenshots, as every app-lock feature does.
+            combine(settingsRepo.privacyMode, settingsRepo.appLockEnabled) { privacy, lock -> privacy || lock }
+                .collect { secure -> applyPrivacyMode(secure) }
         }
         // Keep the icon pick live so onStop can read it without blocking on DataStore (and never stale).
         lifecycleScope.launch {
@@ -383,6 +410,9 @@ class MainActivity : ComponentActivity() {
                         // Launch wordmark plays once per cold launch, over the first screen composed
                         // beneath it. rememberSaveable so a rotation mid-intro doesn't replay it.
                         var showIntro by rememberSaveable { mutableStateOf(true) }
+                        // The app lock is provided here so both this top-level gate and the gallery
+                        // gate (ForgeNavHost) share one session (GYMAP-69).
+                        CompositionLocalProvider(LocalAppLock provides appLock) {
                         Box(Modifier.fillMaxSize()) {
                             when (onboardingDone) {
                                 false -> OnboardingScreen(onFinished = {})
@@ -393,9 +423,26 @@ class MainActivity : ComponentActivity() {
                                 }
                                 null -> {} // DataStore still loading; the theme's gradient shows briefly
                             }
+                            // App-lock gate — an opaque overlay above the nav host (whose state is
+                            // preserved underneath), below the launch intro. The prompt waits for the
+                            // intro to finish. Never over onboarding (the lock is set up there).
+                            if (onboardingDone == true) {
+                                val locked by appLock.appLocked.collectAsState()
+                                if (locked) {
+                                    AppLockScreen(
+                                        subtitle = "Unlock with your fingerprint, face, or phone PIN",
+                                        promptReady = !showIntro,
+                                        onUnlocked = { appLock.markAuthenticated() }
+                                    )
+                                }
+                            }
                             if (showIntro) AvexIntro(iconKey = introIconKey, themed = themedIntro, onDone = { showIntro = false })
                             // Result of a share-to-Avex import — shown over whatever screen is up.
                             ShareImportResultDialog()
+                            // The app's one Undo snackbar (§13) — hosted here so a "deleted · Undo"
+                            // message rides over any screen, including one popped back to after a delete.
+                            com.forge.app.ui.common.SnackbarControllerHost()
+                        }
                         }
                     }
                 }

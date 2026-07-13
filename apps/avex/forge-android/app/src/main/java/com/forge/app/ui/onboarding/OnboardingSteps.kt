@@ -14,18 +14,20 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import com.forge.app.domain.health.WearableBrand
 import com.forge.app.domain.units.toDisplayWeight
+import com.forge.app.security.BiometricAuthenticator
 import kotlin.math.roundToInt
 
 /**
- * Steps 0–6: who you are, how you measure, and how you want to train. One decision per screen;
- * each page is `eyebrow → serif question → caption → content` (OnboardingPrimitives).
- * Steps 7–12 (gym, tuning, preview) live in OnboardingGymSteps.kt.
+ * Steps 0–7: who you are, how you measure, whether to lock the app, and how you want to train. One
+ * decision per screen; each page is `eyebrow → serif question → caption → content` (OnboardingPrimitives).
+ * Steps 8–14 (gym, tuning, preview) live in OnboardingGymSteps.kt.
  */
 
 /** Goal options: key, label, what it changes, and the mono rep-range meta. */
@@ -203,6 +205,29 @@ internal fun StepWearable(selected: String, onSelect: (String) -> Unit) {
                 color = MaterialTheme.colorScheme.primary
             )
             detail.caveat?.let { StepCaption(it) }
+        }
+    }
+}
+
+@Composable
+internal fun StepAppLock(enabled: Boolean, onToggle: (Boolean) -> Unit) {
+    // Availability decides whether the opt-in is offered at all — no screen lock means no credential
+    // to prompt against (GYMAP-69). One selectable tile that toggles; skipping it just leaves it off.
+    val context = LocalContext.current
+    val canAuth = remember { BiometricAuthenticator.canAuthenticate(context) }
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        StepEyebrow("About you")
+        StepTitle("Lock your data?")
+        StepCaption("Keep your photos and progress behind your fingerprint, face, or phone PIN.")
+        Spacer(Modifier.height(2.dp))
+        OptionCard(
+            label = "Lock Avex",
+            description = "Ask to unlock when you open the app. Change it anytime in Settings.",
+            selected = enabled && canAuth,
+            onClick = { if (canAuth) onToggle(!enabled) }
+        )
+        if (!canAuth) {
+            StepCaption("Set a screen lock in your phone's settings to use this.")
         }
     }
 }

@@ -29,7 +29,9 @@ internal data class OnboardingDraft(
     val problemAreas: Set<String>,
     val cadence: String,
     val everyN: Int,
-    val previewSeed: Long
+    val previewSeed: Long,
+    /** App-lock opt-in (GYMAP-69) — absent in older drafts, parsed as false. */
+    val appLock: Boolean
 ) {
     fun toJson(): String = JSONObject().apply {
         put("schema", SCHEMA)
@@ -52,13 +54,14 @@ internal data class OnboardingDraft(
         put("cadence", cadence)
         put("everyN", everyN)
         put("previewSeed", previewSeed)
+        put("appLock", appLock)
     }.toString()
 
     companion object {
         /** Bump whenever the page layout (indices) changes so a draft written by an older build — whose
          *  `page` cursor now points at a different step — is discarded rather than resumed mid-flow onto
          *  the wrong screen. The answer fields are name-keyed and would survive, but the cursor wouldn't. */
-        private const val SCHEMA = 2
+        private const val SCHEMA = 3
 
         /** Null on any parse failure or a stale schema — the draft just restarts onboarding cleanly. */
         fun fromJson(json: String): OnboardingDraft? = runCatching {
@@ -83,7 +86,8 @@ internal data class OnboardingDraft(
                 problemAreas = o.getJSONArray("problemAreas").toStringSet(),
                 cadence = o.getString("cadence"),
                 everyN = o.getInt("everyN"),
-                previewSeed = o.getLong("previewSeed")
+                previewSeed = o.getLong("previewSeed"),
+                appLock = o.optBoolean("appLock", false)
             )
         }.getOrNull()
 

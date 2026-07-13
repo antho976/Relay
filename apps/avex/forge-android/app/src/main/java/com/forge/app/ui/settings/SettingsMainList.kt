@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -44,6 +45,9 @@ internal fun MainList(
     state: SettingsUiState,
     searchQuery: String,
     modifier: Modifier,
+    // Hoisted so the root list's scroll position survives opening a sub-page and backing out — this
+    // composable leaves composition while a sub-page is shown, so an internal state would reset to top.
+    listState: LazyListState,
     onSearchChange: (String) -> Unit,
     onOpenPage: (SettingsPage) -> Unit,
     onOpenCoachBrief: () -> Unit,
@@ -52,7 +56,7 @@ internal fun MainList(
     onResetTarget: (ResetTarget) -> Unit,
     onOpenResetMenu: () -> Unit
 ) {
-    LazyColumn(modifier = modifier, contentPadding = PaddingValues(bottom = 56.dp)) {
+    LazyColumn(state = listState, modifier = modifier, contentPadding = PaddingValues(bottom = 56.dp)) {
         // Persistent search field at the top of the list (modern-phone-settings pattern) — replaces
         // the old top-bar magnifier toggle. Always visible, in both the grouped and results states.
         item("search") { SettingsSearchField(searchQuery, onSearchChange) }
@@ -65,6 +69,7 @@ internal fun MainList(
                 SettingsNavRow("Appearance", rowSubtitle(SettingsPage.Appearance, state), SettingsIcons.Appearance) { onOpenPage(SettingsPage.Appearance) }
                 SettingsNavRow("Units & format", rowSubtitle(SettingsPage.Format, state), SettingsIcons.Units) { onOpenPage(SettingsPage.Format) }
                 SettingsNavRow("Notifications", rowSubtitle(SettingsPage.Notifications, state), SettingsIcons.Notifications) { onOpenPage(SettingsPage.Notifications) }
+                SettingsNavRow("Security", rowSubtitle(SettingsPage.Security, state), SettingsIcons.Security) { onOpenPage(SettingsPage.Security) }
             }
             item("training") {
                 SettingsSectionHeader("Training")
@@ -247,7 +252,7 @@ private fun searchRank(name: String, ql: String): Int {
 
 /** The section a page sits under in the main list — a page result's breadcrumb. */
 private fun pageSection(page: SettingsPage): String = when (page) {
-    SettingsPage.Appearance, SettingsPage.Format, SettingsPage.Notifications -> "General"
+    SettingsPage.Appearance, SettingsPage.Format, SettingsPage.Notifications, SettingsPage.Security -> "General"
     SettingsPage.Program, SettingsPage.Session, SettingsPage.ExercisePrefs, SettingsPage.CardioActivities -> "Training"
     SettingsPage.Coach, SettingsPage.Recovery, SettingsPage.Vacation -> "Coach"
     SettingsPage.Backup, SettingsPage.Storage -> "Data"
@@ -260,6 +265,7 @@ private fun pageGlyph(page: SettingsPage): ImageVector? = when (page) {
     SettingsPage.Format -> SettingsIcons.Units
     SettingsPage.Session -> SettingsIcons.Session
     SettingsPage.Notifications -> SettingsIcons.Notifications
+    SettingsPage.Security -> SettingsIcons.Security
     SettingsPage.Program -> SettingsIcons.Program
     SettingsPage.Coach -> NavIcons.Coach
     SettingsPage.Recovery -> SettingsIcons.Recovery
@@ -368,6 +374,7 @@ internal fun rowSubtitle(page: SettingsPage, s: SettingsUiState): String = when 
         s.coachMode == "auto" -> "On · earning auto-apply"
         else -> "On · suggest mode"
     }
+    SettingsPage.Security -> "App lock ${if (s.appLockEnabled) "on" else "off"} · gallery ${if (s.galleryLockEnabled) "on" else "off"}"
     SettingsPage.Recovery -> "Health Connect · sleep & resting HR"
     SettingsPage.ExercisePrefs -> "${s.liked.size} liked · ${s.disliked.size} disliked"
     // Count lives on its own StateFlow (not SettingsUiState), so search shows a static subtitle.

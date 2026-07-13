@@ -159,6 +159,14 @@ object PreferenceKeys {
     // ─── Privacy mode (#152) ──────────────────────────────────────────────────
     val PRIVACY_MODE = booleanPreferencesKey("privacy_mode")
 
+    // ─── App & gallery lock (GYMAP-69) ────────────────────────────────────────
+    /** Require a biometric / device-credential unlock to open the app. */
+    val APP_LOCK_ENABLED = booleanPreferencesKey("app_lock_enabled")
+    /** Require an unlock to view the progress-photo gallery (independent of APP_LOCK). */
+    val GALLERY_LOCK_ENABLED = booleanPreferencesKey("gallery_lock_enabled")
+    /** How long the app may sit in the background before it re-locks, in SECONDS. 0 = immediately. */
+    val APP_LOCK_TIMEOUT_SEC = intPreferencesKey("app_lock_timeout_sec")
+
     // ─── Warmup disable (#156) ────────────────────────────────────────────────
     /** Epoch-ms until which warmup should be auto-skipped. 0 = not disabled. */
     val WARMUP_DISABLED_UNTIL_MS = longPreferencesKey("warmup_disabled_until_ms")

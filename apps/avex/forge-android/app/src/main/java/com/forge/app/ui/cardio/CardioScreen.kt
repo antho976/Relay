@@ -17,14 +17,12 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -132,7 +130,7 @@ fun CardioScreen(
             wearable = state.sessionWearable, // That day's watch steps (null until loaded / when none).
             wearableConnected = state.stepsConnected, // Show an empty placeholder once connected.
             onEdit = { viewModel.editEntry(sessionEntry.id) },
-            onDelete = { viewModel.requestDelete(sessionEntry.id) },
+            onDelete = { viewModel.deleteEntry(sessionEntry.id) },
             onBack = viewModel::closeSessionDetail,
             onHome = { viewModel.closeSessionDetail(); goHome() }
         )
@@ -160,22 +158,12 @@ fun CardioScreen(
             onOpenLog = viewModel::openSheet,
             onOpenDetail = viewModel::openDetail,
             onOpenSession = viewModel::openSessionDetail,
-            onRequestDelete = viewModel::requestDelete,
+            onRequestDelete = viewModel::deleteEntry,
             onSeeAll = onOpenHistory ?: viewModel::toggleHistoryExpanded,
             seeAllExpands = onOpenHistory == null,
             onConnectWearable = onConnectWearable,
             onOpenGoals = onOpenGoals,
             onDismissHint = viewModel::dismissWearableHint
-        )
-    }
-
-    if (state.pendingDeleteId != null) {
-        AlertDialog(
-            onDismissRequest = viewModel::cancelDelete,
-            title = { Text("Delete entry?") },
-            text = { Text("This can't be undone.") },
-            confirmButton = { TextButton(onClick = viewModel::confirmDelete) { Text("Delete") } },
-            dismissButton = { TextButton(onClick = viewModel::cancelDelete) { Text("Cancel") } }
         )
     }
 }

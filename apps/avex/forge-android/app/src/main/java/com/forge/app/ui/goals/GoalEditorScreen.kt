@@ -20,7 +20,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -28,7 +27,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -411,7 +409,6 @@ private fun CustomEditStep(
     // Only persist a genuinely changed target: re-saving the untouched, unit-rounded seed would drift
     // the stored canonical value (e.g. 100 lb shown as "45.4" kg parses back to 100.09 lb).
     val changed = valueText.trim() != initial.trim()
-    var confirmDelete by rememberSaveable(goal) { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
         CustomTargetField(goal.metric, valueText) { valueText = it }
         Spacer(Modifier.height(24.dp))
@@ -422,25 +419,13 @@ private fun CustomEditStep(
             enabled = target != null && target > 0
         )
         Spacer(Modifier.height(8.dp))
-        // Quiet error-colored text action; the dialog below words the consequence (§13).
+        // §13 undo over confirm: delete now (the editor pops), with a short Undo in its place —
+        // no confirm dialog. What you logged is untouched either way; only the goal itself is removed.
         Text(
             "Delete goal",
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.error,
-            modifier = Modifier.clickableLabeled("Delete goal") { confirmDelete = true }.padding(vertical = 8.dp)
-        )
-    }
-    if (confirmDelete) {
-        AlertDialog(
-            onDismissRequest = { confirmDelete = false },
-            title = { Text("Delete this goal?") },
-            text = { Text("The goal and its progress are removed for good. What you logged stays.") },
-            confirmButton = {
-                TextButton(onClick = { confirmDelete = false; onDelete() }) { Text("Delete") }
-            },
-            dismissButton = {
-                TextButton(onClick = { confirmDelete = false }) { Text("Cancel") }
-            }
+            modifier = Modifier.clickableLabeled("Delete goal", onClick = onDelete).padding(vertical = 8.dp)
         )
     }
 }

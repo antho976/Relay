@@ -49,6 +49,12 @@ data class SettingsUiState(
     val weeklyRecapEnabled: Boolean = true,
     val restTimerAlertEnabled: Boolean = true,
     val privacyMode: Boolean = false,
+    /** App lock (GYMAP-69): require a biometric / device-credential unlock to open the app. */
+    val appLockEnabled: Boolean = false,
+    /** Gallery lock (GYMAP-69): require an unlock to view the progress-photo gallery. */
+    val galleryLockEnabled: Boolean = false,
+    /** Background grace before the app re-locks, in seconds (0 = immediately). */
+    val appLockTimeoutSec: Int = 0,
     val availableEquipment: Set<String> = emptySet(),
     /** Curated/frozen exercise pool (Developer's preset); null = ordinary equipment filtering. */
     val frozenExerciseIds: Set<String>? = null,
@@ -211,6 +217,12 @@ class SettingsViewModel @Inject constructor(
         s.copy(overviewTileOrder = order)
     }.combine(settingsRepo.privacyMode) { s, v ->
         s.copy(privacyMode = v)
+    }.combine(settingsRepo.appLockEnabled) { s, v ->
+        s.copy(appLockEnabled = v)
+    }.combine(settingsRepo.galleryLockEnabled) { s, v ->
+        s.copy(galleryLockEnabled = v)
+    }.combine(settingsRepo.appLockTimeoutSec) { s, v ->
+        s.copy(appLockTimeoutSec = v)
     }.combine(settingsRepo.trainingReminderEnabled) { s, v ->
         s.copy(trainingReminderEnabled = v)
     }.combine(settingsRepo.trainingReminderHour) { s, v ->
@@ -343,6 +355,11 @@ class SettingsViewModel @Inject constructor(
     fun factoryReset() = viewModelScope.launch { resetRepo.factoryReset() }
     fun loadSampleData() = viewModelScope.launch { sampleDataSeeder.seed() }
     fun setPrivacyMode(v: Boolean) = viewModelScope.launch { settingsRepo.setPrivacyMode(v) }
+    // App / gallery lock (GYMAP-69). Enabling is gated on an available device credential in the UI
+    // (Security page), so these persist the choice directly.
+    fun setAppLockEnabled(v: Boolean) = viewModelScope.launch { settingsRepo.setAppLockEnabled(v) }
+    fun setGalleryLockEnabled(v: Boolean) = viewModelScope.launch { settingsRepo.setGalleryLockEnabled(v) }
+    fun setAppLockTimeoutSec(v: Int) = viewModelScope.launch { settingsRepo.setAppLockTimeoutSec(v) }
     fun setAvailableEquipment(codes: Set<String>) = viewModelScope.launch {
         settingsRepo.setAvailableEquipment(codes)
         // Hand-editing the equipment set leaves any curated preset — drop the freeze.

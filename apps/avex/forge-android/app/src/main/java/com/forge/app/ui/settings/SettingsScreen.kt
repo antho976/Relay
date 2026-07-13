@@ -12,6 +12,7 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.AlertDialog
@@ -42,6 +43,7 @@ enum class SettingsPage(val title: String) {
     Format("Units & format"),
     Session("Session"),
     Notifications("Notifications"),
+    Security("Security"),
     Program("Program & equipment"),
     Coach("Coach"),
     Recovery("Recovery"),
@@ -84,6 +86,7 @@ internal val PAGE_ENTRIES = listOf(
     SettingsPageEntry(SettingsPage.Format, "units format kg lb weight date time week timezone locale distance strength standards sex"),
     SettingsPageEntry(SettingsPage.Session, "session haptic feedback vibration notes templates rest timer between sets compound isolation"),
     SettingsPageEntry(SettingsPage.Notifications, "notifications reminders quiet hours recap timer alerts notify suppress"),
+    SettingsPageEntry(SettingsPage.Security, "security lock app lock gallery lock biometric fingerprint face pin passcode privacy photos protect unlock"),
     SettingsPageEntry(SettingsPage.Program, "program equipment generate auto split days routine rotate trainings workouts barbell dumbbell cable machine plate focus goal experience emphasis priority"),
     SettingsPageEntry(SettingsPage.Coach, "coach weekly review autopilot auto-apply suggest mode on off tweaks"),
     SettingsPageEntry(SettingsPage.Recovery, "recovery health connect sleep heart rate resting samsung galaxy pixel fitbit wearable watch ring coach deload steps bodyweight"),
@@ -117,6 +120,9 @@ internal val ALL_ITEMS = listOf(
     SettingsItem("Weight per plate", "plate weight machine plates count", SettingsPage.Program),
     SettingsItem("Heaviest dumbbell", "dumbbell max heaviest adjustable ceiling", SettingsPage.Program),
     SettingsItem("Privacy mode", "privacy mode blur screenshot screen", SettingsPage.Appearance),
+    SettingsItem("App lock", "app lock biometric fingerprint face pin passcode unlock protect open security", SettingsPage.Security),
+    SettingsItem("Photo gallery lock", "gallery lock photos progress pictures biometric fingerprint pin protect security", SettingsPage.Security),
+    SettingsItem("Auto-lock", "auto lock timeout re-lock immediately minutes grace security", SettingsPage.Security),
     SettingsItem("Strength standards", "strength standards sex male female relative bodyweight ratio elite novice", SettingsPage.Format),
     SettingsItem("Weekly recap", "weekly recap summary notification report", SettingsPage.Notifications),
     SettingsItem("Rest timer alerts", "rest timer alert notification background buzz vibrate", SettingsPage.Notifications),
@@ -172,6 +178,9 @@ fun SettingsScreen(
     // The Program page's open sub-section is hoisted here so EVERY back affordance (top-bar arrow,
     // system back) returns to the Program menu first, then to Settings — never skipping a level.
     var programSection by rememberSaveable { mutableStateOf<ProgramSection?>(null) }
+    // Root-list scroll, hoisted here (outside the AnimatedContent that swaps pages) so it survives
+    // opening a sub-page and backing out — the list lands where you left it, not scrolled to the top.
+    val mainListState = rememberLazyListState()
     var searchQuery by remember { mutableStateOf("") }
     var confirmReset by remember { mutableStateOf<ResetTarget?>(null) }
     var showResetMenu by remember { mutableStateOf(false) }
@@ -261,6 +270,7 @@ fun SettingsScreen(
                     state = state,
                     searchQuery = searchQuery,
                     modifier = Modifier.fillMaxSize().padding(inner),
+                    listState = mainListState,
                     onSearchChange = { searchQuery = it },
                     onOpenPage = { currentPage = it; programSection = null },
                     onOpenCoachBrief = onOpenCoachBrief,
@@ -273,6 +283,7 @@ fun SettingsScreen(
                 SettingsPage.Format -> FormatPage(state, viewModel, Modifier.padding(inner))
                 SettingsPage.Session -> SessionPage(state, viewModel, Modifier.padding(inner))
                 SettingsPage.Notifications -> NotificationsPage(state, viewModel, Modifier.padding(inner))
+                SettingsPage.Security -> SecurityPage(state, viewModel, Modifier.padding(inner))
                 SettingsPage.Program -> ProgramPage(
                     state = state,
                     vm = viewModel,

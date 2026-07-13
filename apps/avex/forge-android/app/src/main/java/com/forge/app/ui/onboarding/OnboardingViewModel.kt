@@ -109,7 +109,9 @@ class OnboardingViewModel @Inject constructor(
         seed: Long = System.nanoTime(),
         plateWeightLb: Double = 15.0,
         frozenIds: Set<String>? = null,
-        coachEnabled: Boolean = true
+        coachEnabled: Boolean = true,
+        /** App-lock opt-in from onboarding (GYMAP-69); false leaves it off (the default). */
+        appLock: Boolean = false
     ) {
         // Stop the resume-draft autosaver before the completion write removes the draft.
         draftWritesEnabled = false
@@ -121,6 +123,8 @@ class OnboardingViewModel @Inject constructor(
             settingsRepo.setCoachEnabled(coachEnabled)
             // Advisory only (tailors Recovery's sync pointers); blank = the step was skipped, keep unset.
             if (wearable.isNotEmpty()) settingsRepo.setWearableBrand(wearable)
+            // App-lock opt-in (GYMAP-69); leave off unless the user turned it on.
+            if (appLock) settingsRepo.setAppLockEnabled(true)
 
             val effectiveGoal: String
             when (planMode) {
