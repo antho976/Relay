@@ -156,7 +156,8 @@ fun CardioLogSheet(
     val accent = MaterialTheme.colorScheme.primary
 
     // "MON · JUL 6" — the year only appears once it differs from today's (backdating that far is rare).
-    val dateHeader = run {
+    // Keyed on dateMs so the formatters aren't rebuilt on every recomposition (e.g. each keystroke).
+    val dateHeader = remember(dateMs) {
         val d = Date(dateMs)
         val sameYear = SimpleDateFormat("yyyy", Locale.getDefault()).format(d) ==
             SimpleDateFormat("yyyy", Locale.getDefault()).format(Date())
@@ -166,7 +167,9 @@ fun CardioLogSheet(
     }
     // "7:24 AM" (GYMAP-33) — honors the device's 12/24-hour format, matching the time picker.
     val context = LocalContext.current
-    val timeHeader = android.text.format.DateFormat.getTimeFormat(context).format(Date(dateMs)).uppercase()
+    val timeHeader = remember(dateMs, context) {
+        android.text.format.DateFormat.getTimeFormat(context).format(Date(dateMs)).uppercase()
+    }
 
     Scaffold(
         topBar = {

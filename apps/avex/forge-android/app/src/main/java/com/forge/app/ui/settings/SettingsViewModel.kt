@@ -22,7 +22,8 @@ import javax.inject.Inject
 
 data class SettingsUiState(
     val amoledMode: Boolean = false,
-    val useKg: Boolean = false,
+    /** Weight display unit (GYMAP-72) — lb | kg | st. */
+    val weightUnit: com.forge.app.domain.units.WeightUnit = com.forge.app.domain.units.WeightUnit.LB,
     val useMiles: Boolean = false,
     val useCm: Boolean = false,
     val compactSetLogging: Boolean = false,
@@ -39,8 +40,8 @@ data class SettingsUiState(
     val restCompoundSeconds: Int = 180,
     val restIsolationSeconds: Int = 90,
     val quietHoursEnabled: Boolean = false,
-    val quietHoursStart: Int = 22,
-    val quietHoursEnd: Int = 7,
+    val quietHoursSchedule: com.forge.app.domain.notify.QuietHoursSchedule =
+        com.forge.app.domain.notify.QuietHoursSchedule.default(),
     /** Daily training reminder (engagement) — opt-in, default off. */
     val trainingReminderEnabled: Boolean = false,
     val trainingReminderHour: Int = 18,
@@ -91,13 +92,17 @@ data class SettingsUiState(
     val coachEnabled: Boolean = true,
     /** Current program's weekly sets per muscle (display name → sets), busiest first (Phase 6). */
     val weeklyVolume: List<Pair<String, Int>> = emptyList()
-)
+) {
+    /** Legacy convenience — true only for kilograms. Prefer [weightUnit]. */
+    val useKg: Boolean get() = weightUnit == com.forge.app.domain.units.WeightUnit.KG
+}
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     private val settingsRepo: SettingsRepository,
     private val resetRepo: ResetRepository,
     private val backupRepo: com.forge.app.data.repo.BackupRepository,
+    private val storageRepo: com.forge.app.data.repo.StorageRepository,
     private val importRepo: com.forge.app.data.importer.WorkoutImportRepository,
     private val sampleDataSeeder: com.forge.app.data.repo.SampleDataSeeder,
     private val photoRepo: com.forge.app.data.repo.ProgressPhotoRepository,
@@ -176,25 +181,23 @@ class SettingsViewModel @Inject constructor(
 
     val state: StateFlow<SettingsUiState> = combine(
         settingsRepo.amoledMode,
-        settingsRepo.useKg,
+        settingsRepo.weightUnit,
         settingsRepo.dateFormat,
         settingsRepo.timeFormat24h,
         settingsRepo.firstDayMonday,
         settingsRepo.hapticStrength,
         settingsRepo.quietHoursEnabled,
-        settingsRepo.quietHoursStart,
-        settingsRepo.quietHoursEnd
+        settingsRepo.quietHoursSchedule
     ) { values ->
         SettingsUiState(
             amoledMode = values[0] as Boolean,
-            useKg = values[1] as Boolean,
+            weightUnit = values[1] as com.forge.app.domain.units.WeightUnit,
             dateFormat = values[2] as String,
             timeFormat24h = values[3] as Boolean,
             firstDayMonday = values[4] as Boolean,
             hapticStrength = values[5] as String,
             quietHoursEnabled = values[6] as Boolean,
-            quietHoursStart = values[7] as Int,
-            quietHoursEnd = values[8] as Int
+            quietHoursSchedule = values[7] as com.forge.app.domain.notify.QuietHoursSchedule
         )
     }.combine(settingsRepo.noteTemplates) { s, templates ->
         s.copy(noteTemplates = templates)
@@ -294,7 +297,8 @@ class SettingsViewModel @Inject constructor(
             .map { (muscle, sets) -> muscle.displayName to sets }
 
     fun setAmoledMode(v: Boolean) = viewModelScope.launch { settingsRepo.setAmoledMode(v) }
-    fun setUseKg(v: Boolean) = viewModelScope.launch { settingsRepo.setUseKg(v) }
+    fun setWeightUnit(u: com.forge.app.domain.units.WeightUnit) =
+        viewModelScope.launch { settingsRepo.setWeightUnit(u) }
     fun setUseMiles(v: Boolean) = viewModelScope.launch { settingsRepo.setUseMiles(v) }
     fun setUseCm(v: Boolean) = viewModelScope.launch { settingsRepo.setUseCm(v) }
     fun setDateFormat(v: String) = viewModelScope.launch { settingsRepo.setDateFormat(v) }
@@ -307,8 +311,8 @@ class SettingsViewModel @Inject constructor(
     fun addNoteTemplate(t: String) = viewModelScope.launch { settingsRepo.addNoteTemplate(t) }
     fun removeNoteTemplate(t: String) = viewModelScope.launch { settingsRepo.removeNoteTemplate(t) }
     fun setQuietHoursEnabled(v: Boolean) = viewModelScope.launch { settingsRepo.setQuietHoursEnabled(v) }
-    fun setQuietHoursStart(v: Int) = viewModelScope.launch { settingsRepo.setQuietHoursStart(v) }
-    fun setQuietHoursEnd(v: Int) = viewModelScope.launch { settingsRepo.setQuietHoursEnd(v) }
+    fun setQuietWindow(day: java.time.DayOfWeek, start: Int, end: Int) =
+        viewModelScope.launch { settingsRepo.setQuietWindow(day, start, end) }
 
     fun setTrainingReminderEnabled(v: Boolean) = viewModelScope.launch {
         settingsRepo.setTrainingReminderEnabled(v)
@@ -625,10 +629,19 @@ class SettingsViewModel @Inject constructor(
     private val _dbSizeLabel = kotlinx.coroutines.flow.MutableStateFlow("")
     val dbSizeLabel: StateFlow<String> = _dbSizeLabel.asStateFlow()
 
-    private fun formatBytes(bytes: Long): String = when {
-        bytes >= 1_048_576 -> "%.1f MB".format(bytes / 1_048_576.0)
-        bytes >= 1024 -> "%.0f KB".format(bytes / 1024.0)
-        else -> "$bytes B"
+    // ── Storage breakdown + cache clear (GYMAP-68) ─────────────────────────────
+    /** The per-category on-disk footprint for the Storage page; null until first loaded. */
+    private val _storage = kotlinx.coroutines.flow.MutableStateFlow<com.forge.app.data.repo.StorageBreakdown?>(null)
+    val storage: StateFlow<com.forge.app.data.repo.StorageBreakdown?> = _storage.asStateFlow()
+
+    /** (Re)measure on-disk storage — call when the Storage page opens or after clearing the cache. */
+    fun refreshStorage() = viewModelScope.launch { _storage.value = storageRepo.breakdown() }
+
+    /** Wipe the transient cache, then re-measure so the page reflects the freed space (the shrinking
+     *  Cache row IS the feedback, DESIGN §13 — no success toast). */
+    fun clearCache() = viewModelScope.launch {
+        runCatching { storageRepo.clearCache() }
+        _storage.value = storageRepo.breakdown()
     }
 
     /** Refresh the auto-backup date + failure state — call when the data dialog opens (the worker may have run since). */
@@ -673,6 +686,33 @@ class SettingsViewModel @Inject constructor(
             .getOrDefault(RestoreOutcome.IO_ERROR)
         if (outcome == RestoreOutcome.SUCCESS) _restoreSucceeded.value = true
         else _statusMessage.value = restoreFailureMessage(outcome)
+    }
+
+    // ── Auto-backup config + manual "Back up now" (GYMAP-67) ───────────────────
+    /** Whether the weekly auto-backup is on (default true) — the Backup page toggle. */
+    val autoBackupEnabled: StateFlow<Boolean> = settingsRepo.autoBackupEnabled
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
+
+    /** The user-picked folder backups also write to, or null when internal-only. */
+    val backupFolderUri: StateFlow<String?> = settingsRepo.backupFolderUri
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    fun setAutoBackupEnabled(v: Boolean) = viewModelScope.launch { settingsRepo.setAutoBackupEnabled(v) }
+
+    /** Persist + take a write grant on the picked folder, then seed it with a backup right away so it
+     *  isn't empty until the next weekly run. */
+    fun setBackupFolder(uri: android.net.Uri) = viewModelScope.launch {
+        backupRepo.rememberBackupFolder(uri)
+        backupNow()
+    }
+    fun clearBackupFolder() = viewModelScope.launch { backupRepo.forgetBackupFolder() }
+
+    /** Run a backup right now — to internal storage and the picked folder — the "Back up now" action. */
+    fun backupNow() = viewModelScope.launch {
+        val folder = settingsRepo.backupFolderUri.first()?.let { android.net.Uri.parse(it) }
+        runCatching { backupRepo.autoBackup(folder) }
+            .onSuccess { _statusMessage.value = "Backed up."; refreshAutoBackupInfo() }
+            .onFailure { _statusMessage.value = "Backup failed: ${it.message}" }
     }
 
     fun exportCrashLogs(uri: android.net.Uri) = viewModelScope.launch {

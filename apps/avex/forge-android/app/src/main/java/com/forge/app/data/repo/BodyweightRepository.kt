@@ -75,4 +75,34 @@ class BodyweightRepository @Inject constructor(
         dao.upsert(BodyweightEntry(dateKey = dateKey, weightLb = hc.weightLb, recordedAt = hc.timeMs))
         return hc.weightLb
     }
+
+    /**
+     * One-time bulk backfill of the ENTIRE Health Connect weight history into the local log (GYMAP-63,
+     * on first connect). Reduces HC's readings to one-per-day and inserts ONLY days we don't already
+     * have (see [BodyweightSync.historyToImport]) so a typed weigh-in is never overwritten and re-running
+     * is idempotent.
+     *
+     * Returns the number of new days imported on a SUCCESSFUL read (0 when HC had nothing new), or
+     * **null** when the read couldn't happen (unavailable / not granted / a transient provider error).
+     * The caller latches the "history imported" flag only on a non-null result, so a momentary failure
+     * right after the grant never permanently skips the backfill.
+     */
+    suspend fun importHistoryFromHealthConnect(): Int? {
+        if (!health.canReadWeight()) return null
+        val zone = ZoneId.systemDefault()
+        val readings = health.readWeightHistory(0L, clock.nowMs()) ?: return null
+        val dated = readings.map {
+            BodyweightSync.DatedWeight(
+                dateKey = Instant.ofEpochMilli(it.timeMs).atZone(zone).toLocalDate().toString(),
+                weightLb = it.weightLb,
+                recordedAtMs = it.timeMs
+            )
+        }
+        val existing = dao.all().map { it.dateKey }.toSet()
+        val toImport = BodyweightSync.historyToImport(dated, existing)
+        toImport.forEach {
+            dao.upsert(BodyweightEntry(dateKey = it.dateKey, weightLb = it.weightLb, recordedAt = it.recordedAtMs))
+        }
+        return toImport.size
+    }
 }

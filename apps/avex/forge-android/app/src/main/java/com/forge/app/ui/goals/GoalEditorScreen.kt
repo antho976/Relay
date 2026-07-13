@@ -295,18 +295,18 @@ private fun ColumnScope.LiftPickerStep(exclude: Set<String>, muted: Color, onPic
 /** The weight-target form for a lift goal (add or edit). */
 @Composable
 private fun LiftWeightStep(step: EditorStep.LiftWeight, onSet: (Double) -> Unit, onClear: () -> Unit) {
-    val useKg = LocalForgeSettings.current.useKg
-    // Keyed on useKg (like BodyweightLogSheet) so a unit flip re-seeds in the new unit instead of
+    val weightUnit = LocalForgeSettings.current.weightUnit
+    // Keyed on weightUnit (like BodyweightLogSheet) so a unit flip re-seeds in the new unit instead of
     // parsing the old unit's digits as the new unit; saveable so a typed target survives rotation.
-    var weightText by rememberSaveable(step, useKg) {
-        mutableStateOf(step.currentTargetLb?.let { weightInputValue(it, useKg) } ?: "")
+    var weightText by rememberSaveable(step, weightUnit) {
+        mutableStateOf(step.currentTargetLb?.let { weightInputValue(it, weightUnit) } ?: "")
     }
-    val weightLb = parseToLb(weightText, useKg)
+    val weightLb = parseToLb(weightText, weightUnit)
     Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
         OutlinedTextField(
             value = weightText,
             onValueChange = { weightText = it.filter { c -> c.isDigit() || c == '.' } },
-            label = { Text("Target (${unitLabel(useKg)})") },
+            label = { Text("Target (${unitLabel(weightUnit)})") },
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
             modifier = Modifier.fillMaxWidth()
@@ -349,7 +349,7 @@ private fun CustomNewStep(
     var period by rememberSaveable(metric) {
         mutableStateOf(if (metric == GoalMetric.BODYWEIGHT) GoalPeriod.ALL else GoalPeriod.WEEK)
     }
-    val target = parseCustomTarget(metric, valueText, settings.useKg, settings.useMiles)
+    val target = parseCustomTarget(metric, valueText, settings.weightUnit, settings.useMiles)
 
     Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
         Text(metricHint(metric, settings.useMiles), style = MaterialTheme.typography.bodySmall, color = muted)
@@ -403,11 +403,11 @@ private fun CustomEditStep(
     // Seed and buffer are keyed on the display units too: a unit flip while this form is composed
     // re-seeds both in the new unit, so the `changed` comparison below never crosses unit regimes
     // (which would either save a mis-parsed canonical value or silently skip a real save).
-    val initial = remember(goal, settings.useKg, settings.useMiles) {
-        customTargetInputValue(goal.metric, goal.targetValue, settings.useKg, settings.useMiles)
+    val initial = remember(goal, settings.weightUnit, settings.useMiles) {
+        customTargetInputValue(goal.metric, goal.targetValue, settings.weightUnit, settings.useMiles)
     }
-    var valueText by rememberSaveable(goal, settings.useKg, settings.useMiles) { mutableStateOf(initial) }
-    val target = parseCustomTarget(goal.metric, valueText, settings.useKg, settings.useMiles)
+    var valueText by rememberSaveable(goal, settings.weightUnit, settings.useMiles) { mutableStateOf(initial) }
+    val target = parseCustomTarget(goal.metric, valueText, settings.weightUnit, settings.useMiles)
     // Only persist a genuinely changed target: re-saving the untouched, unit-rounded seed would drift
     // the stored canonical value (e.g. 100 lb shown as "45.4" kg parses back to 100.09 lb).
     val changed = valueText.trim() != initial.trim()
@@ -460,7 +460,7 @@ private fun CustomTargetField(metric: GoalMetric, valueText: String, onValueChan
     OutlinedTextField(
         value = valueText,
         onValueChange = { new -> onValueChange(new.filter { it.isDigit() || (decimal && it == '.') }) },
-        label = { Text("Target (${customGoalUnitLabel(metric, settings.useKg, settings.useMiles)})") },
+        label = { Text("Target (${customGoalUnitLabel(metric, settings.weightUnit, settings.useMiles)})") },
         singleLine = true,
         keyboardOptions = KeyboardOptions(
             keyboardType = if (decimal) KeyboardType.Decimal else KeyboardType.Number
@@ -469,27 +469,27 @@ private fun CustomTargetField(metric: GoalMetric, valueText: String, onValueChan
     )
 }
 
-private fun customGoalUnitLabel(metric: GoalMetric, useKg: Boolean, useMiles: Boolean): String = when (metric) {
+private fun customGoalUnitLabel(metric: GoalMetric, weightUnit: com.forge.app.domain.units.WeightUnit, useMiles: Boolean): String = when (metric) {
     GoalMetric.CARDIO_DISTANCE -> distanceUnitLabel(useMiles)
     GoalMetric.CARDIO_MINUTES -> "min"
     GoalMetric.SESSIONS -> "workouts"
-    GoalMetric.VOLUME, GoalMetric.BODYWEIGHT -> unitLabel(useKg)
+    GoalMetric.VOLUME, GoalMetric.BODYWEIGHT -> unitLabel(weightUnit)
 }
 
 /** Parse the target field (display unit) into the metric's canonical unit; null if blank/invalid. */
-private fun parseCustomTarget(metric: GoalMetric, text: String, useKg: Boolean, useMiles: Boolean): Double? =
+private fun parseCustomTarget(metric: GoalMetric, text: String, weightUnit: com.forge.app.domain.units.WeightUnit, useMiles: Boolean): Double? =
     when (metric) {
         GoalMetric.CARDIO_DISTANCE -> parseToKm(text, useMiles)
         GoalMetric.CARDIO_MINUTES, GoalMetric.SESSIONS -> text.trim().toDoubleOrNull()
-        GoalMetric.VOLUME, GoalMetric.BODYWEIGHT -> parseToLb(text, useKg)
+        GoalMetric.VOLUME, GoalMetric.BODYWEIGHT -> parseToLb(text, weightUnit)
     }
 
 /** Inverse of [parseCustomTarget]: canonical value → bare display-unit string for seeding a field. */
-private fun customTargetInputValue(metric: GoalMetric, canonical: Double, useKg: Boolean, useMiles: Boolean): String =
+private fun customTargetInputValue(metric: GoalMetric, canonical: Double, weightUnit: com.forge.app.domain.units.WeightUnit, useMiles: Boolean): String =
     when (metric) {
         GoalMetric.CARDIO_DISTANCE -> distanceInputValue(canonical, useMiles)
         GoalMetric.CARDIO_MINUTES, GoalMetric.SESSIONS -> canonical.toInt().toString()
-        GoalMetric.VOLUME, GoalMetric.BODYWEIGHT -> weightInputValue(canonical, useKg)
+        GoalMetric.VOLUME, GoalMetric.BODYWEIGHT -> weightInputValue(canonical, weightUnit)
     }
 
 // §4: lens/segment pills take ONE short word.

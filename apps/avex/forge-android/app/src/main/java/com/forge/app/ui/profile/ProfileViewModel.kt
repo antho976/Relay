@@ -3,8 +3,10 @@ package com.forge.app.ui.profile
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.forge.app.data.db.entities.BodyFatEntry
 import com.forge.app.data.db.entities.BodyweightEntry
 import com.forge.app.data.prefs.SettingsRepository
+import com.forge.app.data.repo.BodyFatRepository
 import com.forge.app.data.repo.BodyweightRepository
 import com.forge.app.data.repo.ExtendedGoalRepository
 import com.forge.app.data.repo.ProfileData
@@ -41,6 +43,7 @@ class ProfileViewModel @Inject constructor(
     private val photoRepo: ProgressPhotoRepository,
     private val avatarRepo: AvatarRepository,
     private val bodyweightRepo: BodyweightRepository,
+    private val bodyFatRepo: BodyFatRepository,
     private val extendedGoalRepo: ExtendedGoalRepository
 ) : ViewModel() {
 
@@ -93,6 +96,42 @@ class ProfileViewModel @Inject constructor(
      *  Settings after this screen opened surfaces the import option without recreating the VM. */
     fun refreshWeightConnected() = viewModelScope.launch {
         _weightConnected.value = runCatching { bodyweightRepo.canImportFromHealthConnect() }.getOrDefault(false)
+    }
+
+    // ── Body fat % (the BODY FAT section + its quick-log sheet, GYMAP-62) ─────────
+
+    /** Recent body-fat readings, oldest → newest (the DAO emits newest-first) — feeds the sparkline. */
+    val bodyFat: StateFlow<List<BodyFatEntry>> =
+        bodyFatRepo.observeRecent(90)
+            .map { entries -> entries.sortedBy { it.recordedAt } }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** Whether the quick-log should offer "Import from Health Connect" (body-fat read granted). */
+    private val _bodyFatConnected = MutableStateFlow(false)
+    val bodyFatConnected: StateFlow<Boolean> = _bodyFatConnected.asStateFlow()
+
+    /** Transient confirmation/result line for the body-fat quick-log sheet; cleared when it closes. */
+    private val _bodyFatMessage = MutableStateFlow<String?>(null)
+    val bodyFatMessage: StateFlow<String?> = _bodyFatMessage.asStateFlow()
+
+    /** Save a typed body-fat reading (%) for [date]; the trend updates reactively. */
+    fun logBodyFat(percent: Double, date: LocalDate) = viewModelScope.launch {
+        bodyFatRepo.log(percent, date)
+        _bodyFatMessage.value = "Saved."
+    }
+
+    /** Pull the latest body fat from Health Connect into the log (no-op if nothing newer). */
+    fun importBodyFat() = viewModelScope.launch {
+        val imported = bodyFatRepo.importLatestFromHealthConnect()
+        _bodyFatMessage.value =
+            if (imported != null) "Imported your latest body fat." else "No newer body fat in Health Connect."
+    }
+
+    fun clearBodyFatMessage() { _bodyFatMessage.value = null }
+
+    /** Re-check body-fat HC read permission right before showing the quick-log sheet (see above). */
+    fun refreshBodyFatConnected() = viewModelScope.launch {
+        _bodyFatConnected.value = runCatching { bodyFatRepo.canImportFromHealthConnect() }.getOrDefault(false)
     }
 
     /** True on this profile open iff the user just crossed into a higher tier since last visit. */

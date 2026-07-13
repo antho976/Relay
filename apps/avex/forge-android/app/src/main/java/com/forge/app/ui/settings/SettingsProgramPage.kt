@@ -134,8 +134,17 @@ private fun equipmentSummary(state: SettingsUiState): String {
     val base = preset?.label
         ?: if (state.availableEquipment.isEmpty()) "All equipment"
         else "${state.availableEquipment.size} selected"
-    return "$base · ${com.forge.app.domain.units.formatWeight(state.plateWeightLb, state.useKg)} plates"
+    return "$base · ${plateHardwareLabel(state.plateWeightLb, state.weightUnit)} plates"
 }
+
+/** Plates and dumbbells are physical kg/lb hardware — stones has no denomination, so a stones user
+ *  sees the lb figures they'd actually load (mirrors PlateCalculatorDialog's isMetric fallback);
+ *  showing "3 st 3 lb" for a 45 lb plate would read as nonsense. */
+private fun plateHardwareLabel(lb: Double, unit: com.forge.app.domain.units.WeightUnit): String =
+    com.forge.app.domain.units.formatWeight(
+        lb,
+        if (unit.isMetric) com.forge.app.domain.units.WeightUnit.KG else com.forge.app.domain.units.WeightUnit.LB
+    )
 
 // ─── Sections ──────────────────────────────────────────────────────────────────
 
@@ -302,7 +311,7 @@ private fun EquipmentSection(state: SettingsUiState, vm: SettingsViewModel) {
     ProgramBlock("Weight per plate", "What one plate weighs, for plate-loaded machines.") {
         ChipFlow {
             listOf(5.0, 10.0, 15.0, 20.0, 25.0, 45.0).forEach { w ->
-                PillChip(com.forge.app.domain.units.formatWeight(w, state.useKg), state.plateWeightLb == w) { vm.setPlateWeightLb(w) }
+                PillChip(plateHardwareLabel(w, state.weightUnit), state.plateWeightLb == w) { vm.setPlateWeightLb(w) }
             }
         }
     }
@@ -311,7 +320,7 @@ private fun EquipmentSection(state: SettingsUiState, vm: SettingsViewModel) {
         ChipFlow {
             PillChip("No limit", state.maxDbWeightLb == null) { vm.setMaxDbWeightLb(null) }
             listOf(15.0, 20.0, 25.0, 30.0, 40.0, 50.0, 75.0, 100.0).forEach { w ->
-                PillChip(com.forge.app.domain.units.formatWeight(w, state.useKg), state.maxDbWeightLb == w) { vm.setMaxDbWeightLb(w) }
+                PillChip(plateHardwareLabel(w, state.weightUnit), state.maxDbWeightLb == w) { vm.setMaxDbWeightLb(w) }
             }
         }
     }

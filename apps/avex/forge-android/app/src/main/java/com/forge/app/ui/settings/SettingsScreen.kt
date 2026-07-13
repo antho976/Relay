@@ -48,6 +48,8 @@ enum class SettingsPage(val title: String) {
     ExercisePrefs("Exercise likes"),
     CardioActivities("Cardio activities"),
     Vacation("Holiday / Vacation"),
+    Backup("Backup"),
+    Storage("Storage"),
     WhatsNew("What's new"),
     About("About")
 }
@@ -88,6 +90,8 @@ internal val PAGE_ENTRIES = listOf(
     SettingsPageEntry(SettingsPage.ExercisePrefs, "exercise likes dislike favourite exclude preferences movements heart hidden preferred"),
     SettingsPageEntry(SettingsPage.CardioActivities, "cardio custom activity activities types padel kayak sport add own create running walking"),
     SettingsPageEntry(SettingsPage.Vacation, "holiday vacation pause streak break away travel"),
+    SettingsPageEntry(SettingsPage.Backup, "backup auto backup automatic weekly restore folder uninstall survive save copy protect data safety back up now sd card cloud"),
+    SettingsPageEntry(SettingsPage.Storage, "storage space disk size cache clear breakdown photos database usage used free clean up megabytes"),
     SettingsPageEntry(SettingsPage.WhatsNew, "what's new whats new changelog release notes updates version history latest build recent changes"),
 )
 
@@ -286,6 +290,8 @@ fun SettingsScreen(
                 SettingsPage.ExercisePrefs -> ExercisePrefsPage(state, viewModel, Modifier.padding(inner))
                 SettingsPage.CardioActivities -> CardioActivitiesPage(viewModel, Modifier.padding(inner))
                 SettingsPage.Vacation -> VacationPage(viewModel, Modifier.padding(inner))
+                SettingsPage.Backup -> BackupPage(viewModel, Modifier.padding(inner))
+                SettingsPage.Storage -> StoragePage(viewModel, Modifier.padding(inner))
                 SettingsPage.WhatsNew -> WhatsNewPage(Modifier.padding(inner))
                 SettingsPage.About -> AboutPage(Modifier.padding(inner), viewModel)
             }

@@ -170,7 +170,7 @@ private fun ExerciseDrillRow(
     accent: Color,
     outline: Color
 ) {
-    val useKg = LocalForgeSettings.current.useKg
+    val weightUnit = LocalForgeSettings.current.weightUnit
     // Keyed by name only (NOT metric): Weight/Volume/Reps share one composable tree, so adding metric
     // to the key would reset the row on every metric switch and re-pop the first row open. Starts at
     // [defaultExpanded]; rememberSaveable keeps it closed once collapsed, reopening only on a fresh visit.
@@ -201,7 +201,7 @@ private fun ExerciseDrillRow(
                     maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f)
                 )
                 Text(
-                    formatMetricValue(value, metric, useKg),
+                    formatMetricValue(value, metric, weightUnit),
                     style = MaterialTheme.typography.labelMedium,
                     color = if (expanded) accent else muted
                 )

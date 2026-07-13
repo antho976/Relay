@@ -27,6 +27,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.data.repo.ProgressPhoto
+import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.ui.common.bounceClick
 import java.io.File
@@ -114,7 +115,7 @@ internal fun sameWeightPairs(
 internal fun SameWeightSection(
     pairs: List<SameWeightPair>,
     zone: ZoneId,
-    useKg: Boolean,
+    weightUnit: WeightUnit,
     fileFor: (ProgressPhoto) -> File,
     onCompare: (ProgressPhoto, ProgressPhoto) -> Unit,
     muted: Color
@@ -127,7 +128,7 @@ internal fun SameWeightSection(
         Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
         horizontalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        pairs.forEach { pair -> SameWeightCard(pair, zone, useKg, fileFor, onCompare, muted) }
+        pairs.forEach { pair -> SameWeightCard(pair, zone, weightUnit, fileFor, onCompare, muted) }
     }
 }
 
@@ -136,7 +137,7 @@ internal fun SameWeightSection(
 private fun SameWeightCard(
     pair: SameWeightPair,
     zone: ZoneId,
-    useKg: Boolean,
+    weightUnit: WeightUnit,
     fileFor: (ProgressPhoto) -> File,
     onCompare: (ProgressPhoto, ProgressPhoto) -> Unit,
     muted: Color
@@ -149,8 +150,8 @@ private fun SameWeightCard(
         }
         Spacer(Modifier.height(7.dp))
         Text(
-            if (span.isEmpty()) formatWeight(pair.avgWeightLb, useKg)
-            else "${formatWeight(pair.avgWeightLb, useKg)} · $span",
+            if (span.isEmpty()) formatWeight(pair.avgWeightLb, weightUnit)
+            else "${formatWeight(pair.avgWeightLb, weightUnit)} · $span",
             style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp
         )
     }

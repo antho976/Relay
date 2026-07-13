@@ -155,6 +155,44 @@ object SettingsIcons {
         }
     }
 
+    /** Storage — a database cylinder (top rim ellipse + sides + a mid band), the universal "on disk". */
+    val Storage: ImageVector by lazy {
+        icon("SetStorage") {
+            strokePath(1.7f) {
+                // top rim (a full ellipse from two half-arcs)
+                moveTo(4.8f, 6.4f)
+                arcToRelative(7.2f, 2.6f, 0f, false, true, 14.4f, 0f)
+                arcToRelative(7.2f, 2.6f, 0f, false, true, -14.4f, 0f)
+                // left/right sides down to the base + the bottom curve
+                moveTo(4.8f, 6.4f); lineTo(4.8f, 17.6f)
+                arcToRelative(7.2f, 2.6f, 0f, false, false, 14.4f, 0f)
+                lineTo(19.2f, 6.4f)
+                // the mid band that makes it read as a disk stack, not a plain tube
+                moveTo(4.8f, 12f)
+                arcToRelative(7.2f, 2.6f, 0f, false, false, 14.4f, 0f)
+            }
+        }
+    }
+
+    /** Backup — a cloud with a down-arrow (a saved, restorable copy). */
+    val Backup: ImageVector by lazy {
+        icon("SetBackup") {
+            strokePath(1.7f) {
+                // cloud outline
+                moveTo(7.4f, 16.2f)
+                curveTo(5.2f, 16.2f, 3.6f, 14.7f, 3.6f, 12.7f)
+                curveTo(3.6f, 10.9f, 5.0f, 9.4f, 6.8f, 9.2f)
+                curveTo(7.3f, 6.9f, 9.4f, 5.2f, 12f, 5.2f)
+                curveTo(14.9f, 5.2f, 17.2f, 7.4f, 17.4f, 10.2f)
+                curveTo(19.1f, 10.5f, 20.4f, 11.9f, 20.4f, 13.6f)
+                curveTo(20.4f, 15.0f, 19.4f, 16.2f, 17.4f, 16.2f)
+                // down-arrow through the cloud
+                moveTo(12f, 10.4f); lineTo(12f, 18.6f)
+                moveTo(9f, 15.6f); lineTo(12f, 18.6f); lineTo(15f, 15.6f)
+            }
+        }
+    }
+
     /** What's new — a four-point sparkle (thin concave points) for release notes. */
     val WhatsNew: ImageVector by lazy {
         icon("SetWhatsNew") {

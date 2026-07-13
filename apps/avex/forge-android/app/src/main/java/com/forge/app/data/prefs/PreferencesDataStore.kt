@@ -47,6 +47,11 @@ object PreferenceKeys {
     val NOTE_TEMPLATES = stringSetPreferencesKey("note_templates")
 
     // ─── Units (#2) ───────────────────────────────────────────────────────────
+    /** Weight display unit (GYMAP-72), stored by [com.forge.app.domain.units.WeightUnit.label]
+     *  ("lb" | "kg" | "st"). ABSENT = derive from the legacy [USE_KG] (kg when true, else lb) so
+     *  existing installs carry over. [USE_KG] is kept mirrored (true only for kg) for the derived
+     *  distance/length defaults + backup, which still read it. */
+    val WEIGHT_UNIT = stringPreferencesKey("weight_unit")
     val USE_KG = booleanPreferencesKey("use_kg")
     /** Cardio distance/pace in miles. ABSENT = derive from [USE_KG] (lb→miles, kg→km); only an
      *  explicit pick in onboarding or Settings persists this and breaks the tie to the weight unit. */
@@ -59,6 +64,9 @@ object PreferenceKeys {
     /** When ON (and the WeightRecord write permission is granted), Avex mirrors each weigh-in to
      *  Health Connect. Off by default — write-back is strictly opt-in. */
     val HC_WRITE_BODYWEIGHT = booleanPreferencesKey("hc_write_bodyweight")
+    /** When ON (and the BodyFat write permission is granted), Avex mirrors each body-fat entry to
+     *  Health Connect (GYMAP-62). Off by default — write-back is strictly opt-in. */
+    val HC_WRITE_BODY_FAT = booleanPreferencesKey("hc_write_body_fat")
     /** When ON (and the ActiveCaloriesBurned write permission is granted), Avex writes each finished
      *  session's estimated active calories to Health Connect (HC-4). Off by default — strictly opt-in. */
     val HC_WRITE_CALORIES = booleanPreferencesKey("hc_write_calories")
@@ -66,10 +74,21 @@ object PreferenceKeys {
      *  "pixel" / "none"; absent = never asked). Advisory only — tailors the Recovery page's setup
      *  pointers; every Health Connect read stays vendor-neutral. */
     val WEARABLE_BRAND = stringPreferencesKey("wearable_brand")
+    /** Set true after the one-time bulk import of Health Connect weight HISTORY on first connect
+     *  (GYMAP-63), so the backfill runs exactly once and never re-scans on later refreshes. */
+    val HC_WEIGHT_HISTORY_IMPORTED = booleanPreferencesKey("hc_weight_history_imported")
 
     /** Persisted tree URI of a folder (usually Downloads) the user granted so Import can auto-scan it
      *  for gym-app exports (#GYMAP-17). Empty/absent = no folder access granted yet. */
     val IMPORT_FOLDER_URI = stringPreferencesKey("import_folder_uri")
+
+    // ─── Backup (GYMAP-67) ────────────────────────────────────────────────────
+    /** Weekly auto-backup master switch. Default ON — the app keeps a restorable weekly copy. When
+     *  OFF the scheduled worker runs but no-ops, so no WorkManager cancel/reschedule dance is needed. */
+    val AUTO_BACKUP_ENABLED = booleanPreferencesKey("auto_backup_enabled")
+    /** Persisted tree URI of a user-picked folder the auto-backup ALSO writes into (GYMAP-67), so a
+     *  backup survives an uninstall. Empty/absent = internal app storage only. */
+    val BACKUP_FOLDER_URI = stringPreferencesKey("backup_folder_uri")
 
     // ─── Appearance (#35a) ────────────────────────────────────────────────────
     val AMOLED_MODE = booleanPreferencesKey("amoled_mode")
@@ -106,8 +125,11 @@ object PreferenceKeys {
 
     // ─── Notifications (#122) ─────────────────────────────────────────────────
     val QUIET_HOURS_ENABLED = booleanPreferencesKey("quiet_hours_enabled")
-    val QUIET_HOURS_START = intPreferencesKey("quiet_hours_start")  // 0–23
-    val QUIET_HOURS_END = intPreferencesKey("quiet_hours_end")      // 0–23
+    val QUIET_HOURS_START = intPreferencesKey("quiet_hours_start")  // 0–23; legacy single window, now
+    val QUIET_HOURS_END = intPreferencesKey("quiet_hours_end")      // 0–23; the seed for the per-day schedule
+    /** Per-day quiet windows (GYMAP-75) as a JSON blob; see [com.forge.app.domain.notify.QuietHoursSchedule].
+     *  Absent until the user edits a day — reads fall back to seeding all 7 days from START/END above. */
+    val QUIET_HOURS_SCHEDULE = stringPreferencesKey("quiet_hours_schedule")
     /** Daily "train today" reminder (engagement). Off by default; hour is 0–23, default 18 (6pm). */
     val TRAINING_REMINDER_ENABLED = booleanPreferencesKey("training_reminder_enabled")
     val TRAINING_REMINDER_HOUR = intPreferencesKey("training_reminder_hour")

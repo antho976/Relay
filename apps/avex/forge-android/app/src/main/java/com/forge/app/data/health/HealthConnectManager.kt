@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.ActiveCaloriesBurnedRecord
+import androidx.health.connect.client.records.BodyFatRecord
 import androidx.health.connect.client.records.ExerciseRoute
 import androidx.health.connect.client.records.ExerciseRouteResult
 import androidx.health.connect.client.records.ExerciseSessionRecord
@@ -17,6 +18,7 @@ import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.time.TimeRangeFilter
 import androidx.health.connect.client.units.Energy
 import androidx.health.connect.client.units.Mass
+import androidx.health.connect.client.units.Percentage
 import com.forge.app.domain.adapt.HealthSnap
 import com.forge.app.domain.adapt.RestingHrSample
 import com.forge.app.domain.adapt.SleepNight
@@ -65,6 +67,17 @@ class HealthConnectManager @Inject constructor(
     val weightPermissions: Set<String> = setOf(
         HealthPermission.getReadPermission(WeightRecord::class),
         HealthPermission.getWritePermission(WeightRecord::class)
+    )
+
+    /**
+     * Body-fat-% permissions (GYMAP-62) — read so a smart-scale reading can flow INTO Avex, write so
+     * a Avex figure can flow BACK to Health Connect. Its own set like [weightPermissions], so enabling
+     * body-fat sync never silently asks for weight/recovery, and vice-versa. HC stores body fat as its
+     * own [BodyFatRecord] (a percentage), separate from [WeightRecord], so it needs its own grant.
+     */
+    val bodyFatPermissions: Set<String> = setOf(
+        HealthPermission.getReadPermission(BodyFatRecord::class),
+        HealthPermission.getWritePermission(BodyFatRecord::class)
     )
 
     /**
@@ -165,6 +178,42 @@ class HealthConnectManager @Inject constructor(
     }
 
     /**
+     * The FULL weight history in `[sinceMs, untilMs]`, oldest first, in lb (GYMAP-63 first-connect
+     * backfill). Pages through the provider (unlike [latestWeight]'s single row) and caps at
+     * [HISTORY_MAX_RECORDS] so a pathological history can't pull unbounded records.
+     *
+     * Returns **null** when the read couldn't happen (no provider / not granted / a read error) — as
+     * opposed to an empty list, which means the read SUCCEEDED and HC simply has no records. The caller
+     * needs that distinction: a transient failure must not be mistaken for "nothing to import" and
+     * latch the one-time backfill flag (GYMAP-63).
+     */
+    suspend fun readWeightHistory(sinceMs: Long, untilMs: Long): List<HcWeight>? = withContext(Dispatchers.IO) {
+        val client = clientOrNull() ?: return@withContext null
+        if (!canReadWeight()) return@withContext null
+        hcCatching {
+            val out = ArrayList<HcWeight>()
+            val range = TimeRangeFilter.between(Instant.ofEpochMilli(sinceMs), Instant.ofEpochMilli(untilMs))
+            var token: String? = null
+            do {
+                val resp = client.readRecords(
+                    ReadRecordsRequest(
+                        WeightRecord::class,
+                        timeRangeFilter = range,
+                        ascendingOrder = true,
+                        pageSize = HISTORY_PAGE_SIZE,
+                        pageToken = token
+                    )
+                )
+                resp.records.forEach { out.add(HcWeight(it.weight.inPounds, it.time.toEpochMilli())) }
+                token = resp.pageToken
+                // Stop on an empty page even if a token lingers: without this, a provider that returns
+                // a non-null continuation token but no records would loop forever (out.size never grows).
+            } while (token != null && resp.records.isNotEmpty() && out.size < HISTORY_MAX_RECORDS)
+            out
+        } // null when the read threw — distinct from a successful empty read.
+    }
+
+    /**
      * Write a single bodyweight reading to Health Connect, returning whether it landed. Best-effort
      * and fail-soft: no provider / no write permission / a provider error all return false without
      * throwing, so a failed mirror never breaks the local log (the source of truth stays the DB).
@@ -179,6 +228,60 @@ class HealthConnectManager @Inject constructor(
                         time = Instant.ofEpochMilli(atMs),
                         zoneOffset = null,
                         weight = Mass.pounds(weightLb),
+                        metadata = Metadata.manualEntry()
+                    )
+                )
+            )
+            true
+        } ?: false
+    }
+
+    /** True when Avex may READ body fat % from Health Connect (GYMAP-62). */
+    suspend fun canReadBodyFat(): Boolean =
+        grantedPermissions().contains(HealthPermission.getReadPermission(BodyFatRecord::class))
+
+    /** True when Avex may WRITE body fat % back to Health Connect (GYMAP-62). */
+    suspend fun canWriteBodyFat(): Boolean =
+        grantedPermissions().contains(HealthPermission.getWritePermission(BodyFatRecord::class))
+
+    /** A body-fat reading mirrored out of Health Connect as plain Kotlin (percent + when it was taken). */
+    data class HcBodyFat(val percent: Double, val timeMs: Long)
+
+    /**
+     * The most recent [BodyFatRecord] before [nowMs], as a percentage — or null if HC is absent, the
+     * read permission isn't granted, there are no records, or the read throws. Reads a single
+     * descending-ordered row so a long history never pulls more than one record.
+     */
+    suspend fun latestBodyFat(nowMs: Long): HcBodyFat? = withContext(Dispatchers.IO) {
+        val client = clientOrNull() ?: return@withContext null
+        if (!canReadBodyFat()) return@withContext null
+        hcCatching {
+            client.readRecords(
+                ReadRecordsRequest(
+                    BodyFatRecord::class,
+                    timeRangeFilter = TimeRangeFilter.before(Instant.ofEpochMilli(nowMs)),
+                    ascendingOrder = false,
+                    pageSize = 1
+                )
+            ).records.firstOrNull()?.let { HcBodyFat(it.percentage.value, it.time.toEpochMilli()) }
+        }
+    }
+
+    /**
+     * Write a single body-fat reading (percentage) to Health Connect, returning whether it landed.
+     * Best-effort and fail-soft like [writeWeight]: no provider / no write permission / a provider
+     * error all return false without throwing, so a failed mirror never breaks the local log.
+     */
+    suspend fun writeBodyFat(percent: Double, atMs: Long): Boolean = withContext(Dispatchers.IO) {
+        val client = clientOrNull() ?: return@withContext false
+        if (!canWriteBodyFat()) return@withContext false
+        hcCatching {
+            client.insertRecords(
+                listOf(
+                    BodyFatRecord(
+                        time = Instant.ofEpochMilli(atMs),
+                        zoneOffset = null,
+                        percentage = Percentage(percent),
                         metadata = Metadata.manualEntry()
                     )
                 )
@@ -451,5 +554,9 @@ class HealthConnectManager @Inject constructor(
         /** How many recent exercise sessions [probeSignalFlow] scans for a GPS route before giving up —
          *  bounded so the route reading stays a cheap read even for a heavy logger. */
         const val FLOW_ROUTE_PROBE_SESSIONS = 50
+        /** Page size + hard cap for the [readWeightHistory] backfill. One-per-day weigh-ins over many
+         *  years stay well under the cap; the cap just guards against a pathological history. */
+        const val HISTORY_PAGE_SIZE = 1000
+        const val HISTORY_MAX_RECORDS = 5000
     }
 }

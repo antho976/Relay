@@ -52,6 +52,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.data.repo.ProgressPhoto
 import com.forge.app.domain.photo.PhotoPose
+import com.forge.app.domain.units.WeightUnit
 import com.forge.app.ui.common.ForgeOutlineCapsule
 import com.forge.app.ui.common.ForgePrimaryCapsule
 import com.forge.app.ui.common.ForgeWordmark
@@ -111,7 +112,7 @@ fun MirrorTestScreen(
     val zone = remember { ZoneId.systemDefault() }
     val settings = LocalForgeSettings.current
     val firstDayMonday = settings.firstDayMonday
-    val useKg = settings.useKg
+    val weightUnit = settings.weightUnit
     val searching = query.isNotBlank()
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
@@ -235,7 +236,7 @@ fun MirrorTestScreen(
                     onToggleFilters = { toggleFilters() },
                     searchFocus = searchFocus,
                     zone = zone,
-                    useKg = useKg,
+                    weightUnit = weightUnit,
                     onOpenAlbums = { showAlbums = true },
                     onStartCompare = { compareMode = true },
                     onBandCompare = { a, b -> comparePair = listOf(a, b) },
@@ -282,7 +283,7 @@ fun MirrorTestScreen(
             photos = target.photos,
             startIndex = target.index,
             albumNames = state.albumNames,
-            useKg = useKg,
+            weightUnit = weightUnit,
             fileFor = viewModel::fileFor,
             onSaveNote = { p, n -> viewModel.setNote(p, n) },
             onMove = { p, a -> viewModel.setAlbum(p, a) },
@@ -296,7 +297,7 @@ fun MirrorTestScreen(
 
     comparePair?.let { pair ->
         if (pair.size == 2) CompareSheet(
-            pair = pair, zone = zone, useKg = useKg, fileFor = viewModel::fileFor,
+            pair = pair, zone = zone, weightUnit = weightUnit, fileFor = viewModel::fileFor,
             onDismiss = { comparePair = null }
         ) else comparePair = null
     }
@@ -359,7 +360,7 @@ private fun OverviewLevel(
     onToggleFilters: () -> Unit,
     searchFocus: FocusRequester,
     zone: ZoneId,
-    useKg: Boolean,
+    weightUnit: WeightUnit,
     onOpenAlbums: () -> Unit,
     onStartCompare: () -> Unit,
     onBandCompare: (ProgressPhoto, ProgressPhoto) -> Unit,
@@ -374,7 +375,7 @@ private fun OverviewLevel(
     // Signature mark — works at zero (ghost frames + add prompt), so no separate empty text row (§12).
     val (before, after) = remember(photos) { bestComparePair(photos) }
     ProgressBand(
-        before = before, after = after, zone = zone, useKg = useKg, fileFor = fileFor,
+        before = before, after = after, zone = zone, weightUnit = weightUnit, fileFor = fileFor,
         onCompare = onBandCompare, onAdd = onAdd,
         onBg = onBg, muted = muted, accent = accent, outline = outline
     )
@@ -383,7 +384,7 @@ private fun OverviewLevel(
 
     if (bodyweight.size >= 2) {
         Spacer(Modifier.height(24.dp))
-        BodyweightSparkline(bodyweight, photos, useKg, onBg, muted, accent)
+        BodyweightSparkline(bodyweight, photos, weightUnit, onBg, muted, accent)
     }
 
     // Auto-paired "scale held, body changed" shots — excludes the band pair so it never echoes it.
@@ -396,7 +397,7 @@ private fun OverviewLevel(
     }
     if (samePairs.isNotEmpty()) {
         Spacer(Modifier.height(24.dp))
-        SameWeightSection(samePairs, zone, useKg, fileFor, onBandCompare, muted)
+        SameWeightSection(samePairs, zone, weightUnit, fileFor, onBandCompare, muted)
     }
 
     // ── Pose lens + tool row ──────────────────────────────────────────────────

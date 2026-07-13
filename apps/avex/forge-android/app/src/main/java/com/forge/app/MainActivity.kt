@@ -334,25 +334,19 @@ class MainActivity : ComponentActivity() {
             val uiSettingsFlow = remember {
                 combine(
                     settingsRepo.amoledMode,
-                    settingsRepo.useKg,
+                    settingsRepo.weightUnit,
                     settingsRepo.dateFormat,
                     settingsRepo.timeFormat24h,
                     settingsRepo.firstDayMonday,
-                    settingsRepo.hapticStrength,
-                    settingsRepo.quietHoursEnabled,
-                    settingsRepo.quietHoursStart,
-                    settingsRepo.quietHoursEnd
+                    settingsRepo.hapticStrength
                 ) { values ->
                     ForgeUiSettings(
                         amoledMode = values[0] as Boolean,
-                        useKg = values[1] as Boolean,
+                        weightUnit = values[1] as com.forge.app.domain.units.WeightUnit,
                         dateFormat = values[2] as String,
                         timeFormat24h = values[3] as Boolean,
                         firstDayMonday = values[4] as Boolean,
-                        hapticStrength = values[5] as String,
-                        quietHoursEnabled = values[6] as Boolean,
-                        quietHoursStart = values[7] as Int,
-                        quietHoursEnd = values[8] as Int
+                        hapticStrength = values[5] as String
                     )
                 }.combine(settingsRepo.hiddenOverviewTiles) { s, hidden ->
                     s.copy(hiddenOverviewTiles = hidden)

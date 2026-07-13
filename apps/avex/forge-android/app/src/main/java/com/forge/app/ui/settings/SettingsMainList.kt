@@ -86,8 +86,10 @@ internal fun MainList(
             }
             item("data") {
                 SettingsSectionHeader("Data")
+                SettingsNavRow("Backup", rowSubtitle(SettingsPage.Backup, state), SettingsIcons.Backup) { onOpenPage(SettingsPage.Backup) }
                 SettingsNavRow("Export data", "Sessions · weekly · full backup · PDF", SettingsIcons.Export) { onOpenDataDialog() }
                 SettingsNavRow("Import data", "Strong · Hevy · FitNotes · CSV", SettingsIcons.Import) { onImportData() }
+                SettingsNavRow("Storage", rowSubtitle(SettingsPage.Storage, state), SettingsIcons.Storage) { onOpenPage(SettingsPage.Storage) }
             }
             item("reset") {
                 SettingsSectionHeader("Reset")
@@ -248,6 +250,7 @@ private fun pageSection(page: SettingsPage): String = when (page) {
     SettingsPage.Appearance, SettingsPage.Format, SettingsPage.Notifications -> "General"
     SettingsPage.Program, SettingsPage.Session, SettingsPage.ExercisePrefs, SettingsPage.CardioActivities -> "Training"
     SettingsPage.Coach, SettingsPage.Recovery, SettingsPage.Vacation -> "Coach"
+    SettingsPage.Backup, SettingsPage.Storage -> "Data"
     SettingsPage.WhatsNew, SettingsPage.About -> "About"
 }
 
@@ -263,6 +266,8 @@ private fun pageGlyph(page: SettingsPage): ImageVector? = when (page) {
     SettingsPage.ExercisePrefs -> SettingsIcons.Likes
     SettingsPage.CardioActivities -> NavIcons.Cardio
     SettingsPage.Vacation -> SettingsIcons.Holiday
+    SettingsPage.Backup -> SettingsIcons.Backup
+    SettingsPage.Storage -> SettingsIcons.Storage
     SettingsPage.WhatsNew -> SettingsIcons.WhatsNew
     SettingsPage.About -> null
 }
@@ -338,7 +343,7 @@ private fun NoSearchResults(query: String) {
 
 internal fun rowSubtitle(page: SettingsPage, s: SettingsUiState): String = when (page) {
     SettingsPage.Appearance -> "AMOLED ${if (s.amoledMode) "on" else "off"} · compact ${if (s.compactSetLogging) "on" else "off"}"
-    SettingsPage.Format -> "${if (s.useKg) "kg" else "lb"} · ${if (s.useMiles) "mi" else "km"} · ${if (s.useCm) "cm" else "in"} · ${dateShort(s.dateFormat)} · ${if (s.timeFormat24h) "24h" else "12h"} · ${tzShort(s.timezone)}"
+    SettingsPage.Format -> "${s.weightUnit.label} · ${if (s.useMiles) "mi" else "km"} · ${if (s.useCm) "cm" else "in"} · ${dateShort(s.dateFormat)} · ${if (s.timeFormat24h) "24h" else "12h"} · ${tzShort(s.timezone)}"
     SettingsPage.Session -> "Haptic: ${s.hapticStrength}"
     SettingsPage.Notifications -> {
         // Live preview of which notification types are on (was just quiet-hours / "Off").
@@ -347,9 +352,15 @@ internal fun rowSubtitle(page: SettingsPage, s: SettingsUiState): String = when 
             if (s.weeklyRecapEnabled) add("recap")
             if (s.restTimerAlertEnabled) add("timer")
         }.joinToString(" · ").ifEmpty { "Off" }
-        if (s.quietHoursEnabled)
-            "$on · quiet ${s.quietHoursStart.toString().padStart(2, '0')}:00–${s.quietHoursEnd.toString().padStart(2, '0')}:00"
-        else on
+        if (s.quietHoursEnabled) {
+            // One window shared by every day reads as a time range; a per-day schedule just reads "per day".
+            val w = s.quietHoursSchedule.windows[0]
+            val quiet =
+                if (s.quietHoursSchedule.isUniform && !w.isOff)
+                    "quiet ${w.start.toString().padStart(2, '0')}:00–${w.end.toString().padStart(2, '0')}:00"
+                else "quiet per day"
+            "$on · $quiet"
+        } else on
     }
     SettingsPage.Program -> "${s.daysPerWeek} days/week · ${if (s.availableEquipment.isEmpty()) "all equipment" else "${s.availableEquipment.size} equipment"}"
     SettingsPage.Coach -> when {
@@ -363,6 +374,10 @@ internal fun rowSubtitle(page: SettingsPage, s: SettingsUiState): String = when 
     SettingsPage.CardioActivities -> "Your own cardio activities"
     // Reached via a dedicated MainList row, not the search/nav grid — subtitle unused.
     SettingsPage.Vacation -> "Pause your streak during a holiday"
+    // Live status (last-run date, on/off) lives on its own StateFlow — the row shows a static hint.
+    SettingsPage.Backup -> "Weekly copy · back up now"
+    // Live sizes live on their own StateFlow (not SettingsUiState) — the row shows a static hint.
+    SettingsPage.Storage -> "Space used · clear cache"
     // The live app version — the built VERSION_NAME, so the row reads current at a glance.
     SettingsPage.WhatsNew -> "Version ${com.forge.app.BuildConfig.VERSION_NAME}"
     SettingsPage.About -> "Version · privacy · what's stored"

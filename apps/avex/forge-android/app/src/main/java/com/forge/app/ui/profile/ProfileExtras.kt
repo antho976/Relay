@@ -130,12 +130,12 @@ private fun GoalLine(
     when (tile) {
         is GoalTile.Lift -> {
             name = tile.g.name
-            valueLine = "${weightInputValue(tile.g.currentBestLb, settings.useKg)} / " +
-                "${weightInputValue(tile.g.targetLb, settings.useKg)} ${unitLabel(settings.useKg)}"
+            valueLine = "${weightInputValue(tile.g.currentBestLb, settings.weightUnit)} / " +
+                "${weightInputValue(tile.g.targetLb, settings.weightUnit)} ${unitLabel(settings.weightUnit)}"
         }
         is GoalTile.Custom -> {
             name = customGoalTitle(tile.g)
-            valueLine = customGoalValueLine(tile.g, settings.useKg, settings.useMiles)
+            valueLine = customGoalValueLine(tile.g, settings.weightUnit, settings.useMiles)
         }
     }
     // The shared goal line (ui/goals) — one visual language whether a goal shows here or on the
@@ -261,7 +261,7 @@ private fun ViewAllCell(count: Int, onViewAll: () -> Unit, onBg: Color, muted: C
 /** ON THIS DAY — a single-line throwback to a workout from a previous month, set like a pull quote. */
 @Composable
 internal fun OnThisDaySection(memory: OnThisDayMemory, onBg: Color, muted: Color, accent: Color) {
-    val useKg = LocalForgeSettings.current.useKg
+    val weightUnit = LocalForgeSettings.current.weightUnit
     SectionHeader("ON THIS DAY", muted)
     val ago = monthsAgoPhrase(memory.monthsAgo)
     Row(Modifier.height(IntrinsicSize.Min)) {
@@ -271,7 +271,7 @@ internal fun OnThisDaySection(memory: OnThisDayMemory, onBg: Color, muted: Color
         )
         Spacer(Modifier.width(12.dp))
         Text(
-            "$ago you trained ${memory.dayName} · ${formatVolume(memory.totalVolumeLb, useKg)} ${unitLabel(useKg)}" +
+            "$ago you trained ${memory.dayName} · ${formatVolume(memory.totalVolumeLb, weightUnit)} ${unitLabel(weightUnit)}" +
                 if (memory.prCount > 0) " · ${memory.prCount} PR${if (memory.prCount == 1) "" else "s"}" else "",
             style = MaterialTheme.typography.bodyMedium, color = onBg, fontStyle = FontStyle.Italic
         )

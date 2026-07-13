@@ -17,3 +17,10 @@ internal fun formatShortDate(ms: Long): String =
 /** Medium "MMM d, yyyy" date for a millis timestamp (e.g. the last auto-backup date). */
 internal fun formatMediumDate(ms: Long): String =
     SimpleDateFormat("MMM d, yyyy", Locale.getDefault()).format(Date(ms))
+
+/** Human-readable byte size ("2.4 MB" / "512 KB" / "0 B") — the storage + DB-size readouts. */
+internal fun formatBytes(bytes: Long): String = when {
+    bytes >= 1_048_576 -> "%.1f MB".format(bytes / 1_048_576.0)
+    bytes >= 1024 -> "%.0f KB".format(bytes / 1024.0)
+    else -> "$bytes B"
+}

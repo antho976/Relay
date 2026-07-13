@@ -259,16 +259,16 @@ internal fun RankInfoSheet(
             Spacer(Modifier.height(28.dp))
             Text("HOW TO EARN MORE", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp)
             Spacer(Modifier.height(8.dp))
-            val useKg = LocalForgeSettings.current.useKg
+            val weightUnit = LocalForgeSettings.current.weightUnit
             // Amounts + the volume threshold are derived from XpEngine so this list can never drift
             // from the actual scoring. The kg figure is the true conversion of 1000 lb (≈454 kg),
             // not a hand-rounded "450".
-            val per1000 = toDisplayWeight(1000.0, useKg).roundToInt()
+            val per1000 = toDisplayWeight(1000.0, weightUnit).roundToInt()
             listOf(
                 "Finish a workout" to "+${XpEngine.WORKOUT_XP}",
                 "Each set logged" to "+${XpEngine.SET_XP}",
                 "Set a PR" to "+${XpEngine.PR_XP}",
-                "Every ${String.format(java.util.Locale.US, "%,d", per1000)} ${unitLabel(useKg)} moved" to "+${XpEngine.VOLUME_XP_PER_1000LB}",
+                "Every ${String.format(java.util.Locale.US, "%,d", per1000)} ${unitLabel(weightUnit)} moved" to "+${XpEngine.VOLUME_XP_PER_1000LB}",
                 "Each week you train" to "+${XpEngine.ACTIVE_WEEK_XP}",
                 "Unlock a trophy" to "+10–100"
             ).forEach { (what, amt) ->

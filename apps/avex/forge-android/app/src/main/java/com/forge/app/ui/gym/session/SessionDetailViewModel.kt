@@ -71,7 +71,10 @@ class SessionDetailViewModel @Inject constructor(
      * copy (the repo returns null and the button is only shown for a session with logged exercises).
      */
     fun reLogToday() {
-        if (sessionId < 0 || reLogJob?.isActive == true) return
+        // Block while a re-log is in flight OR one is still pending its Undo (reLoggedSessionId stays set
+        // until the snackbar clears) — otherwise a second tap after the fast transaction finishes silently
+        // creates a duplicate the single-shot Undo can never reach.
+        if (sessionId < 0 || reLogJob?.isActive == true || _reLoggedSessionId.value != null) return
         reLogJob = viewModelScope.launch {
             workoutRepo.reLogSession(sessionId)?.let { _reLoggedSessionId.value = it }
         }

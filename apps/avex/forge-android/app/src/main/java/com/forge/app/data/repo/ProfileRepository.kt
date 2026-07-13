@@ -108,7 +108,7 @@ class ProfileRepository @Inject constructor(
     fun cached(): ProfileData? = lastData
 
     suspend fun load(): ProfileData = withContext(Dispatchers.IO) {
-        val useKg = settingsRepo.useKg.first()
+        val weightUnit = settingsRepo.weightUnit.first()
         val memberSinceMs = settingsRepo.memberSinceMs.first()
         val zone = ZoneId.systemDefault()
         val nowMs = clock.nowMs()
@@ -169,7 +169,7 @@ class ProfileRepository @Inject constructor(
                 activeWeeks = sessions.mapTo(mutableSetOf()) { weekKey(it.startedAt, zone) }.size,
                 trophyPoints = trophyPoints
             ),
-            useKg
+            weightUnit
         )
         val rank = RankLadder.rankFor(xp.total)
 
@@ -184,18 +184,18 @@ class ProfileRepository @Inject constructor(
                 weeklyVolumeLb = recent.sumOf { it.totalVolumeLb ?: 0.0 } / weeks90,
                 bestE1rmLb = bestE1rmD.await()
             ),
-            useKg
+            weightUnit
         )
 
         // ── Trophy case ───────────────────────────────────────────────────────────
         val snapshot = snapshotD.await()
-        val trophyGrid = curatedTrophyGrid(unlockedIds, unlockedDates, snapshot, useKg)
+        val trophyGrid = curatedTrophyGrid(unlockedIds, unlockedDates, snapshot, weightUnit)
         val closestTrophy = snapshot?.let { snap ->
             Trophies.all.filter { it.id !in unlockedIds }
                 .mapNotNull { t -> TrophyEvaluator.progressFraction(t.unlock, snap)?.let { t to it } }
                 .filter { it.second > 0f }
                 .maxByOrNull { it.second }
-                ?.let { (t, _) -> TrophyEvaluator.progressRemaining(t.unlock, snap, useKg)?.let { "$it away from ${t.name}" } }
+                ?.let { (t, _) -> TrophyEvaluator.progressRemaining(t.unlock, snap, weightUnit)?.let { "$it away from ${t.name}" } }
         }
 
         ProfileData(
@@ -250,7 +250,7 @@ class ProfileRepository @Inject constructor(
      * the [HARDEST_DONE] hardest unlocked trophies (by tier points), then locked trophies ranked by
      * progress (almost-complete first, 0%-progress fillers after) up to [TROPHY_HIGHLIGHTS] cells.
      */
-    private fun curatedTrophyGrid(unlockedIds: Set<String>, unlockedDates: Map<String, Long>, snapshot: TrophyStatsSnapshot?, useKg: Boolean): List<TrophyCell> {
+    private fun curatedTrophyGrid(unlockedIds: Set<String>, unlockedDates: Map<String, Long>, snapshot: TrophyStatsSnapshot?, weightUnit: com.forge.app.domain.units.WeightUnit): List<TrophyCell> {
         val hardestDone = Trophies.all
             .filter { it.id in unlockedIds }
             .sortedWith(compareByDescending<Trophy> { it.tier.points }.thenBy { it.name })
@@ -265,7 +265,7 @@ class ProfileRepository @Inject constructor(
             .map { (t, p) ->
                 TrophyCell(
                     t.icon, unlocked = false, progress = p, name = t.name, description = t.description,
-                    progressLabel = snapshot?.let { TrophyEvaluator.progressHint(t.unlock, it, useKg) },
+                    progressLabel = snapshot?.let { TrophyEvaluator.progressHint(t.unlock, it, weightUnit) },
                     variant = Trophies.variantFor(t.id)
                 )
             }

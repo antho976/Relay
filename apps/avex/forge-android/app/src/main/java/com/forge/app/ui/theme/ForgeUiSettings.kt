@@ -1,6 +1,7 @@
 package com.forge.app.ui.theme
 
 import androidx.compose.runtime.compositionLocalOf
+import com.forge.app.domain.units.WeightUnit
 
 /**
  * App-level UI preferences propagated from MainActivity via [LocalForgeSettings].
@@ -9,7 +10,8 @@ import androidx.compose.runtime.compositionLocalOf
  */
 data class ForgeUiSettings(
     val amoledMode: Boolean = false,
-    val useKg: Boolean = false,
+    /** Weight display unit (GYMAP-72) — lb | kg | st. Read this everywhere weight is shown. */
+    val weightUnit: WeightUnit = WeightUnit.LB,
     /** Cardio distance/pace unit — true = miles, false = km. Derives from the weight unit when unset. */
     val useMiles: Boolean = false,
     val hiddenOverviewTiles: Set<String> = emptySet(),
@@ -20,14 +22,15 @@ data class ForgeUiSettings(
     val firstDayMonday: Boolean = true,
     val hapticStrength: String = "strong",   // "off" | "light" | "medium" | "strong"
     val keepScreenOn: Boolean = true,        // hold the display awake while logging (GYMAP-74)
-    val quietHoursEnabled: Boolean = false,
-    val quietHoursStart: Int = 22,
-    val quietHoursEnd: Int = 7,
     val accentColorHex: String = "",         // empty = AccentNavy default
     val accentEnabled: Boolean = true,       // false = monochrome (neutral highlights, no accent)
     val plateWeightLb: Double = 15.0,        // weight of one plate (lb) for plate-loaded exercises
     /** True once the user has finished a workout — first-touch onboarding cards hide once set. */
     val firstWorkoutDone: Boolean = false
-)
+) {
+    /** Legacy convenience — true only for kilograms (lb/stones read false). Prefer [weightUnit];
+     *  kept so sites not yet migrated off the boolean unit flag still compile. */
+    val useKg: Boolean get() = weightUnit == WeightUnit.KG
+}
 
 val LocalForgeSettings = compositionLocalOf { ForgeUiSettings() }

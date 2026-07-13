@@ -110,7 +110,7 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
         )
     }
 
-    val useKg = LocalForgeSettings.current.useKg
+    val weightUnit = LocalForgeSettings.current.weightUnit
     val firstWorkoutDone = LocalForgeSettings.current.firstWorkoutDone
 
     // Single-exercise focus. The shown exercise is an explicit selection — it does NOT
@@ -261,13 +261,13 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
                                 onLogSet = { weight, reps, durationSeconds ->
                                     // Plate exercises enter a plate COUNT (not a display-unit weight),
                                     // so skip the kg→lb conversion — WeightParser turns the count into lb.
-                                    val stored = if (ex.plan.unit == ExerciseUnit.PLATES) weight else toStoredWeightText(weight, useKg)
+                                    val stored = if (ex.plan.unit == ExerciseUnit.PLATES) weight else toStoredWeightText(weight, weightUnit)
                                     onEvent(DayUiEvent.LogSet(id, stored, reps, durationSeconds))
                                 },
                                 onDeleteSet = { setId -> onEvent(DayUiEvent.DeleteSet(setId)) },
                                 // Same unit handling as logging — plate counts pass through, free weights convert.
                                 onEditSet = { setId, w, r ->
-                                    val stored = if (ex.plan.unit == ExerciseUnit.PLATES) w else toStoredWeightText(w, useKg)
+                                    val stored = if (ex.plan.unit == ExerciseUnit.PLATES) w else toStoredWeightText(w, weightUnit)
                                     onEvent(DayUiEvent.EditSet(setId, stored, r))
                                 },
                                 onLogSameAsLast = { setId -> onEvent(DayUiEvent.LogSameAsLast(id, setId)) },

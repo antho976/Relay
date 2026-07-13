@@ -75,12 +75,12 @@ fun SummarySheet(
 
             Spacer(Modifier.height(20.dp))
 
-            val useKg = LocalForgeSettings.current.useKg
+            val weightUnit = LocalForgeSettings.current.weightUnit
             val useMiles = LocalForgeSettings.current.useMiles
             // Stats strip
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
                 if (isGym && volumeLb != null && volumeLb > 0) {
-                    SummaryStat(value = formatVolume(volumeLb, useKg), label = "VOLUME", muted = muted, onBg = onBg)
+                    SummaryStat(value = formatVolume(volumeLb, weightUnit), label = "VOLUME", muted = muted, onBg = onBg)
                 }
                 if (durationMin != null && durationMin > 0) {
                     SummaryStat(value = "$durationMin min", label = "DURATION", muted = muted, onBg = onBg)
@@ -125,7 +125,7 @@ fun SummarySheet(
                             modifier = Modifier.weight(1f)
                         )
                         val setInfo = if (ex.topWeightLb != null && ex.topWeightLb > 0)
-                            "${ex.setCount} × ${formatWeight(ex.topWeightLb, useKg)}"
+                            "${ex.setCount} × ${formatWeight(ex.topWeightLb, weightUnit)}"
                         else "${ex.setCount} sets"
                         Text(setInfo, style = MaterialTheme.typography.labelSmall,
                             color = muted, fontSize = 10.sp)

@@ -284,13 +284,13 @@ fun DayScreen(
     state.warmupSuggesterForExerciseId?.let { exerciseId ->
         val ex = state.exercises.firstOrNull { it.plan.id == exerciseId }
         val workingWeight = ex?.loggedSets?.lastOrNull()?.weightLb ?: ex?.prefillWeight?.toDoubleOrNull()
-        WarmupSuggesterDialog(workingWeightLb = workingWeight, useKg = LocalForgeSettings.current.useKg,
+        WarmupSuggesterDialog(workingWeightLb = workingWeight, weightUnit = LocalForgeSettings.current.weightUnit,
             onDismiss = { viewModel.onEvent(DayUiEvent.DismissTrainingHelper) })
     }
     state.plateCalculatorForExerciseId?.let { exerciseId ->
         val ex = state.exercises.firstOrNull { it.plan.id == exerciseId }
         val workingWeight = ex?.loggedSets?.lastOrNull()?.weightLb ?: ex?.prefillWeight?.toDoubleOrNull()
-        PlateCalculatorDialog(initialWeightLb = workingWeight, useKg = LocalForgeSettings.current.useKg,
+        PlateCalculatorDialog(initialWeightLb = workingWeight, weightUnit = LocalForgeSettings.current.weightUnit,
             onDismiss = { viewModel.onEvent(DayUiEvent.DismissTrainingHelper) })
     }
 

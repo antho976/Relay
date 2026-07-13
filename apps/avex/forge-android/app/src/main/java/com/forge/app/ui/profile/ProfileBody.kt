@@ -44,8 +44,8 @@ internal fun BodySection(
     muted: Color,
     accent: Color
 ) {
-    val useKg = LocalForgeSettings.current.useKg
-    val unit = unitLabel(useKg)
+    val weightUnit = LocalForgeSettings.current.weightUnit
+    val unit = unitLabel(weightUnit)
     SectionHeader("BODYWEIGHT", muted, action = "+ log", onAction = onLog)
     if (entries.isEmpty()) {
         // Just a quiet hint under the header — the "+ log" action IS the entry point. A bold CTA row
@@ -53,7 +53,7 @@ internal fun BodySection(
         InlineEmptyHint("Log a weigh-in and your weight trend charts here.", muted)
         return
     }
-    val display = remember(entries, useKg) { entries.map { toDisplayWeight(it.weightLb, useKg) } }
+    val display = remember(entries, weightUnit) { entries.map { toDisplayWeight(it.weightLb, weightUnit) } }
     // The smoothed trend the arrow + chart line read from — raw weigh-ins swing day to day (water).
     val ma = remember(entries, display) { sevenDayMovingAverage(entries, display) }
     // Trend vs the smoothed weight ~30 days ago (falls back to the previous point). Off the moving
@@ -86,7 +86,7 @@ internal fun BodySection(
     Spacer(Modifier.height(2.dp))
     Text("${unit.uppercase()} NOW", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
     if (display.size >= 2) {
-        val goalDisplay = goalLb?.let { toDisplayWeight(it, useKg) }
+        val goalDisplay = goalLb?.let { toDisplayWeight(it, weightUnit) }
         Spacer(Modifier.height(14.dp))
         // The 7-day average is the bold trend line; the raw weigh-ins are the muted scatter around it;
         // the goal (when set) is the dashed target the range always keeps on-canvas.

@@ -150,7 +150,7 @@ private fun draftToItems(draft: FreestyleDraft): List<FsExercise> =
 /** Map a picked past-session template into the logger's in-memory shape (GYMAP-48): sets pre-filled
  *  from that session and converted to the display unit, name/muscle/bodyweight re-derived from the
  *  library, and any move no longer in the library dropped — mirrors [draftToItems]. */
-private fun List<FreestyleTemplateExercise>.toItems(useKg: Boolean): List<FsExercise> =
+private fun List<FreestyleTemplateExercise>.toItems(weightUnit: com.forge.app.domain.units.WeightUnit): List<FsExercise> =
     mapNotNull { te ->
         val def = ExerciseLibrary.byId(te.libId) ?: return@mapNotNull null
         val bodyweight = def.unit == ExerciseUnit.BODYWEIGHT
@@ -163,7 +163,7 @@ private fun List<FreestyleTemplateExercise>.toItems(useKg: Boolean): List<FsExer
             // A timed template seeds structure only — the hold time is re-entered (templates carry no duration yet).
             sets = te.sets.map { s ->
                 FsSet(
-                    weight = if (bodyweight) "" else s.weightLb?.let { weightInputValue(it, useKg) } ?: "",
+                    weight = if (bodyweight) "" else s.weightLb?.let { weightInputValue(it, weightUnit) } ?: "",
                     reps = s.reps.toString()
                 )
             }.ifEmpty { listOf(FsSet()) }
@@ -171,10 +171,10 @@ private fun List<FreestyleTemplateExercise>.toItems(useKg: Boolean): List<FsExer
     }
 
 /** Volume of one set in lb (weight × reps); bodyweight moves contribute no external load. */
-private fun FsExercise.setVolumeLb(set: FsSet, useKg: Boolean): Double {
+private fun FsExercise.setVolumeLb(set: FsSet, weightUnit: com.forge.app.domain.units.WeightUnit): Double {
     if (bodyweight) return 0.0
     val reps = set.reps.toIntOrNull() ?: return 0.0
-    val w = parseToLb(set.weight, useKg) ?: return 0.0
+    val w = parseToLb(set.weight, weightUnit) ?: return 0.0
     return w * reps
 }
 
@@ -226,8 +226,8 @@ fun FreestyleLogScreen(
     viewModel: FreestyleLogViewModel = hiltViewModel(),
     templateViewModel: FreestyleTemplateViewModel = hiltViewModel()
 ) {
-    val useKg by viewModel.useKg.collectAsStateWithLifecycle()
-    val unitLabel = if (useKg) "kg" else "lb"
+    val weightUnit by viewModel.weightUnit.collectAsStateWithLifecycle()
+    val unitLabel = com.forge.app.domain.units.unitLabel(weightUnit)
     var items by remember { mutableStateOf<List<FsExercise>>(emptyList()) }
     var showBrowser by remember { mutableStateOf(false) }
     // "Start from a past workout" (GYMAP-48): every finished session as a reusable template. Offered
@@ -286,7 +286,7 @@ fun FreestyleLogScreen(
         onBack()
     }
 
-    val totalVolumeLb = items.sumOf { ex -> ex.sets.sumOf { ex.setVolumeLb(it, useKg) } }
+    val totalVolumeLb = items.sumOf { ex -> ex.sets.sumOf { ex.setVolumeLb(it, weightUnit) } }
     // A set counts as logged when it has reps (rep set) OR a parseable hold time (timed set, GYMAP-51).
     val loggedSets = items.sumOf { ex ->
         ex.sets.count { if (ex.timed) (parseHold(it.hold) ?: 0) > 0 else (it.reps.toIntOrNull() ?: 0) > 0 }
@@ -296,7 +296,7 @@ fun FreestyleLogScreen(
     fun save() {
         val payload = items.mapNotNull { ex ->
             val sets = ex.sets.mapNotNull { s ->
-                val weightLb = if (ex.bodyweight) null else parseToLb(s.weight, useKg)
+                val weightLb = if (ex.bodyweight) null else parseToLb(s.weight, weightUnit)
                 if (ex.timed) {
                     // Timed hold: valid when the hold time parses to > 0; reps is 0 and ignored.
                     val dur = parseHold(s.hold)?.takeIf { it > 0 } ?: return@mapNotNull null
@@ -394,7 +394,7 @@ fun FreestyleLogScreen(
                             exerciseCount = items.size,
                             setCount = loggedSets,
                             totalVolumeLb = totalVolumeLb,
-                            useKg = useKg,
+                            weightUnit = weightUnit,
                             empty = items.isEmpty()
                         )
                     }
@@ -405,7 +405,7 @@ fun FreestyleLogScreen(
                             exercise = ex,
                             dragging = dragging,
                             unitLabel = unitLabel,
-                            useKg = useKg,
+                            weightUnit = weightUnit,
                             lastSetsProvider = { id -> viewModel.lastSets(id) },
                             pinnedNoteProvider = { id -> viewModel.pinnedNote(id) },
                             onRemove = { items = items.filterIndexed { idx, _ -> idx != i } },
@@ -448,7 +448,7 @@ fun FreestyleLogScreen(
                 onPick = { sessionId ->
                     scope.launch {
                         // Seed the log from the past session and (re)start the clock from now.
-                        items = templateViewModel.loadTemplate(sessionId).toItems(useKg)
+                        items = templateViewModel.loadTemplate(sessionId).toItems(weightUnit)
                         openedAtMs = System.currentTimeMillis()
                         showTemplates = false
                     }
@@ -480,7 +480,7 @@ private fun FsSessionHeader(
     exerciseCount: Int,
     setCount: Int,
     totalVolumeLb: Double,
-    useKg: Boolean,
+    weightUnit: com.forge.app.domain.units.WeightUnit,
     empty: Boolean
 ) {
     val cs = MaterialTheme.colorScheme
@@ -499,7 +499,7 @@ private fun FsSessionHeader(
                 color = cs.onSurfaceVariant
             )
         } else {
-            val vol = if (totalVolumeLb > 0) " · ${formatWeight(totalVolumeLb, useKg)} volume" else ""
+            val vol = if (totalVolumeLb > 0) " · ${formatWeight(totalVolumeLb, weightUnit)} volume" else ""
             Text(
                 "$exerciseCount exercise${if (exerciseCount == 1) "" else "s"} · $setCount set${if (setCount == 1) "" else "s"}$vol",
                 style = MaterialTheme.typography.bodyMedium,
@@ -555,7 +555,7 @@ private fun FsExerciseCard(
     exercise: FsExercise,
     dragging: Boolean,
     unitLabel: String,
-    useKg: Boolean,
+    weightUnit: com.forge.app.domain.units.WeightUnit,
     lastSetsProvider: suspend (String) -> List<LoggedSet>,
     pinnedNoteProvider: suspend (String) -> String,
     onRemove: () -> Unit,
@@ -566,8 +566,12 @@ private fun FsExerciseCard(
 ) {
     val cs = MaterialTheme.colorScheme
     val setsDone = exercise.sets.count { (it.reps.toIntOrNull() ?: 0) > 0 }
-    val volumeLb = exercise.sets.sumOf { exercise.setVolumeLb(it, useKg) }
-    val weightStep = if (useKg) 2.5 else 5.0
+    val volumeLb = exercise.sets.sumOf { exercise.setVolumeLb(it, weightUnit) }
+    val weightStep = when (weightUnit) {
+        com.forge.app.domain.units.WeightUnit.KG -> 2.5
+        com.forge.app.domain.units.WeightUnit.ST -> 0.5   // half a stone keeps the single-decimal field clean
+        else -> 5.0
+    }
 
     // Last performance for this move — loaded once, powers the "copy last time" panel.
     var lastSets by remember(exercise.libId) { mutableStateOf<List<LoggedSet>>(emptyList()) }
@@ -606,7 +610,7 @@ private fun FsExerciseCard(
             Spacer(Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(exercise.name, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = cs.onSurface)
-                val vol = if (volumeLb > 0) " · ${formatWeight(volumeLb, useKg)}" else ""
+                val vol = if (volumeLb > 0) " · ${formatWeight(volumeLb, weightUnit)}" else ""
                 Text(
                     "${exercise.muscle.displayName.uppercase()} · $setsDone SET${if (setsDone == 1) "" else "S"}$vol",
                     style = MaterialTheme.typography.labelMedium,
@@ -651,13 +655,13 @@ private fun FsExerciseCard(
             ) {
                 LastTimePanel(
                     sets = lastSets,
-                    useKg = useKg,
+                    weightUnit = weightUnit,
                     timed = exercise.timed,
                     onCopy = {
                         onReplaceSets(
                             lastSets.map { s ->
                                 FsSet(
-                                    weight = if (exercise.timed) "" else s.weightLb?.let { lb -> weightInputValue(lb, useKg) } ?: "",
+                                    weight = if (exercise.timed) "" else s.weightLb?.let { lb -> weightInputValue(lb, weightUnit) } ?: "",
                                     reps = if (exercise.timed) "" else s.reps.toString(),
                                     // Legacy holds store the seconds in `reps` (null duration column), so
                                     // fall back to that when copying rather than seeding an empty hold.
@@ -787,14 +791,14 @@ private fun FsExerciseCard(
 
 /** The last session's sets as tappable-to-copy chips + a copy CTA that fills this exercise. */
 @Composable
-private fun LastTimePanel(sets: List<LoggedSet>, useKg: Boolean, timed: Boolean = false, onCopy: () -> Unit) {
+private fun LastTimePanel(sets: List<LoggedSet>, weightUnit: com.forge.app.domain.units.WeightUnit, timed: Boolean = false, onCopy: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     Column(modifier = Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 4.dp)) {
         Text("LAST TIME", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, fontSize = 9.sp)
         Spacer(Modifier.height(6.dp))
         FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             sets.forEach { s ->
-                val w = s.weightLb?.let { formatWeight(it, useKg) } ?: s.weightText.ifBlank { "BW" }
+                val w = s.weightLb?.let { formatWeight(it, weightUnit) } ?: s.weightText.ifBlank { "BW" }
                 Text(
                     // Timed holds show their held time; every other set shows "weight × reps". Legacy
                     // holds (e.g. plank logged before the duration column) carry the seconds in `reps`,

@@ -33,6 +33,7 @@ import androidx.compose.ui.unit.sp
 import com.forge.app.data.db.entities.BodyweightEntry
 import com.forge.app.data.repo.ProgressPhoto
 import com.forge.app.domain.photo.PhotoPose
+import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.domain.units.formatWeightDelta
 import com.forge.app.ui.common.bounceClick
@@ -79,7 +80,7 @@ internal fun ProgressBand(
     before: ProgressPhoto?,
     after: ProgressPhoto?,
     zone: ZoneId,
-    useKg: Boolean,
+    weightUnit: WeightUnit,
     fileFor: (ProgressPhoto) -> File,
     onCompare: (ProgressPhoto, ProgressPhoto) -> Unit,
     onAdd: () -> Unit,
@@ -91,7 +92,7 @@ internal fun ProgressBand(
 
     Row(mod, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         BandFrame("FIRST", before, zone, fileFor, muted, outline, Modifier.weight(1f))
-        BandMeta(before, after, zone, useKg, pair, muted, accent, onBg)
+        BandMeta(before, after, zone, weightUnit, pair, muted, accent, onBg)
         BandFrame("NOW", after, zone, fileFor, muted, outline, Modifier.weight(1f))
     }
     if (!pair) {
@@ -147,7 +148,7 @@ private fun BandMeta(
     before: ProgressPhoto?,
     after: ProgressPhoto?,
     zone: ZoneId,
-    useKg: Boolean,
+    weightUnit: WeightUnit,
     pair: Boolean,
     muted: Color,
     accent: Color,
@@ -163,7 +164,7 @@ private fun BandMeta(
             if (bw != null && aw != null) {
                 val diff = aw - bw
                 Text(
-                    if (kotlin.math.abs(diff) < 0.1) "SAME WT" else formatWeightDelta(diff, useKg),
+                    if (kotlin.math.abs(diff) < 0.1) "SAME WT" else formatWeightDelta(diff, weightUnit),
                     style = MaterialTheme.typography.labelMedium,
                     color = if (kotlin.math.abs(diff) < 0.1) muted else onBg
                 )
@@ -183,7 +184,7 @@ private fun BandMeta(
 internal fun BodyweightSparkline(
     entries: List<BodyweightEntry>,
     photos: List<ProgressPhoto>,
-    useKg: Boolean,
+    weightUnit: WeightUnit,
     onBg: Color, muted: Color, accent: Color
 ) {
     if (entries.size < 2) return
@@ -202,10 +203,10 @@ internal fun BodyweightSparkline(
         Column {
             Text("BODYWEIGHT", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
             Spacer(Modifier.height(2.dp))
-            Text(formatWeight(latest, useKg), style = MaterialTheme.typography.headlineSmall, color = onBg)
+            Text(formatWeight(latest, weightUnit), style = MaterialTheme.typography.headlineSmall, color = onBg)
             if (kotlin.math.abs(diff) >= 0.1) {
                 Text(
-                    "${formatWeightDelta(diff, useKg)} since first",
+                    "${formatWeightDelta(diff, weightUnit)} since first",
                     style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp
                 )
             }

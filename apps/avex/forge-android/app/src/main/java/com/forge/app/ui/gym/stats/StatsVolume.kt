@@ -22,6 +22,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.program.MuscleGroup
@@ -174,14 +175,14 @@ private fun tonnageLabel(v: Double, unit: String): String =
 @Composable
 internal fun ColumnScope.TonnageTrendContent(
     weeklyTonnage: List<WeeklyTonnage>,
-    useKg: Boolean,
+    weightUnit: WeightUnit,
     c: StatsColors
 ) {
     if (weeklyTonnage.size < 2) return
-    val display = weeklyTonnage.map { toDisplayWeight(it.volumeLb, useKg) }
+    val display = weeklyTonnage.map { toDisplayWeight(it.volumeLb, weightUnit) }
     val lo = display.min()
     val hi = display.max()
-    val unit = unitLabel(useKg)
+    val unit = unitLabel(weightUnit)
     LineChart(
         values = display,
         lineColor = c.accent,

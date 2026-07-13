@@ -46,11 +46,14 @@ private fun trimWeight(v: Double): String =
 @Composable
 fun WarmupSuggesterDialog(
     workingWeightLb: Double?,
-    useKg: Boolean,
+    weightUnit: com.forge.app.domain.units.WeightUnit,
     onDismiss: () -> Unit
 ) {
-    val unit = unitLabel(useKg)
-    var input by remember { mutableStateOf(workingWeightLb?.let { weightInputValue(it, useKg) } ?: "") }
+    // Warmup percentages step in plate-friendly increments, so this stays a kg-or-lb view (stones has
+    // no plate denominations) — stones users see the lb figures they'd actually load.
+    val metric = weightUnit.isMetric
+    val unit = unitLabel(metric)
+    var input by remember { mutableStateOf(workingWeightLb?.let { weightInputValue(it, metric) } ?: "") }
     val working = input.toDoubleOrNull()
 
     AlertDialog(
@@ -124,14 +127,17 @@ private val STANDARD_PLATES_KG = listOf(25.0, 20.0, 15.0, 10.0, 5.0, 2.5, 1.25)
 @Composable
 fun PlateCalculatorDialog(
     initialWeightLb: Double? = null,
-    useKg: Boolean,
+    weightUnit: com.forge.app.domain.units.WeightUnit,
     onDismiss: () -> Unit
 ) {
-    val unit = unitLabel(useKg)
-    val plateSet = if (useKg) STANDARD_PLATES_KG else STANDARD_PLATES_LB
-    val heavyBar = if (useKg) 20.0 else 45.0
-    val lightBar = if (useKg) 15.0 else 35.0
-    var input by remember { mutableStateOf(initialWeightLb?.let { weightInputValue(it, useKg) } ?: "") }
+    // Plates are physically kg or lb — stones has no denomination, so a stones user calculates in the
+    // lb figures they'd actually load. Metric = kg; everything else uses the lb bar + plates.
+    val metric = weightUnit.isMetric
+    val unit = unitLabel(metric)
+    val plateSet = if (metric) STANDARD_PLATES_KG else STANDARD_PLATES_LB
+    val heavyBar = if (metric) 20.0 else 45.0
+    val lightBar = if (metric) 15.0 else 35.0
+    var input by remember { mutableStateOf(initialWeightLb?.let { weightInputValue(it, metric) } ?: "") }
     var useHeavyBar by remember { mutableStateOf(true) }
     val bar = if (useHeavyBar) heavyBar else lightBar
     val target = input.toDoubleOrNull()

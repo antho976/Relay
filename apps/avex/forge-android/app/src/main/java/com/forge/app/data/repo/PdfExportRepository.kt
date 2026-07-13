@@ -51,7 +51,7 @@ class PdfExportRepository @Inject constructor(
 
     suspend fun exportSessionPdf(sessionId: Long): File? {
         val session = sessionDao.get(sessionId) ?: return null
-        val useKg = settingsRepo.useKg.first()
+        val weightUnit = settingsRepo.weightUnit.first()
         val useMiles = settingsRepo.useMiles.first()
         val exercises = loggedExerciseDao.forSession(sessionId)
         val dayName = Program.dayDisplayName(session.dayKey)
@@ -80,7 +80,7 @@ class PdfExportRepository @Inject constructor(
         canvas.drawText("$dayName · $dateStr · $timeStr", margin, y, bodyPaint)
         y += 16f
         if (durationMin != null) {
-            canvas.drawText("Duration: ${durationMin}m  ·  Volume: ${formatVolume(session.totalVolumeLb ?: 0.0, useKg)}  ·  PRs: ${session.prCount}", margin, y, bodyPaint)
+            canvas.drawText("Duration: ${durationMin}m  ·  Volume: ${formatVolume(session.totalVolumeLb ?: 0.0, weightUnit)}  ·  PRs: ${session.prCount}", margin, y, bodyPaint)
             y += 16f
         }
         if (!mood.isNullOrBlank() || session.tags.isNotBlank()) {
@@ -106,7 +106,7 @@ class PdfExportRepository @Inject constructor(
             y += 16f
             sets.forEachIndexed { i, set ->
                 val rpe = set.rpe?.let { r -> "  @ RPE " + (if (r % 1.0 == 0.0) "${r.toInt()}" else "%.1f".format(r)) } ?: ""
-                val wLabel = if (set.weightLb != null && set.weightLb > 0) formatWeight(set.weightLb, useKg) else set.weightText
+                val wLabel = if (set.weightLb != null && set.weightLb > 0) formatWeight(set.weightLb, weightUnit) else set.weightText
                 canvas.drawText("  Set ${i + 1}: $wLabel × ${set.reps}$rpe", margin + 8, y, bodyPaint)
                 y += 13f
             }

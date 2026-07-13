@@ -170,7 +170,9 @@ class OnboardingViewModel @Inject constructor(
             }
             // Set ONBOARDING_DONE last — it flips the UI from onboarding to home, so the freshly
             // generated program is already live when the home screen first composes.
-            settingsRepo.completeOnboarding(name, useKg, effectiveGoal, bodyweightLb, useMiles)
+            settingsRepo.completeOnboarding(
+                name, com.forge.app.domain.units.WeightUnit.ofKg(useKg), effectiveGoal, bodyweightLb, useMiles
+            )
         }
     }
 

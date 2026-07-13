@@ -57,9 +57,11 @@ import androidx.compose.ui.unit.sp
 import java.util.Locale
 import com.forge.app.data.db.entities.LoggedSet
 import com.forge.app.domain.units.MAX_HOLD_SECONDS
+import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.formatHold
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.domain.units.parseToLb
+import com.forge.app.domain.units.unitLabel
 import com.forge.app.domain.units.weightInputValue
 import com.forge.app.ui.theme.LocalForgeSettings
 
@@ -107,13 +109,13 @@ fun SetInputRow(
     onRepeatLastSet: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
-    val useKg = LocalForgeSettings.current.useKg
+    val weightUnit = LocalForgeSettings.current.weightUnit
     val plateLb = LocalForgeSettings.current.plateWeightLb
     // Prefill weight + reps with what you did on THIS set last time (#8) — your previous numbers,
     // not the plan target. Plate exercises seed a plate count. First time on the exercise → empty
     // weight + the plan's target reps. Re-seeds per set (keyed on the set number + the seed value).
     val seedWeight = priorSetForActiveRow?.let { p ->
-        p.weightLb?.let { lb -> if (isPlates) formatPlateCount(lb / plateLb) else weightInputValue(lb, useKg) } ?: p.weightText
+        p.weightLb?.let { lb -> if (isPlates) formatPlateCount(lb / plateLb) else weightInputValue(lb, weightUnit) } ?: p.weightText
     } ?: prefillWeight.orEmpty()
     val seedReps = priorSetForActiveRow?.reps?.toString() ?: targetReps?.toString().orEmpty()
     // Re-seed only when the SET NUMBER changes (a new set), not when the derived seed value shifts —
@@ -212,9 +214,9 @@ fun SetInputRow(
         else reps.toIntOrNull()?.let { it > 0 } == true && (isBodyweight || weight.isNotBlank())
     }
 
-    val prRepsHint = remember(weight, priorSets, useKg) {
+    val prRepsHint = remember(weight, priorSets, weightUnit) {
         // The field holds a value in the display unit; convert to lb for the PR comparison.
-        val weightLb = parseToLb(weight, useKg) ?: return@remember null
+        val weightLb = parseToLb(weight, weightUnit) ?: return@remember null
         repsNeededForPr(priorSets, weightLb)
     }
 
@@ -260,7 +262,7 @@ fun SetInputRow(
                             // Plate exercises show "PLATES" (the value is a plate count); free weights
                             // show "WEIGHT · LB/KG". (Unit is changed in Settings, not by tapping here — #5.)
                             Text(
-                                if (isPlates) "PLATES" else "WEIGHT${if (useKg) " · KG" else " · LB"}",
+                                if (isPlates) "PLATES" else "WEIGHT · ${unitLabel(weightUnit).uppercase()}",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = muted,
                                 fontSize = 9.sp
@@ -305,7 +307,7 @@ fun SetInputRow(
                             // Plate exercises read as a plate count, never the lb equivalent (#9) — so
                             // tapping autofills the plate COUNT into the plate field, not its poundage.
                             val priorDisplay = prior.weightLb?.let { lb ->
-                                if (isPlates) "${formatPlateCount(lb / plateLb)} pl" else formatWeight(lb, useKg)
+                                if (isPlates) "${formatPlateCount(lb / plateLb)} pl" else formatWeight(lb, weightUnit)
                             } ?: prior.weightText
                             Text(
                                 // The ghost to beat — tap to autofill the weight only so the user
@@ -321,7 +323,7 @@ fun SetInputRow(
                                         "Autofill last session's weight"
                                     ) {
                                         weight = prior.weightLb?.let { lb ->
-                                            if (isPlates) formatPlateCount(lb / plateLb) else weightInputValue(lb, useKg)
+                                            if (isPlates) formatPlateCount(lb / plateLb) else weightInputValue(lb, weightUnit)
                                         } ?: prior.weightText
                                         // Reps intentionally left for the user — aim for one more.
                                     }
@@ -337,10 +339,11 @@ fun SetInputRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    val weightStep = when { isPlates -> 0.5; useKg -> 2.5; else -> 5.0 }
+                    // Stones steps by half a stone so the single-decimal field stays clean; kg 2.5, lb 5.
+                    val weightStep = when { isPlates -> 0.5; weightUnit == WeightUnit.KG -> 2.5; weightUnit == WeightUnit.ST -> 0.5; else -> 5.0 }
                     if (!isBodyweight) {
                         StepperPill(
-                            label = when { isPlates -> "PL"; useKg -> "KG"; else -> "LB" },
+                            label = if (isPlates) "PL" else unitLabel(weightUnit).uppercase(),
                             onMinus = { stepWeight(-weightStep) },
                             onPlus = { stepWeight(weightStep) }
                         )

@@ -45,6 +45,9 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
     val weightLauncher = rememberLauncherForActivityResult(
         contract = PermissionController.createRequestPermissionResultContract()
     ) { viewModel.refresh() }
+    val bodyFatLauncher = rememberLauncherForActivityResult(
+        contract = PermissionController.createRequestPermissionResultContract()
+    ) { viewModel.refresh() }
     val calorieLauncher = rememberLauncherForActivityResult(
         contract = PermissionController.createRequestPermissionResultContract()
     ) { viewModel.refresh() }
@@ -56,9 +59,10 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
     ) { viewModel.refresh() }
 
     val sleepConnected = state.granted && state.available
-    // Row order = rail order: sleep · bodyweight · calories · steps · routes.
+    // Row order = rail order: sleep · bodyweight · body fat · calories · steps · routes.
     val railStates = listOf(
-        sleepConnected, state.weightGranted, state.calorieGranted, state.stepsGranted, state.exerciseGranted
+        sleepConnected, state.weightGranted, state.bodyFatGranted,
+        state.calorieGranted, state.stepsGranted, state.exerciseGranted
     )
     val connectable = state.available && !state.loading
 
@@ -128,6 +132,27 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
             )
             SettingsActionLink("Import latest weight →") { viewModel.importNow() }
             state.importMessage?.let {
+                Text(
+                    it, style = MaterialTheme.typography.bodySmall, color = muted,
+                    modifier = Modifier.padding(horizontal = 24.dp)
+                )
+            }
+        }
+        RecoveryRow(
+            title = "Body fat sync",
+            explainer = "Pulls body fat % from a smart scale, and writes yours back both ways.",
+            connected = state.bodyFatGranted,
+            connectable = connectable,
+            onConnect = { bodyFatLauncher.launch(viewModel.bodyFatPermissions) }
+        )
+        if (state.bodyFatGranted) {
+            RecoveryToggleRow(
+                label = "Write my body fat to Health Connect",
+                checked = state.writeBodyFat,
+                onCheckedChange = { viewModel.setWriteBodyFat(it) }
+            )
+            SettingsActionLink("Import latest body fat →") { viewModel.importBodyFatNow() }
+            state.bodyFatImportMessage?.let {
                 Text(
                     it, style = MaterialTheme.typography.bodySmall, color = muted,
                     modifier = Modifier.padding(horizontal = 24.dp)

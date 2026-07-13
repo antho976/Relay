@@ -212,7 +212,7 @@ internal fun CardioGoalsSection(
             preview.forEachIndexed { i, g ->
                 GoalProgressLine(
                     title = customGoalTitle(g),
-                    valueLine = customGoalValueLine(g, settings.useKg, settings.useMiles),
+                    valueLine = customGoalValueLine(g, settings.weightUnit, settings.useMiles),
                     fraction = g.fraction,
                     achieved = g.achieved,
                     index = i,

@@ -62,7 +62,7 @@ internal fun customGoalTitle(g: ExtendedGoalRepository.Progress): String {
 }
 
 /** "current / target unit" (or "now → goal" for a bodyweight level). Reused by the Home goal lines. */
-internal fun customGoalValueLine(g: ExtendedGoalRepository.Progress, useKg: Boolean, useMiles: Boolean): String =
+internal fun customGoalValueLine(g: ExtendedGoalRepository.Progress, weightUnit: com.forge.app.domain.units.WeightUnit, useMiles: Boolean): String =
     when (g.metric) {
         GoalMetric.CARDIO_DISTANCE ->
             "${distanceInputValue(g.currentValue, useMiles)} / ${distanceInputValue(g.targetValue, useMiles)} ${distanceUnitLabel(useMiles)}"
@@ -71,9 +71,9 @@ internal fun customGoalValueLine(g: ExtendedGoalRepository.Progress, useKg: Bool
         GoalMetric.SESSIONS ->
             "${g.currentValue.toInt()} / ${g.targetValue.toInt()} workouts"
         GoalMetric.VOLUME ->
-            "${weightInputValue(g.currentValue, useKg)} / ${weightInputValue(g.targetValue, useKg)} ${unitLabel(useKg)}"
+            "${weightInputValue(g.currentValue, weightUnit)} / ${weightInputValue(g.targetValue, weightUnit)} ${unitLabel(weightUnit)}"
         GoalMetric.BODYWEIGHT ->
-            "${weightInputValue(g.currentValue, useKg)} → ${weightInputValue(g.targetValue, useKg)} ${unitLabel(useKg)}"
+            "${weightInputValue(g.currentValue, weightUnit)} → ${weightInputValue(g.targetValue, weightUnit)} ${unitLabel(weightUnit)}"
     }
 
 // ─── The shared goal line ───────────────────────────────────────────────────
@@ -135,10 +135,10 @@ internal fun LiftGoalRow(
     onBg: Color, muted: Color, accent: Color, outline: Color,
     onClick: () -> Unit
 ) {
-    val useKg = LocalForgeSettings.current.useKg
+    val weightUnit = LocalForgeSettings.current.weightUnit
     GoalProgressLine(
         title = g.name,
-        valueLine = "${weightInputValue(g.currentBestLb, useKg)} / ${weightInputValue(g.targetLb, useKg)} ${unitLabel(useKg)}",
+        valueLine = "${weightInputValue(g.currentBestLb, weightUnit)} / ${weightInputValue(g.targetLb, weightUnit)} ${unitLabel(weightUnit)}",
         fraction = g.fraction,
         achieved = g.achieved,
         index = index,
@@ -157,7 +157,7 @@ internal fun CustomGoalRow(
     val settings = LocalForgeSettings.current
     GoalProgressLine(
         title = customGoalTitle(g),
-        valueLine = customGoalValueLine(g, settings.useKg, settings.useMiles),
+        valueLine = customGoalValueLine(g, settings.weightUnit, settings.useMiles),
         fraction = g.fraction,
         achieved = g.achieved,
         index = index,

@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.dp
 import com.forge.app.data.repo.RecoverySignal
 import com.forge.app.data.repo.TrackedLift
 import com.forge.app.domain.adapt.DeloadAdvisor
+import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.ui.common.clickableLabeled
 import com.forge.app.ui.common.InlineEmptyHint
@@ -37,7 +38,7 @@ import kotlin.math.roundToInt
  */
 internal fun LazyListScope.coachSignalsLens(
     state: CoachViewModel.UiState,
-    useKg: Boolean,
+    weightUnit: WeightUnit,
     c: CoachColors,
     onConnectHealth: (() -> Unit)? = null
 ) {
@@ -73,7 +74,7 @@ internal fun LazyListScope.coachSignalsLens(
                         statusColor = color,
                         // The read plus its depth (§4.11): the live e1RM and how many
                         // sessions of history stand behind the trend.
-                        valueText = "${formatWeight(series.last(), useKg)} · " +
+                        valueText = "${formatWeight(series.last(), weightUnit)} · " +
                             "${lift.bouts} session${if (lift.bouts == 1) "" else "s"}",
                         series = series,
                         c = c

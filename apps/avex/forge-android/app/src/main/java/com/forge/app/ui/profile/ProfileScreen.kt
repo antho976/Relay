@@ -86,9 +86,13 @@ fun ProfileScreen(
     val bodyweightGoalLb by viewModel.bodyweightGoalLb.collectAsStateWithLifecycle()
     val weightConnected by viewModel.weightConnected.collectAsStateWithLifecycle()
     val bodyweightMessage by viewModel.bodyweightMessage.collectAsStateWithLifecycle()
+    val bodyFat by viewModel.bodyFat.collectAsStateWithLifecycle()
+    val bodyFatConnected by viewModel.bodyFatConnected.collectAsStateWithLifecycle()
+    val bodyFatMessage by viewModel.bodyFatMessage.collectAsStateWithLifecycle()
     var viewing by remember { mutableStateOf<ProgressPhoto?>(null) }
     var showXpInfo by remember { mutableStateOf(false) }
     var showWeightSheet by remember { mutableStateOf(false) }
+    var showBodyFatSheet by remember { mutableStateOf(false) }
     var showAvatarSheet by remember { mutableStateOf(false) }
     var addChooser by remember { mutableStateOf(false) }
 
@@ -238,6 +242,17 @@ fun ProfileScreen(
                         },
                         onBg = onBg, muted = muted, accent = accent
                     )
+                    // Body fat sits directly beside bodyweight — the same scale often reports both.
+                    Spacer(Modifier.height(28.dp))
+                    BodyFatSection(
+                        entries = bodyFat,
+                        onLog = {
+                            viewModel.clearBodyFatMessage()
+                            viewModel.refreshBodyFatConnected()
+                            showBodyFatSheet = true
+                        },
+                        onBg = onBg, muted = muted, accent = accent
+                    )
                     if (state.lifetimeVolumeSeriesLb.size >= 2) {
                         Spacer(Modifier.height(28.dp))
                         LifetimeVolumeGraph(state.lifetimeVolumeSeriesLb, muted, accent)
@@ -335,6 +350,23 @@ fun ProfileScreen(
             onDismiss = {
                 showWeightSheet = false
                 viewModel.clearBodyweightMessage()
+            }
+        )
+    }
+
+    if (showBodyFatSheet) {
+        BodyFatLogSheet(
+            entries = bodyFat,
+            canImport = bodyFatConnected,
+            message = bodyFatMessage,
+            onSave = { pct, date ->
+                viewModel.logBodyFat(pct, date)
+                showBodyFatSheet = false
+            },
+            onImport = { viewModel.importBodyFat() },  // stays open so the result line shows
+            onDismiss = {
+                showBodyFatSheet = false
+                viewModel.clearBodyFatMessage()
             }
         )
     }

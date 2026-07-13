@@ -51,7 +51,7 @@ internal fun SessionRow(
     val muted = cs.onSurfaceVariant
     val dayName = Program.dayDisplayName(session.dayKey)
     val durationMin = session.durationMinutes()
-    val useKg = LocalForgeSettings.current.useKg
+    val weightUnit = LocalForgeSettings.current.weightUnit
     val tags = session.tags.split(",").map { it.trim() }.filter { it.isNotEmpty() }
 
     Column(modifier = modifier.fillMaxWidth()) {
@@ -90,12 +90,12 @@ internal fun SessionRow(
             Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 if (session.totalVolumeLb != null && session.totalVolumeLb > 0) {
                     Text(
-                        formatVolume(session.totalVolumeLb, useKg),
+                        formatVolume(session.totalVolumeLb, weightUnit),
                         style = MaterialTheme.typography.bodyMedium,
                         color = cs.onBackground
                     )
                     Text(
-                        unitLabel(useKg).uppercase(),
+                        unitLabel(weightUnit).uppercase(),
                         style = MaterialTheme.typography.labelSmall,
                         color = muted,
                         fontSize = 9.sp

@@ -48,6 +48,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.forge.app.data.repo.ProgressPhoto
 import com.forge.app.domain.photo.PhotoPose
+import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.domain.units.formatWeightDelta
 import com.forge.app.ui.common.ForgePrimaryCapsule
@@ -113,7 +114,7 @@ private enum class CompareMode(val label: String) { SLIDER("Slider"), SPLIT("Spl
 internal fun CompareSheet(
     pair: List<ProgressPhoto>,
     zone: ZoneId,
-    useKg: Boolean,
+    weightUnit: WeightUnit,
     fileFor: (ProgressPhoto) -> File,
     onDismiss: () -> Unit
 ) {
@@ -158,7 +159,7 @@ internal fun CompareSheet(
                             // Delta-only (GYMAP-55): the change, never the absolute bodyweight, on a public card.
                             val delta = if (bw != null && aw != null && abs(aw - bw) >= 0.1) {
                                 val d = aw - bw
-                                (if (d > 0) "+" else "−") + formatWeightDelta(abs(d), useKg)
+                                (if (d > 0) "+" else "−") + formatWeightDelta(abs(d), weightUnit)
                             } else null
                             val bp = PhotoPose.fromKey(before.pose)
                             val ap = PhotoPose.fromKey(after.pose)
@@ -191,7 +192,7 @@ internal fun CompareSheet(
                 }
             }
 
-            CompareReadout(before, after, zone, useKg, onBg = Color.White, muted = muted, accent = accent)
+            CompareReadout(before, after, zone, weightUnit, onBg = Color.White, muted = muted, accent = accent)
         }
     }
 }
@@ -262,7 +263,7 @@ private fun CompareReadout(
     before: ProgressPhoto,
     after: ProgressPhoto,
     zone: ZoneId,
-    useKg: Boolean,
+    weightUnit: WeightUnit,
     onBg: Color,
     muted: Color,
     accent: Color
@@ -273,8 +274,8 @@ private fun CompareReadout(
     val aw = after.weightLb
     val weightLine = if (bw != null && aw != null) {
         val d = aw - bw
-        if (kotlin.math.abs(d) < 0.1) "${formatWeight(aw, useKg)} · no change"
-        else "${formatWeight(bw, useKg)} → ${formatWeight(aw, useKg)} · ${formatWeightDelta(d, useKg)}"
+        if (kotlin.math.abs(d) < 0.1) "${formatWeight(aw, weightUnit)} · no change"
+        else "${formatWeight(bw, weightUnit)} → ${formatWeight(aw, weightUnit)} · ${formatWeightDelta(d, weightUnit)}"
     } else null
     val bp = PhotoPose.fromKey(before.pose)
     val ap = PhotoPose.fromKey(after.pose)

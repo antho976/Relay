@@ -3,6 +3,7 @@ package com.forge.app.data.db
 import androidx.room.Database
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
+import com.forge.app.data.db.dao.BodyFatDao
 import com.forge.app.data.db.dao.BodyMeasurementDao
 import com.forge.app.data.db.dao.BodyweightDao
 import com.forge.app.data.db.dao.CardioDao
@@ -27,6 +28,7 @@ import com.forge.app.data.db.dao.SessionSegmentDao
 import com.forge.app.data.db.dao.WarmupRoutineDao
 import com.forge.app.data.db.dao.SessionBreakDao
 import com.forge.app.data.db.dao.VacationDao
+import com.forge.app.data.db.entities.BodyFatEntry
 import com.forge.app.data.db.entities.BodyMeasurementEntry
 import com.forge.app.data.db.entities.BodyweightEntry
 import com.forge.app.data.db.entities.CardioEntry
@@ -55,7 +57,9 @@ import com.forge.app.data.db.entities.SessionBreak
 import com.forge.app.data.db.entities.VacationPeriod
 
 /**
- * Schema is v28 (v28 added `cardio_entry.conditions` — comma-joined weather/environment tags
+ * Schema is v29 (v29 added `body_fat` — per-day body-fat-% history for GYMAP-62, a new empty
+ * table, additive; readings come from Health Connect (a smart scale) or manual entry;
+ * v28 added `cardio_entry.conditions` — comma-joined weather/environment tags
  * (hot/cold/rain/wind) a session was done in for GYMAP-39, an additive nullable column; null = none tagged;
  * v27 added `cardio_entry.incline_pct` + `cardio_entry.laps` + `cardio_entry.elevation_m`
  * — per-type optional cardio fields (treadmill grade / pool laps / outdoor elevation gain) for GYMAP-38,
@@ -98,6 +102,7 @@ import com.forge.app.data.db.entities.VacationPeriod
         RestDayEntry::class,
         TrophyNearMiss::class,
         BodyweightEntry::class,
+        BodyFatEntry::class,
         BodyMeasurementEntry::class,
         VacationPeriod::class,
         ExtendedGoal::class,
@@ -113,7 +118,7 @@ import com.forge.app.data.db.entities.VacationPeriod
         SuggestionOutcome::class,
         SessionSegment::class
     ],
-    version = 28,
+    version = 29,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -130,6 +135,7 @@ abstract class ForgeDatabase : RoomDatabase() {
     abstract fun restDayDao(): RestDayDao
     abstract fun trophyNearMissDao(): TrophyNearMissDao
     abstract fun bodyweightDao(): BodyweightDao
+    abstract fun bodyFatDao(): BodyFatDao
     abstract fun bodyMeasurementDao(): BodyMeasurementDao
     abstract fun vacationDao(): VacationDao
     abstract fun extendedGoalDao(): ExtendedGoalDao

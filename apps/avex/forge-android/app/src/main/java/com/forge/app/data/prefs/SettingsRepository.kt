@@ -29,7 +29,7 @@ enum class SettingsSection(val keys: List<Preferences.Key<*>>) {
     ),
     FORMAT(
         listOf(
-            PreferenceKeys.USE_KG, PreferenceKeys.USER_SEX, PreferenceKeys.DATE_FORMAT,
+            PreferenceKeys.WEIGHT_UNIT, PreferenceKeys.USE_KG, PreferenceKeys.USER_SEX, PreferenceKeys.DATE_FORMAT,
             PreferenceKeys.TIMEZONE,
             PreferenceKeys.TIME_FORMAT_24H, PreferenceKeys.FIRST_DAY_MONDAY
             // FAVORITE_TIMEZONES is the user's curated star list (data, not a format default), so a
@@ -46,6 +46,7 @@ enum class SettingsSection(val keys: List<Preferences.Key<*>>) {
     NOTIFICATIONS(
         listOf(
             PreferenceKeys.QUIET_HOURS_ENABLED, PreferenceKeys.QUIET_HOURS_START, PreferenceKeys.QUIET_HOURS_END,
+            PreferenceKeys.QUIET_HOURS_SCHEDULE,
             PreferenceKeys.TRAINING_REMINDER_ENABLED, PreferenceKeys.TRAINING_REMINDER_HOUR
         )
     )
@@ -152,12 +153,44 @@ class SettingsRepository @Inject constructor(
             prefs[PreferenceKeys.NOTE_TEMPLATES] = cur - template
         }
 
-    // ─── Units (#2) ───────────────────────────────────────────────────────────
+    // ─── Units (#2, GYMAP-72) ───────────────────────────────────────────────────
+
+    /** The weight display unit (lb | kg | st). Reads the tri-state key, falling back to the legacy
+     *  [USE_KG] boolean for installs that predate it so their kg/lb choice carries over. */
+    val weightUnit: Flow<com.forge.app.domain.units.WeightUnit> = context.forgePreferences.data
+        .map { prefs ->
+            prefs[PreferenceKeys.WEIGHT_UNIT]?.let { com.forge.app.domain.units.WeightUnit.fromKey(it) }
+                ?: com.forge.app.domain.units.WeightUnit.ofKg(prefs[PreferenceKeys.USE_KG] ?: false)
+        }
+    suspend fun setWeightUnit(unit: com.forge.app.domain.units.WeightUnit) =
+        context.forgePreferences.edit { prefs ->
+            val stone = com.forge.app.domain.units.WeightUnit.ST
+            val oldKg = prefs[PreferenceKeys.WEIGHT_UNIT]
+                ?.let { com.forge.app.domain.units.WeightUnit.fromKey(it) == com.forge.app.domain.units.WeightUnit.KG }
+                ?: (prefs[PreferenceKeys.USE_KG] ?: false)
+            val newKg = unit == com.forge.app.domain.units.WeightUnit.KG
+            // A kg⇄st switch flips the USE_KG mirror, which would otherwise silently flip the DERIVED
+            // cardio distance (mi/km) and body-measurement length (in/cm) too — surprising when the user
+            // only meant to change a weight preference. Pin those to their pre-switch value first, but
+            // only when the user never made an explicit pick. (lb⇄kg still flips as the deliberate
+            // metric/imperial bundle; lb⇄st never flips USE_KG, so it's already stable.)
+            val stonesInvolved = unit == stone ||
+                prefs[PreferenceKeys.WEIGHT_UNIT] == stone.label
+            if (stonesInvolved && oldKg != newKg) {
+                if (prefs[PreferenceKeys.USE_MILES] == null) prefs[PreferenceKeys.USE_MILES] = !oldKg
+                if (prefs[PreferenceKeys.USE_CM] == null) prefs[PreferenceKeys.USE_CM] = oldKg
+            }
+            prefs[PreferenceKeys.WEIGHT_UNIT] = unit.label
+            // Keep the legacy mirror in sync (true only for kg) so the derived distance/length
+            // defaults + backup, which read USE_KG, stay correct — stones reads as "not kg" = lb-like.
+            prefs[PreferenceKeys.USE_KG] = newKg
+        }
 
     val useKg: Flow<Boolean> = context.forgePreferences.data
         .map { it[PreferenceKeys.USE_KG] ?: false }
+    /** Legacy boolean setter — routes through [setWeightUnit] so both keys stay consistent. */
     suspend fun setUseKg(value: Boolean) =
-        context.forgePreferences.edit { it[PreferenceKeys.USE_KG] = value }
+        setWeightUnit(com.forge.app.domain.units.WeightUnit.ofKg(value))
 
     /** Persisted folder the user granted Import to auto-scan (#GYMAP-17); null when none granted yet. */
     val importFolderUri: Flow<String?> = context.forgePreferences.data
@@ -166,6 +199,22 @@ class SettingsRepository @Inject constructor(
         context.forgePreferences.edit {
             if (uri.isNullOrBlank()) it.remove(PreferenceKeys.IMPORT_FOLDER_URI)
             else it[PreferenceKeys.IMPORT_FOLDER_URI] = uri
+        }
+
+    // ─── Backup (GYMAP-67) ────────────────────────────────────────────────────
+    /** Weekly auto-backup master switch. Default ON. */
+    val autoBackupEnabled: Flow<Boolean> = context.forgePreferences.data
+        .map { it[PreferenceKeys.AUTO_BACKUP_ENABLED] ?: true }
+    suspend fun setAutoBackupEnabled(value: Boolean) =
+        context.forgePreferences.edit { it[PreferenceKeys.AUTO_BACKUP_ENABLED] = value }
+
+    /** User-picked folder the auto-backup also writes to (survives uninstall); null when none picked. */
+    val backupFolderUri: Flow<String?> = context.forgePreferences.data
+        .map { it[PreferenceKeys.BACKUP_FOLDER_URI]?.takeIf { s -> s.isNotBlank() } }
+    suspend fun setBackupFolderUri(uri: String?) =
+        context.forgePreferences.edit {
+            if (uri.isNullOrBlank()) it.remove(PreferenceKeys.BACKUP_FOLDER_URI)
+            else it[PreferenceKeys.BACKUP_FOLDER_URI] = uri
         }
 
     /**
@@ -196,11 +245,23 @@ class SettingsRepository @Inject constructor(
     suspend fun setHcWriteBodyweight(value: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.HC_WRITE_BODYWEIGHT] = value }
 
+    /** Mirror body-fat entries to Health Connect (GYMAP-62). Off by default — write-back is opt-in. */
+    val hcWriteBodyFat: Flow<Boolean> = context.forgePreferences.data
+        .map { it[PreferenceKeys.HC_WRITE_BODY_FAT] ?: false }
+    suspend fun setHcWriteBodyFat(value: Boolean) =
+        context.forgePreferences.edit { it[PreferenceKeys.HC_WRITE_BODY_FAT] = value }
+
     /** Write each finished session's estimated active calories to Health Connect (HC-4). Opt-in, off by default. */
     val hcWriteCalories: Flow<Boolean> = context.forgePreferences.data
         .map { it[PreferenceKeys.HC_WRITE_CALORIES] ?: false }
     suspend fun setHcWriteCalories(value: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.HC_WRITE_CALORIES] = value }
+
+    /** Whether the one-time HC weight-history backfill has run (GYMAP-63). Default false. */
+    val hcWeightHistoryImported: Flow<Boolean> = context.forgePreferences.data
+        .map { it[PreferenceKeys.HC_WEIGHT_HISTORY_IMPORTED] ?: false }
+    suspend fun setHcWeightHistoryImported(value: Boolean) =
+        context.forgePreferences.edit { it[PreferenceKeys.HC_WEIGHT_HISTORY_IMPORTED] = value }
 
     /** Which watch the user wears ([com.forge.app.domain.health.WearableBrand] key; "" = never
      *  asked). Advisory only — tailors Recovery's setup pointers, never gates a read. */
@@ -296,15 +357,27 @@ class SettingsRepository @Inject constructor(
     suspend fun setQuietHoursEnabled(value: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.QUIET_HOURS_ENABLED] = value }
 
-    val quietHoursStart: Flow<Int> = context.forgePreferences.data
-        .map { it[PreferenceKeys.QUIET_HOURS_START] ?: 22 }
-    suspend fun setQuietHoursStart(hour: Int) =
-        context.forgePreferences.edit { it[PreferenceKeys.QUIET_HOURS_START] = hour }
+    /** Per-day quiet windows (GYMAP-75). Seeds from the legacy single window (START/END) until the
+     *  user first edits a day, after which the JSON schedule is authoritative. */
+    val quietHoursSchedule: Flow<com.forge.app.domain.notify.QuietHoursSchedule> =
+        context.forgePreferences.data.map { readQuietSchedule(it) }
 
-    val quietHoursEnd: Flow<Int> = context.forgePreferences.data
-        .map { it[PreferenceKeys.QUIET_HOURS_END] ?: 7 }
-    suspend fun setQuietHoursEnd(hour: Int) =
-        context.forgePreferences.edit { it[PreferenceKeys.QUIET_HOURS_END] = hour }
+    private fun readQuietSchedule(prefs: androidx.datastore.preferences.core.Preferences) =
+        com.forge.app.domain.notify.QuietHoursSchedule.fromJson(
+            prefs[PreferenceKeys.QUIET_HOURS_SCHEDULE],
+            prefs[PreferenceKeys.QUIET_HOURS_START] ?: com.forge.app.domain.notify.QuietHoursSchedule.DEFAULT_START,
+            prefs[PreferenceKeys.QUIET_HOURS_END] ?: com.forge.app.domain.notify.QuietHoursSchedule.DEFAULT_END
+        )
+
+    /** Sets one weekday's window, persisting the whole schedule as JSON (read-modify-write so a partial
+     *  edit never drops the other days). */
+    suspend fun setQuietWindow(day: java.time.DayOfWeek, start: Int, end: Int) =
+        context.forgePreferences.edit { prefs ->
+            val next = readQuietSchedule(prefs)
+                .withWindow(day, com.forge.app.domain.notify.QuietWindow(start, end))
+            prefs[PreferenceKeys.QUIET_HOURS_SCHEDULE] =
+                com.forge.app.domain.notify.QuietHoursSchedule.toJson(next)
+        }
 
     /** Daily training reminder (engagement) — opt-in, default OFF so a new user is never nagged. */
     val trainingReminderEnabled: Flow<Boolean> = context.forgePreferences.data
@@ -738,7 +811,7 @@ class SettingsRepository @Inject constructor(
      *  USE_MILES is deliberately NOT persisted, so [useMiles] keeps deriving from the weight unit. */
     suspend fun completeOnboarding(
         name: String,
-        useKgChoice: Boolean,
+        weightUnitChoice: com.forge.app.domain.units.WeightUnit,
         goal: String,
         bodyweightLb: Double?,
         useMilesChoice: Boolean? = null
@@ -751,7 +824,9 @@ class SettingsRepository @Inject constructor(
             // prefs keeps the original join date.
             if (prefs[PreferenceKeys.MEMBER_SINCE_MS] == null) prefs[PreferenceKeys.MEMBER_SINCE_MS] = clock.nowMs()
             if (name.isNotBlank()) prefs[PreferenceKeys.USER_NAME] = name
-            prefs[PreferenceKeys.USE_KG] = useKgChoice
+            prefs[PreferenceKeys.WEIGHT_UNIT] = weightUnitChoice.label
+            // Mirror the legacy boolean (true only for kg) so the derived distance/length defaults hold.
+            prefs[PreferenceKeys.USE_KG] = (weightUnitChoice == com.forge.app.domain.units.WeightUnit.KG)
             useMilesChoice?.let { prefs[PreferenceKeys.USE_MILES] = it }
             if (goal.isNotBlank()) prefs[PreferenceKeys.USER_GOAL] = goal
             // Setup is done — drop the resume draft in the same atomic write.
@@ -821,15 +896,11 @@ class SettingsRepository @Inject constructor(
     suspend fun setLastStatsTabName(name: String) =
         context.forgePreferences.edit { it[PreferenceKeys.LAST_STATS_TAB_NAME] = name }
 
-    /** Returns true if the current wall-clock time falls within the user's quiet hours window (#122). */
+    /** Returns true if the current wall-clock time falls within the user's quiet hours window for
+     *  today (#122; per-day windows GYMAP-75). */
     suspend fun isQuietNow(): Boolean {
         val prefs = context.forgePreferences.data.firstOrNull() ?: return false
-        val enabled = prefs[PreferenceKeys.QUIET_HOURS_ENABLED] ?: false
-        if (!enabled) return false
-        val start = prefs[PreferenceKeys.QUIET_HOURS_START] ?: 22
-        val end = prefs[PreferenceKeys.QUIET_HOURS_END] ?: 7
-        val now = java.time.LocalTime.now().hour
-        return if (start <= end) now in start until end
-               else now >= start || now < end
+        if (prefs[PreferenceKeys.QUIET_HOURS_ENABLED] != true) return false
+        return readQuietSchedule(prefs).isQuietAt(java.time.LocalDateTime.now())
     }
 }

@@ -237,9 +237,9 @@ internal fun DayViewModel.logSet(
             val bigJump = if (isPlates) (newWeightLb - lastWeightLb) / plateLb >= 1.5
             else newWeightLb > lastWeightLb * 1.20
             if (bigJump) {
-                val useKg = settingsRepo.useKg.first()
-                val lastLabel = if (isPlates) formatPlates(lastWeightLb, plateLb) else formatWeight(lastWeightLb, useKg)
-                val newLabel = if (isPlates) formatPlates(newWeightLb, plateLb) else formatWeight(newWeightLb, useKg)
+                val weightUnit = settingsRepo.weightUnit.first()
+                val lastLabel = if (isPlates) formatPlates(lastWeightLb, plateLb) else formatWeight(lastWeightLb, weightUnit)
+                val newLabel = if (isPlates) formatPlates(newWeightLb, plateLb) else formatWeight(newWeightLb, weightUnit)
                 val percent = ((newWeightLb / lastWeightLb - 1) * 100).toInt()
                 _state.update {
                     it.copy(pendingWeightJumpWarning = WeightJumpWarning(exerciseId, weightText, reps, lastLabel, newLabel, percent))

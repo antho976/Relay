@@ -111,13 +111,13 @@ class WeeklyRecapWorker @AssistedInject constructor(
 
         // ── Weekly recap (#31): your week in numbers — gated by the per-type opt-out (N2).
         if (settingsRepo.weeklyRecapEnabled.first()) {
-            val useKg = settingsRepo.useKg.first()
+            val weightUnit = settingsRepo.weightUnit.first()
             // A full-week streak milestone turns the recap into a small celebration via its title — so
             // when it does, the streak is dropped from the body line to avoid stating it twice.
             val isStreakMilestone = stats.streakDays >= 7 && stats.streakDays % 7 == 0
             val body = buildString {
                 append("${stats.workouts} workout${if (stats.workouts != 1) "s" else ""}")
-                if (stats.volumeLb > 0) append(" · ${formatWeight(stats.volumeLb, useKg)}")
+                if (stats.volumeLb > 0) append(" · ${formatWeight(stats.volumeLb, weightUnit)}")
                 if (stats.cardioMinutes > 0) append(" · ${stats.cardioMinutes} min cardio")
                 if (stats.streakDays > 0 && !isStreakMilestone) append(" · ${stats.streakDays}-day streak")
                 // Retention hooks: the closest trophy you're chasing, and a memory from this date.

@@ -23,6 +23,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.forge.app.domain.units.WeightUnit
 import com.forge.app.ui.common.InlineEmptyHint
 import com.forge.app.ui.gym.session.SegmentRow
 import com.forge.app.ui.gym.stats.components.statsEntrance
@@ -57,7 +58,7 @@ fun StatsContent(
     viewModel: StatsViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    val useKg = LocalForgeSettings.current.useKg
+    val weightUnit = LocalForgeSettings.current.weightUnit
     val dayDetail by viewModel.dayDetail.collectAsStateWithLifecycle()
     // A record tap deep-links into the Strength lens with that lift's row already open. focusNonce
     // bumps on every such tap so re-tapping the SAME lift (a no-op assignment to focusLift) still
@@ -114,7 +115,7 @@ fun StatsContent(
                         Modifier.fillMaxWidth().statsEntrance(0)
                             .padding(horizontal = STATS_GUTTER, vertical = 10.dp)
                     ) {
-                        StatsHeroContent(state, useKg, c)
+                        StatsHeroContent(state, weightUnit, c)
                     }
                 }
 
@@ -136,10 +137,10 @@ fun StatsContent(
 
                 when (lens) {
                     StatsLens.STRENGTH -> strengthLens(
-                        state, useKg, c, focusLift, focusNonce,
+                        state, weightUnit, c, focusLift, focusNonce,
                         onOpenLift = { id -> focusLift = id; focusNonce++; lens = StatsLens.STRENGTH }
                     )
-                    StatsLens.VOLUME -> volumeLens(state, useKg, c)
+                    StatsLens.VOLUME -> volumeLens(state, weightUnit, c)
                     StatsLens.EFFORT -> effortLens(state, c)
                     StatsLens.DAYS -> daysLens(state, c, onDayTap = viewModel::openDay)
                 }
@@ -185,7 +186,7 @@ private fun LazyListScope.loadingSkeleton(c: StatsColors) {
 // ── Strength lens — one comparative, tappable list per lift ─────────────────────
 private fun LazyListScope.strengthLens(
     state: StatsUiState,
-    useKg: Boolean,
+    weightUnit: WeightUnit,
     c: StatsColors,
     focusLift: String?,
     focusNonce: Int,
@@ -201,7 +202,7 @@ private fun LazyListScope.strengthLens(
             caption = "Estimated 1RM, ranked. Tap a lift for its trend, PRs and curve.",
             index = 2
         ) {
-            E1rmComparisonList(state.e1rmLifts, state.recentPrs, state.strengthCurves, useKg, c, focusLift, focusNonce)
+            E1rmComparisonList(state.e1rmLifts, state.recentPrs, state.strengthCurves, weightUnit, c, focusLift, focusNonce)
         }
     }
     // Relative strength — each lift as a multiple of bodyweight.
@@ -214,7 +215,7 @@ private fun LazyListScope.strengthLens(
     if (state.hallOfFame.isNotEmpty()) {
         item("str-records") {
             StatsCard(c, title = "Records", caption = "Your heaviest set on each lift. Tap one for its trend.", index = 4) {
-                RecordsContent(state.hallOfFame, useKg, c, onOpenLift)
+                RecordsContent(state.hallOfFame, weightUnit, c, onOpenLift)
             }
         }
     }
@@ -242,7 +243,7 @@ private fun LazyListScope.daysLens(state: StatsUiState, c: StatsColors, onDayTap
 }
 
 // ── Volume lens — targets, trend, balance (the weekly map lives in the hero) ───
-private fun LazyListScope.volumeLens(state: StatsUiState, useKg: Boolean, c: StatsColors) {
+private fun LazyListScope.volumeLens(state: StatsUiState, weightUnit: WeightUnit, c: StatsColors) {
     // Empty only when there's no logged volume at all. plannedSetsByMuscle is always populated from the
     // program, so it must NOT gate the empty state — otherwise a week with nothing logged yet renders a
     // wall of "0/target" bars that reads as "failing every target" instead of "no data yet".
@@ -260,7 +261,7 @@ private fun LazyListScope.volumeLens(state: StatsUiState, useKg: Boolean, c: Sta
     if (state.weeklyTonnage.size >= 2) {
         item("vol-tonnage") {
             StatsCard(c, title = "Weekly volume", caption = "Total tonnage per week. Is it holding?", index = 3) {
-                TonnageTrendContent(state.weeklyTonnage, useKg, c)
+                TonnageTrendContent(state.weeklyTonnage, weightUnit, c)
             }
         }
     }

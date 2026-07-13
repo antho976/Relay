@@ -45,8 +45,10 @@ class FreestyleLogViewModel @Inject constructor(
     private val customizationRepo: CustomizationRepository
 ) : ViewModel() {
 
-    val useKg: StateFlow<Boolean> =
-        settingsRepo.useKg.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+    val weightUnit: StateFlow<com.forge.app.domain.units.WeightUnit> =
+        settingsRepo.weightUnit.stateIn(
+            viewModelScope, SharingStarted.WhileSubscribed(5_000), com.forge.app.domain.units.WeightUnit.LB
+        )
 
     /** The most recent other performance's sets for an exercise — the "copy last time" panel. */
     suspend fun lastSets(exerciseId: String): List<com.forge.app.data.db.entities.LoggedSet> =

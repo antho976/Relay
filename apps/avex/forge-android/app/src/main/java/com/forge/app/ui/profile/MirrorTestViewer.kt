@@ -61,6 +61,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.forge.app.data.repo.ProgressPhoto
 import com.forge.app.domain.photo.PhotoPose
+import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.parseToLb
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.domain.units.weightInputValue
@@ -85,7 +86,7 @@ internal fun GalleryViewerPager(
     photos: List<ProgressPhoto>,
     startIndex: Int,
     albumNames: List<String>,
-    useKg: Boolean,
+    weightUnit: WeightUnit,
     fileFor: (ProgressPhoto) -> File,
     onSaveNote: (ProgressPhoto, String) -> Unit,
     onMove: (ProgressPhoto, String) -> Unit,
@@ -110,7 +111,7 @@ internal fun GalleryViewerPager(
     val dateOverride = remember { mutableStateMapOf<String, Long>() }
     var noteInput by remember { mutableStateOf(noteOverride[current.fileName] ?: current.note) }
     var weightInput by remember {
-        mutableStateOf(current.weightLb?.let { weightInputValue(it, useKg) } ?: "")
+        mutableStateOf(current.weightLb?.let { weightInputValue(it, weightUnit) } ?: "")
     }
     var showDatePicker by remember { mutableStateOf(false) }
 
@@ -126,10 +127,10 @@ internal fun GalleryViewerPager(
         // Compare in DISPLAY units, not lb: weightInput was seeded via weightInputValue (which rounds to
         // the display step), so a 0.1-kg rounding is ~0.11 lb and an untouched field would trip a raw-lb
         // threshold and silently rewrite the snapshot. Same display text as seeded ⇒ untouched ⇒ no write.
-        val prevDisplay = original.weightLb?.let { weightInputValue(it, useKg) } ?: ""
+        val prevDisplay = original.weightLb?.let { weightInputValue(it, weightUnit) } ?: ""
         val curDisplay = weightInput.trim()
         if (curDisplay != prevDisplay) {
-            val parsed = curDisplay.ifBlank { null }?.let { parseToLb(it, useKg) }
+            val parsed = curDisplay.ifBlank { null }?.let { parseToLb(it, weightUnit) }
             weightOverride[editingFile] = parsed
             onSetWeight(original, parsed)
         }
@@ -139,7 +140,7 @@ internal fun GalleryViewerPager(
             commit()
             editingFile = current.fileName
             noteInput = noteOverride[current.fileName] ?: current.note
-            weightInput = (weightOverride[current.fileName] ?: current.weightLb)?.let { weightInputValue(it, useKg) } ?: ""
+            weightInput = (weightOverride[current.fileName] ?: current.weightLb)?.let { weightInputValue(it, weightUnit) } ?: ""
         }
     }
 
@@ -235,7 +236,7 @@ internal fun GalleryViewerPager(
                         },
                         modifier = Modifier.width(70.dp)
                     )
-                    Text(unitLabel(useKg), style = MaterialTheme.typography.labelMedium, color = muted)
+                    Text(unitLabel(weightUnit), style = MaterialTheme.typography.labelMedium, color = muted)
                 }
 
                 // Album.

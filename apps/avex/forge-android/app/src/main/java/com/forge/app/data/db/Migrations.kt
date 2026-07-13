@@ -297,6 +297,27 @@ val MIGRATION_27_28 = object : Migration(27, 28) {
     }
 }
 
+/**
+ * v28 → v29: body fat % (GYMAP-62). `body_fat` holds per-day body-fat-percentage readings, one row
+ * per day via the unique index, sourced from Health Connect (a smart scale) or manual entry. New
+ * empty table — additive, no existing data touched. Kept separate from `bodyweight_entry` because
+ * HC stores body fat as its own record with an independent timestamp.
+ */
+val MIGRATION_28_29 = object : Migration(28, 29) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `body_fat` (" +
+                "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "`date_key` TEXT NOT NULL, " +
+                "`percent` REAL NOT NULL, " +
+                "`recorded_at` INTEGER NOT NULL)"
+        )
+        db.execSQL(
+            "CREATE UNIQUE INDEX IF NOT EXISTS `index_body_fat_date_key` ON `body_fat` (`date_key`)"
+        )
+    }
+}
+
 /** All migrations, in order. Register every new one here. */
 val ALL_MIGRATIONS: Array<Migration> = arrayOf(
     MIGRATION_12_13,
@@ -314,5 +335,6 @@ val ALL_MIGRATIONS: Array<Migration> = arrayOf(
     MIGRATION_24_25,
     MIGRATION_25_26,
     MIGRATION_26_27,
-    MIGRATION_27_28
+    MIGRATION_27_28,
+    MIGRATION_28_29
 )

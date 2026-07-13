@@ -16,6 +16,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.data.repo.CoachRepository
 import com.forge.app.domain.coach.AutoCoachPlanner
+import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.formatVolumeCompact
 import com.forge.app.ui.common.EditorialFigure
 
@@ -25,7 +26,7 @@ import com.forge.app.ui.common.EditorialFigure
  * the week's figures. The verdict answers "what did my coach decide" before anything else is read.
  */
 @Composable
-internal fun CoachHero(state: CoachViewModel.UiState, useKg: Boolean, c: CoachColors) {
+internal fun CoachHero(state: CoachViewModel.UiState, weightUnit: WeightUnit, c: CoachColors) {
     val brief = state.brief
     val watch = state.watch
 
@@ -105,7 +106,7 @@ internal fun CoachHero(state: CoachViewModel.UiState, useKg: Boolean, c: CoachCo
                     modifier = Modifier.weight(1f)
                 )
                 EditorialFigure(
-                    value = formatVolumeCompact(r.volumeLastWeekLb, useKg),
+                    value = formatVolumeCompact(r.volumeLastWeekLb, weightUnit),
                     label = "Volume",
                     onBg = c.onBg, muted = c.muted, accent = c.accent,
                     delta = r.volumeDeltaPct,
