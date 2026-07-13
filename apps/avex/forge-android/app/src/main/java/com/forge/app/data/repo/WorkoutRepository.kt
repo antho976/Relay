@@ -22,6 +22,7 @@ import com.forge.app.data.db.types.EffortRating
 import com.forge.app.data.health.HealthConnectManager
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.domain.health.ActiveCalorieEstimator
+import com.forge.app.domain.units.MAX_HOLD_SECONDS
 import com.forge.app.domain.pr.PrDetector
 import com.forge.app.domain.volume.VolumeCalculator
 import com.forge.app.program.Equipment
@@ -463,7 +464,8 @@ class WorkoutRepository @Inject constructor(
         setIndex: Int,
         weightText: String,
         weightLb: Double?,
-        reps: Int
+        reps: Int,
+        durationSeconds: Int? = null
     ): Long = loggedSetDao.insert(
         LoggedSet(
             loggedExerciseId = loggedExerciseId,
@@ -471,7 +473,10 @@ class WorkoutRepository @Inject constructor(
             weightText = weightText,
             weightLb = weightLb,
             reps = sanitizeReps(reps),
-            completedAt = clock.nowMs()
+            completedAt = clock.nowMs(),
+            // Timed holds (GYMAP-51): a held duration in whole seconds. null for a normal rep set;
+            // when present, `reps` is not a meaningful count and the set is skipped by weight×reps stats.
+            durationSeconds = durationSeconds?.coerceIn(0, MAX_HOLD_SECONDS)
         )
     )
 
@@ -492,6 +497,10 @@ class WorkoutRepository @Inject constructor(
     /** The single best set ever for an exercise (heaviest, most reps at that weight). */
     suspend fun personalBestSet(exerciseId: String): LoggedSet? =
         loggedSetDao.personalBestSet(exerciseId)
+
+    /** Longest hold ever for a timed-hold exercise (seconds), or null if none — the "best 0:45" hint (GYMAP-51). */
+    suspend fun bestHoldSecondsForExercise(exerciseId: String): Int? =
+        loggedSetDao.bestHoldSecondsForExercise(exerciseId)
 
     /** Per-session aggregates for one exercise (last N finished sessions, newest first). */
     suspend fun sessionAggregatesForExercise(exerciseId: String, limit: Int = 8) =

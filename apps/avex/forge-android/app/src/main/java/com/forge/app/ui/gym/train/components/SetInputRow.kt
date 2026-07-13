@@ -31,11 +31,13 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -54,6 +56,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.util.Locale
 import com.forge.app.data.db.entities.LoggedSet
+import com.forge.app.domain.units.MAX_HOLD_SECONDS
+import com.forge.app.domain.units.formatHold
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.domain.units.parseToLb
 import com.forge.app.domain.units.weightInputValue
@@ -87,12 +91,16 @@ fun SetInputRow(
     isBodyweight: Boolean = false,
     /** Plate-loaded machine/cable exercise — the weight field is a plate COUNT, labelled "PLATES". */
     isPlates: Boolean = false,
+    /** Timed-hold exercise (GYMAP-51) — the reps/RPE/Δ columns become a HOLD readout + stopwatch, and
+     *  the set logs a duration (seconds) instead of reps. Every non-timed exercise is unchanged. */
+    isTimed: Boolean = false,
     /** Recommended reps from the plan (e.g. 12 from "8-12") — pre-filled into the reps field. */
     targetReps: Int? = null,
     /** Greyed hint shown in the empty reps field — the recommended rep even for AMRAP (e.g. 12). */
     repsPlaceholder: Int? = null,
     onAdvance: () -> Unit = {},
-    onSubmit: (weightText: String, reps: Int) -> Unit,
+    /** [durationSeconds] non-null = a timed-hold set (GYMAP-51); reps is then 0. */
+    onSubmit: (weightText: String, reps: Int, durationSeconds: Int?) -> Unit,
     onAddSet: (() -> Unit)? = null,
     /** Logs a duplicate of this session's last set immediately (long-press on LOG SET). Null until
      *  at least one set is logged this session; null disables the gesture. */
@@ -115,6 +123,36 @@ fun SetInputRow(
     val repsFocus = remember { FocusRequester() }
     val haptic = LocalHapticFeedback.current
 
+    // ── Timed-hold state (GYMAP-51) — only exercised when isTimed ────────────────
+    // durationSec is the held time in seconds; it's driven by a wall-clock-anchored count-up
+    // stopwatch (so it stays accurate across a backgrounded app, like RestTimerController) and by a
+    // ±5s manual stepper. Everything re-seeds to zero on a new set (keyed on nextSetNumber).
+    var durationSec by rememberSaveable(nextSetNumber) { mutableStateOf(0) }
+    var swRunning by rememberSaveable(nextSetNumber) { mutableStateOf(false) }
+    var swAnchorMs by rememberSaveable(nextSetNumber) { mutableStateOf(0L) }
+    var swBaseSec by rememberSaveable(nextSetNumber) { mutableStateOf(0) }
+    LaunchedEffect(swRunning) {
+        while (swRunning) {
+            val elapsed = ((System.currentTimeMillis() - swAnchorMs) / 1000L).toInt()
+            durationSec = (swBaseSec + elapsed).coerceIn(0, MAX_HOLD_SECONDS)
+            delay(200)
+        }
+    }
+    fun toggleStopwatch() {
+        if (swRunning) {
+            swRunning = false
+        } else {
+            swBaseSec = durationSec
+            swAnchorMs = System.currentTimeMillis()
+            swRunning = true
+        }
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+    }
+    fun stepHold(delta: Int) {
+        swRunning = false // a manual nudge stops the running clock so the two inputs never fight
+        durationSec = (durationSec + delta).coerceIn(0, MAX_HOLD_SECONDS)
+    }
+
     fun onWeightChange(new: String) {
         // Typing "x"/"X" after a number (e.g. "45x") commits the weight and jumps to the
         // reps field, so the rest of "45x10" is typed as reps — never truncated mid-entry.
@@ -136,12 +174,20 @@ fun SetInputRow(
     // weight too (the keyboard's Done bypassed the disabled-button guard, logging a weightless set).
     // Bodyweight exercises log "BW" and skip the weight requirement.
     fun submitSet() {
+        if (isTimed) {
+            val d = durationSec.takeIf { it > 0 } ?: return
+            swRunning = false
+            // Weight is optional on a hold (weighted plank/hang); bodyweight or blank logs "BW".
+            val wt = if (isBodyweight || weight.isBlank()) "BW" else weight.trim()
+            onSubmit(wt, 0, d)
+            return
+        }
         val r = reps.toIntOrNull()?.takeIf { it > 0 } ?: return
         if (isBodyweight) {
-            onSubmit("BW", r)
+            onSubmit("BW", r, null)
         } else {
             if (weight.isBlank()) return
-            onSubmit(weight.trim(), r)
+            onSubmit(weight.trim(), r, null)
         }
         // Fields re-seed from the next set's prior automatically (keyed on the set number) (#8).
     }
@@ -161,8 +207,9 @@ fun SetInputRow(
         reps = (base + delta).coerceAtLeast(0).toString()
     }
 
-    val canSubmit = remember(weight, reps, isBodyweight) {
-        reps.toIntOrNull()?.let { it > 0 } == true && (isBodyweight || weight.isNotBlank())
+    val canSubmit = remember(weight, reps, isBodyweight, isTimed, durationSec) {
+        if (isTimed) durationSec > 0
+        else reps.toIntOrNull()?.let { it > 0 } == true && (isBodyweight || weight.isNotBlank())
     }
 
     val prRepsHint = remember(weight, priorSets, useKg) {
@@ -181,7 +228,8 @@ fun SetInputRow(
         Column(modifier = modifier.fillMaxWidth()) {
             // Active input row — hidden once the target sets are met (then the CTA
             // becomes "MOVE TO NEXT"; tap "+ ADD A SET" to log a bonus set).
-            if (!targetsMet) {
+            // Timed holds take the parallel HOLD/stopwatch body below; every other exercise is unchanged.
+            if (!targetsMet && !isTimed) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -303,6 +351,67 @@ fun SetInputRow(
                 Spacer(Modifier.height(12.dp))
             }
 
+            // ── Timed-hold input (GYMAP-51) — HOLD readout + stopwatch, replacing weight/reps ──
+            if (!targetsMet && isTimed) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(onBg.copy(alpha = 0.05f), RoundedCornerShape(10.dp))
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.Bottom
+                ) {
+                    Box(modifier = Modifier.width(SET_COL_W).padding(bottom = 4.dp)) {
+                        Text(
+                            "%02d".format(nextSetNumber),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = muted,
+                            fontSize = 9.sp
+                        )
+                    }
+                    // HOLD readout — the big mm:ss, accent while the stopwatch is running.
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("HOLD", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            formatHold(durationSec),
+                            style = MaterialTheme.typography.headlineMedium,
+                            color = if (swRunning) MaterialTheme.colorScheme.primary else onBg
+                        )
+                    }
+                    // The hold to beat — tap to autofill last session's time.
+                    Box(modifier = Modifier.width(DELTA_COL_W), contentAlignment = Alignment.BottomEnd) {
+                        priorSetForActiveRow?.durationSeconds?.let { priorSec ->
+                            Text(
+                                "beat ${formatHold(priorSec)}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = onBg.copy(alpha = 0.7f),
+                                fontSize = 9.sp,
+                                textAlign = TextAlign.End,
+                                modifier = Modifier
+                                    .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                                    .clickableLabeled("Autofill last session's hold time") {
+                                        swRunning = false
+                                        durationSec = priorSec.coerceIn(0, MAX_HOLD_SECONDS)
+                                    }
+                            )
+                        }
+                    }
+                }
+
+                // Stopwatch + ±5s adjust — the timed analogue of the weight/reps steppers.
+                Spacer(Modifier.height(10.dp))
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    StopwatchButton(running = swRunning, onToggle = { toggleStopwatch() })
+                    StepperPill(label = "5 SEC", onMinus = { stepHold(-5) }, onPlus = { stepHold(5) })
+                }
+
+                Spacer(Modifier.height(12.dp))
+            }
+
             // "+ ADD A SET" — outlined rounded button; extends the planned set count.
             Box(
                 modifier = Modifier
@@ -412,7 +521,7 @@ fun SetInputRow(
                 Button(
                     onClick = {
                         val r = reps.toIntOrNull() ?: return@Button
-                        onSubmit(weight.trim(), r)
+                        onSubmit(weight.trim(), r, null)
                         reps = ""
                     },
                     enabled = canSubmit,
@@ -436,6 +545,37 @@ fun SetInputRow(
                 )
             }
         }
+    }
+}
+
+/**
+ * Start/Stop control for a timed hold (GYMAP-51) — a 44dp capsule in the row's own language: an
+ * outline when idle ("Start hold"), an accent wash + accent border + accent label while the count-up
+ * runs ("Stop"). The whole capsule is the tap target with a spoken a11y label.
+ */
+@Composable
+private fun StopwatchButton(
+    running: Boolean,
+    onToggle: () -> Unit
+) {
+    val onBg = MaterialTheme.colorScheme.onBackground
+    val accent = MaterialTheme.colorScheme.primary
+    val outline = MaterialTheme.colorScheme.outline
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .then(if (running) Modifier.background(accent.copy(alpha = 0.15f)) else Modifier)
+            .border(1.dp, if (running) accent else outline.copy(alpha = 0.5f), RoundedCornerShape(50))
+            .clickableLabeled(if (running) "Stop the hold timer" else "Start the hold timer") { onToggle() }
+            .sizeIn(minWidth = 96.dp, minHeight = 44.dp)
+            .padding(horizontal = 16.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            if (running) "Stop" else "Start hold",
+            style = MaterialTheme.typography.labelLarge,
+            color = if (running) accent else onBg
+        )
     }
 }
 

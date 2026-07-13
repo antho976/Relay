@@ -284,7 +284,8 @@ class StatsRepository @Inject constructor(
                     toFailure = s.toFailure,
                     isAssisted = s.isAssisted,
                     dropAnnotation = s.dropAnnotation,
-                    setType = s.setType
+                    setType = s.setType,
+                    durationSeconds = s.durationSeconds
                 )
             }
             // Best working e1RM this session, flagged as a new best when it tops every PRIOR session's

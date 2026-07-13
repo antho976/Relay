@@ -90,11 +90,3 @@ fun List<BuilderDay>.toEntities(): Pair<List<ProgramDay>, List<ProgramSlot>> {
     }
     return days to slots
 }
-
-/** Move the element at [from] to index [to], returning a new list (drag-reorder helper). */
-fun <T> List<T>.moved(from: Int, to: Int): List<T> {
-    if (from == to || from !in indices || to !in indices) return this
-    val m = toMutableList()
-    m.add(to, m.removeAt(from))
-    return m
-}

@@ -9,6 +9,7 @@ import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.data.repo.ProgramRepository
 import com.forge.app.program.ExerciseLibrary
 import com.forge.app.ui.common.ProgramChangeGuard
+import com.forge.app.ui.common.moved
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow

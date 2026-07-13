@@ -14,7 +14,9 @@ internal data class FreestyleDraftSet(
     val setType: String? = null,
     val isAmrap: Boolean = false,
     val toFailure: Boolean = false,
-    val rpe: Double? = null
+    val rpe: Double? = null,
+    /** Raw hold-time text for a timed-hold set (GYMAP-51), e.g. "1:30"; blank for a rep set. */
+    val hold: String = ""
 )
 
 /** One drafted exercise: a library id + its sets. Name/muscle/bodyweight are re-derived from the
@@ -46,6 +48,9 @@ internal data class FreestyleDraft(
                         if (s.isAmrap) put("amrap", true)
                         if (s.toFailure) put("fail", true)
                         s.rpe?.let { put("rpe", it) }
+                        // Hold time written only for timed sets — a compatible additive field (old
+                        // builds ignore "h"; a draft without it reads hold = "").
+                        if (s.hold.isNotBlank()) put("h", s.hold)
                     }
                 }))
             }
@@ -75,7 +80,8 @@ internal data class FreestyleDraft(
                             setType = if (so.isNull("t")) null else so.optString("t").ifBlank { null },
                             isAmrap = so.optBoolean("amrap", false),
                             toFailure = so.optBoolean("fail", false),
-                            rpe = if (so.has("rpe")) so.getDouble("rpe") else null
+                            rpe = if (so.has("rpe")) so.getDouble("rpe") else null,
+                            hold = so.optString("h", "")
                         )
                     }
                 )

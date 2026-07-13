@@ -500,6 +500,10 @@ class SettingsViewModel @Inject constructor(
         val file = backupRepo.exportBodyweightCsv()
         _exportPath.value = file.absolutePath
     }
+    fun exportCardioCsv() = viewModelScope.launch {
+        val file = backupRepo.exportCardioCsv()
+        _exportPath.value = file.absolutePath
+    }
     fun clearExportPath() { _exportPath.value = null }
 
     // ── Import from another gym app (#GYMAP-17) ────────────────────────────────

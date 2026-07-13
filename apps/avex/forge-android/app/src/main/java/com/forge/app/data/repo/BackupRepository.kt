@@ -8,6 +8,8 @@ import com.forge.app.data.db.dao.LoggedExerciseDao
 import com.forge.app.data.db.dao.LoggedSetDao
 import com.forge.app.data.db.dao.SessionDao
 import com.forge.app.data.prefs.SettingsRepository
+import com.forge.app.domain.cardio.CardioActivity
+import com.forge.app.domain.cardio.CardioCondition
 import dagger.hilt.android.qualifiers.ApplicationContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -220,6 +222,10 @@ class BackupRepository @Inject constructor(
                     put("effort", c.effort ?: "")
                     put("restReason", c.restReason ?: "")
                     put("note", c.note ?: "")
+                    // Per-type fields (GYMAP-38); elevation stays canonical metres like distance is km.
+                    put("inclinePct", c.inclinePct ?: "")
+                    put("laps", c.laps ?: "")
+                    put("elevationM", c.elevationM ?: "")
                 })
             }
             put("cardio", cardioArr)
@@ -344,6 +350,34 @@ class BackupRepository @Inject constructor(
         sb.appendLine("date,weightLb")
         entries.forEach { e -> sb.appendLine("${e.dateKey},${e.weightLb}") }
         val file = File(context.filesDir, "forge_bodyweight.csv")
+        file.writeText(sb.toString())
+        return file
+    }
+
+    /**
+     * Every cardio entry as CSV (GYMAP-43). One row per entry, newest first. The type is resolved to
+     * its display name (custom activities included, GYMAP-37) so the sheet reads as words, not raw
+     * `custom_…` codes; distance stays canonical km like the other exports' canonical-unit columns.
+     */
+    suspend fun exportCardioCsv(): File {
+        val entries = cardioDao.since(0L)
+        val customs = settingsRepo.customCardioTypes.first()
+        val sb = StringBuilder()
+        // Per-type columns (GYMAP-38) trail the note; elevation stays canonical metres like distanceKm.
+        // Conditions (GYMAP-39) trail last, resolved to words (" · " joined) like the type column.
+        sb.appendLine("date,type,durationMin,distanceKm,effort,restReason,intervals,hrZone,note,inclinePct,laps,elevationM,conditions")
+        entries.forEach { e ->
+            val date = dateFmt.format(Instant.ofEpochMilli(e.date).atZone(zone))
+            val typeName = CardioActivity.resolve(e.type, customs).displayName
+            val conditions = CardioCondition.decode(e.conditions).joinToString(" · ") { it.displayName }
+            sb.appendLine(
+                "$date,${csv(typeName)},${e.durationMin},${e.distanceKm ?: ""}," +
+                    "${csv(e.effort ?: "")},${csv(e.restReason ?: "")},${e.intervalCount ?: ""}," +
+                    "${csv(e.hrZone ?: "")},${csv(e.note ?: "")},${e.inclinePct ?: ""},${e.laps ?: ""},${e.elevationM ?: ""}," +
+                    csv(conditions)
+            )
+        }
+        val file = File(context.filesDir, "forge_cardio.csv")
         file.writeText(sb.toString())
         return file
     }

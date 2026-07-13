@@ -299,10 +299,39 @@ internal fun PillChip(
     }
 }
 
+/** A bare number for seeding an editable field — drops a whole value's trailing ".0" (e.g. incline). */
+internal fun plainDecimalInput(v: Double): String =
+    if (v % 1.0 == 0.0) v.toInt().toString() else v.toString()
+
 internal fun sanitizeDecimal(input: String): String {
     val filtered = input.filter { it.isDigit() || it == '.' }
     val firstDot = filtered.indexOf('.')
     val collapsed = if (firstDot == -1) filtered
     else filtered.substring(0, firstDot + 1) + filtered.substring(firstDot + 1).replace(".", "")
     return collapsed.take(6)
+}
+
+/** Keep digits and a single colon, capped at "HH:MM" width, for the duration field (GYMAP-41). */
+internal fun sanitizeDuration(input: String): String {
+    val filtered = input.filter { it.isDigit() || it == ':' }
+    val firstColon = filtered.indexOf(':')
+    val collapsed = if (firstColon == -1) filtered
+    else filtered.substring(0, firstColon + 1) + filtered.substring(firstColon + 1).replace(":", "")
+    return collapsed.take(5)
+}
+
+/**
+ * Parse the duration field into whole minutes (GYMAP-41). Accepts either a plain minute count
+ * ("90" -> 90) or an H:MM clock value ("1:30" -> 90); a lone number stays minutes so existing
+ * plain-number entry is unchanged. The store has no seconds column, so no sub-minute component is
+ * read; malformed parts count as 0.
+ */
+internal fun parseDurationMin(input: String): Int {
+    val t = input.trim()
+    if (t.isEmpty()) return 0
+    val colon = t.indexOf(':')
+    if (colon < 0) return t.toIntOrNull() ?: 0
+    val hours = t.substring(0, colon).toIntOrNull() ?: 0
+    val minutes = t.substring(colon + 1).toIntOrNull() ?: 0
+    return hours * 60 + minutes
 }

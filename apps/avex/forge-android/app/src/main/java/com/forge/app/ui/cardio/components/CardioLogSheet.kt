@@ -40,13 +40,16 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.domain.cardio.CardioActivity
+import com.forge.app.domain.cardio.CardioCondition
 import com.forge.app.domain.cardio.CardioEffort
 import com.forge.app.domain.cardio.CardioRestReason
 import com.forge.app.domain.cardio.CustomCardioType
 import com.forge.app.domain.cardio.pacePerUnit
 import com.forge.app.domain.units.distanceInputValue
 import com.forge.app.domain.units.distanceUnitLabel
+import com.forge.app.domain.units.elevationInputValue
 import com.forge.app.domain.units.parseToKm
+import com.forge.app.domain.units.parseToMeters
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -64,7 +67,11 @@ fun CardioLogSheet(
         note: String?,
         dateMs: Long,
         intervalCount: Int?,
-        hrZone: String?
+        hrZone: String?,
+        inclinePct: Double?,
+        laps: Int?,
+        elevationM: Double?,
+        conditions: Set<CardioCondition>
     ) -> Unit,
     /** Persist a just-created custom activity (GYMAP-37) — wired to the VM so it lands in DataStore
      *  and the picker/rows pick it up reactively. */
@@ -72,6 +79,9 @@ fun CardioLogSheet(
     editing: CardioEntry? = null,
     /** Distance entry/pace unit — true = miles, false = km. The field stores km regardless. */
     useMiles: Boolean = false,
+    /** The last-logged activity code (GYMAP-40) — seeds a NEW entry's activity instead of always
+     *  defaulting to Run. Null (and ignored while editing) falls back to Run. */
+    lastUsedType: String? = null,
     /** Tapping the Avex wordmark — defaults to "go Home"; the cardio tab overrides it to close first. */
     onHome: () -> Unit = com.forge.app.ui.common.LocalGoHome.current
 ) {
@@ -79,10 +89,12 @@ fun CardioLogSheet(
     // entry without leaving composition — fields can't carry over from the previously-opened entry.
     val editKey = editing?.id
     // The selected activity — a built-in type or a user's custom one (GYMAP-37). Seeded by resolving
-    // the edited entry's stored code against the custom list; a new entry defaults to Run.
+    // the edited entry's stored code against the custom list; a NEW entry seeds to the last-logged
+    // activity (GYMAP-40), falling back to Run on a fresh install.
     val customTypes = com.forge.app.ui.cardio.LocalCardioTypes.current
     var type by remember(editKey) {
-        mutableStateOf(editing?.let { CardioActivity.resolve(it.type, customTypes) } ?: CardioActivity.RUN)
+        val seed = editing?.type ?: lastUsedType?.takeIf { it.isNotBlank() }
+        mutableStateOf(seed?.let { CardioActivity.resolve(it, customTypes) } ?: CardioActivity.RUN)
     }
     var showCreateCustom by remember { mutableStateOf(false) }
     var durationText by remember(editKey) { mutableStateOf(editing?.durationMin?.takeIf { it > 0 }?.toString() ?: "") }
@@ -92,18 +104,36 @@ fun CardioLogSheet(
     var note by remember(editKey) { mutableStateOf(editing?.note ?: "") }
     var intervalText by remember(editKey) { mutableStateOf(editing?.intervalCount?.takeIf { it > 0 }?.toString() ?: "") }
     var hrZone by remember(editKey) { mutableStateOf(editing?.hrZone) }
+    // Per-type optional fields (GYMAP-38): incline % (treadmill/elliptical), laps (swim), elevation
+    // gain (outdoor). Elevation seeds in the display unit; the field stores metres regardless.
+    var inclineText by remember(editKey) { mutableStateOf(editing?.inclinePct?.takeIf { it > 0 }?.let { plainDecimalInput(it) } ?: "") }
+    var lapsText by remember(editKey) { mutableStateOf(editing?.laps?.takeIf { it > 0 }?.toString() ?: "") }
+    var elevationText by remember(editKey) { mutableStateOf(editing?.elevationM?.takeIf { it > 0 }?.let { elevationInputValue(it, useMiles) } ?: "") }
+    // Weather / environment tags (GYMAP-39), multi-select — seeded from the edited entry's stored codes.
+    var conditions by remember(editKey) { mutableStateOf(CardioCondition.decode(editing?.conditions)) }
     var dateMs by remember(editKey) { mutableStateOf(editing?.date ?: System.currentTimeMillis()) }
     var showDatePicker by remember { mutableStateOf(false) }
-    // Optional details (effort / HR zone / intervals) start tucked away — opened by default only when
-    // editing an entry that already has one of them, so they're never silently hidden.
+    // Optional details (effort / HR zone / intervals / per-type fields / conditions) start tucked away —
+    // opened by default only when editing an entry that already has one, so they're never silently hidden.
     var moreOpen by remember(editKey) {
-        mutableStateOf(editing != null && (editing.effort != null || editing.hrZone != null || (editing.intervalCount ?: 0) > 0))
+        mutableStateOf(
+            editing != null && (
+                editing.effort != null || editing.hrZone != null || (editing.intervalCount ?: 0) > 0 ||
+                    editing.inclinePct != null || editing.laps != null || editing.elevationM != null ||
+                    !editing.conditions.isNullOrBlank()
+                )
+        )
     }
 
-    val durationInt = durationText.toIntOrNull() ?: 0
+    // Accepts plain minutes ("90") or an H:MM clock value ("1:30" -> 90) — GYMAP-41.
+    val durationInt = parseDurationMin(durationText)
     // The field holds a number in the display unit; convert to the canonical km we store + pass to onSave.
     val distanceKm = parseToKm(distanceText, useMiles)
     val intervalInt = intervalText.toIntOrNull()
+    // Per-type fields — raw parsed values; the VM keeps only the ones the chosen activity surfaces.
+    val inclineValue = inclineText.toDoubleOrNull()
+    val lapsValue = lapsText.toIntOrNull()
+    val elevationValue = parseToMeters(elevationText, useMiles)
     val canSubmit = if (type.isRest) restReason != null else durationInt > 0
 
     val onBg = MaterialTheme.colorScheme.onBackground
@@ -169,9 +199,10 @@ fun CardioLogSheet(
                             CompactNumberField(
                                 caption = "Duration",
                                 value = durationText,
-                                onValueChange = { durationText = it.filter(Char::isDigit).take(4) },
+                                onValueChange = { durationText = sanitizeDuration(it) },
                                 placeholder = "30",
-                                unit = "min",
+                                // Reflects how the typed value reads: plain minutes, or an H:MM clock (GYMAP-41).
+                                unit = if (durationText.contains(':')) "h:mm" else "min",
                                 keyboardType = KeyboardType.Number,
                                 onBg = onBg, muted = muted, accent = accent, outline = outline,
                                 modifier = Modifier.weight(1f)
@@ -197,7 +228,7 @@ fun CardioLogSheet(
                     }
                 }
 
-                // Optional details (effort / HR zone / intervals), collapsed behind a "More" expander.
+                // Optional details (effort / HR zone / intervals / per-type fields), collapsed behind "More".
                 cardioMoreItems(
                     moreOpen = moreOpen,
                     onToggleMore = { moreOpen = !moreOpen },
@@ -206,6 +237,15 @@ fun CardioLogSheet(
                     hrZone = hrZone, onHrZone = { hrZone = it },
                     intervalText = intervalText,
                     onIntervalChange = { intervalText = it.filter(Char::isDigit).take(3) },
+                    inclineText = inclineText,
+                    onInclineChange = { inclineText = sanitizeDecimal(it) },
+                    lapsText = lapsText,
+                    onLapsChange = { lapsText = it.filter(Char::isDigit).take(4) },
+                    elevationText = elevationText,
+                    onElevationChange = { elevationText = it.filter(Char::isDigit).take(5) },
+                    conditions = conditions,
+                    onToggleCondition = { c -> conditions = if (c in conditions) conditions - c else conditions + c },
+                    useMiles = useMiles,
                     onBg = onBg, bg = bg, muted = muted, accent = accent, outline = outline
                 )
             } else {
@@ -269,7 +309,11 @@ fun CardioLogSheet(
                         note.ifBlank { null },
                         dateMs,
                         if (type.isHiit) intervalInt else null,
-                        if (type.isRest) null else hrZone
+                        if (type.isRest) null else hrZone,
+                        inclineValue,
+                        lapsValue,
+                        elevationValue,
+                        if (type.isRest) emptySet() else conditions
                     )
                 },
                 onCancel = onDismiss,

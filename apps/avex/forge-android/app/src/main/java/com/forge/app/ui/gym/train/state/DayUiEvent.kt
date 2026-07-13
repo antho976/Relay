@@ -7,7 +7,8 @@ import com.forge.app.program.ExerciseDef
 sealed interface DayUiEvent {
     // Exercise card interactions
     data class ToggleExpanded(val exerciseId: String) : DayUiEvent
-    data class LogSet(val exerciseId: String, val weightText: String, val reps: Int) : DayUiEvent
+    /** [durationSeconds] non-null = a timed-hold set (GYMAP-51); reps is then 0 and ignored. */
+    data class LogSet(val exerciseId: String, val weightText: String, val reps: Int, val durationSeconds: Int? = null) : DayUiEvent
     /** Long-press on a logged set row — immediately log another set with the same weight/reps. */
     data class LogSameAsLast(val exerciseId: String, val setId: Long) : DayUiEvent
     data class DeleteSet(val setId: Long) : DayUiEvent

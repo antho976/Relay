@@ -18,6 +18,8 @@ sealed interface CardioActivity {
     val isRest: Boolean
     /** Surfaces the interval-count field. Only [CardioType.HIIT]. */
     val isHiit: Boolean
+    /** The per-type optional fields this activity surfaces (incline / laps / elevation, GYMAP-38). */
+    val optionalFields: Set<CardioField>
 
     data class Builtin(val type: CardioType) : CardioActivity {
         override val code: String get() = type.code
@@ -25,15 +27,17 @@ sealed interface CardioActivity {
         override val icon: ImageVector get() = type.icon
         override val isRest: Boolean get() = type.isRest
         override val isHiit: Boolean get() = type == CardioType.HIIT
+        override val optionalFields: Set<CardioField> get() = optionalFieldsFor(type)
     }
 
     data class Custom(val custom: CustomCardioType) : CardioActivity {
         override val code: String get() = custom.code
         override val displayName: String get() = custom.name
         override val icon: ImageVector get() = CardioGlyphs.icon(custom.glyphKey)
-        // Custom activities are always plain steady-state work — no rest/HIIT special-casing.
+        // Custom activities are always plain steady-state work — no rest/HIIT/per-type special-casing.
         override val isRest: Boolean get() = false
         override val isHiit: Boolean get() = false
+        override val optionalFields: Set<CardioField> get() = emptySet()
     }
 
     companion object {

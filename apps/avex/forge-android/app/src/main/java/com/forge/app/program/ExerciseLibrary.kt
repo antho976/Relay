@@ -45,7 +45,14 @@ data class ExerciseDef(
      * bread-and-butter movements. Above 1 marks a signature staple (lateral raises — the user's
      * stated priority) that should anchor its slot most weeks.
      */
-    val pickBias: Double = 1.0
+    val pickBias: Double = 1.0,
+    /**
+     * Timed-hold exercise (GYMAP-51): logged as a held DURATION in seconds instead of reps — planks,
+     * dead hangs, wall sits, side planks. The logger shows a stopwatch + mm:ss field where the reps
+     * field normally is, and these sets are kept out of every weight×reps stat (volume, e1RM, PR).
+     * [defaultReps] still carries the target as a time string (e.g. "30-60s") for display.
+     */
+    val timed: Boolean = false
 ) {
     /**
      * Owner-only movement — the plate-count ([ExerciseUnit.PLATES]) station exercises, which are
@@ -417,7 +424,7 @@ object ExerciseLibrary {
             muscleTarget = "Whole core, isometric",
             why = "Builds the bracing strength that protects your back during squats and deadlifts.",
             whenToUse = "No pull-up bar, or as a warm-up to other core work.",
-            pickBias = 0.7),
+            pickBias = 0.7, timed = true),
         ExerciseDef("mwm-high-pulley-crunch", "High Pulley Ab Crunch", MuscleGroup.CORE,
             listOf(Equipment.CABLE), ExerciseUnit.PLATES,
             listOf(ISO, MC), Difficulty.BEGINNER, 3, "10-15", "Kneel and crunch down",
@@ -443,6 +450,31 @@ object ExerciseLibrary {
         // bodyweight-only (or minimal-equipment) setup can never produce an empty/starved day.
         // fallbackOnly = true keeps these out of an equipped user's picks — they only enter the
         // pool when nothing the user actually owns can fill the muscle.
+        //
+        // Timed holds (GYMAP-51) — logged as a held duration, not reps. fallbackOnly so they never
+        // headline an equipped user's generated day (plank already covers auto-generated core holds);
+        // still fully browsable in the freestyle picker and offered as swap candidates.
+        ExerciseDef("dead-hang", "Dead Hang", MuscleGroup.BACK,
+            listOf(Equipment.PULL_UP_BAR), ExerciseUnit.BODYWEIGHT,
+            listOf(ISO, BW), Difficulty.BEGINNER, 3, "20-40s", "Hang at full stretch, shoulders active",
+            muscleTarget = "Grip + lats + shoulder decompression",
+            why = "Just hang from the bar. Builds grip endurance and opens up the shoulders and lats.",
+            whenToUse = "Grip work, or a shoulder-friendly finisher on a pull day.",
+            fallbackOnly = true, pickBias = 0.6, timed = true),
+        ExerciseDef("wall-sit", "Wall Sit", MuscleGroup.QUADS,
+            listOf(Equipment.BODYWEIGHT_ONLY), ExerciseUnit.BODYWEIGHT,
+            listOf(ISO, BW), Difficulty.BEGINNER, 3, "30-60s", "Thighs parallel, back flat on the wall",
+            muscleTarget = "Quads, isometric",
+            why = "Sit against a wall with thighs parallel and hold. Zero-equipment quad burn.",
+            whenToUse = "No equipment, or a quad finisher.",
+            fallbackOnly = true, pickBias = 0.6, timed = true),
+        ExerciseDef("side-plank", "Side Plank", MuscleGroup.CORE,
+            listOf(Equipment.BODYWEIGHT_ONLY), ExerciseUnit.BODYWEIGHT,
+            listOf(ISO, BW), Difficulty.BEGINNER, 3, "20-45s", "Stack hips, hold a straight line",
+            muscleTarget = "Obliques + lateral core, isometric",
+            why = "Hold your body in a straight line on one forearm — trains the obliques and lateral core the front plank misses.",
+            whenToUse = "Oblique / anti-lateral-flexion core work with no equipment.",
+            fallbackOnly = true, pickBias = 0.6, timed = true),
         ExerciseDef("bw-inverted-row", "Inverted Row", MuscleGroup.BACK,
             listOf(Equipment.BODYWEIGHT_ONLY), ExerciseUnit.BODYWEIGHT,
             listOf(COMP, BW), Difficulty.INTERMEDIATE, 4, "AMRAP", "Under a sturdy table, body straight",

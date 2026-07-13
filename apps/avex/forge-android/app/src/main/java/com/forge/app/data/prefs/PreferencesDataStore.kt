@@ -219,6 +219,11 @@ object PreferenceKeys {
      *  than the (schema-locked) Room DB; a logged session references one only by its stable code. */
     val CUSTOM_CARDIO_TYPES = stringPreferencesKey("custom_cardio_types")
 
+    /** The activity code of the last cardio session logged (GYMAP-40) — the log sheet seeds a new
+     *  entry to it instead of always defaulting to Run. Absent until the first session; rest days
+     *  don't write it (a rest default would be nonsense). */
+    val LAST_CARDIO_TYPE = stringPreferencesKey("last_cardio_type")
+
     /** Default rest between sets (seconds), per movement type — the base the RestAdvisor builds on.
      *  Absent ⇒ the canonical 180 (compound) / 90 (isolation). */
     val REST_COMPOUND_SECONDS = intPreferencesKey("rest_compound_seconds")

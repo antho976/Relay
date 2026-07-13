@@ -30,6 +30,7 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.data.db.entities.CardioEntry
+import com.forge.app.domain.cardio.CardioCondition
 import com.forge.app.domain.cardio.CardioEffort
 import com.forge.app.domain.cardio.CardioRestReason
 import com.forge.app.domain.cardio.CardioActivity
@@ -38,11 +39,13 @@ import com.forge.app.domain.cardio.CardioWearableDay
 import com.forge.app.domain.cardio.RoutePoint
 import com.forge.app.domain.cardio.cardioDetailParts
 import com.forge.app.domain.cardio.compareCardioSession
+import com.forge.app.domain.cardio.formatInclinePct
 import com.forge.app.domain.cardio.formatPaceSec
 import com.forge.app.domain.cardio.paceSecPerUnit
 import com.forge.app.domain.cardio.pacePerUnit
 import com.forge.app.domain.units.distanceUnitLabel
 import com.forge.app.domain.units.formatDistance
+import com.forge.app.domain.units.formatElevation
 import com.forge.app.ui.common.EditorialHairline
 import com.forge.app.ui.common.EditorialHeader
 import com.forge.app.ui.common.ForgeOutlineCapsule
@@ -135,9 +138,17 @@ fun CardioSessionDetailSheet(
                             val (meta, metaIsBest) = paceCompareMeta(entry, compare, useMiles)
                             StatRow("Pace", "$pace /$unit", onBg, muted, outline, meta = meta, metaColor = if (metaIsBest) accent else muted)
                         }
+                        // Per-type fields (GYMAP-38) — at most one applies to any given activity.
+                        entry.laps?.takeIf { it > 0 }?.let { StatRow("Laps", "$it", onBg, muted, outline) }
+                        entry.inclinePct?.takeIf { it > 0 }?.let { StatRow("Incline", formatInclinePct(it), onBg, muted, outline) }
+                        entry.elevationM?.takeIf { it > 0 }?.let { StatRow("Elevation gain", formatElevation(it, useMiles), onBg, muted, outline) }
                         CardioEffort.fromCode(entry.effort)?.let { StatRow("Effort", it.displayName, onBg, muted, outline) }
                         entry.hrZone?.let { StatRow("HR zone", "Z$it", onBg, muted, outline) }
                         entry.intervalCount?.takeIf { it > 0 }?.let { StatRow("Intervals", "$it", onBg, muted, outline) }
+                        // Weather tags (GYMAP-39), read-only here — the interactive chips live in the log sheet.
+                        CardioCondition.decode(entry.conditions).takeIf { it.isNotEmpty() }?.let { tags ->
+                            StatRow("Conditions", tags.joinToString(" · ") { it.displayName }, onBg, muted, outline)
+                        }
                     }
                 }
             }

@@ -261,6 +261,42 @@ val MIGRATION_24_25 = object : Migration(24, 25) {
     }
 }
 
+/**
+ * v25 → v26: timed-hold sets (GYMAP-51). `logged_set.duration_seconds` holds the held time in whole
+ * seconds for isometric holds (planks, dead hangs, wall sits); null for a normal rep-based set.
+ * Additive nullable column — pre-existing rows read null (rep-based, exactly as before).
+ */
+val MIGRATION_25_26 = object : Migration(25, 26) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `logged_set` ADD COLUMN `duration_seconds` INTEGER")
+    }
+}
+
+/**
+ * v26 → v27: per-type cardio fields (GYMAP-38). `cardio_entry` gains `incline_pct` (treadmill /
+ * elliptical grade %), `laps` (pool lengths for a swim) and `elevation_m` (elevation gain in metres
+ * for outdoor distance work). Three additive nullable columns — pre-existing rows read null (the
+ * field simply doesn't apply to that activity, or wasn't logged).
+ */
+val MIGRATION_26_27 = object : Migration(26, 27) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `cardio_entry` ADD COLUMN `incline_pct` REAL")
+        db.execSQL("ALTER TABLE `cardio_entry` ADD COLUMN `laps` INTEGER")
+        db.execSQL("ALTER TABLE `cardio_entry` ADD COLUMN `elevation_m` REAL")
+    }
+}
+
+/**
+ * v27 → v28: cardio conditions (GYMAP-39). `cardio_entry.conditions` holds the weather / environment
+ * tags a session was done in (hot/cold/rain/wind) as a comma-joined code list. Additive nullable
+ * column — pre-existing rows read null (no conditions tagged).
+ */
+val MIGRATION_27_28 = object : Migration(27, 28) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `cardio_entry` ADD COLUMN `conditions` TEXT")
+    }
+}
+
 /** All migrations, in order. Register every new one here. */
 val ALL_MIGRATIONS: Array<Migration> = arrayOf(
     MIGRATION_12_13,
@@ -275,5 +311,8 @@ val ALL_MIGRATIONS: Array<Migration> = arrayOf(
     MIGRATION_21_22,
     MIGRATION_22_23,
     MIGRATION_23_24,
-    MIGRATION_24_25
+    MIGRATION_24_25,
+    MIGRATION_25_26,
+    MIGRATION_26_27,
+    MIGRATION_27_28
 )

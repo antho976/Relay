@@ -55,7 +55,14 @@ import com.forge.app.data.db.entities.SessionBreak
 import com.forge.app.data.db.entities.VacationPeriod
 
 /**
- * Schema is v25 (v25 added `bodyweight_entry.note` — an optional per-weigh-in note for GYMAP-54, an
+ * Schema is v28 (v28 added `cardio_entry.conditions` — comma-joined weather/environment tags
+ * (hot/cold/rain/wind) a session was done in for GYMAP-39, an additive nullable column; null = none tagged;
+ * v27 added `cardio_entry.incline_pct` + `cardio_entry.laps` + `cardio_entry.elevation_m`
+ * — per-type optional cardio fields (treadmill grade / pool laps / outdoor elevation gain) for GYMAP-38,
+ * three additive nullable columns; null = the field doesn't apply / wasn't logged;
+ * v26 added `logged_set.duration_seconds` — held time in seconds for timed-hold sets
+ * (planks/dead hangs/wall sits) for GYMAP-51, an additive nullable column; null = normal rep-based set;
+ * v25 added `bodyweight_entry.note` — an optional per-weigh-in note for GYMAP-54, an
  * additive nullable column; v24 added `body_measurement` — per-type circumference history for GYMAP-52, a new
  * empty table, additive; v23 added `cardio_entry.interval_count` + `cardio_entry.hr_zone` for cardio
  * depth — HIIT interval counts + manual HR-zone tags;
@@ -106,7 +113,7 @@ import com.forge.app.data.db.entities.VacationPeriod
         SuggestionOutcome::class,
         SessionSegment::class
     ],
-    version = 25,
+    version = 28,
     exportSchema = true
 )
 @TypeConverters(Converters::class)

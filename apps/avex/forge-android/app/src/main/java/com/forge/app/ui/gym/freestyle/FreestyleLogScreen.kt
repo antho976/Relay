@@ -26,6 +26,7 @@ import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
@@ -53,6 +54,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -63,14 +65,20 @@ import com.forge.app.data.db.entities.LoggedSet
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.domain.units.parseToLb
 import com.forge.app.domain.units.weightInputValue
+import com.forge.app.domain.units.formatHold
+import com.forge.app.domain.units.parseHold
 import com.forge.app.program.ExerciseLibrary
 import com.forge.app.program.ExerciseUnit
 import com.forge.app.program.MuscleGroup
+import com.forge.app.ui.common.DraggableItem
 import com.forge.app.ui.common.ForgeOutlineCapsule
 import com.forge.app.ui.common.ForgePrimaryCapsule
 import com.forge.app.ui.common.ForgeWordmark
 import com.forge.app.ui.common.GlyphButton
 import com.forge.app.ui.common.clickableLabeled
+import com.forge.app.ui.common.dragContainer
+import com.forge.app.ui.common.moved
+import com.forge.app.ui.common.rememberDragDropState
 import com.forge.app.ui.common.rirLabel
 import com.forge.app.ui.common.rpeLabel
 import com.forge.app.ui.gym.stats.components.MuscleFigure
@@ -85,7 +93,9 @@ private data class FsSet(
     val setType: String? = null,       // null | "warmup" | "drop" — the mutually-exclusive shape
     val isAmrap: Boolean = false,
     val toFailure: Boolean = false,
-    val rpe: Double? = null
+    val rpe: Double? = null,
+    /** Raw hold-time text for a timed-hold set (GYMAP-51), e.g. "1:30" or "45"; blank for a rep set. */
+    val hold: String = ""
 ) {
     val hasTags: Boolean get() = setType != null || isAmrap || toFailure || rpe != null
 
@@ -102,6 +112,8 @@ private data class FsExercise(
     val name: String,
     val muscle: MuscleGroup,
     val bodyweight: Boolean,
+    /** Timed-hold exercise (GYMAP-51) — sets log a held duration (mm:ss) instead of reps. */
+    val timed: Boolean = false,
     val sets: List<FsSet> = listOf(FsSet())
 )
 
@@ -111,7 +123,7 @@ private fun draftFrom(items: List<FsExercise>, openedAtMs: Long): FreestyleDraft
         openedAtMs = openedAtMs,
         exercises = items.map { ex ->
             FreestyleDraftExercise(ex.libId, ex.sets.map {
-                FreestyleDraftSet(it.weight, it.reps, it.setType, it.isAmrap, it.toFailure, it.rpe)
+                FreestyleDraftSet(it.weight, it.reps, it.setType, it.isAmrap, it.toFailure, it.rpe, it.hold)
             })
         }
     )
@@ -126,7 +138,8 @@ private fun draftToItems(draft: FreestyleDraft): List<FsExercise> =
             name = def.name,
             muscle = def.muscle,
             bodyweight = def.unit == ExerciseUnit.BODYWEIGHT,
-            sets = de.sets.map { FsSet(it.weight, it.reps, it.setType, it.isAmrap, it.toFailure, it.rpe) }
+            timed = def.timed,
+            sets = de.sets.map { FsSet(it.weight, it.reps, it.setType, it.isAmrap, it.toFailure, it.rpe, it.hold) }
                 .ifEmpty { listOf(FsSet()) }
         )
     }
@@ -143,6 +156,8 @@ private fun List<FreestyleTemplateExercise>.toItems(useKg: Boolean): List<FsExer
             name = def.name,
             muscle = def.muscle,
             bodyweight = bodyweight,
+            timed = def.timed,
+            // A timed template seeds structure only — the hold time is re-entered (templates carry no duration yet).
             sets = te.sets.map { s ->
                 FsSet(
                     weight = if (bodyweight) "" else s.weightLb?.let { weightInputValue(it, useKg) } ?: "",
@@ -249,23 +264,41 @@ fun FreestyleLogScreen(
     }
 
     val totalVolumeLb = items.sumOf { ex -> ex.sets.sumOf { ex.setVolumeLb(it, useKg) } }
-    val loggedSets = items.sumOf { ex -> ex.sets.count { (it.reps.toIntOrNull() ?: 0) > 0 } }
+    // A set counts as logged when it has reps (rep set) OR a parseable hold time (timed set, GYMAP-51).
+    val loggedSets = items.sumOf { ex ->
+        ex.sets.count { if (ex.timed) (parseHold(it.hold) ?: 0) > 0 else (it.reps.toIntOrNull() ?: 0) > 0 }
+    }
     val canSave = loggedSets > 0
 
     fun save() {
         val payload = items.mapNotNull { ex ->
             val sets = ex.sets.mapNotNull { s ->
-                val reps = s.reps.toIntOrNull()?.takeIf { it > 0 } ?: return@mapNotNull null
                 val weightLb = if (ex.bodyweight) null else parseToLb(s.weight, useKg)
-                FreestyleSetInput(
-                    weightText = if (ex.bodyweight) "" else s.weight.trim(),
-                    weightLb = weightLb,
-                    reps = reps,
-                    setType = s.setType,
-                    isAmrap = s.isAmrap,
-                    toFailure = s.toFailure,
-                    rpe = s.rpe
-                )
+                if (ex.timed) {
+                    // Timed hold: valid when the hold time parses to > 0; reps is 0 and ignored.
+                    val dur = parseHold(s.hold)?.takeIf { it > 0 } ?: return@mapNotNull null
+                    FreestyleSetInput(
+                        weightText = if (ex.bodyweight) "" else s.weight.trim(),
+                        weightLb = weightLb,
+                        reps = 0,
+                        durationSeconds = dur,
+                        setType = s.setType,
+                        isAmrap = s.isAmrap,
+                        toFailure = s.toFailure,
+                        rpe = s.rpe
+                    )
+                } else {
+                    val reps = s.reps.toIntOrNull()?.takeIf { it > 0 } ?: return@mapNotNull null
+                    FreestyleSetInput(
+                        weightText = if (ex.bodyweight) "" else s.weight.trim(),
+                        weightLb = weightLb,
+                        reps = reps,
+                        setType = s.setType,
+                        isAmrap = s.isAmrap,
+                        toFailure = s.toFailure,
+                        rpe = s.rpe
+                    )
+                }
             }
             if (sets.isEmpty()) null else FreestyleExerciseInput(ex.libId, sets)
         }
@@ -273,6 +306,14 @@ fun FreestyleLogScreen(
             leaving = true   // stop the debounced autosave from re-writing the draft after save clears it
             viewModel.save(payload, openedAtMs) { onBack() }
         }
+    }
+
+    // Long-press an exercise card to drag it into a new order (GYMAP-47). One fixed leading item (the
+    // resume prompt / session header) sits above the rows; bounding to items.size keeps the trailing
+    // "+ Add exercise" footer from becoming a drop target.
+    val listState = rememberLazyListState()
+    val dragState = rememberDragDropState(listState, firstDraggableIndex = 1, draggableItemCount = items.size) { from, to ->
+        items = items.moved(from, to)
     }
 
     Box(Modifier.fillMaxSize()) {
@@ -298,7 +339,8 @@ fun FreestyleLogScreen(
             containerColor = Color.Transparent
         ) { inner ->
             LazyColumn(
-                modifier = Modifier.fillMaxSize().padding(inner),
+                state = listState,
+                modifier = Modifier.fillMaxSize().padding(inner).dragContainer(dragState),
                 contentPadding = PaddingValues(horizontal = 24.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(0.dp)
             ) {
@@ -335,19 +377,23 @@ fun FreestyleLogScreen(
                     }
                 }
                 itemsIndexed(items, key = { _, ex -> ex.libId }) { i, ex ->
-                    FsExerciseCard(
-                        exercise = ex,
-                        unitLabel = unitLabel,
-                        useKg = useKg,
-                        lastSetsProvider = { id -> viewModel.lastSets(id) },
-                        onRemove = { items = items.filterIndexed { idx, _ -> idx != i } },
-                        onSetChange = { setIdx, set ->
-                            updateExercise(i) { e -> e.copy(sets = e.sets.mapIndexed { si, s -> if (si == setIdx) set else s }) }
-                        },
-                        onAddSet = { updateExercise(i) { e -> e.copy(sets = e.sets + FsSet()) } },
-                        onRemoveSet = { setIdx -> updateExercise(i) { e -> e.copy(sets = e.sets.filterIndexed { si, _ -> si != setIdx }) } },
-                        onReplaceSets = { newSets -> updateExercise(i) { e -> e.copy(sets = newSets) } }
-                    )
+                    DraggableItem(dragState, i) { dragging ->
+                        FsExerciseCard(
+                            exercise = ex,
+                            dragging = dragging,
+                            unitLabel = unitLabel,
+                            useKg = useKg,
+                            lastSetsProvider = { id -> viewModel.lastSets(id) },
+                            pinnedNoteProvider = { id -> viewModel.pinnedNote(id) },
+                            onRemove = { items = items.filterIndexed { idx, _ -> idx != i } },
+                            onSetChange = { setIdx, set ->
+                                updateExercise(i) { e -> e.copy(sets = e.sets.mapIndexed { si, s -> if (si == setIdx) set else s }) }
+                            },
+                            onAddSet = { updateExercise(i) { e -> e.copy(sets = e.sets + FsSet()) } },
+                            onRemoveSet = { setIdx -> updateExercise(i) { e -> e.copy(sets = e.sets.filterIndexed { si, _ -> si != setIdx }) } },
+                            onReplaceSets = { newSets -> updateExercise(i) { e -> e.copy(sets = newSets) } }
+                        )
+                    }
                 }
                 if (pendingDraft == null) {
                     item {
@@ -394,7 +440,7 @@ fun FreestyleLogScreen(
                 onConfirm = { picked ->
                     val added = picked.mapNotNull { id ->
                         val def = ExerciseLibrary.byId(id) ?: return@mapNotNull null
-                        FsExercise(libId = def.id, name = def.name, muscle = def.muscle, bodyweight = def.unit == ExerciseUnit.BODYWEIGHT)
+                        FsExercise(libId = def.id, name = def.name, muscle = def.muscle, bodyweight = def.unit == ExerciseUnit.BODYWEIGHT, timed = def.timed)
                     }
                     items = items + added
                     showBrowser = false
@@ -436,6 +482,15 @@ private fun FsSessionHeader(
                 style = MaterialTheme.typography.bodyMedium,
                 color = cs.onSurface
             )
+            // Non-obvious control, so a one-line explainer (§13) — only once there's an order to change.
+            if (exerciseCount >= 2) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Hold an exercise to reorder.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = cs.onSurfaceVariant.copy(alpha = 0.7f)
+                )
+            }
         }
         Spacer(Modifier.height(8.dp))
     }
@@ -475,9 +530,11 @@ private fun FsResumePrompt(
 @Composable
 private fun FsExerciseCard(
     exercise: FsExercise,
+    dragging: Boolean,
     unitLabel: String,
     useKg: Boolean,
     lastSetsProvider: suspend (String) -> List<LoggedSet>,
+    pinnedNoteProvider: suspend (String) -> String,
     onRemove: () -> Unit,
     onSetChange: (Int, FsSet) -> Unit,
     onAddSet: () -> Unit,
@@ -493,13 +550,26 @@ private fun FsExerciseCard(
     var lastSets by remember(exercise.libId) { mutableStateOf<List<LoggedSet>>(emptyList()) }
     var showLast by remember(exercise.libId) { mutableStateOf(false) }
     var expanded by remember(exercise.libId) { mutableStateOf(true) }
+    // The pinned cue (#112) a user attached to this move, surfaced read-only while logging (GYMAP-49).
+    var pinnedNote by remember(exercise.libId) { mutableStateOf("") }
     // Which set (if any) has its tag editor folded open — one at a time keeps the card compact.
     var openSetIdx by remember(exercise.libId) { mutableStateOf<Int?>(null) }
-    LaunchedEffect(exercise.libId) { lastSets = lastSetsProvider(exercise.libId) }
+    LaunchedEffect(exercise.libId) {
+        lastSets = lastSetsProvider(exercise.libId)
+        pinnedNote = pinnedNoteProvider(exercise.libId)
+    }
 
-    // Air alone separates exercise blocks (§1: no section hairlines).
-    Spacer(Modifier.height(20.dp))
-    Column(modifier = Modifier.fillMaxWidth()) {
+    // Air alone separates exercise blocks (§1: no section hairlines); it's top padding (not a leading
+    // Spacer) so the card stays a single child of the drag wrapper's Box and the air sits outside the
+    // picked-up wash. While dragging, a faint clipped wash reads the card as lifted (matches the builder).
+    Column(
+        modifier = Modifier.fillMaxWidth()
+            .padding(top = 20.dp)
+            .then(
+                if (dragging) Modifier.clip(RoundedCornerShape(12.dp)).background(cs.surfaceVariant.copy(alpha = 0.5f))
+                else Modifier
+            )
+    ) {
         // Header: target-muscle thumbnail + name + a mono meta line that stays visible when collapsed —
         // so a long workout can be tidied by folding done exercises down to a one-line summary.
         Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -522,6 +592,18 @@ private fun FsExerciseCard(
             }
             GlyphButton(if (expanded) "▾" else "▸", if (expanded) "Collapse" else "Expand", cs.onSurfaceVariant, onClick = { expanded = !expanded })
             GlyphButton("×", "Remove exercise", cs.onSurfaceVariant, onClick = onRemove)
+        }
+
+        // Pinned cue — the coach note kept in the always-visible header (shows folded too), mirroring
+        // the structured Train card's quoted-italic aside so the same cue reads the same everywhere.
+        if (pinnedNote.isNotBlank()) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "\" $pinnedNote \"",
+                style = MaterialTheme.typography.bodySmall,
+                color = cs.onSurfaceVariant.copy(alpha = 0.6f),
+                fontStyle = FontStyle.Italic
+            )
         }
 
       AnimatedVisibility(
@@ -547,12 +629,14 @@ private fun FsExerciseCard(
                 LastTimePanel(
                     sets = lastSets,
                     useKg = useKg,
+                    timed = exercise.timed,
                     onCopy = {
                         onReplaceSets(
                             lastSets.map { s ->
                                 FsSet(
-                                    weight = s.weightLb?.let { lb -> weightInputValue(lb, useKg) } ?: "",
-                                    reps = s.reps.toString()
+                                    weight = if (exercise.timed) "" else s.weightLb?.let { lb -> weightInputValue(lb, useKg) } ?: "",
+                                    reps = if (exercise.timed) "" else s.reps.toString(),
+                                    hold = if (exercise.timed) s.durationSeconds?.let { formatHold(it) } ?: "" else ""
                                 )
                             }
                         )
@@ -571,7 +655,7 @@ private fun FsExerciseCard(
                 style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, fontSize = 9.sp,
                 modifier = Modifier.weight(1f).padding(start = if (exercise.bodyweight) 0.dp else 36.dp)
             )
-            Text("REPS", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, fontSize = 9.sp, modifier = Modifier.padding(start = 36.dp))
+            Text(if (exercise.timed) "HOLD" else "REPS", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, fontSize = 9.sp, modifier = Modifier.padding(start = 36.dp))
             Spacer(Modifier.width(72.dp))
         }
         Spacer(Modifier.height(4.dp))
@@ -600,15 +684,26 @@ private fun FsExerciseCard(
                         StepBtn("+", "Increase weight") { onSetChange(setIdx, set.copy(weight = stepWeightStr(set.weight, weightStep))) }
                     }
                     Spacer(Modifier.width(6.dp))
-                    StepBtn("−", "Decrease reps") { onSetChange(setIdx, set.copy(reps = stepRepsStr(set.reps, -1))) }
-                    FsUnderlineField(
-                        value = set.reps,
-                        onValueChange = { new -> onSetChange(setIdx, set.copy(reps = new.filter { it.isDigit() })) },
-                        placeholder = "0",
-                        keyboardType = KeyboardType.Number,
-                        modifier = Modifier.width(36.dp)
-                    )
-                    StepBtn("+", "Increase reps") { onSetChange(setIdx, set.copy(reps = stepRepsStr(set.reps, 1))) }
+                    if (exercise.timed) {
+                        // Timed hold (GYMAP-51): a manual mm:ss field (or bare seconds) in place of reps.
+                        FsUnderlineField(
+                            value = set.hold,
+                            onValueChange = { new -> onSetChange(setIdx, set.copy(hold = new.filter { it.isDigit() || it == ':' })) },
+                            placeholder = "0:00",
+                            keyboardType = KeyboardType.Text,
+                            modifier = Modifier.width(64.dp)
+                        )
+                    } else {
+                        StepBtn("−", "Decrease reps") { onSetChange(setIdx, set.copy(reps = stepRepsStr(set.reps, -1))) }
+                        FsUnderlineField(
+                            value = set.reps,
+                            onValueChange = { new -> onSetChange(setIdx, set.copy(reps = new.filter { it.isDigit() })) },
+                            placeholder = "0",
+                            keyboardType = KeyboardType.Number,
+                            modifier = Modifier.width(36.dp)
+                        )
+                        StepBtn("+", "Increase reps") { onSetChange(setIdx, set.copy(reps = stepRepsStr(set.reps, 1))) }
+                    }
                     // Set-type tags (warmup/drop/AMRAP/failure/RPE) fold behind this ⋯ toggle so the
                     // weight×reps entry stays the big primary target (§3 live/flow).
                     FsTagToggle { openSetIdx = if (tagsOpen) null else setIdx }
@@ -667,7 +762,7 @@ private fun FsExerciseCard(
 
 /** The last session's sets as tappable-to-copy chips + a copy CTA that fills this exercise. */
 @Composable
-private fun LastTimePanel(sets: List<LoggedSet>, useKg: Boolean, onCopy: () -> Unit) {
+private fun LastTimePanel(sets: List<LoggedSet>, useKg: Boolean, timed: Boolean = false, onCopy: () -> Unit) {
     val cs = MaterialTheme.colorScheme
     Column(modifier = Modifier.fillMaxWidth().padding(top = 8.dp, bottom = 4.dp)) {
         Text("LAST TIME", style = MaterialTheme.typography.labelSmall, color = cs.onSurfaceVariant, fontSize = 9.sp)
@@ -676,7 +771,8 @@ private fun LastTimePanel(sets: List<LoggedSet>, useKg: Boolean, onCopy: () -> U
             sets.forEach { s ->
                 val w = s.weightLb?.let { formatWeight(it, useKg) } ?: s.weightText.ifBlank { "BW" }
                 Text(
-                    "$w × ${s.reps}",
+                    // Timed holds show their held time; every other set shows "weight × reps".
+                    if (timed) formatHold(s.durationSeconds ?: 0) else "$w × ${s.reps}",
                     style = MaterialTheme.typography.labelMedium,
                     color = cs.onSurface,
                     modifier = Modifier

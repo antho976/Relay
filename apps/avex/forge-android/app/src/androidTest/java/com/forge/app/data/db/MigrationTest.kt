@@ -195,12 +195,50 @@ class MigrationTest {
     }
 
     @Test
-    fun migrateFullChain12To25_runsEveryStepInOrder() {
+    fun migrate25To26_addsDurationSecondsColumn() {
+        helper.createDatabase(dbName, 25).close()
+        val db = helper.runMigrationsAndValidate(dbName, 26, true, MIGRATION_25_26)
+
+        db.query("PRAGMA table_info(`logged_set`)").use { cursor ->
+            val cols = mutableSetOf<String>()
+            while (cursor.moveToNext()) cols += cursor.getString(cursor.getColumnIndexOrThrow("name"))
+            assertEquals("logged_set.duration_seconds should exist after 25→26", true, "duration_seconds" in cols)
+        }
+    }
+
+    @Test
+    fun migrate26To27_addsPerTypeCardioColumns() {
+        helper.createDatabase(dbName, 26).close()
+        val db = helper.runMigrationsAndValidate(dbName, 27, true, MIGRATION_26_27)
+
+        db.query("PRAGMA table_info(`cardio_entry`)").use { cursor ->
+            val cols = mutableSetOf<String>()
+            while (cursor.moveToNext()) cols += cursor.getString(cursor.getColumnIndexOrThrow("name"))
+            listOf("incline_pct", "laps", "elevation_m").forEach {
+                assertEquals("cardio_entry.$it should exist after 26→27", true, it in cols)
+            }
+        }
+    }
+
+    @Test
+    fun migrate27To28_addsConditionsColumn() {
+        helper.createDatabase(dbName, 27).close()
+        val db = helper.runMigrationsAndValidate(dbName, 28, true, MIGRATION_27_28)
+
+        db.query("PRAGMA table_info(`cardio_entry`)").use { cursor ->
+            val cols = mutableSetOf<String>()
+            while (cursor.moveToNext()) cols += cursor.getString(cursor.getColumnIndexOrThrow("name"))
+            assertEquals("cardio_entry.conditions should exist after 27→28", true, "conditions" in cols)
+        }
+    }
+
+    @Test
+    fun migrateFullChain12To28_runsEveryStepInOrder() {
         // The pairwise tests above each validate one hop. This runs the WHOLE locked chain in a
         // single pass — a real v12 install upgrading straight to today's schema — so a gap or an
         // out-of-order/incompatible step between any two versions is caught, not just each hop alone.
         helper.createDatabase(dbName, 12).close()
-        helper.runMigrationsAndValidate(dbName, 25, true, *ALL_MIGRATIONS)
+        helper.runMigrationsAndValidate(dbName, 28, true, *ALL_MIGRATIONS)
     }
 
     @Test

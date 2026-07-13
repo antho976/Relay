@@ -11,7 +11,9 @@ import com.forge.app.data.repo.CardioRepository
 import com.forge.app.data.repo.ExtendedGoalRepository
 import com.forge.app.data.repo.TrophyRepository
 import com.forge.app.domain.cardio.CardioActivity
+import com.forge.app.domain.cardio.CardioCondition
 import com.forge.app.domain.cardio.CardioEffort
+import com.forge.app.domain.cardio.CardioField
 import com.forge.app.domain.cardio.CardioRestReason
 import com.forge.app.domain.cardio.CardioType
 import com.forge.app.domain.cardio.CardioWearableDay
@@ -149,6 +151,8 @@ class CardioViewModel @Inject constructor(
         st.copy(useMiles = useMiles)
     }.combine(connection) { st, conn ->
         st.copy(stepsConnected = conn.steps, routesConnected = conn.routes)
+    }.combine(settingsRepo.lastCardioType) { st, lastType ->
+        st.copy(lastCardioType = lastType)
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(stopTimeoutMillis = 5_000),
@@ -255,7 +259,11 @@ class CardioViewModel @Inject constructor(
         note: String?,
         dateMs: Long,
         intervalCount: Int?,
-        hrZone: String?
+        hrZone: String?,
+        inclinePct: Double?,
+        laps: Int?,
+        elevationM: Double?,
+        conditions: Set<CardioCondition>
     ) {
         val editingId = transient.value.editing?.id
         viewModelScope.launch {
@@ -270,9 +278,19 @@ class CardioViewModel @Inject constructor(
                 note = note?.takeIf { it.isNotBlank() },
                 // Interval count only applies to HIIT; HR zone to any active session. Cleared for rest.
                 intervalCount = if (activity.isHiit) intervalCount?.takeIf { it > 0 } else null,
-                hrZone = if (activity.isRest) null else hrZone
+                hrZone = if (activity.isRest) null else hrZone,
+                // Per-type fields (GYMAP-38): kept only for the activities that surface them, so a
+                // value typed then switched away from (stale form state) is never persisted.
+                inclinePct = inclinePct.takeIf { CardioField.INCLINE in activity.optionalFields && (it ?: 0.0) > 0.0 },
+                laps = laps.takeIf { CardioField.LAPS in activity.optionalFields && (it ?: 0) > 0 },
+                elevationM = elevationM.takeIf { CardioField.ELEVATION in activity.optionalFields && (it ?: 0.0) > 0.0 },
+                // Weather tags (GYMAP-39) — descriptive only, and never on a rest day.
+                conditions = if (activity.isRest) null else CardioCondition.encode(conditions)
             )
             if (editingId != null) cardioRepo.update(entry) else cardioRepo.add(entry)
+            // Remember the activity as the next new-entry default (GYMAP-40) — only when logging a NEW
+            // active session, so editing an old row or saving a rest day never changes the default.
+            if (editingId == null && !activity.isRest) settingsRepo.setLastCardioType(activity.code)
             transient.update { it.copy(sheetOpen = false, editing = null) }
             // Cardio trophies (first run / 100 km / N sessions) evaluate here too, since cardio logging
             // doesn't go through the workout-finish path that normally unlocks trophies — but off the

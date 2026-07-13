@@ -9,7 +9,9 @@ import com.forge.app.data.health.HealthConnectManager
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.data.repo.CardioRepository
 import com.forge.app.domain.cardio.CardioActivity
+import com.forge.app.domain.cardio.CardioCondition
 import com.forge.app.domain.cardio.CardioEffort
+import com.forge.app.domain.cardio.CardioField
 import com.forge.app.domain.cardio.CardioRestReason
 import com.forge.app.domain.cardio.CardioWearableDay
 import com.forge.app.domain.cardio.RoutePoint
@@ -169,7 +171,11 @@ class CardioSessionDetailViewModel @Inject constructor(
         note: String?,
         dateMs: Long,
         intervalCount: Int?,
-        hrZone: String?
+        hrZone: String?,
+        inclinePct: Double?,
+        laps: Int?,
+        elevationM: Double?,
+        conditions: Set<CardioCondition>
     ) {
         val current = state.value.entry ?: return
         viewModelScope.launch {
@@ -184,7 +190,13 @@ class CardioSessionDetailViewModel @Inject constructor(
                     restReason = if (activity.isRest) restReason?.code else null,
                     note = note?.takeIf { it.isNotBlank() },
                     intervalCount = if (activity.isHiit) intervalCount?.takeIf { it > 0 } else null,
-                    hrZone = if (activity.isRest) null else hrZone
+                    hrZone = if (activity.isRest) null else hrZone,
+                    // Per-type fields (GYMAP-38): kept only for the activities that surface them.
+                    inclinePct = inclinePct.takeIf { CardioField.INCLINE in activity.optionalFields && (it ?: 0.0) > 0.0 },
+                    laps = laps.takeIf { CardioField.LAPS in activity.optionalFields && (it ?: 0) > 0 },
+                    elevationM = elevationM.takeIf { CardioField.ELEVATION in activity.optionalFields && (it ?: 0.0) > 0.0 },
+                    // Weather tags (GYMAP-39) — descriptive only, and never on a rest day.
+                    conditions = if (activity.isRest) null else CardioCondition.encode(conditions)
                 )
             )
             editing.value = false

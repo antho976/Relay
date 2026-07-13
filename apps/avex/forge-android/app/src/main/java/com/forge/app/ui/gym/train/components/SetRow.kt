@@ -59,6 +59,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.data.db.entities.LoggedSet
+import com.forge.app.domain.units.formatHoldLabel
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.domain.units.formatWeightDelta
 import com.forge.app.domain.units.unitLabel
@@ -91,6 +92,9 @@ fun SetRow(
     setIndex: Int = 1,
     isPr: Boolean,
     isPlates: Boolean = false,
+    /** Timed-hold exercise (GYMAP-51) — the row reads its held duration instead of reps, and the
+     *  weight-delta column is dropped (a hold has no weight×reps delta). */
+    isTimed: Boolean = false,
     priorSet: LoggedSet? = null,
     /** Last session's FINAL set — the fallback baseline for the LAST delta when you did more sets
      *  this session than last time (so the column is never blank on a bonus set). */
@@ -207,17 +211,20 @@ fun SetRow(
             }
         }
     } else {
+        // A timed hold has no weight/reps to edit inline, so tapping the row is a no-op (delete via
+        // swipe, re-log via long-press still work); every other exercise opens the inline editor.
         val tapMod = if (onLongPress != null)
-            modifier.combinedClickable(onClick = { isEditing = true }, onLongClick = onLongPress)
+            modifier.combinedClickable(onClick = { if (!isTimed) isEditing = true }, onLongClick = onLongPress)
         else
-            modifier.combinedClickable(onClick = { isEditing = true })
+            modifier.combinedClickable(onClick = { if (!isTimed) isEditing = true })
 
         // Build a single spoken description so TalkBack reads the row as one unit rather than
         // announcing each Text node separately: "Set 2, 50 kg, 10 reps[, RPE 8][, personal record]".
         val rowDescription = buildString {
             append("Set $setIndex")
             if (displayWeight != null) append(", $displayWeight")
-            append(", ${set.reps} reps")
+            if (isTimed) append(", held ${formatHoldLabel(set.durationSeconds ?: 0)}")
+            else append(", ${set.reps} reps")
             set.rpe?.let { append(", RPE ${rpeLabel(it)}, ${rirLabel(it)} in reserve") }
             if (isPr) append(", personal record")
         }
@@ -297,22 +304,35 @@ fun SetRow(
                     )
                 }
                 priorSet?.let { prior ->
-                    // Plate exercises read as a plate count, not the lb equivalent (#9).
-                    val priorDisplay = prior.weightLb?.let { lb ->
-                        if (isPlates) "${formatPlateCount(lb / plateLb)} pl" else formatWeight(lb, useKg)
-                    } ?: prior.weightText
-                    Text(
-                        "$priorDisplay × ${prior.reps}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = muted.copy(alpha = 0.45f),
-                        fontSize = 9.sp
-                    )
+                    // Timed holds ghost the prior HOLD time; everything else ghosts "weight × reps".
+                    val ghost = if (isTimed) {
+                        prior.durationSeconds?.let { formatHoldLabel(it) }
+                    } else {
+                        // Plate exercises read as a plate count, not the lb equivalent (#9).
+                        val priorDisplay = prior.weightLb?.let { lb ->
+                            if (isPlates) "${formatPlateCount(lb / plateLb)} pl" else formatWeight(lb, useKg)
+                        } ?: prior.weightText
+                        "$priorDisplay × ${prior.reps}"
+                    }
+                    if (ghost != null) {
+                        Text(
+                            ghost,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = muted.copy(alpha = 0.45f),
+                            fontSize = 9.sp
+                        )
+                    }
                 }
             }
 
-            // Reps col
+            // Reps col — a timed hold reads its held duration (0:45) here instead of a rep count.
             Box(modifier = Modifier.width(REPS_COL_W), contentAlignment = Alignment.CenterStart) {
-                Text("${set.reps}", style = MaterialTheme.typography.headlineSmall, color = onBg)
+                Text(
+                    if (isTimed) formatHoldLabel(set.durationSeconds ?: 0) else "${set.reps}",
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = onBg,
+                    maxLines = 1
+                )
             }
 
             // RPE col — tappable framed box
@@ -336,9 +356,10 @@ fun SetRow(
                 }
             }
 
-            // Delta col — trend icon + value, green when you beat last session
+            // Delta col — trend icon + value, green when you beat last session. Suppressed for timed
+            // holds (no weight×reps delta; a hold's progress is its longer time, shown as the ghost).
             Box(modifier = Modifier.width(DELTA_COL_W), contentAlignment = Alignment.CenterEnd) {
-                deltaLabel?.let {
+                if (!isTimed) deltaLabel?.let {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                         if (deltaPositive || deltaNegative) {
                             Icon(

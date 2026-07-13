@@ -31,11 +31,16 @@ import androidx.compose.ui.zIndex
  * [onMove] / [DraggableItem]. Without this the dragged row never highlights and the reorder swaps
  * the wrong elements (or no-ops when the shifted index falls out of range).
  *
+ * When fixed items also sit BELOW the draggable rows (an "add" footer, a save bar in the list), pass
+ * the row count as [draggableItemCount] so a drag can't pick up or drop onto a trailing item — without
+ * it, dragging the last row down over a footer hands the drag to that footer and drops the row's
+ * picked-up highlight. Leave it unbounded when the rows are the last items (the default).
+ *
  * Usage:
  * ```
  * val listState = rememberLazyListState()
  * val drag = rememberDragDropState(listState, firstDraggableIndex = HEADER_COUNT) { from, to ->
- *     items = items.move(from, to)
+ *     items = items.moved(from, to)
  * }
  * LazyColumn(state = listState, modifier = Modifier.dragContainer(drag)) {
  *     item { Header() }                            // HEADER_COUNT leading items
@@ -49,16 +54,25 @@ import androidx.compose.ui.zIndex
 fun rememberDragDropState(
     lazyListState: LazyListState,
     firstDraggableIndex: Int = 0,
+    draggableItemCount: Int = Int.MAX_VALUE,
     onMove: (Int, Int) -> Unit
 ): DragDropState =
-    remember(lazyListState, firstDraggableIndex) { DragDropState(lazyListState, firstDraggableIndex, onMove) }
+    remember(lazyListState, firstDraggableIndex, draggableItemCount) {
+        DragDropState(lazyListState, firstDraggableIndex, draggableItemCount, onMove)
+    }
 
 class DragDropState internal constructor(
     private val state: LazyListState,
     /** Count of fixed leading items (headers) before the draggable rows in the LazyColumn. */
     private val firstDraggableIndex: Int,
+    /** Number of draggable rows — bounds picking up / dropping past a trailing footer. Unbounded default. */
+    draggableItemCount: Int,
     private val onMove: (Int, Int) -> Unit
 ) {
+    // Highest full LazyColumn index a drag may pick up or target; guards trailing fixed items.
+    private val lastDraggableIndex: Int =
+        if (draggableItemCount == Int.MAX_VALUE) Int.MAX_VALUE else firstDraggableIndex + draggableItemCount - 1
+
     /** Full LazyColumn index of the row being dragged (includes [firstDraggableIndex]); null = none. */
     var draggingItemIndex by mutableStateOf<Int?>(null)
         private set
@@ -80,8 +94,11 @@ class DragDropState internal constructor(
 
     internal fun onDragStart(offset: Offset) {
         state.layoutInfo.visibleItemsInfo
-            // Only the draggable rows can be picked up — a long-press on a header is ignored.
-            .firstOrNull { it.index >= firstDraggableIndex && offset.y.toInt() in it.offset..(it.offset + it.size) }
+            // Only the draggable rows can be picked up — a long-press on a header or footer is ignored.
+            .firstOrNull {
+                it.index in firstDraggableIndex..lastDraggableIndex &&
+                    offset.y.toInt() in it.offset..(it.offset + it.size)
+            }
             ?.also {
                 draggingItemIndex = it.index
                 draggingItemInitialOffset = it.offset
@@ -100,8 +117,8 @@ class DragDropState internal constructor(
         val startOffset = dragging.offset + draggingItemOffset
         val middleOffset = startOffset + dragging.size / 2f
         val target = state.layoutInfo.visibleItemsInfo.firstOrNull { item ->
-            // Never target a header slot — only swap among the draggable rows.
-            item.index >= firstDraggableIndex && item.index != dragging.index &&
+            // Never target a header or footer slot — only swap among the draggable rows.
+            item.index in firstDraggableIndex..lastDraggableIndex && item.index != dragging.index &&
                 middleOffset.toInt() in item.offset..(item.offset + item.size)
         }
         if (target != null) {
@@ -136,4 +153,13 @@ fun LazyItemScope.DraggableItem(
         if (dragging) Modifier.zIndex(1f).graphicsLayer { translationY = dragDropState.draggingItemOffset }
         else Modifier.animateItem()
     Box(modifier.then(itemModifier)) { content(dragging) }
+}
+
+/** Move the element at [from] to index [to], returning a new list — the reorder helper the
+ *  [DragDropState]'s onMove callback applies to its backing list. No-ops on out-of-range indices. */
+fun <T> List<T>.moved(from: Int, to: Int): List<T> {
+    if (from == to || from !in indices || to !in indices) return this
+    val m = toMutableList()
+    m.add(to, m.removeAt(from))
+    return m
 }

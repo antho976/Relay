@@ -258,11 +258,11 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
                                 advanceLabel = if (exNextId != null) "MOVE TO NEXT →" else "FINISH WORKOUT →",
                                 onAdvance = { if (exNextId != null) shownExerciseId = exNextId else onEvent(DayUiEvent.FinishWorkout) },
                                 onToggle = { },
-                                onLogSet = { weight, reps ->
+                                onLogSet = { weight, reps, durationSeconds ->
                                     // Plate exercises enter a plate COUNT (not a display-unit weight),
                                     // so skip the kg→lb conversion — WeightParser turns the count into lb.
                                     val stored = if (ex.plan.unit == ExerciseUnit.PLATES) weight else toStoredWeightText(weight, useKg)
-                                    onEvent(DayUiEvent.LogSet(id, stored, reps))
+                                    onEvent(DayUiEvent.LogSet(id, stored, reps, durationSeconds))
                                 },
                                 onDeleteSet = { setId -> onEvent(DayUiEvent.DeleteSet(setId)) },
                                 // Same unit handling as logging — plate counts pass through, free weights convert.

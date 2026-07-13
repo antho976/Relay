@@ -112,10 +112,11 @@ class ProfileRepository @Inject constructor(
         val memberSinceMs = settingsRepo.memberSinceMs.first()
         val zone = ZoneId.systemDefault()
         val nowMs = clock.nowMs()
-        // Calendar-year bounds (system zone) for the THIS YEAR consistency grid's cardio read.
-        val zonedToday = Instant.ofEpochMilli(nowMs).atZone(zone).toLocalDate()
-        val yearStartMs = zonedToday.withDayOfYear(1).atStartOfDay(zone).toInstant().toEpochMilli()
-        val yearEndMs = zonedToday.withDayOfYear(1).plusYears(1).atStartOfDay(zone).toInstant().toEpochMilli()
+        // Today (system zone) — drives both the calendar-year bounds for the THIS YEAR consistency
+        // grid's cardio read and the this-week/last-week tallies further down.
+        val today = Instant.ofEpochMilli(nowMs).atZone(zone).toLocalDate()
+        val yearStartMs = today.withDayOfYear(1).atStartOfDay(zone).toInstant().toEpochMilli()
+        val yearEndMs = today.withDayOfYear(1).plusYears(1).atStartOfDay(zone).toInstant().toEpochMilli()
         coroutineScope {
         // Fire the independent DAO reads concurrently — the trophy snapshot's 13+ queries are the
         // long pole, so overlapping it with the rest is the main win for profile-open latency (#8).
@@ -146,7 +147,6 @@ class ProfileRepository @Inject constructor(
         val totalSets = sessions.sumOf { it.setCount }
 
         // ── This-week vs last-week tallies (ISO weeks) — the tiles' "vs last week" arrows ─────────
-        val today = Instant.ofEpochMilli(nowMs).atZone(zone).toLocalDate()
         val thisWeekKey = weekKeyOf(today)
         val lastWeekKey = weekKeyOf(today.minusWeeks(1))
         var workoutsThisWeek = 0; var workoutsLastWeek = 0

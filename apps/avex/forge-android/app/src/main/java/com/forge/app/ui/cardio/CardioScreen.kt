@@ -120,6 +120,7 @@ fun CardioScreen(
             onCreateCustom = viewModel::addCustomType,
             editing = state.editing,
             useMiles = state.useMiles,
+            lastUsedType = state.lastCardioType,
             onHome = { viewModel.closeSheet(); goHome() }
         )
         sessionEntry != null -> CardioSessionDetailSheet(

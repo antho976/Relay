@@ -87,7 +87,10 @@ internal fun BodyweightLogSheet(
     var input by remember(seedLb, useKg, date) {
         mutableStateOf(seedLb?.let { weightInputValue(it, useKg) } ?: "")
     }
-    var note by remember(date) { mutableStateOf(entryForDate?.note ?: "") }
+    // Keyed on the day's entry (not just the date) so a late flow emission — or a change while the
+    // sheet is open — re-seeds the note like the weight field above, rather than leaving it blank and
+    // then blanking the stored note on Save.
+    var note by remember(entryForDate, date) { mutableStateOf(entryForDate?.note ?: "") }
 
     val parsed = parseSaneBodyweightLb(input, useKg)
     val invalid = input.isNotBlank() && parsed == null

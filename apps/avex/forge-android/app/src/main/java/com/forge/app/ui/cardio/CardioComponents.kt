@@ -22,6 +22,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.data.repo.ExtendedGoalRepository
+import com.forge.app.domain.cardio.WHO_WEEKLY_ACTIVITY_MIN
 import com.forge.app.domain.units.distanceUnitLabel
 import com.forge.app.domain.units.toDisplayDistance
 import com.forge.app.ui.cardio.components.BarGeom
@@ -112,20 +113,30 @@ internal fun CardioHero(
         }
         Spacer(Modifier.height(18.dp))
         WeekBoxRow(days = days, todayDow = todayDow, onBg = onBg, muted = muted, outline = outline, accent = accent)
+        Spacer(Modifier.height(16.dp))
+        // A personal minutes target fills its goal meter; without one, the WHO 150-min/week reference
+        // takes its place (GYMAP-42) so the week always reads against a baseline, never empty space.
         if (weekTargetMin > 0) {
-            Spacer(Modifier.height(16.dp))
-            GoalMeter(
-                weekMinutes = weekMinutes, weekTargetMin = weekTargetMin,
+            MinutesMeter(
+                minutes = weekMinutes, target = weekTargetMin,
+                label = if (weekMinutes >= weekTargetMin) "GOAL HIT · $weekTargetMin MIN" else "GOAL $weekTargetMin MIN",
+                muted = muted, outline = outline, accent = accent
+            )
+        } else {
+            MinutesMeter(
+                minutes = weekMinutes, target = WHO_WEEKLY_ACTIVITY_MIN,
+                label = if (weekMinutes >= WHO_WEEKLY_ACTIVITY_MIN) "WHO 150 MIN · MET" else "WHO 150 MIN",
                 muted = muted, outline = outline, accent = accent
             )
         }
     }
 }
 
-/** The weekly-goal progress meter — a thin accent bar filling toward the minutes target. */
+/** A thin accent progress bar filling [minutes] toward [target] with a mono caption — shared by the
+ *  weekly goal meter and the WHO 150-min reference fallback (§5: bar fills primary on a 0.25 track). */
 @Composable
-private fun GoalMeter(weekMinutes: Int, weekTargetMin: Int, muted: Color, outline: Color, accent: Color) {
-    val frac = (weekMinutes.toFloat() / weekTargetMin).coerceIn(0f, 1f)
+private fun MinutesMeter(minutes: Int, target: Int, label: String, muted: Color, outline: Color, accent: Color) {
+    val frac = (minutes.toFloat() / target).coerceIn(0f, 1f)
     Column(Modifier.fillMaxWidth()) {
         Box(
             Modifier.fillMaxWidth().height(4.dp)
@@ -141,7 +152,7 @@ private fun GoalMeter(weekMinutes: Int, weekTargetMin: Int, muted: Color, outlin
         }
         Spacer(Modifier.height(6.dp))
         Text(
-            if (weekMinutes >= weekTargetMin) "GOAL HIT · $weekTargetMin MIN" else "GOAL $weekTargetMin MIN",
+            label,
             style = MaterialTheme.typography.labelSmall,
             color = muted, fontSize = 9.sp, letterSpacing = 1.sp
         )

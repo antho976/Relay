@@ -307,6 +307,15 @@ data class ExerciseUiState(
             }
             return code?.let { ExerciseUnit.fromCode(it) } ?: plan.unit
         }
+
+    /**
+     * Timed-hold exercise (GYMAP-51) — logged as a held DURATION (seconds), not reps: planks, dead
+     * hangs, wall sits. Resolved from the EFFECTIVE exercise (swap-aware via [effectiveExerciseId])
+     * so swapping in/out of a hold switches the input mode too; custom exercises (not in the library)
+     * are never timed. The set-input row then shows a stopwatch + mm:ss instead of a reps field.
+     */
+    val timed: Boolean
+        get() = com.forge.app.program.ExerciseLibrary.byId(effectiveExerciseId)?.timed == true
 }
 
 /** Slim per-session aggregate for one exercise (for the day-screen ledger strip). */

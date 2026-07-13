@@ -3,6 +3,7 @@ package com.forge.app.ui.gym.freestyle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.forge.app.data.prefs.SettingsRepository
+import com.forge.app.data.repo.CustomizationRepository
 import com.forge.app.data.repo.WorkoutRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
@@ -23,7 +24,9 @@ data class FreestyleSetInput(
     val setType: String? = null,
     val isAmrap: Boolean = false,
     val toFailure: Boolean = false,
-    val rpe: Double? = null
+    val rpe: Double? = null,
+    /** Held time in seconds for a timed-hold set (GYMAP-51); null for a rep set (reps is then the count). */
+    val durationSeconds: Int? = null
 )
 
 /** One persisted exercise: a library id and its sets. */
@@ -38,7 +41,8 @@ data class FreestyleExerciseInput(val libId: String, val sets: List<FreestyleSet
 @HiltViewModel
 class FreestyleLogViewModel @Inject constructor(
     private val workoutRepo: WorkoutRepository,
-    private val settingsRepo: SettingsRepository
+    private val settingsRepo: SettingsRepository,
+    private val customizationRepo: CustomizationRepository
 ) : ViewModel() {
 
     val useKg: StateFlow<Boolean> =
@@ -47,6 +51,17 @@ class FreestyleLogViewModel @Inject constructor(
     /** The most recent other performance's sets for an exercise — the "copy last time" panel. */
     suspend fun lastSets(exerciseId: String): List<com.forge.app.data.db.entities.LoggedSet> =
         workoutRepo.lastPerformanceSets(exerciseId)
+
+    /**
+     * The always-visible pinned cue (#112) the user attached to this exercise, or "" if none. Surfaced
+     * read-only while freestyle-logging so a cue pinned on the exercise in the program shows here too
+     * (GYMAP-49). Keyed by library id — the same key the Train flow writes under (getSwap(plan.id),
+     * where plan.id == ExerciseDef.id). Caveat: a cue pinned while another exercise was swapped into a
+     * program slot is stored under that slot's base id, so it surfaces for the slot's base move here,
+     * not the swapped-in one — matches how the swap system already keys the shared row.
+     */
+    suspend fun pinnedNote(libId: String): String =
+        customizationRepo.getSwap(libId)?.pinnedNote?.takeIf { it.isNotBlank() }.orEmpty()
 
     // ─── Draft persistence (autosave + resume) ───────────────────────────────
 
@@ -78,7 +93,7 @@ class FreestyleLogViewModel @Inject constructor(
             items.forEachIndexed { exIdx, ex ->
                 val loggedExerciseId = workoutRepo.addExerciseToSession(sessionId, ex.libId, exIdx)
                 ex.sets.forEachIndexed { setIdx, s ->
-                    val setId = workoutRepo.logSet(loggedExerciseId, setIdx, s.weightText, s.weightLb, s.reps)
+                    val setId = workoutRepo.logSet(loggedExerciseId, setIdx, s.weightText, s.weightLb, s.reps, s.durationSeconds)
                     // Persist the set-type tags via the existing per-field setters — only when set, so an
                     // untagged set writes exactly as before. Warm-ups still count toward volume/PRs (label
                     // only), matching the structured flow's set model (GYMAP-46).

@@ -516,6 +516,13 @@ class SettingsRepository @Inject constructor(
     suspend fun setCardioWearableHintDismissed() =
         context.forgePreferences.edit { it[PreferenceKeys.CARDIO_WEARABLE_HINT_DISMISSED] = true }
 
+    /** The last cardio activity code logged (GYMAP-40) — the log sheet's new-entry default. Null until
+     *  the first non-rest session; the stored code is resolved to an activity at the call site. */
+    val lastCardioType: Flow<String?> = context.forgePreferences.data
+        .map { it[PreferenceKeys.LAST_CARDIO_TYPE] }
+    suspend fun setLastCardioType(code: String) =
+        context.forgePreferences.edit { it[PreferenceKeys.LAST_CARDIO_TYPE] = code }
+
     // ─── Custom cardio activity types (GYMAP-37) ──────────────────────────────
     /** The user's defined cardio activities, decoded from the JSON blob (empty when none). */
     val customCardioTypes: Flow<List<com.forge.app.domain.cardio.CustomCardioType>> =

@@ -55,5 +55,8 @@ data class CardioUiState(
     /** Avex holds the ExerciseSession read grant — for GPS-route matching (also hides the banner). */
     val routesConnected: Boolean = false,
     /** Distance/pace unit — true shows miles, false km. Derives from the weight unit when unset. */
-    val useMiles: Boolean = false
+    val useMiles: Boolean = false,
+    /** The last cardio activity code logged (GYMAP-40); the log sheet seeds a new entry to it instead
+     *  of always defaulting to Run. Null until the first non-rest session. */
+    val lastCardioType: String? = null
 )
