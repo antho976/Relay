@@ -16,5 +16,7 @@ data class BodyweightEntry(
     @ColumnInfo(name = "date_key") val dateKey: String,
     /** Weight in lb (converted from kg at input if needed). */
     @ColumnInfo(name = "weight_lb") val weightLb: Double,
-    @ColumnInfo(name = "recorded_at") val recordedAt: Long
+    @ColumnInfo(name = "recorded_at") val recordedAt: Long,
+    /** Optional freeform note for this weigh-in (GYMAP-54) — e.g. "fasted", "post-holiday". Null when blank. */
+    @ColumnInfo(name = "note") val note: String? = null
 )

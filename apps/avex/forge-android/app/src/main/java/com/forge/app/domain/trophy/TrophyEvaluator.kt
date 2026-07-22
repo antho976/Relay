@@ -1,5 +1,6 @@
 package com.forge.app.domain.trophy
 
+import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.program.Trophies
@@ -49,7 +50,7 @@ object TrophyEvaluator {
         is UnlockRule.CardioDistanceAtLeastKm -> s.cardioDistanceKm >= rule.km
     }
 
-    fun progressHint(rule: UnlockRule, s: TrophyStatsSnapshot, useKg: Boolean): String? = when (rule) {
+    fun progressHint(rule: UnlockRule, s: TrophyStatsSnapshot, unit: WeightUnit): String? = when (rule) {
         is UnlockRule.TotalSessionsAtLeast -> "${s.totalLoggedExercises} / ${rule.n}"
         is UnlockRule.TotalPRsAtLeast -> "${s.totalPrs} / ${rule.n}"
         is UnlockRule.BrutalCountAtLeast -> "${s.brutalRatings} / ${rule.n}"
@@ -57,9 +58,9 @@ object TrophyEvaluator {
         is UnlockRule.FullTargetHitsAtLeast -> "${s.fullTargetHits} / ${rule.n}"
         is UnlockRule.WorkoutsCompletedAtLeast -> "${s.finishedSessions} / ${rule.n}"
         is UnlockRule.DistinctDaysTrainedAtLeast -> "${s.distinctDayKeysTrained} / ${rule.n} days"
-        is UnlockRule.MaxBenchAtLeast -> "${toDisplayWeight(s.maxBenchLb, useKg).toInt()} / ${toDisplayWeight(rule.lb, useKg).toInt()} ${unitLabel(useKg)}"
-        is UnlockRule.MaxSquatAtLeast -> "${toDisplayWeight(s.maxSquatLb, useKg).toInt()} / ${toDisplayWeight(rule.lb, useKg).toInt()} ${unitLabel(useKg)}"
-        is UnlockRule.MaxSessionVolumeAtLeast -> "${toDisplayWeight(s.maxSessionVolumeLb, useKg).toInt()} / ${toDisplayWeight(rule.lb, useKg).toInt()} ${unitLabel(useKg)}"
+        is UnlockRule.MaxBenchAtLeast -> "${toDisplayWeight(s.maxBenchLb, unit).toInt()} / ${toDisplayWeight(rule.lb, unit).toInt()} ${unitLabel(unit)}"
+        is UnlockRule.MaxSquatAtLeast -> "${toDisplayWeight(s.maxSquatLb, unit).toInt()} / ${toDisplayWeight(rule.lb, unit).toInt()} ${unitLabel(unit)}"
+        is UnlockRule.MaxSessionVolumeAtLeast -> "${toDisplayWeight(s.maxSessionVolumeLb, unit).toInt()} / ${toDisplayWeight(rule.lb, unit).toInt()} ${unitLabel(unit)}"
         is UnlockRule.MaxStreakAtLeast -> "${s.maxStreakEver} / ${rule.days} days"
         is UnlockRule.EarlyBirdSessionsAtLeast -> "${s.earlyBirdSessions} / ${rule.n} sessions"
         is UnlockRule.NightOwlSessionsAtLeast -> "${s.nightOwlSessions} / ${rule.n} sessions"
@@ -71,7 +72,7 @@ object TrophyEvaluator {
         is UnlockRule.ConsistencyKingRule -> if (s.consistencyKingEarned) "Earned" else "No missed week in 3 months"
         is UnlockRule.VarietyPackRule -> if (s.varietyPackEarned) "Earned" else "Train all 4 days in one week"
         is UnlockRule.ExerciseGoalsAchievedAtLeast -> "${s.exerciseGoalsAchieved} / ${rule.n} goals"
-        is UnlockRule.LifetimeTonnageAtLeast -> "${toDisplayWeight(s.lifetimeTonnageLb, useKg).toLong()} / ${toDisplayWeight(rule.lb, useKg).toLong()} ${unitLabel(useKg)}"
+        is UnlockRule.LifetimeTonnageAtLeast -> "${toDisplayWeight(s.lifetimeTonnageLb, unit).toLong()} / ${toDisplayWeight(rule.lb, unit).toLong()} ${unitLabel(unit)}"
         is UnlockRule.TrainingAnniversaryRule -> "${trainingDaysElapsed(s)} / 365 days"
         is UnlockRule.CardioSessionsAtLeast -> "${s.cardioSessions} / ${rule.n} sessions"
         is UnlockRule.CardioDistanceAtLeastKm -> "${s.cardioDistanceKm.toInt()} / ${rule.km.toInt()} km"
@@ -129,7 +130,7 @@ object TrophyEvaluator {
         else -> -1 to -1
     }
 
-    fun progressRemaining(rule: UnlockRule, s: TrophyStatsSnapshot, useKg: Boolean): String? = when (rule) {
+    fun progressRemaining(rule: UnlockRule, s: TrophyStatsSnapshot, unit: WeightUnit): String? = when (rule) {
         is UnlockRule.TotalSessionsAtLeast -> "${rule.n - s.totalLoggedExercises} exercises"
         is UnlockRule.TotalPRsAtLeast -> "${rule.n - s.totalPrs} PRs"
         is UnlockRule.BrutalCountAtLeast -> "${rule.n - s.brutalRatings} brutal ratings"
@@ -137,9 +138,9 @@ object TrophyEvaluator {
         is UnlockRule.FullTargetHitsAtLeast -> "${rule.n - s.fullTargetHits} full-target sets"
         is UnlockRule.WorkoutsCompletedAtLeast -> "${rule.n - s.finishedSessions} workouts"
         is UnlockRule.DistinctDaysTrainedAtLeast -> "${rule.n - s.distinctDayKeysTrained} day types"
-        is UnlockRule.MaxBenchAtLeast -> "${toDisplayWeight((rule.lb - s.maxBenchLb).coerceAtLeast(0.0), useKg).toInt()} ${unitLabel(useKg)} on bench"
-        is UnlockRule.MaxSquatAtLeast -> "${toDisplayWeight((rule.lb - s.maxSquatLb).coerceAtLeast(0.0), useKg).toInt()} ${unitLabel(useKg)} on goblet"
-        is UnlockRule.MaxSessionVolumeAtLeast -> "${toDisplayWeight((rule.lb - s.maxSessionVolumeLb).coerceAtLeast(0.0), useKg).toInt()} ${unitLabel(useKg)} session volume"
+        is UnlockRule.MaxBenchAtLeast -> "${toDisplayWeight((rule.lb - s.maxBenchLb).coerceAtLeast(0.0), unit).toInt()} ${unitLabel(unit)} on bench"
+        is UnlockRule.MaxSquatAtLeast -> "${toDisplayWeight((rule.lb - s.maxSquatLb).coerceAtLeast(0.0), unit).toInt()} ${unitLabel(unit)} on goblet"
+        is UnlockRule.MaxSessionVolumeAtLeast -> "${toDisplayWeight((rule.lb - s.maxSessionVolumeLb).coerceAtLeast(0.0), unit).toInt()} ${unitLabel(unit)} session volume"
         is UnlockRule.MaxStreakAtLeast -> "${rule.days - s.maxStreakEver} more consecutive days"
         is UnlockRule.EarlyBirdSessionsAtLeast -> "${rule.n - s.earlyBirdSessions} early sessions"
         is UnlockRule.NightOwlSessionsAtLeast -> "${rule.n - s.nightOwlSessions} night sessions"
@@ -151,7 +152,7 @@ object TrophyEvaluator {
         is UnlockRule.ConsistencyKingRule -> null
         is UnlockRule.VarietyPackRule -> null
         is UnlockRule.ExerciseGoalsAchievedAtLeast -> "${rule.n - s.exerciseGoalsAchieved} more goal(s)"
-        is UnlockRule.LifetimeTonnageAtLeast -> "${toDisplayWeight((rule.lb - s.lifetimeTonnageLb).coerceAtLeast(0.0), useKg).toLong()} ${unitLabel(useKg)} to go"
+        is UnlockRule.LifetimeTonnageAtLeast -> "${toDisplayWeight((rule.lb - s.lifetimeTonnageLb).coerceAtLeast(0.0), unit).toLong()} ${unitLabel(unit)} to go"
         is UnlockRule.TrainingAnniversaryRule -> {
             val remaining = (365 - trainingDaysElapsed(s)).coerceAtLeast(0)
             if (remaining == 0) null else "$remaining more days"

@@ -1,90 +1,173 @@
 package com.forge.app.domain.units
 
 import java.util.Locale
+import kotlin.math.abs
+import kotlin.math.roundToInt
 
 private const val KG_PER_LB = 0.45359237
+private const val LB_PER_STONE = 14.0
 
 // Number formatting here is pinned to Locale.US so the decimal separator is always '.', never a
 // locale-dependent ',' — a comma would both read wrong ("1,2k") and break parseToLb's round-trip.
 
-/** Converts a stored lb value to the display unit and formats it WITH a unit suffix (e.g. "20 kg"). */
-fun formatWeight(lb: Double, useKg: Boolean): String {
-    if (useKg) {
-        val kg = lb * KG_PER_LB
-        return if (kg % 1.0 == 0.0) "${kg.toInt()} kg" else String.format(Locale.US, "%.1f kg", kg)
+/**
+ * The weight unit the app displays in (GYMAP-72). Weights are ALWAYS stored in pounds; a unit only
+ * changes how a stored lb value renders and how a typed value is read back. Stones (British) render
+ * as a `st + lb` compound ("12 st 4 lb"); kg and lb render as one decimal number ("45.4 kg").
+ * Aggregates (volume) stay decimal in every unit ("1.2k st") — a stone+lb total would be nonsense.
+ */
+enum class WeightUnit(val label: String) {
+    LB("lb"), KG("kg"), ST("st");
+
+    /** Metric = kilograms. Drives the distance/length default (imperial lb/st → miles/inches). */
+    val isMetric: Boolean get() = this == KG
+
+    companion object {
+        /** Parse a persisted key (the [label]); anything unknown/null falls back to [LB]. */
+        fun fromKey(key: String?): WeightUnit = entries.firstOrNull { it.label == key } ?: LB
+        /** Bridge from the legacy boolean unit flag (true = kg, false = lb). */
+        fun ofKg(useKg: Boolean): WeightUnit = if (useKg) KG else LB
     }
-    return if (lb % 1.0 == 0.0) "${lb.toInt()} lb" else String.format(Locale.US, "%.1f lb", lb)
+}
+
+private fun trimDecimal(v: Double): String =
+    if (v % 1.0 == 0.0) "${v.toInt()}" else String.format(Locale.US, "%.1f", v)
+
+/** A non-negative lb value as a stone+lb compound: "12 st 4 lb" / "12 st" / "8 lb" (rounded to lb). */
+private fun formatStoneLb(lb: Double): String {
+    val totalLb = lb.roundToInt()
+    val st = totalLb / 14
+    val rem = totalLb % 14
+    return when {
+        st > 0 && rem > 0 -> "$st st $rem lb"
+        st > 0 -> "$st st"
+        else -> "$rem lb"   // 0 st (incl. a bare 0) → "N lb"
+    }
+}
+
+/** Converts a stored lb value to the display unit and formats it WITH a unit suffix (e.g. "20 kg"). */
+fun formatWeight(lb: Double, unit: WeightUnit): String = when (unit) {
+    WeightUnit.KG -> {
+        val kg = lb * KG_PER_LB
+        if (kg % 1.0 == 0.0) "${kg.toInt()} kg" else String.format(Locale.US, "%.1f kg", kg)
+    }
+    WeightUnit.ST -> formatStoneLb(lb)
+    WeightUnit.LB -> if (lb % 1.0 == 0.0) "${lb.toInt()} lb" else String.format(Locale.US, "%.1f lb", lb)
 }
 
 /**
  * Session volume (stored lb) converted to the display unit and abbreviated past 1k — "850 lb" /
- * "1.2k kg". Mirrors [formatWeight]'s unit handling; used by the session-detail surfaces, which
- * (unlike the lb-only overview/history rows) honour the kg setting alongside their per-set weights.
+ * "1.2k kg" / "1.2k st". Volume stays a single decimal figure in every unit (a stone+lb aggregate
+ * would be nonsense). Used by the session-detail surfaces, which honour the unit alongside their
+ * per-set weights.
  */
-fun formatVolume(volumeLb: Double, useKg: Boolean): String {
-    val v = toDisplayWeight(volumeLb, useKg)
-    val unit = unitLabel(useKg)
-    return if (v >= 1000) String.format(Locale.US, "%.1fk %s", v / 1000, unit) else "${v.toInt()} $unit"
+fun formatVolume(volumeLb: Double, unit: WeightUnit): String {
+    val v = toDisplayWeight(volumeLb, unit)
+    val u = unit.label
+    return if (v >= 1000) String.format(Locale.US, "%.1fk %s", v / 1000, u) else "${v.toInt()} $u"
 }
 
 /**
  * Compact volume with trailing zeros trimmed — "1.2k lb" / "950 lb", or unit-less when [withUnit] is
  * false ("412k" / "950"). The single source for the Coach Brief / Profile ledger / Recap compact
- * volume labels, which each used to keep their own (locale-unsafe) copy of this.
+ * volume labels. Decimal in every unit, like [formatVolume].
  */
-fun formatVolumeCompact(volumeLb: Double, useKg: Boolean, withUnit: Boolean = true): String {
-    val v = toDisplayWeight(volumeLb, useKg)
-    val suffix = if (withUnit) " ${unitLabel(useKg)}" else ""
+fun formatVolumeCompact(volumeLb: Double, unit: WeightUnit, withUnit: Boolean = true): String {
+    val v = toDisplayWeight(volumeLb, unit)
+    val suffix = if (withUnit) " ${unit.label}" else ""
     return if (v >= 1000)
         "${String.format(Locale.US, "%.1f", v / 1000).trimEnd('0').trimEnd('.')}k$suffix"
     else "${v.toInt()}$suffix"
 }
 
-/** The numeric value in the display unit, UNformatted — for driving animated counters / raw math. */
-fun toDisplayWeight(lb: Double, useKg: Boolean): Double = if (useKg) lb * KG_PER_LB else lb
+/** The numeric value in the display unit, UNformatted — for driving animated counters / raw math.
+ *  Stones is a single decimal (lb/14) here — the stone+lb split is only a display concern. */
+fun toDisplayWeight(lb: Double, unit: WeightUnit): Double = when (unit) {
+    WeightUnit.KG -> lb * KG_PER_LB
+    WeightUnit.ST -> lb / LB_PER_STONE
+    WeightUnit.LB -> lb
+}
 
 /** Inverse of [toDisplayWeight]: a value the user picked in their display unit, back to stored lb. */
-fun fromDisplayWeight(value: Double, useKg: Boolean): Double = if (useKg) value / KG_PER_LB else value
+fun fromDisplayWeight(value: Double, unit: WeightUnit): Double = when (unit) {
+    WeightUnit.KG -> value / KG_PER_LB
+    WeightUnit.ST -> value * LB_PER_STONE
+    WeightUnit.LB -> value
+}
 
 /**
  * The numeric value in the display unit with NO unit suffix — for seeding editable weight fields.
- * The log/edit input fields hold a bare number in the display unit; conversion to lb happens on
- * submit via [toStoredWeightText]. (Pairing this with [toStoredWeightText] is what lets the field
- * round-trip — tapping a kg suggestion no longer logs a set with no weight.)
+ * The single-field log/edit inputs hold a bare number in the display unit; conversion to lb happens
+ * on submit via [toStoredWeightText]. Stones seeds a single decimal ("9.6") — the compound st+lb
+ * entry is only used by the bodyweight sheet's two-field input, which computes lb directly.
  */
-fun weightInputValue(lb: Double, useKg: Boolean): String {
-    val v = if (useKg) lb * KG_PER_LB else lb
-    return if (v % 1.0 == 0.0) "${v.toInt()}" else String.format(Locale.US, "%.1f", v)
+fun weightInputValue(lb: Double, unit: WeightUnit): String = trimDecimal(toDisplayWeight(lb, unit))
+
+/** A weight *difference* (in lb) formatted in the display unit with a unit label, e.g. "2.5 kg"
+ *  / "-1 st 2 lb" (no leading "+" on gains, matching the kg/lb form). */
+fun formatWeightDelta(lbDiff: Double, unit: WeightUnit): String = when (unit) {
+    WeightUnit.ST -> if (lbDiff < 0) "-${formatStoneLb(abs(lbDiff))}" else formatStoneLb(lbDiff)
+    WeightUnit.KG -> "${trimDecimal(lbDiff * KG_PER_LB)} kg"
+    WeightUnit.LB -> "${trimDecimal(lbDiff)} lb"
 }
 
-/** A weight *difference* (in lb) formatted in the display unit with a unit label, e.g. "2.5 kg". */
-fun formatWeightDelta(lbDiff: Double, useKg: Boolean): String {
-    val v = if (useKg) lbDiff * KG_PER_LB else lbDiff
-    val num = if (v % 1.0 == 0.0) "${v.toInt()}" else String.format(Locale.US, "%.1f", v)
-    return "$num ${unitLabel(useKg)}"
+private val STONE_LB_REGEX =
+    Regex("""^\s*(\d+(?:\.\d+)?)\s*st\s*(\d+(?:\.\d+)?)?\s*(?:lb)?\s*$""")
+
+/** Parse a typed stones value to lb: compound "12 st 4 lb"/"12 st 4"/"12 st", or bare decimal
+ *  stones "9.6"/"9.6 st" (the single-field lift input). */
+private fun parseStonesToLb(s: String): Double? {
+    STONE_LB_REGEX.matchEntire(s)?.let { m ->
+        val st = m.groupValues[1].toDoubleOrNull() ?: return null
+        val lb = m.groupValues[2].toDoubleOrNull() ?: 0.0
+        return st * LB_PER_STONE + lb
+    }
+    val bare = s.removeSuffix("st").trim().toDoubleOrNull() ?: return null
+    return bare * LB_PER_STONE
 }
 
 /**
  * Converts a user-entered string in the display unit back to lb for storage. Tolerates a trailing
- * unit suffix ("20 kg", "20kg", "20 lb") so it round-trips [formatWeight]/[weightInputValue] output.
+ * unit suffix ("20 kg", "20kg", "20 lb") and the stones compound ("12 st 4 lb") so it round-trips
+ * [formatWeight]/[weightInputValue] output.
  */
-fun parseToLb(input: String, useKg: Boolean): Double? {
-    val cleaned = input.trim().lowercase().removeSuffix("kg").removeSuffix("lb").trim()
-    val numeric = cleaned.toDoubleOrNull() ?: return null
-    return if (useKg) numeric / KG_PER_LB else numeric
+fun parseToLb(input: String, unit: WeightUnit): Double? {
+    val cleaned = input.trim().lowercase()
+    return when (unit) {
+        WeightUnit.KG -> cleaned.removeSuffix("kg").trim().toDoubleOrNull()?.let { it / KG_PER_LB }
+        WeightUnit.LB -> cleaned.removeSuffix("lb").trim().toDoubleOrNull()
+        WeightUnit.ST -> parseStonesToLb(cleaned)
+    }
 }
 
 /**
  * Canonical stored weight text (always lb) for what the user typed in the display unit. A numeric
- * kg entry is converted to its lb value; anything non-numeric ("BW", "2 plates") passes through
- * unchanged for [com.forge.app.domain.parser.WeightParser] to interpret. Used by BOTH the log and
- * edit paths so unit handling can never diverge between them.
+ * kg/stones entry is converted to its lb value; anything non-numeric ("BW", "2 plates") passes
+ * through unchanged for [com.forge.app.domain.parser.WeightParser] to interpret. Used by BOTH the log
+ * and edit paths so unit handling can never diverge between them.
  */
-fun toStoredWeightText(input: String, useKg: Boolean): String {
+fun toStoredWeightText(input: String, unit: WeightUnit): String {
     val trimmed = input.trim()
-    if (!useKg) return trimmed
-    val lb = parseToLb(trimmed, useKg = true) ?: return trimmed
+    if (unit == WeightUnit.LB) return trimmed
+    val lb = parseToLb(trimmed, unit) ?: return trimmed
     return if (lb % 1.0 == 0.0) "${lb.toInt()}" else String.format(Locale.US, "%.1f", lb)
 }
 
-fun unitLabel(useKg: Boolean): String = if (useKg) "kg" else "lb"
+fun unitLabel(unit: WeightUnit): String = unit.label
+
+// ─── Legacy boolean-flag overloads (true = kg, false = lb) ───────────────────────────────────────
+// The app long modelled the weight unit as a `useKg: Boolean`. These bridges keep every existing
+// call site compiling and behaving exactly as before while sites migrate to the tri-state
+// [WeightUnit]; a boolean can only ever be kg or lb, so an un-migrated site safely never shows stones.
+
+fun formatWeight(lb: Double, useKg: Boolean): String = formatWeight(lb, WeightUnit.ofKg(useKg))
+fun formatVolume(volumeLb: Double, useKg: Boolean): String = formatVolume(volumeLb, WeightUnit.ofKg(useKg))
+fun formatVolumeCompact(volumeLb: Double, useKg: Boolean, withUnit: Boolean = true): String =
+    formatVolumeCompact(volumeLb, WeightUnit.ofKg(useKg), withUnit)
+fun toDisplayWeight(lb: Double, useKg: Boolean): Double = toDisplayWeight(lb, WeightUnit.ofKg(useKg))
+fun fromDisplayWeight(value: Double, useKg: Boolean): Double = fromDisplayWeight(value, WeightUnit.ofKg(useKg))
+fun weightInputValue(lb: Double, useKg: Boolean): String = weightInputValue(lb, WeightUnit.ofKg(useKg))
+fun formatWeightDelta(lbDiff: Double, useKg: Boolean): String = formatWeightDelta(lbDiff, WeightUnit.ofKg(useKg))
+fun parseToLb(input: String, useKg: Boolean): Double? = parseToLb(input, WeightUnit.ofKg(useKg))
+fun toStoredWeightText(input: String, useKg: Boolean): String = toStoredWeightText(input, WeightUnit.ofKg(useKg))
+fun unitLabel(useKg: Boolean): String = WeightUnit.ofKg(useKg).label

@@ -21,11 +21,18 @@ object Routes {
     const val GOALS = "goals"
     const val GOAL_EDITOR = "goals/editor?exerciseId={exerciseId}&customId={customId}"
     const val MIRROR_TEST = "mirror-test"
-    const val PROGRAM_BUILDER = "program-builder?blank={blank}"
+    const val PROGRESS_CAMERA = "progress-camera"
+    const val BODY_MEASUREMENTS = "body-measurements"
+    const val PROGRAM_BUILDER = "program-builder?blank={blank}&view={view}"
     const val FREESTYLE_LOG = "freestyle-log"
 
     const val ARG_BLANK = "blank"
-    fun programBuilder(blank: Boolean = false) = "program-builder?blank=$blank"
+    const val ARG_VIEW = "view"
+
+    /** The program screen. [view] opens it read-only (the top-bar pencil unlocks editing);
+     *  [blank] starts an empty build-your-own plan and implies editing. */
+    fun programBuilder(blank: Boolean = false, view: Boolean = false) =
+        "program-builder?blank=$blank&view=$view"
 
     const val ARG_DAY_KEY = "dayKey"
     const val ARG_SKIP_WARMUP = "skipWarmup"

@@ -29,8 +29,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.ui.common.clickableLabeled
+import com.forge.app.domain.cardio.CardioActivity
 import com.forge.app.domain.cardio.CardioRestReason
-import com.forge.app.domain.cardio.CardioType
+import com.forge.app.ui.cardio.LocalCardioTypes
 import com.forge.app.domain.units.formatDistance
 import java.time.Instant
 import java.time.LocalDate
@@ -54,13 +55,13 @@ fun CardioEntryRow(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val type = CardioType.fromCode(entry.type)
+    val activity = CardioActivity.resolve(entry.type, LocalCardioTypes.current)
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
 
     val zone = ZoneId.systemDefault()
     val dayLabel = remember(entry.date, today) { entryDayLabel(entry.date, today, zone) }
-    val summary = remember(entry, useMiles) { rowSummary(entry, type, useMiles) }
+    val summary = remember(entry, useMiles) { rowSummary(entry, activity.isRest, useMiles) }
 
     val dismissState = rememberSwipeToDismissBoxState(
         confirmValueChange = { value ->
@@ -113,13 +114,13 @@ fun CardioEntryRow(
                 modifier = Modifier.width(56.dp)
             )
             Icon(
-                type.icon,
+                activity.icon,
                 contentDescription = null,
                 tint = onBg,
                 modifier = Modifier.size(20.dp)
             )
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(type.displayName, style = MaterialTheme.typography.bodyMedium, color = onBg)
+                Text(activity.displayName, style = MaterialTheme.typography.bodyMedium, color = onBg)
                 if (summary.isNotBlank()) {
                     Text(
                         summary,
@@ -153,8 +154,8 @@ private fun entryDayLabel(dateMs: Long, today: LocalDate, zone: ZoneId): String 
 
 /** A one-line row summary — just duration + distance (or the rest reason). Everything else (pace,
  *  HR zone, calories, effort, note, GPS) is shown in the per-session detail, not crammed here. */
-private fun rowSummary(entry: CardioEntry, type: CardioType, useMiles: Boolean): String {
-    if (type.isRest) return CardioRestReason.fromCode(entry.restReason)?.displayName ?: "Rest day"
+private fun rowSummary(entry: CardioEntry, isRest: Boolean, useMiles: Boolean): String {
+    if (isRest) return CardioRestReason.fromCode(entry.restReason)?.displayName ?: "Rest day"
     return buildList {
         if (entry.durationMin > 0) add("${entry.durationMin} min")
         entry.distanceKm?.let { add(formatDistance(it, useMiles)) }

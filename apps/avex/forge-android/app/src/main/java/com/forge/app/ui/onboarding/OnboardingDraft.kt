@@ -20,6 +20,8 @@ internal data class OnboardingDraft(
     val experience: String,
     val bodyweightInput: String,
     val sex: String?,
+    /** WearableBrand key ("" = not picked yet) — absent in pre-wearable-step drafts, parsed as "". */
+    val wearable: String,
     val daysPerWeek: Int,
     val equipment: Set<String>,
     val frozenIds: Set<String>?,
@@ -27,9 +29,12 @@ internal data class OnboardingDraft(
     val problemAreas: Set<String>,
     val cadence: String,
     val everyN: Int,
-    val previewSeed: Long
+    val previewSeed: Long,
+    /** App-lock opt-in (GYMAP-69) — absent in older drafts, parsed as false. */
+    val appLock: Boolean
 ) {
     fun toJson(): String = JSONObject().apply {
+        put("schema", SCHEMA)
         put("page", page)
         put("planMode", planMode)
         put("name", name)
@@ -40,6 +45,7 @@ internal data class OnboardingDraft(
         put("experience", experience)
         put("bodyweightInput", bodyweightInput)
         sex?.let { put("sex", it) }                       // absent = never picked
+        put("wearable", wearable)
         put("daysPerWeek", daysPerWeek)
         put("equipment", JSONArray(equipment.toList()))
         frozenIds?.let { put("frozenIds", JSONArray(it.toList())) }
@@ -48,12 +54,19 @@ internal data class OnboardingDraft(
         put("cadence", cadence)
         put("everyN", everyN)
         put("previewSeed", previewSeed)
+        put("appLock", appLock)
     }.toString()
 
     companion object {
-        /** Null on any parse failure — a corrupt draft just restarts onboarding cleanly. */
+        /** Bump whenever the page layout (indices) changes so a draft written by an older build — whose
+         *  `page` cursor now points at a different step — is discarded rather than resumed mid-flow onto
+         *  the wrong screen. The answer fields are name-keyed and would survive, but the cursor wouldn't. */
+        private const val SCHEMA = 3
+
+        /** Null on any parse failure or a stale schema — the draft just restarts onboarding cleanly. */
         fun fromJson(json: String): OnboardingDraft? = runCatching {
             val o = JSONObject(json)
+            if (o.optInt("schema", 1) != SCHEMA) return null
             OnboardingDraft(
                 page = o.getInt("page"),
                 planMode = o.getString("planMode"),
@@ -65,6 +78,7 @@ internal data class OnboardingDraft(
                 experience = o.getString("experience"),
                 bodyweightInput = o.getString("bodyweightInput"),
                 sex = if (o.has("sex")) o.getString("sex") else null,
+                wearable = o.optString("wearable", ""),
                 daysPerWeek = o.getInt("daysPerWeek"),
                 equipment = o.getJSONArray("equipment").toStringSet(),
                 frozenIds = if (o.has("frozenIds")) o.getJSONArray("frozenIds").toStringSet() else null,
@@ -72,7 +86,8 @@ internal data class OnboardingDraft(
                 problemAreas = o.getJSONArray("problemAreas").toStringSet(),
                 cadence = o.getString("cadence"),
                 everyN = o.getInt("everyN"),
-                previewSeed = o.getLong("previewSeed")
+                previewSeed = o.getLong("previewSeed"),
+                appLock = o.optBoolean("appLock", false)
             )
         }.getOrNull()
 

@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.data.repo.ExtendedGoalRepository
 import com.forge.app.data.repo.GoalRepository
+import com.forge.app.ui.common.SnackbarController
 import com.forge.app.domain.goal.GoalMetric
 import com.forge.app.domain.goal.GoalPeriod
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -35,6 +36,7 @@ class GoalsViewModel @Inject constructor(
     private val goalRepo: GoalRepository,
     private val extendedGoalRepo: ExtendedGoalRepository,
     private val settingsRepo: SettingsRepository,
+    private val snackbar: SnackbarController,
 ) : ViewModel() {
 
     data class UiState(
@@ -131,7 +133,14 @@ class GoalsViewModel @Inject constructor(
         withContext(NonCancellable) { extendedGoalRepo.updateTarget(id, targetValue) }
     }
 
+    // §13 undo over confirm: delete now, offer a short Undo. NonCancellable (like the other mutations)
+    // because the editor pops its back-stack entry — clearing this VM — the moment it fires this; the
+    // shield lets the capture + delete + snackbar emit finish. The removed row (baseline and all) is
+    // held for the undo, which re-inserts it with its original id.
     fun deleteCustomGoal(id: Long) = viewModelScope.launch {
-        withContext(NonCancellable) { extendedGoalRepo.delete(id) }
+        withContext(NonCancellable) {
+            val removed = extendedGoalRepo.delete(id) ?: return@withContext
+            snackbar.showUndo("Goal deleted") { extendedGoalRepo.restore(removed) }
+        }
     }
 }

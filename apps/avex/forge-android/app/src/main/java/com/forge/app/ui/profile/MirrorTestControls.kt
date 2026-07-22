@@ -1,37 +1,21 @@
 package com.forge.app.ui.profile
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.forge.app.data.repo.ProgressPhoto
-import com.forge.app.ui.common.bounceClick
 import java.time.Instant
 import java.time.YearMonth
 import java.time.ZoneId
@@ -79,22 +63,6 @@ internal fun gallerySpanLabel(oldestMs: Long, newestMs: Long, zone: ZoneId): Str
     }
 }
 
-/** A quiet one-line stat: total photo count and the span they cover ("18 photos · 5 months"). */
-@Composable
-internal fun GalleryStatsHeader(photos: List<ProgressPhoto>, muted: Color, modifier: Modifier = Modifier) {
-    if (photos.isEmpty()) return
-    val zone = remember { ZoneId.systemDefault() }
-    val text = remember(photos) {
-        val count = photos.size
-        val label = "$count photo${if (count == 1) "" else "s"}"
-        if (count < 2) label else {
-            val span = gallerySpanLabel(photos.minOf { it.takenAtMs }, photos.maxOf { it.takenAtMs }, zone)
-            if (span.isEmpty()) label else "$label · $span"
-        }
-    }
-    Text(text, style = MaterialTheme.typography.labelMedium, color = muted, modifier = modifier)
-}
-
 /** The search field — filters photos by note, album name or date across the whole gallery. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -120,45 +88,3 @@ internal fun GallerySearchBar(
     )
 }
 
-/** Sort toggle (left) + grid-density cycle (right) — the compact controls under the range chips. */
-@Composable
-internal fun GalleryControlsRow(
-    sort: GallerySort,
-    onToggleSort: () -> Unit,
-    columns: Int,
-    onCycleColumns: () -> Unit,
-    muted: Color,
-    outline: Color,
-    modifier: Modifier = Modifier
-) {
-    Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        ControlPill(icon = { Icon(Icons.Filled.SwapVert, null, tint = muted, modifier = Modifier.size(15.dp)) },
-            label = sort.label, muted = muted, outline = outline, onClick = onToggleSort)
-        Spacer(Modifier.width(8.dp))
-        ControlPill(icon = { Icon(Icons.Filled.GridView, null, tint = muted, modifier = Modifier.size(15.dp)) },
-            label = "$columns", muted = muted, outline = outline, onClick = onCycleColumns)
-    }
-}
-
-@Composable
-private fun ControlPill(
-    icon: @Composable () -> Unit,
-    label: String,
-    muted: Color,
-    outline: Color,
-    onClick: () -> Unit
-) {
-    Row(
-        Modifier
-            .clip(RoundedCornerShape(50))
-            .background(Color.Transparent)
-            .border(1.dp, outline.copy(alpha = 0.35f), RoundedCornerShape(50))
-            .bounceClick { onClick() }
-            .padding(horizontal = 12.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(5.dp)
-    ) {
-        icon()
-        Text(label, style = MaterialTheme.typography.labelMedium, color = muted)
-    }
-}

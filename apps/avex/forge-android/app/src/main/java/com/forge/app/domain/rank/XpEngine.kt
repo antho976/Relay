@@ -1,5 +1,6 @@
 package com.forge.app.domain.rank
 
+import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.formatVolumeCompact
 
 /**
@@ -30,7 +31,7 @@ object XpEngine {
     const val VOLUME_XP_PER_1000LB = 5L
     const val ACTIVE_WEEK_XP = 40L
 
-    fun compute(s: XpSnapshot, useKg: Boolean = false): XpBreakdown {
+    fun compute(s: XpSnapshot, unit: WeightUnit = WeightUnit.LB): XpBreakdown {
         val workouts = s.finishedSessions * WORKOUT_XP
         val sets = s.totalSets * SET_XP
         val prs = s.totalPrs * PR_XP
@@ -38,13 +39,13 @@ object XpEngine {
         val weeks = s.activeWeeks * ACTIVE_WEEK_XP
         val trophies = s.trophyPoints.toLong()
 
-        // XP is scored per 1000 lb. lb users see "<vol> × 5" so the math reads literally; for kg users
-        // that multiplication wouldn't hold (1000 lb isn't a round kg figure), so we show the volume in
-        // kg without the misleading "× 5" — the earned XP is shown on the row either way.
-        val volumeDetail = if (useKg)
-            "${formatVolumeCompact(s.totalVolumeLb, useKg = true)} moved"
+        // XP is scored per 1000 lb. lb users see "<vol> × 5" so the math reads literally; for kg/stones
+        // users that multiplication wouldn't hold (1000 lb isn't a round kg/st figure), so we show the
+        // volume in their unit without the misleading "× 5" — the earned XP is shown on the row either way.
+        val volumeDetail = if (unit == WeightUnit.LB)
+            "${formatVolumeCompact(s.totalVolumeLb, WeightUnit.LB)} × $VOLUME_XP_PER_1000LB"
         else
-            "${formatVolumeCompact(s.totalVolumeLb, useKg = false)} × $VOLUME_XP_PER_1000LB"
+            "${formatVolumeCompact(s.totalVolumeLb, unit)} moved"
 
         val sources = listOf(
             XpSource("Workouts", "${s.finishedSessions} × $WORKOUT_XP", workouts),

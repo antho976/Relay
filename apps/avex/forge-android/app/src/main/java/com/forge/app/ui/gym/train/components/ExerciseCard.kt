@@ -79,7 +79,7 @@ fun ExerciseCard(
     restTimerState: RestTimerState? = null,
     sessionStartedAtMs: Long? = null,
     onToggle: () -> Unit,
-    onLogSet: (weightText: String, reps: Int) -> Unit,
+    onLogSet: (weightText: String, reps: Int, durationSeconds: Int?) -> Unit,
     onDeleteSet: (setId: Long) -> Unit,
     onEditSet: (setId: Long, weightText: String, reps: Int) -> Unit,
     onLogSameAsLast: (setId: Long) -> Unit,
@@ -151,6 +151,9 @@ fun ExerciseCard(
                 // bodyweight slot for a weighted one (or vice-versa) switches the weight type too.
                 val isBodyweight = state.effectiveUnit == ExerciseUnit.BODYWEIGHT
                 val isPlates = state.effectiveUnit == ExerciseUnit.PLATES
+                // Timed holds (GYMAP-51) log a duration, not reps — the REPS column reads HOLD and the
+                // input row swaps in a stopwatch. Resolved swap-aware off the effective exercise.
+                val isTimed = state.timed
 
                 // Exercise counter. The "⋯ options" button was removed (its actions — swap via the
                 // name, skip/rate via the footer, rest timer via the timer bubble — are all reachable
@@ -273,7 +276,7 @@ fun ExerciseCard(
                         when { isBodyweight -> "BODYWEIGHT"; isPlates -> "PLATES"; else -> "WEIGHT · LB" },
                         style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, modifier = Modifier.weight(1f)
                     )
-                    Text("REPS", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, modifier = Modifier.width(48.dp))
+                    Text(if (isTimed) "HOLD" else "REPS", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, modifier = Modifier.width(48.dp))
                     Text("RPE", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, modifier = Modifier.width(44.dp), textAlign = TextAlign.Center)
                     Text("LAST", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, modifier = Modifier.width(72.dp), textAlign = TextAlign.End)
                 }
@@ -287,6 +290,7 @@ fun ExerciseCard(
                             setIndex = i + 1,
                             isPr = set.id == state.bestPrSetId,
                             isPlates = isPlates,
+                            isTimed = isTimed,
                             priorSet = state.priorSets.getOrNull(i),
                             priorFallbackSet = state.priorSets.lastOrNull(),
                             onDelete = { onDeleteSet(set.id) },
@@ -336,6 +340,7 @@ fun ExerciseCard(
                         onFinishEarly = if (!targetsMet && state.loggedSets.isNotEmpty()) onFinishEarly else null,
                         isBodyweight = isBodyweight,
                         isPlates = isPlates,
+                        isTimed = isTimed,
                         targetReps = targetRepsOf(state.plan.reps),
                         repsPlaceholder = recommendedRepsOf(state.plan.reps),
                         onAdvance = onAdvance,

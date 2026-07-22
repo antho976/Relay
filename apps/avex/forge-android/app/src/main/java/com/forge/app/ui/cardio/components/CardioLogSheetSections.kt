@@ -1,27 +1,39 @@
 package com.forge.app.ui.cardio.components
 
+import android.text.format.DateFormat
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.SelectableDates
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TimePicker
 import androidx.compose.material3.rememberDatePickerState
+import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import com.forge.app.domain.cardio.CardioActivity
+import com.forge.app.domain.cardio.CardioCondition
 import com.forge.app.domain.cardio.CardioEffort
-import com.forge.app.domain.cardio.CardioType
+import com.forge.app.domain.cardio.CardioField
+import com.forge.app.domain.units.elevationUnitLabel
 import com.forge.app.ui.common.ForgeOutlineCapsule
 import com.forge.app.ui.common.ForgePrimaryCapsule
 import java.time.Instant
@@ -29,19 +41,32 @@ import java.time.ZoneId
 import java.time.ZoneOffset
 
 /**
- * The optional cardio details (effort / HR zone / intervals), tucked behind a "More" expander so the
- * common case (just time + distance) stays short. Added as LazyColumn items by [CardioLogSheet].
+ * The optional cardio details (effort / HR zone / intervals / per-type fields / conditions), tucked
+ * behind a "More" expander so the common case (just time + distance) stays short. Added as LazyColumn
+ * items by [CardioLogSheet].
  */
+@OptIn(ExperimentalLayoutApi::class)
 internal fun LazyListScope.cardioMoreItems(
     moreOpen: Boolean,
     onToggleMore: () -> Unit,
-    type: CardioType,
+    activity: CardioActivity,
     effort: CardioEffort?,
     onEffort: (CardioEffort?) -> Unit,
     hrZone: String?,
     onHrZone: (String?) -> Unit,
     intervalText: String,
     onIntervalChange: (String) -> Unit,
+    inclineText: String,
+    onInclineChange: (String) -> Unit,
+    lapsText: String,
+    onLapsChange: (String) -> Unit,
+    elevationText: String,
+    onElevationChange: (String) -> Unit,
+    /** Weather / environment tags (GYMAP-39), multi-select — the currently-selected set + a per-tag toggle. */
+    conditions: Set<CardioCondition>,
+    onToggleCondition: (CardioCondition) -> Unit,
+    /** Distance/elevation unit — true = miles + feet, false = km + metres. */
+    useMiles: Boolean,
     onBg: Color,
     bg: Color,
     muted: Color,
@@ -89,8 +114,28 @@ internal fun LazyListScope.cardioMoreItems(
         }
     }
 
+    // Conditions (GYMAP-39) — the weather the session was done in, multi-select. Applies to any active
+    // session (the whole More block is hidden on a rest day), so it's not gated by activity type.
+    item("conditions") {
+        FormSection(label = "Conditions", optional = true, muted = muted, onBg = onBg, outline = outline) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                CardioCondition.entries.forEach { c ->
+                    PillChip(
+                        label = c.displayName.uppercase(),
+                        selected = c in conditions,
+                        onClick = { onToggleCondition(c) },
+                        onBg = onBg, bg = bg, muted = muted, outline = outline
+                    )
+                }
+            }
+        }
+    }
+
     // Interval count — only meaningful for HIIT / interval work.
-    if (type == CardioType.HIIT) {
+    if (activity.isHiit) {
         item("intervals") {
             FormSection(label = "Intervals", optional = true, muted = muted, onBg = onBg, outline = outline) {
                 NumberInputRow(
@@ -104,12 +149,57 @@ internal fun LazyListScope.cardioMoreItems(
             }
         }
     }
+
+    // Per-type fields (GYMAP-38) — each shows only for the activities it fits (belt grade, pool
+    // laps, outdoor climb), so the form never carries a field the activity can't use.
+    if (CardioField.INCLINE in activity.optionalFields) {
+        item("incline") {
+            FormSection(label = "Incline", optional = true, muted = muted, onBg = onBg, outline = outline) {
+                NumberInputRow(
+                    value = inclineText,
+                    onValueChange = onInclineChange,
+                    placeholder = "6",
+                    unit = "%",
+                    keyboardType = KeyboardType.Decimal,
+                    onBg = onBg, muted = muted, accent = accent, outline = outline
+                )
+            }
+        }
+    }
+    if (CardioField.LAPS in activity.optionalFields) {
+        item("laps") {
+            FormSection(label = "Laps", optional = true, muted = muted, onBg = onBg, outline = outline) {
+                NumberInputRow(
+                    value = lapsText,
+                    onValueChange = onLapsChange,
+                    placeholder = "20",
+                    unit = "laps",
+                    keyboardType = KeyboardType.Number,
+                    onBg = onBg, muted = muted, accent = accent, outline = outline
+                )
+            }
+        }
+    }
+    if (CardioField.ELEVATION in activity.optionalFields) {
+        item("elevation") {
+            FormSection(label = "Elevation gain", optional = true, muted = muted, onBg = onBg, outline = outline) {
+                NumberInputRow(
+                    value = elevationText,
+                    onValueChange = onElevationChange,
+                    placeholder = "120",
+                    unit = elevationUnitLabel(useMiles),
+                    keyboardType = KeyboardType.Number,
+                    onBg = onBg, muted = muted, accent = accent, outline = outline
+                )
+            }
+        }
+    }
 }
 
 /** The save / cancel action row at the foot of the cardio log sheet. */
 internal fun LazyListScope.cardioSaveActionsItem(
     editing: Boolean,
-    type: CardioType,
+    activity: CardioActivity,
     canSubmit: Boolean,
     onSubmit: () -> Unit,
     onCancel: () -> Unit,
@@ -128,7 +218,7 @@ internal fun LazyListScope.cardioSaveActionsItem(
             ForgePrimaryCapsule(
                 label = when {
                     editing -> "Save changes"
-                    type.isRest -> "Save rest day"
+                    activity.isRest -> "Save rest day"
                     else -> "Save entry"
                 },
                 onClick = onSubmit,
@@ -183,4 +273,45 @@ private fun combineDay(pickedUtcMidnightMs: Long, keepTimeFromMs: Long): Long {
     val day = Instant.ofEpochMilli(pickedUtcMidnightMs).atZone(ZoneOffset.UTC).toLocalDate()
     val time = Instant.ofEpochMilli(keepTimeFromMs).atZone(zone).toLocalTime()
     return day.atTime(time).atZone(zone).toInstant().toEpochMilli()
+}
+
+/**
+ * The cardio start-time picker (GYMAP-33) — sets the time-of-day of the entry's timestamp (there is
+ * no separate start-time column; the entry's [dateMs] already carries the clock). [onPicked] returns
+ * the same calendar day with the chosen time. Honors the device's 12/24-hour format.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun CardioTimePickerDialog(dateMs: Long, onPicked: (Long) -> Unit, onDismiss: () -> Unit) {
+    val time = remember(dateMs) { Instant.ofEpochMilli(dateMs).atZone(ZoneId.systemDefault()).toLocalTime() }
+    val tpState = rememberTimePickerState(
+        initialHour = time.hour,
+        initialMinute = time.minute,
+        is24Hour = DateFormat.is24HourFormat(LocalContext.current)
+    )
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextButton(onClick = {
+                onPicked(combineTime(tpState.hour, tpState.minute, dateMs))
+                onDismiss()
+            }) { Text("OK") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+        text = {
+            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                TimePicker(state = tpState)
+            }
+        }
+    )
+}
+
+/**
+ * Keep the calendar day from [keepDayFromMs] and replace only the time-of-day with the picked
+ * [hour]:[minute] — the inverse of [combineDay], so setting the start time never shifts the date.
+ */
+private fun combineTime(hour: Int, minute: Int, keepDayFromMs: Long): Long {
+    val zone = ZoneId.systemDefault()
+    val day = Instant.ofEpochMilli(keepDayFromMs).atZone(zone).toLocalDate()
+    return day.atTime(hour, minute).atZone(zone).toInstant().toEpochMilli()
 }

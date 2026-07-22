@@ -170,12 +170,87 @@ class MigrationTest {
     }
 
     @Test
-    fun migrateFullChain12To23_runsEveryStepInOrder() {
+    fun migrate23To24_addsBodyMeasurementTable() {
+        helper.createDatabase(dbName, 23).close()
+        val db = helper.runMigrationsAndValidate(dbName, 24, true, MIGRATION_23_24)
+
+        db.query("SELECT name FROM sqlite_master WHERE type='table' AND name = 'body_measurement'")
+            .use { assertEquals("body_measurement should exist after 23→24", 1, it.count) }
+        db.query(
+            "SELECT name FROM sqlite_master WHERE type='index' " +
+                "AND name = 'index_body_measurement_type_date_key'"
+        ).use { assertEquals("unique (type, date_key) index should exist after 23→24", 1, it.count) }
+    }
+
+    @Test
+    fun migrate24To25_addsBodyweightNoteColumn() {
+        helper.createDatabase(dbName, 24).close()
+        val db = helper.runMigrationsAndValidate(dbName, 25, true, MIGRATION_24_25)
+
+        db.query("PRAGMA table_info(`bodyweight_entry`)").use { cursor ->
+            val cols = mutableSetOf<String>()
+            while (cursor.moveToNext()) cols += cursor.getString(cursor.getColumnIndexOrThrow("name"))
+            assertEquals("bodyweight_entry.note should exist after 24→25", true, "note" in cols)
+        }
+    }
+
+    @Test
+    fun migrate25To26_addsDurationSecondsColumn() {
+        helper.createDatabase(dbName, 25).close()
+        val db = helper.runMigrationsAndValidate(dbName, 26, true, MIGRATION_25_26)
+
+        db.query("PRAGMA table_info(`logged_set`)").use { cursor ->
+            val cols = mutableSetOf<String>()
+            while (cursor.moveToNext()) cols += cursor.getString(cursor.getColumnIndexOrThrow("name"))
+            assertEquals("logged_set.duration_seconds should exist after 25→26", true, "duration_seconds" in cols)
+        }
+    }
+
+    @Test
+    fun migrate26To27_addsPerTypeCardioColumns() {
+        helper.createDatabase(dbName, 26).close()
+        val db = helper.runMigrationsAndValidate(dbName, 27, true, MIGRATION_26_27)
+
+        db.query("PRAGMA table_info(`cardio_entry`)").use { cursor ->
+            val cols = mutableSetOf<String>()
+            while (cursor.moveToNext()) cols += cursor.getString(cursor.getColumnIndexOrThrow("name"))
+            listOf("incline_pct", "laps", "elevation_m").forEach {
+                assertEquals("cardio_entry.$it should exist after 26→27", true, it in cols)
+            }
+        }
+    }
+
+    @Test
+    fun migrate27To28_addsConditionsColumn() {
+        helper.createDatabase(dbName, 27).close()
+        val db = helper.runMigrationsAndValidate(dbName, 28, true, MIGRATION_27_28)
+
+        db.query("PRAGMA table_info(`cardio_entry`)").use { cursor ->
+            val cols = mutableSetOf<String>()
+            while (cursor.moveToNext()) cols += cursor.getString(cursor.getColumnIndexOrThrow("name"))
+            assertEquals("cardio_entry.conditions should exist after 27→28", true, "conditions" in cols)
+        }
+    }
+
+    @Test
+    fun migrate28To29_addsBodyFatTable() {
+        helper.createDatabase(dbName, 28).close()
+        val db = helper.runMigrationsAndValidate(dbName, 29, true, MIGRATION_28_29)
+
+        db.query("SELECT name FROM sqlite_master WHERE type='table' AND name = 'body_fat'")
+            .use { assertEquals("body_fat should exist after 28→29", 1, it.count) }
+        db.query(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name = 'index_body_fat_date_key'"
+        ).use { assertEquals("unique date_key index should exist after 28→29", 1, it.count) }
+    }
+
+    @Test
+    fun migrateFullChain12To29_runsEveryStepInOrder() {
         // The pairwise tests above each validate one hop. This runs the WHOLE locked chain in a
         // single pass — a real v12 install upgrading straight to today's schema — so a gap or an
         // out-of-order/incompatible step between any two versions is caught, not just each hop alone.
         helper.createDatabase(dbName, 12).close()
-        helper.runMigrationsAndValidate(dbName, 23, true, *ALL_MIGRATIONS)
+        helper.runMigrationsAndValidate(dbName, 29, true, *ALL_MIGRATIONS)
     }
 
     @Test

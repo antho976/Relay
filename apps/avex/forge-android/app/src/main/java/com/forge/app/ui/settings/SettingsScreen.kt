@@ -12,6 +12,7 @@ import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.AlertDialog
@@ -42,11 +43,16 @@ enum class SettingsPage(val title: String) {
     Format("Units & format"),
     Session("Session"),
     Notifications("Notifications"),
+    Security("Security"),
     Program("Program & equipment"),
     Coach("Coach"),
     Recovery("Recovery"),
     ExercisePrefs("Exercise likes"),
+    CardioActivities("Cardio activities"),
     Vacation("Holiday / Vacation"),
+    Backup("Backup"),
+    Storage("Storage"),
+    WhatsNew("What's new"),
     About("About")
 }
 
@@ -80,11 +86,16 @@ internal val PAGE_ENTRIES = listOf(
     SettingsPageEntry(SettingsPage.Format, "units format kg lb weight date time week timezone locale distance strength standards sex"),
     SettingsPageEntry(SettingsPage.Session, "session haptic feedback vibration notes templates rest timer between sets compound isolation"),
     SettingsPageEntry(SettingsPage.Notifications, "notifications reminders quiet hours recap timer alerts notify suppress"),
+    SettingsPageEntry(SettingsPage.Security, "security lock app lock gallery lock biometric fingerprint face pin passcode privacy photos protect unlock"),
     SettingsPageEntry(SettingsPage.Program, "program equipment generate auto split days routine rotate trainings workouts barbell dumbbell cable machine plate focus goal experience emphasis priority"),
     SettingsPageEntry(SettingsPage.Coach, "coach weekly review autopilot auto-apply suggest mode on off tweaks"),
-    SettingsPageEntry(SettingsPage.Recovery, "recovery health connect sleep heart rate resting samsung watch coach deload steps bodyweight"),
+    SettingsPageEntry(SettingsPage.Recovery, "recovery health connect sleep heart rate resting samsung galaxy pixel fitbit wearable watch ring coach deload steps bodyweight"),
     SettingsPageEntry(SettingsPage.ExercisePrefs, "exercise likes dislike favourite exclude preferences movements heart hidden preferred"),
+    SettingsPageEntry(SettingsPage.CardioActivities, "cardio custom activity activities types padel kayak sport add own create running walking"),
     SettingsPageEntry(SettingsPage.Vacation, "holiday vacation pause streak break away travel"),
+    SettingsPageEntry(SettingsPage.Backup, "backup auto backup automatic weekly restore folder uninstall survive save copy protect data safety back up now sd card cloud"),
+    SettingsPageEntry(SettingsPage.Storage, "storage space disk size cache clear breakdown photos database usage used free clean up megabytes"),
+    SettingsPageEntry(SettingsPage.WhatsNew, "what's new whats new changelog release notes updates version history latest build recent changes"),
 )
 
 internal val ALL_ITEMS = listOf(
@@ -94,11 +105,13 @@ internal val ALL_ITEMS = listOf(
     SettingsItem("App icon", "app icon launcher home screen change alternate", SettingsPage.Appearance),
     SettingsItem("Weight unit", "kg lb weight unit pounds kilograms", SettingsPage.Format),
     SettingsItem("Distance unit", "km mi miles kilometers distance cardio pace", SettingsPage.Format),
+    SettingsItem("Length unit", "cm in inches centimeters length body measurements waist chest", SettingsPage.Format),
     SettingsItem("Date format", "date format dd mm yyyy", SettingsPage.Format),
     SettingsItem("Time format", "time 12h 24h clock hour", SettingsPage.Format),
     SettingsItem("First day of week", "week start monday sunday", SettingsPage.Format),
     SettingsItem("Timezone", "timezone locale region", SettingsPage.Format),
     SettingsItem("Haptic feedback", "haptic vibration strength", SettingsPage.Session),
+    SettingsItem("Keep screen on", "keep screen on awake display lock timeout sleep session logging", SettingsPage.Session),
     SettingsItem("Rest times", "rest timer seconds between sets compound isolation default", SettingsPage.Session),
     SettingsItem("Note templates", "notes templates prompts form energy pain focus", SettingsPage.Session),
     SettingsItem("Training reminders", "reminder notify nudge daily streak train schedule engagement", SettingsPage.Notifications),
@@ -107,10 +120,14 @@ internal val ALL_ITEMS = listOf(
     SettingsItem("Weight per plate", "plate weight machine plates count", SettingsPage.Program),
     SettingsItem("Heaviest dumbbell", "dumbbell max heaviest adjustable ceiling", SettingsPage.Program),
     SettingsItem("Privacy mode", "privacy mode blur screenshot screen", SettingsPage.Appearance),
+    SettingsItem("App lock", "app lock biometric fingerprint face pin passcode unlock protect open security", SettingsPage.Security),
+    SettingsItem("Photo gallery lock", "gallery lock photos progress pictures biometric fingerprint pin protect security", SettingsPage.Security),
+    SettingsItem("Auto-lock", "auto lock timeout re-lock immediately minutes grace security", SettingsPage.Security),
     SettingsItem("Strength standards", "strength standards sex male female relative bodyweight ratio elite novice", SettingsPage.Format),
     SettingsItem("Weekly recap", "weekly recap summary notification report", SettingsPage.Notifications),
     SettingsItem("Rest timer alerts", "rest timer alert notification background buzz vibrate", SettingsPage.Notifications),
     SettingsItem("Health Connect", "health connect recovery sync samsung google fit permissions wearable watch", SettingsPage.Recovery),
+    SettingsItem("Wearable", "wearable watch galaxy pixel fitbit samsung ring band tracker", SettingsPage.Recovery),
     SettingsItem("Sleep", "sleep recovery hours health connect rest coach deload", SettingsPage.Recovery),
     SettingsItem("Resting heart rate", "resting heart rate hr recovery health connect coach", SettingsPage.Recovery),
     SettingsItem("Steps", "steps recovery health connect cardio wearable daily", SettingsPage.Recovery),
@@ -161,6 +178,9 @@ fun SettingsScreen(
     // The Program page's open sub-section is hoisted here so EVERY back affordance (top-bar arrow,
     // system back) returns to the Program menu first, then to Settings — never skipping a level.
     var programSection by rememberSaveable { mutableStateOf<ProgramSection?>(null) }
+    // Root-list scroll, hoisted here (outside the AnimatedContent that swaps pages) so it survives
+    // opening a sub-page and backing out — the list lands where you left it, not scrolled to the top.
+    val mainListState = rememberLazyListState()
     var searchQuery by remember { mutableStateOf("") }
     var confirmReset by remember { mutableStateOf<ResetTarget?>(null) }
     var showResetMenu by remember { mutableStateOf(false) }
@@ -250,6 +270,7 @@ fun SettingsScreen(
                     state = state,
                     searchQuery = searchQuery,
                     modifier = Modifier.fillMaxSize().padding(inner),
+                    listState = mainListState,
                     onSearchChange = { searchQuery = it },
                     onOpenPage = { currentPage = it; programSection = null },
                     onOpenCoachBrief = onOpenCoachBrief,
@@ -262,6 +283,7 @@ fun SettingsScreen(
                 SettingsPage.Format -> FormatPage(state, viewModel, Modifier.padding(inner))
                 SettingsPage.Session -> SessionPage(state, viewModel, Modifier.padding(inner))
                 SettingsPage.Notifications -> NotificationsPage(state, viewModel, Modifier.padding(inner))
+                SettingsPage.Security -> SecurityPage(state, viewModel, Modifier.padding(inner))
                 SettingsPage.Program -> ProgramPage(
                     state = state,
                     vm = viewModel,
@@ -277,7 +299,11 @@ fun SettingsScreen(
                 )
                 SettingsPage.Recovery -> RecoveryPage(Modifier.padding(inner))
                 SettingsPage.ExercisePrefs -> ExercisePrefsPage(state, viewModel, Modifier.padding(inner))
+                SettingsPage.CardioActivities -> CardioActivitiesPage(viewModel, Modifier.padding(inner))
                 SettingsPage.Vacation -> VacationPage(viewModel, Modifier.padding(inner))
+                SettingsPage.Backup -> BackupPage(viewModel, Modifier.padding(inner))
+                SettingsPage.Storage -> StoragePage(viewModel, Modifier.padding(inner))
+                SettingsPage.WhatsNew -> WhatsNewPage(Modifier.padding(inner))
                 SettingsPage.About -> AboutPage(Modifier.padding(inner), viewModel)
             }
         }

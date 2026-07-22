@@ -29,5 +29,14 @@ data class CardioEntry(
     /** Number of intervals for a HIIT / interval session; null for steady-state work (DB v23). */
     @ColumnInfo(name = "interval_count") val intervalCount: Int? = null,
     /** Manually-logged HR training zone ("1".."5"), or null when not tracked (DB v23). */
-    @ColumnInfo(name = "hr_zone") val hrZone: String? = null
+    @ColumnInfo(name = "hr_zone") val hrZone: String? = null,
+    /** Treadmill / elliptical incline as a percent grade; null for activities without one (DB v27, GYMAP-38). */
+    @ColumnInfo(name = "incline_pct") val inclinePct: Double? = null,
+    /** Pool lengths (laps) for a swim; null otherwise (DB v27, GYMAP-38). */
+    @ColumnInfo(name = "laps") val laps: Int? = null,
+    /** Elevation gain in metres for outdoor distance work (run/walk/hike/cycle); null otherwise (DB v27, GYMAP-38). */
+    @ColumnInfo(name = "elevation_m") val elevationM: Double? = null,
+    /** Weather / environment tags as comma-joined codes (hot/cold/rain/wind); null when none (DB v28, GYMAP-39).
+     *  Decoded via [com.forge.app.domain.cardio.CardioCondition.decode]. */
+    @ColumnInfo(name = "conditions") val conditions: String? = null
 )

@@ -22,8 +22,10 @@ import javax.inject.Inject
 
 data class SettingsUiState(
     val amoledMode: Boolean = false,
-    val useKg: Boolean = false,
+    /** Weight display unit (GYMAP-72) — lb | kg | st. */
+    val weightUnit: com.forge.app.domain.units.WeightUnit = com.forge.app.domain.units.WeightUnit.LB,
     val useMiles: Boolean = false,
+    val useCm: Boolean = false,
     val compactSetLogging: Boolean = false,
     val noteTemplates: Set<String> = setOf("form felt: ", "energy: ", "pain/discomfort: ", "focus cue: "),
     val hiddenOverviewTiles: Set<String> = emptySet(),
@@ -32,12 +34,14 @@ data class SettingsUiState(
     val timeFormat24h: Boolean = false,
     val firstDayMonday: Boolean = true,
     val hapticStrength: String = "strong",
+    /** Hold the screen awake during an active session (GYMAP-74). Default on. */
+    val keepScreenOn: Boolean = true,
     /** Default rest bases (seconds) per movement type — the Session-settings rest override. */
     val restCompoundSeconds: Int = 180,
     val restIsolationSeconds: Int = 90,
     val quietHoursEnabled: Boolean = false,
-    val quietHoursStart: Int = 22,
-    val quietHoursEnd: Int = 7,
+    val quietHoursSchedule: com.forge.app.domain.notify.QuietHoursSchedule =
+        com.forge.app.domain.notify.QuietHoursSchedule.default(),
     /** Daily training reminder (engagement) — opt-in, default off. */
     val trainingReminderEnabled: Boolean = false,
     val trainingReminderHour: Int = 18,
@@ -45,6 +49,12 @@ data class SettingsUiState(
     val weeklyRecapEnabled: Boolean = true,
     val restTimerAlertEnabled: Boolean = true,
     val privacyMode: Boolean = false,
+    /** App lock (GYMAP-69): require a biometric / device-credential unlock to open the app. */
+    val appLockEnabled: Boolean = false,
+    /** Gallery lock (GYMAP-69): require an unlock to view the progress-photo gallery. */
+    val galleryLockEnabled: Boolean = false,
+    /** Background grace before the app re-locks, in seconds (0 = immediately). */
+    val appLockTimeoutSec: Int = 0,
     val availableEquipment: Set<String> = emptySet(),
     /** Curated/frozen exercise pool (Developer's preset); null = ordinary equipment filtering. */
     val frozenExerciseIds: Set<String>? = null,
@@ -56,6 +66,8 @@ data class SettingsUiState(
     val accentEnabled: Boolean = true,
     /** Selected launcher-icon enum name; "" = default emblem. Rings the current choice in the picker. */
     val appIconKey: String = "",
+    /** Theme the cold-launch Avex intro to the chosen app icon (default on); off = plain B&W Avex. */
+    val themedLaunchIntro: Boolean = true,
     val timezone: String = java.util.TimeZone.getDefault().id,
     /** IANA zone ids the user has starred — pinned to the top of the timezone picker. */
     val favoriteTimezones: Set<String> = emptySet(),
@@ -86,13 +98,17 @@ data class SettingsUiState(
     val coachEnabled: Boolean = true,
     /** Current program's weekly sets per muscle (display name → sets), busiest first (Phase 6). */
     val weeklyVolume: List<Pair<String, Int>> = emptyList()
-)
+) {
+    /** Legacy convenience — true only for kilograms. Prefer [weightUnit]. */
+    val useKg: Boolean get() = weightUnit == com.forge.app.domain.units.WeightUnit.KG
+}
 
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     private val settingsRepo: SettingsRepository,
     private val resetRepo: ResetRepository,
     private val backupRepo: com.forge.app.data.repo.BackupRepository,
+    private val storageRepo: com.forge.app.data.repo.StorageRepository,
     private val importRepo: com.forge.app.data.importer.WorkoutImportRepository,
     private val sampleDataSeeder: com.forge.app.data.repo.SampleDataSeeder,
     private val photoRepo: com.forge.app.data.repo.ProgressPhotoRepository,
@@ -154,27 +170,40 @@ class SettingsViewModel @Inject constructor(
     fun deleteVacation(period: com.forge.app.data.db.entities.VacationPeriod) =
         viewModelScope.launch { vacationRepo.delete(period) }
 
+    // ─── Custom cardio activity types (GYMAP-37) ──────────────────────────────
+    // A standalone StateFlow (not the big combine) — list data managed like vacations above.
+    val customCardioTypes: StateFlow<List<com.forge.app.domain.cardio.CustomCardioType>> =
+        settingsRepo.customCardioTypes
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    fun addCustomCardioType(type: com.forge.app.domain.cardio.CustomCardioType) =
+        viewModelScope.launch { settingsRepo.addCustomCardioType(type) }
+
+    fun updateCustomCardioType(type: com.forge.app.domain.cardio.CustomCardioType) =
+        viewModelScope.launch { settingsRepo.updateCustomCardioType(type) }
+
+    fun deleteCustomCardioType(code: String) =
+        viewModelScope.launch { settingsRepo.deleteCustomCardioType(code) }
+
     val state: StateFlow<SettingsUiState> = combine(
         settingsRepo.amoledMode,
-        settingsRepo.useKg,
+        settingsRepo.weightUnit,
         settingsRepo.dateFormat,
         settingsRepo.timeFormat24h,
         settingsRepo.firstDayMonday,
         settingsRepo.hapticStrength,
         settingsRepo.quietHoursEnabled,
-        settingsRepo.quietHoursStart,
-        settingsRepo.quietHoursEnd
+        settingsRepo.quietHoursSchedule
     ) { values ->
         SettingsUiState(
             amoledMode = values[0] as Boolean,
-            useKg = values[1] as Boolean,
+            weightUnit = values[1] as com.forge.app.domain.units.WeightUnit,
             dateFormat = values[2] as String,
             timeFormat24h = values[3] as Boolean,
             firstDayMonday = values[4] as Boolean,
             hapticStrength = values[5] as String,
             quietHoursEnabled = values[6] as Boolean,
-            quietHoursStart = values[7] as Int,
-            quietHoursEnd = values[8] as Int
+            quietHoursSchedule = values[7] as com.forge.app.domain.notify.QuietHoursSchedule
         )
     }.combine(settingsRepo.noteTemplates) { s, templates ->
         s.copy(noteTemplates = templates)
@@ -182,10 +211,18 @@ class SettingsViewModel @Inject constructor(
         s.copy(hiddenOverviewTiles = hidden)
     }.combine(settingsRepo.compactSetLogging) { s, v ->
         s.copy(compactSetLogging = v)
+    }.combine(settingsRepo.keepScreenOn) { s, v ->
+        s.copy(keepScreenOn = v)
     }.combine(settingsRepo.overviewTileOrder) { s, order ->
         s.copy(overviewTileOrder = order)
     }.combine(settingsRepo.privacyMode) { s, v ->
         s.copy(privacyMode = v)
+    }.combine(settingsRepo.appLockEnabled) { s, v ->
+        s.copy(appLockEnabled = v)
+    }.combine(settingsRepo.galleryLockEnabled) { s, v ->
+        s.copy(galleryLockEnabled = v)
+    }.combine(settingsRepo.appLockTimeoutSec) { s, v ->
+        s.copy(appLockTimeoutSec = v)
     }.combine(settingsRepo.trainingReminderEnabled) { s, v ->
         s.copy(trainingReminderEnabled = v)
     }.combine(settingsRepo.trainingReminderHour) { s, v ->
@@ -210,6 +247,8 @@ class SettingsViewModel @Inject constructor(
         s.copy(accentEnabled = v)
     }.combine(settingsRepo.appIcon) { s, v ->
         s.copy(appIconKey = v)
+    }.combine(settingsRepo.themedLaunchIntro) { s, v ->
+        s.copy(themedLaunchIntro = v)
     }.combine(settingsRepo.timezone) { s, v ->
         s.copy(timezone = v)
     }.combine(settingsRepo.favoriteTimezones) { s, v ->
@@ -252,6 +291,8 @@ class SettingsViewModel @Inject constructor(
         s.copy(coachEnabled = v)
     }.combine(settingsRepo.useMiles) { s, v ->
         s.copy(useMiles = v)
+    }.combine(settingsRepo.useCm) { s, v ->
+        s.copy(useCm = v)
     }.combine(programRepository.revision) { s, _ ->
         s.copy(weeklyVolume = computeWeeklyVolume())
     }.combine(programCustomizationRepo.observeCustomExercises()) { s, v ->
@@ -268,19 +309,22 @@ class SettingsViewModel @Inject constructor(
             .map { (muscle, sets) -> muscle.displayName to sets }
 
     fun setAmoledMode(v: Boolean) = viewModelScope.launch { settingsRepo.setAmoledMode(v) }
-    fun setUseKg(v: Boolean) = viewModelScope.launch { settingsRepo.setUseKg(v) }
+    fun setWeightUnit(u: com.forge.app.domain.units.WeightUnit) =
+        viewModelScope.launch { settingsRepo.setWeightUnit(u) }
     fun setUseMiles(v: Boolean) = viewModelScope.launch { settingsRepo.setUseMiles(v) }
+    fun setUseCm(v: Boolean) = viewModelScope.launch { settingsRepo.setUseCm(v) }
     fun setDateFormat(v: String) = viewModelScope.launch { settingsRepo.setDateFormat(v) }
     fun setTimeFormat24h(v: Boolean) = viewModelScope.launch { settingsRepo.setTimeFormat24h(v) }
     fun setFirstDayMonday(v: Boolean) = viewModelScope.launch { settingsRepo.setFirstDayMonday(v) }
     fun setHapticStrength(v: String) = viewModelScope.launch { settingsRepo.setHapticStrength(v) }
+    fun setKeepScreenOn(v: Boolean) = viewModelScope.launch { settingsRepo.setKeepScreenOn(v) }
     fun setRestCompoundSeconds(s: Int) = viewModelScope.launch { settingsRepo.setRestCompoundSeconds(s) }
     fun setRestIsolationSeconds(s: Int) = viewModelScope.launch { settingsRepo.setRestIsolationSeconds(s) }
     fun addNoteTemplate(t: String) = viewModelScope.launch { settingsRepo.addNoteTemplate(t) }
     fun removeNoteTemplate(t: String) = viewModelScope.launch { settingsRepo.removeNoteTemplate(t) }
     fun setQuietHoursEnabled(v: Boolean) = viewModelScope.launch { settingsRepo.setQuietHoursEnabled(v) }
-    fun setQuietHoursStart(v: Int) = viewModelScope.launch { settingsRepo.setQuietHoursStart(v) }
-    fun setQuietHoursEnd(v: Int) = viewModelScope.launch { settingsRepo.setQuietHoursEnd(v) }
+    fun setQuietWindow(day: java.time.DayOfWeek, start: Int, end: Int) =
+        viewModelScope.launch { settingsRepo.setQuietWindow(day, start, end) }
 
     fun setTrainingReminderEnabled(v: Boolean) = viewModelScope.launch {
         settingsRepo.setTrainingReminderEnabled(v)
@@ -311,6 +355,11 @@ class SettingsViewModel @Inject constructor(
     fun factoryReset() = viewModelScope.launch { resetRepo.factoryReset() }
     fun loadSampleData() = viewModelScope.launch { sampleDataSeeder.seed() }
     fun setPrivacyMode(v: Boolean) = viewModelScope.launch { settingsRepo.setPrivacyMode(v) }
+    // App / gallery lock (GYMAP-69). Enabling is gated on an available device credential in the UI
+    // (Security page), so these persist the choice directly.
+    fun setAppLockEnabled(v: Boolean) = viewModelScope.launch { settingsRepo.setAppLockEnabled(v) }
+    fun setGalleryLockEnabled(v: Boolean) = viewModelScope.launch { settingsRepo.setGalleryLockEnabled(v) }
+    fun setAppLockTimeoutSec(v: Int) = viewModelScope.launch { settingsRepo.setAppLockTimeoutSec(v) }
     fun setAvailableEquipment(codes: Set<String>) = viewModelScope.launch {
         settingsRepo.setAvailableEquipment(codes)
         // Hand-editing the equipment set leaves any curated preset — drop the freeze.
@@ -446,6 +495,7 @@ class SettingsViewModel @Inject constructor(
     fun setAppIcon(icon: com.forge.app.appicon.AppIcon) = viewModelScope.launch {
         settingsRepo.setAppIcon(icon.name)
     }
+    fun setThemedLaunchIntro(v: Boolean) = viewModelScope.launch { settingsRepo.setThemedLaunchIntro(v) }
     fun setTimezone(id: String) = viewModelScope.launch { settingsRepo.setTimezone(id) }
     fun toggleFavoriteTimezone(id: String) = viewModelScope.launch { settingsRepo.toggleFavoriteTimezone(id) }
     fun exportLastSessionPdf() = viewModelScope.launch {
@@ -474,6 +524,10 @@ class SettingsViewModel @Inject constructor(
     }
     fun exportBodyweightCsv() = viewModelScope.launch {
         val file = backupRepo.exportBodyweightCsv()
+        _exportPath.value = file.absolutePath
+    }
+    fun exportCardioCsv() = viewModelScope.launch {
+        val file = backupRepo.exportCardioCsv()
         _exportPath.value = file.absolutePath
     }
     fun clearExportPath() { _exportPath.value = null }
@@ -592,10 +646,19 @@ class SettingsViewModel @Inject constructor(
     private val _dbSizeLabel = kotlinx.coroutines.flow.MutableStateFlow("")
     val dbSizeLabel: StateFlow<String> = _dbSizeLabel.asStateFlow()
 
-    private fun formatBytes(bytes: Long): String = when {
-        bytes >= 1_048_576 -> "%.1f MB".format(bytes / 1_048_576.0)
-        bytes >= 1024 -> "%.0f KB".format(bytes / 1024.0)
-        else -> "$bytes B"
+    // ── Storage breakdown + cache clear (GYMAP-68) ─────────────────────────────
+    /** The per-category on-disk footprint for the Storage page; null until first loaded. */
+    private val _storage = kotlinx.coroutines.flow.MutableStateFlow<com.forge.app.data.repo.StorageBreakdown?>(null)
+    val storage: StateFlow<com.forge.app.data.repo.StorageBreakdown?> = _storage.asStateFlow()
+
+    /** (Re)measure on-disk storage — call when the Storage page opens or after clearing the cache. */
+    fun refreshStorage() = viewModelScope.launch { _storage.value = storageRepo.breakdown() }
+
+    /** Wipe the transient cache, then re-measure so the page reflects the freed space (the shrinking
+     *  Cache row IS the feedback, DESIGN §13 — no success toast). */
+    fun clearCache() = viewModelScope.launch {
+        runCatching { storageRepo.clearCache() }
+        _storage.value = storageRepo.breakdown()
     }
 
     /** Refresh the auto-backup date + failure state — call when the data dialog opens (the worker may have run since). */
@@ -640,6 +703,33 @@ class SettingsViewModel @Inject constructor(
             .getOrDefault(RestoreOutcome.IO_ERROR)
         if (outcome == RestoreOutcome.SUCCESS) _restoreSucceeded.value = true
         else _statusMessage.value = restoreFailureMessage(outcome)
+    }
+
+    // ── Auto-backup config + manual "Back up now" (GYMAP-67) ───────────────────
+    /** Whether the weekly auto-backup is on (default true) — the Backup page toggle. */
+    val autoBackupEnabled: StateFlow<Boolean> = settingsRepo.autoBackupEnabled
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
+
+    /** The user-picked folder backups also write to, or null when internal-only. */
+    val backupFolderUri: StateFlow<String?> = settingsRepo.backupFolderUri
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    fun setAutoBackupEnabled(v: Boolean) = viewModelScope.launch { settingsRepo.setAutoBackupEnabled(v) }
+
+    /** Persist + take a write grant on the picked folder, then seed it with a backup right away so it
+     *  isn't empty until the next weekly run. */
+    fun setBackupFolder(uri: android.net.Uri) = viewModelScope.launch {
+        backupRepo.rememberBackupFolder(uri)
+        backupNow()
+    }
+    fun clearBackupFolder() = viewModelScope.launch { backupRepo.forgetBackupFolder() }
+
+    /** Run a backup right now — to internal storage and the picked folder — the "Back up now" action. */
+    fun backupNow() = viewModelScope.launch {
+        val folder = settingsRepo.backupFolderUri.first()?.let { android.net.Uri.parse(it) }
+        runCatching { backupRepo.autoBackup(folder) }
+            .onSuccess { _statusMessage.value = "Backed up."; refreshAutoBackupInfo() }
+            .onFailure { _statusMessage.value = "Backup failed: ${it.message}" }
     }
 
     fun exportCrashLogs(uri: android.net.Uri) = viewModelScope.launch {

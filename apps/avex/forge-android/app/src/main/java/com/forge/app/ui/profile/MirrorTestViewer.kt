@@ -1,4 +1,4 @@
-@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class, androidx.compose.material3.ExperimentalMaterial3Api::class)
 
 package com.forge.app.ui.profile
 
@@ -19,17 +19,23 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -48,33 +54,45 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.forge.app.data.repo.ProgressPhoto
+import com.forge.app.domain.photo.PhotoPose
+import com.forge.app.domain.units.WeightUnit
+import com.forge.app.domain.units.parseToLb
+import com.forge.app.domain.units.unitLabel
+import com.forge.app.domain.units.weightInputValue
 import com.forge.app.ui.common.bounceClick
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.text.SimpleDateFormat
+import java.time.Instant
+import java.time.ZoneId
 import java.util.Date
 import java.util.Locale
 
 /**
- * Full-screen, swipeable photo viewer. Opens on the tapped photo and pages left/right through the
- * exact list the grid was showing (search results, an album, or the whole timeline). Each page shows
- * the whole photo (Fit, not cropped) over a dark scrim, with its date, an editable note, move-to-album
- * chips and delete in a bottom sheet. Note edits commit on swipe / dismiss; album moves reflect at once.
+ * Full-screen, swipeable photo viewer + metadata editor. Opens on the tapped photo and pages through
+ * the exact list the grid showed. Each page shows the whole photo (Fit) over a dark scrim; the bottom
+ * sheet edits its date, pose, bodyweight, note and album, and deletes. Note + weight edits commit on
+ * swipe / dismiss; pose, album and date reflect at once.
  */
 @Composable
 internal fun GalleryViewerPager(
     photos: List<ProgressPhoto>,
     startIndex: Int,
     albumNames: List<String>,
+    weightUnit: WeightUnit,
     fileFor: (ProgressPhoto) -> File,
     onSaveNote: (ProgressPhoto, String) -> Unit,
     onMove: (ProgressPhoto, String) -> Unit,
+    onSetPose: (ProgressPhoto, String) -> Unit,
+    onSetWeight: (ProgressPhoto, Double?) -> Unit,
+    onSetDate: (ProgressPhoto, Long) -> Unit,
     onDelete: (ProgressPhoto) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -83,27 +101,46 @@ internal fun GalleryViewerPager(
     val pagerState = rememberPagerState(initialPage = start) { photos.size }
     val current = photos.getOrElse(pagerState.currentPage) { photos[start] }
 
-    // Note editing: one live buffer tracked by which file it belongs to, so it survives swipes and
-    // commits the previous photo's edit before loading the next.
+    // Live buffers keyed by file so edits survive swipes; overrides echo committed values back when you
+    // page to a photo again, over the (frozen) `photos` snapshot.
     var editingFile by remember { mutableStateOf(current.fileName) }
-    // Local echoes so an edit reflects instantly without waiting on a VM reload — a committed note
-    // stays authoritative over the (possibly stale) `photos` snapshot when you page back to it.
     val noteOverride = remember { mutableStateMapOf<String, String>() }
     val albumOverride = remember { mutableStateMapOf<String, String>() }
+    val poseOverride = remember { mutableStateMapOf<String, String>() }
+    val weightOverride = remember { mutableStateMapOf<String, Double?>() }
+    val dateOverride = remember { mutableStateMapOf<String, Long>() }
     var noteInput by remember { mutableStateOf(noteOverride[current.fileName] ?: current.note) }
-    val currentAlbum = albumOverride[current.fileName] ?: current.album
+    var weightInput by remember {
+        mutableStateOf(current.weightLb?.let { weightInputValue(it, weightUnit) } ?: "")
+    }
+    var showDatePicker by remember { mutableStateOf(false) }
 
-    fun commitNote() {
+    val currentAlbum = albumOverride[current.fileName] ?: current.album
+    val currentPose = poseOverride[current.fileName] ?: current.pose
+    val currentDate = dateOverride[current.fileName] ?: current.takenAtMs
+
+    fun commit() {
         val original = photos.firstOrNull { it.fileName == editingFile } ?: return
         val trimmed = noteInput.trim()
         noteOverride[editingFile] = trimmed
         if (trimmed != original.note) onSaveNote(original, trimmed)
+        // Compare in DISPLAY units, not lb: weightInput was seeded via weightInputValue (which rounds to
+        // the display step), so a 0.1-kg rounding is ~0.11 lb and an untouched field would trip a raw-lb
+        // threshold and silently rewrite the snapshot. Same display text as seeded ⇒ untouched ⇒ no write.
+        val prevDisplay = original.weightLb?.let { weightInputValue(it, weightUnit) } ?: ""
+        val curDisplay = weightInput.trim()
+        if (curDisplay != prevDisplay) {
+            val parsed = curDisplay.ifBlank { null }?.let { parseToLb(it, weightUnit) }
+            weightOverride[editingFile] = parsed
+            onSetWeight(original, parsed)
+        }
     }
     LaunchedEffect(pagerState.currentPage) {
         if (current.fileName != editingFile) {
-            commitNote()
+            commit()
             editingFile = current.fileName
             noteInput = noteOverride[current.fileName] ?: current.note
+            weightInput = (weightOverride[current.fileName] ?: current.weightLb)?.let { weightInputValue(it, weightUnit) } ?: ""
         }
     }
 
@@ -111,20 +148,13 @@ internal fun GalleryViewerPager(
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val accent = MaterialTheme.colorScheme.primary
 
-    Dialog(
-        onDismissRequest = { commitNote(); onDismiss() },
-        properties = DialogProperties(usePlatformDefaultWidth = false)
-    ) {
+    Dialog(onDismissRequest = { commit(); onDismiss() }, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Column(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.94f))) {
-            // Top bar: close + "3 / 5" counter.
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                IconButton(onClick = { commitNote(); onDismiss() }) {
-                    Icon(Icons.Filled.Close, contentDescription = "Close", tint = Color.White)
-                }
+                IconButton(onClick = { commit(); onDismiss() }) { Icon(Icons.Filled.Close, contentDescription = "Close", tint = Color.White) }
                 Text(
                     "${pagerState.currentPage + 1} / ${photos.size}",
                     style = MaterialTheme.typography.labelMedium, color = Color.White.copy(alpha = 0.85f)
@@ -136,27 +166,24 @@ internal fun GalleryViewerPager(
                 GalleryFullImage(fileFor(photos[page]), Modifier.fillMaxSize().padding(horizontal = 8.dp))
             }
 
-            // Bottom sheet: date + delete, editable note, move-to-album chips.
+            // Metadata editor.
             Column(
                 Modifier.fillMaxWidth()
                     .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
                     .background(MaterialTheme.colorScheme.surface)
                     .padding(16.dp)
             ) {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(
-                        SimpleDateFormat("EEEE, MMM d, yyyy", Locale.getDefault()).format(Date(current.takenAtMs)),
-                        style = MaterialTheme.typography.labelMedium, color = muted
+                        SimpleDateFormat("EEEE, MMM d, yyyy", Locale.getDefault()).format(Date(currentDate)),
+                        style = MaterialTheme.typography.labelMedium, color = accent,
+                        modifier = Modifier.bounceClick { showDatePicker = true }.padding(vertical = 4.dp)
                     )
-                    IconButton(onClick = { commitNote(); onDelete(current) }) {
+                    IconButton(onClick = { commit(); onDelete(current) }) {
                         Icon(Icons.Filled.Delete, contentDescription = "Delete photo", tint = MaterialTheme.colorScheme.error)
                     }
                 }
-                Spacer(Modifier.height(6.dp))
+                Spacer(Modifier.height(8.dp))
                 BasicTextField(
                     value = noteInput,
                     onValueChange = { noteInput = it.take(140) },
@@ -165,8 +192,7 @@ internal fun GalleryViewerPager(
                     decorationBox = { inner ->
                         Box {
                             if (noteInput.isEmpty()) Text(
-                                "Add a note…",
-                                style = MaterialTheme.typography.bodyMedium,
+                                "Add a note…", style = MaterialTheme.typography.bodyMedium,
                                 color = muted.copy(alpha = 0.6f), fontStyle = FontStyle.Italic
                             )
                             inner()
@@ -174,21 +200,81 @@ internal fun GalleryViewerPager(
                     },
                     modifier = Modifier.fillMaxWidth()
                 )
+
+                // Pose.
+                Spacer(Modifier.height(14.dp))
+                Text("POSE", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
+                Spacer(Modifier.height(6.dp))
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    PhotoPose.entries.forEach { p ->
+                        GalleryChip(p.label, selected = currentPose == p.name) {
+                            val next = if (currentPose == p.name) "" else p.name
+                            poseOverride[current.fileName] = next
+                            onSetPose(current, next)
+                        }
+                    }
+                }
+
+                // Bodyweight.
+                Spacer(Modifier.height(14.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("WEIGHT", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
+                    Spacer(Modifier.width(10.dp))
+                    BasicTextField(
+                        value = weightInput,
+                        onValueChange = { weightInput = it.filter { c -> c.isDigit() || c == '.' }.take(6) },
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(color = onSurface),
+                        cursorBrush = SolidColor(accent),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        decorationBox = { inner ->
+                            Box {
+                                if (weightInput.isEmpty()) Text(
+                                    "—", style = MaterialTheme.typography.bodyMedium, color = muted.copy(alpha = 0.6f)
+                                )
+                                inner()
+                            }
+                        },
+                        modifier = Modifier.width(70.dp)
+                    )
+                    Text(unitLabel(weightUnit), style = MaterialTheme.typography.labelMedium, color = muted)
+                }
+
+                // Album.
                 Spacer(Modifier.height(14.dp))
                 Text("ALBUM", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
                 Spacer(Modifier.height(6.dp))
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     GalleryChip("Unsorted", selected = currentAlbum.isBlank()) {
-                        commitNote(); albumOverride[current.fileName] = ""; onMove(current, "")
+                        albumOverride[current.fileName] = ""; onMove(current, "")
                     }
                     albumNames.forEach { name ->
                         GalleryChip(name, selected = currentAlbum == name) {
-                            commitNote(); albumOverride[current.fileName] = name; onMove(current, name)
+                            albumOverride[current.fileName] = name; onMove(current, name)
                         }
                     }
                 }
             }
         }
+    }
+
+    if (showDatePicker) {
+        val dpState = rememberDatePickerState(initialSelectedDateMillis = currentDate)
+        DatePickerDialog(
+            onDismissRequest = { showDatePicker = false },
+            confirmButton = {
+                TextButton(onClick = {
+                    dpState.selectedDateMillis?.let { picked ->
+                        // DatePicker returns UTC midnight — map that calendar day to local start-of-day.
+                        val localDate = Instant.ofEpochMilli(picked).atZone(ZoneId.of("UTC")).toLocalDate()
+                        val ms = localDate.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+                        dateOverride[current.fileName] = ms
+                        onSetDate(current, ms)
+                    }
+                    showDatePicker = false
+                }) { Text("Set") }
+            },
+            dismissButton = { TextButton(onClick = { showDatePicker = false }) { Text("Cancel") } }
+        ) { DatePicker(state = dpState) }
     }
 }
 
@@ -198,7 +284,13 @@ internal fun GalleryViewerPager(
  * so the viewer never cuts off the top/bottom of a physique shot.
  */
 @Composable
-internal fun GalleryFullImage(file: File, modifier: Modifier = Modifier, reqPx: Int = 1400) {
+internal fun GalleryFullImage(
+    file: File,
+    modifier: Modifier = Modifier,
+    reqPx: Int = 1400,
+    alpha: Float = 1f,
+    contentScale: ContentScale = ContentScale.Fit
+) {
     val bitmap by produceState<ImageBitmap?>(initialValue = null, file.path, reqPx) {
         value = withContext(Dispatchers.IO) { decodeFittedBitmap(file, reqPx)?.asImageBitmap() }
     }
@@ -208,7 +300,8 @@ internal fun GalleryFullImage(file: File, modifier: Modifier = Modifier, reqPx: 
             bitmap = bmp,
             contentDescription = "Progress photo",
             modifier = modifier,
-            contentScale = ContentScale.Fit,
+            contentScale = contentScale,
+            alpha = alpha,
             filterQuality = FilterQuality.High
         )
     } else {

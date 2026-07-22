@@ -81,10 +81,11 @@ object RankCardRenderer {
         canvas.drawText("${"%,d".format(Locale.US, xpTotal)} XP", cx, 832f, sub)
         if (!standingLine.isNullOrBlank()) canvas.drawText(standingLine, cx, 892f, sub)
 
-        // ── FORGE wordmark (tier-tinted, italic serif) ──
-        canvas.drawText("FORGE", cx, 1010f, Paint().apply {
+        // ── "• Avex" wordmark (tier-tinted, italic serif) — matches BeforeAfterCardRenderer so the
+        //    two shareable cards read as one family ──
+        canvas.drawText("• Avex", cx, 1010f, Paint().apply {
             isAntiAlias = true; color = tier; textAlign = Paint.Align.CENTER
-            textSize = 52f; letterSpacing = 0.28f; typeface = Typeface.create(Typeface.SERIF, Typeface.ITALIC)
+            textSize = 52f; letterSpacing = 0.12f; typeface = Typeface.create(Typeface.SERIF, Typeface.ITALIC)
         })
 
         val file = File(context.filesDir, "forge_rank_card.png")

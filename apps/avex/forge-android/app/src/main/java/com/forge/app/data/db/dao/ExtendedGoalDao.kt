@@ -26,6 +26,9 @@ interface ExtendedGoalDao {
     @Query("SELECT * FROM extended_goal ORDER BY created_at DESC")
     suspend fun getAll(): List<ExtendedGoal>
 
+    @Query("SELECT * FROM extended_goal WHERE id = :id")
+    suspend fun getById(id: Long): ExtendedGoal?
+
     @Query("SELECT * FROM extended_goal WHERE exercise_id = :exerciseId")
     fun observeForExercise(exerciseId: String): Flow<List<ExtendedGoal>>
 

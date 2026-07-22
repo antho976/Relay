@@ -3,6 +3,8 @@ package com.forge.app.data.db
 import androidx.room.Database
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
+import com.forge.app.data.db.dao.BodyFatDao
+import com.forge.app.data.db.dao.BodyMeasurementDao
 import com.forge.app.data.db.dao.BodyweightDao
 import com.forge.app.data.db.dao.CardioDao
 import com.forge.app.data.db.dao.DayNameOverrideDao
@@ -26,6 +28,8 @@ import com.forge.app.data.db.dao.SessionSegmentDao
 import com.forge.app.data.db.dao.WarmupRoutineDao
 import com.forge.app.data.db.dao.SessionBreakDao
 import com.forge.app.data.db.dao.VacationDao
+import com.forge.app.data.db.entities.BodyFatEntry
+import com.forge.app.data.db.entities.BodyMeasurementEntry
 import com.forge.app.data.db.entities.BodyweightEntry
 import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.data.db.entities.DayNameOverride
@@ -53,8 +57,19 @@ import com.forge.app.data.db.entities.SessionBreak
 import com.forge.app.data.db.entities.VacationPeriod
 
 /**
- * Schema is v23 (v23 added `cardio_entry.interval_count` + `cardio_entry.hr_zone` for cardio depth —
- * HIIT interval counts + manual HR-zone tags;
+ * Schema is v29 (v29 added `body_fat` — per-day body-fat-% history for GYMAP-62, a new empty
+ * table, additive; readings come from Health Connect (a smart scale) or manual entry;
+ * v28 added `cardio_entry.conditions` — comma-joined weather/environment tags
+ * (hot/cold/rain/wind) a session was done in for GYMAP-39, an additive nullable column; null = none tagged;
+ * v27 added `cardio_entry.incline_pct` + `cardio_entry.laps` + `cardio_entry.elevation_m`
+ * — per-type optional cardio fields (treadmill grade / pool laps / outdoor elevation gain) for GYMAP-38,
+ * three additive nullable columns; null = the field doesn't apply / wasn't logged;
+ * v26 added `logged_set.duration_seconds` — held time in seconds for timed-hold sets
+ * (planks/dead hangs/wall sits) for GYMAP-51, an additive nullable column; null = normal rep-based set;
+ * v25 added `bodyweight_entry.note` — an optional per-weigh-in note for GYMAP-54, an
+ * additive nullable column; v24 added `body_measurement` — per-type circumference history for GYMAP-52, a new
+ * empty table, additive; v23 added `cardio_entry.interval_count` + `cardio_entry.hr_zone` for cardio
+ * depth — HIIT interval counts + manual HR-zone tags;
  * v22 added `logged_exercise.slot_id` + `exercise_customization.swapped_exercise_id`
  * for swap re-attribution, so a swapped entry's `exercise_id` becomes the real exercise performed and
  * its PRs/stats attribute correctly; v21 added the `source` origin tag to program_customization +
@@ -87,6 +102,8 @@ import com.forge.app.data.db.entities.VacationPeriod
         RestDayEntry::class,
         TrophyNearMiss::class,
         BodyweightEntry::class,
+        BodyFatEntry::class,
+        BodyMeasurementEntry::class,
         VacationPeriod::class,
         ExtendedGoal::class,
         SessionBreak::class,
@@ -101,7 +118,7 @@ import com.forge.app.data.db.entities.VacationPeriod
         SuggestionOutcome::class,
         SessionSegment::class
     ],
-    version = 23,
+    version = 29,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -118,6 +135,8 @@ abstract class ForgeDatabase : RoomDatabase() {
     abstract fun restDayDao(): RestDayDao
     abstract fun trophyNearMissDao(): TrophyNearMissDao
     abstract fun bodyweightDao(): BodyweightDao
+    abstract fun bodyFatDao(): BodyFatDao
+    abstract fun bodyMeasurementDao(): BodyMeasurementDao
     abstract fun vacationDao(): VacationDao
     abstract fun extendedGoalDao(): ExtendedGoalDao
     abstract fun sessionBreakDao(): SessionBreakDao

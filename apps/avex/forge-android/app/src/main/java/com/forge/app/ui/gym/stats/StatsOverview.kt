@@ -20,6 +20,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.formatVolumeCompact
 import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.domain.units.unitLabel
@@ -41,7 +42,7 @@ import kotlin.math.roundToInt
  * first row).
  */
 @Composable
-internal fun ColumnScope.StatsHeroContent(state: StatsUiState, useKg: Boolean, c: StatsColors) {
+internal fun ColumnScope.StatsHeroContent(state: StatsUiState, weightUnit: WeightUnit, c: StatsColors) {
     val cmp = state.weekComparison
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
         Column(Modifier.weight(1f)) {
@@ -56,9 +57,9 @@ internal fun ColumnScope.StatsHeroContent(state: StatsUiState, useKg: Boolean, c
             if (cmp != null) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     WeekMetric(
-                        formatVolumeCompact(cmp.current.volumeLb, useKg, withUnit = false),
-                        cmp.volumeDelta.takeIf { it != 0.0 }?.let { formatVolumeCompact(abs(it), useKg, withUnit = false) to (it > 0) },
-                        unitLabel(useKg), c, Modifier.weight(1.1f)
+                        formatVolumeCompact(cmp.current.volumeLb, weightUnit, withUnit = false),
+                        cmp.volumeDelta.takeIf { it != 0.0 }?.let { formatVolumeCompact(abs(it), weightUnit, withUnit = false) to (it > 0) },
+                        unitLabel(weightUnit), c, Modifier.weight(1.1f)
                     )
                     WeekMetric("${cmp.current.sessions}", countDelta(cmp.sessionsDelta), "sessions", c, Modifier.weight(1f))
                     WeekMetric("${cmp.current.sets}", countDelta(cmp.current.sets - cmp.previous.sets), "sets", c, Modifier.weight(1f))
@@ -67,7 +68,7 @@ internal fun ColumnScope.StatsHeroContent(state: StatsUiState, useKg: Boolean, c
                 // First run / a quiet week: honest zeros, drawn as the same three figures (§12) — never a
                 // dash or a bare sentence. Deltas are suppressed (no prior week to compare against yet).
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    WeekMetric(formatVolumeCompact(0.0, useKg, withUnit = false), null, unitLabel(useKg), c, Modifier.weight(1.1f))
+                    WeekMetric(formatVolumeCompact(0.0, weightUnit, withUnit = false), null, unitLabel(weightUnit), c, Modifier.weight(1.1f))
                     WeekMetric("0", null, "sessions", c, Modifier.weight(1f))
                     WeekMetric("0", null, "sets", c, Modifier.weight(1f))
                 }
@@ -143,12 +144,12 @@ private fun WeekMetric(
 @Composable
 internal fun ColumnScope.RecordsContent(
     records: List<PrRecord>,
-    useKg: Boolean,
+    weightUnit: WeightUnit,
     c: StatsColors,
     onOpenLift: (String) -> Unit = {}
 ) {
     val fmt = remember { SimpleDateFormat("MMM d, yyyy", Locale.getDefault()) }
-    val unit = unitLabel(useKg)
+    val unit = unitLabel(weightUnit)
     val shown = records.take(6)
     shown.forEachIndexed { i, r ->
         Row(
@@ -162,7 +163,7 @@ internal fun ColumnScope.RecordsContent(
                 Text(fmt.format(Date(r.sessionDate)), style = MaterialTheme.typography.labelSmall, color = c.muted)
             }
             Text(
-                "${toDisplayWeight(r.maxWeightLb, useKg).roundToInt()} $unit × ${r.bestReps}",
+                "${toDisplayWeight(r.maxWeightLb, weightUnit).roundToInt()} $unit × ${r.bestReps}",
                 style = MaterialTheme.typography.titleSmall,
                 color = c.accent
             )

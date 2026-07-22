@@ -31,12 +31,16 @@ import kotlinx.coroutines.launch
  * scenes (LaunchScenes.kt) are deliberately UNWIRED, kept for re-wiring: compose
  * `IconLaunchScene(icon, reduceMotion, Modifier.fillMaxSize())` behind the wordmark and restore the
  * longer (950ms) themed hold.
+ *
+ * [themed] is the user's "Custom startup animation" setting (Appearance). Off resolves the intro to
+ * [AppIcon.Default] — no palette — so the shared plain path in [AvexWordmark] plays the black-and-
+ * white Avex settle instead of the icon-family effect (and no choreographed family exit fires).
  */
 @Composable
-fun AvexIntro(iconKey: String, onDone: () -> Unit) {
+fun AvexIntro(iconKey: String, themed: Boolean = true, onDone: () -> Unit) {
     val (gradTop, gradBottom) = forgeBackgroundGradient(LocalForgeSettings.current.amoledMode)
     val reduceMotion = ForgeMotion.durationScale <= 0f
-    val icon = AppIcon.fromKey(iconKey)
+    val icon = if (themed) AppIcon.fromKey(iconKey) else AppIcon.Default
 
     // Text settles: alpha 0→1 with a hair of upward scale. Plate: the whole overlay fades out to
     // reveal. Exit: families with a choreographed wordmark death (melt, black hole, CRT-off, wipe)

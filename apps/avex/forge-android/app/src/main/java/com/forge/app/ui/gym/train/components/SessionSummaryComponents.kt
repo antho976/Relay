@@ -257,7 +257,7 @@ internal fun TagPicker(selected: Set<String>, onToggle: (String) -> Unit, onBg: 
 
 @Composable
 internal fun HighlightRow(h: ExerciseHighlight, onBg: Color, muted: Color) {
-    val useKg = LocalForgeSettings.current.useKg
+    val weightUnit = LocalForgeSettings.current.weightUnit
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
@@ -265,7 +265,7 @@ internal fun HighlightRow(h: ExerciseHighlight, onBg: Color, muted: Color) {
     ) {
         Column(Modifier.weight(1f)) {
             Text(h.exerciseName, style = MaterialTheme.typography.bodySmall, color = onBg)
-            Text("${h.setsLogged} sets · ${formatVolume(h.volumeLb, useKg)}", style = MaterialTheme.typography.bodySmall, color = muted, fontSize = 10.sp)
+            Text("${h.setsLogged} sets · ${formatVolume(h.volumeLb, weightUnit)}", style = MaterialTheme.typography.bodySmall, color = muted, fontSize = 10.sp)
         }
         if (h.isPr) {
             Text("PR", color = onBg, fontWeight = FontWeight.Black, style = MaterialTheme.typography.labelSmall, fontSize = 9.sp, letterSpacing = 0.5.sp)

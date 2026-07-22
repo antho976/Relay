@@ -45,15 +45,30 @@ val DAY_ACCENTS: List<String> = listOf("#E85D4A", "#D4A017", "#5B9279", "#7B6CB5
 /** Max characters for a day name — keeps the big home/day-card title from overflowing the screen. */
 const val MAX_DAY_NAME = 24
 
+/** Rep-range presets in the sets/reps sheet; any other stored string renders as Custom. */
+val REP_PRESETS: List<String> = listOf("4-6", "6-8", "8-12", "10-15", "12-20")
+
+/** Sets a day plans in total — the day anchor's right meta ("14 SETS"). */
+val BuilderDay.totalSets: Int get() = exercises.sumOf { it.sets }
+
+/** Name for a duplicated day: "Upper A" → "Upper A 2" (then 3…), bumped past [taken] names and
+ *  trimmed so suffix + base always fit [MAX_DAY_NAME]. Pure — testable. */
+fun copyName(base: String, taken: Set<String>): String {
+    var n = 2
+    while (true) {
+        val suffix = " $n"
+        val cand = base.take(MAX_DAY_NAME - suffix.length).trimEnd() + suffix
+        if (cand !in taken) return cand
+        n++
+    }
+}
+
 /** Normalize a stored archetype to its base type — stored keys can carry a split suffix (e.g.
  *  "upper-a"/"lower-b"), matching how the repository's archetypeMeta strips it. */
 internal fun baseArchetype(archetype: String): String = archetype.substringBefore('-').lowercase()
 
 internal fun wordFor(archetype: String): String =
     DAY_TYPES.firstOrNull { it.first == baseArchetype(archetype) }?.third ?: ""
-
-internal fun typeLabel(archetype: String): String =
-    DAY_TYPES.firstOrNull { it.first == baseArchetype(archetype) }?.second ?: "Full body"
 
 /** Pure mapping from the edited model to persistable rows (positions = list order). Testable. */
 fun List<BuilderDay>.toEntities(): Pair<List<ProgramDay>, List<ProgramSlot>> {
@@ -74,12 +89,4 @@ fun List<BuilderDay>.toEntities(): Pair<List<ProgramDay>, List<ProgramSlot>> {
         }
     }
     return days to slots
-}
-
-/** Move the element at [from] to index [to], returning a new list (drag-reorder helper). */
-fun <T> List<T>.moved(from: Int, to: Int): List<T> {
-    if (from == to || from !in indices || to !in indices) return this
-    val m = toMutableList()
-    m.add(to, m.removeAt(from))
-    return m
 }

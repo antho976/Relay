@@ -32,10 +32,36 @@ enum class Equipment(val display: String) {
     BENCH("Flat bench"),
     /** Adjustable/incline bench — NOT part of the Developer's preset (that bench is flat-only). */
     INCLINE_BENCH("Incline bench"),
+    /** Parallel dip bars — a dip tower, rack attachment, or parallettes (GYMAP-20). */
+    DIP_STATION("Dip bars"),
+    /** Suspension trainer — TRX-style straps or gymnastic rings (GYMAP-20). */
+    SUSPENSION("Suspension trainer"),
+    /** Ab roller wheel (GYMAP-20). */
+    AB_WHEEL("Ab wheel"),
     BODYWEIGHT_ONLY("Bodyweight only"),
     /** Generic selectorized resistance machine (leg press, pulldown, chest press, etc.). */
     MACHINE("Machine")
 }
+
+/**
+ * Equipment grouped for the selector UIs (onboarding fine-tune + Settings → Program → Equipment) —
+ * shared here so the two surfaces can never drift. Covers every [Equipment] value exactly once.
+ */
+val equipmentGroups: List<Pair<String, List<Equipment>>> = listOf(
+    "Free weights" to listOf(
+        Equipment.DUMBBELLS, Equipment.BARBELL, Equipment.KETTLEBELL,
+        Equipment.EZ_BAR, Equipment.TRAP_BAR
+    ),
+    "Racks & benches" to listOf(
+        Equipment.BENCH, Equipment.INCLINE_BENCH, Equipment.SQUAT_RACK,
+        Equipment.SMITH_MACHINE, Equipment.DIP_STATION
+    ),
+    "Machines & cables" to listOf(Equipment.MACHINE, Equipment.CABLE),
+    "Small gear & bodyweight" to listOf(
+        Equipment.PULL_UP_BAR, Equipment.RESISTANCE_BAND, Equipment.SUSPENSION,
+        Equipment.AB_WHEEL, Equipment.BODYWEIGHT_ONLY
+    )
+)
 
 /**
  * A one-tap equipment preset. [equipment] fills the available-equipment set. A non-null [frozenIds]
@@ -60,24 +86,34 @@ data class EquipmentPreset(
  * generalization can never change what it produces. Every other preset is plain equipment filtering.
  */
 val equipmentPresets: List<EquipmentPreset> = listOf(
+    // The big-app lineup (GYMAP-20): everything → basic commercial → home big/small → the curated
+    // owner gym → the minimal setups. Selection is stored as the equipment SET, so ids are UI-only —
+    // except "developer", whose id + frozenIds lock the curated pool.
+    EquipmentPreset("everything", "Everything gym", Equipment.entries.map { it.name }.toSet()),
+    EquipmentPreset("basic-gym", "Basic gym", setOf(
+        Equipment.DUMBBELLS.name, Equipment.BARBELL.name, Equipment.SQUAT_RACK.name,
+        Equipment.SMITH_MACHINE.name, Equipment.BENCH.name, Equipment.INCLINE_BENCH.name,
+        Equipment.MACHINE.name, Equipment.CABLE.name
+    )),
+    EquipmentPreset("home-big", "Home gym · big", setOf(
+        Equipment.DUMBBELLS.name, Equipment.BARBELL.name, Equipment.SQUAT_RACK.name,
+        Equipment.BENCH.name, Equipment.INCLINE_BENCH.name, Equipment.PULL_UP_BAR.name,
+        Equipment.EZ_BAR.name, Equipment.TRAP_BAR.name, Equipment.KETTLEBELL.name,
+        Equipment.RESISTANCE_BAND.name, Equipment.DIP_STATION.name, Equipment.AB_WHEEL.name
+    )),
+    EquipmentPreset("home-small", "Home gym · small", setOf(
+        Equipment.DUMBBELLS.name, Equipment.BENCH.name,
+        Equipment.RESISTANCE_BAND.name, Equipment.PULL_UP_BAR.name
+    )),
     EquipmentPreset(
         // Label renamed for sharing; id "developer" + frozenIds kept intact so the curated pool is unchanged.
         "developer", "Home machine gym",
         setOf(Equipment.DUMBBELLS.name, Equipment.BENCH.name, Equipment.CABLE.name, Equipment.MACHINE.name),
         frozenIds = ExerciseLibrary.DEVELOPER_FROZEN_IDS
     ),
-    EquipmentPreset("commercial", "Full gym (everything)", Equipment.entries.map { it.name }.toSet()),
-    EquipmentPreset("basic-gym", "Basic gym", setOf(
-        Equipment.DUMBBELLS.name, Equipment.BARBELL.name, Equipment.SQUAT_RACK.name,
-        Equipment.BENCH.name, Equipment.INCLINE_BENCH.name, Equipment.MACHINE.name, Equipment.CABLE.name
-    )),
-    EquipmentPreset("home-barbell", "Home gym + barbell", setOf(
-        Equipment.DUMBBELLS.name, Equipment.BARBELL.name, Equipment.SQUAT_RACK.name,
-        Equipment.BENCH.name, Equipment.INCLINE_BENCH.name, Equipment.PULL_UP_BAR.name
-    )),
-    EquipmentPreset("db-bench", "Dumbbells + bench",
-        setOf(Equipment.DUMBBELLS.name, Equipment.BENCH.name)),
     EquipmentPreset("dumbbells", "Dumbbells only", setOf(Equipment.DUMBBELLS.name)),
+    EquipmentPreset("bands-bw", "Bands & bodyweight",
+        setOf(Equipment.RESISTANCE_BAND.name, Equipment.BODYWEIGHT_ONLY.name)),
     EquipmentPreset("bodyweight", "Bodyweight only", setOf(Equipment.BODYWEIGHT_ONLY.name))
 )
 

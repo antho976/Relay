@@ -21,6 +21,12 @@ datastore = "1.1.1"
 # Health Connect (on-device recovery signals — sleep, resting HR — for the coach)
 health-connect = "1.1.0"
 
+# CameraX (in-app guided progress-photo capture with a pose-ghost overlay)
+camerax = "1.4.2"
+
+# Biometric / device-credential app lock (GYMAP-69) — no app PIN stored; the OS handles the credential
+biometric = "1.1.0"
+
 # Async
 coroutines = "1.9.0"
 
@@ -42,6 +48,7 @@ uiautomator = "2.3.0"
 # Core AndroidX
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version = "1.15.0" }
 androidx-core-splashscreen = { group = "androidx.core", name = "core-splashscreen", version = "1.0.1" }
+androidx-exifinterface = { group = "androidx.exifinterface", name = "exifinterface", version = "1.4.1" }
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activity-compose" }
 androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycle" }
 androidx-lifecycle-viewmodel-compose = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-compose", version.ref = "lifecycle" }
@@ -74,6 +81,15 @@ androidx-datastore-preferences = { group = "androidx.datastore", name = "datasto
 
 # Health Connect
 androidx-health-connect = { group = "androidx.health.connect", name = "connect-client", version.ref = "health-connect" }
+
+# CameraX
+androidx-camera-core = { group = "androidx.camera", name = "camera-core", version.ref = "camerax" }
+androidx-camera-camera2 = { group = "androidx.camera", name = "camera-camera2", version.ref = "camerax" }
+androidx-camera-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", version.ref = "camerax" }
+androidx-camera-view = { group = "androidx.camera", name = "camera-view", version.ref = "camerax" }
+
+# Biometric — BiometricPrompt + device-credential fallback for the app/gallery lock (GYMAP-69)
+androidx-biometric = { group = "androidx.biometric", name = "biometric", version.ref = "biometric" }
 
 # Coroutines
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }

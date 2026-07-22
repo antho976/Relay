@@ -6,6 +6,7 @@ import com.forge.app.data.db.entities.Session
 import com.forge.app.data.db.entities.durationMinutes
 import com.forge.app.data.repo.StatsRepository
 import com.forge.app.domain.session.SessionType
+import com.forge.app.domain.units.WeightUnit
 import com.forge.app.program.Program
 import com.forge.app.ui.overview.state.MilestoneEvent
 import com.forge.app.ui.overview.state.OnThisDayMemory
@@ -37,7 +38,7 @@ internal fun buildOverviewUiState(
     distanceKm: Double,
     dayVolStats: Map<String, SessionDao.DayVolumeStats>,
     cardioTargetMin: Int = 0,
-    useKg: Boolean = false,
+    weightUnit: WeightUnit = WeightUnit.LB,
     useMiles: Boolean = false
 ): OverviewUiState {
     val gymItems = stats.recentGymSessions.map { session ->
@@ -111,7 +112,7 @@ internal fun buildOverviewUiState(
         totalFinishedSessions = stats.totalFinishedSessions,
         streakDays = stats.streakDays,
         bestSessionThisWeekLb = stats.bestSessionThisWeekLb,
-        pendingMilestone = computePendingMilestone(stats, shown, useKg),
+        pendingMilestone = computePendingMilestone(stats, shown, weightUnit),
         onThisDayMemory = memory,
         nextUpDayKey = stats.nextUpDayKey,
         weekDaysTrained = stats.weekDaysTrained,
@@ -149,7 +150,7 @@ private fun relativeDay(epochMs: Long): String {
 private fun computePendingMilestone(
     stats: StatsRepository.WeeklyStats,
     shown: Set<String>,
-    useKg: Boolean
+    weightUnit: WeightUnit
 ): MilestoneEvent? {
     if (stats.totalFinishedSessions >= 100 && MILESTONE_SESSIONS_100 !in shown) {
         return MilestoneEvent(MILESTONE_SESSIONS_100, "100 workouts complete. You've earned this.")
@@ -157,7 +158,7 @@ private fun computePendingMilestone(
     if (stats.volumeLb >= VOLUME_MILESTONE_LB && MILESTONE_VOLUME_10K !in shown) {
         // Threshold stays in lb (the stored unit) so it fires consistently; the label honours the
         // user's unit — "10k lb" / "4.5k kg" — instead of always reading lb.
-        val volLabel = com.forge.app.domain.units.formatVolumeCompact(VOLUME_MILESTONE_LB, useKg)
+        val volLabel = com.forge.app.domain.units.formatVolumeCompact(VOLUME_MILESTONE_LB, weightUnit)
         return MilestoneEvent(MILESTONE_VOLUME_10K, "$volLabel this week. Volume beast.")
     }
     val firstMs = stats.firstFinishedSessionMs

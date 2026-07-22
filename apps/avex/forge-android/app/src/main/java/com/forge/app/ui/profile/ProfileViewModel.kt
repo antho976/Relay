@@ -3,14 +3,19 @@ package com.forge.app.ui.profile
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.forge.app.data.db.entities.BodyFatEntry
 import com.forge.app.data.db.entities.BodyweightEntry
 import com.forge.app.data.prefs.SettingsRepository
+import com.forge.app.data.repo.BodyFatRepository
 import com.forge.app.data.repo.BodyweightRepository
+import com.forge.app.data.repo.ExtendedGoalRepository
 import com.forge.app.data.repo.ProfileData
 import com.forge.app.data.repo.ProfileRepository
 import com.forge.app.data.repo.AvatarRepository
 import com.forge.app.data.repo.ProgressPhoto
 import com.forge.app.data.repo.ProgressPhotoRepository
+import com.forge.app.domain.goal.GoalMetric
+import com.forge.app.domain.goal.parseGoalType
 import com.forge.app.ui.profile.state.ProfileUiState
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -22,6 +27,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.io.File
+import java.time.LocalDate
 import javax.inject.Inject
 
 /**
@@ -36,7 +42,9 @@ class ProfileViewModel @Inject constructor(
     private val settingsRepo: SettingsRepository,
     private val photoRepo: ProgressPhotoRepository,
     private val avatarRepo: AvatarRepository,
-    private val bodyweightRepo: BodyweightRepository
+    private val bodyweightRepo: BodyweightRepository,
+    private val bodyFatRepo: BodyFatRepository,
+    private val extendedGoalRepo: ExtendedGoalRepository
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(ProfileUiState())
@@ -50,6 +58,17 @@ class ProfileViewModel @Inject constructor(
             .map { entries -> entries.sortedBy { it.recordedAt } }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    /** The active bodyweight goal target in lb (canonical), or null when none is set — feeds the
+     *  chart's dashed target line. Reads just the goal's target; progress is computed elsewhere. */
+    val bodyweightGoalLb: StateFlow<Double?> =
+        extendedGoalRepo.observeAll()
+            .map { goals ->
+                goals.firstNotNullOfOrNull { g ->
+                    if (parseGoalType(g.goalType)?.metric == GoalMetric.BODYWEIGHT) g.targetValue else null
+                }
+            }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
     /** Whether the quick-log should offer "Import from Health Connect" (read granted). */
     private val _weightConnected = MutableStateFlow(false)
     val weightConnected: StateFlow<Boolean> = _weightConnected.asStateFlow()
@@ -58,9 +77,9 @@ class ProfileViewModel @Inject constructor(
     private val _bodyweightMessage = MutableStateFlow<String?>(null)
     val bodyweightMessage: StateFlow<String?> = _bodyweightMessage.asStateFlow()
 
-    /** Save a typed weigh-in (lb); the trend updates reactively via observeRecent. */
-    fun logBodyweight(weightLb: Double) = viewModelScope.launch {
-        bodyweightRepo.log(weightLb)
+    /** Save a typed weigh-in (lb) for [date] with an optional [note]; the trend updates reactively. */
+    fun logBodyweight(weightLb: Double, date: LocalDate, note: String?) = viewModelScope.launch {
+        bodyweightRepo.log(weightLb, date, note)
         _bodyweightMessage.value = "Saved."
     }
 
@@ -79,11 +98,57 @@ class ProfileViewModel @Inject constructor(
         _weightConnected.value = runCatching { bodyweightRepo.canImportFromHealthConnect() }.getOrDefault(false)
     }
 
+    // ── Body fat % (the BODY FAT section + its quick-log sheet, GYMAP-62) ─────────
+
+    /** Recent body-fat readings, oldest → newest (the DAO emits newest-first) — feeds the sparkline. */
+    val bodyFat: StateFlow<List<BodyFatEntry>> =
+        bodyFatRepo.observeRecent(90)
+            .map { entries -> entries.sortedBy { it.recordedAt } }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** Whether the quick-log should offer "Import from Health Connect" (body-fat read granted). */
+    private val _bodyFatConnected = MutableStateFlow(false)
+    val bodyFatConnected: StateFlow<Boolean> = _bodyFatConnected.asStateFlow()
+
+    /** Transient confirmation/result line for the body-fat quick-log sheet; cleared when it closes. */
+    private val _bodyFatMessage = MutableStateFlow<String?>(null)
+    val bodyFatMessage: StateFlow<String?> = _bodyFatMessage.asStateFlow()
+
+    /** Save a typed body-fat reading (%) for [date]; the trend updates reactively. */
+    fun logBodyFat(percent: Double, date: LocalDate) = viewModelScope.launch {
+        bodyFatRepo.log(percent, date)
+        _bodyFatMessage.value = "Saved."
+    }
+
+    /** Pull the latest body fat from Health Connect into the log (no-op if nothing newer). */
+    fun importBodyFat() = viewModelScope.launch {
+        val imported = bodyFatRepo.importLatestFromHealthConnect()
+        _bodyFatMessage.value =
+            if (imported != null) "Imported your latest body fat." else "No newer body fat in Health Connect."
+    }
+
+    fun clearBodyFatMessage() { _bodyFatMessage.value = null }
+
+    /** Re-check body-fat HC read permission right before showing the quick-log sheet (see above). */
+    fun refreshBodyFatConnected() = viewModelScope.launch {
+        _bodyFatConnected.value = runCatching { bodyFatRepo.canImportFromHealthConnect() }.getOrDefault(false)
+    }
+
     /** True on this profile open iff the user just crossed into a higher tier since last visit. */
     private val _showRankUpCelebration = MutableStateFlow(false)
     val showRankUpCelebration: StateFlow<Boolean> = _showRankUpCelebration.asStateFlow()
 
-    init { load() }
+    init {
+        load()
+        // Keep the filmstrip fresh when the photo store changes elsewhere — most importantly a shot
+        // taken in the in-app camera (a separate screen), but also edits made in the full gallery.
+        // Collect from the start (no drop): the replayed initial revision costs one redundant photos()
+        // read that matches load()'s, but dropping it risks losing a bump that lands between load()'s
+        // read and this collector subscribing (that bump would BE the replayed value we'd skip).
+        viewModelScope.launch {
+            photoRepo.revision.collect { _state.value = _state.value.copy(photos = photoRepo.photos()) }
+        }
+    }
 
     private fun load() = viewModelScope.launch {
         val name = settingsRepo.userName.first()
@@ -171,7 +236,8 @@ class ProfileViewModel @Inject constructor(
         trophyGrid = data.trophyGrid,
         closestTrophy = data.closestTrophy,
         memory = data.memory,
-        lifetimeVolumeSeriesLb = data.lifetimeVolumeSeriesLb
+        lifetimeVolumeSeriesLb = data.lifetimeVolumeSeriesLb,
+        activityByDay = data.activityByDay
     )
 
     /** Called by the UI after the one-shot celebration has played so it never replays on recompose. */
@@ -197,8 +263,8 @@ class ProfileViewModel @Inject constructor(
     fun fileFor(photo: ProgressPhoto) = photoRepo.fileFor(photo)
 
     fun addPhoto(uri: Uri) = viewModelScope.launch {
-        photoRepo.add(uri, System.currentTimeMillis())
-        _state.value = _state.value.copy(photos = photoRepo.photos())
+        // Dated by EXIF capture time inside the repo; the revision collector refreshes the strip.
+        photoRepo.add(uri)
     }
 
     fun deletePhoto(photo: ProgressPhoto) = viewModelScope.launch {

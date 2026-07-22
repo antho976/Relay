@@ -59,8 +59,11 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.data.db.entities.LoggedSet
+import com.forge.app.domain.units.WeightUnit
+import com.forge.app.domain.units.formatHoldLabel
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.domain.units.formatWeightDelta
+import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.ui.common.clickableLabeled
 import com.forge.app.ui.common.rirLabel
@@ -91,6 +94,9 @@ fun SetRow(
     setIndex: Int = 1,
     isPr: Boolean,
     isPlates: Boolean = false,
+    /** Timed-hold exercise (GYMAP-51) — the row reads its held duration instead of reps, and the
+     *  weight-delta column is dropped (a hold has no weight×reps delta). */
+    isTimed: Boolean = false,
     priorSet: LoggedSet? = null,
     /** Last session's FINAL set — the fallback baseline for the LAST delta when you did more sets
      *  this session than last time (so the column is never blank on a bonus set). */
@@ -105,19 +111,19 @@ fun SetRow(
     onToggleFailure: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
-    val useKg = LocalForgeSettings.current.useKg
+    val weightUnit = LocalForgeSettings.current.weightUnit
     val plateLb = LocalForgeSettings.current.plateWeightLb
     // Plate exercises read as a plate count + the lb equivalent (e.g. "3 plates (45 lb)"); the edit
     // field seeds with the plate count. Free weights show/seed the weight in the display unit.
     val displayWeight = set.weightLb?.let { lb ->
-        if (isPlates) "${formatPlateCount(lb / plateLb)} plates (${formatWeight(lb, useKg)})"
-        else formatWeight(lb, useKg)
+        if (isPlates) "${formatPlateCount(lb / plateLb)} plates (${formatWeight(lb, weightUnit)})"
+        else formatWeight(lb, weightUnit)
     } ?: set.weightText
     val editSeed = set.weightLb?.let { lb ->
-        if (isPlates) formatPlateCount(lb / plateLb) else weightInputValue(lb, useKg)
+        if (isPlates) formatPlateCount(lb / plateLb) else weightInputValue(lb, weightUnit)
     } ?: set.weightText
     var isEditing by remember(set.id) { mutableStateOf(false) }
-    var editWeight by remember(set.id, useKg, set.weightText) { mutableStateOf(editSeed) }
+    var editWeight by remember(set.id, weightUnit, set.weightText) { mutableStateOf(editSeed) }
     var editReps by remember(set.id, set.reps) { mutableStateOf(set.reps.toString()) }
     var showRpePicker by remember { mutableStateOf(false) }
 
@@ -153,10 +159,10 @@ fun SetRow(
             if (isPlates) {
                 val pd = wDiff / plateLb
                 (if (pd >= 0) "+" else "") + formatPlateCount(pd) + " pl"
-            } else (if (wDiff >= 0) "+" else "") + formatWeightDelta(wDiff, useKg)
+            } else (if (wDiff >= 0) "+" else "") + formatWeightDelta(wDiff, weightUnit)
         rDiff != 0 -> (if (rDiff > 0) "+" else "") + "$rDiff rep"
         // Matched exactly — show a deliberate zero rather than nothing (#6).
-        wDiff != null -> if (isPlates) "+0 pl" else "+0 ${unitLabel(useKg)}"
+        wDiff != null -> if (isPlates) "+0 pl" else "+0 ${unitLabel(weightUnit)}"
         else -> "+0 rep"
     }
     val deltaColor = when {
@@ -193,7 +199,21 @@ fun SetRow(
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done)
             )
             IconButton(
-                onClick = { if (canConfirm) { onEdit(editWeight.trim(), editReps.toInt()); isEditing = false } },
+                onClick = {
+                    if (canConfirm) {
+                        val typed = editWeight.trim()
+                        val storedLb = set.weightLb
+                        // Untouched free-weight field: hand back the FULL-PRECISION display value rather
+                        // than the rounded field text, so the display→lb round-trip on save can't drift
+                        // the stored weight (e.g. an imported 135 lb lift shown as "9.6 st" must stay
+                        // 135 lb when only the reps change). LB/plates need no conversion, so keep as-is.
+                        val weightOut = if (!isPlates && weightUnit != WeightUnit.LB &&
+                            storedLb != null && typed == editSeed
+                        ) toDisplayWeight(storedLb, weightUnit).toString() else typed
+                        onEdit(weightOut, editReps.toInt())
+                        isEditing = false
+                    }
+                },
                 modifier = Modifier.size(36.dp),
                 enabled = canConfirm
             ) {
@@ -207,17 +227,20 @@ fun SetRow(
             }
         }
     } else {
+        // A timed hold has no weight/reps to edit inline, so tapping the row is a no-op (delete via
+        // swipe, re-log via long-press still work); every other exercise opens the inline editor.
         val tapMod = if (onLongPress != null)
-            modifier.combinedClickable(onClick = { isEditing = true }, onLongClick = onLongPress)
+            modifier.combinedClickable(onClick = { if (!isTimed) isEditing = true }, onLongClick = onLongPress)
         else
-            modifier.combinedClickable(onClick = { isEditing = true })
+            modifier.combinedClickable(onClick = { if (!isTimed) isEditing = true })
 
         // Build a single spoken description so TalkBack reads the row as one unit rather than
         // announcing each Text node separately: "Set 2, 50 kg, 10 reps[, RPE 8][, personal record]".
         val rowDescription = buildString {
             append("Set $setIndex")
             if (displayWeight != null) append(", $displayWeight")
-            append(", ${set.reps} reps")
+            if (isTimed) append(", held ${formatHoldLabel(set.durationSeconds ?: 0)}")
+            else append(", ${set.reps} reps")
             set.rpe?.let { append(", RPE ${rpeLabel(it)}, ${rirLabel(it)} in reserve") }
             if (isPr) append(", personal record")
         }
@@ -283,7 +306,7 @@ fun SetRow(
                         fontWeight = if (isPr) FontWeight.SemiBold else FontWeight.Normal
                     )
                     Text(
-                        "(${formatWeight(plateLbField, useKg)})",
+                        "(${formatWeight(plateLbField, weightUnit)})",
                         style = MaterialTheme.typography.labelSmall,
                         color = muted.copy(alpha = 0.8f),
                         fontSize = 11.sp
@@ -297,22 +320,35 @@ fun SetRow(
                     )
                 }
                 priorSet?.let { prior ->
-                    // Plate exercises read as a plate count, not the lb equivalent (#9).
-                    val priorDisplay = prior.weightLb?.let { lb ->
-                        if (isPlates) "${formatPlateCount(lb / plateLb)} pl" else formatWeight(lb, useKg)
-                    } ?: prior.weightText
-                    Text(
-                        "$priorDisplay × ${prior.reps}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = muted.copy(alpha = 0.45f),
-                        fontSize = 9.sp
-                    )
+                    // Timed holds ghost the prior HOLD time; everything else ghosts "weight × reps".
+                    val ghost = if (isTimed) {
+                        prior.durationSeconds?.let { formatHoldLabel(it) }
+                    } else {
+                        // Plate exercises read as a plate count, not the lb equivalent (#9).
+                        val priorDisplay = prior.weightLb?.let { lb ->
+                            if (isPlates) "${formatPlateCount(lb / plateLb)} pl" else formatWeight(lb, weightUnit)
+                        } ?: prior.weightText
+                        "$priorDisplay × ${prior.reps}"
+                    }
+                    if (ghost != null) {
+                        Text(
+                            ghost,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = muted.copy(alpha = 0.45f),
+                            fontSize = 9.sp
+                        )
+                    }
                 }
             }
 
-            // Reps col
+            // Reps col — a timed hold reads its held duration (0:45) here instead of a rep count.
             Box(modifier = Modifier.width(REPS_COL_W), contentAlignment = Alignment.CenterStart) {
-                Text("${set.reps}", style = MaterialTheme.typography.headlineSmall, color = onBg)
+                Text(
+                    if (isTimed) formatHoldLabel(set.durationSeconds ?: 0) else "${set.reps}",
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = onBg,
+                    maxLines = 1
+                )
             }
 
             // RPE col — tappable framed box
@@ -336,9 +372,10 @@ fun SetRow(
                 }
             }
 
-            // Delta col — trend icon + value, green when you beat last session
+            // Delta col — trend icon + value, green when you beat last session. Suppressed for timed
+            // holds (no weight×reps delta; a hold's progress is its longer time, shown as the ghost).
             Box(modifier = Modifier.width(DELTA_COL_W), contentAlignment = Alignment.CenterEnd) {
-                deltaLabel?.let {
+                if (!isTimed) deltaLabel?.let {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                         if (deltaPositive || deltaNegative) {
                             Icon(

@@ -36,45 +36,80 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.forge.app.domain.cardio.CardioActivity
 import com.forge.app.domain.cardio.CardioType
 import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.common.clickableLabeled
 
 /**
- * The compact sheet header — the entry's date as a small outlined capsule that IS the date-picker
- * trigger (interactive, so it earns its border; no separate "When?" section, no "· change" tag).
+ * The compact sheet header — the entry's date and start time as small outlined capsules that ARE the
+ * date / time-picker triggers (interactive, so they earn their border; no separate "When?" section, no
+ * "· change" tag). The time capsule (GYMAP-33) is hidden on rest days, which have no start time.
  */
 @Composable
-internal fun CardioLogHeroItem(dateHeader: String, muted: Color, onBg: Color, outline: Color, onPickDate: () -> Unit) {
-    Row(Modifier.padding(horizontal = 24.dp).padding(top = 8.dp, bottom = 4.dp)) {
-        Row(
-            modifier = Modifier
-                .clip(RoundedCornerShape(50))
-                .border(1.dp, outline.copy(alpha = 0.35f), RoundedCornerShape(50))
-                .bounceClick(onClick = onPickDate)
-                .padding(horizontal = 14.dp, vertical = 9.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Text(dateHeader, style = MaterialTheme.typography.labelMedium, color = onBg, letterSpacing = 1.sp)
-            Text("▾", style = MaterialTheme.typography.labelSmall, color = muted)
+internal fun CardioLogHeroItem(
+    dateHeader: String,
+    timeHeader: String,
+    showTime: Boolean,
+    muted: Color, onBg: Color, outline: Color,
+    onPickDate: () -> Unit,
+    onPickTime: () -> Unit
+) {
+    Row(
+        Modifier.padding(horizontal = 24.dp).padding(top = 8.dp, bottom = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        HeroPickerCapsule(text = dateHeader, label = "Pick date", muted = muted, onBg = onBg, outline = outline, onClick = onPickDate)
+        if (showTime) {
+            HeroPickerCapsule(text = timeHeader, label = "Pick start time", muted = muted, onBg = onBg, outline = outline, onClick = onPickTime)
         }
+    }
+}
+
+@Composable
+private fun HeroPickerCapsule(
+    text: String,
+    label: String,
+    muted: Color, onBg: Color, outline: Color,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .border(1.dp, outline.copy(alpha = 0.35f), RoundedCornerShape(50))
+            .bounceClick(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            text,
+            style = MaterialTheme.typography.labelMedium,
+            color = onBg,
+            letterSpacing = 1.sp,
+            modifier = Modifier.semantics { contentDescription = label }
+        )
+        Text("▾", style = MaterialTheme.typography.labelSmall, color = muted)
     }
 }
 
 /**
  * The activity-type selector — shows the current pick (icon + name) and opens a dropdown of all
- * types. A compact single-row control in place of the old 12-pill grid.
+ * types: the built-in [CardioType]s, then the user's custom activities (GYMAP-37), then an
+ * "add custom activity" row that opens the create dialog. A compact single-row control.
  */
 @Composable
 internal fun ActivityDropdown(
-    selected: CardioType,
-    onSelect: (CardioType) -> Unit,
+    selected: CardioActivity,
+    onSelect: (CardioActivity) -> Unit,
+    onAddCustom: () -> Unit,
     onBg: Color,
     muted: Color,
     outline: Color
 ) {
     var open by remember { mutableStateOf(false) }
+    val customs = com.forge.app.ui.cardio.LocalCardioTypes.current
+    val accent = MaterialTheme.colorScheme.primary
     Box {
         Row(
             modifier = Modifier
@@ -98,17 +133,29 @@ internal fun ActivityDropdown(
             )
         }
         DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
-            CardioType.entries.forEach { t ->
+            val builtins = CardioType.entries.map { CardioActivity.Builtin(it) }
+            val customActivities = customs.map { CardioActivity.Custom(it) }
+            (builtins + customActivities).forEach { activity ->
                 DropdownMenuItem(
                     text = {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Icon(t.icon, contentDescription = null, tint = onBg, modifier = Modifier.size(18.dp))
-                            Text(t.displayName, color = onBg)
+                            Icon(activity.icon, contentDescription = null, tint = onBg, modifier = Modifier.size(18.dp))
+                            Text(activity.displayName, color = onBg)
                         }
                     },
-                    onClick = { onSelect(t); open = false }
+                    onClick = { onSelect(activity); open = false }
                 )
             }
+            HorizontalDivider(color = outline.copy(alpha = 0.25f))
+            DropdownMenuItem(
+                text = {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("+", style = MaterialTheme.typography.titleMedium, color = accent)
+                        Text("Add custom activity", color = accent)
+                    }
+                },
+                onClick = { open = false; onAddCustom() }
+            )
         }
     }
 }
@@ -282,10 +329,39 @@ internal fun PillChip(
     }
 }
 
+/** A bare number for seeding an editable field — drops a whole value's trailing ".0" (e.g. incline). */
+internal fun plainDecimalInput(v: Double): String =
+    if (v % 1.0 == 0.0) v.toInt().toString() else v.toString()
+
 internal fun sanitizeDecimal(input: String): String {
     val filtered = input.filter { it.isDigit() || it == '.' }
     val firstDot = filtered.indexOf('.')
     val collapsed = if (firstDot == -1) filtered
     else filtered.substring(0, firstDot + 1) + filtered.substring(firstDot + 1).replace(".", "")
     return collapsed.take(6)
+}
+
+/** Keep digits and a single colon, capped at "HH:MM" width, for the duration field (GYMAP-41). */
+internal fun sanitizeDuration(input: String): String {
+    val filtered = input.filter { it.isDigit() || it == ':' }
+    val firstColon = filtered.indexOf(':')
+    val collapsed = if (firstColon == -1) filtered
+    else filtered.substring(0, firstColon + 1) + filtered.substring(firstColon + 1).replace(":", "")
+    return collapsed.take(5)
+}
+
+/**
+ * Parse the duration field into whole minutes (GYMAP-41). Accepts either a plain minute count
+ * ("90" -> 90) or an H:MM clock value ("1:30" -> 90); a lone number stays minutes so existing
+ * plain-number entry is unchanged. The store has no seconds column, so no sub-minute component is
+ * read; malformed parts count as 0.
+ */
+internal fun parseDurationMin(input: String): Int {
+    val t = input.trim()
+    if (t.isEmpty()) return 0
+    val colon = t.indexOf(':')
+    if (colon < 0) return t.toIntOrNull() ?: 0
+    val hours = t.substring(0, colon).toIntOrNull() ?: 0
+    val minutes = t.substring(colon + 1).toIntOrNull() ?: 0
+    return hours * 60 + minutes
 }

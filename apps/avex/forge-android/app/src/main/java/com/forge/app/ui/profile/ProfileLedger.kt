@@ -33,6 +33,7 @@ import androidx.compose.ui.unit.sp
 import com.forge.app.Features
 import com.forge.app.domain.rank.StandingMetric
 import com.forge.app.domain.units.formatVolumeCompact
+import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.ui.common.bounceClick
@@ -90,13 +91,13 @@ internal fun AllTimeSection(
     muted: Color,
     accent: Color
 ) {
-    val useKg = LocalForgeSettings.current.useKg
+    val weightUnit = LocalForgeSettings.current.weightUnit
     SectionHeader("ALL-TIME", muted)
     // At zero sessions the grid still renders — honest zeros ARE the empty state (§12), the
     // figures fill in from the first logged set.
     val specs = buildList {
         add(StatCellSpec("$sessions", "WORKOUTS", delta = workoutsDelta))
-        add(StatCellSpec(formatVolume(volumeLb, useKg), "LIFETIME ${unitLabel(useKg).uppercase()}"))
+        add(StatCellSpec(formatVolume(volumeLb, weightUnit), "LIFETIME ${unitLabel(weightUnit).uppercase()}"))
         add(StatCellSpec("$prs", "PRs", delta = prsDelta))
         add(StatCellSpec(formatCount(sets), "SETS", delta = setsDelta))
         if (Features.SHOW_GAMIFICATION) add(StatCellSpec("$xp", "XP"))
@@ -117,8 +118,8 @@ internal fun LifetimeVolumeGraph(
     modifier: Modifier = Modifier
 ) {
     if (volumeSeriesLb.size < 2) return
-    val useKg = LocalForgeSettings.current.useKg
-    val series = volumeSeriesLb.map { toDisplayWeight(it, useKg) }
+    val weightUnit = LocalForgeSettings.current.weightUnit
+    val series = volumeSeriesLb.map { toDisplayWeight(it, weightUnit) }
     Column(modifier) {
         ProfileSparkline(series, accent, Modifier.fillMaxWidth().height(72.dp))
         Spacer(Modifier.height(8.dp))
@@ -185,4 +186,4 @@ internal fun StandingSection(
 }
 
 /** "412k" / "950" — compact lifetime volume (unit-less). */
-internal fun formatVolume(lb: Double, useKg: Boolean): String = formatVolumeCompact(lb, useKg, withUnit = false)
+internal fun formatVolume(lb: Double, unit: WeightUnit): String = formatVolumeCompact(lb, unit, withUnit = false)
