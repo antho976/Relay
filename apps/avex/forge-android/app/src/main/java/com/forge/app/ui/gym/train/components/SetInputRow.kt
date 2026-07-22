@@ -83,6 +83,11 @@ fun SetInputRow(
     priorSetForActiveRow: LoggedSet? = null,
     targetsMet: Boolean = false,
     advanceLabel: String = "",
+    /** Accent action link shown under LOG SET when [onFinishEarly] is set — ends the exercise with
+     *  the sets already logged (AMRAP / gassed out) instead of forcing SKIP. */
+    finishEarlyLabel: String = "",
+    /** Null hides the finish-early link (zero sets logged, or targets already met). */
+    onFinishEarly: (() -> Unit)? = null,
     /** Bodyweight exercise (push-ups, planks…) — no weight field; logs reps only as "BW". */
     isBodyweight: Boolean = false,
     /** Plate-loaded machine/cable exercise — the weight field is a plate COUNT, labelled "PLATES". */
@@ -381,6 +386,26 @@ fun SetInputRow(
                         textAlign = TextAlign.Center,
                         modifier = Modifier.fillMaxWidth()
                     )
+                }
+                // "I'm done" — end the exercise with what you logged (files it under DONE, not
+                // skipped) and move on. Secondary to LOG SET, so it's an accent action link, not a
+                // second filled capsule (§8: one filled per section). Shown only once ≥1 set is logged.
+                if (onFinishEarly != null) {
+                    Spacer(Modifier.height(6.dp))
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .sizeIn(minHeight = 48.dp)
+                            .clickableLabeled(finishEarlyLabel) { onFinishEarly() },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            finishEarlyLabel,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            textAlign = TextAlign.Center
+                        )
+                    }
                 }
             }
         }

@@ -98,6 +98,10 @@ fun ExerciseCard(
     onOpenChart: () -> Unit = {},
     advanceLabel: String = "",
     onAdvance: () -> Unit = {},
+    /** Secondary CTA to end this exercise before all target sets are logged (marks it done, not
+     *  skipped, then advances). Shown only once ≥1 set is logged and targets aren't met. */
+    finishEarlyLabel: String = "",
+    onFinishEarly: () -> Unit = {},
     onMoveUp: (() -> Unit)? = null,
     onMoveDown: (() -> Unit)? = null,
     onLongPress: (() -> Unit)? = null,
@@ -326,6 +330,10 @@ fun ExerciseCard(
                         priorSetForActiveRow = state.priorSets.getOrNull(state.loggedSets.size),
                         targetsMet = targetsMet,
                         advanceLabel = advanceLabel,
+                        // "I'm done" path — only meaningful once you've logged something and haven't hit
+                        // the target yet (with zero sets that's a skip; at target the advance CTA shows).
+                        finishEarlyLabel = finishEarlyLabel,
+                        onFinishEarly = if (!targetsMet && state.loggedSets.isNotEmpty()) onFinishEarly else null,
                         isBodyweight = isBodyweight,
                         isPlates = isPlates,
                         targetReps = targetRepsOf(state.plan.reps),

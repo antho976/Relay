@@ -34,6 +34,7 @@ internal suspend fun DayViewModel.refreshExercises() {
     }
     val previousExpandedById = _state.value.exercises.associate { it.plan.id to it.isExpanded }
     val previousBonusById = _state.value.exercises.associate { it.plan.id to it.bonusSets }
+    val previousFinishedEarlyById = _state.value.exercises.associate { it.plan.id to it.finishedEarly }
     val previousOrderById = _state.value.exercises.mapIndexed { i, e -> e.plan.id to i }.toMap()
 
     val effectivePlans = programCustomRepo.effectivePlanForDay(dayKey)
@@ -66,7 +67,8 @@ internal suspend fun DayViewModel.refreshExercises() {
                     expandedOverride = previousExpandedById[plan.id],
                     plateLb = plateLb,
                     dbMaxLb = dbMaxLb,
-                    bonusSets = previousBonusById[plan.id] ?: 0
+                    bonusSets = previousBonusById[plan.id] ?: 0,
+                    finishedEarly = previousFinishedEarlyById[plan.id] ?: false
                 )
             }
         }.awaitAll()
@@ -111,7 +113,8 @@ internal suspend fun DayViewModel.refreshExercise(exerciseId: String) {
         expandedOverride = existing.isExpanded,
         plateLb = settingsRepo.plateWeightLb.first(),
         dbMaxLb = settingsRepo.maxDbWeightLb.first(),
-        bonusSets = existing.bonusSets
+        bonusSets = existing.bonusSets,
+        finishedEarly = existing.finishedEarly
     )
     val newList = current.toMutableList().also { it[idx] = rebuilt }
     _state.update { it.copy(isLoading = false, exercises = annotateNextExerciseDeltas(newList)) }
