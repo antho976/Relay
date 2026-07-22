@@ -259,7 +259,7 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
                                 onAdvance = { if (exNextId != null) shownExerciseId = exNextId else onEvent(DayUiEvent.FinishWorkout) },
                                 // Finish an exercise you can't fully complete (AMRAP / gassed out) without
                                 // marking it skipped: record it done, then advance like MOVE TO NEXT.
-                                finishEarlyLabel = if (exNextId != null) "Done with this exercise →" else "Done, finish workout →",
+                                finishEarlyLabel = if (exNextId != null) "Done with this exercise" else "Done, finish workout",
                                 onFinishEarly = {
                                     onEvent(DayUiEvent.FinishExerciseEarly(id))
                                     if (exNextId != null) shownExerciseId = exNextId else onEvent(DayUiEvent.FinishWorkout)
