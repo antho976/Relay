@@ -93,10 +93,11 @@ fun DayScreen(
     }
 
     // Keep the screen awake while a session is in progress so the phone doesn't lock mid-rest and
-    // force a PIN/biometric unlock between sets. Released the moment the session finishes or the
-    // screen leaves composition.
-    DisposableEffect(state.isFinished) {
-        view.keepScreenOn = !state.isFinished
+    // force a PIN/biometric unlock between sets. Gated on the Session setting (GYMAP-74, default on);
+    // released the moment the session finishes, the setting turns off, or the screen leaves composition.
+    val keepScreenOn = LocalForgeSettings.current.keepScreenOn
+    DisposableEffect(state.isFinished, keepScreenOn) {
+        view.keepScreenOn = keepScreenOn && !state.isFinished
         onDispose { view.keepScreenOn = false }
     }
 
@@ -283,13 +284,13 @@ fun DayScreen(
     state.warmupSuggesterForExerciseId?.let { exerciseId ->
         val ex = state.exercises.firstOrNull { it.plan.id == exerciseId }
         val workingWeight = ex?.loggedSets?.lastOrNull()?.weightLb ?: ex?.prefillWeight?.toDoubleOrNull()
-        WarmupSuggesterDialog(workingWeightLb = workingWeight, useKg = LocalForgeSettings.current.useKg,
+        WarmupSuggesterDialog(workingWeightLb = workingWeight, weightUnit = LocalForgeSettings.current.weightUnit,
             onDismiss = { viewModel.onEvent(DayUiEvent.DismissTrainingHelper) })
     }
     state.plateCalculatorForExerciseId?.let { exerciseId ->
         val ex = state.exercises.firstOrNull { it.plan.id == exerciseId }
         val workingWeight = ex?.loggedSets?.lastOrNull()?.weightLb ?: ex?.prefillWeight?.toDoubleOrNull()
-        PlateCalculatorDialog(initialWeightLb = workingWeight, useKg = LocalForgeSettings.current.useKg,
+        PlateCalculatorDialog(initialWeightLb = workingWeight, weightUnit = LocalForgeSettings.current.weightUnit,
             onDismiss = { viewModel.onEvent(DayUiEvent.DismissTrainingHelper) })
     }
 

@@ -228,6 +228,96 @@ val MIGRATION_22_23 = object : Migration(22, 23) {
     }
 }
 
+/**
+ * v23 → v24: body measurements (GYMAP-52). `body_measurement` holds per-type circumference readings
+ * (waist/chest/arms/thighs/hips), one row per (type, day) via the unique index. New empty table —
+ * additive, no existing data touched.
+ */
+val MIGRATION_23_24 = object : Migration(23, 24) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `body_measurement` (" +
+                "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "`type` TEXT NOT NULL, " +
+                "`date_key` TEXT NOT NULL, " +
+                "`value_cm` REAL NOT NULL, " +
+                "`recorded_at` INTEGER NOT NULL)"
+        )
+        db.execSQL(
+            "CREATE UNIQUE INDEX IF NOT EXISTS `index_body_measurement_type_date_key` " +
+                "ON `body_measurement` (`type`, `date_key`)"
+        )
+    }
+}
+
+/**
+ * v24 → v25: bodyweight notes (GYMAP-54). `bodyweight_entry.note` holds an optional freeform note
+ * per weigh-in. Additive nullable column — pre-existing rows read null. Backdating needs no schema
+ * change: `date_key` already keys one entry per day, so upserting a past day just replaces it.
+ */
+val MIGRATION_24_25 = object : Migration(24, 25) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `bodyweight_entry` ADD COLUMN `note` TEXT")
+    }
+}
+
+/**
+ * v25 → v26: timed-hold sets (GYMAP-51). `logged_set.duration_seconds` holds the held time in whole
+ * seconds for isometric holds (planks, dead hangs, wall sits); null for a normal rep-based set.
+ * Additive nullable column — pre-existing rows read null (rep-based, exactly as before).
+ */
+val MIGRATION_25_26 = object : Migration(25, 26) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `logged_set` ADD COLUMN `duration_seconds` INTEGER")
+    }
+}
+
+/**
+ * v26 → v27: per-type cardio fields (GYMAP-38). `cardio_entry` gains `incline_pct` (treadmill /
+ * elliptical grade %), `laps` (pool lengths for a swim) and `elevation_m` (elevation gain in metres
+ * for outdoor distance work). Three additive nullable columns — pre-existing rows read null (the
+ * field simply doesn't apply to that activity, or wasn't logged).
+ */
+val MIGRATION_26_27 = object : Migration(26, 27) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `cardio_entry` ADD COLUMN `incline_pct` REAL")
+        db.execSQL("ALTER TABLE `cardio_entry` ADD COLUMN `laps` INTEGER")
+        db.execSQL("ALTER TABLE `cardio_entry` ADD COLUMN `elevation_m` REAL")
+    }
+}
+
+/**
+ * v27 → v28: cardio conditions (GYMAP-39). `cardio_entry.conditions` holds the weather / environment
+ * tags a session was done in (hot/cold/rain/wind) as a comma-joined code list. Additive nullable
+ * column — pre-existing rows read null (no conditions tagged).
+ */
+val MIGRATION_27_28 = object : Migration(27, 28) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL("ALTER TABLE `cardio_entry` ADD COLUMN `conditions` TEXT")
+    }
+}
+
+/**
+ * v28 → v29: body fat % (GYMAP-62). `body_fat` holds per-day body-fat-percentage readings, one row
+ * per day via the unique index, sourced from Health Connect (a smart scale) or manual entry. New
+ * empty table — additive, no existing data touched. Kept separate from `bodyweight_entry` because
+ * HC stores body fat as its own record with an independent timestamp.
+ */
+val MIGRATION_28_29 = object : Migration(28, 29) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `body_fat` (" +
+                "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "`date_key` TEXT NOT NULL, " +
+                "`percent` REAL NOT NULL, " +
+                "`recorded_at` INTEGER NOT NULL)"
+        )
+        db.execSQL(
+            "CREATE UNIQUE INDEX IF NOT EXISTS `index_body_fat_date_key` ON `body_fat` (`date_key`)"
+        )
+    }
+}
+
 /** All migrations, in order. Register every new one here. */
 val ALL_MIGRATIONS: Array<Migration> = arrayOf(
     MIGRATION_12_13,
@@ -240,5 +330,11 @@ val ALL_MIGRATIONS: Array<Migration> = arrayOf(
     MIGRATION_19_20,
     MIGRATION_20_21,
     MIGRATION_21_22,
-    MIGRATION_22_23
+    MIGRATION_22_23,
+    MIGRATION_23_24,
+    MIGRATION_24_25,
+    MIGRATION_25_26,
+    MIGRATION_26_27,
+    MIGRATION_27_28,
+    MIGRATION_28_29
 )

@@ -60,7 +60,7 @@ fun CoachScreen(
     viewModel: CoachViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    val useKg = LocalForgeSettings.current.useKg
+    val weightUnit = LocalForgeSettings.current.weightUnit
     val c = rememberCoachColors()
     var lens by rememberSaveable { mutableStateOf(initialLens) }
 
@@ -101,7 +101,7 @@ fun CoachScreen(
                 // ── Hero: the verdict and the week's figures ──────────────────
                 item("coach-hero") {
                     Column(Modifier.fillMaxWidth().statsEntrance(0).padding(vertical = 10.dp)) {
-                        CoachHero(state, useKg, c)
+                        CoachHero(state, weightUnit, c)
                     }
                 }
 
@@ -130,7 +130,7 @@ fun CoachScreen(
                         onUndo = viewModel::undo,
                         onApplyAll = viewModel::applyAll
                     )
-                    CoachLens.SIGNALS -> coachSignalsLens(state, useKg, c, onConnectHealth)
+                    CoachLens.SIGNALS -> coachSignalsLens(state, weightUnit, c, onConnectHealth)
                     CoachLens.JOURNEY -> coachJourneyLens(state, c)
                 }
             }

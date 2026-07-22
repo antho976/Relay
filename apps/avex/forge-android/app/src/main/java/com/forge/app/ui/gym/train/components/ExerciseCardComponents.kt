@@ -184,9 +184,9 @@ internal fun LastSessionStrip(
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val outline = MaterialTheme.colorScheme.outline
-    val useKg = LocalForgeSettings.current.useKg
+    val weightUnit = LocalForgeSettings.current.weightUnit
     // Count the volume up to its new total when a set lands, instead of snapping.
-    val animatedVolume by animateIntAsState(targetValue = toDisplayWeight(currentVolumeLb, useKg).toInt(), label = "volume")
+    val animatedVolume by animateIntAsState(targetValue = toDisplayWeight(currentVolumeLb, weightUnit).toInt(), label = "volume")
 
     // Tick once a second so the elapsed time advances live — but only when a session has
     // actually started. Without the guard the loop recomposes the strip every second even
@@ -214,7 +214,7 @@ internal fun LastSessionStrip(
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(elapsedStr, style = MaterialTheme.typography.labelMedium, color = onBg, fontSize = 11.sp)
             Text("·", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.5f))
-            Text("$animatedVolume ${unitLabel(useKg)}", style = MaterialTheme.typography.labelMedium, color = onBg, fontSize = 11.sp)
+            Text("$animatedVolume ${unitLabel(weightUnit)}", style = MaterialTheme.typography.labelMedium, color = onBg, fontSize = 11.sp)
             Text("·", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.5f))
             Text("$currentSets/$targetSets", style = MaterialTheme.typography.labelMedium, color = muted, fontSize = 11.sp)
         }

@@ -44,19 +44,26 @@ fun ForgePrimaryCapsule(
     }
 }
 
-/** §8 level ② — the outlined sidekick capsule. Disabled = dimmed and inert (§4.5). */
+/** §8 level ② — the outlined sidekick capsule. Disabled = dimmed and inert (§4.5). Pass
+ *  [contentColor] only for a true state (§5 — e.g. error on a destructive action); it tints the
+ *  label full-strength and the border at the outline rung. */
 @Composable
 fun ForgeOutlineCapsule(
     label: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    enabled: Boolean = true
+    enabled: Boolean = true,
+    contentColor: Color? = null
 ) {
     val alpha = if (enabled) 1f else 0.35f
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(50))
-            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f * alpha), RoundedCornerShape(50))
+            .border(
+                1.dp,
+                (contentColor ?: MaterialTheme.colorScheme.outline).copy(alpha = 0.35f * alpha),
+                RoundedCornerShape(50)
+            )
             .bounceClick(enabled = enabled, onClick = onClick)
             .padding(horizontal = 18.dp, vertical = 13.dp),
         contentAlignment = Alignment.Center
@@ -64,7 +71,7 @@ fun ForgeOutlineCapsule(
         Text(
             label,
             style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.onBackground.copy(alpha = alpha)
+            color = (contentColor ?: MaterialTheme.colorScheme.onBackground).copy(alpha = alpha)
         )
     }
 }

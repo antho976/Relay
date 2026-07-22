@@ -17,14 +17,12 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -117,8 +115,10 @@ fun CardioScreen(
         state.sheetOpen -> CardioLogSheet(
             onDismiss = viewModel::closeSheet,
             onSave = viewModel::saveEntry,
+            onCreateCustom = viewModel::addCustomType,
             editing = state.editing,
             useMiles = state.useMiles,
+            lastUsedType = state.lastCardioType,
             onHome = { viewModel.closeSheet(); goHome() }
         )
         sessionEntry != null -> CardioSessionDetailSheet(
@@ -130,7 +130,7 @@ fun CardioScreen(
             wearable = state.sessionWearable, // That day's watch steps (null until loaded / when none).
             wearableConnected = state.stepsConnected, // Show an empty placeholder once connected.
             onEdit = { viewModel.editEntry(sessionEntry.id) },
-            onDelete = { viewModel.requestDelete(sessionEntry.id) },
+            onDelete = { viewModel.deleteEntry(sessionEntry.id) },
             onBack = viewModel::closeSessionDetail,
             onHome = { viewModel.closeSessionDetail(); goHome() }
         )
@@ -140,6 +140,7 @@ fun CardioScreen(
             useMiles = state.useMiles,
             weekTargetMin = state.weekTargetMin,
             cardioStreakDays = state.cardioStreakDays,
+            paceSeries = state.cardioPaceSeries,
             wearable = state.weekWearable, // Today's watch steps on the current-week page (null when none).
             wearableConnected = state.stepsConnected, // Show an empty placeholder once connected.
             todayDow = todayDow,
@@ -157,22 +158,12 @@ fun CardioScreen(
             onOpenLog = viewModel::openSheet,
             onOpenDetail = viewModel::openDetail,
             onOpenSession = viewModel::openSessionDetail,
-            onRequestDelete = viewModel::requestDelete,
+            onRequestDelete = viewModel::deleteEntry,
             onSeeAll = onOpenHistory ?: viewModel::toggleHistoryExpanded,
             seeAllExpands = onOpenHistory == null,
             onConnectWearable = onConnectWearable,
             onOpenGoals = onOpenGoals,
             onDismissHint = viewModel::dismissWearableHint
-        )
-    }
-
-    if (state.pendingDeleteId != null) {
-        AlertDialog(
-            onDismissRequest = viewModel::cancelDelete,
-            title = { Text("Delete entry?") },
-            text = { Text("This can't be undone.") },
-            confirmButton = { TextButton(onClick = viewModel::confirmDelete) { Text("Delete") } },
-            dismissButton = { TextButton(onClick = viewModel::cancelDelete) { Text("Cancel") } }
         )
     }
 }
@@ -240,6 +231,7 @@ private fun CardioListContent(
                     weekMinutes = state.weekMinutes,
                     weekDistanceKm = state.weekDistanceKm,
                     streakDays = state.cardioStreakDays,
+                    todaySteps = state.todaySteps,
                     weekTargetMin = state.weekTargetMin,
                     useMiles = state.useMiles,
                     days = state.weekDays,
@@ -258,6 +250,20 @@ private fun CardioListContent(
                     CardioGoalsSection(
                         goals = state.cardioGoals,
                         onOpenGoals = onOpenGoals,
+                        onBg = onBg, muted = muted, accent = accent, outline = outline
+                    )
+                }
+            }
+
+            // RECORDS — per-activity all-time bests (GYMAP-34). Hidden until a distance session exists;
+            // the hero already carries the zero state, so there's no empty records shell here (§12).
+            if (state.cardioRecords.isNotEmpty()) {
+                item("records") {
+                    Spacer(Modifier.height(28.dp))
+                    CardioRecordsSection(
+                        records = state.cardioRecords,
+                        useMiles = state.useMiles,
+                        onOpenSession = onOpenSession,
                         onBg = onBg, muted = muted, accent = accent, outline = outline
                     )
                 }

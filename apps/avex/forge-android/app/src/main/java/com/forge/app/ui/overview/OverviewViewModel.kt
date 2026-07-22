@@ -12,6 +12,7 @@ import com.forge.app.data.repo.TrophyRepository
 import com.forge.app.data.repo.WorkoutRepository
 import com.forge.app.domain.adapt.Recommendation
 import com.forge.app.domain.coach.AutoCoachPlanner
+import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.formatVolumeCompact
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.program.ExerciseLibrary
@@ -127,7 +128,7 @@ class OverviewViewModel @Inject constructor(
         cardioRepo.observeDistanceKmSince(weekStartMs),
         statsRepo.observeDayVolumeStats(),
         settingsRepo.cardioWeeklyTargetMin,
-        settingsRepo.useKg,
+        settingsRepo.weightUnit,
         settingsRepo.useMiles
     ) { args ->
         val stats = args[0] as StatsRepository.WeeklyStats
@@ -141,7 +142,7 @@ class OverviewViewModel @Inject constructor(
         @Suppress("UNCHECKED_CAST")
         val dayVolStats = args[6] as Map<String, SessionDao.DayVolumeStats>
         val cardioTarget = args[7] as Int
-        val useKg = args[8] as Boolean
+        val weightUnit = args[8] as WeightUnit
         val useMiles = args[9] as Boolean
 
         buildOverviewUiState(
@@ -153,7 +154,7 @@ class OverviewViewModel @Inject constructor(
             distanceKm = distanceKm,
             dayVolStats = dayVolStats,
             cardioTargetMin = cardioTarget,
-            useKg = useKg,
+            weightUnit = weightUnit,
             useMiles = useMiles
         )
     }.combine(customizationRepo.observeAllDayNames()) { s, names ->
@@ -181,26 +182,26 @@ class OverviewViewModel @Inject constructor(
         // No fixed plan (freestyle) or no program yet → there's no weekly target to count toward, so
         // emit 0 (the home suppresses the "of N target" line when it's 0).
         if (freestyle || com.forge.app.program.Program.days.isEmpty()) s.copy(weeklyWorkoutTarget = 0) else s
-    }.combine(settingsRepo.useKg) { s, useKg ->
+    }.combine(settingsRepo.weightUnit) { s, weightUnit ->
         // Attach each recent gym row's marquee lift (its heaviest set). Each lookup is a real DB
         // read, so withTopLifts memoizes by session: a finished session's top set is immutable.
         // Without this the read re-ran on EVERY emission of the combine chain above (active-session,
-        // coach, weekly-stats ticks) for the same unchanged sessions. useKg is part of the cache
+        // coach, weekly-stats ticks) for the same unchanged sessions. weightUnit is part of the cache
         // signature so flipping the unit re-formats the marquee instead of serving a stale string.
-        s.copy(recentItems = withTopLifts(s.recentItems, useKg))
+        s.copy(recentItems = withTopLifts(s.recentItems, weightUnit))
     }.combine(
         // Near-miss rows + the current unlocked set + the display unit, folded together so the
         // "Up next" label can (a) skip stale rows for trophies already unlocked — near-miss rows
         // aren't deleted on unlock — and (b) render the right unit for distance/tonnage misses.
-        combine(trophyRepo.observeNearMisses(), trophyRepo.observeUnlockedIds(), settingsRepo.useKg) {
-            nearMisses, unlockedIds, useKg -> Triple(nearMisses, unlockedIds.toHashSet(), useKg)
+        combine(trophyRepo.observeNearMisses(), trophyRepo.observeUnlockedIds(), settingsRepo.weightUnit) {
+            nearMisses, unlockedIds, weightUnit -> Triple(nearMisses, unlockedIds.toHashSet(), weightUnit)
         }
-    ) { s, (nearMisses, unlockedIds, useKg) ->
+    ) { s, (nearMisses, unlockedIds, weightUnit) ->
         // "Up next" trophy: the locked trophy closest to unlocking (highest progress fraction).
         val top = nearMisses
             .filter { it.target > 0 && it.trophyId !in unlockedIds }
             .maxByOrNull { it.progress.toFloat() / it.target }
-        s.copy(topNearMiss = top?.let { nearMissLabel(it, useKg) })
+        s.copy(topNearMiss = top?.let { nearMissLabel(it, weightUnit) })
     }.combine(goalsFlow) { s, gc ->
         s.copy(goals = gc.first, customGoals = gc.second)
     }.flowOn(Dispatchers.Default).stateIn(
@@ -214,11 +215,11 @@ class OverviewViewModel @Inject constructor(
      * tonnage and anniversary misses carry a unit so the bare integer isn't ambiguous (e.g. "15 km
      * to go" rather than "15 to go"). The rule is looked up from the in-memory catalogue by id.
      */
-    private fun nearMissLabel(nm: com.forge.app.data.db.entities.TrophyNearMiss, useKg: Boolean): String {
+    private fun nearMissLabel(nm: com.forge.app.data.db.entities.TrophyNearMiss, weightUnit: WeightUnit): String {
         val remaining = (nm.target - nm.progress).coerceAtLeast(0)
         val toGo = when (Trophies.all.firstOrNull { it.id == nm.trophyId }?.unlock) {
             is com.forge.app.program.UnlockRule.CardioDistanceAtLeastKm -> "$remaining km to go"
-            is com.forge.app.program.UnlockRule.LifetimeTonnageAtLeast -> "${formatVolumeCompact(remaining.toDouble(), useKg)} to go"
+            is com.forge.app.program.UnlockRule.LifetimeTonnageAtLeast -> "${formatVolumeCompact(remaining.toDouble(), weightUnit)} to go"
             is com.forge.app.program.UnlockRule.TrainingAnniversaryRule -> "$remaining days to go"
             else -> "$remaining to go"
         }
@@ -365,24 +366,24 @@ class OverviewViewModel @Inject constructor(
      * above, so writes are already serial; kept a ConcurrentHashMap so a future parallelization of the
      * per-item reads can't introduce a silent data race.
      */
-    private val topLiftCache = ConcurrentHashMap<Long, Pair<Pair<Double?, Boolean>, String?>>()
+    private val topLiftCache = ConcurrentHashMap<Long, Pair<Pair<Double?, WeightUnit>, String?>>()
 
-    private suspend fun withTopLifts(items: List<OverviewRecentItem>, useKg: Boolean): List<OverviewRecentItem> =
+    private suspend fun withTopLifts(items: List<OverviewRecentItem>, weightUnit: WeightUnit): List<OverviewRecentItem> =
         items.map { item ->
             if (!item.isGym || item.id < 0) return@map item
-            val sig = item.volumeLb to useKg
+            val sig = item.volumeLb to weightUnit
             val cached = topLiftCache[item.id]
             val lift = if (cached != null && cached.first == sig) cached.second
-                else topLiftFor(item.id, useKg).also { topLiftCache[item.id] = sig to it }
+                else topLiftFor(item.id, weightUnit).also { topLiftCache[item.id] = sig to it }
             item.copy(topLift = lift)
         }
 
     /** Heaviest weighted set of a session, formatted "Name 185 lb × 5". Null for bodyweight-only days. */
-    private suspend fun topLiftFor(sessionId: Long, useKg: Boolean): String? {
+    private suspend fun topLiftFor(sessionId: Long, weightUnit: WeightUnit): String? {
         val top = statsRepo.getSessionExerciseLines(sessionId)
             .filter { (it.topWeightLb ?: 0.0) > 0.0 }
             .maxByOrNull { it.topWeightLb!! } ?: return null
-        val wText = formatWeight(top.topWeightLb!!, useKg)
+        val wText = formatWeight(top.topWeightLb!!, weightUnit)
         return "${top.exerciseName} $wText × ${top.topReps ?: 0}"
     }
 }

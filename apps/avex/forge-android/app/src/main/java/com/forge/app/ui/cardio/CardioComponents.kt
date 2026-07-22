@@ -22,14 +22,22 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.data.repo.ExtendedGoalRepository
+import com.forge.app.domain.cardio.CardioActivity
+import com.forge.app.domain.cardio.CardioActivityRecord
+import com.forge.app.domain.cardio.WHO_WEEKLY_ACTIVITY_MIN
+import com.forge.app.domain.cardio.pacePerUnit
 import com.forge.app.domain.units.distanceUnitLabel
+import com.forge.app.domain.units.formatDistance
 import com.forge.app.domain.units.toDisplayDistance
 import com.forge.app.ui.cardio.components.BarGeom
 import com.forge.app.ui.cardio.components.VerticalBarRow
 import com.forge.app.ui.cardio.state.CardioDayCell
 import com.forge.app.ui.common.EditorialFigure
+import com.forge.app.ui.common.EditorialHairline
 import com.forge.app.ui.common.EditorialHeader
 import com.forge.app.ui.common.clickableLabeled
+import java.text.SimpleDateFormat
+import java.util.Date
 import com.forge.app.ui.goals.GoalProgressLine
 import com.forge.app.ui.goals.customGoalTitle
 import com.forge.app.ui.goals.customGoalValueLine
@@ -49,6 +57,8 @@ internal fun CardioHero(
     weekMinutes: Int,
     weekDistanceKm: Double,
     streakDays: Int,
+    /** Today's watch step total (GYMAP-64); null hides the line (no watch connected / read failed). */
+    todaySteps: Int?,
     weekTargetMin: Int,
     useMiles: Boolean,
     days: List<CardioDayCell>,
@@ -110,22 +120,42 @@ internal fun CardioHero(
                 )
             }
         }
+        // Today's step count (GYMAP-64) — a quiet line echoing the top eyebrow, shown only when a watch
+        // is connected. A distinct "today" read, kept out of the THIS WEEK figures above (0 shows honestly).
+        if (todaySteps != null) {
+            Spacer(Modifier.height(12.dp))
+            Text(
+                "TODAY · ${"%,d".format(todaySteps)} STEPS",
+                style = MaterialTheme.typography.labelSmall,
+                color = muted, fontSize = 9.sp, letterSpacing = 1.sp
+            )
+        }
         Spacer(Modifier.height(18.dp))
         WeekBoxRow(days = days, todayDow = todayDow, onBg = onBg, muted = muted, outline = outline, accent = accent)
+        Spacer(Modifier.height(16.dp))
+        // A personal minutes target fills its goal meter; without one, the WHO 150-min/week reference
+        // takes its place (GYMAP-42) so the week always reads against a baseline, never empty space.
         if (weekTargetMin > 0) {
-            Spacer(Modifier.height(16.dp))
-            GoalMeter(
-                weekMinutes = weekMinutes, weekTargetMin = weekTargetMin,
+            MinutesMeter(
+                minutes = weekMinutes, target = weekTargetMin,
+                label = if (weekMinutes >= weekTargetMin) "GOAL HIT · $weekTargetMin MIN" else "GOAL $weekTargetMin MIN",
+                muted = muted, outline = outline, accent = accent
+            )
+        } else {
+            MinutesMeter(
+                minutes = weekMinutes, target = WHO_WEEKLY_ACTIVITY_MIN,
+                label = if (weekMinutes >= WHO_WEEKLY_ACTIVITY_MIN) "WHO 150 MIN · MET" else "WHO 150 MIN",
                 muted = muted, outline = outline, accent = accent
             )
         }
     }
 }
 
-/** The weekly-goal progress meter — a thin accent bar filling toward the minutes target. */
+/** A thin accent progress bar filling [minutes] toward [target] with a mono caption — shared by the
+ *  weekly goal meter and the WHO 150-min reference fallback (§5: bar fills primary on a 0.25 track). */
 @Composable
-private fun GoalMeter(weekMinutes: Int, weekTargetMin: Int, muted: Color, outline: Color, accent: Color) {
-    val frac = (weekMinutes.toFloat() / weekTargetMin).coerceIn(0f, 1f)
+private fun MinutesMeter(minutes: Int, target: Int, label: String, muted: Color, outline: Color, accent: Color) {
+    val frac = (minutes.toFloat() / target).coerceIn(0f, 1f)
     Column(Modifier.fillMaxWidth()) {
         Box(
             Modifier.fillMaxWidth().height(4.dp)
@@ -141,7 +171,7 @@ private fun GoalMeter(weekMinutes: Int, weekTargetMin: Int, muted: Color, outlin
         }
         Spacer(Modifier.height(6.dp))
         Text(
-            if (weekMinutes >= weekTargetMin) "GOAL HIT · $weekTargetMin MIN" else "GOAL $weekTargetMin MIN",
+            label,
             style = MaterialTheme.typography.labelSmall,
             color = muted, fontSize = 9.sp, letterSpacing = 1.sp
         )
@@ -182,7 +212,7 @@ internal fun CardioGoalsSection(
             preview.forEachIndexed { i, g ->
                 GoalProgressLine(
                     title = customGoalTitle(g),
-                    valueLine = customGoalValueLine(g, settings.useKg, settings.useMiles),
+                    valueLine = customGoalValueLine(g, settings.weightUnit, settings.useMiles),
                     fraction = g.fraction,
                     achieved = g.achieved,
                     index = i,
@@ -190,6 +220,61 @@ internal fun CardioGoalsSection(
                     onClick = onOpenGoals
                 )
             }
+        }
+    }
+}
+
+/**
+ * RECORDS — per-activity all-time bests (GYMAP-34). One row per activity type the user has distance
+ * sessions for, most-logged first: the longest distance as the accent headline (with its date), the
+ * fastest pace as mono meta. Each row opens the record-setting (longest) session. The whole block is
+ * hidden when there's nothing yet — the hero carries the zero state, so no empty records shell (§12).
+ */
+@Composable
+internal fun CardioRecordsSection(
+    records: List<CardioActivityRecord>,
+    useMiles: Boolean,
+    onOpenSession: (Long) -> Unit,
+    onBg: Color,
+    muted: Color,
+    accent: Color,
+    outline: Color
+) {
+    val customs = LocalCardioTypes.current
+    val fmt = remember { SimpleDateFormat("MMM d, yyyy", Locale.getDefault()) }
+    Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
+        EditorialHeader(label = "Records", muted = muted, accent = accent)
+        Spacer(Modifier.height(12.dp))
+        records.forEachIndexed { i, r ->
+            val name = CardioActivity.resolve(r.typeCode, customs).displayName
+            val longestKm = r.longestEntry.distanceKm ?: 0.0
+            val pace = pacePerUnit(r.fastestEntry.durationMin, r.fastestEntry.distanceKm, useMiles)
+            Row(
+                Modifier.fillMaxWidth()
+                    .clickableLabeled("Show your longest $name") { onOpenSession(r.longestEntry.id) }
+                    .padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(name, style = MaterialTheme.typography.bodyMedium, color = onBg)
+                    Text(
+                        fmt.format(Date(r.longestEntry.date)),
+                        style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp
+                    )
+                }
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(formatDistance(longestKm, useMiles), style = MaterialTheme.typography.titleSmall, color = accent)
+                    if (pace != null) {
+                        Text(
+                            "BEST $pace /${distanceUnitLabel(useMiles)}".uppercase(),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = muted, fontSize = 9.sp, letterSpacing = 0.5.sp
+                        )
+                    }
+                }
+            }
+            // Table rule between record rows — a line as data (§1), via the shared hairline.
+            if (i < records.lastIndex) EditorialHairline(outline)
         }
     }
 }

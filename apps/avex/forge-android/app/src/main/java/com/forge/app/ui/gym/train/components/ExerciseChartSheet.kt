@@ -79,10 +79,10 @@ fun ExerciseChartSheet(
                 .padding(horizontal = 24.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            val useKg = LocalForgeSettings.current.useKg
+            val weightUnit = LocalForgeSettings.current.weightUnit
             Text(exerciseName, style = MaterialTheme.typography.headlineSmall, color = onBg)
             Text(
-                "VOLUME ACROSS SESSIONS · ${unitLabel(useKg)}",
+                "VOLUME ACROSS SESSIONS · ${unitLabel(weightUnit)}",
                 style = MaterialTheme.typography.labelSmall,
                 color = muted,
                 fontSize = 9.sp,
@@ -93,12 +93,12 @@ fun ExerciseChartSheet(
             // Memoized: these three passes only change when the history or unit does, so they
             // don't re-walk the list on every recomposition of the sheet.
             if (history.isNotEmpty()) {
-                val parts = remember(history, useKg) {
+                val parts = remember(history, weightUnit) {
                     val bestVolume = history.maxByOrNull { it.volumeLb }?.volumeLb
                     val heaviest = history.mapNotNull { it.topWeightLb }.maxOrNull()
                     buildList {
-                        bestVolume?.let { add("best ${formatVolume(it, useKg)}") }
-                        heaviest?.let { add("heaviest ${formatWeight(it, useKg)}") }
+                        bestVolume?.let { add("best ${formatVolume(it, weightUnit)}") }
+                        heaviest?.let { add("heaviest ${formatWeight(it, weightUnit)}") }
                         add("${history.size} session${if (history.size == 1) "" else "s"}")
                     }
                 }
@@ -163,14 +163,14 @@ fun ExerciseChartSheet(
                             pt.durationMin?.let { append("$it min") }
                             pt.topWeightLb?.let {
                                 if (isNotEmpty()) append(" · ")
-                                append("top ${formatWeight(it, useKg)}")
+                                append("top ${formatWeight(it, weightUnit)}")
                             }
                         }
                         if (meta.isNotBlank()) {
                             Text(meta, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp)
                         }
                     }
-                    Text(formatVolume(pt.volumeLb, useKg), style = MaterialTheme.typography.bodyMedium, color = accent, fontWeight = FontWeight.SemiBold)
+                    Text(formatVolume(pt.volumeLb, weightUnit), style = MaterialTheme.typography.bodyMedium, color = accent, fontWeight = FontWeight.SemiBold)
                 }
             }
 

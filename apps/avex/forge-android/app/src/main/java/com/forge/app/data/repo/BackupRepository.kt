@@ -1,13 +1,17 @@
 package com.forge.app.data.repo
 
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
+import androidx.documentfile.provider.DocumentFile
 import com.forge.app.data.db.ForgeDatabase
 import com.forge.app.data.db.dao.CardioDao
 import com.forge.app.data.db.dao.LoggedExerciseDao
 import com.forge.app.data.db.dao.LoggedSetDao
 import com.forge.app.data.db.dao.SessionDao
 import com.forge.app.data.prefs.SettingsRepository
+import com.forge.app.domain.cardio.CardioActivity
+import com.forge.app.domain.cardio.CardioCondition
 import dagger.hilt.android.qualifiers.ApplicationContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -155,6 +159,7 @@ class BackupRepository @Inject constructor(
             // VACUUM backup remains the authoritative restore source.
             put("settings", JSONObject().apply {
                 put("useKg", settingsRepo.useKg.first())
+                put("weightUnit", settingsRepo.weightUnit.first().label)
                 put("userGoal", settingsRepo.userGoal.first())
                 put("userName", settingsRepo.userName.first())
                 put("daysPerWeek", settingsRepo.daysPerWeek.first())
@@ -220,6 +225,10 @@ class BackupRepository @Inject constructor(
                     put("effort", c.effort ?: "")
                     put("restReason", c.restReason ?: "")
                     put("note", c.note ?: "")
+                    // Per-type fields (GYMAP-38); elevation stays canonical metres like distance is km.
+                    put("inclinePct", c.inclinePct ?: "")
+                    put("laps", c.laps ?: "")
+                    put("elevationM", c.elevationM ?: "")
                 })
             }
             put("cardio", cardioArr)
@@ -348,6 +357,34 @@ class BackupRepository @Inject constructor(
         return file
     }
 
+    /**
+     * Every cardio entry as CSV (GYMAP-43). One row per entry, newest first. The type is resolved to
+     * its display name (custom activities included, GYMAP-37) so the sheet reads as words, not raw
+     * `custom_…` codes; distance stays canonical km like the other exports' canonical-unit columns.
+     */
+    suspend fun exportCardioCsv(): File {
+        val entries = cardioDao.since(0L)
+        val customs = settingsRepo.customCardioTypes.first()
+        val sb = StringBuilder()
+        // Per-type columns (GYMAP-38) trail the note; elevation stays canonical metres like distanceKm.
+        // Conditions (GYMAP-39) trail last, resolved to words (" · " joined) like the type column.
+        sb.appendLine("date,type,durationMin,distanceKm,effort,restReason,intervals,hrZone,note,inclinePct,laps,elevationM,conditions")
+        entries.forEach { e ->
+            val date = dateFmt.format(Instant.ofEpochMilli(e.date).atZone(zone))
+            val typeName = CardioActivity.resolve(e.type, customs).displayName
+            val conditions = CardioCondition.decode(e.conditions).joinToString(" · ") { it.displayName }
+            sb.appendLine(
+                "$date,${csv(typeName)},${e.durationMin},${e.distanceKm ?: ""}," +
+                    "${csv(e.effort ?: "")},${csv(e.restReason ?: "")},${e.intervalCount ?: ""}," +
+                    "${csv(e.hrZone ?: "")},${csv(e.note ?: "")},${e.inclinePct ?: ""},${e.laps ?: ""},${e.elevationM ?: ""}," +
+                    csv(conditions)
+            )
+        }
+        val file = File(context.filesDir, "forge_cardio.csv")
+        file.writeText(sb.toString())
+        return file
+    }
+
     /** Total on-disk database size (main file + WAL + SHM), in bytes — the Data dialog readout. */
     fun dbSizeBytes(): Long {
         val base = context.getDatabasePath(DB_NAME)
@@ -360,11 +397,14 @@ class BackupRepository @Inject constructor(
      * RESTORABLE ZIP (DB + prefs + progress photos) — the same format as [backupToUri] — instead of
      * the lossy JSON export it used to write, which nothing could ever read back in.
      */
-    suspend fun autoBackup(): File = withContext(Dispatchers.IO) {
+    suspend fun autoBackup(folderUri: Uri? = null): File = withContext(Dispatchers.IO) {
         val file = File(context.filesDir, AUTO_BACKUP_NAME)
         val snap = snapshotDatabase()
         try {
             file.outputStream().use { out -> writeBackupZip(out, snap) }
+            // Also mirror into a user-picked folder so the backup survives an uninstall (GYMAP-67). A
+            // folder write must not fail the whole backup — the internal copy already succeeded.
+            if (folderUri != null) runCatching { writeZipToFolder(folderUri, snap) }
         } finally {
             snap.delete()
         }
@@ -374,6 +414,28 @@ class BackupRepository @Inject constructor(
         File(context.filesDir, AUTO_BACKUP_FAILED_MARKER).delete()
         file
     }
+
+    /** Write the full backup zip into a user-granted SAF tree, overwriting the prior slot (GYMAP-67). */
+    private fun writeZipToFolder(folderUri: Uri, snap: File) {
+        val tree = DocumentFile.fromTreeUri(context, folderUri) ?: return
+        // Keep exactly one current backup in the folder — replace the previous one.
+        tree.findFile(AUTO_BACKUP_NAME)?.delete()
+        val doc = tree.createFile("application/zip", AUTO_BACKUP_NAME) ?: return
+        context.contentResolver.openOutputStream(doc.uri)?.use { out -> writeBackupZip(out, snap) }
+    }
+
+    /** Take a persistable read+write grant on the picked backup folder and remember it (GYMAP-67). */
+    suspend fun rememberBackupFolder(treeUri: Uri) = withContext(Dispatchers.IO) {
+        runCatching {
+            context.contentResolver.takePersistableUriPermission(
+                treeUri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            )
+        }
+        settingsRepo.setBackupFolderUri(treeUri.toString())
+    }
+
+    /** Stop mirroring backups to a folder (its persisted grant is dropped by the OS in time). */
+    suspend fun forgetBackupFolder() = settingsRepo.setBackupFolderUri(null)
 
     /** When the auto-backup slot was last written, or null if none exists yet (#86 restore affordance). */
     fun autoBackupSavedAtMs(): Long? =

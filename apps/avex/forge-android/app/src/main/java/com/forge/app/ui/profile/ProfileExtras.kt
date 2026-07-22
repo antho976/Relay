@@ -32,6 +32,7 @@ import androidx.compose.ui.unit.sp
 import com.forge.app.data.repo.ExtendedGoalRepository
 import com.forge.app.data.repo.GoalRepository
 import com.forge.app.data.repo.ProgressPhoto
+import com.forge.app.domain.photo.PhotoPose
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.domain.units.weightInputValue
 import com.forge.app.ui.common.bounceClick
@@ -129,12 +130,12 @@ private fun GoalLine(
     when (tile) {
         is GoalTile.Lift -> {
             name = tile.g.name
-            valueLine = "${weightInputValue(tile.g.currentBestLb, settings.useKg)} / " +
-                "${weightInputValue(tile.g.targetLb, settings.useKg)} ${unitLabel(settings.useKg)}"
+            valueLine = "${weightInputValue(tile.g.currentBestLb, settings.weightUnit)} / " +
+                "${weightInputValue(tile.g.targetLb, settings.weightUnit)} ${unitLabel(settings.weightUnit)}"
         }
         is GoalTile.Custom -> {
             name = customGoalTitle(tile.g)
-            valueLine = customGoalValueLine(tile.g, settings.useKg, settings.useMiles)
+            valueLine = customGoalValueLine(tile.g, settings.weightUnit, settings.useMiles)
         }
     }
     // The shared goal line (ui/goals) — one visual language whether a goal shows here or on the
@@ -150,9 +151,11 @@ private fun GoalLine(
 /**
  * GALLERY — a full-bleed horizontal filmstrip of the latest photos, echoing the cover photo's
  * edge-to-edge treatment instead of boxing thumbnails in a card. Dates sit on the photos over a
- * bottom scrim; the strip ends in a "view all" cell that opens the full Gallery. The section must be
- * composed OUTSIDE the page's side margins — it applies its own padding to header and caption and
- * lets the photos run to the screen edge.
+ * bottom scrim; the section header carries the "view all →" link into the full Gallery — the strip
+ * is the preview beside it (§4.2), so there's one view-all home, not a second tail cell. Adding a
+ * photo lives inside the Gallery (or the empty-state "first photo" cell here). The section must be
+ * composed OUTSIDE the page's side margins — it applies its own padding to the header and lets the
+ * photos run to the screen edge.
  */
 @Composable
 internal fun GalleryStrip(
@@ -161,12 +164,21 @@ internal fun GalleryStrip(
     onAdd: () -> Unit,
     onView: (ProgressPhoto) -> Unit,
     onViewAll: () -> Unit,
-    onBg: Color,
     muted: Color,
     outline: Color
 ) {
     Box(Modifier.padding(horizontal = 20.dp)) {
-        SectionHeader("GALLERY", muted, action = "+ add", onAction = onAdd)
+        // Mirrors GOALS (§4.2): the header link opens the full Gallery, folding in the count once
+        // the strip stops showing them all; empty = nothing to view, so no link.
+        SectionHeader(
+            "GALLERY", muted,
+            action = when {
+                photos.isEmpty() -> null
+                photos.size > 10 -> "all ${photos.size} →"
+                else -> "view all →"
+            },
+            onAction = if (photos.isNotEmpty()) onViewAll else null
+        )
     }
     if (photos.isEmpty()) {
         Column(Modifier.padding(horizontal = 20.dp)) {
@@ -186,8 +198,6 @@ internal fun GalleryStrip(
                     )
                 }
             }
-            Spacer(Modifier.height(10.dp))
-            PrivateNote(muted)
         }
         return
     }
@@ -198,12 +208,7 @@ internal fun GalleryStrip(
         items(photos.take(10), key = { it.fileName }) { photo ->
             StripPhotoCell(photo, fileFor(photo), onView)
         }
-        item(key = "view-all") {
-            ViewAllCell(photos.size, onViewAll, onBg, muted, outline)
-        }
     }
-    Spacer(Modifier.height(10.dp))
-    Box(Modifier.padding(horizontal = 20.dp)) { PrivateNote(muted) }
 }
 
 /** One filmstrip photo — portrait crop, date overlaid on a soft bottom scrim. */
@@ -220,6 +225,15 @@ private fun StripPhotoCell(photo: ProgressPhoto, file: File, onView: (ProgressPh
                 Brush.verticalGradient(0.62f to Color.Transparent, 1f to Color.Black.copy(alpha = 0.55f))
             )
         )
+        PhotoPose.fromKey(photo.pose)?.let { pose ->
+            Text(
+                pose.label.uppercase(),
+                style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.92f), fontSize = 8.sp,
+                modifier = Modifier.align(Alignment.TopStart).padding(8.dp)
+                    .clip(RoundedCornerShape(4.dp)).background(Color.Black.copy(alpha = 0.4f))
+                    .padding(horizontal = 5.dp, vertical = 2.dp)
+            )
+        }
         Text(
             SimpleDateFormat("MMM d", Locale.getDefault()).format(Date(photo.takenAtMs)).uppercase(),
             style = MaterialTheme.typography.labelSmall,
@@ -229,42 +243,10 @@ private fun StripPhotoCell(photo: ProgressPhoto, file: File, onView: (ProgressPh
     }
 }
 
-/** The strip's tail cell — total count + a route into the full Gallery (albums, compare, search). */
-@Composable
-private fun ViewAllCell(count: Int, onViewAll: () -> Unit, onBg: Color, muted: Color, outline: Color) {
-    // No fill — just a hairline ghost cell, so it sits back into the page instead of reading as a
-    // solid slab beside the photos.
-    Box(
-        Modifier.width(StripCellWidth).height(StripCellHeight)
-            .clip(RoundedCornerShape(16.dp))
-            .border(1.dp, outline.copy(alpha = 0.25f), RoundedCornerShape(16.dp))
-            .bounceClick { onViewAll() },
-        contentAlignment = Alignment.Center
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text("$count", style = MaterialTheme.typography.headlineMedium, color = onBg)
-            Spacer(Modifier.height(4.dp))
-            Text(
-                "GALLERY →", style = MaterialTheme.typography.labelSmall,
-                color = muted, fontSize = 9.sp, letterSpacing = 1.5.sp
-            )
-        }
-    }
-}
-
-/** The data-safety reassurance line under the strip. */
-@Composable
-private fun PrivateNote(muted: Color) {
-    Text(
-        "Private · these never leave your phone.",
-        style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic, fontSize = 10.sp
-    )
-}
-
 /** ON THIS DAY — a single-line throwback to a workout from a previous month, set like a pull quote. */
 @Composable
 internal fun OnThisDaySection(memory: OnThisDayMemory, onBg: Color, muted: Color, accent: Color) {
-    val useKg = LocalForgeSettings.current.useKg
+    val weightUnit = LocalForgeSettings.current.weightUnit
     SectionHeader("ON THIS DAY", muted)
     val ago = monthsAgoPhrase(memory.monthsAgo)
     Row(Modifier.height(IntrinsicSize.Min)) {
@@ -274,7 +256,7 @@ internal fun OnThisDaySection(memory: OnThisDayMemory, onBg: Color, muted: Color
         )
         Spacer(Modifier.width(12.dp))
         Text(
-            "$ago you trained ${memory.dayName} · ${formatVolume(memory.totalVolumeLb, useKg)} ${unitLabel(useKg)}" +
+            "$ago you trained ${memory.dayName} · ${formatVolume(memory.totalVolumeLb, weightUnit)} ${unitLabel(weightUnit)}" +
                 if (memory.prCount > 0) " · ${memory.prCount} PR${if (memory.prCount == 1) "" else "s"}" else "",
             style = MaterialTheme.typography.bodyMedium, color = onBg, fontStyle = FontStyle.Italic
         )

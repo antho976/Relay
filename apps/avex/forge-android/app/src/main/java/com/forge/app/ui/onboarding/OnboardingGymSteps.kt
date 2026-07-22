@@ -5,7 +5,9 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
@@ -13,7 +15,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
@@ -21,6 +25,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -30,7 +35,9 @@ import com.forge.app.program.EquipmentPreset
 import com.forge.app.program.ExerciseLibrary
 import com.forge.app.program.GeneratedDay
 import com.forge.app.program.ProblemArea
+import com.forge.app.program.equipmentGroups
 import com.forge.app.program.equipmentPresets
+import com.forge.app.ui.common.parseAccentHex
 import com.forge.app.ui.theme.ForgeMotion
 
 /** Steps 6–11 of the generated path: training days, gym gear, plates, tuning, and the week preview. */
@@ -66,19 +73,18 @@ internal fun StepDays(days: Int, onChange: (Int) -> Unit) {
     }
 }
 
+/** GYMAP-20 step 1 of 2: pick the closest gym preset; the selection answers with what's in it. */
 @Composable
-internal fun StepEquipment(
+internal fun StepGymPresets(
     selected: Set<String>,
     frozenIds: Set<String>?,
-    onToggle: (String) -> Unit,
     onSelectPreset: (EquipmentPreset) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         StepEyebrow("Your gym")
         StepTitle("What's in your gym?")
-        StepCaption("Pick a preset, then fine-tune. Plans only use what's on.")
+        StepCaption("Pick the closest setup. You fine-tune every piece next.")
         Spacer(Modifier.height(2.dp))
-        StepSectionLabel("Presets")
         equipmentPresets.chunked(2).forEach { rowPresets ->
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 rowPresets.forEach { preset ->
@@ -94,20 +100,45 @@ internal fun StepEquipment(
                 if (rowPresets.size == 1) Spacer(Modifier.weight(1f))
             }
         }
-        Spacer(Modifier.height(8.dp))
-        StepSectionLabel("Fine-tune", meta = "${selected.size} on")
-        Equipment.entries.chunked(3).forEach { rowGear ->
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                rowGear.forEach { e ->
-                    EquipmentTile(
-                        icon = OnboardingIcons.forEquipment(e),
-                        label = e.display,
-                        selected = e.name in selected,
-                        onClick = { onToggle(e.name) },
-                        modifier = Modifier.weight(1f)
-                    )
+        // "What's in it" — the live gear readout of the current selection (preset or hand-tuned).
+        if (selected.isNotEmpty()) {
+            Spacer(Modifier.height(4.dp))
+            StepSectionLabel("In this setup", meta = "${selected.size} on")
+            Text(
+                gearReadout(selected),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                lineHeight = 16.sp,
+                maxLines = 4,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+/** GYMAP-20 step 2 of 2: every piece of gear, grouped, toggleable. */
+@Composable
+internal fun StepFineTune(selected: Set<String>, onToggle: (String) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        StepEyebrow("Your gym")
+        StepTitle("Fine-tune your gear")
+        StepCaption("Toggle anything the preset got wrong. Plans only use what's on.")
+        Spacer(Modifier.height(2.dp))
+        equipmentGroups.forEach { (group, items) ->
+            StepSectionLabel(group, meta = "${items.count { it.name in selected }} on")
+            items.chunked(3).forEach { rowGear ->
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    rowGear.forEach { e ->
+                        EquipmentTile(
+                            icon = OnboardingIcons.forEquipment(e),
+                            label = e.display,
+                            selected = e.name in selected,
+                            onClick = { onToggle(e.name) },
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    repeat(3 - rowGear.size) { Spacer(Modifier.weight(1f)) }
                 }
-                repeat(3 - rowGear.size) { Spacer(Modifier.weight(1f)) }
             }
         }
     }
@@ -120,6 +151,12 @@ private fun presetMeta(preset: EquipmentPreset): String = when {
     preset.equipment.size == 1 -> "1 piece"
     else -> "${preset.equipment.size} pieces"
 }
+
+/** The selection's gear, in enum order — or one line when it's simply everything. */
+private fun gearReadout(selected: Set<String>): String =
+    if (selected.size == Equipment.entries.size) "EVERY PIECE ON THE FINE-TUNE LIST"
+    else Equipment.entries.filter { it.name in selected }
+        .joinToString(" · ") { it.display }.uppercase()
 
 @Composable
 internal fun StepPlateWeight(plateWeightLb: Double, useKg: Boolean, onSet: (Double) -> Unit) {
@@ -198,15 +235,16 @@ internal fun StepPreview(days: List<GeneratedDay>) {
             transitionSpec = { fadeIn(ForgeMotion.enterTween()) togetherWith fadeOut(ForgeMotion.exitTween()) },
             label = "preview_reroll"
         ) { shownDays ->
-            Column(verticalArrangement = Arrangement.spacedBy(22.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
                 shownDays.forEach { day -> PreviewDay(day) }
             }
         }
     }
 }
 
-/** One day as a quiet table: mono day anchor + set-count meta, then a row per exercise with its
- *  sets × reps on the right — the same vocabulary as the set tables, not a dot-joined prose blob. */
+/** One day in the program screen's section formula (GYMAP-21/28 — the two render identically):
+ *  colour-dot + mono anchor with its set count as right meta, then hang-indented exercise rows with
+ *  the sets × reps at the quiet caption rung, so the movement names carry the row. */
 @Composable
 private fun PreviewDay(day: GeneratedDay) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
@@ -216,25 +254,31 @@ private fun PreviewDay(day: GeneratedDay) {
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                day.name.uppercase(),
-                style = MaterialTheme.typography.labelMedium,
-                color = muted,
-                letterSpacing = 1.sp
-            )
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Box(Modifier.size(8.dp).clip(CircleShape).background(parseAccentHex(day.accentHex)))
+                Text(
+                    day.name.uppercase(),
+                    style = MaterialTheme.typography.labelLarge,
+                    color = muted,
+                    letterSpacing = 1.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
             Text(
                 "${day.exercises.sumOf { it.sets }} SETS",
                 style = MaterialTheme.typography.labelSmall,
                 color = muted
             )
         }
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(10.dp))
         if (day.exercises.isEmpty()) {
-            Text("Cardio", style = MaterialTheme.typography.bodyMedium, color = muted)
+            Text("Cardio", style = MaterialTheme.typography.bodyMedium, color = muted,
+                modifier = Modifier.padding(start = 16.dp))
         }
         day.exercises.forEach { ex ->
             Row(
-                Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                Modifier.fillMaxWidth().padding(start = 16.dp, top = 5.dp, bottom = 5.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -250,7 +294,7 @@ private fun PreviewDay(day: GeneratedDay) {
                 Text(
                     "${ex.sets} × ${ex.reps}",
                     style = MaterialTheme.typography.labelSmall,
-                    color = muted
+                    color = muted.copy(alpha = 0.7f)
                 )
             }
         }

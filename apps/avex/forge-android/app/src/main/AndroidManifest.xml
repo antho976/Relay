@@ -10,6 +10,15 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <!-- Timer vibration -->
     <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- Biometric / device-credential app & gallery lock (GYMAP-69). The androidx.biometric library
+         folds in the pre-28 USE_FINGERPRINT alias; no app PIN is stored, the OS owns the credential. -->
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+
+    <!-- In-app guided progress-photo camera. Captured shots are written straight to app-private
+         storage (never the camera roll); no INTERNET permission, so they never leave the device.
+         The camera is optional — the gallery still imports from the photo picker without it. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera.any" android:required="false" />
 
     <!-- Health Connect: read-only recovery signals (sleep, resting HR) feed the coach. These are
          on-device permissions granted via the Health Connect app; Forge holds NO internet permission,

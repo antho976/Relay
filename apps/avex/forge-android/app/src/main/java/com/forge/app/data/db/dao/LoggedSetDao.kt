@@ -48,6 +48,7 @@ interface LoggedSetDao {
           AND s.logged_exercise_id != :excludeLoggedExerciseId
           AND s.weight_lb IS NOT NULL
           AND s.is_assisted = 0
+          AND s.duration_seconds IS NULL
         GROUP BY s.reps
     """)
     suspend fun repMaxFrontierForExercise(exerciseId: String, excludeLoggedExerciseId: Long): List<RepMaxRow>
@@ -73,6 +74,7 @@ interface LoggedSetDao {
           AND sess.started_at < :beforeStartedAt
           AND s.weight_lb IS NOT NULL
           AND s.is_assisted = 0
+          AND s.duration_seconds IS NULL
         GROUP BY le.exercise_id, s.reps
     """)
     suspend fun repMaxFrontierBeforeSession(
@@ -100,21 +102,37 @@ interface LoggedSetDao {
     """)
     suspend fun hasHistoryForExercise(exerciseId: String, excludeLoggedExerciseId: Long): Boolean
 
-    /** The single best set ever for an exercise: heaviest weight, most reps at that weight. */
+    /**
+     * The single best set ever for an exercise: heaviest weight, most reps at that weight.
+     * Timed-hold sets (`duration_seconds` set, reps not meaningful) are excluded here and in every
+     * weight×reps / e1RM / volume aggregate below — a weighted plank must not read as a strength best
+     * (GYMAP-51). Read/display queries (forLoggedExercise, allForSession) keep timed sets.
+     */
     @Query("""
         SELECT s.* FROM logged_set s
         INNER JOIN logged_exercise le ON s.logged_exercise_id = le.id
-        WHERE le.exercise_id = :exerciseId AND s.weight_lb IS NOT NULL
+        WHERE le.exercise_id = :exerciseId AND s.weight_lb IS NOT NULL AND s.duration_seconds IS NULL
         ORDER BY s.weight_lb DESC, s.reps DESC
         LIMIT 1
     """)
     suspend fun personalBestSet(exerciseId: String): LoggedSet?
 
+    /**
+     * Longest hold ever for a timed-hold exercise (GYMAP-51) — the counterpart to [maxWeightForExercise]
+     * for holds, driving the "best 0:45" prefill/ghost hint. Null if the exercise has no timed set.
+     */
+    @Query("""
+        SELECT MAX(s.duration_seconds) FROM logged_set s
+        INNER JOIN logged_exercise le ON s.logged_exercise_id = le.id
+        WHERE le.exercise_id = :exerciseId AND s.duration_seconds IS NOT NULL
+    """)
+    suspend fun bestHoldSecondsForExercise(exerciseId: String): Int?
+
     /** Max numeric weight ever lifted for the given exercise. Null if all logs are non-numeric (e.g. BW). */
     @Query("""
         SELECT MAX(s.weight_lb) FROM logged_set s
         INNER JOIN logged_exercise le ON s.logged_exercise_id = le.id
-        WHERE le.exercise_id = :exerciseId
+        WHERE le.exercise_id = :exerciseId AND s.duration_seconds IS NULL
     """)
     suspend fun maxWeightForExercise(exerciseId: String): Double?
 
@@ -122,7 +140,7 @@ interface LoggedSetDao {
     @Query("""
         SELECT MAX(s.weight_lb) FROM logged_set s
         INNER JOIN logged_exercise le ON s.logged_exercise_id = le.id
-        WHERE le.exercise_id IN (:exerciseIds)
+        WHERE le.exercise_id IN (:exerciseIds) AND s.duration_seconds IS NULL
     """)
     suspend fun maxWeightAcrossExercises(exerciseIds: List<String>): Double?
 
@@ -135,7 +153,7 @@ interface LoggedSetDao {
         SELECT le.exercise_id AS exercise_id, MAX(s.weight_lb) AS weight_lb
         FROM logged_set s
         INNER JOIN logged_exercise le ON s.logged_exercise_id = le.id
-        WHERE le.exercise_id IN (:exerciseIds) AND s.weight_lb IS NOT NULL
+        WHERE le.exercise_id IN (:exerciseIds) AND s.weight_lb IS NOT NULL AND s.duration_seconds IS NULL
         GROUP BY le.exercise_id
     """)
     suspend fun maxWeightPerExercise(exerciseIds: List<String>): List<ExerciseMaxRow>
@@ -159,6 +177,7 @@ interface LoggedSetDao {
         INNER JOIN session s ON le.session_id = s.id
         WHERE s.finished_at IS NOT NULL
           AND s.is_untracked = 0 AND le.skipped = 0 AND ls.is_assisted = 0
+          AND ls.duration_seconds IS NULL
         ORDER BY s.started_at ASC
     """)
     fun observeAllFinishedSetsWithSession(): Flow<List<SetWithExerciseAndSession>>
@@ -177,6 +196,7 @@ interface LoggedSetDao {
         WHERE s.finished_at IS NOT NULL AND s.started_at >= :sinceMs
           AND s.is_untracked = 0 AND le.skipped = 0 AND ls.is_assisted = 0
           AND ls.weight_lb IS NOT NULL AND ls.weight_lb > 0
+          AND ls.duration_seconds IS NULL
     """)
     suspend fun bestE1rmLbSince(sinceMs: Long): Double?
 
@@ -230,6 +250,7 @@ interface LoggedSetDao {
         INNER JOIN logged_exercise le ON ls.logged_exercise_id = le.id
         INNER JOIN session s ON le.session_id = s.id
         WHERE le.exercise_id = :exerciseId AND s.finished_at IS NOT NULL
+          AND ls.duration_seconds IS NULL
         GROUP BY s.id
         ORDER BY s.started_at DESC
         LIMIT :limit
@@ -254,6 +275,7 @@ interface LoggedSetDao {
         INNER JOIN logged_exercise le ON ls.logged_exercise_id = le.id
         INNER JOIN session s ON le.session_id = s.id
         WHERE s.finished_at IS NOT NULL AND s.is_untracked = 0
+          AND ls.duration_seconds IS NULL
         ORDER BY ls.completed_at ASC
     """)
     suspend fun allForFinishedSessions(): List<LoggedSet>
@@ -265,7 +287,7 @@ interface LoggedSetDao {
             FROM logged_set s
             INNER JOIN logged_exercise le ON s.logged_exercise_id = le.id
             INNER JOIN session ss ON le.session_id = ss.id
-            WHERE ss.finished_at IS NOT NULL
+            WHERE ss.finished_at IS NOT NULL AND s.duration_seconds IS NULL
             GROUP BY le.session_id
         )
     """)
@@ -277,7 +299,7 @@ interface LoggedSetDao {
         FROM logged_set s
         INNER JOIN logged_exercise le ON s.logged_exercise_id = le.id
         INNER JOIN session ss ON le.session_id = ss.id
-        WHERE ss.finished_at IS NOT NULL AND s.weight_lb IS NOT NULL
+        WHERE ss.finished_at IS NOT NULL AND s.weight_lb IS NOT NULL AND s.duration_seconds IS NULL
         ORDER BY s.weight_lb DESC
         LIMIT 1
     """)

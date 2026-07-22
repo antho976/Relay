@@ -11,19 +11,23 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import com.forge.app.domain.health.WearableBrand
 import com.forge.app.domain.units.toDisplayWeight
+import com.forge.app.security.BiometricAuthenticator
 import kotlin.math.roundToInt
 
 /**
- * Steps 0–5: who you are, how you measure, and how you want to train. One decision per screen;
- * each page is `eyebrow → serif question → caption → content` (OnboardingPrimitives).
- * Steps 6–11 (gym, tuning, preview) live in OnboardingGymSteps.kt.
+ * Steps 0–7: who you are, how you measure, whether to lock the app, and how you want to train. One
+ * decision per screen; each page is `eyebrow → serif question → caption → content` (OnboardingPrimitives).
+ * Steps 8–14 (gym, tuning, preview) live in OnboardingGymSteps.kt.
  */
 
 /** Goal options: key, label, what it changes, and the mono rep-range meta. */
@@ -137,8 +141,101 @@ internal fun StepBody(
     }
 }
 
+/**
+ * Wearable options: the brand (label + source app from [WearableBrand]), how it feeds Health
+ * Connect, the right-meta naming the one per-brand difference (Galaxy sends GPS routes, Fitbit
+ * versions vary), the mono what-syncs readout, and the honest version caveat. Facts, not
+ * plumbing — every Health Connect read is vendor-neutral.
+ */
+private data class WearableDetail(
+    val brand: WearableBrand,
+    val description: String,
+    val meta: String?,
+    val syncs: String?,
+    val caveat: String?
+)
+
+private val WEARABLE_DETAILS = listOf(
+    WearableDetail(
+        WearableBrand.GALAXY,
+        "Feeds Health Connect through Samsung Health.",
+        meta = "Routes sync",
+        syncs = "Sleep · steps · heart rate · workouts · GPS routes",
+        caveat = "Signals depend on your watch and Samsung Health versions. Older models send fewer."
+    ),
+    WearableDetail(
+        WearableBrand.PIXEL,
+        "Feeds Health Connect through the Fitbit app.",
+        meta = "Routes vary",
+        syncs = "Sleep · steps · heart rate · workouts",
+        caveat = "GPS routes and some signals depend on your Fitbit version. Older watches send fewer."
+    ),
+    WearableDetail(
+        WearableBrand.NONE,
+        "Any tracker that feeds Health Connect works too.",
+        meta = null, syncs = null, caveat = null
+    )
+)
+
+@Composable
+internal fun StepWearable(selected: String, onSelect: (String) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        StepEyebrow("About you")
+        StepTitle("What's on your wrist?")
+        StepCaption("Nothing connects yet. You grant each signal later in Settings.")
+        Spacer(Modifier.height(2.dp))
+        WEARABLE_DETAILS.forEach { detail ->
+            OptionCard(
+                label = detail.brand.label,
+                description = detail.description,
+                meta = detail.meta,
+                selected = selected == detail.brand.key,
+                onClick = { onSelect(detail.brand.key) }
+            )
+        }
+        // The pick answers with what it sends (StepDays' split-readout idiom), plus the version
+        // caveat — feature sets differ per watch generation and companion-app version.
+        val detail = WEARABLE_DETAILS.firstOrNull { it.brand.key == selected }
+        if (detail?.syncs != null) {
+            Spacer(Modifier.height(4.dp))
+            StepSectionLabel("What syncs")
+            Text(
+                detail.syncs.uppercase(),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary
+            )
+            detail.caveat?.let { StepCaption(it) }
+        }
+    }
+}
+
+@Composable
+internal fun StepAppLock(enabled: Boolean, onToggle: (Boolean) -> Unit) {
+    // Availability decides whether the opt-in is offered at all — no screen lock means no credential
+    // to prompt against (GYMAP-69). One selectable tile that toggles; skipping it just leaves it off.
+    val context = LocalContext.current
+    val canAuth = remember { BiometricAuthenticator.canAuthenticate(context) }
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        StepEyebrow("About you")
+        StepTitle("Lock your data?")
+        StepCaption("Keep your photos and progress behind your fingerprint, face, or phone PIN.")
+        Spacer(Modifier.height(2.dp))
+        OptionCard(
+            label = "Lock Avex",
+            description = "Ask to unlock when you open the app. Change it anytime in Settings.",
+            selected = enabled && canAuth,
+            onClick = { if (canAuth) onToggle(!enabled) }
+        )
+        if (!canAuth) {
+            StepCaption("Set a screen lock in your phone's settings to use this.")
+        }
+    }
+}
+
 @Composable
 internal fun StepPlanMode(selected: String, onSelect: (String) -> Unit) {
+    // One coordinator for the card videos so they start — and therefore replay and freeze — together.
+    val videoSync = remember { PlanModeSync(PLAN_MODE_DETAILS.count { planModeHasVideo(it.first) }) }
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         StepEyebrow("Your plan")
         StepTitle("How do you want to train?")
@@ -149,14 +246,15 @@ internal fun StepPlanMode(selected: String, onSelect: (String) -> Unit) {
                 label = label,
                 description = desc,
                 selected = selected == key,
-                // Maturity tags: custom/freestyle ship earlier-stage than the generated path.
+                // Maturity tags: the generated path is the pick; custom has shipped (no tag);
+                // freestyle is still earlier-stage but out of alpha now.
                 meta = when (key) {
                     PLAN_GENERATED -> "Recommended"
-                    PLAN_CUSTOM -> "Beta"
-                    else -> "Alpha"
+                    PLAN_CUSTOM -> null
+                    else -> "Beta"
                 },
                 onClick = { onSelect(key) },
-                topContent = { PlanModeMedia(key) }
+                topContent = { PlanModeMedia(key, videoSync) }
             )
         }
     }

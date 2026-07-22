@@ -22,6 +22,7 @@ import com.forge.app.data.db.types.EffortRating
 import com.forge.app.data.health.HealthConnectManager
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.domain.health.ActiveCalorieEstimator
+import com.forge.app.domain.units.MAX_HOLD_SECONDS
 import com.forge.app.domain.pr.PrDetector
 import com.forge.app.domain.volume.VolumeCalculator
 import com.forge.app.program.Equipment
@@ -137,6 +138,73 @@ class WorkoutRepository @Inject constructor(
             dayKey = Program.FREESTYLE_DAY_KEY, startedAt = startedAt, finishedAt = null
         )
         return sessionDao.insert(session)
+    }
+
+    /**
+     * "Log again today" (GYMAP-36): duplicate a past finished session as a fresh freestyle session dated
+     * now — a full-fidelity copy so a repeated workout can be re-logged without re-entering it. Every
+     * non-skipped logged exercise and each of its sets is copied verbatim (weight, reps, set type, RPE,
+     * timed hold, drop/AMRAP/failure/assist markers), preserving order; only per-session EVALUATIONS are
+     * dropped (difficulty rating, hit-target, PR flag, and the day-specific exercise note) since those
+     * are re-earned on the real day, not repeated. Keyed freestyle ("Open workout") like every other
+     * re-log-a-past-workout path (GYMAP-48), so slotId — a program-slot link meaningless in a freestyle
+     * log — is dropped too.
+     *
+     * Stamped finished with denormalised volume/setCount but WITHOUT [finishSession]'s side effects (no
+     * program rotation, no Health Connect calorie mirror) — a re-log is data entry, not a live finish.
+     * prCount is 0 by construction: a copy of existing history can only ever TIE an all-time max it is
+     * duplicating, never beat it, so no copied set is a PR. Returns the new session id, or null when the
+     * source is missing or logged nothing to copy (the caller then has nothing to re-log).
+     */
+    suspend fun reLogSession(sourceSessionId: Long, startedAt: Long = clock.nowMs()): Long? =
+        database.withTransaction {
+            val source = sessionDao.get(sourceSessionId) ?: return@withTransaction null
+            val sourceExercises = loggedExerciseDao.forSession(sourceSessionId).filterNot { it.skipped }
+            if (sourceExercises.isEmpty()) return@withTransaction null
+
+            val newSession = Session(dayKey = Program.FREESTYLE_DAY_KEY, startedAt = startedAt, finishedAt = null)
+            val newSessionId = sessionDao.insert(newSession)
+            sourceExercises.forEach { le ->
+                val newLeId = loggedExerciseDao.insert(
+                    LoggedExercise(
+                        sessionId = newSessionId,
+                        exerciseId = le.exerciseId,
+                        orderIndex = le.orderIndex,
+                        // Keep the performed name/unit override + superset grouping so the copy reads
+                        // identically; drop slotId + every per-session evaluation (see kdoc).
+                        swappedName = le.swappedName,
+                        swappedUnit = le.swappedUnit,
+                        supersetGroup = le.supersetGroup
+                    )
+                )
+                val copies = loggedSetDao.forLoggedExercise(le.id)
+                    .map { it.copy(id = 0, loggedExerciseId = newLeId, completedAt = startedAt) }
+                if (copies.isNotEmpty()) loggedSetDao.insertAll(copies)
+            }
+
+            val newSets = loggedSetDao.allForSession(newSessionId)
+            sessionDao.update(
+                newSession.copy(
+                    id = newSessionId,
+                    finishedAt = clock.nowMs(),
+                    totalVolumeLb = VolumeCalculator.sessionVolumeLb(newSets),
+                    setCount = newSets.size,
+                    // Inherit the original's active time so the re-log shows a realistic duration
+                    // (a duplicated workout took about as long) instead of ~0.
+                    activeSeconds = source.activeSeconds
+                )
+            )
+            newSessionId
+        }
+
+    /**
+     * The sets from the most recent OTHER time this exercise was performed — powers the freestyle
+     * logger's "copy last time" panel. Empty when it has never been logged before. excludeSessionId is
+     * -1 because a freestyle log has no persisted session id while it's being filled in.
+     */
+    suspend fun lastPerformanceSets(exerciseId: String): List<LoggedSet> {
+        val last = loggedExerciseDao.lastLoggedBefore(exerciseId, -1L) ?: return emptyList()
+        return loggedSetDao.forLoggedExercise(last.id).sortedBy { it.setIndex }
     }
 
     /**
@@ -453,7 +521,8 @@ class WorkoutRepository @Inject constructor(
         setIndex: Int,
         weightText: String,
         weightLb: Double?,
-        reps: Int
+        reps: Int,
+        durationSeconds: Int? = null
     ): Long = loggedSetDao.insert(
         LoggedSet(
             loggedExerciseId = loggedExerciseId,
@@ -461,7 +530,10 @@ class WorkoutRepository @Inject constructor(
             weightText = weightText,
             weightLb = weightLb,
             reps = sanitizeReps(reps),
-            completedAt = clock.nowMs()
+            completedAt = clock.nowMs(),
+            // Timed holds (GYMAP-51): a held duration in whole seconds. null for a normal rep set;
+            // when present, `reps` is not a meaningful count and the set is skipped by weight×reps stats.
+            durationSeconds = durationSeconds?.coerceIn(0, MAX_HOLD_SECONDS)
         )
     )
 
@@ -482,6 +554,10 @@ class WorkoutRepository @Inject constructor(
     /** The single best set ever for an exercise (heaviest, most reps at that weight). */
     suspend fun personalBestSet(exerciseId: String): LoggedSet? =
         loggedSetDao.personalBestSet(exerciseId)
+
+    /** Longest hold ever for a timed-hold exercise (seconds), or null if none — the "best 0:45" hint (GYMAP-51). */
+    suspend fun bestHoldSecondsForExercise(exerciseId: String): Int? =
+        loggedSetDao.bestHoldSecondsForExercise(exerciseId)
 
     /** Per-session aggregates for one exercise (last N finished sessions, newest first). */
     suspend fun sessionAggregatesForExercise(exerciseId: String, limit: Int = 8) =

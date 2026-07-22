@@ -38,6 +38,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.domain.adapt.E1rm
+import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.ui.gym.stats.components.LineChart
@@ -67,7 +68,7 @@ internal fun ColumnScope.E1rmComparisonList(
     lifts: List<E1rmLift>,
     prs: List<PrEntry>,
     curves: List<StrengthCurve>,
-    useKg: Boolean,
+    weightUnit: WeightUnit,
     c: StatsColors,
     /** A lift to open pre-expanded — set when a record tap deep-links here. */
     focusLift: String? = null,
@@ -85,7 +86,7 @@ internal fun ColumnScope.E1rmComparisonList(
             barProgress = staggeredProgress(progress, i, lifts.size),
             prsForLift = prs.filter { it.exerciseName == lift.exerciseName },
             curve = curves.firstOrNull { it.exerciseId == lift.exerciseId },
-            useKg = useKg,
+            weightUnit = weightUnit,
             c = c,
             isFocused = lift.exerciseId == focusLift,
             focusNonce = focusNonce
@@ -105,12 +106,12 @@ private fun E1rmDrillRow(
     barProgress: Float,
     prsForLift: List<PrEntry>,
     curve: StrengthCurve?,
-    useKg: Boolean,
+    weightUnit: WeightUnit,
     c: StatsColors,
     isFocused: Boolean,
     focusNonce: Int
 ) {
-    val display = remember(lift.history, useKg) { lift.history.map { toDisplayWeight(it, useKg) } }
+    val display = remember(lift.history, weightUnit) { lift.history.map { toDisplayWeight(it, weightUnit) } }
     val expandable = display.size >= 2
     var expanded by rememberSaveable(lift.exerciseId) { mutableStateOf(isFocused && expandable) }
     // A record tap deep-links here and focuses this row; focusNonce changes on every such tap, so
@@ -125,8 +126,8 @@ private fun E1rmDrillRow(
             expanded = true
         }
     }
-    val current = toDisplayWeight(lift.currentE1rm, useKg).roundToInt()
-    val unit = unitLabel(useKg)
+    val current = toDisplayWeight(lift.currentE1rm, weightUnit).roundToInt()
+    val unit = unitLabel(weightUnit)
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(vertical = 2.dp)) {
         Column(
@@ -182,7 +183,7 @@ private fun E1rmDrillRow(
             exit = shrinkVertically() + fadeOut()
         ) {
             Box(Modifier.padding(horizontal = 8.dp)) {
-                LiftDetailBody(lift, display, prsForLift, curve, useKg, c)
+                LiftDetailBody(lift, display, prsForLift, curve, weightUnit, c)
             }
         }
     }
@@ -195,10 +196,10 @@ private fun LiftDetailBody(
     display: List<Double>,
     prsForLift: List<PrEntry>,
     curve: StrengthCurve?,
-    useKg: Boolean,
+    weightUnit: WeightUnit,
     c: StatsColors
 ) {
-    val unit = unitLabel(useKg)
+    val unit = unitLabel(weightUnit)
     val lo = remember(display) { display.minOrNull() ?: 0.0 }
     val hi = remember(display) { display.maxOrNull() ?: 1.0 }
     val fmt = remember { SimpleDateFormat("MMM d", Locale.getDefault()) }
@@ -240,7 +241,7 @@ private fun LiftDetailBody(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Text(
-                        "${toDisplayWeight(pr.weightLb, useKg).roundToInt()} $unit × ${pr.reps}",
+                        "${toDisplayWeight(pr.weightLb, weightUnit).roundToInt()} $unit × ${pr.reps}",
                         style = MaterialTheme.typography.bodySmall, color = c.onBg
                     )
                     Text(fmt.format(Date(pr.date)), style = MaterialTheme.typography.labelSmall, color = c.muted)
@@ -253,22 +254,22 @@ private fun LiftDetailBody(
             Spacer(Modifier.height(12.dp))
             Text("STRENGTH CURVE", style = MaterialTheme.typography.labelSmall, color = c.muted, fontSize = 9.sp, letterSpacing = 1.sp)
             Spacer(Modifier.height(6.dp))
-            LiftCurveChart(curve, useKg, c)
+            LiftCurveChart(curve, weightUnit, c)
         }
     }
 }
 
 /** Every working set as weight × reps with the fitted Epley curve — scoped to one lift. */
 @Composable
-private fun LiftCurveChart(curve: StrengthCurve, useKg: Boolean, c: StatsColors) {
-    val unit = unitLabel(useKg)
-    val pts = remember(curve, useKg) {
-        curve.points.map { Offset(it.reps.toFloat(), toDisplayWeight(it.weightLb, useKg).toFloat()) }
+private fun LiftCurveChart(curve: StrengthCurve, weightUnit: WeightUnit, c: StatsColors) {
+    val unit = unitLabel(weightUnit)
+    val pts = remember(curve, weightUnit) {
+        curve.points.map { Offset(it.reps.toFloat(), toDisplayWeight(it.weightLb, weightUnit).toFloat()) }
     }
-    val e1 = toDisplayWeight(curve.e1rmLb, useKg).toFloat()
+    val e1 = toDisplayWeight(curve.e1rmLb, weightUnit).toFloat()
     val maxReps = curve.points.maxOf { it.reps }.coerceAtLeast(2)
     // Fitted curve from the e1RM via the shared Epley inverse — never diverges from E1rm.epley.
-    val overlay = remember(curve, useKg) {
+    val overlay = remember(curve, weightUnit) {
         (maxReps downTo 1).map { r -> Offset(r.toFloat(), E1rm.epleyInverse(e1.toDouble(), r).toFloat()) }
     }
     val minY = minOf(pts.minOf { it.y }, overlay.minOf { it.y })

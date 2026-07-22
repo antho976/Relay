@@ -62,6 +62,7 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.domain.units.toDisplayWeight
+import com.forge.app.domain.units.unitLabel
 import com.forge.app.ui.theme.LocalForgeSettings
 import com.forge.app.program.Program
 import com.forge.app.program.Trophies
@@ -501,13 +502,13 @@ fun OverviewScreen(
             }
             Spacer(Modifier.height(16.dp))
 
-            val useKg = LocalForgeSettings.current.useKg
+            val weightUnit = LocalForgeSettings.current.weightUnit
             val animWorkouts by animateIntAsState(state.workoutsThisWeek.coerceAtLeast(0), label = "workouts")
-            val animVolume by animateIntAsState(toDisplayWeight(state.volumeThisWeekLb, useKg).coerceAtLeast(0.0).toInt(), label = "volume")
+            val animVolume by animateIntAsState(toDisplayWeight(state.volumeThisWeekLb, weightUnit).coerceAtLeast(0.0).toInt(), label = "volume")
             val animCardio by animateIntAsState(state.cardioMinutesThisWeek.coerceAtLeast(0), label = "cardio")
             Row(modifier = Modifier.fillMaxWidth()) {
                 OverviewStat(value = "$animWorkouts", label = "WORKOUTS", modifier = Modifier.weight(1f))
-                OverviewStat(value = "$animVolume", label = if (useKg) "KG" else "LB", modifier = Modifier.weight(1f))
+                OverviewStat(value = "$animVolume", label = unitLabel(weightUnit).uppercase(), modifier = Modifier.weight(1f))
                 OverviewStat(
                     value = if (state.cardioWeeklyTargetMin > 0) "$animCardio/${state.cardioWeeklyTargetMin}" else "$animCardio",
                     label = "CARDIO MIN", modifier = Modifier.weight(1f)
@@ -661,9 +662,9 @@ private fun OnThisDayCard(
     accent: Color,
     outline: Color
 ) {
-    val useKg = LocalForgeSettings.current.useKg
+    val weightUnit = LocalForgeSettings.current.weightUnit
     val agoLabel = com.forge.app.ui.common.monthsAgoPhrase(memory.monthsAgo).uppercase()
-    val vol = com.forge.app.domain.units.formatVolumeCompact(memory.totalVolumeLb, useKg)
+    val vol = com.forge.app.domain.units.formatVolumeCompact(memory.totalVolumeLb, weightUnit)
     val prText = if (memory.prCount > 0) " · ${memory.prCount} PR${if (memory.prCount > 1) "s" else ""}" else ""
     Column(
         modifier = Modifier

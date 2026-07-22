@@ -47,22 +47,48 @@ object PreferenceKeys {
     val NOTE_TEMPLATES = stringSetPreferencesKey("note_templates")
 
     // ─── Units (#2) ───────────────────────────────────────────────────────────
+    /** Weight display unit (GYMAP-72), stored by [com.forge.app.domain.units.WeightUnit.label]
+     *  ("lb" | "kg" | "st"). ABSENT = derive from the legacy [USE_KG] (kg when true, else lb) so
+     *  existing installs carry over. [USE_KG] is kept mirrored (true only for kg) for the derived
+     *  distance/length defaults + backup, which still read it. */
+    val WEIGHT_UNIT = stringPreferencesKey("weight_unit")
     val USE_KG = booleanPreferencesKey("use_kg")
     /** Cardio distance/pace in miles. ABSENT = derive from [USE_KG] (lb→miles, kg→km); only an
      *  explicit pick in onboarding or Settings persists this and breaks the tie to the weight unit. */
     val USE_MILES = booleanPreferencesKey("use_miles")
+    /** Body measurements (GYMAP-52) in cm vs inches. ABSENT = derive from [USE_KG] (kg→cm, lb→in);
+     *  an explicit pick in Settings persists this and breaks the tie to the weight unit. */
+    val USE_CM = booleanPreferencesKey("use_cm")
 
     // ─── Health Connect bodyweight sync (HC-3) ────────────────────────────────
     /** When ON (and the WeightRecord write permission is granted), Avex mirrors each weigh-in to
      *  Health Connect. Off by default — write-back is strictly opt-in. */
     val HC_WRITE_BODYWEIGHT = booleanPreferencesKey("hc_write_bodyweight")
+    /** When ON (and the BodyFat write permission is granted), Avex mirrors each body-fat entry to
+     *  Health Connect (GYMAP-62). Off by default — write-back is strictly opt-in. */
+    val HC_WRITE_BODY_FAT = booleanPreferencesKey("hc_write_body_fat")
     /** When ON (and the ActiveCaloriesBurned write permission is granted), Avex writes each finished
      *  session's estimated active calories to Health Connect (HC-4). Off by default — strictly opt-in. */
     val HC_WRITE_CALORIES = booleanPreferencesKey("hc_write_calories")
+    /** Which watch the user wears ([com.forge.app.domain.health.WearableBrand] key: "galaxy" /
+     *  "pixel" / "none"; absent = never asked). Advisory only — tailors the Recovery page's setup
+     *  pointers; every Health Connect read stays vendor-neutral. */
+    val WEARABLE_BRAND = stringPreferencesKey("wearable_brand")
+    /** Set true after the one-time bulk import of Health Connect weight HISTORY on first connect
+     *  (GYMAP-63), so the backfill runs exactly once and never re-scans on later refreshes. */
+    val HC_WEIGHT_HISTORY_IMPORTED = booleanPreferencesKey("hc_weight_history_imported")
 
     /** Persisted tree URI of a folder (usually Downloads) the user granted so Import can auto-scan it
      *  for gym-app exports (#GYMAP-17). Empty/absent = no folder access granted yet. */
     val IMPORT_FOLDER_URI = stringPreferencesKey("import_folder_uri")
+
+    // ─── Backup (GYMAP-67) ────────────────────────────────────────────────────
+    /** Weekly auto-backup master switch. Default ON — the app keeps a restorable weekly copy. When
+     *  OFF the scheduled worker runs but no-ops, so no WorkManager cancel/reschedule dance is needed. */
+    val AUTO_BACKUP_ENABLED = booleanPreferencesKey("auto_backup_enabled")
+    /** Persisted tree URI of a user-picked folder the auto-backup ALSO writes into (GYMAP-67), so a
+     *  backup survives an uninstall. Empty/absent = internal app storage only. */
+    val BACKUP_FOLDER_URI = stringPreferencesKey("backup_folder_uri")
 
     // ─── Appearance (#35a) ────────────────────────────────────────────────────
     val AMOLED_MODE = booleanPreferencesKey("amoled_mode")
@@ -76,6 +102,9 @@ object PreferenceKeys {
      *  (stable across builds). Empty/absent = the default emblem. The live source of truth is the
      *  enabled activity-alias; this only lets the picker ring the current choice. */
     val APP_ICON = stringPreferencesKey("app_icon")
+    /** When ON (default), the cold-launch intro themes the Avex wordmark to the chosen app icon's
+     *  family (sheen/crystals/aurora/melt/…). OFF plays the plain black-and-white Avex settle instead. */
+    val THEMED_LAUNCH_INTRO = booleanPreferencesKey("themed_launch_intro")
 
     // ─── Locale (#116) ────────────────────────────────────────────────────────
     /** "MM/dd/yyyy" or "dd/MM/yyyy" */
@@ -90,10 +119,17 @@ object PreferenceKeys {
     /** "off" | "light" | "medium" | "strong" */
     val HAPTIC_STRENGTH = stringPreferencesKey("haptic_strength")
 
+    // ─── Keep screen on while logging (GYMAP-74) ──────────────────────────────
+    /** Hold the screen awake during an active session so it doesn't lock between sets. Default on. */
+    val KEEP_SCREEN_ON = booleanPreferencesKey("keep_screen_on")
+
     // ─── Notifications (#122) ─────────────────────────────────────────────────
     val QUIET_HOURS_ENABLED = booleanPreferencesKey("quiet_hours_enabled")
-    val QUIET_HOURS_START = intPreferencesKey("quiet_hours_start")  // 0–23
-    val QUIET_HOURS_END = intPreferencesKey("quiet_hours_end")      // 0–23
+    val QUIET_HOURS_START = intPreferencesKey("quiet_hours_start")  // 0–23; legacy single window, now
+    val QUIET_HOURS_END = intPreferencesKey("quiet_hours_end")      // 0–23; the seed for the per-day schedule
+    /** Per-day quiet windows (GYMAP-75) as a JSON blob; see [com.forge.app.domain.notify.QuietHoursSchedule].
+     *  Absent until the user edits a day — reads fall back to seeding all 7 days from START/END above. */
+    val QUIET_HOURS_SCHEDULE = stringPreferencesKey("quiet_hours_schedule")
     /** Daily "train today" reminder (engagement). Off by default; hour is 0–23, default 18 (6pm). */
     val TRAINING_REMINDER_ENABLED = booleanPreferencesKey("training_reminder_enabled")
     val TRAINING_REMINDER_HOUR = intPreferencesKey("training_reminder_hour")
@@ -123,6 +159,14 @@ object PreferenceKeys {
     // ─── Privacy mode (#152) ──────────────────────────────────────────────────
     val PRIVACY_MODE = booleanPreferencesKey("privacy_mode")
 
+    // ─── App & gallery lock (GYMAP-69) ────────────────────────────────────────
+    /** Require a biometric / device-credential unlock to open the app. */
+    val APP_LOCK_ENABLED = booleanPreferencesKey("app_lock_enabled")
+    /** Require an unlock to view the progress-photo gallery (independent of APP_LOCK). */
+    val GALLERY_LOCK_ENABLED = booleanPreferencesKey("gallery_lock_enabled")
+    /** How long the app may sit in the background before it re-locks, in SECONDS. 0 = immediately. */
+    val APP_LOCK_TIMEOUT_SEC = intPreferencesKey("app_lock_timeout_sec")
+
     // ─── Warmup disable (#156) ────────────────────────────────────────────────
     /** Epoch-ms until which warmup should be auto-skipped. 0 = not disabled. */
     val WARMUP_DISABLED_UNTIL_MS = longPreferencesKey("warmup_disabled_until_ms")
@@ -132,9 +176,15 @@ object PreferenceKeys {
     val USER_NAME = stringPreferencesKey("user_name")
     /** Onboarding completed flag — distinct from WELCOMED which just tracks splash. */
     val ONBOARDING_DONE = booleanPreferencesKey("onboarding_done")
+    /** When onboarding finished (epoch ms) — the profile's stable "member since" date, so the SINCE
+     *  line shows from setup onward instead of only appearing after the first logged workout. */
+    val MEMBER_SINCE_MS = longPreferencesKey("member_since_ms")
     /** Mid-onboarding draft (every answer + the current page) as JSON, so a full app kill resumes
      *  setup where it left off. Removed atomically when onboarding completes. */
     val ONBOARDING_DRAFT = stringPreferencesKey("onboarding_draft")
+    /** In-progress freestyle log (exercises/sets typed so far + when it was opened) as JSON, so a
+     *  navigate-away or app kill can resume it. Removed when the workout is saved or discarded. */
+    val FREESTYLE_DRAFT = stringPreferencesKey("freestyle_draft")
     /** Set true the first (and only) time the default split is auto-seeded, so a deliberately empty
      *  plan (build-your-own / cleared) is never silently re-seeded on a later relaunch. */
     val PROGRAM_SEEDED = booleanPreferencesKey("program_seeded")
@@ -162,6 +212,8 @@ object PreferenceKeys {
     val PRIORITY_MUSCLES = stringSetPreferencesKey("priority_muscles")
     /** Pinned exercise library ids — kept across regenerations when their muscle is trained. */
     val PINNED_EXERCISES = stringSetPreferencesKey("pinned_exercises")
+    /** Bookmarked exercise ids — surfaced first in the exercise browser's Favorites filter. */
+    val FAVORITE_EXERCISES = stringSetPreferencesKey("favorite_exercises")
     /** Rotation cadence: "never" | "every_n". */
     val ROTATION_CADENCE = stringPreferencesKey("rotation_cadence")
     /** Day-aware scheduling: "sequence" (legacy day-after-last) | "weekday" (fixed weekly plan). */
@@ -195,6 +247,16 @@ object PreferenceKeys {
     /** Set true once the user dismisses the "connect a watch/ring" hint on the cardio screen, so it
      *  never reappears. Lives in DataStore so it survives a DB wipe/restore. */
     val CARDIO_WEARABLE_HINT_DISMISSED = booleanPreferencesKey("cardio_wearable_hint_dismissed")
+
+    /** User-defined cardio activity types (GYMAP-37) as one JSON blob — see
+     *  [com.forge.app.domain.cardio.CustomCardioType]. A small config list, so it lives here rather
+     *  than the (schema-locked) Room DB; a logged session references one only by its stable code. */
+    val CUSTOM_CARDIO_TYPES = stringPreferencesKey("custom_cardio_types")
+
+    /** The activity code of the last cardio session logged (GYMAP-40) — the log sheet seeds a new
+     *  entry to it instead of always defaulting to Run. Absent until the first session; rest days
+     *  don't write it (a rest default would be nonsense). */
+    val LAST_CARDIO_TYPE = stringPreferencesKey("last_cardio_type")
 
     /** Default rest between sets (seconds), per movement type — the base the RestAdvisor builds on.
      *  Absent ⇒ the canonical 180 (compound) / 90 (isolation). */

@@ -1,5 +1,6 @@
 package com.forge.app.ui.programbuilder
 
+import com.forge.app.ui.common.moved
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue

@@ -98,9 +98,9 @@ internal fun GoalSetterDialog(
     onClear: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    val useKg = com.forge.app.ui.theme.LocalForgeSettings.current.useKg
-    var weightText by remember { mutableStateOf(currentGoal?.let { com.forge.app.domain.units.weightInputValue(it, useKg) } ?: "") }
-    val weightLb = com.forge.app.domain.units.parseToLb(weightText, useKg)
+    val weightUnit = com.forge.app.ui.theme.LocalForgeSettings.current.weightUnit
+    var weightText by remember { mutableStateOf(currentGoal?.let { com.forge.app.domain.units.weightInputValue(it, weightUnit) } ?: "") }
+    val weightLb = com.forge.app.domain.units.parseToLb(weightText, weightUnit)
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Goal weight — $exerciseName") },
@@ -108,7 +108,7 @@ internal fun GoalSetterDialog(
             OutlinedTextField(
                 value = weightText,
                 onValueChange = { weightText = it.filter { c -> c.isDigit() || c == '.' } },
-                label = { Text("Target weight (${com.forge.app.domain.units.unitLabel(useKg)})") },
+                label = { Text("Target weight (${com.forge.app.domain.units.unitLabel(weightUnit)})") },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal)
             )

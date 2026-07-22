@@ -32,6 +32,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.formatVolumeCompact
 import com.forge.app.ui.common.EditorialFigure
 import com.forge.app.ui.common.EditorialHeader
@@ -46,7 +47,7 @@ fun RecapScreen(
     viewModel: RecapViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    val useKg = LocalForgeSettings.current.useKg
+    val weightUnit = LocalForgeSettings.current.weightUnit
     val cs = MaterialTheme.colorScheme
     val muted = cs.onSurfaceVariant
     val accent = cs.primary
@@ -92,7 +93,7 @@ fun RecapScreen(
                     RecapFiguresRow(
                         figures = listOf(
                             Pair("${recap.sessionCount}", "workouts"),
-                            Pair(formatRecapVolume(recap.totalVolumeLb, useKg), "total volume"),
+                            Pair(formatRecapVolume(recap.totalVolumeLb, weightUnit), "total volume"),
                             Pair("${recap.totalPrs}", "prs"),
                             Pair("${recap.totalSets}", "sets")
                         ),
@@ -107,7 +108,7 @@ fun RecapScreen(
                 RecapFiguresRow(
                     figures = listOf(
                         Pair("0", "workouts"),
-                        Pair(formatRecapVolume(0.0, useKg), "total volume"),
+                        Pair(formatRecapVolume(0.0, weightUnit), "total volume"),
                         Pair("0", "prs"),
                         Pair("0", "sets")
                     ),
@@ -126,13 +127,13 @@ fun RecapScreen(
                     RecapFiguresRow(
                         figures = listOf(
                             Pair("${recap.sessionCount}", "workouts"),
-                            Pair(formatRecapVolume(recap.totalVolumeLb, useKg), "total volume"),
+                            Pair(formatRecapVolume(recap.totalVolumeLb, weightUnit), "total volume"),
                             Pair("${recap.totalPrs}", "prs"),
                             Pair("${recap.longestStreak}d", "streak")
                         ),
                         onBg = onBg, muted = muted, accent = accent
                     )
-                    if (recap.avgWeeklyVolume > 0) RecapRow("Avg weekly volume", formatRecapVolume(recap.avgWeeklyVolume, useKg), onBg, muted)
+                    if (recap.avgWeeklyVolume > 0) RecapRow("Avg weekly volume", formatRecapVolume(recap.avgWeeklyVolume, weightUnit), onBg, muted)
                     if (recap.topExercise != null) RecapRow("Most trained exercise", recap.topExercise, onBg, muted)
                     if (recap.bestMonthName != null) RecapRow("Best month", recap.bestMonthName, onBg, muted)
                 }
@@ -141,7 +142,7 @@ fun RecapScreen(
                 RecapFiguresRow(
                     figures = listOf(
                         Pair("0", "workouts"),
-                        Pair(formatRecapVolume(0.0, useKg), "total volume"),
+                        Pair(formatRecapVolume(0.0, weightUnit), "total volume"),
                         Pair("0", "prs"),
                         Pair("0d", "streak")
                     ),
@@ -220,7 +221,7 @@ private fun RecapFiguresRow(
 }
 
 /** Volume for the recap sections: "12.5k lb" for big numbers, the exact value under 1000 lb (no "0k"). */
-private fun formatRecapVolume(lb: Double, useKg: Boolean): String = formatVolumeCompact(lb, useKg)
+private fun formatRecapVolume(lb: Double, weightUnit: WeightUnit): String = formatVolumeCompact(lb, weightUnit)
 
 @Composable
 private fun RecapRow(

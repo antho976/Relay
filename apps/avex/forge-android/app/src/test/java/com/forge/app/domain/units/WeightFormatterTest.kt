@@ -99,4 +99,48 @@ class WeightFormatterTest {
         // 5000 lb = 2268 kg — the 1k abbreviation applies AFTER conversion, so it reads "2.3k kg".
         assertEquals("2.3k kg", formatVolume(5000.0, useKg = true))
     }
+
+    // ─── Stones (GYMAP-72) — stone + pounds compound display, decimal aggregates ──────────
+
+    @Test
+    fun formatStonesAsCompound() {
+        assertEquals("9 st 9 lb", formatWeight(135.0, WeightUnit.ST))  // 135 = 9*14 + 9
+        assertEquals("12 st", formatWeight(168.0, WeightUnit.ST))      // exact stone, no lb remainder
+        assertEquals("8 lb", formatWeight(8.0, WeightUnit.ST))         // under a stone → lb only
+    }
+
+    @Test
+    fun formatVolumeStonesStaysDecimal() {
+        assertEquals("100 st", formatVolume(1400.0, WeightUnit.ST))    // 1400 / 14 = 100
+        assertEquals("1.4k st", formatVolume(20000.0, WeightUnit.ST))  // 1428.6 st → abbreviated
+    }
+
+    @Test
+    fun parseStonesCompoundAndBare() {
+        assertEquals(172.0, parseToLb("12 st 4 lb", WeightUnit.ST)!!, 0.001) // 12*14 + 4
+        assertEquals(172.0, parseToLb("12 st 4", WeightUnit.ST)!!, 0.001)
+        assertEquals(168.0, parseToLb("12 st", WeightUnit.ST)!!, 0.001)
+        assertEquals(134.4, parseToLb("9.6", WeightUnit.ST)!!, 0.001)        // bare decimal stones
+        assertNull(parseToLb("BW", WeightUnit.ST))
+    }
+
+    @Test
+    fun stonesInputValueRoundTripsWithinDisplayPrecision() {
+        assertEquals("12", weightInputValue(168.0, WeightUnit.ST))           // exact → no decimal
+        val text = weightInputValue(135.0, WeightUnit.ST)                    // "9.6"
+        assertEquals(135.0, parseToLb(text, WeightUnit.ST)!!, 1.5)           // display rounds to 0.1 st
+    }
+
+    @Test
+    fun toStoredWeightTextStonesConvertsToLb() {
+        assertEquals("172", toStoredWeightText("12 st 4", WeightUnit.ST))
+        assertEquals("BW", toStoredWeightText("BW", WeightUnit.ST))
+    }
+
+    @Test
+    fun formatWeightDeltaStones() {
+        assertEquals("1 st 6 lb", formatWeightDelta(20.0, WeightUnit.ST))    // 20 = 14 + 6
+        assertEquals("6 lb", formatWeightDelta(6.0, WeightUnit.ST))          // under a stone, no "+"
+        assertEquals("-8 lb", formatWeightDelta(-8.0, WeightUnit.ST))        // loss keeps the sign
+    }
 }

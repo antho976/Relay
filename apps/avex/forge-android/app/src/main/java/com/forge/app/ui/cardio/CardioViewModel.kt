@@ -10,14 +10,21 @@ import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.data.repo.CardioRepository
 import com.forge.app.data.repo.ExtendedGoalRepository
 import com.forge.app.data.repo.TrophyRepository
+import com.forge.app.domain.cardio.CardioActivity
+import com.forge.app.domain.cardio.CardioCondition
+import com.forge.app.domain.cardio.cardioActivityRecords
+import com.forge.app.domain.cardio.cardioPaceSeries
 import com.forge.app.domain.cardio.CardioEffort
+import com.forge.app.domain.cardio.CardioField
 import com.forge.app.domain.cardio.CardioRestReason
 import com.forge.app.domain.cardio.CardioType
 import com.forge.app.domain.cardio.CardioWearableDay
+import com.forge.app.domain.cardio.CustomCardioType
 import com.forge.app.domain.cardio.RoutePoint
 import com.forge.app.domain.goal.GoalMetric
 import com.forge.app.ui.cardio.state.CardioDayCell
 import com.forge.app.ui.cardio.state.CardioUiState
+import com.forge.app.ui.common.SnackbarController
 import java.time.DayOfWeek
 import java.time.Instant
 import java.time.LocalDate
@@ -53,6 +60,7 @@ class CardioViewModel @Inject constructor(
     private val trophyRepo: TrophyRepository,
     private val extendedGoalRepo: ExtendedGoalRepository,
     private val healthConnectManager: HealthConnectManager,
+    private val snackbar: SnackbarController,
     private val clock: Clock
 ) : ViewModel() {
 
@@ -68,12 +76,14 @@ class CardioViewModel @Inject constructor(
 
     init { refreshConnection() }
 
-    /** Re-read whether the steps / exercise grants are held (call on resume — grants change in the HC app). */
+    /** Re-read whether the steps / exercise grants are held (call on resume — grants change in the HC app).
+     *  Also refreshes today's step total for the hero line (GYMAP-64) so it tracks steps taken while away. */
     fun refreshConnection() = viewModelScope.launch {
-        connection.value = WearableConnection(
-            steps = healthConnectManager.canReadSteps(),
-            routes = healthConnectManager.canReadExercise()
-        )
+        val steps = healthConnectManager.canReadSteps()
+        val routes = healthConnectManager.canReadExercise()
+        // Read today's steps only when granted; fail-soft to null so a read error just hides the line.
+        val todaySteps = if (steps) runCatching { loadStepsForDay(clock.nowMs()).totalSteps }.getOrNull() else null
+        connection.value = WearableConnection(steps = steps, routes = routes, todaySteps = todaySteps)
     }
 
     // One shared subscription to the full history — both the derived aggregates and the cardio-goals
@@ -99,7 +109,11 @@ class CardioViewModel @Inject constructor(
             weekDays = buildWeekDays(weekEntries),
             weekDistanceKm = weekEntries
                 .filter { it.type != CardioType.REST.code }
-                .sumOf { it.distanceKm ?: 0.0 }
+                .sumOf { it.distanceKm ?: 0.0 },
+            // All-time per-activity bests (GYMAP-34) — off the full history, on this same background pass.
+            records = cardioActivityRecords(all),
+            // Per-activity pace series (GYMAP-35) for the trend chart in the week overlay's current page.
+            paceSeries = cardioPaceSeries(all)
         )
     }.flowOn(Dispatchers.Default)
 
@@ -129,11 +143,12 @@ class CardioViewModel @Inject constructor(
             cardioStreakDays = d.cardioStreakDays,
             weekDays = d.weekDays,
             weekDistanceKm = d.weekDistanceKm,
+            cardioRecords = d.records,
+            cardioPaceSeries = d.paceSeries,
             cardioGoals = cardioGoals,
             entries = d.all,
             sheetOpen = tr.sheetOpen,
             editing = tr.editing,
-            pendingDeleteId = tr.pendingDeleteId,
             detailOpen = tr.detailOpen,
             sessionDetailId = tr.sessionDetailId,
             sessionWearable = tr.sessionWearable,
@@ -146,7 +161,9 @@ class CardioViewModel @Inject constructor(
     }.combine(settingsRepo.useMiles) { st, useMiles ->
         st.copy(useMiles = useMiles)
     }.combine(connection) { st, conn ->
-        st.copy(stepsConnected = conn.steps, routesConnected = conn.routes)
+        st.copy(stepsConnected = conn.steps, routesConnected = conn.routes, todaySteps = conn.todaySteps)
+    }.combine(settingsRepo.lastCardioType) { st, lastType ->
+        st.copy(lastCardioType = lastType)
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(stopTimeoutMillis = 5_000),
@@ -227,16 +244,13 @@ class CardioViewModel @Inject constructor(
     /** Reveal the full history below the 5 most-recent entries on the main list (or collapse it). */
     fun toggleHistoryExpanded() = transient.update { it.copy(historyExpanded = !it.historyExpanded) }
 
-    fun requestDelete(id: Long) = transient.update { it.copy(pendingDeleteId = id) }
-    fun cancelDelete() = transient.update { it.copy(pendingDeleteId = null) }
-
-    fun confirmDelete() {
-        val id = transient.value.pendingDeleteId ?: return
-        viewModelScope.launch {
-            val entry = cardioRepo.get(id) ?: return@launch
-            cardioRepo.delete(entry)
-            transient.update { it.copy(pendingDeleteId = null) }
-        }
+    /** Delete an entry now and offer an Undo (§13 undo over confirm) — the captured row re-inserts
+     *  with its original id, so an undo restores it exactly. The row's reactive disappearance from the
+     *  list (and the auto-close of an open session overlay) is the confirmation; no dialog. */
+    fun deleteEntry(id: Long) = viewModelScope.launch {
+        val entry = cardioRepo.get(id) ?: return@launch
+        cardioRepo.delete(entry)
+        snackbar.showUndo("Entry deleted") { cardioRepo.add(entry) }
     }
 
     /**
@@ -245,7 +259,7 @@ class CardioViewModel @Inject constructor(
      * Distance / effort / restReason are nullable; pass null when the form skipped them.
      */
     fun saveEntry(
-        type: CardioType,
+        activity: CardioActivity,
         durationMin: Int,
         distanceKm: Double?,
         effort: CardioEffort?,
@@ -253,24 +267,38 @@ class CardioViewModel @Inject constructor(
         note: String?,
         dateMs: Long,
         intervalCount: Int?,
-        hrZone: String?
+        hrZone: String?,
+        inclinePct: Double?,
+        laps: Int?,
+        elevationM: Double?,
+        conditions: Set<CardioCondition>
     ) {
         val editingId = transient.value.editing?.id
         viewModelScope.launch {
             val entry = CardioEntry(
                 id = editingId ?: 0,
                 date = dateMs,
-                type = type.code,
+                type = activity.code,
                 durationMin = durationMin.coerceAtLeast(0),
-                distanceKm = if (type.isRest) null else distanceKm,
-                effort = if (type.isRest) null else effort?.code,
-                restReason = if (type.isRest) restReason?.code else null,
+                distanceKm = if (activity.isRest) null else distanceKm,
+                effort = if (activity.isRest) null else effort?.code,
+                restReason = if (activity.isRest) restReason?.code else null,
                 note = note?.takeIf { it.isNotBlank() },
                 // Interval count only applies to HIIT; HR zone to any active session. Cleared for rest.
-                intervalCount = if (type == CardioType.HIIT) intervalCount?.takeIf { it > 0 } else null,
-                hrZone = if (type.isRest) null else hrZone
+                intervalCount = if (activity.isHiit) intervalCount?.takeIf { it > 0 } else null,
+                hrZone = if (activity.isRest) null else hrZone,
+                // Per-type fields (GYMAP-38): kept only for the activities that surface them, so a
+                // value typed then switched away from (stale form state) is never persisted.
+                inclinePct = inclinePct.takeIf { CardioField.INCLINE in activity.optionalFields && (it ?: 0.0) > 0.0 },
+                laps = laps.takeIf { CardioField.LAPS in activity.optionalFields && (it ?: 0) > 0 },
+                elevationM = elevationM.takeIf { CardioField.ELEVATION in activity.optionalFields && (it ?: 0.0) > 0.0 },
+                // Weather tags (GYMAP-39) — descriptive only, and never on a rest day.
+                conditions = if (activity.isRest) null else CardioCondition.encode(conditions)
             )
             if (editingId != null) cardioRepo.update(entry) else cardioRepo.add(entry)
+            // Remember the activity as the next new-entry default (GYMAP-40) — only when logging a NEW
+            // active session, so editing an old row or saving a rest day never changes the default.
+            if (editingId == null && !activity.isRest) settingsRepo.setLastCardioType(activity.code)
             transient.update { it.copy(sheetOpen = false, editing = null) }
             // Cardio trophies (first run / 100 km / N sessions) evaluate here too, since cardio logging
             // doesn't go through the workout-finish path that normally unlocks trophies — but off the
@@ -279,13 +307,18 @@ class CardioViewModel @Inject constructor(
         }
     }
 
+    /** Persist a custom activity created inline from the log sheet (GYMAP-37). The picker + rows pick
+     *  it up reactively via [LocalCardioTypes]; the sheet also selects it optimistically. */
+    fun addCustomType(type: CustomCardioType) = viewModelScope.launch {
+        settingsRepo.addCustomCardioType(type)
+    }
+
     /** The Health Connect grants Avex holds for the cardio screen's wearable data. */
-    private data class WearableConnection(val steps: Boolean = false, val routes: Boolean = false)
+    private data class WearableConnection(val steps: Boolean = false, val routes: Boolean = false, val todaySteps: Int? = null)
 
     private data class TransientState(
         val sheetOpen: Boolean = false,
         val editing: CardioEntry? = null,
-        val pendingDeleteId: Long? = null,
         val detailOpen: Boolean = false,
         val sessionDetailId: Long? = null,
         val sessionWearable: CardioWearableDay? = null,
@@ -302,7 +335,9 @@ class CardioViewModel @Inject constructor(
         val cardioDaysThisWeek: Int,
         val cardioStreakDays: Int,
         val weekDays: List<CardioDayCell>,
-        val weekDistanceKm: Double
+        val weekDistanceKm: Double,
+        val records: List<com.forge.app.domain.cardio.CardioActivityRecord>,
+        val paceSeries: List<com.forge.app.domain.cardio.CardioPaceSeries>
     )
 
     companion object {

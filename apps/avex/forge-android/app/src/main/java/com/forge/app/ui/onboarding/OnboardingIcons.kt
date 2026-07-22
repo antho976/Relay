@@ -181,6 +181,45 @@ object OnboardingIcons {
         }
     }
 
+    /** Dip bars — a dip tower head-on: two uprights flaring into short parallel grip bars. */
+    val DipStation: ImageVector by lazy {
+        icon("OnbDip") {
+            fillPath {
+                roundRect(6.2f, 8.6f, 8.2f, 20.2f, 1.0f)      // left upright
+                roundRect(15.8f, 8.6f, 17.8f, 20.2f, 1.0f)    // right upright
+                roundRect(2.8f, 7.0f, 8.2f, 8.8f, 0.9f)       // left grip bar
+                roundRect(15.8f, 7.0f, 21.2f, 8.8f, 0.9f)     // right grip bar
+            }
+        }
+    }
+
+    /** Suspension trainer — an anchor point with two straps splaying down to handles. */
+    val Suspension: ImageVector by lazy {
+        icon("OnbSuspension") {
+            fillPath { circle(12f, 4.6f, 1.5f) }
+            strokePath(1.8f) {
+                moveTo(12f, 5.8f); lineTo(7.6f, 15.2f)
+                moveTo(12f, 5.8f); lineTo(16.4f, 15.2f)
+            }
+            fillPath {
+                roundRect(5.4f, 15.2f, 9.8f, 17.2f, 0.9f)     // left handle
+                roundRect(14.2f, 15.2f, 18.6f, 17.2f, 0.9f)   // right handle
+            }
+        }
+    }
+
+    /** Ab wheel — side view: a big wheel with the axle handle out each side. */
+    val AbWheel: ImageVector by lazy {
+        icon("OnbAbWheel") {
+            strokePath(1.8f) { circle(12f, 12f, 5.6f) }
+            fillPath { circle(12f, 12f, 1.1f) }
+            strokePath(1.9f) {
+                moveTo(2.8f, 12f); lineTo(6.4f, 12f)
+                moveTo(17.6f, 12f); lineTo(21.2f, 12f)
+            }
+        }
+    }
+
     /** Machine — a selectorized weight stack under its top beam and pin cable. */
     val Machine: ImageVector by lazy {
         icon("OnbMachine") {
@@ -273,18 +312,22 @@ object OnboardingIcons {
         Equipment.PULL_UP_BAR -> PullUpBar
         Equipment.BENCH -> Bench
         Equipment.INCLINE_BENCH -> InclineBench
+        Equipment.DIP_STATION -> DipStation
+        Equipment.SUSPENSION -> Suspension
+        Equipment.AB_WHEEL -> AbWheel
         Equipment.BODYWEIGHT_ONLY -> Bodyweight
         Equipment.MACHINE -> Machine
     }
 
     /** Preset id → glyph; unknown ids (future presets) fall back to the building. */
     fun forPreset(id: String): ImageVector = when (id) {
+        "everything" -> Building
+        "basic-gym" -> Machine
+        "home-big" -> SquatRack
+        "home-small" -> Bench
         "developer" -> House
-        "commercial" -> Building
-        "basic-gym" -> SquatRack
-        "home-barbell" -> Barbell
-        "db-bench" -> Bench
         "dumbbells" -> Dumbbell
+        "bands-bw" -> Band
         "bodyweight" -> Bodyweight
         else -> Building
     }

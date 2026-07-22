@@ -36,8 +36,8 @@ android {
         applicationId = "com.quietsoftware.avex"
         minSdk = 26
         targetSdk = 35
-        versionCode = 88
-        versionName = "0.8.8.1"
+        versionCode = 89
+        versionName = "0.8.8.3"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
@@ -108,6 +108,9 @@ dependencies {
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
     implementation(libs.androidx.activity.compose)
+    // AndroidX ExifInterface — reads capture dates from HEIC/PNG/WebP on every supported API level;
+    // the framework class misses those on older devices, losing the real date of gallery imports.
+    implementation(libs.androidx.exifinterface)
 
     // Compose (BOM-pinned)
     implementation(platform(libs.compose.bom))
@@ -137,6 +140,18 @@ dependencies {
     // Health Connect — on-device IPC for recovery signals (sleep, resting HR). No INTERNET; the
     // data is read from the Health Connect system app and never leaves the device.
     implementation(libs.androidx.health.connect)
+
+    // CameraX — in-app guided progress-photo camera (preview + capture; pose-ghost alignment overlay).
+    // Photos are written straight to app-private storage, never the camera roll.
+    implementation(libs.androidx.camera.core)
+    implementation(libs.androidx.camera.camera2)
+    implementation(libs.androidx.camera.lifecycle)
+    implementation(libs.androidx.camera.view)
+
+    // Biometric — BiometricPrompt (fingerprint/face + device PIN/pattern/password fallback) for the
+    // app & photo-gallery lock (GYMAP-69). No app PIN is stored; the OS owns the credential. Requires
+    // MainActivity to be a FragmentActivity.
+    implementation(libs.androidx.biometric)
 
     // Coroutines
     implementation(libs.kotlinx.coroutines.android)

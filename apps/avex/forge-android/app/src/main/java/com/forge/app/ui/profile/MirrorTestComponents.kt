@@ -96,7 +96,7 @@ internal fun MonthGroupedGrid(
         photos.groupBy { YearMonth.from(Instant.ofEpochMilli(it.takenAtMs).atZone(zone)) }
     }
     grouped.forEach { (month, monthPhotos) ->
-        Text(month.format(MONTH_HEADER_FMT).uppercase(), style = MaterialTheme.typography.labelMedium, color = muted)
+        Text(month.format(MONTH_HEADER_FMT).uppercase(), style = MaterialTheme.typography.labelMedium, color = muted, letterSpacing = 1.sp)
         Spacer(Modifier.height(8.dp))
         PhotoRows(monthPhotos, columns, fileFor, muted, accent, onPhotoClick, selectable, selectionIndexOf)
         Spacer(Modifier.height(16.dp))
@@ -131,7 +131,8 @@ internal fun PhotoRows(
 
 /**
  * A single square photo cell with its short date laid over a soft bottom scrim (matching the
- * Profile filmstrip), plus optional compare-selection chrome.
+ * Profile filmstrip), plus optional compare-selection chrome. Deliberately date-only — the pose
+ * lens pills group by pose, so a pose chip on every cell would be uniform noise (§8).
  */
 @Composable
 internal fun PhotoCell(
@@ -147,7 +148,7 @@ internal fun PhotoCell(
     selectionIndex: Int? = null
 ) {
     val selected = selectionIndex != null
-    Box(modifier.aspectRatio(1f).clip(RoundedCornerShape(8.dp)).bounceClick { onClick(photo) }) {
+    Box(modifier.aspectRatio(1f).clip(RoundedCornerShape(12.dp)).bounceClick { onClick(photo) }) {
         ProgressPhotoImage(fileFor(photo), Modifier.fillMaxSize(), reqPx = reqPx)
         if (showDate) {
             Box(
@@ -163,7 +164,7 @@ internal fun PhotoCell(
         }
         if (selectable) {
             if (selected) {
-                Box(Modifier.matchParentSize().border(2.dp, accent, RoundedCornerShape(8.dp)))
+                Box(Modifier.matchParentSize().border(2.dp, accent, RoundedCornerShape(12.dp)))
                 Box(
                     Modifier.align(Alignment.TopEnd).padding(4.dp).size(20.dp).clip(CircleShape).background(accent),
                     contentAlignment = Alignment.Center

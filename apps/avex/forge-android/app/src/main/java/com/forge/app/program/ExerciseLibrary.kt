@@ -45,7 +45,14 @@ data class ExerciseDef(
      * bread-and-butter movements. Above 1 marks a signature staple (lateral raises — the user's
      * stated priority) that should anchor its slot most weeks.
      */
-    val pickBias: Double = 1.0
+    val pickBias: Double = 1.0,
+    /**
+     * Timed-hold exercise (GYMAP-51): logged as a held DURATION in seconds instead of reps — planks,
+     * dead hangs, wall sits, side planks. The logger shows a stopwatch + mm:ss field where the reps
+     * field normally is, and these sets are kept out of every weight×reps stat (volume, e1RM, PR).
+     * [defaultReps] still carries the target as a time string (e.g. "30-60s") for display.
+     */
+    val timed: Boolean = false
 ) {
     /**
      * Owner-only movement — the plate-count ([ExerciseUnit.PLATES]) station exercises, which are
@@ -417,7 +424,7 @@ object ExerciseLibrary {
             muscleTarget = "Whole core, isometric",
             why = "Builds the bracing strength that protects your back during squats and deadlifts.",
             whenToUse = "No pull-up bar, or as a warm-up to other core work.",
-            pickBias = 0.7),
+            pickBias = 0.7, timed = true),
         ExerciseDef("mwm-high-pulley-crunch", "High Pulley Ab Crunch", MuscleGroup.CORE,
             listOf(Equipment.CABLE), ExerciseUnit.PLATES,
             listOf(ISO, MC), Difficulty.BEGINNER, 3, "10-15", "Kneel and crunch down",
@@ -443,6 +450,31 @@ object ExerciseLibrary {
         // bodyweight-only (or minimal-equipment) setup can never produce an empty/starved day.
         // fallbackOnly = true keeps these out of an equipped user's picks — they only enter the
         // pool when nothing the user actually owns can fill the muscle.
+        //
+        // Timed holds (GYMAP-51) — logged as a held duration, not reps. fallbackOnly so they never
+        // headline an equipped user's generated day (plank already covers auto-generated core holds);
+        // still fully browsable in the freestyle picker and offered as swap candidates.
+        ExerciseDef("dead-hang", "Dead Hang", MuscleGroup.BACK,
+            listOf(Equipment.PULL_UP_BAR), ExerciseUnit.BODYWEIGHT,
+            listOf(ISO, BW), Difficulty.BEGINNER, 3, "20-40s", "Hang at full stretch, shoulders active",
+            muscleTarget = "Grip + lats + shoulder decompression",
+            why = "Just hang from the bar. Builds grip endurance and opens up the shoulders and lats.",
+            whenToUse = "Grip work, or a shoulder-friendly finisher on a pull day.",
+            fallbackOnly = true, pickBias = 0.6, timed = true),
+        ExerciseDef("wall-sit", "Wall Sit", MuscleGroup.QUADS,
+            listOf(Equipment.BODYWEIGHT_ONLY), ExerciseUnit.BODYWEIGHT,
+            listOf(ISO, BW), Difficulty.BEGINNER, 3, "30-60s", "Thighs parallel, back flat on the wall",
+            muscleTarget = "Quads, isometric",
+            why = "Sit against a wall with thighs parallel and hold. Zero-equipment quad burn.",
+            whenToUse = "No equipment, or a quad finisher.",
+            fallbackOnly = true, pickBias = 0.6, timed = true),
+        ExerciseDef("side-plank", "Side Plank", MuscleGroup.CORE,
+            listOf(Equipment.BODYWEIGHT_ONLY), ExerciseUnit.BODYWEIGHT,
+            listOf(ISO, BW), Difficulty.BEGINNER, 3, "20-45s", "Stack hips, hold a straight line",
+            muscleTarget = "Obliques + lateral core, isometric",
+            why = "Hold your body in a straight line on one forearm — trains the obliques and lateral core the front plank misses.",
+            whenToUse = "Oblique / anti-lateral-flexion core work with no equipment.",
+            fallbackOnly = true, pickBias = 0.6, timed = true),
         ExerciseDef("bw-inverted-row", "Inverted Row", MuscleGroup.BACK,
             listOf(Equipment.BODYWEIGHT_ONLY), ExerciseUnit.BODYWEIGHT,
             listOf(COMP, BW), Difficulty.INTERMEDIATE, 4, "AMRAP", "Under a sturdy table, body straight",
@@ -558,6 +590,13 @@ object ExerciseLibrary {
             why = "The fixed bar path lets you press heavy without a spotter — a safe way to overload the chest.",
             whenToUse = "Heavy pressing when training alone."),
 
+        ExerciseDef("dip", "Dip", MuscleGroup.CHEST,
+            listOf(Equipment.DIP_STATION), ExerciseUnit.BODYWEIGHT,
+            listOf(COMP, BW), Difficulty.INTERMEDIATE, 3, "6-10", "Lean forward, elbows ~45°, deep but pain-free",
+            muscleTarget = "Lower chest + triceps + front delts",
+            why = "The bodyweight bench press. Leaning forward shifts the load onto the chest, and a backpack adds weight when reps get easy.",
+            whenToUse = "Heavy pressing on dip bars, no bench needed."),
+
         // ── Back (generalized) ──
         ExerciseDef("barbell-row", "Barbell Row", MuscleGroup.BACK,
             listOf(Equipment.BARBELL), ExerciseUnit.WEIGHT,
@@ -577,6 +616,19 @@ object ExerciseLibrary {
             muscleTarget = "Mid-back thickness",
             why = "Constant cable tension builds the middle back with a strong squeeze and no lower-back strain.",
             whenToUse = "Horizontal pull when you have a cable row station."),
+        ExerciseDef("suspension-row", "Suspension Row", MuscleGroup.BACK,
+            listOf(Equipment.SUSPENSION), ExerciseUnit.BODYWEIGHT,
+            listOf(COMP, BW), Difficulty.BEGINNER, 3, "8-12", "Body straight, pull your chest to the handles",
+            muscleTarget = "Whole back + biceps",
+            why = "A row you load by walking your feet forward: one step turns it from easy to brutal, no weights needed.",
+            whenToUse = "Horizontal pulling on straps or rings."),
+        ExerciseDef("band-row", "Band Row", MuscleGroup.BACK,
+            listOf(Equipment.RESISTANCE_BAND), ExerciseUnit.BODYWEIGHT,
+            listOf(COMP, BW), Difficulty.BEGINNER, 3, "12-15", "Band around a post, squeeze the shoulder blades",
+            muscleTarget = "Whole back + biceps",
+            why = "Anchor a band and row. Resistance peaks at the squeeze, right where your back works hardest.",
+            whenToUse = "Back work when all you have is a band.",
+            fallbackOnly = true),
 
         // ── Shoulders (generalized) ──
         ExerciseDef("barbell-overhead-press", "Barbell Overhead Press", MuscleGroup.SHOULDERS,
@@ -640,6 +692,13 @@ object ExerciseLibrary {
             muscleTarget = "Rear delts + upper back",
             why = "Hold a band at arm's length and pull it apart. Endless rear-delt and posture volume with minimal gear.",
             whenToUse = "Rear-delt and posture work when all you have is a band."),
+        ExerciseDef("suspension-face-pull", "Suspension Face Pull", MuscleGroup.REAR_DELTS,
+            listOf(Equipment.SUSPENSION), ExerciseUnit.BODYWEIGHT,
+            listOf(ISO, BW), Difficulty.BEGINNER, 3, "12-15", "Lean back, pull the handles to your temples",
+            muscleTarget = "Rear delts + upper back, posture",
+            why = "The cable face pull on straps: lean back and pull to your face, elbows high. Steeper lean, harder set.",
+            whenToUse = "Rear-delt work on a suspension trainer, no cable needed.",
+            pickBias = 0.9),
 
         // ── Biceps (generalized) ──
         ExerciseDef("barbell-curl", "Barbell Curl", MuscleGroup.BICEPS,
@@ -805,7 +864,20 @@ object ExerciseLibrary {
             listOf(ISO, MC), Difficulty.BEGINNER, 3, "12-15", "Kneel, rope by your head, crunch down",
             muscleTarget = "Upper abs, loadable",
             why = "Kneel at a high cable and crunch down — lets you ADD WEIGHT to ab work for real progression.",
-            whenToUse = "When you want weighted ab work with actual overload.")
+            whenToUse = "When you want weighted ab work with actual overload."),
+        ExerciseDef("ab-wheel-rollout", "Ab Wheel Rollout", MuscleGroup.CORE,
+            listOf(Equipment.AB_WHEEL), ExerciseUnit.BODYWEIGHT,
+            listOf(COMP, BW), Difficulty.INTERMEDIATE, 3, "8-12", "Roll out only as far as your back stays flat",
+            muscleTarget = "Whole core, anti-extension",
+            why = "One of the hardest ab moves per rep: the wheel makes your core fight the stretch the whole way out.",
+            whenToUse = "Core work with an ab wheel. Progress by rolling further."),
+        ExerciseDef("captains-chair-knee-raise", "Captain's Chair Knee Raise", MuscleGroup.CORE,
+            listOf(Equipment.DIP_STATION), ExerciseUnit.BODYWEIGHT,
+            listOf(ISO, BW), Difficulty.BEGINNER, 3, "10-15", "Forearms on the pads, knees to your chest",
+            muscleTarget = "Lower abs",
+            why = "Braced on the dip tower's arm pads, raise your knees. Lower-ab work with no grip limit and no bar hang.",
+            whenToUse = "Lower abs on a dip station.",
+            pickBias = 0.8)
     )
 
     private val byId: Map<String, ExerciseDef> = all.associateBy { it.id }
@@ -831,6 +903,7 @@ object ExerciseLibrary {
         "diamond-push-up" to MovementPattern.HORIZONTAL_PUSH,
         "db-overhead-press" to MovementPattern.VERTICAL_PUSH,
         "bench-dip" to MovementPattern.VERTICAL_PUSH,
+        "dip" to MovementPattern.VERTICAL_PUSH,
         // Front raises are anterior-delt flexion — same prime mover as a vertical press. Classing
         // them VERTICAL_PUSH stops a day stacking OHP + front raise, or two front-raise variants.
         "db-front-raise" to MovementPattern.VERTICAL_PUSH,
@@ -859,6 +932,8 @@ object ExerciseLibrary {
         "plank" to MovementPattern.CORE,
         "mwm-high-pulley-crunch" to MovementPattern.CORE,
         "lying-leg-raise" to MovementPattern.CORE,
+        "ab-wheel-rollout" to MovementPattern.CORE,
+        "captains-chair-knee-raise" to MovementPattern.CORE,
         // Bodyweight fallbacks
         "bw-inverted-row" to MovementPattern.HORIZONTAL_PULL,
         "bw-pike-push-up" to MovementPattern.VERTICAL_PUSH,
@@ -879,6 +954,8 @@ object ExerciseLibrary {
         "lat-pulldown" to MovementPattern.VERTICAL_PULL,
         "barbell-row" to MovementPattern.HORIZONTAL_PULL,
         "seated-cable-row" to MovementPattern.HORIZONTAL_PULL,
+        "suspension-row" to MovementPattern.HORIZONTAL_PULL,
+        "band-row" to MovementPattern.HORIZONTAL_PULL,
         "back-squat" to MovementPattern.SQUAT,
         "front-squat" to MovementPattern.SQUAT,
         "pause-squat" to MovementPattern.SQUAT,
@@ -953,6 +1030,10 @@ object ExerciseLibrary {
         // ── Dips / close-grip presses — shoulders and/or elbows (loaded lockout).
         "bench-dip" to setOf(ProblemArea.SHOULDERS, ProblemArea.WRISTS, ProblemArea.ELBOWS),
         "dip-machine" to setOf(ProblemArea.SHOULDERS, ProblemArea.ELBOWS),
+        // Full bodyweight dips load the shoulder at a deep stretch — the harshest of the dip family.
+        "dip" to setOf(ProblemArea.SHOULDERS, ProblemArea.ELBOWS, ProblemArea.WRISTS),
+        // The rollout is a loaded anti-extension hold — risky with a cranky lower back or shoulders.
+        "ab-wheel-rollout" to setOf(ProblemArea.LOWER_BACK, ProblemArea.SHOULDERS),
         "close-grip-bench-press" to setOf(ProblemArea.ELBOWS),
         "close-grip-db-press" to setOf(ProblemArea.ELBOWS),
         // ── Elbow-stressing arm work — loaded skull crushers / overhead ext / straight-bar & preacher curls.

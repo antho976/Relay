@@ -3,14 +3,15 @@ package com.forge.app.domain.cardio
 /**
  * Pure, Android-free shapes for the wearable side of cardio (steps-by-hour + GPS route).
  *
- * The cardio UI is built against these now, but they are NOT yet populated from Health
- * Connect — that read path (a separate opt-in `StepsRecord` / `ExerciseSessionRecord`
- * permission on [com.forge.app.data.health.HealthConnectManager]) lands in a focused
- * follow-up. Until then every wearable slot in the UI is null and falls back to a quiet
- * "connect a wearable" placeholder, so wiring the real data is a drop-in, not a refactor.
+ * Populated from Health Connect via [com.forge.app.data.health.HealthConnectManager] —
+ * `readStepsDay` fills the hourly steps, `matchSessionRoute` resolves a watch session's GPS
+ * track (each behind its own opt-in grant). Vendor-neutral: any watch or ring that feeds
+ * Health Connect (Samsung Health for Galaxy, Fitbit for Pixel, …) lands here identically.
+ * When nothing fed Health Connect the slots stay null/empty and the UI falls back to a
+ * quiet "connect a wearable" placeholder.
  *
  * Keeping these in `domain` (no Compose / no Android deps) means they're unit-testable and
- * the same instances flow from the eventual HC read straight into the composables.
+ * the same instances flow from the HC read straight into the composables.
  */
 
 /** Active steps recorded in one wall-clock hour of a day ([hour] is 0..23, local time). */

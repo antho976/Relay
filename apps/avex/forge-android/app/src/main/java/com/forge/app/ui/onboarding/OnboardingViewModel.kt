@@ -95,6 +95,8 @@ class OnboardingViewModel @Inject constructor(
         bodyweightLb: Double?,
         /** Explicit cardio distance choice; null = leave tied to the weight unit (lb→miles, kg→km). */
         useMiles: Boolean? = null,
+        /** WearableBrand key from the wearable step; "" (skipped early) leaves the pref unset. */
+        wearable: String = "",
         // [goal] + [experience] are collected on EVERY path (they steer the coach's rep-range/volume
         // suggestions). The rest of these are generated-only; custom/freestyle default them.
         goal: String = "build_muscle",
@@ -107,7 +109,9 @@ class OnboardingViewModel @Inject constructor(
         seed: Long = System.nanoTime(),
         plateWeightLb: Double = 15.0,
         frozenIds: Set<String>? = null,
-        coachEnabled: Boolean = true
+        coachEnabled: Boolean = true,
+        /** App-lock opt-in from onboarding (GYMAP-69); false leaves it off (the default). */
+        appLock: Boolean = false
     ) {
         // Stop the resume-draft autosaver before the completion write removes the draft.
         draftWritesEnabled = false
@@ -117,6 +121,10 @@ class OnboardingViewModel @Inject constructor(
             settingsRepo.setUserSex(sex)
             settingsRepo.setFreestyleMode(planMode == PLAN_FREESTYLE)
             settingsRepo.setCoachEnabled(coachEnabled)
+            // Advisory only (tailors Recovery's sync pointers); blank = the step was skipped, keep unset.
+            if (wearable.isNotEmpty()) settingsRepo.setWearableBrand(wearable)
+            // App-lock opt-in (GYMAP-69); leave off unless the user turned it on.
+            if (appLock) settingsRepo.setAppLockEnabled(true)
 
             val effectiveGoal: String
             when (planMode) {
@@ -166,7 +174,9 @@ class OnboardingViewModel @Inject constructor(
             }
             // Set ONBOARDING_DONE last — it flips the UI from onboarding to home, so the freshly
             // generated program is already live when the home screen first composes.
-            settingsRepo.completeOnboarding(name, useKg, effectiveGoal, bodyweightLb, useMiles)
+            settingsRepo.completeOnboarding(
+                name, com.forge.app.domain.units.WeightUnit.ofKg(useKg), effectiveGoal, bodyweightLb, useMiles
+            )
         }
     }
 

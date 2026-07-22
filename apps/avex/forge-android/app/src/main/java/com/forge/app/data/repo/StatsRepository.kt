@@ -283,7 +283,9 @@ class StatsRepository @Inject constructor(
                     isAmrap = s.isAmrap,
                     toFailure = s.toFailure,
                     isAssisted = s.isAssisted,
-                    dropAnnotation = s.dropAnnotation
+                    dropAnnotation = s.dropAnnotation,
+                    setType = s.setType,
+                    durationSeconds = s.durationSeconds
                 )
             }
             // Best working e1RM this session, flagged as a new best when it tops every PRIOR session's

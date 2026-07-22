@@ -27,6 +27,7 @@ import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.formatVolume
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.ui.common.SegmentPill
@@ -39,9 +40,9 @@ import com.forge.app.ui.gym.stats.components.staggeredProgress
 import com.forge.app.ui.theme.ForgeMotion
 
 /** Volume/weight/reps value as a short label for the chosen metric (weight & volume honor the kg setting). */
-internal fun formatMetricValue(value: Double, metric: SessionMetric, useKg: Boolean): String = when (metric) {
-    SessionMetric.WEIGHT -> formatWeight(value, useKg)
-    SessionMetric.VOLUME -> formatVolume(value, useKg)
+internal fun formatMetricValue(value: Double, metric: SessionMetric, weightUnit: WeightUnit): String = when (metric) {
+    SessionMetric.WEIGHT -> formatWeight(value, weightUnit)
+    SessionMetric.VOLUME -> formatVolume(value, weightUnit)
     SessionMetric.REPS -> "${value.toInt()}"
     SessionMetric.RPE -> "RPE ${rpeLabel(value)}"
 }

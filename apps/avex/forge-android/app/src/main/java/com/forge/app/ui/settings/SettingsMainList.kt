@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -44,6 +45,9 @@ internal fun MainList(
     state: SettingsUiState,
     searchQuery: String,
     modifier: Modifier,
+    // Hoisted so the root list's scroll position survives opening a sub-page and backing out — this
+    // composable leaves composition while a sub-page is shown, so an internal state would reset to top.
+    listState: LazyListState,
     onSearchChange: (String) -> Unit,
     onOpenPage: (SettingsPage) -> Unit,
     onOpenCoachBrief: () -> Unit,
@@ -52,7 +56,7 @@ internal fun MainList(
     onResetTarget: (ResetTarget) -> Unit,
     onOpenResetMenu: () -> Unit
 ) {
-    LazyColumn(modifier = modifier, contentPadding = PaddingValues(bottom = 56.dp)) {
+    LazyColumn(state = listState, modifier = modifier, contentPadding = PaddingValues(bottom = 56.dp)) {
         // Persistent search field at the top of the list (modern-phone-settings pattern) — replaces
         // the old top-bar magnifier toggle. Always visible, in both the grouped and results states.
         item("search") { SettingsSearchField(searchQuery, onSearchChange) }
@@ -65,12 +69,14 @@ internal fun MainList(
                 SettingsNavRow("Appearance", rowSubtitle(SettingsPage.Appearance, state), SettingsIcons.Appearance) { onOpenPage(SettingsPage.Appearance) }
                 SettingsNavRow("Units & format", rowSubtitle(SettingsPage.Format, state), SettingsIcons.Units) { onOpenPage(SettingsPage.Format) }
                 SettingsNavRow("Notifications", rowSubtitle(SettingsPage.Notifications, state), SettingsIcons.Notifications) { onOpenPage(SettingsPage.Notifications) }
+                SettingsNavRow("Security", rowSubtitle(SettingsPage.Security, state), SettingsIcons.Security) { onOpenPage(SettingsPage.Security) }
             }
             item("training") {
                 SettingsSectionHeader("Training")
                 SettingsNavRow("Program & equipment", rowSubtitle(SettingsPage.Program, state), SettingsIcons.Program) { onOpenPage(SettingsPage.Program) }
                 SettingsNavRow("Session", rowSubtitle(SettingsPage.Session, state), SettingsIcons.Session) { onOpenPage(SettingsPage.Session) }
                 SettingsNavRow("Exercise likes", rowSubtitle(SettingsPage.ExercisePrefs, state), SettingsIcons.Likes) { onOpenPage(SettingsPage.ExercisePrefs) }
+                SettingsNavRow("Cardio activities", "Your own cardio activities", NavIcons.Cardio) { onOpenPage(SettingsPage.CardioActivities) }
             }
             item("coach") {
                 SettingsSectionHeader("Coach")
@@ -85,8 +91,10 @@ internal fun MainList(
             }
             item("data") {
                 SettingsSectionHeader("Data")
+                SettingsNavRow("Backup", rowSubtitle(SettingsPage.Backup, state), SettingsIcons.Backup) { onOpenPage(SettingsPage.Backup) }
                 SettingsNavRow("Export data", "Sessions · weekly · full backup · PDF", SettingsIcons.Export) { onOpenDataDialog() }
                 SettingsNavRow("Import data", "Strong · Hevy · FitNotes · CSV", SettingsIcons.Import) { onImportData() }
+                SettingsNavRow("Storage", rowSubtitle(SettingsPage.Storage, state), SettingsIcons.Storage) { onOpenPage(SettingsPage.Storage) }
             }
             item("reset") {
                 SettingsSectionHeader("Reset")
@@ -94,8 +102,13 @@ internal fun MainList(
                 DestructiveRow("Reset…") { onOpenResetMenu() }
                 // …and a factory reset stays a separate, clearly more dangerous button.
                 DestructiveRow(ResetTarget.FACTORY.label, isFactory = true) { onResetTarget(ResetTarget.FACTORY) }
+            }
+            item("about") {
+                SettingsSectionHeader("About")
+                // What's new (GYMAP-71) — subtitle carries the live app version; taps to the changelog.
+                SettingsNavRow("What's new", rowSubtitle(SettingsPage.WhatsNew, state), SettingsIcons.WhatsNew) { onOpenPage(SettingsPage.WhatsNew) }
                 Spacer(Modifier.height(20.dp))
-                // About Avex is a quiet footer link at the very bottom of the app.
+                // About Avex stays a quiet footer link at the very bottom of the app.
                 AboutLink { onOpenPage(SettingsPage.About) }
                 Spacer(Modifier.height(8.dp))
             }
@@ -239,10 +252,11 @@ private fun searchRank(name: String, ql: String): Int {
 
 /** The section a page sits under in the main list — a page result's breadcrumb. */
 private fun pageSection(page: SettingsPage): String = when (page) {
-    SettingsPage.Appearance, SettingsPage.Format, SettingsPage.Notifications -> "General"
-    SettingsPage.Program, SettingsPage.Session, SettingsPage.ExercisePrefs -> "Training"
+    SettingsPage.Appearance, SettingsPage.Format, SettingsPage.Notifications, SettingsPage.Security -> "General"
+    SettingsPage.Program, SettingsPage.Session, SettingsPage.ExercisePrefs, SettingsPage.CardioActivities -> "Training"
     SettingsPage.Coach, SettingsPage.Recovery, SettingsPage.Vacation -> "Coach"
-    SettingsPage.About -> "About"
+    SettingsPage.Backup, SettingsPage.Storage -> "Data"
+    SettingsPage.WhatsNew, SettingsPage.About -> "About"
 }
 
 /** The leading glyph for a page's results — the same family the nav rows use. */
@@ -251,11 +265,16 @@ private fun pageGlyph(page: SettingsPage): ImageVector? = when (page) {
     SettingsPage.Format -> SettingsIcons.Units
     SettingsPage.Session -> SettingsIcons.Session
     SettingsPage.Notifications -> SettingsIcons.Notifications
+    SettingsPage.Security -> SettingsIcons.Security
     SettingsPage.Program -> SettingsIcons.Program
     SettingsPage.Coach -> NavIcons.Coach
     SettingsPage.Recovery -> SettingsIcons.Recovery
     SettingsPage.ExercisePrefs -> SettingsIcons.Likes
+    SettingsPage.CardioActivities -> NavIcons.Cardio
     SettingsPage.Vacation -> SettingsIcons.Holiday
+    SettingsPage.Backup -> SettingsIcons.Backup
+    SettingsPage.Storage -> SettingsIcons.Storage
+    SettingsPage.WhatsNew -> SettingsIcons.WhatsNew
     SettingsPage.About -> null
 }
 
@@ -330,7 +349,7 @@ private fun NoSearchResults(query: String) {
 
 internal fun rowSubtitle(page: SettingsPage, s: SettingsUiState): String = when (page) {
     SettingsPage.Appearance -> "AMOLED ${if (s.amoledMode) "on" else "off"} · compact ${if (s.compactSetLogging) "on" else "off"}"
-    SettingsPage.Format -> "${if (s.useKg) "kg" else "lb"} · ${if (s.useMiles) "mi" else "km"} · ${dateShort(s.dateFormat)} · ${if (s.timeFormat24h) "24h" else "12h"} · ${tzShort(s.timezone)}"
+    SettingsPage.Format -> "${s.weightUnit.label} · ${if (s.useMiles) "mi" else "km"} · ${if (s.useCm) "cm" else "in"} · ${dateShort(s.dateFormat)} · ${if (s.timeFormat24h) "24h" else "12h"} · ${tzShort(s.timezone)}"
     SettingsPage.Session -> "Haptic: ${s.hapticStrength}"
     SettingsPage.Notifications -> {
         // Live preview of which notification types are on (was just quiet-hours / "Off").
@@ -339,9 +358,15 @@ internal fun rowSubtitle(page: SettingsPage, s: SettingsUiState): String = when 
             if (s.weeklyRecapEnabled) add("recap")
             if (s.restTimerAlertEnabled) add("timer")
         }.joinToString(" · ").ifEmpty { "Off" }
-        if (s.quietHoursEnabled)
-            "$on · quiet ${s.quietHoursStart.toString().padStart(2, '0')}:00–${s.quietHoursEnd.toString().padStart(2, '0')}:00"
-        else on
+        if (s.quietHoursEnabled) {
+            // One window shared by every day reads as a time range; a per-day schedule just reads "per day".
+            val w = s.quietHoursSchedule.windows[0]
+            val quiet =
+                if (s.quietHoursSchedule.isUniform && !w.isOff)
+                    "quiet ${w.start.toString().padStart(2, '0')}:00–${w.end.toString().padStart(2, '0')}:00"
+                else "quiet per day"
+            "$on · $quiet"
+        } else on
     }
     SettingsPage.Program -> "${s.daysPerWeek} days/week · ${if (s.availableEquipment.isEmpty()) "all equipment" else "${s.availableEquipment.size} equipment"}"
     SettingsPage.Coach -> when {
@@ -349,10 +374,19 @@ internal fun rowSubtitle(page: SettingsPage, s: SettingsUiState): String = when 
         s.coachMode == "auto" -> "On · earning auto-apply"
         else -> "On · suggest mode"
     }
+    SettingsPage.Security -> "App lock ${if (s.appLockEnabled) "on" else "off"} · gallery ${if (s.galleryLockEnabled) "on" else "off"}"
     SettingsPage.Recovery -> "Health Connect · sleep & resting HR"
     SettingsPage.ExercisePrefs -> "${s.liked.size} liked · ${s.disliked.size} disliked"
+    // Count lives on its own StateFlow (not SettingsUiState), so search shows a static subtitle.
+    SettingsPage.CardioActivities -> "Your own cardio activities"
     // Reached via a dedicated MainList row, not the search/nav grid — subtitle unused.
     SettingsPage.Vacation -> "Pause your streak during a holiday"
+    // Live status (last-run date, on/off) lives on its own StateFlow — the row shows a static hint.
+    SettingsPage.Backup -> "Weekly copy · back up now"
+    // Live sizes live on their own StateFlow (not SettingsUiState) — the row shows a static hint.
+    SettingsPage.Storage -> "Space used · clear cache"
+    // The live app version — the built VERSION_NAME, so the row reads current at a glance.
+    SettingsPage.WhatsNew -> "Version ${com.forge.app.BuildConfig.VERSION_NAME}"
     SettingsPage.About -> "Version · privacy · what's stored"
 }
 

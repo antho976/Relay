@@ -14,7 +14,8 @@ export const ON_BG = '#EEEEF2';
 export const VIGNETTE_WIDTH = 1128;
 export const VIGNETTE_HEIGHT = 288;
 export const FPS = 30;
-/** One seamless loop: empty first frame → inputs → build → hold → fade to empty. All three
- *  plan-mode illustrations share this length (the Canvas vignettes' LOOP_MS mirrors it) so the
- *  cards breathe at the same pace. */
+/** One seamless pass: frame 0 and the LAST frame are the same finished plan, held still, so the loop
+ *  restart never jumps; in between the plan clears and rebuilds. The card loops this twice then holds
+ *  the last frame (the plan). Both videos share this length + held-first / held-last shape so the two
+ *  cards start, loop, and freeze together (the Canvas fallbacks' LOOP_MS mirrors it too). */
 export const LOOP_FRAMES = 240;

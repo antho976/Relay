@@ -30,7 +30,11 @@ data class SetDetail(
     val isAmrap: Boolean,
     val toFailure: Boolean,
     val isAssisted: Boolean,
-    val dropAnnotation: String?
+    val dropAnnotation: String?,
+    /** Advanced set type (null = normal | "warmup" | "drop" | …) — drives the WARM/DROP badges. */
+    val setType: String?,
+    /** Held time in seconds for a timed-hold set (GYMAP-51); null = a normal rep set. */
+    val durationSeconds: Int? = null
 ) {
     val volumeLb: Double get() = (weightLb ?: 0.0) * reps
 

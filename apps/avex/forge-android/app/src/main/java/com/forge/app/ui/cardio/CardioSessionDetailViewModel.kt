@@ -8,9 +8,12 @@ import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.data.health.HealthConnectManager
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.data.repo.CardioRepository
+import com.forge.app.ui.common.SnackbarController
+import com.forge.app.domain.cardio.CardioActivity
+import com.forge.app.domain.cardio.CardioCondition
 import com.forge.app.domain.cardio.CardioEffort
+import com.forge.app.domain.cardio.CardioField
 import com.forge.app.domain.cardio.CardioRestReason
-import com.forge.app.domain.cardio.CardioType
 import com.forge.app.domain.cardio.CardioWearableDay
 import com.forge.app.domain.cardio.RoutePoint
 import com.forge.app.ui.nav.Routes
@@ -57,8 +60,9 @@ data class CardioSessionDetailState(
 @HiltViewModel
 class CardioSessionDetailViewModel @Inject constructor(
     private val cardioRepo: CardioRepository,
-    settingsRepo: SettingsRepository,
+    private val settingsRepo: SettingsRepository,
     private val healthConnectManager: HealthConnectManager,
+    private val snackbar: SnackbarController,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
@@ -147,16 +151,25 @@ class CardioSessionDetailViewModel @Inject constructor(
     fun openEdit() { editing.value = true }
     fun closeEdit() { editing.value = false }
 
+    /** Persist a custom activity created inline while editing this session (GYMAP-37). */
+    fun addCustomType(type: com.forge.app.domain.cardio.CustomCardioType) = viewModelScope.launch {
+        settingsRepo.addCustomCardioType(type)
+    }
+
+    /** Delete now and offer an Undo (§13). The screen pops on [deleted]; the undo snackbar is hosted
+     *  at the app root, so it rides over the History list we land back on and re-inserts the captured
+     *  row (original id preserved) if tapped. */
     fun delete() {
         val entry = state.value.entry ?: return
         viewModelScope.launch {
             cardioRepo.delete(entry)
             deleted.value = true
+            snackbar.showUndo("Entry deleted") { cardioRepo.add(entry) }
         }
     }
 
     fun save(
-        type: CardioType,
+        activity: CardioActivity,
         durationMin: Int,
         distanceKm: Double?,
         effort: CardioEffort?,
@@ -164,7 +177,11 @@ class CardioSessionDetailViewModel @Inject constructor(
         note: String?,
         dateMs: Long,
         intervalCount: Int?,
-        hrZone: String?
+        hrZone: String?,
+        inclinePct: Double?,
+        laps: Int?,
+        elevationM: Double?,
+        conditions: Set<CardioCondition>
     ) {
         val current = state.value.entry ?: return
         viewModelScope.launch {
@@ -172,14 +189,20 @@ class CardioSessionDetailViewModel @Inject constructor(
                 CardioEntry(
                     id = current.id,
                     date = dateMs,
-                    type = type.code,
+                    type = activity.code,
                     durationMin = durationMin.coerceAtLeast(0),
-                    distanceKm = if (type.isRest) null else distanceKm,
-                    effort = if (type.isRest) null else effort?.code,
-                    restReason = if (type.isRest) restReason?.code else null,
+                    distanceKm = if (activity.isRest) null else distanceKm,
+                    effort = if (activity.isRest) null else effort?.code,
+                    restReason = if (activity.isRest) restReason?.code else null,
                     note = note?.takeIf { it.isNotBlank() },
-                    intervalCount = if (type == CardioType.HIIT) intervalCount?.takeIf { it > 0 } else null,
-                    hrZone = if (type.isRest) null else hrZone
+                    intervalCount = if (activity.isHiit) intervalCount?.takeIf { it > 0 } else null,
+                    hrZone = if (activity.isRest) null else hrZone,
+                    // Per-type fields (GYMAP-38): kept only for the activities that surface them.
+                    inclinePct = inclinePct.takeIf { CardioField.INCLINE in activity.optionalFields && (it ?: 0.0) > 0.0 },
+                    laps = laps.takeIf { CardioField.LAPS in activity.optionalFields && (it ?: 0) > 0 },
+                    elevationM = elevationM.takeIf { CardioField.ELEVATION in activity.optionalFields && (it ?: 0.0) > 0.0 },
+                    // Weather tags (GYMAP-39) — descriptive only, and never on a rest day.
+                    conditions = if (activity.isRest) null else CardioCondition.encode(conditions)
                 )
             )
             editing.value = false

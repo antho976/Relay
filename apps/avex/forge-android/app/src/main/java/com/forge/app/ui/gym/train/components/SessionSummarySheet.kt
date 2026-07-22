@@ -68,7 +68,7 @@ fun SessionSummarySheet(
     val outline = MaterialTheme.colorScheme.outline
     val bg = MaterialTheme.colorScheme.background
     val accent = MaterialTheme.colorScheme.primary
-    val useKg = LocalForgeSettings.current.useKg
+    val weightUnit = LocalForgeSettings.current.weightUnit
     val context = LocalContext.current
     val hapticStrength = LocalForgeSettings.current.hapticStrength
 
@@ -146,7 +146,7 @@ fun SessionSummarySheet(
 
                 // General stats + time taken.
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-                    CountUpStat(value = summary.totalVolumeLb, label = "VOLUME", onBg = onBg, muted = muted) { formatVolume(it, useKg) }
+                    CountUpStat(value = summary.totalVolumeLb, label = "VOLUME", onBg = onBg, muted = muted) { formatVolume(it, weightUnit) }
                     FlatStat(value = "${summary.durationMinutes} min", label = "TIME", onBg = onBg, muted = muted)
                 }
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {

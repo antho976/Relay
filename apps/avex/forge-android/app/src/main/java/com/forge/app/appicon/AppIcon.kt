@@ -13,7 +13,7 @@ import javax.inject.Singleton
 /** The effect/style family a launcher icon belongs to. Typed (not a raw string) so every `when` over
  *  it is exhaustive — adding a family is a compile error at each dispatch site instead of a silent
  *  fall-through to the plain wordmark / no scene. The name doubles as the picker's family header. */
-enum class IconFamily { Forge, Aurora, Gem, Metal, Molten, Nebula, Solid, Stealth }
+enum class IconFamily { Forge, Solid, Metal, Stealth, Molten, Nebula, Aurora, Gem }
 
 /**
  * A selectable home-screen launcher icon.
@@ -41,57 +41,32 @@ enum class AppIcon(
      *  ribbon sweeps through all of them). Kept as Longs so this model stays Compose-free. */
     val launchPalette: List<Long>? = null,
 ) {
+    // Declaration order IS the picker order: the family headers come from
+    // `entries.map { it.family }.distinct()` and each family's tiles keep their declaration order.
+    // Kept in the design-reference order (Solid, Metal, Stealth, Molten, Nebula, Aurora, Gem), with
+    // Default first so the revert-to-stock option always leads. Persistence is by [name], so this
+    // order is free to change without migrating anyone's pick.
     Default("Default", IconFamily.Forge, R.drawable.ic_launcher_foreground, isDefault = true),
-    AuroraClassic("Classic", IconFamily.Aurora, R.drawable.app_icon_aurora_classic,
-        launchPalette = listOf(0xFF6E63A8, 0xFF9A8FD0, 0xFFE0A34A)),
-    AuroraDawn("Dawn", IconFamily.Aurora, R.drawable.app_icon_aurora_dawn,
-        launchPalette = listOf(0xFF574B7E, 0xFFE87F9E, 0xFFE9C75F)),
-    AuroraDusk("Dusk", IconFamily.Aurora, R.drawable.app_icon_aurora_dusk,
-        launchPalette = listOf(0xFF6B3F7E, 0xFFC0619B, 0xFFE2743C)),
-    AuroraNorthern("Northern", IconFamily.Aurora, R.drawable.app_icon_aurora_northern,
-        launchPalette = listOf(0xFF145247, 0xFF2FA57E, 0xFF8FE0AC)),
-    GemEmerald("Emerald", IconFamily.Gem, R.drawable.app_icon_gem_emerald,
-        launchPalette = listOf(0xFF143325, 0xFF35B57A, 0xFFB9F0D4)),
-    GemFrost("Frost", IconFamily.Gem, R.drawable.app_icon_gem_frost,
-        launchPalette = listOf(0xFF1A3440, 0xFF6FC4E0, 0xFFF4FCFF)),
-    GemHolo("Holo", IconFamily.Gem, R.drawable.app_icon_gem_holo,
-        launchPalette = listOf(0xFF241A3D, 0xFFA060F0, 0xFFFFA8D8)),
-    MetalChrome("Chrome", IconFamily.Metal, R.drawable.app_icon_metal_chrome,
-        launchPalette = listOf(0xFF212631, 0xFF8E9AAC, 0xFFFFFFFF)),
-    MetalCopper("Copper", IconFamily.Metal, R.drawable.app_icon_metal_copper,
-        launchPalette = listOf(0xFF2B231F, 0xFFC8845A, 0xFFFFE4B1)),
-    MetalGold("Gold", IconFamily.Metal, R.drawable.app_icon_metal_gold,
-        launchPalette = listOf(0xFF342D1F, 0xFFD4AF57, 0xFFFFF7DC)),
-    MetalGunmetal("Gunmetal", IconFamily.Metal, R.drawable.app_icon_metal_gunmetal,
-        launchPalette = listOf(0xFF21252B, 0xFF6E7A88, 0xFFEEF7FF)),
-    MetalRosegold("Rose gold", IconFamily.Metal, R.drawable.app_icon_metal_rosegold,
-        launchPalette = listOf(0xFF2B2529, 0xFFD8A090, 0xFFFFFBF3)),
-    MoltenCrimson("Crimson", IconFamily.Molten, R.drawable.app_icon_molten_crimson,
-        launchPalette = listOf(0xFF451318, 0xFFC93038, 0xFFFFC9CB)),
-    MoltenEmber("Ember", IconFamily.Molten, R.drawable.app_icon_molten_ember,
-        launchPalette = listOf(0xFF47220C, 0xFFE07820, 0xFFFFD98C)),
-    MoltenOcean("Ocean", IconFamily.Molten, R.drawable.app_icon_molten_ocean,
-        launchPalette = listOf(0xFF122C48, 0xFF3E8FD6, 0xFFC8ECFB)),
-    MoltenPlasma("Plasma", IconFamily.Molten, R.drawable.app_icon_molten_plasma,
-        launchPalette = listOf(0xFF331A4D, 0xFFA855E8, 0xFFEFCBFF)),
-    NebulaAmber("Amber", IconFamily.Nebula, R.drawable.app_icon_nebula_amber,
-        launchPalette = listOf(0xFF4D2F0B, 0xFFC07C22, 0xFFFFF3D8)),
-    NebulaCrimson("Crimson", IconFamily.Nebula, R.drawable.app_icon_nebula_crimson,
-        launchPalette = listOf(0xFF4A101E, 0xFFB62846, 0xFFFFE3E8)),
-    NebulaTeal("Teal", IconFamily.Nebula, R.drawable.app_icon_nebula_teal,
-        launchPalette = listOf(0xFF0C3C40, 0xFF209C99, 0xFFE2FFFB)),
-    NebulaViolet("Violet", IconFamily.Nebula, R.drawable.app_icon_nebula_violet,
-        launchPalette = listOf(0xFF301650, 0xFF7938B8, 0xFFF2E6FF)),
-    SolidAmber("Amber", IconFamily.Solid, R.drawable.app_icon_solid_amber,
-        launchPalette = listOf(0xFF9C6F20, 0xFFE6A532, 0xFFF5C562)),
-    SolidEmber("Ember", IconFamily.Solid, R.drawable.app_icon_solid_ember,
-        launchPalette = listOf(0xFF141414, 0xFFE6A532, 0xFFF5C562)),
     SolidNavy("Navy", IconFamily.Solid, R.drawable.app_icon_solid_navy,
         launchPalette = listOf(0xFF283349, 0xFF3D4F73, 0xFF6B84AD)),
+    SolidAmber("Amber", IconFamily.Solid, R.drawable.app_icon_solid_amber,
+        launchPalette = listOf(0xFF9C6F20, 0xFFE6A532, 0xFFF5C562)),
     SolidPaper("Paper", IconFamily.Solid, R.drawable.app_icon_solid_paper,
         launchPalette = listOf(0xFFB8B4A8, 0xFFFAF9F6, 0xFFFFFFFF)),
+    SolidEmber("Ember", IconFamily.Solid, R.drawable.app_icon_solid_ember,
+        launchPalette = listOf(0xFF141414, 0xFFE6A532, 0xFFF5C562)),
     SolidPrism("Prism", IconFamily.Solid, R.drawable.app_icon_solid_prism,
         launchPalette = listOf(0xFF384867, 0xFFFAF9F6, 0xFFFFFFFF)),
+    MetalGold("Gold", IconFamily.Metal, R.drawable.app_icon_metal_gold,
+        launchPalette = listOf(0xFF342D1F, 0xFFD4AF57, 0xFFFFF7DC)),
+    MetalChrome("Chrome", IconFamily.Metal, R.drawable.app_icon_metal_chrome,
+        launchPalette = listOf(0xFF212631, 0xFF8E9AAC, 0xFFFFFFFF)),
+    MetalRosegold("Rose gold", IconFamily.Metal, R.drawable.app_icon_metal_rosegold,
+        launchPalette = listOf(0xFF2B2529, 0xFFD8A090, 0xFFFFFBF3)),
+    MetalCopper("Copper", IconFamily.Metal, R.drawable.app_icon_metal_copper,
+        launchPalette = listOf(0xFF2B231F, 0xFFC8845A, 0xFFFFE4B1)),
+    MetalGunmetal("Gunmetal", IconFamily.Metal, R.drawable.app_icon_metal_gunmetal,
+        launchPalette = listOf(0xFF21252B, 0xFF6E7A88, 0xFFEEF7FF)),
     StealthAmber("Amber", IconFamily.Stealth, R.drawable.app_icon_stealth_amber,
         launchPalette = listOf(0xFF171208, 0xFFD9A032, 0xFFFFDC6B)),
     StealthCrimson("Crimson", IconFamily.Stealth, R.drawable.app_icon_stealth_crimson,
@@ -99,7 +74,37 @@ enum class AppIcon(
     StealthCyan("Cyan", IconFamily.Stealth, R.drawable.app_icon_stealth_cyan,
         launchPalette = listOf(0xFF081517, 0xFF38C4DC, 0xFF90FFFF)),
     StealthViolet("Violet", IconFamily.Stealth, R.drawable.app_icon_stealth_violet,
-        launchPalette = listOf(0xFF130A1A, 0xFFA85CE0, 0xFFF3C1FF));
+        launchPalette = listOf(0xFF130A1A, 0xFFA85CE0, 0xFFF3C1FF)),
+    MoltenEmber("Ember", IconFamily.Molten, R.drawable.app_icon_molten_ember,
+        launchPalette = listOf(0xFF47220C, 0xFFE07820, 0xFFFFD98C)),
+    MoltenPlasma("Plasma", IconFamily.Molten, R.drawable.app_icon_molten_plasma,
+        launchPalette = listOf(0xFF331A4D, 0xFFA855E8, 0xFFEFCBFF)),
+    MoltenCrimson("Crimson", IconFamily.Molten, R.drawable.app_icon_molten_crimson,
+        launchPalette = listOf(0xFF451318, 0xFFC93038, 0xFFFFC9CB)),
+    MoltenOcean("Ocean", IconFamily.Molten, R.drawable.app_icon_molten_ocean,
+        launchPalette = listOf(0xFF122C48, 0xFF3E8FD6, 0xFFC8ECFB)),
+    NebulaViolet("Violet", IconFamily.Nebula, R.drawable.app_icon_nebula_violet,
+        launchPalette = listOf(0xFF301650, 0xFF7938B8, 0xFFF2E6FF)),
+    NebulaTeal("Teal", IconFamily.Nebula, R.drawable.app_icon_nebula_teal,
+        launchPalette = listOf(0xFF0C3C40, 0xFF209C99, 0xFFE2FFFB)),
+    NebulaCrimson("Crimson", IconFamily.Nebula, R.drawable.app_icon_nebula_crimson,
+        launchPalette = listOf(0xFF4A101E, 0xFFB62846, 0xFFFFE3E8)),
+    NebulaAmber("Amber", IconFamily.Nebula, R.drawable.app_icon_nebula_amber,
+        launchPalette = listOf(0xFF4D2F0B, 0xFFC07C22, 0xFFFFF3D8)),
+    AuroraClassic("Classic", IconFamily.Aurora, R.drawable.app_icon_aurora_classic,
+        launchPalette = listOf(0xFF6E63A8, 0xFF9A8FD0, 0xFFE0A34A)),
+    AuroraNorthern("Northern", IconFamily.Aurora, R.drawable.app_icon_aurora_northern,
+        launchPalette = listOf(0xFF145247, 0xFF2FA57E, 0xFF8FE0AC)),
+    AuroraDusk("Dusk", IconFamily.Aurora, R.drawable.app_icon_aurora_dusk,
+        launchPalette = listOf(0xFF6B3F7E, 0xFFC0619B, 0xFFE2743C)),
+    AuroraDawn("Dawn", IconFamily.Aurora, R.drawable.app_icon_aurora_dawn,
+        launchPalette = listOf(0xFF574B7E, 0xFFE87F9E, 0xFFE9C75F)),
+    GemEmerald("Emerald", IconFamily.Gem, R.drawable.app_icon_gem_emerald,
+        launchPalette = listOf(0xFF143325, 0xFF35B57A, 0xFFB9F0D4)),
+    GemFrost("Frost", IconFamily.Gem, R.drawable.app_icon_gem_frost,
+        launchPalette = listOf(0xFF1A3440, 0xFF6FC4E0, 0xFFF4FCFF)),
+    GemHolo("Holo", IconFamily.Gem, R.drawable.app_icon_gem_holo,
+        launchPalette = listOf(0xFF241A3D, 0xFFA060F0, 0xFFFFA8D8));
 
     /** Human name for the current-selection row: "Default", else "Nebula Violet". */
     val displayName: String get() = if (isDefault) label else "$family $label"
@@ -116,7 +121,7 @@ enum class AppIcon(
         /** Persisted key → enum. Empty/unknown ⇒ [Default]. */
         fun fromKey(key: String): AppIcon = entries.firstOrNull { it.name == key } ?: Default
 
-        /** Family headers in declaration order (Forge, Aurora, Gem, …), de-duped. */
+        /** Family headers in declaration order (Forge, Solid, Metal, Stealth, …), de-duped. */
         val families: List<IconFamily> = entries.map { it.family }.distinct()
     }
 }

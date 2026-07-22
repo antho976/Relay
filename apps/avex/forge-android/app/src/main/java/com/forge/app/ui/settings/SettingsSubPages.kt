@@ -105,6 +105,12 @@ internal fun AppearancePage(state: SettingsUiState, vm: SettingsViewModel, modif
 
         SettingsSectionHeader("App icon")
         AppIconRow(state.appIconKey) { showAppIconSheet = true }
+        ToggleRow(
+            "Custom startup animation",
+            "Off shows the plain black-and-white Avex instead of the icon-themed launch.",
+            state.themedLaunchIntro,
+            vm::setThemedLaunchIntro
+        )
 
         Spacer(Modifier.height(8.dp))
         SectionResetRow(com.forge.app.data.prefs.SettingsSection.APPEARANCE, vm)
@@ -134,18 +140,24 @@ internal fun FormatPage(state: SettingsUiState, vm: SettingsViewModel, modifier:
         SettingsSectionHeader("Units", top = 12.dp)
         InlineChipRow(
             "Weight",
-            listOf("lb" to "lb", "kg" to "kg"),
-            if (state.useKg) "kg" else "lb"
-        ) { vm.setUseKg(it == "kg") }
+            listOf("lb" to "lb", "kg" to "kg", "st" to "st"),
+            state.weightUnit.label
+        ) { vm.setWeightUnit(com.forge.app.domain.units.WeightUnit.fromKey(it)) }
         InlineChipRow(
             "Distance",
             listOf("km" to "km", "mi" to "mi"),
             if (state.useMiles) "mi" else "km"
         ) { vm.setUseMiles(it == "mi") }
+        InlineChipRow(
+            "Length",
+            listOf("cm" to "cm", "in" to "in"),
+            if (state.useCm) "cm" else "in"
+        ) { vm.setUseCm(it == "cm") }
         // Live preview — updates the moment a unit is switched.
         CardFootnote(
-            "e.g. ${com.forge.app.domain.units.formatWeight(135.0, state.useKg)} · " +
-                com.forge.app.domain.units.formatDistance(5.0, state.useMiles)
+            "e.g. ${com.forge.app.domain.units.formatWeight(135.0, state.weightUnit)} · " +
+                "${com.forge.app.domain.units.formatDistance(5.0, state.useMiles)} · " +
+                com.forge.app.domain.units.formatLength(90.0, state.useCm)
         )
 
         SettingsSectionHeader("Date & time")
@@ -504,6 +516,14 @@ internal fun SessionPage(state: SettingsUiState, vm: SettingsViewModel, modifier
             onSelect = vm::setHapticStrength
         )
 
+        SettingsSectionHeader("Screen")
+        ToggleRow(
+            "Keep screen on",
+            "Keeps the display awake while logging so it won't lock between sets.",
+            state.keepScreenOn,
+            vm::setKeepScreenOn
+        )
+
         SettingsSectionHeader("Rest timer")
         ChipField(
             label = "Compound lifts",
@@ -725,12 +745,11 @@ internal fun NotificationsPage(state: SettingsUiState, vm: SettingsViewModel, mo
         SettingsSectionHeader("Quiet hours")
         ToggleRow(
             "Silence alerts",
-            "Mute timer and recap notifications during the hours below",
+            "Mute timer and recap notifications during each day's window",
             state.quietHoursEnabled, vm::setQuietHoursEnabled
         )
         if (state.quietHoursEnabled) {
-            HourPickerRow("From", state.quietHoursStart, vm::setQuietHoursStart)
-            HourPickerRow("Until", state.quietHoursEnd, vm::setQuietHoursEnd)
+            QuietHoursDays(state, vm)
         }
 
         SectionResetRow(com.forge.app.data.prefs.SettingsSection.NOTIFICATIONS, vm)

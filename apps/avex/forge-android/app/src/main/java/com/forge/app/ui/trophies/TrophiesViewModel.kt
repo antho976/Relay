@@ -41,8 +41,8 @@ class TrophiesViewModel @Inject constructor(
         trophyRepo.observeNearMisses(),
         snapshotFlow,
         filterFlow,
-        settingsRepo.useKg
-    ) { unlocked, nearMisses, snapshot, filter, useKg ->
+        settingsRepo.weightUnit
+    ) { unlocked, nearMisses, snapshot, filter, weightUnit ->
         if (snapshot == null) {
             TrophiesUiState(isLoading = true, totalCount = Trophies.all.size, selectedFilter = filter)
         } else {
@@ -50,7 +50,7 @@ class TrophiesViewModel @Inject constructor(
                 unlockedByIdToDate = unlocked.associate { it.trophyId to it.unlockedAt },
                 snapshot = snapshot,
                 filter = filter,
-                useKg = useKg,
+                weightUnit = weightUnit,
                 nearMisses = nearMisses.map { nm ->
                     NearMissEntry(
                         trophyName = nm.trophyName,
@@ -81,7 +81,7 @@ class TrophiesViewModel @Inject constructor(
         unlockedByIdToDate: Map<String, Long>,
         snapshot: TrophyStatsSnapshot,
         filter: TrophyFilter,
-        useKg: Boolean,
+        weightUnit: com.forge.app.domain.units.WeightUnit,
         nearMisses: List<NearMissEntry> = emptyList()
     ): TrophiesUiState {
         val displays = Trophies.all.map { trophy ->
@@ -90,7 +90,7 @@ class TrophiesViewModel @Inject constructor(
             TrophyDisplay(
                 trophy = trophy,
                 unlockedAt = unlockedAt,
-                progressHint = if (unlockedAt == null) TrophyEvaluator.progressHint(trophy.unlock, snapshot, useKg) else null,
+                progressHint = if (unlockedAt == null) TrophyEvaluator.progressHint(trophy.unlock, snapshot, weightUnit) else null,
                 progressFraction = progressFraction
             )
         }
@@ -100,7 +100,7 @@ class TrophiesViewModel @Inject constructor(
             .filter { !it.isUnlocked && (it.progressFraction ?: 0f) > 0f }
             .maxByOrNull { it.progressFraction ?: 0f }
         val closestTrophyNudge = closestDisplay?.let { d ->
-            TrophyEvaluator.progressRemaining(d.trophy.unlock, snapshot, useKg)
+            TrophyEvaluator.progressRemaining(d.trophy.unlock, snapshot, weightUnit)
                 ?.let { remaining -> "$remaining away from ${d.trophy.name}" }
         }
 

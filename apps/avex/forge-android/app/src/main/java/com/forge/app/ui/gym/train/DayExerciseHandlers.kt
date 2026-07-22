@@ -20,11 +20,12 @@ internal fun DayViewModel.handleExerciseEvent(event: DayUiEvent) {
                 if (it.plan.id == event.exerciseId) it.copy(isExpanded = !it.isExpanded) else it
             })
         }
-        is DayUiEvent.LogSet -> logSet(event.exerciseId, event.weightText, event.reps)
+        is DayUiEvent.LogSet -> logSet(event.exerciseId, event.weightText, event.reps, durationSeconds = event.durationSeconds)
         is DayUiEvent.LogSameAsLast -> {
             val set = _state.value.exercises.flatMap { it.loggedSets }
                 .firstOrNull { it.id == event.setId } ?: return
-            logSet(event.exerciseId, set.weightText, set.reps)
+            // Re-log carries the hold duration too, so repeating a timed set isn't logged as an empty rep set.
+            logSet(event.exerciseId, set.weightText, set.reps, durationSeconds = set.durationSeconds)
         }
         is DayUiEvent.DeleteSet -> viewModelScope.launch {
             val set = findSet(event.setId) ?: return@launch
@@ -211,8 +212,15 @@ internal fun DayViewModel.handleExerciseEvent(event: DayUiEvent) {
     }
 }
 
-internal fun DayViewModel.logSet(exerciseId: String, weightText: String, reps: Int, skipJumpCheck: Boolean = false) {
-    if (reps <= 0) return
+internal fun DayViewModel.logSet(
+    exerciseId: String,
+    weightText: String,
+    reps: Int,
+    durationSeconds: Int? = null,
+    skipJumpCheck: Boolean = false
+) {
+    // A timed-hold set (GYMAP-51) carries a duration and reps = 0; a rep set needs reps > 0.
+    if (reps <= 0 && durationSeconds == null) return
     viewModelScope.launch {
         val sessionId = _state.value.sessionId ?: return@launch
         val currentUi = _state.value.exercises.firstOrNull { it.plan.id == exerciseId } ?: return@launch
@@ -236,9 +244,9 @@ internal fun DayViewModel.logSet(exerciseId: String, weightText: String, reps: I
             val bigJump = if (isPlates) (newWeightLb - lastWeightLb) / plateLb >= 1.5
             else newWeightLb > lastWeightLb * 1.20
             if (bigJump) {
-                val useKg = settingsRepo.useKg.first()
-                val lastLabel = if (isPlates) formatPlates(lastWeightLb, plateLb) else formatWeight(lastWeightLb, useKg)
-                val newLabel = if (isPlates) formatPlates(newWeightLb, plateLb) else formatWeight(newWeightLb, useKg)
+                val weightUnit = settingsRepo.weightUnit.first()
+                val lastLabel = if (isPlates) formatPlates(lastWeightLb, plateLb) else formatWeight(lastWeightLb, weightUnit)
+                val newLabel = if (isPlates) formatPlates(newWeightLb, plateLb) else formatWeight(newWeightLb, weightUnit)
                 val percent = ((newWeightLb / lastWeightLb - 1) * 100).toInt()
                 _state.update {
                     it.copy(pendingWeightJumpWarning = WeightJumpWarning(exerciseId, weightText, reps, lastLabel, newLabel, percent))
@@ -289,7 +297,8 @@ internal fun DayViewModel.logSet(exerciseId: String, weightText: String, reps: I
             setIndex = currentUi.loggedSets.size,
             weightText = weightText,
             weightLb = newWeightLb,
-            reps = reps
+            reps = reps,
+            durationSeconds = durationSeconds
         )
 
         // First set of this exercise while a suggestion chip was showing → record suggestion vs

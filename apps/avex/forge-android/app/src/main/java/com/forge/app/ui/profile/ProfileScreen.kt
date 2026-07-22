@@ -76,17 +76,25 @@ fun ProfileScreen(
     onBack: (() -> Unit)? = null,
     onOpenTrophies: () -> Unit,
     onOpenPhotoGallery: () -> Unit = {},
+    onOpenCamera: () -> Unit = {},
+    onOpenMeasurements: () -> Unit = {},
     viewModel: ProfileViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val showRankUpCelebration by viewModel.showRankUpCelebration.collectAsStateWithLifecycle()
     val bodyweight by viewModel.bodyweight.collectAsStateWithLifecycle()
+    val bodyweightGoalLb by viewModel.bodyweightGoalLb.collectAsStateWithLifecycle()
     val weightConnected by viewModel.weightConnected.collectAsStateWithLifecycle()
     val bodyweightMessage by viewModel.bodyweightMessage.collectAsStateWithLifecycle()
+    val bodyFat by viewModel.bodyFat.collectAsStateWithLifecycle()
+    val bodyFatConnected by viewModel.bodyFatConnected.collectAsStateWithLifecycle()
+    val bodyFatMessage by viewModel.bodyFatMessage.collectAsStateWithLifecycle()
     var viewing by remember { mutableStateOf<ProgressPhoto?>(null) }
     var showXpInfo by remember { mutableStateOf(false) }
     var showWeightSheet by remember { mutableStateOf(false) }
+    var showBodyFatSheet by remember { mutableStateOf(false) }
     var showAvatarSheet by remember { mutableStateOf(false) }
+    var addChooser by remember { mutableStateOf(false) }
 
     // Persist the one-time edit hint as soon as it surfaces — it stays visible this session, gone next.
     LaunchedEffect(state.showAvatarHint) { if (state.showAvatarHint) viewModel.markAvatarHintSeen() }
@@ -222,20 +230,40 @@ fun ProfileScreen(
                         onBg = onBg, muted = muted, accent = accent
                     )
                     Spacer(Modifier.height(28.dp))
-                    BodySection(
-                        entries = bodyweight,
-                        onLog = {
+                    // BODY (Antho 2026-07-13) — bodyweight, body fat and measurements merged into one
+                    // compact stack so the "your body" cluster reads as a single section, not three.
+                    BodyMetricsSection(
+                        bodyweight = bodyweight,
+                        bodyweightGoalLb = bodyweightGoalLb,
+                        bodyFat = bodyFat,
+                        onLogWeight = {
                             // Fresh sheet: drop any prior result line and re-check HC permission so a
                             // grant made in Settings since this screen opened surfaces the import option.
                             viewModel.clearBodyweightMessage()
                             viewModel.refreshWeightConnected()
                             showWeightSheet = true
                         },
+                        onLogBodyFat = {
+                            viewModel.clearBodyFatMessage()
+                            viewModel.refreshBodyFatConnected()
+                            showBodyFatSheet = true
+                        },
+                        onOpenMeasurements = onOpenMeasurements,
                         onBg = onBg, muted = muted, accent = accent
                     )
                     if (state.lifetimeVolumeSeriesLb.size >= 2) {
                         Spacer(Modifier.height(28.dp))
                         LifetimeVolumeGraph(state.lifetimeVolumeSeriesLb, muted, accent)
+                    }
+                }
+
+                // ── This year's consistency (gym + cardio) — a whole-calendar-year glance, a
+                //    DIFFERENT mark from the Stats 26-week load heatmap (§4.3). Hidden until the
+                //    year has any activity, so a new user never sees a dead grid (§12).
+                if (state.activityByDay.isNotEmpty()) {
+                    Spacer(Modifier.height(28.dp))
+                    Column(pad.statsEntrance(3)) {
+                        YearConsistencySection(state.activityByDay, muted, accent)
                     }
                 }
 
@@ -253,7 +281,7 @@ fun ProfileScreen(
                 // ── Gallery filmstrip (index 4) — full-bleed, pads itself ────────
                 Spacer(Modifier.height(28.dp))
                 Column(Modifier.fillMaxWidth().statsEntrance(4)) {
-                    GalleryStrip(state.photos, viewModel::fileFor, onAdd = { pickPhoto() }, onView = { viewing = it }, onViewAll = onOpenPhotoGallery, onBg, muted, outline)
+                    GalleryStrip(state.photos, viewModel::fileFor, onAdd = { addChooser = true }, onView = { viewing = it }, onViewAll = onOpenPhotoGallery, muted, outline)
                 }
 
                 state.memory?.let { m ->
@@ -302,11 +330,11 @@ fun ProfileScreen(
 
     if (showWeightSheet) {
         BodyweightLogSheet(
-            latestLb = bodyweight.lastOrNull()?.weightLb,
+            entries = bodyweight,
             canImport = weightConnected,
             message = bodyweightMessage,
-            onSave = { lb ->
-                viewModel.logBodyweight(lb)
+            onSave = { lb, date, note ->
+                viewModel.logBodyweight(lb, date, note)
                 showWeightSheet = false
             },
             onImport = { viewModel.importBodyweight() },  // stays open so the result line shows
@@ -314,6 +342,31 @@ fun ProfileScreen(
                 showWeightSheet = false
                 viewModel.clearBodyweightMessage()
             }
+        )
+    }
+
+    if (showBodyFatSheet) {
+        BodyFatLogSheet(
+            entries = bodyFat,
+            canImport = bodyFatConnected,
+            message = bodyFatMessage,
+            onSave = { pct, date ->
+                viewModel.logBodyFat(pct, date)
+                showBodyFatSheet = false
+            },
+            onImport = { viewModel.importBodyFat() },  // stays open so the result line shows
+            onDismiss = {
+                showBodyFatSheet = false
+                viewModel.clearBodyFatMessage()
+            }
+        )
+    }
+
+    if (addChooser) {
+        AddPhotoChooser(
+            onCamera = { addChooser = false; onOpenCamera() },
+            onImport = { addChooser = false; pickPhoto() },
+            onDismiss = { addChooser = false }
         )
     }
 

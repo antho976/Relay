@@ -43,6 +43,8 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.forge.app.data.db.types.EffortRating
 import com.forge.app.domain.session.SessionType
+import com.forge.app.domain.units.WeightUnit
+import com.forge.app.domain.units.formatHoldLabel
 import com.forge.app.domain.units.formatVolume
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.program.MuscleGroup
@@ -211,14 +213,14 @@ private fun MuscleMapDialog(
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun SummaryStrip(data: SessionDetailData, onBg: Color, muted: Color) {
-    val useKg = LocalForgeSettings.current.useKg
+    val weightUnit = LocalForgeSettings.current.weightUnit
     FlowRow(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(18.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         data.volumeLb?.takeIf { it > 0 }?.let {
-            TrendStat(formatVolume(it, useKg), "VOLUME", trendOf(it, data.prevVolumeLb), muted, onBg)
+            TrendStat(formatVolume(it, weightUnit), "VOLUME", trendOf(it, data.prevVolumeLb), muted, onBg)
         }
         data.durationMin?.takeIf { it > 0 }?.let { SummaryStat("$it min", "DURATION", muted, onBg) }
         if (data.setCount > 0) {
@@ -290,15 +292,15 @@ internal fun ExerciseDetailBody(
     accent: Color,
     outline: Color
 ) {
-    val useKg = LocalForgeSettings.current.useKg
+    val weightUnit = LocalForgeSettings.current.weightUnit
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         val hasChip = ex.e1rmLb != null || ex.isPr || ex.effort != null
         if (hasChip) {
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
                 // A new best e1RM lights up like a PR; otherwise it's a quiet reference chip.
                 ex.e1rmLb?.let { e ->
-                    if (ex.e1rmIsBest) Chip("e1RM ${formatWeight(e, useKg)}", accent, accent.copy(alpha = 0.15f))
-                    else Chip("e1RM ${formatWeight(e, useKg)}", muted, outline.copy(alpha = 0.12f))
+                    if (ex.e1rmIsBest) Chip("e1RM ${formatWeight(e, weightUnit)}", accent, accent.copy(alpha = 0.15f))
+                    else Chip("e1RM ${formatWeight(e, weightUnit)}", muted, outline.copy(alpha = 0.12f))
                 }
                 if (ex.isPr) Chip("PR", accent, accent.copy(alpha = 0.15f))
                 ex.effort?.let { Chip(it.displayName, effortColor(it), effortColor(it).copy(alpha = 0.15f)) }
@@ -307,25 +309,30 @@ internal fun ExerciseDetailBody(
         if (!ex.note.isNullOrBlank()) {
             Text("“${ex.note}”", style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic, fontSize = 11.sp)
         }
-        Text(exerciseSummary(ex, useKg), style = MaterialTheme.typography.bodySmall, color = muted)
+        Text(exerciseSummary(ex, weightUnit), style = MaterialTheme.typography.bodySmall, color = muted)
         PerExerciseSetChart(ex, metric, style, accent, muted, outline)
         SetTable(ex.sets, onBg, muted, outline)
     }
 }
 
-/** "Top 135 × 8 · 4 sets · 4,320 lb" — the collapsed-card gist. */
-private fun exerciseSummary(ex: ExerciseDetail, useKg: Boolean): String {
+/** "Top 135 × 8 · 4 sets · 4,320 lb" — the collapsed-card gist. A timed hold reads "Best 0:45 · N sets". */
+private fun exerciseSummary(ex: ExerciseDetail, weightUnit: WeightUnit): String {
+    // A timed-hold exercise summarises by its longest hold, not weight×reps volume (GYMAP-51).
+    if (ex.sets.isNotEmpty() && ex.sets.all { it.durationSeconds != null }) {
+        val best = ex.sets.maxOf { it.durationSeconds ?: 0 }
+        return "Best ${formatHoldLabel(best)} · ${ex.sets.size} ${if (ex.sets.size == 1) "set" else "sets"}"
+    }
     val top = ex.sets.firstOrNull { it.isTopSet } ?: ex.sets.maxByOrNull { it.weightLb ?: 0.0 }
     return buildList {
-        top?.let { add("Top ${weightLabel(it, useKg)} × ${it.reps}") }
+        top?.let { add("Top ${weightLabel(it, weightUnit)} × ${it.reps}") }
         add("${ex.sets.size} ${if (ex.sets.size == 1) "set" else "sets"}")
-        if (ex.volumeLb > 0) add(formatVolume(ex.volumeLb, useKg))
+        if (ex.volumeLb > 0) add(formatVolume(ex.volumeLb, weightUnit))
     }.joinToString(" · ")
 }
 
 @Composable
 private fun SetTable(sets: List<SetDetail>, onBg: Color, muted: Color, outline: Color) {
-    val useKg = LocalForgeSettings.current.useKg
+    val weightUnit = LocalForgeSettings.current.weightUnit
     Column {
         sets.forEachIndexed { i, s ->
             // Table rule — one of the few sanctioned lines (§1: a line exists only as data).
@@ -338,7 +345,8 @@ private fun SetTable(sets: List<SetDetail>, onBg: Color, muted: Color, outline: 
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("${s.number}", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.65f), fontSize = 10.sp, modifier = Modifier.width(14.dp))
                     Text(
-                        "${weightLabel(s, useKg)} × ${s.reps}",
+                        // A timed hold reads its held time (0:45); every other set reads "weight × reps".
+                        if (s.durationSeconds != null) formatHoldLabel(s.durationSeconds) else "${weightLabel(s, weightUnit)} × ${s.reps}",
                         style = MaterialTheme.typography.bodyMedium,
                         // Always white — the top set keeps a SemiBold emphasis but is no longer accent-tinted.
                         color = onBg,
@@ -346,10 +354,13 @@ private fun SetTable(sets: List<SetDetail>, onBg: Color, muted: Color, outline: 
                     )
                 }
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    if (s.setType == "warmup") SetTag("WARM", muted)
                     if (s.isAmrap) SetTag("AMRAP", muted)
                     if (s.toFailure) SetTag("FAIL", muted)
                     if (s.isAssisted) SetTag("ASSIST", muted)
-                    if (!s.dropAnnotation.isNullOrBlank()) SetTag("DROP", muted)
+                    // A drop set is marked by set_type; the annotation (drop weight/reps) is optional
+                    // extra detail, so the badge keys off either (freestyle drops carry no annotation).
+                    if (s.setType == "drop" || !s.dropAnnotation.isNullOrBlank()) SetTag("DROP", muted)
                     s.rpe?.let {
                         Text("RPE ${rpeLabel(it)}", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
                     }
@@ -376,8 +387,8 @@ private fun SetTag(text: String, muted: Color) {
     Text(text, style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.65f), fontSize = 8.sp, letterSpacing = 0.5.sp)
 }
 
-private fun weightLabel(s: SetDetail, useKg: Boolean): String =
-    if (s.weightLb != null && s.weightLb > 0) formatWeight(s.weightLb, useKg) else s.weightText.ifBlank { "BW" }
+private fun weightLabel(s: SetDetail, weightUnit: WeightUnit): String =
+    if (s.weightLb != null && s.weightLb > 0) formatWeight(s.weightLb, weightUnit) else s.weightText.ifBlank { "BW" }
 
 // §5 reserved state colors only — EASY and JUST_RIGHT are both healthy readings (success),
 // HARD cautions, BRUTAL alarms. Never raw literals here.

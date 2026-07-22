@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.sp
 import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.domain.cardio.CardioWeekAggregate
 import com.forge.app.domain.cardio.CardioWearableDay
+import com.forge.app.domain.cardio.WHO_WEEKLY_ACTIVITY_MIN
 import com.forge.app.domain.cardio.pacePerUnit
 import com.forge.app.domain.units.distanceUnitLabel
 import com.forge.app.domain.units.toDisplayDistance
@@ -48,6 +49,8 @@ internal fun CardioWeekStatsPage(
     weekEntries: List<CardioEntry>,
     useMiles: Boolean,
     isCurrentWeek: Boolean,
+    /** Per-activity pace series (GYMAP-35); non-empty only on the current-week page (cross-week data). */
+    paceSeries: List<com.forge.app.domain.cardio.CardioPaceSeries>,
     todayDow: Int,
     weekTargetMin: Int,
     cardioStreakDays: Int,
@@ -132,27 +135,41 @@ internal fun CardioWeekStatsPage(
             }
         }
 
-        // ── Goal + streak (current week only) ───────────────────────────────
-        if (isCurrentWeek && (weekTargetMin > 0 || cardioStreakDays >= 2)) {
+        // ── Goal / WHO reference + streak (current week only) ────────────────
+        if (isCurrentWeek) {
             Spacer(Modifier.height(4.dp))
             Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
                 if (cardioStreakDays >= 2) {
                     Text("$cardioStreakDays-day cardio streak", style = MaterialTheme.typography.bodyMedium, color = onBg, fontWeight = FontWeight.SemiBold)
                     Spacer(Modifier.height(8.dp))
                 }
-                if (weekTargetMin > 0) {
-                    val frac = (agg.minutes.toFloat() / weekTargetMin).coerceIn(0f, 1f)
-                    Box(Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(4.dp)).background(outline.copy(alpha = 0.25f))) {
-                        Box(Modifier.fillMaxWidth(frac).height(4.dp).clip(RoundedCornerShape(4.dp)).background(accent))
-                    }
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        if (agg.minutes >= weekTargetMin) "Goal hit · ${agg.minutes} / $weekTargetMin min"
-                        else "${agg.minutes} / $weekTargetMin min this week",
-                        style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp
-                    )
+                // A personal target fills its goal bar; without one, the WHO 150-min/week reference does (GYMAP-42).
+                val hasGoal = weekTargetMin > 0
+                val target = if (hasGoal) weekTargetMin else WHO_WEEKLY_ACTIVITY_MIN
+                val frac = (agg.minutes.toFloat() / target).coerceIn(0f, 1f)
+                Box(Modifier.fillMaxWidth().height(4.dp).clip(RoundedCornerShape(4.dp)).background(outline.copy(alpha = 0.25f))) {
+                    Box(Modifier.fillMaxWidth(frac).height(4.dp).clip(RoundedCornerShape(4.dp)).background(accent))
                 }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    when {
+                        hasGoal && agg.minutes >= target -> "Goal hit · ${agg.minutes} / $target min"
+                        hasGoal -> "${agg.minutes} / $target min this week"
+                        agg.minutes >= target -> "WHO 150 min met · ${agg.minutes} min"
+                        else -> "${agg.minutes} / 150 min · WHO reference"
+                    },
+                    style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp
+                )
             }
+        }
+
+        // ── Pace trend ── cross-week, so it rides the current-week page alone and never repeats (§4.3).
+        if (isCurrentWeek && paceSeries.isNotEmpty()) {
+            Spacer(Modifier.height(14.dp))
+            CardioPaceTrendSection(
+                series = paceSeries, useMiles = useMiles,
+                onBg = onBg, muted = muted, outline = outline, accent = accent
+            )
         }
 
         // ── Wearable steps (data, or a placeholder once connected) ──────────

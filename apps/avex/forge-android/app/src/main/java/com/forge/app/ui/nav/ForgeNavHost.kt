@@ -27,6 +27,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -53,7 +55,11 @@ import com.forge.app.ui.gym.train.DayListScreen
 import com.forge.app.ui.gym.train.DayScreen
 import com.forge.app.ui.goals.GoalEditorScreen
 import com.forge.app.ui.goals.GoalsScreen
+import com.forge.app.security.LocalAppLock
+import com.forge.app.ui.profile.BodyMeasurementsScreen
 import com.forge.app.ui.profile.MirrorTestScreen
+import com.forge.app.ui.profile.ProgressCameraScreen
+import com.forge.app.ui.security.AppLockScreen
 import com.forge.app.ui.recap.RecapScreen
 import com.forge.app.ui.settings.SettingsScreen
 import com.forge.app.ui.theme.ForgeMotion
@@ -107,7 +113,15 @@ fun ForgeNavHost(initialDayKey: String? = null) {
         nav.popBackStack(Routes.OVERVIEW, false)
     }
 
-    CompositionLocalProvider(com.forge.app.ui.common.LocalGoHome provides goHome) {
+    // User-defined cardio activities, fed once here so every cardio surface can resolve a `custom_`
+    // code to its name + glyph without per-screen plumbing (GYMAP-37).
+    val cardioTypesVm: com.forge.app.ui.cardio.CardioTypesViewModel = hiltViewModel()
+    val cardioTypes by cardioTypesVm.types.collectAsStateWithLifecycle()
+
+    CompositionLocalProvider(
+        com.forge.app.ui.common.LocalGoHome provides goHome,
+        com.forge.app.ui.cardio.LocalCardioTypes provides cardioTypes
+    ) {
     NavHost(
         navController = nav,
         startDestination = Routes.OVERVIEW,
@@ -151,10 +165,14 @@ fun ForgeNavHost(initialDayKey: String? = null) {
         }
         composable(
             route = Routes.PROGRAM_BUILDER,
-            arguments = listOf(navArgument(Routes.ARG_BLANK) { type = NavType.BoolType; defaultValue = false })
+            arguments = listOf(
+                navArgument(Routes.ARG_BLANK) { type = NavType.BoolType; defaultValue = false },
+                navArgument(Routes.ARG_VIEW) { type = NavType.BoolType; defaultValue = false }
+            )
         ) { entry ->
             ProgramBuilderScreen(
                 blank = entry.arguments?.getBoolean(Routes.ARG_BLANK) ?: false,
+                startInView = entry.arguments?.getBoolean(Routes.ARG_VIEW) ?: false,
                 onClose = { nav.popBackStack() }
             )
         }
@@ -262,7 +280,29 @@ fun ForgeNavHost(initialDayKey: String? = null) {
             )
         }
         composable(Routes.MIRROR_TEST) {
-            MirrorTestScreen(onBack = { nav.popBackStack() })
+            // Gallery lock (GYMAP-69): gate the progress photos unless the session is already
+            // authenticated (unlocking the app satisfies this too — no second prompt). Cancel → back.
+            val appLock = LocalAppLock.current
+            val galleryLocked by appLock.galleryLocked.collectAsStateWithLifecycle()
+            if (galleryLocked) {
+                AppLockScreen(
+                    subtitle = "Unlock your progress photos",
+                    promptReady = true,
+                    onUnlocked = { appLock.markAuthenticated() },
+                    onCancel = { nav.popBackStack() }
+                )
+            } else {
+                MirrorTestScreen(
+                    onBack = { nav.popBackStack() },
+                    onOpenCamera = { nav.navigate(Routes.PROGRESS_CAMERA) }
+                )
+            }
+        }
+        composable(Routes.PROGRESS_CAMERA) {
+            ProgressCameraScreen(onBack = { nav.popBackStack() })
+        }
+        composable(Routes.BODY_MEASUREMENTS) {
+            BodyMeasurementsScreen(onBack = { nav.popBackStack() })
         }
     }
     }

@@ -126,6 +126,7 @@ internal fun DataExportDialog(
             ExportRow("All sessions", "CSV", "spreadsheet of every session", onBg, muted) { viewModel.exportSessionsCsv(); onDismiss() }
             ExportRow("All PRs", "CSV", "your best lift per exercise", onBg, muted) { viewModel.exportPrsCsv(); onDismiss() }
             ExportRow("Bodyweight", "CSV", "every weigh-in", onBg, muted) { viewModel.exportBodyweightCsv(); onDismiss() }
+            ExportRow("Cardio", "CSV", "every cardio session", onBg, muted) { viewModel.exportCardioCsv(); onDismiss() }
             ExportRow("Last session", "PDF", "printable session sheet", onBg, muted) { viewModel.exportLastSessionPdf(); onDismiss() }
             ExportRow("Crash logs", "ZIP", "diagnostics if something broke", onBg, muted) { onExportCrashLogs(); onDismiss() }
 

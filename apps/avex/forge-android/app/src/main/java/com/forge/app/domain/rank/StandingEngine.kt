@@ -1,6 +1,8 @@
 package com.forge.app.domain.rank
 
+import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.formatVolumeCompact
+import com.forge.app.domain.units.formatWeight
 import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.domain.units.unitLabel
 import kotlin.math.roundToInt
@@ -51,20 +53,21 @@ object StandingEngine {
         0.0 to 99, 100.0 to 80, 200.0 to 55, 350.0 to 30, 500.0 to 12, 600.0 to 5, 700.0 to 2
     )
 
-    fun standings(s: StandingSnapshot, useKg: Boolean): List<StandingMetric> = buildList {
+    fun standings(s: StandingSnapshot, unit: WeightUnit): List<StandingMetric> = buildList {
         add(StandingMetric("consistency", "Consistency", "${fmt1(s.sessionsPerWeek)}×/wk", pct(CONSISTENCY, s.sessionsPerWeek)))
         add(StandingMetric("streak", "Streak length", "${s.streakWeeks} wk", pct(STREAK, s.streakWeeks.toDouble())))
-        add(StandingMetric("volume", "Weekly volume", formatVolumeCompact(s.weeklyVolumeLb, useKg), pct(VOLUME, s.weeklyVolumeLb)))
+        add(StandingMetric("volume", "Weekly volume", formatVolumeCompact(s.weeklyVolumeLb, unit), pct(VOLUME, s.weeklyVolumeLb)))
         // Strength percentile is omitted pre-baseline (no weighted sets yet) so the bar doesn't
         // show a misleading "TOP 99%" on a brand-new profile.
         if (s.bestE1rmLb != null && s.bestE1rmLb > 0.0) {
-            // Shared converter (canonical kg factor) + round (not truncate) so e.g. 439.9 → "440",
-            // not "439" — matches how every other weight reads in the app.
-            val displayE1rm = toDisplayWeight(s.bestE1rmLb, useKg).roundToInt()
+            // kg/lb read as one rounded figure ("440 lb"); stones takes the stone+lb compound so a
+            // whole-stone round doesn't drop up to 13 lb of the estimate.
+            val valueText = if (unit == WeightUnit.ST) formatWeight(s.bestE1rmLb, unit)
+                else "${toDisplayWeight(s.bestE1rmLb, unit).roundToInt()} ${unitLabel(unit)}"
             add(StandingMetric(
                 key = "strength",
                 label = "Best e1RM",
-                valueText = "$displayE1rm ${unitLabel(useKg)}",
+                valueText = valueText,
                 topPercent = pct(E1RM, s.bestE1rmLb)
             ))
         }

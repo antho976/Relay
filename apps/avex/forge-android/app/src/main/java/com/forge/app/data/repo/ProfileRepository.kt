@@ -3,6 +3,7 @@ package com.forge.app.data.repo
 import com.forge.app.core.time.Clock
 import com.forge.app.data.db.dao.LoggedSetDao
 import com.forge.app.data.db.dao.SessionDao
+import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.data.db.entities.Session
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.domain.rank.RankInfo
@@ -78,7 +79,10 @@ data class ProfileData(
     val prsLastWeek: Int = 0,
     /** Cumulative lifted volume (lb), one point per finished session, oldest → newest — drives the
      *  All-Time graph. Single-point until a second lifting workout exists. */
-    val lifetimeVolumeSeriesLb: List<Double> = emptyList()
+    val lifetimeVolumeSeriesLb: List<Double> = emptyList(),
+    /** How many times you trained each calendar day THIS YEAR (gym sessions + non-rest cardio),
+     *  keyed by epoch-day — feeds the THIS YEAR consistency grid. Empty ⇒ no activity yet this year. */
+    val activityByDay: Map<Long, Int> = emptyMap()
 )
 
 /**
@@ -94,6 +98,7 @@ class ProfileRepository @Inject constructor(
     private val loggedSetDao: LoggedSetDao,
     private val trophyRepo: TrophyRepository,
     private val statsRepo: StatsRepository,
+    private val cardioRepo: CardioRepository,
     private val settingsRepo: SettingsRepository,
     private val clock: Clock
 ) {
@@ -103,9 +108,15 @@ class ProfileRepository @Inject constructor(
     fun cached(): ProfileData? = lastData
 
     suspend fun load(): ProfileData = withContext(Dispatchers.IO) {
-        val useKg = settingsRepo.useKg.first()
+        val weightUnit = settingsRepo.weightUnit.first()
+        val memberSinceMs = settingsRepo.memberSinceMs.first()
         val zone = ZoneId.systemDefault()
         val nowMs = clock.nowMs()
+        // Today (system zone) — drives both the calendar-year bounds for the THIS YEAR consistency
+        // grid's cardio read and the this-week/last-week tallies further down.
+        val today = Instant.ofEpochMilli(nowMs).atZone(zone).toLocalDate()
+        val yearStartMs = today.withDayOfYear(1).atStartOfDay(zone).toInstant().toEpochMilli()
+        val yearEndMs = today.withDayOfYear(1).plusYears(1).atStartOfDay(zone).toInstant().toEpochMilli()
         coroutineScope {
         // Fire the independent DAO reads concurrently — the trophy snapshot's 13+ queries are the
         // long pole, so overlapping it with the rest is the main win for profile-open latency (#8).
@@ -124,6 +135,8 @@ class ProfileRepository @Inject constructor(
                 loggedSetDao.bestE1rmLbSince(since90)
             }.getOrNull()
         }
+        // This year's non-rest cardio, for the consistency grid (a "showed up" day is gym OR cardio).
+        val cardioYearD = async { runCatching { cardioRepo.entriesInRange(yearStartMs, yearEndMs) }.getOrDefault(emptyList()) }
         val sessions = sessionsD.await()
         val unlockedDates = unlockedDatesD.await()
         val unlockedIds = unlockedDates.keys
@@ -134,7 +147,6 @@ class ProfileRepository @Inject constructor(
         val totalSets = sessions.sumOf { it.setCount }
 
         // ── This-week vs last-week tallies (ISO weeks) — the tiles' "vs last week" arrows ─────────
-        val today = Instant.ofEpochMilli(nowMs).atZone(zone).toLocalDate()
         val thisWeekKey = weekKeyOf(today)
         val lastWeekKey = weekKeyOf(today.minusWeeks(1))
         var workoutsThisWeek = 0; var workoutsLastWeek = 0
@@ -157,7 +169,7 @@ class ProfileRepository @Inject constructor(
                 activeWeeks = sessions.mapTo(mutableSetOf()) { weekKey(it.startedAt, zone) }.size,
                 trophyPoints = trophyPoints
             ),
-            useKg
+            weightUnit
         )
         val rank = RankLadder.rankFor(xp.total)
 
@@ -172,18 +184,18 @@ class ProfileRepository @Inject constructor(
                 weeklyVolumeLb = recent.sumOf { it.totalVolumeLb ?: 0.0 } / weeks90,
                 bestE1rmLb = bestE1rmD.await()
             ),
-            useKg
+            weightUnit
         )
 
         // ── Trophy case ───────────────────────────────────────────────────────────
         val snapshot = snapshotD.await()
-        val trophyGrid = curatedTrophyGrid(unlockedIds, unlockedDates, snapshot, useKg)
+        val trophyGrid = curatedTrophyGrid(unlockedIds, unlockedDates, snapshot, weightUnit)
         val closestTrophy = snapshot?.let { snap ->
             Trophies.all.filter { it.id !in unlockedIds }
                 .mapNotNull { t -> TrophyEvaluator.progressFraction(t.unlock, snap)?.let { t to it } }
                 .filter { it.second > 0f }
                 .maxByOrNull { it.second }
-                ?.let { (t, _) -> TrophyEvaluator.progressRemaining(t.unlock, snap, useKg)?.let { "$it away from ${t.name}" } }
+                ?.let { (t, _) -> TrophyEvaluator.progressRemaining(t.unlock, snap, weightUnit)?.let { "$it away from ${t.name}" } }
         }
 
         ProfileData(
@@ -195,7 +207,7 @@ class ProfileRepository @Inject constructor(
             totalPrs = totalPrs,
             streakDays = streakD.await(),
             longestStreakDays = snapshot?.maxStreakEver ?: 0,
-            sinceLabel = sessions.minOfOrNull { it.startedAt }
+            sinceLabel = sinceMs(memberSinceMs, sessions)
                 ?.let { Instant.ofEpochMilli(it).atZone(zone).format(SINCE_FMT).uppercase() } ?: "",
             trophyUnlocked = unlockedIds.size,
             trophyTotal = Trophies.all.size,
@@ -209,7 +221,8 @@ class ProfileRepository @Inject constructor(
             setsLastWeek = setsLastWeek,
             prsThisWeek = prsThisWeek,
             prsLastWeek = prsLastWeek,
-            lifetimeVolumeSeriesLb = cumulativeSessionVolumeLb(sessions)
+            lifetimeVolumeSeriesLb = cumulativeSessionVolumeLb(sessions),
+            activityByDay = buildYearActivity(sessions, cardioYearD.await(), zone, today.year)
         )
         }.also { lastData = it }
     }
@@ -217,11 +230,27 @@ class ProfileRepository @Inject constructor(
     // ── Helpers ───────────────────────────────────────────────────────────────────
 
     /**
+     * The "member since" instant (epoch ms) for the profile's SINCE line, or null when there's nothing
+     * to anchor it to yet. Prefers the onboarding date ([memberSinceMs], stamped when setup finished) so
+     * the line shows from day one — even with zero workouts — instead of only after the first session.
+     * When a logged session predates onboarding (imported history), the earlier of the two wins so
+     * "since" reflects when the user actually started. Pre-onboarding-stamp users (memberSinceMs == 0)
+     * fall back to their earliest session, preserving the old behaviour for them.
+     */
+    private fun sinceMs(memberSinceMs: Long, sessions: List<Session>): Long? {
+        val earliestSession = sessions.minOfOrNull { it.startedAt }
+        return when {
+            memberSinceMs > 0L -> minOf(memberSinceMs, earliestSession ?: Long.MAX_VALUE)
+            else -> earliestSession
+        }
+    }
+
+    /**
      * The profile's curated trophy-case highlight (NOT the full catalog — that's one tap away):
      * the [HARDEST_DONE] hardest unlocked trophies (by tier points), then locked trophies ranked by
      * progress (almost-complete first, 0%-progress fillers after) up to [TROPHY_HIGHLIGHTS] cells.
      */
-    private fun curatedTrophyGrid(unlockedIds: Set<String>, unlockedDates: Map<String, Long>, snapshot: TrophyStatsSnapshot?, useKg: Boolean): List<TrophyCell> {
+    private fun curatedTrophyGrid(unlockedIds: Set<String>, unlockedDates: Map<String, Long>, snapshot: TrophyStatsSnapshot?, weightUnit: com.forge.app.domain.units.WeightUnit): List<TrophyCell> {
         val hardestDone = Trophies.all
             .filter { it.id in unlockedIds }
             .sortedWith(compareByDescending<Trophy> { it.tier.points }.thenBy { it.name })
@@ -236,7 +265,7 @@ class ProfileRepository @Inject constructor(
             .map { (t, p) ->
                 TrophyCell(
                     t.icon, unlocked = false, progress = p, name = t.name, description = t.description,
-                    progressLabel = snapshot?.let { TrophyEvaluator.progressHint(t.unlock, it, useKg) },
+                    progressLabel = snapshot?.let { TrophyEvaluator.progressHint(t.unlock, it, weightUnit) },
                     variant = Trophies.variantFor(t.id)
                 )
             }
@@ -285,5 +314,30 @@ internal fun cumulativeSessionVolumeLb(sessions: List<Session>): List<Double> {
     if (sessions.isEmpty()) return emptyList()
     var cumulative = 0.0
     return sessions.sortedBy { it.startedAt }.map { cumulative += it.totalVolumeLb ?: 0.0; cumulative }
+}
+
+/**
+ * Per-day training count for [year] — how many times you trained each calendar day (finished gym
+ * sessions + non-rest cardio), keyed by epoch-day (system zone). Only days with activity are present,
+ * so the map's size is the year's active-day count. Feeds the profile's THIS YEAR consistency grid.
+ * Pure (no DAO/DI), mirroring [cumulativeSessionVolumeLb].
+ */
+internal fun buildYearActivity(
+    sessions: List<Session>,
+    cardio: List<CardioEntry>,
+    zone: ZoneId,
+    year: Int
+): Map<Long, Int> {
+    val counts = HashMap<Long, Int>()
+    fun bump(ms: Long) {
+        val date = Instant.ofEpochMilli(ms).atZone(zone).toLocalDate()
+        if (date.year == year) {
+            val key = date.toEpochDay()
+            counts[key] = (counts[key] ?: 0) + 1
+        }
+    }
+    sessions.forEach { bump(it.startedAt) }
+    cardio.forEach { bump(it.date) }
+    return counts
 }
 

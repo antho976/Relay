@@ -103,7 +103,7 @@ fun RecentRow(
     onClick: () -> Unit = {}
 ) {
     val settings = LocalForgeSettings.current
-    val useKg = settings.useKg
+    val weightUnit = settings.weightUnit
     Column(
         modifier = Modifier.fillMaxWidth().bounceClick { onClick() },
         verticalArrangement = Arrangement.spacedBy(3.dp)
@@ -147,7 +147,7 @@ fun RecentRow(
             if (item.isGym && item.volumeLb != null && item.volumeLb > 0) {
                 Spacer(Modifier.width(12.dp))
                 Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    val volText = formatVolume(item.volumeLb, useKg)
+                    val volText = formatVolume(item.volumeLb, weightUnit)
                     // Trend vs this day-type's average (reuses vsAvgPct); a best session always reads up.
                     val trend = when {
                         item.isBest || (item.vsAvgPct != null && item.vsAvgPct > 0) -> "↑"
