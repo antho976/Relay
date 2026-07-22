@@ -143,13 +143,13 @@ data class DayUiState(
     val sessionProgressText: String
         get() {
             if (exercises.isEmpty()) return ""
-            val done = exercises.count { it.loggedSets.size >= it.targetSets || it.skipped }
+            val done = exercises.count { it.isComplete }
             return "$done / ${exercises.size}"
         }
 
     /** Remaining planned sets across all non-skipped exercises; used to estimate end time (#103). */
     val remainingSetsCount: Int
-        get() = exercises.filter { !it.skipped }
+        get() = exercises.filter { !it.isComplete }
             .sumOf { maxOf(0, it.targetSets - it.loggedSets.size) }
 
     /** "Beat the ghost": logged sets that surpassed the same-position set from last session. */
@@ -270,10 +270,22 @@ data class ExerciseUiState(
      * resets if the VM is recreated). Raises [targetSets] so the card doesn't
      * auto-collapse and the counter reflects the new goal.
      */
-    val bonusSets: Int = 0
+    val bonusSets: Int = 0,
+    /**
+     * The user declared this exercise done before logging every target set ("I did what I
+     * could" — AMRAP / gassed out). Distinct from [skipped] (didn't do it at all): the logged
+     * sets still count, the card files under DONE not SKIPPED. In-memory like [bonusSets].
+     */
+    val finishedEarly: Boolean = false
 ) {
     /** Planned sets plus any session-local bonus sets ("+ ADD A SET"). */
     val targetSets: Int get() = plan.sets + bonusSets
+
+    /**
+     * Needs no more work in the active queue: skipped, all target sets logged, or the user
+     * finished it early. The one predicate for "done" everywhere (progress, up-next, done list).
+     */
+    val isComplete: Boolean get() = skipped || loggedSets.size >= targetSets || finishedEarly
 
     /** 0f–1f progress toward [goalWeightLb] based on all-time PB. Null if either is absent. */
     val goalProgressFraction: Float?

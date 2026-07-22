@@ -116,6 +116,10 @@ sealed interface DayUiEvent {
     /** Add one set beyond the plan for this exercise this session ("+ ADD A SET"). */
     data class AddBonusSet(val exerciseId: String) : DayUiEvent
 
+    /** Mark this exercise done with the sets already logged, without completing every target set
+     *  (AMRAP / gassed out). Counts as DONE, not skipped; the caller then advances. */
+    data class FinishExerciseEarly(val exerciseId: String) : DayUiEvent
+
     /** Switch the global weight unit (lb ↔ kg) from the training screen. */
     data class SetUseKg(val useKg: Boolean) : DayUiEvent
 

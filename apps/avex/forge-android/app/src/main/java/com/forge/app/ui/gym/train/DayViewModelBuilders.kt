@@ -31,7 +31,8 @@ internal suspend fun DayViewModel.buildExerciseUi(
     expandedOverride: Boolean?,
     plateLb: Double,
     dbMaxLb: Double?,
-    bonusSets: Int = 0
+    bonusSets: Int = 0,
+    finishedEarly: Boolean = false
 ): ExerciseUiState = coroutineScope {
     val sessionId = _state.value.sessionId ?: error("sessionId required")
     // The swap id drives attribution: every history/PR/stats read below keys on the EXERCISE ACTUALLY
@@ -224,7 +225,8 @@ internal suspend fun DayViewModel.buildExerciseUi(
         pinnedNote = persistent?.pinnedNote ?: "",
         supersetGroup = logged?.supersetGroup,
         sessionHistory = displayHistory,
-        bonusSets = bonusSets
+        bonusSets = bonusSets,
+        finishedEarly = finishedEarly
     )
 }
 

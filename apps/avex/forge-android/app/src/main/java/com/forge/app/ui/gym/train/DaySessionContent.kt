@@ -119,7 +119,7 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
     // Keyed on the exercise list (same reference across rest-timer-tick state copies), so this list
     // walk doesn't re-run on every per-second recomposition — only when the exercises actually change.
     val firstIncompleteId = remember(state.exercises) {
-        state.exercises.firstOrNull { !it.skipped && it.loggedSets.size < it.targetSets }?.plan?.id
+        state.exercises.firstOrNull { !it.isComplete }?.plan?.id
     }
     var shownExerciseId by remember { mutableStateOf<String?>(null) }
     // Initialise the selection (and repair it if the shown exercise disappears), without
@@ -213,7 +213,7 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
                 // earlier in the list — so jumping back to a finished exercise can't orphan an
                 // incomplete one (it lands here, not nowhere). Completed/skipped ones go to DONE.
                 val remaining = state.exercises.withIndex().filter { (_, ex) ->
-                    ex.plan.id != shownExercise.plan.id && !ex.skipped && ex.loggedSets.size < ex.targetSets
+                    ex.plan.id != shownExercise.plan.id && !ex.isComplete
                 }
                 val upcoming = (remaining.filter { it.index > idx } + remaining.filter { it.index < idx })
                     .map { it.index to it.value }
@@ -257,6 +257,13 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
                                 sessionStartedAtMs = state.elapsedAnchorMs,
                                 advanceLabel = if (exNextId != null) "MOVE TO NEXT →" else "FINISH WORKOUT →",
                                 onAdvance = { if (exNextId != null) shownExerciseId = exNextId else onEvent(DayUiEvent.FinishWorkout) },
+                                // Finish an exercise you can't fully complete (AMRAP / gassed out) without
+                                // marking it skipped: record it done, then advance like MOVE TO NEXT.
+                                finishEarlyLabel = if (exNextId != null) "Done with this exercise →" else "Done, finish workout →",
+                                onFinishEarly = {
+                                    onEvent(DayUiEvent.FinishExerciseEarly(id))
+                                    if (exNextId != null) shownExerciseId = exNextId else onEvent(DayUiEvent.FinishWorkout)
+                                },
                                 onToggle = { },
                                 onLogSet = { weight, reps ->
                                     // Plate exercises enter a plate COUNT (not a display-unit weight),
@@ -281,7 +288,7 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
                                     if (!ex.skipped) {
                                         val advanceTo = exNextId
                                             ?: state.exercises.firstOrNull {
-                                                it.plan.id != id && !it.skipped && it.loggedSets.size < it.targetSets
+                                                it.plan.id != id && !it.isComplete
                                             }?.plan?.id
                                         if (advanceTo != null) shownExerciseId = advanceTo
                                     }
@@ -320,7 +327,7 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
                 // Exercises you've finished or skipped stay here, below Up Next — tap one to
                 // re-open it in the card above and keep editing its sets.
                 val done = state.exercises.withIndex().filter { (_, ex) ->
-                    ex.plan.id != shownExercise.plan.id && (ex.skipped || ex.loggedSets.size >= ex.targetSets)
+                    ex.plan.id != shownExercise.plan.id && ex.isComplete
                 }
                 if (done.isNotEmpty()) {
                     item(key = "done-header", contentType = "done-header") {

@@ -64,7 +64,7 @@ internal fun DayViewModel.handleExerciseEvent(event: DayUiEvent) {
             if (newSkipped) {
                 val nextEx = _state.value.exercises
                     .dropWhile { it.plan.id != event.exerciseId }.drop(1)
-                    .firstOrNull { !it.skipped && it.loggedSets.size < it.targetSets }
+                    .firstOrNull { !it.isComplete }
                 if (nextEx != null) _state.update { s ->
                     s.copy(exercises = s.exercises.map {
                         if (it.plan.id == nextEx.plan.id) it.copy(isExpanded = true) else it
@@ -182,6 +182,13 @@ internal fun DayViewModel.handleExerciseEvent(event: DayUiEvent) {
         is DayUiEvent.AddBonusSet -> _state.update { s ->
             s.copy(exercises = s.exercises.map {
                 if (it.plan.id == event.exerciseId) it.copy(bonusSets = it.bonusSets + 1, isExpanded = true) else it
+            })
+        }
+        // Declare the exercise done early — collapse the card and file it under DONE (mirrors the
+        // auto-collapse when the final target set is logged). Navigation is the caller's job.
+        is DayUiEvent.FinishExerciseEarly -> _state.update { s ->
+            s.copy(exercises = s.exercises.map {
+                if (it.plan.id == event.exerciseId) it.copy(finishedEarly = true, isExpanded = false) else it
             })
         }
         is DayUiEvent.SetUseKg -> viewModelScope.launch { settingsRepo.setUseKg(event.useKg) }
