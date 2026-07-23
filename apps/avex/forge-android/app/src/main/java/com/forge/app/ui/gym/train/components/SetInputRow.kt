@@ -89,10 +89,11 @@ fun SetInputRow(
     priorSetForActiveRow: LoggedSet? = null,
     targetsMet: Boolean = false,
     advanceLabel: String = "",
-    /** Accent action link shown under LOG SET when [onFinishEarly] is set — ends the exercise with
-     *  the sets already logged (AMRAP / gassed out) instead of forcing SKIP. */
+    /** Full-width outlined button shown above LOG SET when [onFinishEarly] is set — ends the
+     *  exercise with the sets already logged (AMRAP / gassed out) instead of forcing SKIP.
+     *  Rendered uppercased to match the screen's button voice. */
     finishEarlyLabel: String = "",
-    /** Null hides the finish-early link (zero sets logged, or targets already met). */
+    /** Null hides the finish-early button (zero sets logged, or targets already met). */
     onFinishEarly: (() -> Unit)? = null,
     /** Bodyweight exercise (push-ups, planks…) — no weight field; logs reps only as "BW". */
     isBodyweight: Boolean = false,
@@ -337,7 +338,9 @@ fun SetInputRow(
                     }
                 }
 
-                // ── Quick-adjust row — +/- steppers (repeat-last-set is hold-LOG-SET) ────
+                // ── Quick-adjust row — +/- steppers + inline "+ SET" (repeat-last-set is
+                // hold-LOG-SET). "Add a set" rides here as a compact pill so the prominent
+                // full-width slot below can carry the exercise-finish action instead.
                 Spacer(Modifier.height(10.dp))
                 FlowRow(
                     modifier = Modifier.fillMaxWidth(),
@@ -354,6 +357,8 @@ fun SetInputRow(
                         )
                     }
                     StepperPill(label = "REPS", onMinus = { stepReps(-1) }, onPlus = { stepReps(1) })
+                    // Extends the planned set count; sized/shaped to match the stepper pills.
+                    AddSetPill(onAdd = onAddSet)
                 }
 
                 Spacer(Modifier.height(12.dp))
@@ -406,7 +411,8 @@ fun SetInputRow(
                     }
                 }
 
-                // Stopwatch + ±5s adjust — the timed analogue of the weight/reps steppers.
+                // Stopwatch + ±5s adjust — the timed analogue of the weight/reps steppers,
+                // carrying the same inline "+ SET" pill so timed holds can add a set too.
                 Spacer(Modifier.height(10.dp))
                 FlowRow(
                     modifier = Modifier.fillMaxWidth(),
@@ -415,31 +421,27 @@ fun SetInputRow(
                 ) {
                     StopwatchButton(running = swRunning, onToggle = { toggleStopwatch() })
                     StepperPill(label = "5 SEC", onMinus = { stepHold(-5) }, onPlus = { stepHold(5) })
+                    AddSetPill(onAdd = onAddSet)
                 }
 
                 Spacer(Modifier.height(12.dp))
             }
 
-            // "+ ADD A SET" — outlined rounded button; extends the planned set count.
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .border(1.dp, muted.copy(alpha = 0.6f), ctaShape)
-                    .then(if (onAddSet != null) Modifier.clickable { onAddSet() } else Modifier)
-                    .padding(vertical = 14.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    "+ ADD A SET",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = muted
-                )
-            }
-
-            Spacer(Modifier.height(10.dp))
-
             if (targetsMet) {
-                // Solid white advance CTA — input is done; move to the next exercise.
+                // Targets hit — the input row (with its inline "+ SET") is gone, so
+                // "add a bonus set" takes the full-width slot, then the solid white advance
+                // CTA moves to the next exercise.
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(1.dp, muted.copy(alpha = 0.6f), ctaShape)
+                        .then(if (onAddSet != null) Modifier.clickable { onAddSet() } else Modifier)
+                        .padding(vertical = 14.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("+ ADD A SET", style = MaterialTheme.typography.labelMedium, color = muted)
+                }
+                Spacer(Modifier.height(10.dp))
                 Button(
                     onClick = onAdvance,
                     modifier = Modifier.fillMaxWidth(),
@@ -453,6 +455,28 @@ fun SetInputRow(
                     Text(advanceLabel, style = MaterialTheme.typography.labelLarge)
                 }
             } else {
+                // "Done with this exercise" — end the exercise with what you logged (files it
+                // under DONE, not skipped) and move on. It's the sidekick to LOG SET, so it's a
+                // full-width OUTLINED button in the prominent slot (§8 ②) — not a stretched text
+                // link. Sits where "+ ADD A SET" used to. Shown only once ≥1 set is logged.
+                if (onFinishEarly != null) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(1.dp, muted.copy(alpha = 0.6f), ctaShape)
+                            .clickableLabeled(finishEarlyLabel) { onFinishEarly() }
+                            .padding(vertical = 14.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            finishEarlyLabel.uppercase(),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = onBg
+                        )
+                    }
+                    Spacer(Modifier.height(10.dp))
+                }
+
                 // Tap the weight/reps fields to use the system keyboard; tapping this logs the set.
                 // A Material Button can't take a long-press, so this is a styled Box with
                 // combinedClickable: tap = log the typed set, long-press = repeat your last set.
@@ -498,26 +522,6 @@ fun SetInputRow(
                         textAlign = TextAlign.Center,
                         modifier = Modifier.fillMaxWidth()
                     )
-                }
-                // "I'm done" — end the exercise with what you logged (files it under DONE, not
-                // skipped) and move on. Secondary to LOG SET, so it's an accent action link, not a
-                // second filled capsule (§8: one filled per section). Shown only once ≥1 set is logged.
-                if (onFinishEarly != null) {
-                    Spacer(Modifier.height(6.dp))
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .sizeIn(minHeight = 48.dp)
-                            .clickableLabeled(finishEarlyLabel) { onFinishEarly() },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            finishEarlyLabel,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary,
-                            textAlign = TextAlign.Center
-                        )
-                    }
                 }
             }
         }
@@ -573,6 +577,24 @@ fun SetInputRow(
                 )
             }
         }
+    }
+}
+
+/** A compact pill that rides the quick-adjust row and appends one set to the plan.
+ *  Sized/shaped to sit flush with the +/- stepper pills beside it. */
+@Composable
+private fun AddSetPill(onAdd: (() -> Unit)?) {
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val outline = MaterialTheme.colorScheme.outline
+    Box(
+        modifier = Modifier
+            .sizeIn(minHeight = 40.dp)
+            .border(1.dp, outline.copy(alpha = 0.5f), RoundedCornerShape(50))
+            .then(if (onAdd != null) Modifier.clickableLabeled("Add a set") { onAdd() } else Modifier)
+            .padding(horizontal = 18.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text("+ SET", style = MaterialTheme.typography.labelMedium, color = muted)
     }
 }
 
