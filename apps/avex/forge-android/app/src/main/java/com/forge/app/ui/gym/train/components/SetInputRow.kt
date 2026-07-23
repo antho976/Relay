@@ -58,6 +58,7 @@ import java.util.Locale
 import com.forge.app.data.db.entities.LoggedSet
 import com.forge.app.domain.units.MAX_HOLD_SECONDS
 import com.forge.app.domain.units.WeightUnit
+import com.forge.app.service.wear.toProtocol
 import com.forge.app.domain.units.formatHold
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.domain.units.parseToLb
@@ -347,8 +348,9 @@ fun SetInputRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    // Stones steps by half a stone so the single-decimal field stays clean; kg 2.5, lb 5.
-                    val weightStep = when { isPlates -> 0.5; weightUnit == WeightUnit.KG -> 2.5; weightUnit == WeightUnit.ST -> 0.5; else -> 5.0 }
+                    // The step table lives in :shared (W1) so the phone's ± and the watch's bezel
+                    // adjust can never drift; the unit mapping is the wear publisher's.
+                    val weightStep = com.forge.shared.weight.WeightSteps.weightStep(weightUnit.toProtocol(), isPlates)
                     if (!isBodyweight) {
                         StepperPill(
                             label = if (isPlates) "PL" else unitLabel(weightUnit).uppercase(),

@@ -188,6 +188,18 @@ fun OverviewScreen(
     val orphanNotice by viewModel.orphanNotice.collectAsStateWithLifecycle()
     val selectedItem by viewModel.selectedItem.collectAsStateWithLifecycle()
     val summaryLines by viewModel.sessionExerciseLines.collectAsStateWithLifecycle()
+    val movement by viewModel.movement.collectAsStateWithLifecycle()
+
+    // Keep the movement line current across a day of glances (W6) — steps taken while away should
+    // show on return, same resume-refresh rule as the cardio hero's TODAY line (GYMAP-64).
+    val movementLifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(movementLifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) viewModel.refreshMovement()
+        }
+        movementLifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { movementLifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     // A milestone "fires and vanishes" otherwise (it's marked shown immediately) — capture it into a
     // transient banner so the user actually sees it (#Overview pendingMilestone).
     var milestoneToast by remember { mutableStateOf<MilestoneEvent?>(null) }
@@ -515,6 +527,14 @@ fun OverviewScreen(
                 )
             }
 
+            // ── Movement today (W6) — the watch's step count against a typical day. Rendered only
+            // when steps are connected (GYMAP-64 rule: honest zero when connected, hidden otherwise);
+            // the bar is the mark and works at zero (§12). "Typical" = median of the last 14 days.
+            movement?.let { m ->
+                Spacer(Modifier.height(16.dp))
+                MovementLine(m, onBg = onBg, muted = muted, outline = outline, accent = accent)
+            }
+
             // ── Coach (adaptation engine: actionable advice only) ────────────
             // Hidden in freestyle (no plan to coach against); shown for generated AND custom — custom
             // has a real plan, so fatigue/deload/swap advice all apply once they've trained.
@@ -678,5 +698,59 @@ private fun OnThisDayCard(
         Spacer(Modifier.height(2.dp))
         Text("You trained ${memory.dayName} · $vol moved$prText",
             style = MaterialTheme.typography.bodyMedium, color = onBg)
+    }
+}
+
+/**
+ * The Home movement line (W6): today's watch steps against a typical day (14-day median), the
+ * quiet daily-movement read between sessions. One thin bar (fill `primary` on an outline track,
+ * §5) + one mono reading — honest at zero, hidden entirely when steps aren't connected.
+ */
+@Composable
+private fun MovementLine(
+    movement: OverviewViewModel.TodayMovement,
+    onBg: Color,
+    muted: Color,
+    outline: Color,
+    accent: Color
+) {
+    val reading = buildString {
+        append("%,d".format(movement.steps))
+        append(" STEPS")
+        movement.typicalSteps?.let { append(" · TYPICAL ~%,d".format(it)) }
+    }
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("MOVEMENT", style = MaterialTheme.typography.labelMedium, color = muted)
+            Text(
+                reading,
+                style = MaterialTheme.typography.labelSmall,
+                color = muted, fontSize = 9.sp, letterSpacing = 0.5.sp
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        // Today against the typical-day mark; with no baseline yet the bar shows today against
+        // itself (full when any steps, empty at zero) — a real reading either way, never fake.
+        val target = movement.typicalSteps ?: movement.steps
+        val fraction = if (target <= 0) 0f else (movement.steps.toFloat() / target).coerceIn(0f, 1f)
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(4.dp)
+                .background(outline.copy(alpha = 0.3f), RoundedCornerShape(2.dp))
+        ) {
+            if (fraction > 0f) {
+                Box(
+                    Modifier
+                        .fillMaxWidth(fraction)
+                        .height(4.dp)
+                        .background(accent, RoundedCornerShape(2.dp))
+                )
+            }
+        }
     }
 }

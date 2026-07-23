@@ -41,6 +41,7 @@ class WorkoutSessionService : Service() {
 
     @Inject lateinit var bridge: WorkoutSessionBridge
     @Inject lateinit var settingsRepo: SettingsRepository
+    @Inject lateinit var wearConnection: com.forge.app.service.wear.WearConnection
 
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var currentState: SessionNotifState? = null
@@ -53,6 +54,10 @@ class WorkoutSessionService : Service() {
         const val CHANNEL_TIMER = "forge_timer"
         private const val NOTIF_SESSION = 1
         private const val NOTIF_TIMER = 2
+        /** How long the phone waits for the wrist's timer-done haptic ack before buzzing itself. */
+        private const val HAPTIC_ACK_GRACE_MS = 2_500L
+        /** Ack recency accepted as "the wrist buzzed for THIS timer" (covers the grace + BT lag). */
+        private const val HAPTIC_ACK_WINDOW_MS = 8_000L
 
         fun createChannels(context: Context) {
             val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -117,6 +122,17 @@ class WorkoutSessionService : Service() {
                 bridge.timerDone.collect {
                     // N2: respect the per-type opt-out (buzz + notify when the app is backgrounded).
                     if (restTimerAlertEnabled) {
+                        // Haptic handoff (W1, DESIGN.md §16): when the watch is reachable, IT owns
+                        // the timer-done buzz — the phone waits a short grace for the wrist's ack
+                        // and stays silent when it lands. No ack (watch app dead, BT dropped at the
+                        // boundary) → the phone buzzes late rather than nobody buzzing.
+                        val watchReachable = wearConnection.reachableWearNodeId() != null
+                        if (watchReachable) {
+                            kotlinx.coroutines.delay(HAPTIC_ACK_GRACE_MS)
+                            if (wearConnection.hapticAckedWithin(HAPTIC_ACK_WINDOW_MS, System.currentTimeMillis())) {
+                                return@collect
+                            }
+                        }
                         // Quiet hours: still buzz (you're mid-workout and want the cue) but skip the
                         // heads-up notification so the phone stays visually silent.
                         if (settingsRepo.isQuietNow()) vibratePhone() else postTimerDoneNotification()

@@ -45,6 +45,7 @@ class DayViewModel @Inject constructor(
     internal val clock: Clock,
     @ApplicationContext internal val appContext: Context,
     internal val bridge: WorkoutSessionBridge,
+    internal val timerHolder: com.forge.app.service.wear.SessionTimerHolder,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
@@ -58,7 +59,10 @@ class DayViewModel @Inject constructor(
     internal val dayKey: String = dayPlan.key
     internal val skipWarmup: Boolean = savedStateHandle.get<Boolean>(Routes.ARG_SKIP_WARMUP) ?: false
 
-    internal val restTimer = RestTimerController(viewModelScope, clock)
+    // The app-scoped shared timer (W1): the wrist mirrors it and wrist skip/+30 commands act on it,
+    // so the day screen CONSUMES the singleton instead of owning a private instance. Cleanup moved
+    // from VM-scope death to the explicit session end (stopSessionService stops it).
+    internal val restTimer = timerHolder.controller
 
     /** Personal rest-correction factors (engine System 2). Neutral until the init load lands. */
     internal var restTuning: com.forge.app.domain.adapt.RestTuning =

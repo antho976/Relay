@@ -29,6 +29,10 @@ interface LoggedExerciseDao {
     @Query("SELECT * FROM logged_exercise WHERE session_id = :sessionId ORDER BY order_index")
     suspend fun forSession(sessionId: Long): List<LoggedExercise>
 
+    /** Reactive [forSession] — drives the watch's /session/live mirror (W1) off Room invalidation. */
+    @Query("SELECT * FROM logged_exercise WHERE session_id = :sessionId ORDER BY order_index")
+    fun observeForSession(sessionId: Long): Flow<List<LoggedExercise>>
+
     /**
      * The most recently logged instance of this exercise in any *other* session. Used
      * to pre-fill the weight input on the day screen from the user's last performance.

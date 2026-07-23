@@ -26,3 +26,6 @@ dependencyResolutionManagement {
 rootProject.name = "Forge"
 include(":app")
 include(":baselineprofile")
+// Wear OS (W1): :shared = the pure protocol/timer core both apps compile; :wear = the watch app.
+include(":shared")
+include(":wear")

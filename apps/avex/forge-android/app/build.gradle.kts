@@ -101,6 +101,14 @@ ksp {
 }
 
 dependencies {
+    // The pure protocol/timer core shared with the watch (W1). api: its coroutines/serialization
+    // types appear in :app signatures.
+    api(project(":shared"))
+
+    // Wearable Data Layer — Bluetooth IPC to the watch app; no network involved (W1).
+    implementation(libs.play.services.wearable)
+    implementation(libs.kotlinx.coroutines.play.services)
+
     // Core + lifecycle
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.core.splashscreen)

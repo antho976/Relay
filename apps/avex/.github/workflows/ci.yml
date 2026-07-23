@@ -39,9 +39,12 @@ jobs:
           gradle-version: "9.4.1"
 
       - name: Unit tests
-        run: gradle -p forge-android testDebugUnitTest --no-daemon
+        # testDebugUnitTest covers the Android modules (:app + :wear); :shared is a pure Kotlin/JVM
+        # library whose task is `test` — without it the protocol + rest-timer suites would silently
+        # never run in CI (W1).
+        run: gradle -p forge-android testDebugUnitTest :shared:test --no-daemon
 
-      - name: Assemble debug APK
+      - name: Assemble debug APKs (phone + wear)
         run: gradle -p forge-android assembleDebug --no-daemon
 
       - name: Assemble release (unsigned, exercises R8)
@@ -51,5 +54,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: forge-debug-apk
-          path: forge-android/app/build/outputs/apk/debug/*.apk
+          path: |
+            forge-android/app/build/outputs/apk/debug/*.apk
+            forge-android/wear/build/outputs/apk/debug/*.apk
           if-no-files-found: warn

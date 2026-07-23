@@ -54,14 +54,34 @@ data class HealthSnap(
     /** Recent sleep sessions (any order; the advisor windows them). */
     val sleepNights: List<SleepNight> = emptyList(),
     /** Recent resting-heart-rate readings (any order). */
-    val restingHr: List<RestingHrSample> = emptyList()
+    val restingHr: List<RestingHrSample> = emptyList(),
+    /** Recent heart-rate-variability readings (RMSSD ms, any order) — a watch's overnight HRV (W6).
+     *  Additive readiness input; empty when not granted / not produced. */
+    val hrv: List<HrvSample> = emptyList(),
+    /** Recent per-day step totals (W6) — the daily-movement readiness input. Empty when not granted. */
+    val dailySteps: List<DailySteps> = emptyList()
 )
 
-/** One night's sleep: when it ended (epoch-ms) and how long it lasted (minutes). */
-data class SleepNight(val endedAtMs: Long, val durationMin: Int)
+/**
+ * One night's sleep: when it ended (epoch-ms) and how long it lasted (minutes). [deepMin]/[remMin]
+ * carry the provider's sleep stages when it reports them (W6); 0 = stages absent, never "no deep
+ * sleep" — consumers gate on `deepMin + remMin > 0`.
+ */
+data class SleepNight(
+    val endedAtMs: Long,
+    val durationMin: Int,
+    val deepMin: Int = 0,
+    val remMin: Int = 0
+)
 
 /** One resting-HR reading: when it was taken (epoch-ms) and the value in beats per minute. */
 data class RestingHrSample(val timeMs: Long, val bpm: Int)
+
+/** One HRV reading: when it was taken (epoch-ms) and the RMSSD value in milliseconds (W6). */
+data class HrvSample(val timeMs: Long, val rmssdMs: Double)
+
+/** One day's total steps: local-midnight epoch-ms and the count (W6). */
+data class DailySteps(val dayStartMs: Long, val steps: Int)
 
 data class ProgramDaySnap(
     val dayKey: String,

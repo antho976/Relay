@@ -257,6 +257,21 @@ class SettingsRepository @Inject constructor(
     suspend fun setHcWriteCalories(value: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.HC_WRITE_CALORIES] = value }
 
+    /** Watch workouts the user dismissed from the cardio import suggestions (W5), by HC record id. */
+    val hcDismissedWatchImports: Flow<Set<String>> = context.forgePreferences.data
+        .map { it[PreferenceKeys.HC_DISMISSED_WATCH_IMPORTS] ?: emptySet() }
+    suspend fun addDismissedWatchImports(ids: Set<String>) =
+        context.forgePreferences.edit {
+            it[PreferenceKeys.HC_DISMISSED_WATCH_IMPORTS] =
+                (it[PreferenceKeys.HC_DISMISSED_WATCH_IMPORTS] ?: emptySet()) + ids
+        }
+
+    /** Write each finished gym + cardio session to Health Connect (W0). Opt-in, off by default. */
+    val hcWriteSessions: Flow<Boolean> = context.forgePreferences.data
+        .map { it[PreferenceKeys.HC_WRITE_SESSIONS] ?: false }
+    suspend fun setHcWriteSessions(value: Boolean) =
+        context.forgePreferences.edit { it[PreferenceKeys.HC_WRITE_SESSIONS] = value }
+
     /** Whether the one-time HC weight-history backfill has run (GYMAP-63). Default false. */
     val hcWeightHistoryImported: Flow<Boolean> = context.forgePreferences.data
         .map { it[PreferenceKeys.HC_WEIGHT_HISTORY_IMPORTED] ?: false }

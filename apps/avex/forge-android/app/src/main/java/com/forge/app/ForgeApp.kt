@@ -28,6 +28,10 @@ class ForgeApp : Application(), Configuration.Provider {
     @Inject lateinit var programRepository: ProgramRepository
     @Inject lateinit var settingsRepository: SettingsRepository
     @Inject lateinit var reminderScheduler: ReminderScheduler
+    @Inject lateinit var wearStatePublisher: com.forge.app.service.wear.WearStatePublisher
+
+    /** App-lifetime work that should survive any screen (the wear publisher's collectors, W1). */
+    private val appScope = CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.Default)
 
     override val workManagerConfiguration: Configuration
         get() = Configuration.Builder().setWorkerFactory(workerFactory).build()
@@ -48,6 +52,9 @@ class ForgeApp : Application(), Configuration.Provider {
                 settingsRepository.trainingReminderHour.first()
             )
         }
+        // Mirror phone state to the wrist (W1): /session/live + /timer/state + /config collectors,
+        // and the app-open /glance/today refresh. All fail-soft — no watch means unread DataItems.
+        wearStatePublisher.start(appScope)
     }
 
     /**
