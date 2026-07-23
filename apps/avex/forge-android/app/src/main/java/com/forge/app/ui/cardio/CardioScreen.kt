@@ -4,6 +4,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -35,6 +36,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.ui.cardio.components.CardioEntryRow
@@ -129,6 +131,9 @@ fun CardioScreen(
             onShowRoute = state.sessionRouteConsentId?.let { id -> { routeLauncher.launch(id) } },
             wearable = state.sessionWearable, // That day's watch steps (null until loaded / when none).
             wearableConnected = state.stepsConnected, // Show an empty placeholder once connected.
+            hr = state.sessionHr, // Matched watch workout's HR series (W5); null hides the section.
+            watchStats = state.sessionWatch,
+            onAdoptWatchStats = viewModel::adoptWatchStats,
             onEdit = { viewModel.editEntry(sessionEntry.id) },
             onDelete = { viewModel.deleteEntry(sessionEntry.id) },
             onBack = viewModel::closeSessionDetail,
@@ -163,7 +168,9 @@ fun CardioScreen(
             seeAllExpands = onOpenHistory == null,
             onConnectWearable = onConnectWearable,
             onOpenGoals = onOpenGoals,
-            onDismissHint = viewModel::dismissWearableHint
+            onDismissHint = viewModel::dismissWearableHint,
+            onImportWatch = viewModel::importWatchWorkout,
+            onDismissImports = viewModel::dismissWatchImports
         )
     }
 }
@@ -184,7 +191,9 @@ private fun CardioListContent(
     seeAllExpands: Boolean,
     onConnectWearable: () -> Unit,
     onOpenGoals: () -> Unit,
-    onDismissHint: () -> Unit
+    onDismissHint: () -> Unit,
+    onImportWatch: (com.forge.app.domain.health.WatchWorkout) -> Unit,
+    onDismissImports: () -> Unit
 ) {
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
@@ -265,6 +274,22 @@ private fun CardioListContent(
                         useMiles = state.useMiles,
                         onOpenSession = onOpenSession,
                         onBg = onBg, muted = muted, accent = accent, outline = outline
+                    )
+                }
+            }
+
+            // FROM YOUR WATCH (W5) — sessions the watch recorded that have no entry here yet. Row tap
+            // imports (prefilled sheet); the header's `hide` dismisses the batch for good. Hidden when
+            // empty — the watch banner carries the unconnected state, so no empty shell (§12).
+            if (state.importSuggestions.isNotEmpty()) {
+                item("watch-imports") {
+                    Spacer(Modifier.height(28.dp))
+                    WatchImportsSection(
+                        suggestions = state.importSuggestions,
+                        useMiles = state.useMiles,
+                        onImport = onImportWatch,
+                        onDismiss = onDismissImports,
+                        onBg = onBg, muted = muted, accent = accent
                     )
                 }
             }
@@ -357,5 +382,74 @@ private fun SeeAllRow(
             .padding(horizontal = 24.dp, vertical = 14.dp)
     ) {
         Text(label, style = MaterialTheme.typography.labelMedium, color = accent)
+    }
+}
+
+/**
+ * FROM YOUR WATCH (W5) — watch-recorded workouts with no matching entry, offered as one-tap
+ * imports. Each row's whole surface imports it (opens the prefilled log sheet); the header's
+ * `hide` action dismisses the batch permanently. Suggestions only, never auto-logged.
+ */
+@Composable
+private fun WatchImportsSection(
+    suggestions: List<com.forge.app.domain.health.WatchWorkout>,
+    useMiles: Boolean,
+    onImport: (com.forge.app.domain.health.WatchWorkout) -> Unit,
+    onDismiss: () -> Unit,
+    onBg: Color,
+    muted: Color,
+    accent: Color
+) {
+    Column {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            com.forge.app.ui.common.EditorialHeader(
+                label = "From your watch",
+                muted = muted,
+                accent = accent,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                "hide",
+                style = MaterialTheme.typography.labelMedium,
+                color = muted,
+                modifier = Modifier
+                    .clickableLabeled("Hide watch workout suggestions", onClick = onDismiss)
+                    .padding(horizontal = 4.dp, vertical = 8.dp)
+            )
+        }
+        Spacer(Modifier.height(2.dp))
+        suggestions.forEach { w ->
+            val type = com.forge.app.domain.cardio.CardioType.entries
+                .firstOrNull { it.code == com.forge.app.data.health.HcExerciseTypes.toCardioCode(w.exerciseType) }
+            val dayLabel = remember(w.startMs) {
+                java.text.SimpleDateFormat("EEE h:mm a", java.util.Locale.getDefault())
+                    .format(java.util.Date(w.startMs))
+            }
+            val meta = buildList {
+                add(dayLabel)
+                add("${w.durationMin} min")
+                w.distanceKm?.let { add(com.forge.app.domain.units.formatDistance(it, useMiles)) }
+            }.joinToString(" · ")
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickableLabeled("Import ${type?.displayName ?: "workout"}", onClick = { onImport(w) })
+                    .padding(horizontal = 24.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(type?.displayName ?: "Workout", style = MaterialTheme.typography.bodyLarge, color = onBg)
+                    Text(
+                        meta.uppercase(),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = muted, letterSpacing = 0.5.sp
+                    )
+                }
+                Text("import →", style = MaterialTheme.typography.labelMedium, color = accent)
+            }
+        }
     }
 }

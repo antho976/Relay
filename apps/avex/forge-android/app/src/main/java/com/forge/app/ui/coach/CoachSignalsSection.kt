@@ -20,6 +20,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.forge.app.data.repo.RecoverySignal
 import com.forge.app.data.repo.TrackedLift
 import com.forge.app.domain.adapt.DeloadAdvisor
@@ -182,6 +183,19 @@ internal fun LazyListScope.coachSignalsLens(
                     sig.label.contains("heart", ignoreCase = true) && state.health.restingHr.size >= 2 -> {
                         Spacer(Modifier.height(6.dp))
                         CoachHrLine(state.health.restingHr, state.health.hrBaseline, c)
+                        // Overnight HRV rides the heart row as one more reading (W6) — window
+                        // average vs its own baseline, shown only once enough samples exist.
+                        state.health.hrvWindowAvg?.let { hrv ->
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                buildString {
+                                    append("HRV $hrv MS")
+                                    state.health.hrvBaseline?.let { append(" · BASELINE $it MS") }
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = c.muted, fontSize = 9.sp, letterSpacing = 0.5.sp
+                            )
+                        }
                         Spacer(Modifier.height(12.dp))
                     }
                 }

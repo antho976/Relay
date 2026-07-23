@@ -208,6 +208,15 @@ fun SessionDetailScreen(
                             }
                         }
                     }
+                    // The watch's HR trace (W3): rendered only when the watch streamed this session —
+                    // no watch, no section, no empty shell (the trace is watch-authored data).
+                    state.hrView?.let { hrView ->
+                        item("heart-rate") {
+                            Box(Modifier.statsEntrance(3).padding(top = 20.dp)) {
+                                SessionHrSection(hrView, onBg, muted, accent, outline)
+                            }
+                        }
+                    }
                     // "Log again today" (GYMAP-36): one-tap re-log of this exact workout as today's
                     // session — a page-end do-it-now capsule (§8 ①), shown only when there's something
                     // to copy (the exercises-empty branch never reaches here).

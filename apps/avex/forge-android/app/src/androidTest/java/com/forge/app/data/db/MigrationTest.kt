@@ -245,12 +245,36 @@ class MigrationTest {
     }
 
     @Test
-    fun migrateFullChain12To29_runsEveryStepInOrder() {
+    fun migrate29To30_addsLeanMassTable() {
+        helper.createDatabase(dbName, 29).close()
+        val db = helper.runMigrationsAndValidate(dbName, 30, true, MIGRATION_29_30)
+
+        db.query("SELECT name FROM sqlite_master WHERE type='table' AND name = 'lean_mass'")
+            .use { assertEquals("lean_mass should exist after 29→30", 1, it.count) }
+        db.query(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name = 'index_lean_mass_date_key'"
+        ).use { assertEquals("unique date_key index should exist after 29→30", 1, it.count) }
+    }
+
+    @Test
+    fun migrate30To31_addsSessionHrTable() {
+        helper.createDatabase(dbName, 30).close()
+        val db = helper.runMigrationsAndValidate(dbName, 31, true, MIGRATION_30_31)
+
+        db.query("SELECT name FROM sqlite_master WHERE type='table' AND name = 'session_hr_sample'")
+            .use { assertEquals("session_hr_sample should exist after 30→31", 1, it.count) }
+        db.query(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name = 'index_session_hr_sample_session_id'"
+        ).use { assertEquals("session index should exist after 30→31", 1, it.count) }
+    }
+
+    @Test
+    fun migrateFullChain12To31_runsEveryStepInOrder() {
         // The pairwise tests above each validate one hop. This runs the WHOLE locked chain in a
         // single pass — a real v12 install upgrading straight to today's schema — so a gap or an
         // out-of-order/incompatible step between any two versions is caught, not just each hop alone.
         helper.createDatabase(dbName, 12).close()
-        helper.runMigrationsAndValidate(dbName, 29, true, *ALL_MIGRATIONS)
+        helper.runMigrationsAndValidate(dbName, 31, true, *ALL_MIGRATIONS)
     }
 
     @Test

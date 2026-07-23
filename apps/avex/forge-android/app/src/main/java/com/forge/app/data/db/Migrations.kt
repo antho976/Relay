@@ -318,6 +318,48 @@ val MIGRATION_28_29 = object : Migration(28, 29) {
     }
 }
 
+/**
+ * v29 → v30: lean body mass (W6). `lean_mass` holds per-day lean-body-mass readings from a watch's
+ * BIA measurement, imported from Health Connect — one row per day via the unique index, the exact
+ * shape of `body_fat`. New empty table — additive, no existing data touched. Import-only (no manual
+ * log, no write-back): the watch is the sole author of this metric.
+ */
+val MIGRATION_29_30 = object : Migration(29, 30) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `lean_mass` (" +
+                "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "`date_key` TEXT NOT NULL, " +
+                "`weight_lb` REAL NOT NULL, " +
+                "`recorded_at` INTEGER NOT NULL)"
+        )
+        db.execSQL(
+            "CREATE UNIQUE INDEX IF NOT EXISTS `index_lean_mass_date_key` ON `lean_mass` (`date_key`)"
+        )
+    }
+}
+
+/**
+ * v30 → v31: live session heart rate (W3). `session_hr_sample` holds the watch's HR stream during
+ * a workout — (session_id, at_ms) keyed so re-sent batches stay idempotent, CASCADE with the
+ * session. New empty table — additive, no existing data touched.
+ */
+val MIGRATION_30_31 = object : Migration(30, 31) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `session_hr_sample` (" +
+                "`session_id` INTEGER NOT NULL, " +
+                "`at_ms` INTEGER NOT NULL, " +
+                "`bpm` INTEGER NOT NULL, " +
+                "PRIMARY KEY(`session_id`, `at_ms`), " +
+                "FOREIGN KEY(`session_id`) REFERENCES `session`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE)"
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_session_hr_sample_session_id` ON `session_hr_sample` (`session_id`)"
+        )
+    }
+}
+
 /** All migrations, in order. Register every new one here. */
 val ALL_MIGRATIONS: Array<Migration> = arrayOf(
     MIGRATION_12_13,
@@ -336,5 +378,7 @@ val ALL_MIGRATIONS: Array<Migration> = arrayOf(
     MIGRATION_25_26,
     MIGRATION_26_27,
     MIGRATION_27_28,
-    MIGRATION_28_29
+    MIGRATION_28_29,
+    MIGRATION_29_30,
+    MIGRATION_30_31
 )

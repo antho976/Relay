@@ -45,7 +45,10 @@ class CoachViewModel @Inject constructor(
         /** Resting heart rate readings in bpm, oldest first. */
         val restingHr: List<Int> = emptyList(),
         val hrWindowAvg: Int? = null,
-        val hrBaseline: Int? = null
+        val hrBaseline: Int? = null,
+        /** Overnight HRV (RMSSD ms): recent-window average vs the prior-window baseline (W6). */
+        val hrvWindowAvg: Int? = null,
+        val hrvBaseline: Int? = null
     )
 
     data class UiState(
@@ -150,6 +153,11 @@ class CoachViewModel @Inject constructor(
         val hr = s.health.restingHr.sortedBy { it.timeMs }
         val windowHr = hr.filter { it.timeMs >= windowStart }.map { it.bpm }
         val priorHr = hr.filter { it.timeMs in priorStart until windowStart }.map { it.bpm }
+        // Overnight HRV (W6) — same window-vs-baseline framing as resting HR, same sample gate,
+        // so the two heart readings can't drift apart in meaning.
+        val hrv = s.health.hrv.sortedBy { it.timeMs }
+        val windowHrv = hrv.filter { it.timeMs >= windowStart }.map { it.rmssdMs }
+        val priorHrv = hrv.filter { it.timeMs in priorStart until windowStart }.map { it.rmssdMs }
         return HealthSeries(
             sleepHours = sleep,
             sleepFloorHours = t.deloadSleepDebtMinutes / 60f,
@@ -157,6 +165,10 @@ class CoachViewModel @Inject constructor(
             hrWindowAvg = windowHr.takeIf { it.size >= t.deloadMinRestingHrSamples }
                 ?.average()?.roundToInt(),
             hrBaseline = priorHr.takeIf { it.size >= t.deloadMinRestingHrSamples }
+                ?.average()?.roundToInt(),
+            hrvWindowAvg = windowHrv.takeIf { it.size >= t.deloadMinRestingHrSamples }
+                ?.average()?.roundToInt(),
+            hrvBaseline = priorHrv.takeIf { it.size >= t.deloadMinRestingHrSamples }
                 ?.average()?.roundToInt()
         )
     }

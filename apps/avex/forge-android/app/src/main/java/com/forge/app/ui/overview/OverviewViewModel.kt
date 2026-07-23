@@ -56,8 +56,34 @@ class OverviewViewModel @Inject constructor(
     private val coachRepo: com.forge.app.data.repo.CoachRepository,
     private val programRepo: com.forge.app.data.repo.ProgramRepository,
     private val programChangeGuard: com.forge.app.ui.common.ProgramChangeGuard,
+    private val healthConnectManager: com.forge.app.data.health.HealthConnectManager,
     private val clock: Clock
 ) : ViewModel() {
+
+    /** Today's watch steps against a typical day (W6) — null hides the Home movement line entirely. */
+    data class TodayMovement(val steps: Int, val typicalSteps: Int?)
+
+    private val _movement = MutableStateFlow<TodayMovement?>(null)
+    val movement: StateFlow<TodayMovement?> = _movement
+
+    /**
+     * Refresh the Home movement line (W6): today's Health Connect step total + the median of the
+     * previous 14 full days as "typical" (null below 3 days of history — no fake baseline). Fail-soft:
+     * not granted / no provider / read error → null → the line simply doesn't render (GYMAP-64 rule).
+     */
+    fun refreshMovement() = viewModelScope.launch {
+        if (!healthConnectManager.canReadSteps()) { _movement.value = null; return@launch }
+        val zone = java.time.ZoneId.systemDefault()
+        val now = clock.nowMs()
+        val today = java.time.Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
+        val todayStartMs = today.atStartOfDay(zone).toInstant().toEpochMilli()
+        val sinceMs = today.minusDays(14).atStartOfDay(zone).toInstant().toEpochMilli()
+        val days = healthConnectManager.readDailyStepTotals(sinceMs, now)
+        val todaySteps = days.lastOrNull { it.dayStartMs == todayStartMs }?.steps ?: 0
+        val prior = days.filter { it.dayStartMs < todayStartMs && it.steps > 0 }.map { it.steps }.sorted()
+        val typical = if (prior.size >= 3) prior[prior.size / 2] else null
+        _movement.value = TodayMovement(steps = todaySteps, typicalSteps = typical)
+    }
 
     private val _onThisDayMemory = MutableStateFlow<OnThisDayMemory?>(null)
     private val _coach = MutableStateFlow<List<CoachItem>>(emptyList())
@@ -229,6 +255,7 @@ class OverviewViewModel @Inject constructor(
     init {
         viewModelScope.launch { _onThisDayMemory.value = statsRepo.findOnThisDayMemory() }
         viewModelScope.launch { reloadCoach() }
+        refreshMovement()
         // Backfill the first-touch flag for users who already have history, so the onboarding cards
         // never reappear for a returning user (e.g. after a data wipe). finishWorkout() sets it going forward.
         viewModelScope.launch {

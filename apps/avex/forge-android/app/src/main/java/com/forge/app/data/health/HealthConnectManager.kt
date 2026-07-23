@@ -5,27 +5,37 @@ import androidx.health.connect.client.HealthConnectClient
 import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.ActiveCaloriesBurnedRecord
 import androidx.health.connect.client.records.BodyFatRecord
+import androidx.health.connect.client.records.DistanceRecord
 import androidx.health.connect.client.records.ExerciseRoute
 import androidx.health.connect.client.records.ExerciseRouteResult
 import androidx.health.connect.client.records.ExerciseSessionRecord
+import androidx.health.connect.client.records.HeartRateRecord
+import androidx.health.connect.client.records.HeartRateVariabilityRmssdRecord
+import androidx.health.connect.client.records.LeanBodyMassRecord
 import androidx.health.connect.client.records.Record
 import androidx.health.connect.client.records.RestingHeartRateRecord
 import androidx.health.connect.client.records.SleepSessionRecord
 import androidx.health.connect.client.records.StepsRecord
+import androidx.health.connect.client.records.TotalCaloriesBurnedRecord
 import androidx.health.connect.client.records.WeightRecord
 import androidx.health.connect.client.records.metadata.Metadata
+import androidx.health.connect.client.request.AggregateRequest
 import androidx.health.connect.client.request.ReadRecordsRequest
 import androidx.health.connect.client.time.TimeRangeFilter
 import androidx.health.connect.client.units.Energy
 import androidx.health.connect.client.units.Mass
 import androidx.health.connect.client.units.Percentage
+import com.forge.app.domain.adapt.DailySteps
 import com.forge.app.domain.adapt.HealthSnap
+import com.forge.app.domain.adapt.HrvSample
 import com.forge.app.domain.adapt.RestingHrSample
 import com.forge.app.domain.adapt.SleepNight
 import com.forge.app.domain.cardio.CardioWearableDay
 import com.forge.app.domain.cardio.RoutePoint
+import com.forge.app.domain.health.HrPoint
 import com.forge.app.domain.health.SessionWindow
 import com.forge.app.domain.health.StepSample
+import com.forge.app.domain.health.WatchWorkout
 import com.forge.app.domain.health.bestSessionMatch
 import com.forge.app.domain.health.bucketStepsByHour
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -107,6 +117,51 @@ class HealthConnectManager @Inject constructor(
      */
     val exercisePermissions: Set<String> = setOf(
         HealthPermission.getReadPermission(ExerciseSessionRecord::class)
+    )
+
+    /**
+     * HRV read permission (W6) — a watch's overnight heart-rate variability (RMSSD), the strongest
+     * recovery signal it produces. Requested ALONGSIDE the recovery set by the same Sleep & heart
+     * rate row (one concept, one row), but kept out of [permissions] so existing grants stay valid:
+     * the row's connected state still keys on sleep + resting HR alone, and HRV is opportunistic.
+     */
+    val hrvPermissions: Set<String> = setOf(
+        HealthPermission.getReadPermission(HeartRateVariabilityRmssdRecord::class)
+    )
+
+    /**
+     * Lean-body-mass read permission (W6) — the watch's BIA skeletal-muscle reading. Read-only and
+     * its own set like [stepsPermissions]: the watch is the sole author, Avex only imports.
+     */
+    val leanMassPermissions: Set<String> = setOf(
+        HealthPermission.getReadPermission(LeanBodyMassRecord::class)
+    )
+
+    /**
+     * Watch-workout READ permissions (W5) — everything the "your watch workouts, understood" layer
+     * consumes: the workout's HR series for the cardio HR graph, its measured distance and calories
+     * for stat enrichment / import prefill, and the session list itself. One set, one Recovery row —
+     * these reads only ever serve that one feature, so they opt in together. ExerciseSessionRecord
+     * read may already be granted via the GPS-routes row; re-requesting a granted permission is a
+     * no-op in the HC flow.
+     */
+    val watchWorkoutPermissions: Set<String> = setOf(
+        HealthPermission.getReadPermission(HeartRateRecord::class),
+        HealthPermission.getReadPermission(DistanceRecord::class),
+        HealthPermission.getReadPermission(TotalCaloriesBurnedRecord::class),
+        HealthPermission.getReadPermission(ExerciseSessionRecord::class)
+    )
+
+    /**
+     * Exercise-session WRITE permission (W0) — lets a finished Avex gym or cardio session flow OUT
+     * to Health Connect as an [ExerciseSessionRecord], which is what makes it appear in Samsung
+     * Health / Google Fit. Write-only and its own set like [caloriePermissions]: enabling
+     * session write-back never silently asks for any read.
+     */
+    val sessionWritePermissions: Set<String> = setOf(
+        HealthPermission.getWritePermission(ExerciseSessionRecord::class),
+        // W3: the watch's live HR trace rides the written session as a HeartRateRecord series.
+        HealthPermission.getWritePermission(HeartRateRecord::class)
     )
 
     /** SDK_AVAILABLE / SDK_UNAVAILABLE / SDK_UNAVAILABLE_PROVIDER_UPDATE_REQUIRED. */
@@ -322,35 +377,85 @@ class HealthConnectManager @Inject constructor(
     }
 
     /**
-     * Read sleep + resting-HR records in `[startMs, nowMs]` into a pure [HealthSnap]. Returns empty
-     * on any failure (unavailable / not granted / provider error) — recovery signals are additive,
-     * never load-bearing, so a miss just means the coach leans on its on-app signals instead.
+     * Read the recovery signals in `[startMs, nowMs]` into a pure [HealthSnap]: sleep (with stages
+     * when the provider reports them, W6) + resting HR behind the recovery grant, and — each behind
+     * its OWN grant, independently fail-soft — HRV (W6) and per-day steps (W6). Any missing grant
+     * or read error just leaves that field empty: recovery signals are additive, never load-bearing.
      */
     suspend fun readRecovery(startMs: Long, nowMs: Long): HealthSnap = withContext(Dispatchers.IO) {
         val client = clientOrNull() ?: return@withContext HealthSnap()
-        if (!hasAllPermissions()) return@withContext HealthSnap()
-        hcCatching {
-            val range = TimeRangeFilter.between(Instant.ofEpochMilli(startMs), Instant.ofEpochMilli(nowMs))
-            val sleep = client.readRecords(ReadRecordsRequest(SleepSessionRecord::class, timeRangeFilter = range))
-                .records.mapNotNull {
+        val granted = grantedPermissions()
+        val range = TimeRangeFilter.between(Instant.ofEpochMilli(startMs), Instant.ofEpochMilli(nowMs))
+
+        val recoveryGranted = granted.containsAll(permissions)
+        val sleep = if (!recoveryGranted) emptyList() else hcCatching {
+            client.readRecords(ReadRecordsRequest(SleepSessionRecord::class, timeRangeFilter = range))
+                .records.mapNotNull { rec ->
                     // Drop corrupt records (a third-party app can write endTime <= startTime) and cap
                     // absurd spans (a forgotten wearable can log a multi-day "night") so one bad row
                     // can't skew DeloadAdvisor's sleep average up or down.
-                    val min = Duration.between(it.startTime, it.endTime).toMinutes()
+                    val min = Duration.between(rec.startTime, rec.endTime).toMinutes()
                     if (min <= 0) null else SleepNight(
-                        endedAtMs = it.endTime.toEpochMilli(),
-                        durationMin = min.coerceAtMost(MAX_SLEEP_MIN).toInt()
+                        endedAtMs = rec.endTime.toEpochMilli(),
+                        durationMin = min.coerceAtMost(MAX_SLEEP_MIN).toInt(),
+                        deepMin = rec.stageMinutes(SleepSessionRecord.STAGE_TYPE_DEEP),
+                        remMin = rec.stageMinutes(SleepSessionRecord.STAGE_TYPE_REM)
                     )
                 }
-            val hr = client.readRecords(ReadRecordsRequest(RestingHeartRateRecord::class, timeRangeFilter = range))
+        }.orEmpty()
+        val hr = if (!recoveryGranted) emptyList() else hcCatching {
+            client.readRecords(ReadRecordsRequest(RestingHeartRateRecord::class, timeRangeFilter = range))
                 .records.mapNotNull {
                     // Ignore physiologically impossible readings (0 bpm corrupt rows would distort the baseline).
                     val bpm = it.beatsPerMinute.toInt()
                     if (bpm in MIN_BPM..MAX_BPM) RestingHrSample(timeMs = it.time.toEpochMilli(), bpm = bpm) else null
                 }
-            HealthSnap(sleepNights = sleep, restingHr = hr)
-        } ?: HealthSnap()
+        }.orEmpty()
+
+        val hrvGranted = HealthPermission.getReadPermission(HeartRateVariabilityRmssdRecord::class) in granted
+        val hrv = if (!hrvGranted) emptyList() else hcCatching {
+            client.readRecords(ReadRecordsRequest(HeartRateVariabilityRmssdRecord::class, timeRangeFilter = range))
+                .records.mapNotNull {
+                    val rmssd = it.heartRateVariabilityMillis
+                    if (rmssd > 0.0 && rmssd < MAX_RMSSD_MS) HrvSample(timeMs = it.time.toEpochMilli(), rmssdMs = rmssd) else null
+                }
+        }.orEmpty()
+
+        HealthSnap(
+            sleepNights = sleep, restingHr = hr, hrv = hrv,
+            dailySteps = readDailyStepTotals(startMs, nowMs)
+        )
     }
+
+    /**
+     * Per-day step totals in `[startMs, endMs]`, bucketed on the local calendar day (W6). One read,
+     * grouped client-side; fail-soft to empty. Feeds the coach's daily-movement input and the
+     * Home movement line's typical-day compare.
+     */
+    suspend fun readDailyStepTotals(startMs: Long, endMs: Long): List<DailySteps> = withContext(Dispatchers.IO) {
+        val client = clientOrNull() ?: return@withContext emptyList()
+        if (!canReadSteps()) return@withContext emptyList()
+        hcCatching {
+            val zone = java.time.ZoneId.systemDefault()
+            val range = TimeRangeFilter.between(Instant.ofEpochMilli(startMs), Instant.ofEpochMilli(endMs))
+            client.readRecords(ReadRecordsRequest(StepsRecord::class, timeRangeFilter = range))
+                .records
+                .groupBy { Instant.ofEpochMilli(it.startTime.toEpochMilli()).atZone(zone).toLocalDate() }
+                .map { (day, recs) ->
+                    DailySteps(
+                        dayStartMs = day.atStartOfDay(zone).toInstant().toEpochMilli(),
+                        steps = recs.sumOf { it.count }.toInt()
+                    )
+                }
+                .sortedBy { it.dayStartMs }
+        }.orEmpty()
+    }
+
+    /** Minutes this sleep session spent in [stageType], per the provider's stage list (0 = absent). */
+    private fun SleepSessionRecord.stageMinutes(stageType: Int): Int =
+        stages.filter { it.stage == stageType }
+            .sumOf { Duration.between(it.startTime, it.endTime).toMinutes().coerceAtLeast(0) }
+            .toInt()
 
     /** True when Avex may READ steps from Health Connect. */
     suspend fun canReadSteps(): Boolean =
@@ -377,6 +482,246 @@ class HealthConnectManager @Inject constructor(
     suspend fun canReadExercise(): Boolean =
         grantedPermissions().contains(HealthPermission.getReadPermission(ExerciseSessionRecord::class))
 
+    /** True when Avex may WRITE exercise sessions to Health Connect (W0). */
+    suspend fun canWriteExerciseSessions(): Boolean =
+        grantedPermissions().contains(HealthPermission.getWritePermission(ExerciseSessionRecord::class))
+
+    /**
+     * Write one finished session to Health Connect as an [ExerciseSessionRecord] (W0), returning
+     * whether it landed. Fail-soft like every write here. [clientRecordId] makes the write an
+     * UPSERT keyed on (our package, clientRecordId): re-finishing the same session or editing a
+     * cardio entry UPDATES the HC record instead of duplicating it, and [deleteExerciseSession]
+     * can remove it when the local entry is deleted. [clientRecordVersion] must not decrease for
+     * an update to land, so callers pass a stamp that grows with each edit.
+     */
+    suspend fun writeExerciseSession(
+        clientRecordId: String,
+        clientRecordVersion: Long,
+        exerciseType: Int,
+        title: String,
+        startMs: Long,
+        endMs: Long
+    ): Boolean = withContext(Dispatchers.IO) {
+        val client = clientOrNull() ?: return@withContext false
+        if (!canWriteExerciseSessions()) return@withContext false
+        val safeEnd = maxOf(endMs, startMs + 1)
+        hcCatching {
+            client.insertRecords(
+                listOf(
+                    ExerciseSessionRecord(
+                        startTime = Instant.ofEpochMilli(startMs),
+                        startZoneOffset = null,
+                        endTime = Instant.ofEpochMilli(safeEnd),
+                        endZoneOffset = null,
+                        exerciseType = exerciseType,
+                        title = title,
+                        metadata = Metadata.manualEntry(
+                            clientRecordId = clientRecordId,
+                            clientRecordVersion = clientRecordVersion
+                        )
+                    )
+                )
+            )
+            true
+        } ?: false
+    }
+
+    /** True when Avex may WRITE heart-rate series to Health Connect (W3). */
+    suspend fun canWriteHeartRate(): Boolean =
+        grantedPermissions().contains(HealthPermission.getWritePermission(HeartRateRecord::class))
+
+    /**
+     * Write the watch's HR trace for a finished session as one [HeartRateRecord] series (W3),
+     * keyed like the session record so a re-finish updates rather than duplicates. Fail-soft.
+     */
+    suspend fun writeHrSeries(
+        clientRecordId: String,
+        clientRecordVersion: Long,
+        startMs: Long,
+        endMs: Long,
+        samples: List<HrPoint>
+    ): Boolean = withContext(Dispatchers.IO) {
+        if (samples.isEmpty()) return@withContext false
+        val client = clientOrNull() ?: return@withContext false
+        if (!canWriteHeartRate()) return@withContext false
+        val safeEnd = maxOf(endMs, startMs + 1)
+        hcCatching {
+            client.insertRecords(
+                listOf(
+                    HeartRateRecord(
+                        startTime = Instant.ofEpochMilli(startMs),
+                        startZoneOffset = null,
+                        endTime = Instant.ofEpochMilli(safeEnd),
+                        endZoneOffset = null,
+                        samples = samples
+                            .filter { it.timeMs in startMs..safeEnd }
+                            .map { HeartRateRecord.Sample(Instant.ofEpochMilli(it.timeMs), it.bpm.toLong()) },
+                        metadata = Metadata.manualEntry(
+                            clientRecordId = clientRecordId,
+                            clientRecordVersion = clientRecordVersion
+                        )
+                    )
+                )
+            )
+            true
+        } ?: false
+    }
+
+    /**
+     * Delete the Health Connect session Avex wrote under [clientRecordId] (a deleted cardio entry
+     * takes its mirror with it). Fail-soft; deleting an id that was never written is a no-op.
+     */
+    suspend fun deleteExerciseSession(clientRecordId: String): Boolean = withContext(Dispatchers.IO) {
+        val client = clientOrNull() ?: return@withContext false
+        if (!canWriteExerciseSessions()) return@withContext false
+        hcCatching {
+            client.deleteRecords(
+                ExerciseSessionRecord::class,
+                recordIdsList = emptyList(),
+                clientRecordIdsList = listOf(clientRecordId)
+            )
+            true
+        } ?: false
+    }
+
+    /**
+     * True when [record] was written by Avex itself (W0 write-back). Session READS must skip
+     * self-authored records: our own (routeless) sessions would otherwise time-match a cardio
+     * entry better than the user's real watch session and shadow its GPS route / HR series.
+     */
+    private fun isSelfWritten(record: Record): Boolean =
+        record.metadata.dataOrigin.packageName == context.packageName
+
+    // ─── Watch workouts (W5): HR series + measured stats + import candidates ──
+
+    /** True when Avex may READ heart-rate series from Health Connect (W5). */
+    suspend fun canReadHeartRate(): Boolean =
+        grantedPermissions().contains(HealthPermission.getReadPermission(HeartRateRecord::class))
+
+    /** True when Avex may READ lean body mass from Health Connect (W6). */
+    suspend fun canReadLeanMass(): Boolean =
+        grantedPermissions().contains(HealthPermission.getReadPermission(LeanBodyMassRecord::class))
+
+    /** A lean-mass reading mirrored out of Health Connect as plain Kotlin (lb + when it was taken). */
+    data class HcLeanMass(val weightLb: Double, val timeMs: Long)
+
+    /**
+     * The most recent [LeanBodyMassRecord] before [nowMs], in lb — or null if HC is absent, the read
+     * permission isn't granted, there are no records, or the read throws. Single-row read like
+     * [latestWeight]/[latestBodyFat].
+     */
+    suspend fun latestLeanMass(nowMs: Long): HcLeanMass? = withContext(Dispatchers.IO) {
+        val client = clientOrNull() ?: return@withContext null
+        if (!canReadLeanMass()) return@withContext null
+        hcCatching {
+            client.readRecords(
+                ReadRecordsRequest(
+                    LeanBodyMassRecord::class,
+                    timeRangeFilter = TimeRangeFilter.before(Instant.ofEpochMilli(nowMs)),
+                    ascendingOrder = false,
+                    pageSize = 1
+                )
+            ).records.firstOrNull()?.let { HcLeanMass(it.mass.inPounds, it.time.toEpochMilli()) }
+        }
+    }
+
+    /**
+     * Every heart-rate sample in `[startMs, endMs]`, flattened out of HC's series records, ordered
+     * by time, physiologically bounded, and capped so a runaway provider can't hand back an
+     * unbounded list. Fail-soft to empty like every read here.
+     */
+    suspend fun readHrSeries(startMs: Long, endMs: Long): List<HrPoint> = withContext(Dispatchers.IO) {
+        val client = clientOrNull() ?: return@withContext emptyList()
+        if (!canReadHeartRate()) return@withContext emptyList()
+        hcCatching {
+            val range = TimeRangeFilter.between(Instant.ofEpochMilli(startMs), Instant.ofEpochMilli(endMs))
+            client.readRecords(ReadRecordsRequest(HeartRateRecord::class, timeRangeFilter = range))
+                .records.asSequence()
+                .flatMap { it.samples }
+                .mapNotNull { s ->
+                    val bpm = s.beatsPerMinute.toInt()
+                    if (bpm in MIN_BPM..MAX_BPM) HrPoint(timeMs = s.time.toEpochMilli(), bpm = bpm) else null
+                }
+                .sortedBy { it.timeMs }
+                .take(HR_SERIES_MAX_SAMPLES)
+                .toList()
+        }.orEmpty()
+    }
+
+    /**
+     * The watch session that best matches a cardio entry on its day, summarised with its measured
+     * stats (W5) — the same time-window match as [matchSessionRoute], but for the HR graph and the
+     * "watch measured" reading rather than the GPS track. Self-written sessions are excluded.
+     * Distance/calories aggregate over the session's span, each independently fail-soft to null.
+     */
+    suspend fun matchWatchSession(
+        entryStartMs: Long,
+        entryDurationMin: Int,
+        dayStartMs: Long,
+        dayEndMs: Long
+    ): WatchWorkout? = withContext(Dispatchers.IO) {
+        val client = clientOrNull() ?: return@withContext null
+        if (!canReadExercise()) return@withContext null
+        hcCatching {
+            val range = TimeRangeFilter.between(Instant.ofEpochMilli(dayStartMs), Instant.ofEpochMilli(dayEndMs))
+            val records = client.readRecords(ReadRecordsRequest(ExerciseSessionRecord::class, timeRangeFilter = range))
+                .records.filterNot(::isSelfWritten)
+            val windows = records.mapIndexed { i, r ->
+                SessionWindow(index = i, startMs = r.startTime.toEpochMilli(), endMs = r.endTime.toEpochMilli())
+            }
+            val idx = bestSessionMatch(entryStartMs, entryDurationMin, windows) ?: return@hcCatching null
+            records[idx].toWatchWorkout(client)
+        }
+    }
+
+    /**
+     * The most recent NON-Avex exercise sessions in `[sinceMs, nowMs]` — the candidate pool for
+     * "recorded with your watch — import?" suggestions (W5). Bounded at [limit]; the caller filters
+     * out sessions that already have a matching cardio entry and ones the user dismissed.
+     */
+    suspend fun recentWatchWorkouts(sinceMs: Long, nowMs: Long, limit: Int = 10): List<WatchWorkout> =
+        withContext(Dispatchers.IO) {
+            val client = clientOrNull() ?: return@withContext emptyList()
+            if (!canReadExercise()) return@withContext emptyList()
+            hcCatching {
+                val range = TimeRangeFilter.between(Instant.ofEpochMilli(sinceMs), Instant.ofEpochMilli(nowMs))
+                client.readRecords(
+                    ReadRecordsRequest(
+                        ExerciseSessionRecord::class, timeRangeFilter = range,
+                        ascendingOrder = false, pageSize = limit * 2
+                    )
+                ).records.filterNot(::isSelfWritten).take(limit).map { it.toWatchWorkout(client) }
+            }.orEmpty()
+        }
+
+    /** Summarise one HC session with its measured distance/calories (each gated + fail-soft). */
+    private suspend fun ExerciseSessionRecord.toWatchWorkout(client: HealthConnectClient): WatchWorkout {
+        val granted = grantedPermissions()
+        val start = startTime.toEpochMilli()
+        val end = endTime.toEpochMilli()
+        val metrics = buildSet {
+            if (HealthPermission.getReadPermission(DistanceRecord::class) in granted) add(DistanceRecord.DISTANCE_TOTAL)
+            if (HealthPermission.getReadPermission(TotalCaloriesBurnedRecord::class) in granted) add(TotalCaloriesBurnedRecord.ENERGY_TOTAL)
+        }
+        val aggregate = if (metrics.isEmpty()) null else hcCatching {
+            client.aggregate(
+                AggregateRequest(
+                    metrics = metrics,
+                    timeRangeFilter = TimeRangeFilter.between(startTime, endTime)
+                )
+            )
+        }
+        return WatchWorkout(
+            recordId = metadata.id,
+            startMs = start,
+            endMs = end,
+            exerciseType = exerciseType,
+            title = title,
+            distanceKm = aggregate?.get(DistanceRecord.DISTANCE_TOTAL)?.inKilometers?.takeIf { it > 0.0 },
+            kcal = aggregate?.get(TotalCaloriesBurnedRecord.ENERGY_TOTAL)?.inKilocalories?.takeIf { it > 0.0 }
+        )
+    }
+
     /**
      * The watch session that best matches a cardio entry on its day, resolved for route display.
      *
@@ -400,7 +745,8 @@ class HealthConnectManager @Inject constructor(
         if (!canReadExercise()) return@withContext null
         hcCatching {
             val range = TimeRangeFilter.between(Instant.ofEpochMilli(dayStartMs), Instant.ofEpochMilli(dayEndMs))
-            val records = client.readRecords(ReadRecordsRequest(ExerciseSessionRecord::class, timeRangeFilter = range)).records
+            val records = client.readRecords(ReadRecordsRequest(ExerciseSessionRecord::class, timeRangeFilter = range))
+                .records.filterNot(::isSelfWritten)
             val windows = records.mapIndexed { i, r ->
                 SessionWindow(index = i, startMs = r.startTime.toEpochMilli(), endMs = r.endTime.toEpochMilli())
             }
@@ -471,7 +817,7 @@ class HealthConnectManager @Inject constructor(
                         ExerciseSessionRecord::class, timeRangeFilter = range,
                         ascendingOrder = false, pageSize = FLOW_ROUTE_PROBE_SESSIONS
                     )
-                ).records.any {
+                ).records.filterNot(::isSelfWritten).any {
                     it.exerciseRouteResult is ExerciseRouteResult.Data ||
                         it.exerciseRouteResult is ExerciseRouteResult.ConsentRequired
                 }
@@ -558,5 +904,9 @@ class HealthConnectManager @Inject constructor(
          *  years stay well under the cap; the cap just guards against a pathological history. */
         const val HISTORY_PAGE_SIZE = 1000
         const val HISTORY_MAX_RECORDS = 5000
+        /** Cap on flattened HR samples per read (W5) — ~3h at 1Hz; charts downsample far below this. */
+        const val HR_SERIES_MAX_SAMPLES = 12_000
+        /** RMSSD sanity ceiling (W6) — real overnight values sit ~15–150ms; 500+ is a corrupt row. */
+        const val MAX_RMSSD_MS = 500.0
     }
 }

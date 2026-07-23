@@ -43,6 +43,8 @@ import com.forge.app.domain.cardio.formatInclinePct
 import com.forge.app.domain.cardio.formatPaceSec
 import com.forge.app.domain.cardio.paceSecPerUnit
 import com.forge.app.domain.cardio.pacePerUnit
+import com.forge.app.domain.health.avgBpm
+import com.forge.app.domain.health.maxBpm
 import com.forge.app.domain.units.distanceUnitLabel
 import com.forge.app.domain.units.formatDistance
 import com.forge.app.domain.units.formatElevation
@@ -78,6 +80,12 @@ fun CardioSessionDetailSheet(
     wearable: CardioWearableDay? = null,
     /** Avex holds the steps grant — show the steps section (with a placeholder) even before data syncs. */
     wearableConnected: Boolean = false,
+    /** Downsampled HR series of the matched watch workout (W5); non-null with ≥2 points draws the graph. */
+    hr: List<com.forge.app.domain.health.HrPoint>? = null,
+    /** The matched watch workout's measured stats (W5); drives the "watch measured" reading. */
+    watchStats: com.forge.app.domain.health.WatchWorkout? = null,
+    /** Adopt the watch's measured duration/distance onto this entry — offered only when they differ. */
+    onAdoptWatchStats: (() -> Unit)? = null,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
     onBack: () -> Unit,
@@ -173,6 +181,21 @@ fun CardioSessionDetailSheet(
                 }
             }
 
+            // The watch's HR series over this workout (W5) — the graph IS the section (§12); avg/max
+            // ride the header line as its reading. Hidden entirely when no watch session matched.
+            if (!activity.isRest && hr != null && hr.size >= 2) {
+                item("heart-rate") {
+                    HeartRateSection(
+                        hr = hr,
+                        watchStats = watchStats,
+                        entry = entry,
+                        useMiles = useMiles,
+                        onAdoptWatchStats = onAdoptWatchStats,
+                        onBg = onBg, muted = muted, accent = accent
+                    )
+                }
+            }
+
             // Wearable steps — shown when a watch fed data, or as a quiet placeholder once connected
             // (so a connected user sees the section is live before that day's steps sync). Hidden
             // entirely on a rest day, and when nothing's connected (the banner carries the invite).
@@ -230,6 +253,84 @@ fun CardioSessionDetailSheet(
                             .clickableLabeled("Delete session", onClick = onDelete)
                             // Padding, not text size, carries the ≥48dp touch target (§8).
                             .padding(horizontal = 12.dp, vertical = 16.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The matched watch workout's heart rate over this session (W5): an open line chart (§10 — stroke
+ * `primary`, no frame) with AVG · MAX as the header's reading, and — when the watch measured a
+ * different duration/distance than the entry carries — one "watch measured" line with an explicit
+ * adopt action (never a silent overwrite).
+ */
+@Composable
+private fun HeartRateSection(
+    hr: List<com.forge.app.domain.health.HrPoint>,
+    watchStats: com.forge.app.domain.health.WatchWorkout?,
+    entry: CardioEntry,
+    useMiles: Boolean,
+    onAdoptWatchStats: (() -> Unit)?,
+    onBg: Color,
+    muted: Color,
+    accent: Color
+) {
+    val avg = hr.avgBpm()
+    val max = hr.maxBpm()
+    Column(Modifier.padding(horizontal = 24.dp, vertical = 8.dp)) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            EditorialHeader(label = "Heart rate", muted = muted, accent = accent)
+            if (avg != null && max != null) {
+                Text(
+                    "AVG $avg · MAX $max BPM",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = muted, fontSize = 9.sp, letterSpacing = 0.5.sp
+                )
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        com.forge.app.ui.gym.stats.components.LineChart(
+            values = hr.map { it.bpm.toDouble() },
+            lineColor = accent,
+            modifier = Modifier.fillMaxWidth().height(96.dp)
+        )
+        // The watch's own reading of this workout, offered beside the logged values (§4.9). The
+        // adopt link renders only when it would actually change something.
+        val watchParts = watchStats?.let { w ->
+            buildList {
+                if (w.durationMin > 0 && w.durationMin != entry.durationMin) add("${w.durationMin} min")
+                w.distanceKm?.takeIf { d -> entry.distanceKm == null || kotlin.math.abs(d - entry.distanceKm!!) > 0.05 }
+                    ?.let { add(formatDistance(it, useMiles)) }
+                w.kcal?.let { add("${it.toInt()} kcal") }
+            }
+        }.orEmpty()
+        if (watchParts.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "Watch measured ${watchParts.joinToString(" · ")}",
+                    style = MaterialTheme.typography.bodySmall, color = muted
+                )
+                if (onAdoptWatchStats != null &&
+                    watchParts.any { !it.endsWith("kcal") } // kcal alone isn't adoptable onto the entry
+                ) {
+                    Text(
+                        "use watch stats →",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = accent,
+                        modifier = Modifier
+                            .clickableLabeled("Use watch stats", onClick = onAdoptWatchStats)
+                            .padding(vertical = 2.dp)
                     )
                 }
             }

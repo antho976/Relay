@@ -46,6 +46,35 @@ class SessionDetailViewModel @Inject constructor(
         viewModelScope.launch {
             val data = if (sessionId >= 0) statsRepo.getSessionDetail(sessionId) else null
             _state.value = SessionDetailUiState(isLoading = false, data = data)
+            // The watch's HR trace (W3), analyzed AFTER the page renders — additive: no watch, no
+            // section. Sets attribute samples to exercises; rest events power the HRR read.
+            if (sessionId >= 0) {
+                val samples = workoutRepo.hrSamplesForSession(sessionId)
+                    .map { com.forge.app.domain.health.HrPoint(timeMs = it.atMs, bpm = it.bpm) }
+                if (samples.isNotEmpty()) {
+                    val exercises = workoutRepo.loggedExercisesForSession(sessionId)
+                    val nameByLoggedId = exercises.associate { le ->
+                        le.id to (le.swappedName?.takeIf { it.isNotBlank() }
+                            ?: com.forge.app.program.Program.exercise(le.exerciseId)?.name
+                            ?: le.exerciseId)
+                    }
+                    val sets = workoutRepo.allSetsForSession(sessionId).map {
+                        com.forge.app.domain.health.HrSetRef(
+                            completedAtMs = it.completedAt,
+                            exerciseName = nameByLoggedId[it.loggedExerciseId] ?: ""
+                        )
+                    }
+                    val rests = workoutRepo.restEventsForSession(sessionId).map {
+                        com.forge.app.domain.health.HrRestRef(
+                            endedAtMs = it.loggedAt,
+                            realizedSeconds = it.realizedSeconds
+                        )
+                    }
+                    _state.value = _state.value.copy(
+                        hrView = com.forge.app.domain.health.buildSessionHrView(samples, sets, rests)
+                    )
+                }
+            }
         }
     }
 

@@ -53,6 +53,8 @@ object DatabaseModule {
     @Provides fun provideTrophyNearMissDao(db: ForgeDatabase): TrophyNearMissDao = db.trophyNearMissDao()
     @Provides fun provideBodyweightDao(db: ForgeDatabase): BodyweightDao = db.bodyweightDao()
     @Provides fun provideBodyFatDao(db: ForgeDatabase): BodyFatDao = db.bodyFatDao()
+    @Provides fun provideLeanMassDao(db: ForgeDatabase): com.forge.app.data.db.dao.LeanMassDao = db.leanMassDao()
+    @Provides fun provideSessionHrSampleDao(db: ForgeDatabase): com.forge.app.data.db.dao.SessionHrSampleDao = db.sessionHrSampleDao()
     @Provides fun provideBodyMeasurementDao(db: ForgeDatabase): BodyMeasurementDao = db.bodyMeasurementDao()
     @Provides fun provideVacationDao(db: ForgeDatabase): com.forge.app.data.db.dao.VacationDao = db.vacationDao()
     @Provides fun provideExtendedGoalDao(db: ForgeDatabase): com.forge.app.data.db.dao.ExtendedGoalDao = db.extendedGoalDao()

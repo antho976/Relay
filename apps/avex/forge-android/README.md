@@ -65,6 +65,8 @@ app/src/main/java/com/forge/app/
 - One ViewModel per screen. ViewModels >~150 lines → extract use-case logic into `domain/`.
 - One Room entity per file in `data/db/entities/`; one DAO per file in `data/db/dao/`.
 - KSP, not KAPT (faster builds, Kotlin-native).
-- No multi-Gradle-module split (intentional — single `:app` module).
+- Modules: `:app` (phone) + `:wear` (watch app, W1) + `:shared` (pure Kotlin — the wear protocol,
+  rest-timer core and weight-step table both apps compile) + `:baselineprofile`. Everything else
+  stays in `:app`; `:shared` holds ONLY what both apps need (no Room, no Hilt, no UI).
 - No chart library (custom Compose `Canvas`).
 - No analytics, no crash reporting, no cloud sync.

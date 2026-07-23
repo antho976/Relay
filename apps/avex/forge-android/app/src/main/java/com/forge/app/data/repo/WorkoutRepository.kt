@@ -74,10 +74,12 @@ class WorkoutRepository @Inject constructor(
     private val suggestionOutcomeDao: SuggestionOutcomeDao,
     private val sessionSegmentDao: com.forge.app.data.db.dao.SessionSegmentDao,
     private val bodyweightDao: BodyweightDao,
+    private val sessionHrSampleDao: com.forge.app.data.db.dao.SessionHrSampleDao,
     private val health: HealthConnectManager,
     private val clock: Clock,
     private val settingsRepo: SettingsRepository,
     private val programRepository: ProgramRepository,
+    private val wearHrIngest: com.forge.app.service.wear.WearHrIngest,
     private val database: com.forge.app.data.db.ForgeDatabase
 ) {
 
@@ -255,8 +257,20 @@ class WorkoutRepository @Inject constructor(
             )
         )
         maybeRotateProgram()
-        maybeWriteActiveCalories(session, finishedAtMs = now, activeSeconds = activeSeconds)
+        writeFinishMirrors(session, endMs = now, activeSeconds = activeSeconds)
         return activeSeconds
+    }
+
+    /**
+     * Every Health Connect mirror a finished gym session gets — ONE helper so the normal finish and
+     * the orphan-recovery finish can't drift (a recovered session is a real session; it mirrors too).
+     * Each write is independently gated on its own opt-in pref + granted permission and fail-soft,
+     * so a miss can never affect the local finish.
+     */
+    private suspend fun writeFinishMirrors(session: Session, endMs: Long, activeSeconds: Int) {
+        maybeWriteActiveCalories(session, finishedAtMs = endMs, activeSeconds = activeSeconds)
+        maybeWriteSessionRecord(session, endMs = endMs)
+        maybeWriteHrSeries(session, endMs = endMs)
     }
 
     /**
@@ -268,11 +282,57 @@ class WorkoutRepository @Inject constructor(
     private suspend fun maybeWriteActiveCalories(session: Session, finishedAtMs: Long, activeSeconds: Int) {
         if (!settingsRepo.hcWriteCalories.first()) return
         if (!health.canWriteActiveCalories()) return
-        val weightLb = bodyweightDao.latest()?.weightLb ?: return
-        // Pass fractional minutes (/ 60.0) so a sub-minute remainder isn't truncated away — Int
-        // division dropped up to ~1 min per session and skipped sessions under a full minute entirely.
-        val kcal = ActiveCalorieEstimator.estimate(activeSeconds / 60.0, weightLb, session.intensity) ?: return
+        // The watch's MEASURED burn (streamed with the HR batches, W3) beats the MET estimate —
+        // "cardio kcal estimates return only with real watch burn data" is the settled rule.
+        val watchKcal = wearHrIngest.watchKcal(session.id)
+        val kcal = watchKcal ?: run {
+            val weightLb = bodyweightDao.latest()?.weightLb ?: return
+            // Pass fractional minutes (/ 60.0) so a sub-minute remainder isn't truncated away — Int
+            // division dropped up to ~1 min per session and skipped sessions under a full minute entirely.
+            ActiveCalorieEstimator.estimate(activeSeconds / 60.0, weightLb, session.intensity) ?: return
+        }
         health.writeActiveCalories(kcal, session.startedAt, finishedAtMs)
+    }
+
+    /**
+     * W3: attach the watch's HR trace to the finished session in Health Connect — same opt-in as
+     * the session write (one "workout sessions" concept), fail-soft, upsert-keyed per session.
+     */
+    private suspend fun maybeWriteHrSeries(session: Session, endMs: Long) {
+        if (!settingsRepo.hcWriteSessions.first()) return
+        val samples = sessionHrSampleDao.forSession(session.id)
+        if (samples.isEmpty()) return
+        health.writeHrSeries(
+            clientRecordId = "avex-session-hr-${session.id}",
+            clientRecordVersion = endMs,
+            startMs = session.startedAt,
+            endMs = endMs,
+            samples = samples.map { com.forge.app.domain.health.HrPoint(timeMs = it.atMs, bpm = it.bpm) }
+        )
+    }
+
+    /** The watch's HR trace for one session (W3) — session detail's graph + HRR read. */
+    suspend fun hrSamplesForSession(sessionId: Long): List<com.forge.app.data.db.entities.SessionHrSample> =
+        sessionHrSampleDao.forSession(sessionId)
+
+    /**
+     * W0: mirror this finished gym session to Health Connect as a strength-training
+     * [androidx.health.connect.client.records.ExerciseSessionRecord], titled with its day name —
+     * this is what makes it appear in Samsung Health / Google Fit. Keyed on a stable
+     * clientRecordId per session so a re-finish (orphan recovery after a crash) UPDATES the HC
+     * record instead of duplicating it; the version stamp is the finish time, which only grows.
+     */
+    private suspend fun maybeWriteSessionRecord(session: Session, endMs: Long) {
+        if (!settingsRepo.hcWriteSessions.first()) return
+        if (!health.canWriteExerciseSessions()) return
+        health.writeExerciseSession(
+            clientRecordId = "avex-session-${session.id}",
+            clientRecordVersion = endMs,
+            exerciseType = com.forge.app.data.health.HcExerciseTypes.STRENGTH,
+            title = Program.dayDisplayName(session.dayKey),
+            startMs = session.startedAt,
+            endMs = endMs
+        )
     }
 
     /** Lifetime count of PR sets across all logged exercises — feeds the PR-milestone notification. */
@@ -409,6 +469,11 @@ class WorkoutRepository @Inject constructor(
                 activeSeconds = activeSeconds
             )
         )
+        // Mirror to Health Connect like a normal finish (a recovered session is a real session) — but
+        // end the HC record at the LAST logged activity, not `now`: resolution can run days after the
+        // session was abandoned, and `now` would write a multi-day workout into Samsung Health.
+        val hcEndMs = sets.maxOfOrNull { it.completedAt } ?: (active.startedAt + activeSeconds * 1000L)
+        writeFinishMirrors(active, endMs = hcEndMs, activeSeconds = activeSeconds)
         return OrphanResolution(finishedToHistory = true)
     }
 
@@ -604,6 +669,9 @@ class WorkoutRepository @Inject constructor(
 
     /** Recent realized-rest history — RestAdvisor's tuning input. */
     suspend fun recentRestEvents(limit: Int = 200): List<RestEvent> = restEventDao.recent(limit)
+
+    /** One session's completed rests, oldest first — the HRR read's windows (W3). */
+    suspend fun restEventsForSession(sessionId: Long): List<RestEvent> = restEventDao.forSession(sessionId)
 
     // ─── Suggestion outcomes (auto-coach Phase 2 calibration) ─────────────────
 

@@ -50,6 +50,14 @@ data class CardioUiState(
     /** Non-null → a matching watch session has a route that needs Health Connect consent; this is the
      *  record id to hand the consent contract. Drives the "Show GPS route" button on the session sheet. */
     val sessionRouteConsentId: String? = null,
+    /** Downsampled HR series of the open session's matched watch workout (W5); null when none. */
+    val sessionHr: List<com.forge.app.domain.health.HrPoint>? = null,
+    /** The open session's matched watch workout, with measured duration/distance/calories (W5). */
+    val sessionWatch: com.forge.app.domain.health.WatchWorkout? = null,
+    /** Watch workouts with no matching entry — the "recorded with your watch, import?" rows (W5). */
+    val importSuggestions: List<com.forge.app.domain.health.WatchWorkout> = emptyList(),
+    /** Avex holds the HeartRateRecord read grant (W5) — the session HR graph can load. */
+    val hrConnected: Boolean = false,
     /** Watch steps for today, shown on the current-week stats page; null until loaded / when none. */
     val weekWearable: CardioWearableDay? = null,
     /** False → the main list shows only the 5 most-recent entries; true → the full history. */

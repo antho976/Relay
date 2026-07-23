@@ -27,6 +27,7 @@ class HealthConnectViewModel @Inject constructor(
     private val settingsRepo: SettingsRepository,
     private val bodyweightRepo: BodyweightRepository,
     private val bodyFatRepo: BodyFatRepository,
+    private val leanMassRepo: com.forge.app.data.repo.LeanMassRepository,
     private val clock: Clock
 ) : ViewModel() {
 
@@ -50,10 +51,18 @@ class HealthConnectViewModel @Inject constructor(
         val calorieGranted: Boolean = false,
         /** Write opt-in: mirror each finished session's estimated active calories to HC (HC-4). */
         val writeCalories: Boolean = false,
+        /** Session WRITE permission is granted — Avex may write finished workouts to HC (W0). */
+        val sessionGranted: Boolean = false,
+        /** Write opt-in: mirror each finished gym + cardio session to Health Connect (W0). */
+        val writeSessions: Boolean = false,
         /** Steps READ permission is granted — Avex may read a watch's step counts for the cardio graph. */
         val stepsGranted: Boolean = false,
         /** Exercise-session READ permission is granted — Avex may find watch sessions to offer GPS routes. */
         val exerciseGranted: Boolean = false,
+        /** Heart-rate READ permission is granted — watch workouts show their HR graph + stats (W5). */
+        val watchWorkoutGranted: Boolean = false,
+        /** Lean-body-mass READ permission is granted — the watch's BIA reading can import (W6). */
+        val leanMassGranted: Boolean = false,
         /** The user's watch ([com.forge.app.domain.health.WearableBrand] key; "" = never picked).
          *  Advisory — tailors the page's setup pointers, never gates a read. */
         val wearableBrand: String = "",
@@ -63,7 +72,9 @@ class HealthConnectViewModel @Inject constructor(
         /** Transient one-tap-import result line, cleared on the next refresh. */
         val importMessage: String? = null,
         /** Transient one-tap-import result line for the body-fat row (GYMAP-62). */
-        val bodyFatImportMessage: String? = null
+        val bodyFatImportMessage: String? = null,
+        /** Transient one-tap-import result line for the muscle-mass row (W6). */
+        val leanMassImportMessage: String? = null
     )
 
     private val _state = MutableStateFlow(UiState())
@@ -81,11 +92,23 @@ class HealthConnectViewModel @Inject constructor(
     /** Permissions the calorie launcher should request (write ActiveCaloriesBurned). */
     val caloriePermissions: Set<String> get() = manager.caloriePermissions
 
+    /** Permissions the workout-session launcher should request (write ExerciseSessionRecord, W0). */
+    val sessionWritePermissions: Set<String> get() = manager.sessionWritePermissions
+
     /** Permissions the steps launcher should request (read StepsRecord). */
     val stepsPermissions: Set<String> get() = manager.stepsPermissions
 
     /** Permissions the GPS-routes launcher should request (read ExerciseSessionRecord). */
     val exercisePermissions: Set<String> get() = manager.exercisePermissions
+
+    /** Permissions the watch-workouts launcher should request (read HR + distance + calories, W5). */
+    val watchWorkoutPermissions: Set<String> get() = manager.watchWorkoutPermissions
+
+    /** HRV read (W6) — requested WITH the recovery set by the sleep row (one concept, one row). */
+    val hrvPermissions: Set<String> get() = manager.hrvPermissions
+
+    /** Permissions the muscle-mass launcher should request (read LeanBodyMass, W6). */
+    val leanMassPermissions: Set<String> get() = manager.leanMassPermissions
 
     init { refresh() }
 
@@ -95,11 +118,15 @@ class HealthConnectViewModel @Inject constructor(
         val weightGranted = if (available) manager.canReadWeight() else false
         val bodyFatGranted = if (available) manager.canReadBodyFat() else false
         val calorieGranted = if (available) manager.canWriteActiveCalories() else false
+        val sessionGranted = if (available) manager.canWriteExerciseSessions() else false
         val stepsGranted = if (available) manager.canReadSteps() else false
         val exerciseGranted = if (available) manager.canReadExercise() else false
+        val watchWorkoutGranted = if (available) manager.canReadHeartRate() else false
+        val leanMassGranted = if (available) manager.canReadLeanMass() else false
         val writeBodyweight = settingsRepo.hcWriteBodyweight.first()
         val writeBodyFat = settingsRepo.hcWriteBodyFat.first()
         val writeCalories = settingsRepo.hcWriteCalories.first()
+        val writeSessions = settingsRepo.hcWriteSessions.first()
         val wearableBrand = settingsRepo.wearableBrand.first()
         _state.value = _state.value.copy(
             loading = false,
@@ -112,8 +139,12 @@ class HealthConnectViewModel @Inject constructor(
             writeBodyFat = writeBodyFat,
             calorieGranted = calorieGranted,
             writeCalories = writeCalories,
+            sessionGranted = sessionGranted,
+            writeSessions = writeSessions,
             stepsGranted = stepsGranted,
             exerciseGranted = exerciseGranted,
+            watchWorkoutGranted = watchWorkoutGranted,
+            leanMassGranted = leanMassGranted,
             wearableBrand = wearableBrand
             // importMessage + signalFlow preserved (copy, not a fresh UiState): the import line so a
             // just-shown result isn't wiped by a lifecycle refresh; the prior reading so rows keep
@@ -157,6 +188,11 @@ class HealthConnectViewModel @Inject constructor(
         _state.value = _state.value.copy(writeCalories = value)
     }
 
+    fun setWriteSessions(value: Boolean) = viewModelScope.launch {
+        settingsRepo.setHcWriteSessions(value)
+        _state.value = _state.value.copy(writeSessions = value)
+    }
+
     fun setWriteBodyFat(value: Boolean) = viewModelScope.launch {
         settingsRepo.setHcWriteBodyFat(value)
         _state.value = _state.value.copy(writeBodyFat = value)
@@ -173,6 +209,13 @@ class HealthConnectViewModel @Inject constructor(
         val imported = bodyFatRepo.importLatestFromHealthConnect()
         _state.value = _state.value.copy(
             bodyFatImportMessage = if (imported != null) "Imported your latest body fat." else "No newer body fat in Health Connect."
+        )
+    }
+
+    fun importLeanMassNow() = viewModelScope.launch {
+        val imported = leanMassRepo.importLatestFromHealthConnect()
+        _state.value = _state.value.copy(
+            leanMassImportMessage = if (imported != null) "Imported your latest muscle mass." else "No newer muscle mass in Health Connect."
         )
     }
 }

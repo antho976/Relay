@@ -64,19 +64,28 @@ internal fun BodyMetricsSection(
     onBg: Color,
     muted: Color,
     accent: Color,
-    measurementsVm: BodyMeasurementsViewModel = hiltViewModel()
+    measurementsVm: BodyMeasurementsViewModel = hiltViewModel(),
+    leanMassVm: LeanMassViewModel = hiltViewModel()
 ) {
     val measurements by measurementsVm.state.collectAsStateWithLifecycle()
+    val leanMass by leanMassVm.state.collectAsStateWithLifecycle()
+
+    // The MUSCLE row exists only for a connected watch (or leftover data after a disconnect) — an
+    // HC-only metric never shows an unconnected ghost row here; Recovery owns the connect flow.
+    val showMuscle = leanMass.connected || leanMass.entries.isNotEmpty()
 
     SectionHeader("BODY", muted)
-    if (bodyweight.isEmpty() && bodyFat.isEmpty() && !measurements.anyData) {
-        // All three at zero → one hint, never three identical ghost rows (§12 collapse-repetition).
+    if (bodyweight.isEmpty() && bodyFat.isEmpty() && !measurements.anyData && leanMass.entries.isEmpty()) {
+        // All at zero → one hint, never a stack of identical ghost rows (§12 collapse-repetition).
         InlineEmptyHint("Log a weigh-in, body fat or a measurement to track your body here.", muted)
         return
     }
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         WeightRow(bodyweight, bodyweightGoalLb, onLogWeight, onBg, muted, accent)
         BodyFatRow(bodyFat, onLogBodyFat, onBg, muted, accent)
+        if (showMuscle) {
+            LeanMassRow(leanMass.entries, onSync = { leanMassVm.syncNow() }, onBg, muted, accent)
+        }
         SizesRow(measurements, onOpenMeasurements, muted, accent)
     }
 }
@@ -157,6 +166,43 @@ private fun BodyFatRow(
         onBg = onBg, muted = muted, accent = accent
     ) {
         if (values.size >= 2) ProfileSparkline(values, accent, markMod)
+        else GhostSpark(muted)
+    }
+}
+
+/**
+ * MUSCLE row (W6) — the watch's BIA lean-mass reading as a serif figure with a ~30-day delta, the
+ * raw readings as the spark (measured sparsely, like body fat). Import-only: the row's `sync →`
+ * pulls the latest Health Connect reading; there is no manual log for a watch-authored metric.
+ */
+@Composable
+private fun LeanMassRow(
+    entries: List<com.forge.app.data.db.entities.LeanMassEntry>,
+    onSync: () -> Unit,
+    onBg: Color,
+    muted: Color,
+    accent: Color
+) {
+    val weightUnit = LocalForgeSettings.current.weightUnit
+    val display = remember(entries, weightUnit) { entries.map { toDisplayWeight(it.weightLb, weightUnit) } }
+    val delta = remember(entries, display) {
+        if (entries.size < 2) null else {
+            val cutoff = entries.last().recordedAt - DELTA_WINDOW_MS
+            val refIdx = entries.indexOfFirst { it.recordedAt >= cutoff }.coerceAtMost(entries.lastIndex - 1)
+            display.last() - display[refIdx.coerceAtLeast(0)]
+        }
+    }
+    BodyMetricRow(
+        label = "MUSCLE",
+        figure = if (entries.isEmpty()) null else "%.1f".format(display.last()),
+        unit = unitLabel(weightUnit).uppercase(),
+        delta = delta.asMetricDelta(),
+        action = "sync →",
+        onAction = onSync,
+        rowTapNav = false,
+        onBg = onBg, muted = muted, accent = accent
+    ) {
+        if (display.size >= 2) ProfileSparkline(display, accent, markMod)
         else GhostSpark(muted)
     }
 }

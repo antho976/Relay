@@ -188,5 +188,8 @@ internal fun DayViewModel.startSessionService(dayName: String) {
 
 internal fun DayViewModel.stopSessionService() {
     bridge.endSession()
+    // The shared timer is app-scoped now (W1) — a session that ends takes its rest timer with it,
+    // on the phone AND the wrist (the publisher deletes /timer/state when this goes null).
+    restTimer.stop()
     appContext.stopService(Intent(appContext, WorkoutSessionService::class.java))
 }
