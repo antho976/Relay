@@ -43,17 +43,24 @@ class WatchSessionMirror @Inject constructor(
     private val loggedExerciseDao: LoggedExerciseDao,
     private val loggedSetDao: LoggedSetDao,
     private val customizationRepo: com.forge.app.data.repo.CustomizationRepository,
-    private val settingsRepo: SettingsRepository
+    private val settingsRepo: SettingsRepository,
+    private val focusHolder: WearFocusHolder
 ) {
     @OptIn(ExperimentalCoroutinesApi::class)
     val sessionLive: Flow<SessionLiveDto?> = sessionDao.observeActiveSession()
         .flatMapLatest { session ->
-            if (session == null) flowOf(null)
+            // Freestyle ("Open workout") logs are draft-built on the phone and exist as an active
+            // session only for the instant save() runs — never a live sitting the wrist could join.
+            // Without this gate Program.day("freestyle") falls back to the program's FIRST day and
+            // the watch would flash (or log against) a day the user isn't doing. Wrist freestyle
+            // is a deliberate later feature; until then the watch stays idle.
+            if (session == null || session.dayKey == Program.FREESTYLE_DAY_KEY) flowOf(null)
             else combine(
                 loggedExerciseDao.observeForSession(session.id),
                 loggedSetDao.observeAllForSession(session.id),
-                settingsRepo.weightUnit
-            ) { exercises, sets, unit -> buildDto(session, exercises, sets, unit) }
+                settingsRepo.weightUnit,
+                focusHolder.earlyDone
+            ) { exercises, sets, unit, _ -> buildDto(session, exercises, sets, unit) }
         }
 
     private suspend fun buildDto(
@@ -73,10 +80,20 @@ class WatchSessionMirror @Inject constructor(
             val done = row?.let { setsByLoggedExercise[it.id]?.size } ?: 0
             Triple(ex, row, done)
         }
-        // Current = the first slot still short of its planned sets; a fully-logged day pins to the
-        // last slot so the wrist shows "4 of 4" rather than going blank.
-        val currentIdx = counts.indexOfFirst { (ex, _, done) -> done < ex.sets }
-            .let { if (it == -1) counts.lastIndex else it }
+        // Current slot = CurrentSlotResolver's policy (follow the lifter): the most recently
+        // logged slot while short of plan, else the next incomplete AFTER it, skipping slots the
+        // day screen declared done early (WearFocusHolder) — never pinned to an abandoned slot.
+        val lastLoggedIdx = sets.maxByOrNull { it.completedAt }
+            ?.let { last -> counts.indexOfFirst { (_, row, _) -> row?.id == last.loggedExerciseId } }
+            ?.takeIf { it >= 0 }
+        val earlyDoneIdx = focusHolder.earlyDoneFor(session.id)
+            .let { ids -> counts.indices.filter { counts[it].first.id in ids }.toSet() }
+        val currentIdx = CurrentSlotResolver.resolve(
+            plannedSets = counts.map { it.first.sets },
+            doneSets = counts.map { it.third },
+            lastLoggedIdx = lastLoggedIdx,
+            earlyDoneIdx = earlyDoneIdx
+        )
         val current = counts.getOrNull(currentIdx)
         val protoUnit = unit.toProtocol()
 
@@ -122,7 +139,8 @@ class WatchSessionMirror @Inject constructor(
             startedAtMs = session.startedAt,
             unit = protoUnit,
             weightStep = WeightSteps.weightStep(protoUnit, isPlates),
-            isPlates = isPlates
+            isPlates = isPlates,
+            isBodyweight = effectivePlan?.unit == ExerciseUnit.BODYWEIGHT
         )
     }
 

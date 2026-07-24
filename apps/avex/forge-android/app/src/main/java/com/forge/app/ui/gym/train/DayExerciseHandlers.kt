@@ -187,10 +187,15 @@ internal fun DayViewModel.handleExerciseEvent(event: DayUiEvent) {
         }
         // Declare the exercise done early — collapse the card and file it under DONE (mirrors the
         // auto-collapse when the final target set is logged). Navigation is the caller's job.
-        is DayUiEvent.FinishExerciseEarly -> _state.update { s ->
-            s.copy(exercises = s.exercises.map {
-                if (it.plan.id == event.exerciseId) it.copy(finishedEarly = true, isExpanded = false) else it
-            })
+        // finishedEarly never reaches Room, so the wrist mirror can't see it — the WearFocusHolder
+        // mark lets the watch's current-slot pick scan past this slot instead of pinning to it.
+        is DayUiEvent.FinishExerciseEarly -> {
+            _state.value.sessionId?.let { wearFocusHolder.markEarlyDone(it, event.exerciseId) }
+            _state.update { s ->
+                s.copy(exercises = s.exercises.map {
+                    if (it.plan.id == event.exerciseId) it.copy(finishedEarly = true, isExpanded = false) else it
+                })
+            }
         }
         is DayUiEvent.SetUseKg -> viewModelScope.launch { settingsRepo.setUseKg(event.useKg) }
         is DayUiEvent.SetSupersetGroup -> viewModelScope.launch {

@@ -46,6 +46,7 @@ class DayViewModel @Inject constructor(
     @ApplicationContext internal val appContext: Context,
     internal val bridge: WorkoutSessionBridge,
     internal val timerHolder: com.forge.app.service.wear.SessionTimerHolder,
+    internal val wearFocusHolder: com.forge.app.service.wear.WearFocusHolder,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 

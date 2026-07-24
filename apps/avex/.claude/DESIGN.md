@@ -280,9 +280,15 @@ this instant?" only (§Principle 2 of `docs/WEAR_OS_PLAN.md`) — no stats, no h
   voices on one round screen. Curved text only for the top eyebrow label (time/exercise name),
   never prose.
 - **Layout**: center-weighted single column; safe inset 8% of diameter; one decision per screen;
-  swipe-dismiss preserved (no custom back). Screens: idle home · session (target big) · rest
-  timer. Bezel/rotary = the primary adjust input; touch ± capsules always present (44dp+ on
-  wrist). Nothing fake-tappable (§4 holds).
+  swipe-dismiss preserved (no custom back). Screens: idle home · session (figure big) · rest
+  timer · RPE picker (post-log, reached from the transient undo/`rate →` row on timer + set
+  views) · one 20s "Finished" beat when the session ends (points at the phone for notes/details).
+  Bezel/rotary = the primary adjust input; touch ± steppers always present (44dp touch, 34dp
+  visual, flanking the figure). **The serif figure IS the adjust target**: weight big by default,
+  tap the small reps line to bring reps up (and back) — bezel and steppers always change the big
+  number; bodyweight slots pin reps big. Guard rails answer with a **Confirm capsule** (one more
+  tap), never "do it on the phone". Status/error lines sit ABOVE the capsule (below clips on
+  round). Nothing fake-tappable (§4 holds).
 - **Ambient**: dimmed mono only — onBg text at 0.6, no accent, no surfaces, burn-in-safe (no
   large filled areas); timer keeps the serif countdown, everything else drops.
 - **Haptics**: timer-done = the one strong buzz (with phone-suppression ack); set-logged = short

@@ -42,6 +42,37 @@ fun WristCapsule(
     }
 }
 
+/**
+ * Round ± stepper (§16: touch capsules always present beside the bezel — not every watch has a
+ * rotary). 44dp touch target, 34dp visual circle so the pair fits beside the serif figure it
+ * flanks — the figure IS the value being stepped, so the glyphs need no state color.
+ */
+@Composable
+fun WristStepper(
+    glyph: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val colors = LocalWearColors.current
+    Box(
+        modifier = modifier
+            .size(44.dp)
+            .clip(CircleShape)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Box(
+            Modifier
+                .size(34.dp)
+                .clip(CircleShape)
+                .background(Color(0xFF15161B)),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(glyph, style = WearType.control, color = colors.onBg)
+        }
+    }
+}
+
 /** Logged-set ticks: filled accent = done, hollow = ahead. The section's mark, honest at zero. */
 @Composable
 fun SetTicks(done: Int, total: Int, modifier: Modifier = Modifier) {
