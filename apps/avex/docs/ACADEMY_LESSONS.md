@@ -10,7 +10,9 @@
 - **Just-in-time, not curriculum-first.** Only Fundamentals is sequential for the user
   (cold-start). Everything else unlocks the first time its coach moment fires.
   "In order" below therefore means *authoring order* (which phase writes it), not a
-  course index the user marches through.
+  course index the user marches through. *(Rev 2: unlock triggers below are of two
+  kinds — coach-ledger moments AND app-usage moments (first rest-timer use, first
+  readiness tap). Both persist as `LessonEvent` rows; same idempotent-recompute rule.)*
 - **Teach exactly what the coach does — no more.** Each lesson exists because a coach
   reason links to it (`reason.lessonId`). If a concept below ever gets cut from the
   coach, cut its lesson too.
@@ -79,7 +81,9 @@ Directive, one per step, paired with the prepped template session.
   recovery in athletes* (Int J Sports Med).
 
 **F6 · `fundamentals.soreness_vs_injury` — Soreness vs injury**
-- Unlock: first soreness flag / sick-day flag.
+- Unlock: first soreness flag / sick-day flag *(rev 2: the sick flag and injury
+  restriction this references now ship in Coach v3 Phase B — see the plan's "Life
+  events" concept; rev 1 referenced a flag no machinery created)*.
 - Teaches: DOMS (dull, symmetric, peaks 24–72 h, fades with a warm-up) vs injury (sharp,
   local, joint-y, worsens under load). Soreness is not the goal and not proof of a good
   session — the repeated-bout effect makes it fade even as progress continues. When the
