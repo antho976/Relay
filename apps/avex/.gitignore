@@ -5,3 +5,4 @@
 # between machines, but never the ephemeral agent worktrees or the runtime lock.
 .claude/worktrees/
 .claude/scheduled_tasks.lock
+.relay/
