@@ -12,24 +12,30 @@
 | Wear OS | `WEAR_OS_PLAN.md` | Companion watch app (Google + Samsung), live HR, HC write-back |
 | Engine | `ENGINE_PLAN.md` | Conditioning coached as a lifter — zones, placement, base loop |
 
-They interlock: watch HR (W3) powers Engine's live coaching (E-C) and ReadinessV2 (Coach B);
-Engine's load feeds readiness interference (Coach B) and the Today Directive's rest-day
-prescriptions; the Today tile (W4) renders the directive (Coach B). No hard blockers
-anywhere — every phase has a defined degraded mode.
+They interlock: watch HR (W3, **shipped**) powers Engine's live coaching (E-C) and
+ReadinessV2 (Coach B); Engine's load feeds readiness interference (Coach B) and the Today
+Directive's rest-day prescriptions; the Today tile (W4, **shipped**) renders the
+directive once Coach B exists. No hard blockers anywhere — every phase has a defined
+degraded mode.
 
 ## Suggested sequence
 
-1. **Wear W0** — HC exercise-session write-back. Tiny, instant "Samsung Health" win.
-2. **Coach v3 A** — eat everything + Goal Portfolio (foundation both later plans lean on).
-3. **Wear W1–W2** — timer + set logging on the wrist (the headline watch release).
-4. **Coach v3 B** — Today Directive + ReadinessV2 + check-in + Academy foundation.
-5. **Engine E-A → E-B** — zones/load, then the coached conditioning week.
-6. **Wear W3** — live HR (unlocks the next two).
-7. **Engine E-C** — live zone coaching on the wrist.
-8. **Coach v3 C–D** — blocks, then the learning loop + projects.
-9. **Wear W4** — tiles/complications (directive now exists to render).
-10. **Engine E-D** — the base loop; conditioning joins the weekly pass.
-11. **Coach v3 E–F** — initiative/trust ladder, then future signal slots.
+> Rev 2 (2026-07-24): **the entire Wear plan (W0–W6) has shipped** — items renumbered.
+> Both remaining plans re-verified at 0.8.8.3 / schema v31; see
+> `COACH_ENGINE_PLAN_REVIEW.md` for the audit behind their rev-2 amendments.
+
+1. **Coach v3 A** — eat everything + Goal Portfolio (rev 2: HRV/steps/sleep-stage
+   plumbing already landed with Wear, so A is cheaper than planned; adds the
+   session-type picker prerequisite).
+2. **Coach v3 B** — Today Directive + ReadinessV2 + check-in + **life events** + Academy
+   foundation.
+3. **Engine E-A → E-B** — zones/load (now includes age/max-HR capture), then the coached
+   conditioning week.
+4. **Engine E-C** — live zone coaching on the wrist (W3 HR is live; needs the
+   `/cardio/live` protocol rev + its own cardio HR-sample storage).
+5. **Coach v3 C–D** — blocks, then the learning loop + projects.
+6. **Engine E-D** — the base loop; conditioning joins the weekly pass.
+7. **Coach v3 E–F** — initiative/trust ladder, then future signal slots.
 
 Rule of thumb kept throughout: alternate a platform release (watch) with a brain release
 (coach/engine) so every few releases have a visible headline.
