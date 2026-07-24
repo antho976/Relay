@@ -8,6 +8,7 @@ import com.forge.shared.protocol.GlanceTodayDto
 import com.forge.shared.protocol.HapticAckDto
 import com.forge.shared.protocol.LogSetCommand
 import com.forge.shared.protocol.SessionLiveDto
+import com.forge.shared.protocol.SetRpeCommand
 import com.forge.shared.protocol.TimerCommand
 import com.forge.shared.protocol.TimerStateDto
 import com.forge.shared.protocol.UndoSetCommand
@@ -57,6 +58,13 @@ class WearDataRepository private constructor(context: Context) : DataClient.OnDa
     private val _lastAck = MutableStateFlow<CmdAckDto?>(null)
     val lastAck: StateFlow<CmdAckDto?> = _lastAck
 
+    /** The last successfully logged set (from its ack), stamped with LOCAL receive time — drives
+     *  the rest screen's transient undo/RPE row. [rpeSent] hides the row once a rating went out. */
+    data class LastLog(val setId: Long, val atLocalMs: Long, val rpeSent: Boolean = false)
+
+    private val _lastLog = MutableStateFlow<LastLog?>(null)
+    val lastLog: StateFlow<LastLog?> = _lastLog
+
     /** The phone speaks a newer protocol — the UI shows "update Avex on your phone". */
     private val _newerVersion = MutableStateFlow(false)
     val newerVersion: StateFlow<Boolean> = _newerVersion
@@ -96,7 +104,13 @@ class WearDataRepository private constructor(context: Context) : DataClient.OnDa
             WearProtocol.PATH_GLANCE_TODAY ->
                 if (!deleted) decodeInto<GlanceTodayDto>(bytes) { _glance.value = it }
             WearProtocol.PATH_CMD_ACK ->
-                if (!deleted) decodeInto<CmdAckDto>(bytes) { _lastAck.value = it }
+                if (!deleted) decodeInto<CmdAckDto>(bytes) { ack ->
+                    _lastAck.value = ack
+                    // A successful log names its set — remember it locally for undo/RPE.
+                    if (ack.ok && ack.setId != null) {
+                        _lastLog.value = LastLog(ack.setId!!, System.currentTimeMillis())
+                    }
+                }
         }
     }
 
@@ -113,17 +127,31 @@ class WearDataRepository private constructor(context: Context) : DataClient.OnDa
     fun sendTimerCommand(action: TimerCommand.Action): String =
         send(WearProtocol.PATH_CMD_TIMER, TimerCommand(commandId = newId(), action = action))
 
-    fun sendLogSet(sessionId: Long, exerciseId: String?, weightText: String?, reps: Int?): String =
+    fun sendLogSet(
+        sessionId: Long,
+        exerciseId: String?,
+        weightText: String?,
+        reps: Int?,
+        confirmedJump: Boolean = false
+    ): String =
         send(
             WearProtocol.PATH_CMD_LOG_SET,
             LogSetCommand(
                 commandId = newId(), sessionId = sessionId,
-                exerciseId = exerciseId, weightText = weightText, reps = reps
+                exerciseId = exerciseId, weightText = weightText, reps = reps,
+                confirmedJump = confirmedJump
             )
         )
 
-    fun sendUndoSet(sessionId: Long): String =
-        send(WearProtocol.PATH_CMD_UNDO_SET, UndoSetCommand(commandId = newId(), sessionId = sessionId))
+    fun sendUndoSet(sessionId: Long): String {
+        _lastLog.value = null // The row acted; don't offer to rate an undone set.
+        return send(WearProtocol.PATH_CMD_UNDO_SET, UndoSetCommand(commandId = newId(), sessionId = sessionId))
+    }
+
+    fun sendSetRpe(setId: Long, rpe: Double): String {
+        _lastLog.value = _lastLog.value?.takeIf { it.setId == setId }?.copy(rpeSent = true)
+        return send(WearProtocol.PATH_CMD_SET_RPE, SetRpeCommand(commandId = newId(), setId = setId, rpe = rpe))
+    }
 
     fun sendHrBatch(sessionId: Long, samples: List<com.forge.shared.protocol.HrBatchDto.Sample>, totalKcal: Double?) {
         sendBytes(
@@ -148,6 +176,7 @@ class WearDataRepository private constructor(context: Context) : DataClient.OnDa
             is TimerCommand -> dto.commandId
             is LogSetCommand -> dto.commandId
             is UndoSetCommand -> dto.commandId
+            is SetRpeCommand -> dto.commandId
             else -> ""
         }
     }

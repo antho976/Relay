@@ -49,6 +49,7 @@ class WearSyncService : WearableListenerService() {
             }
             WearProtocol.PATH_CMD_LOG_SET -> runBlocking { commandHandler.handleLogSet(event.data) }
             WearProtocol.PATH_CMD_UNDO_SET -> runBlocking { commandHandler.handleUndoSet(event.data) }
+            WearProtocol.PATH_CMD_SET_RPE -> runBlocking { commandHandler.handleSetRpe(event.data) }
             WearProtocol.PATH_HR_BATCH -> runBlocking { hrIngest.handleBatch(event.data) }
             else -> super.onMessageReceived(event)
         }

@@ -38,7 +38,9 @@ data class SessionLiveDto(
     /** Bezel-adjust metadata: unit + step in display unit + plate mode (shared step table). */
     val unit: ProtocolWeightUnit = ProtocolWeightUnit.LB,
     val weightStep: Double = 5.0,
-    val isPlates: Boolean = false
+    val isPlates: Boolean = false,
+    /** Bodyweight exercise — no weight to adjust, the wrist pins its adjust target to reps. */
+    val isBodyweight: Boolean = false
 )
 
 /** Rest-timer state ([WearProtocol.PATH_TIMER_STATE]). The watch renders the countdown locally
@@ -97,7 +99,9 @@ data class LogSetCommand(
      *  null = log as prescribed. */
     val weightText: String? = null,
     /** Reps override; null = as prescribed. */
-    val reps: Int? = null
+    val reps: Int? = null,
+    /** The user confirm-tapped a big weight jump the phone flagged ([CmdAckDto.needsConfirm]). */
+    val confirmedJump: Boolean = false
 )
 
 /** Rest-timer control ([WearProtocol.PATH_CMD_TIMER]). */
@@ -117,6 +121,17 @@ data class UndoSetCommand(
     val v: Int = WearProtocol.VERSION,
     val commandId: String,
     val sessionId: Long
+)
+
+/** Rate a just-logged set ([WearProtocol.PATH_CMD_SET_RPE]). [setId] comes off the log ack, so
+ *  the rating lands on exactly that set — a later set or a finished session can't misdirect it. */
+@Serializable
+data class SetRpeCommand(
+    val v: Int = WearProtocol.VERSION,
+    val commandId: String,
+    val setId: Long,
+    /** The phone's RPE scale: 6.0–10.0 in 0.5 steps. */
+    val rpe: Double
 )
 
 /** A batch of live HR samples during an active session ([WearProtocol.PATH_HR_BATCH], W3). */
@@ -143,6 +158,10 @@ data class CmdAckDto(
     val reason: String? = null,
     /** The acked set was a PR — the wrist's gold flash + double-tick rides the confirmation. */
     val pr: Boolean = false,
+    /** Refused pending a confirm tap (big weight jump): resend with [LogSetCommand.confirmedJump]. */
+    val needsConfirm: Boolean = false,
+    /** The logged set's row id on a successful log — the wrist's RPE command targets it. */
+    val setId: Long? = null,
     val atMs: Long
 )
 

@@ -3,6 +3,7 @@ package com.forge.app.service.wear
 import com.forge.app.core.time.Clock
 import com.forge.shared.protocol.CmdAckDto
 import com.forge.shared.protocol.LogSetCommand
+import com.forge.shared.protocol.SetRpeCommand
 import com.forge.shared.protocol.UndoSetCommand
 import com.forge.shared.protocol.WearCodec
 import javax.inject.Inject
@@ -33,6 +34,26 @@ class WearCommandHandler @Inject constructor(
                 ok = result.ok,
                 reason = result.reason,
                 pr = result.wasPr,
+                needsConfirm = result.needsConfirm,
+                setId = result.setId,
+                atMs = clock.nowMs()
+            )
+        )
+    }
+
+    suspend fun handleSetRpe(bytes: ByteArray) {
+        val cmd = when (val d = WearCodec.decode<SetRpeCommand>(bytes)) {
+            is WearCodec.DecodeResult.Ok -> d.value
+            else -> return
+        }
+        if (!deduper.isNew(cmd.commandId)) return
+        val result = setLog.rpeFromWatch(cmd.setId, cmd.rpe)
+        publisher.publishAck(
+            CmdAckDto(
+                commandId = cmd.commandId,
+                ok = result.ok,
+                reason = result.reason,
+                setId = result.setId,
                 atMs = clock.nowMs()
             )
         )

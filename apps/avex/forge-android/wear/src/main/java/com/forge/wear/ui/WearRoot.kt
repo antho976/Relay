@@ -1,6 +1,7 @@
 package com.forge.wear.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -9,7 +10,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -21,11 +26,17 @@ import androidx.wear.compose.material.TimeText
 import com.forge.shared.protocol.GlanceTodayDto
 import com.forge.wear.data.WearDataRepository
 import com.forge.wear.data.WristHaptics
+import kotlinx.coroutines.delay
 
 /**
  * The watch app's whole surface (W1): pure black ground, one screen at a time, driven entirely by
  * the mirrored DataItems. No session → the idle glance; session + running timer → the countdown;
- * session otherwise → the set view. A newer phone protocol → the one honest update screen.
+ * session otherwise → the set view; a session that just ended → one Finished beat; the rate
+ * affordance → the RPE picker. A newer phone protocol → the one honest update screen.
+ *
+ * Log-ack FEEDBACK lives here, not in SetView: the phone starts the rest timer before the set
+ * write, so the timer DataItem usually replaces SetView before its ack lands — the set-logged
+ * tick / PR double-tick + gold wash must fire on whichever screen is up.
  */
 @Composable
 fun WearRoot(repo: WearDataRepository, haptics: WristHaptics) {
@@ -34,20 +45,78 @@ fun WearRoot(repo: WearDataRepository, haptics: WristHaptics) {
     val config by repo.config.collectAsStateWithLifecycle()
     val glance by repo.glance.collectAsStateWithLifecycle()
     val newerVersion by repo.newerVersion.collectAsStateWithLifecycle()
+    val lastAck by repo.lastAck.collectAsStateWithLifecycle()
+
+    var rpeSetId by remember { mutableStateOf<Long?>(null) }
+    var prWash by remember { mutableStateOf(false) }
+    var consumedAckId by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(lastAck) {
+        val ack = lastAck ?: return@LaunchedEffect
+        if (ack.commandId == consumedAckId) return@LaunchedEffect
+        consumedAckId = ack.commandId
+        if (ack.ok && ack.setId != null && !ack.needsConfirm) {
+            if (ack.pr) {
+                haptics.pr()
+                try { prWash = true; delay(1_200) } finally { prWash = false }
+            } else {
+                haptics.setLogged()
+            }
+        }
+    }
+
+    // One Finished beat when the live session disappears — then back to the idle glance.
+    var showFinished by remember { mutableStateOf(false) }
+    var hadSession by remember { mutableStateOf(false) }
+    LaunchedEffect(session) {
+        if (session != null) { hadSession = true; showFinished = false }
+        else if (hadSession) { hadSession = false; showFinished = true }
+    }
 
     CompositionLocalProvider(LocalWearColors provides wearColors(config)) {
         Box(Modifier.fillMaxSize().background(Color.Black)) {
             when {
                 newerVersion -> UpdateScreen()
+                rpeSetId != null -> RpeScreen(setId = rpeSetId!!, repo = repo, onDone = { rpeSetId = null })
                 session != null -> {
                     val t = timer
                     // A finished/stopped timer (paused at 0) hands back to the set view.
                     val timerLive = t != null && (!t.paused || t.pausedRemainingSeconds > 0)
-                    if (timerLive) TimerView(t!!, repo, haptics) else SetView(session!!, repo, haptics)
+                    if (timerLive) TimerView(t!!, repo, haptics, onRpe = { rpeSetId = it })
+                    else SetView(session!!, repo, onRpe = { rpeSetId = it })
                 }
+                showFinished -> FinishedScreen(onDone = { showFinished = false })
                 else -> IdleScreen(glance)
             }
             TimeText()
+            if (prWash) {
+                val colors = LocalWearColors.current
+                Box(Modifier.fillMaxSize().background(colors.prGold.copy(alpha = 0.25f)))
+            }
+        }
+    }
+}
+
+/** The session just ended — one quiet beat pointing at the phone for the rest (notes, details). */
+@Composable
+private fun FinishedScreen(onDone: () -> Unit) {
+    val colors = LocalWearColors.current
+    LaunchedEffect(Unit) { delay(20_000); onDone() }
+    Box(
+        Modifier.fillMaxSize().clickable(onClick = onDone),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(horizontal = 24.dp)
+        ) {
+            Text("WORKOUT", style = WearType.labelSmall, color = colors.muted)
+            Spacer(Modifier.height(4.dp))
+            Text("Finished", style = WearType.figureSmall, color = colors.onBg)
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "Add notes and details on your phone",
+                style = WearType.body, color = colors.muted, textAlign = TextAlign.Center
+            )
         }
     }
 }

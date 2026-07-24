@@ -53,6 +53,12 @@ object WearType {
     )
     val figureSmall = figure.copy(fontSize = 26.sp)
     val body = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 14.sp)
+    /** Control glyphs (the ± steppers) — sans, a step up from body so the mark reads in a circle. */
+    val control = TextStyle(
+        fontFamily = FontFamily.SansSerif,
+        fontSize = 16.sp,
+        fontWeight = FontWeight.Medium
+    )
     val label = TextStyle(
         fontFamily = FontFamily.Monospace,
         fontSize = 10.sp,

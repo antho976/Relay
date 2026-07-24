@@ -27,6 +27,8 @@ object WearProtocol {
     const val PATH_CMD_LOG_SET = "/cmd/log-set"
     const val PATH_CMD_TIMER = "/cmd/timer"
     const val PATH_CMD_UNDO_SET = "/cmd/undo-set"
+    /** Rate the set a log ack named ([CmdAckDto.setId]) — targeted, so a late RPE can't miss. */
+    const val PATH_CMD_SET_RPE = "/cmd/set-rpe"
     const val PATH_HR_BATCH = "/hr/batch"
     /** The watch felt the timer-done buzz — lets the phone stay silent (one buzz, one body part). */
     const val PATH_HAPTIC_ACK = "/haptic/ack"
