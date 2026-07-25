@@ -442,6 +442,10 @@ class MainActivity : FragmentActivity() {
                             // The app's one Undo snackbar (§13) — hosted here so a "deleted · Undo"
                             // message rides over any screen, including one popped back to after a delete.
                             com.forge.app.ui.common.SnackbarControllerHost()
+                            // The morning check-in (Coach v3 B1): asked once a day at first open,
+                            // hosted here so it rides over whatever screen the app resumed to, and
+                            // silent for anyone who has stopped answering it.
+                            com.forge.app.ui.checkin.CheckinSheet()
                         }
                         }
                     }

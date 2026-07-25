@@ -268,13 +268,72 @@ class MigrationTest {
         ).use { assertEquals("session index should exist after 30→31", 1, it.count) }
     }
 
+
     @Test
-    fun migrateFullChain12To31_runsEveryStepInOrder() {
+    fun migrate31To32_addsGoalPortfolioAcademyLedgerAndDecisionColumns() {
+        helper.createDatabase(dbName, 31).close()
+        val db = helper.runMigrationsAndValidate(dbName, 32, true, MIGRATION_31_32)
+
+        db.query("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('coach_goal','lesson_event')")
+            .use { assertEquals("A2 tables should exist after 31→32", 2, it.count) }
+        db.query(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name IN " +
+                "('index_coach_goal_kind','index_lesson_event_lesson_id')"
+        ).use { assertEquals("A2 indices should exist after 31→32", 2, it.count) }
+
+        // The four additive coach_decision columns: existing rows must read back as week-scoped
+        // with no lesson and no undo expiry, which is exactly what every pre-A2 decision was.
+        db.query("PRAGMA table_info(`coach_decision`)").use { c ->
+            val names = mutableSetOf<String>()
+            while (c.moveToNext()) names += c.getString(c.getColumnIndexOrThrow("name"))
+            assertEquals("lesson_id column", true, names.contains("lesson_id"))
+            assertEquals("scope column", true, names.contains("scope"))
+            assertEquals("scope_key column", true, names.contains("scope_key"))
+            assertEquals("undo_expires_at column", true, names.contains("undo_expires_at"))
+        }
+    }
+
+
+    @Test
+    fun migrate32To33_addsCheckinAndInjuryTables() {
+        helper.createDatabase(dbName, 32).close()
+        val db = helper.runMigrationsAndValidate(dbName, 33, true, MIGRATION_32_33)
+
+        db.query("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('checkin_entry','injury_restriction')")
+            .use { assertEquals("B1 tables should exist after 32→33", 2, it.count) }
+        // One check-in per calendar day: the unique index is what makes the upsert an upsert.
+        db.query(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name = 'index_checkin_entry_date_key'"
+        ).use { assertEquals("unique date_key index should exist after 32→33", 1, it.count) }
+    }
+
+
+    @Test
+    fun migrate33To34_addsTheTrainingBlock() {
+        helper.createDatabase(dbName, 33).close()
+        val db = helper.runMigrationsAndValidate(dbName, 34, true, MIGRATION_33_34)
+
+        db.query("SELECT name FROM sqlite_master WHERE type='table' AND name = 'training_block'")
+            .use { assertEquals("training_block should exist after 33→34", 1, it.count) }
+    }
+
+
+    @Test
+    fun migrate34To35_addsProactiveProjects() {
+        helper.createDatabase(dbName, 34).close()
+        val db = helper.runMigrationsAndValidate(dbName, 35, true, MIGRATION_34_35)
+
+        db.query("SELECT name FROM sqlite_master WHERE type='table' AND name = 'coach_project'")
+            .use { assertEquals("coach_project should exist after 34→35", 1, it.count) }
+    }
+
+    @Test
+    fun migrateFullChain12To35_runsEveryStepInOrder() {
         // The pairwise tests above each validate one hop. This runs the WHOLE locked chain in a
         // single pass — a real v12 install upgrading straight to today's schema — so a gap or an
         // out-of-order/incompatible step between any two versions is caught, not just each hop alone.
         helper.createDatabase(dbName, 12).close()
-        helper.runMigrationsAndValidate(dbName, 31, true, *ALL_MIGRATIONS)
+        helper.runMigrationsAndValidate(dbName, 35, true, *ALL_MIGRATIONS)
     }
 
     @Test

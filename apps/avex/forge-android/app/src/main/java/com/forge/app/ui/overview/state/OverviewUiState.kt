@@ -60,6 +60,16 @@ data class FatigueHint(val score: Int, val threshold: Int, val topDriver: String
 
 @Immutable
 data class OverviewUiState(
+    /**
+     * Today's one answer (Coach v3 B2). The hero renders THIS rather than a bare next-workout
+     * name: the directive replaces that lead-in (plan M7) instead of stacking beside it.
+     * Null only before the first read lands.
+     */
+    val directive: com.forge.app.domain.coach.TodayDirective.Directive? = null,
+    /** Today's per-exercise targets, when the directive says train. */
+    val brief: com.forge.app.domain.coach.PreSessionBrief.Brief? = null,
+    /** The cold-start lesson the directive is carrying, while the coach is still learning you. */
+    val coldStartLesson: com.forge.app.domain.academy.Lesson? = null,
     val workoutsThisWeek: Int = 0,
     /** The user's chosen days/week — the "of N" denominator, NOT a hardcoded 6 (multi-user). */
     val weeklyWorkoutTarget: Int = 4,

@@ -1,5 +1,6 @@
 package com.forge.app.domain.adapt
 
+import com.forge.app.data.db.entities.BodyweightEntry
 import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.data.db.entities.LoggedExercise
 import com.forge.app.data.db.entities.LoggedSet
@@ -31,6 +32,8 @@ object SnapshotAssembler {
         prefs: PrefsSnap,
         moods: List<MoodEntry> = emptyList(),
         cardio: List<CardioEntry> = emptyList(),
+        /** Bodyweight log (A1); any order, sorted newest-first here. Empty until the user logs one. */
+        bodyweight: List<BodyweightEntry> = emptyList(),
         /** Off-app recovery signals from Health Connect; empty when the user hasn't connected it. */
         health: HealthSnap = HealthSnap(),
         // No default: a missing zone silently binned every session into UTC weeks, giving non-UTC
@@ -38,13 +41,16 @@ object SnapshotAssembler {
         zoneId: java.time.ZoneId
     ): AdaptationSnapshot {
         val orderedSessions = sessions.sortedBy { it.startedAt }
-        val startedAtBySessionId = orderedSessions.associate { it.id to it.startedAt }
+        // The whole parent session, not just its start time: A1 carries the session TYPE onto every
+        // bout so advisors can exclude test/technique/first-back work from progression reads.
+        val sessionById = orderedSessions.associateBy { it.id }
         val setsByLoggedExercise = loggedSets.groupBy { it.loggedExerciseId }
 
         val history = loggedExercises
             .mapNotNull { le ->
                 // Drop rows whose parent session isn't in the (finished, tracked) list.
-                val startedAt = startedAtBySessionId[le.sessionId] ?: return@mapNotNull null
+                val session = sessionById[le.sessionId] ?: return@mapNotNull null
+                val startedAt = session.startedAt
                 // Key by the SLOT, not the re-keyed exercise_id (#11): every engine consumer looks
                 // history up by the program slot id (ProgramSlotSnap.exerciseId = plan.id), and the
                 // `slots` map that resolves names/muscles is slot-keyed too. A swapped row's
@@ -58,7 +64,8 @@ object SnapshotAssembler {
                     hitFullTarget = le.hitFullTarget,
                     skipped = le.skipped,
                     swappedName = le.swappedName,
-                    sets = setsByLoggedExercise[le.id].orEmpty().sortedBy { it.setIndex }
+                    sets = setsByLoggedExercise[le.id].orEmpty().sortedBy { it.setIndex },
+                    sessionType = session.sessionType
                 )
             }
             .groupBy({ it.first }, { it.second })
@@ -91,6 +98,7 @@ object SnapshotAssembler {
             exerciseHistory = history,
             moods = moods.sortedByDescending { it.recordedAt },
             cardio = cardio.sortedByDescending { it.date },
+            bodyweight = bodyweight.sortedByDescending { it.recordedAt },
             prefs = prefs,
             health = health
         )

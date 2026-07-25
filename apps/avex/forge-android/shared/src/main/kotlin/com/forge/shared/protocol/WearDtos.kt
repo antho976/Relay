@@ -75,6 +75,14 @@ data class GlanceTodayDto(
     val readinessPercent: Int? = null,
     /** Next planned day's display name; null in freestyle / no-plan mode. */
     val nextDayTitle: String? = null,
+    /**
+     * Today's directive headline from the phone's coach (Coach v3 B2) — "Push day", "Rest today".
+     * Null on older phone builds, and the tile falls back to [nextDayTitle], so the wrist degrades
+     * to next-planned-day rather than going blank.
+     */
+    val directiveHeadline: String? = null,
+    /** One short line of why, when the phone has one. */
+    val directiveReason: String? = null,
     val weekSessionsDone: Int = 0,
     /** Weekly session target; null when no real plan. */
     val weekSessionsPlanned: Int? = null,

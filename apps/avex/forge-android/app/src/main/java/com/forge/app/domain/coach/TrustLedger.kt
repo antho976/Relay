@@ -56,6 +56,10 @@ object TrustLedger {
         // "failed" breaks the streak.
         val decided = decisions
             .filter { it.type == type }
+            // NOT FOLLOWED is neutral (B1): the athlete was away or unwell, so the window says
+            // nothing about the advice. It must neither extend a streak nor break one, so it is
+            // invisible here rather than counted either way.
+            .filter { it.outcome != CoachDecision.OUTCOME_NOT_FOLLOWED }
             .filter {
                 when (it.status) {
                     "applied", "skipped", "reverted" -> true

@@ -21,6 +21,8 @@ import com.forge.app.data.db.entities.SuggestionOutcome
 import com.forge.app.data.db.types.EffortRating
 import com.forge.app.data.health.HealthConnectManager
 import com.forge.app.data.prefs.SettingsRepository
+import com.forge.app.domain.coach.LifeEvents
+import com.forge.app.domain.session.SessionType
 import com.forge.app.domain.health.ActiveCalorieEstimator
 import com.forge.app.domain.units.MAX_HOLD_SECONDS
 import com.forge.app.domain.pr.PrDetector
@@ -118,11 +120,27 @@ class WorkoutRepository @Inject constructor(
         // feeds DeloadAdvisor's repeat-suppression (the marker was previously never written — #18).
         val deloadStart = settingsRepo.deloadWeekStartMs.first()
         val inDeloadWeek = deloadStart > 0 && clock.nowMs() - deloadStart in 0 until DELOAD_WEEK_MS
+        // First session after a real break: tag it FIRST_BACK (Coach v3 B1). The enum has existed
+        // since #109 with nothing to write it; this is its writer. The tag keeps the return week out
+        // of stall and fatigue reads (A1's filter), so easing back in never reads as a plateau.
+        val sessionType = if (isFirstBack()) SessionType.FIRST_BACK.key else SessionType.NORMAL.key
         val session = Session(
-            dayKey = dayKey, startedAt = clock.nowMs(), finishedAt = null, deloadMarkedHere = inDeloadWeek
+            dayKey = dayKey, startedAt = clock.nowMs(), finishedAt = null, deloadMarkedHere = inDeloadWeek,
+            sessionType = sessionType
         )
         val id = sessionDao.insert(session)
         return StartedSession(session.copy(id = id), created = true)
+    }
+
+    /**
+     * Is this the first session back after a layoff? True only for the session that RESUMES
+     * training — once a return session exists, [LifeEvents] reports the ramp rather than the gap,
+     * so the tag lands on exactly one session (B1).
+     */
+    private suspend fun isFirstBack(): Boolean {
+        val finished = sessionDao.allFinished().filter { !it.isUntracked }
+        val layoff = LifeEvents.layoff(finished, clock.nowMs())
+        return layoff?.away == true
     }
 
     /**

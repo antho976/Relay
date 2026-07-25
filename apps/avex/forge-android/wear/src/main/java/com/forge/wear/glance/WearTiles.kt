@@ -109,9 +109,19 @@ class TodayTileService : AvexTileService() {
                 label(context, "OPEN AVEX ON YOUR PHONE", ON_BG)
             )
         }
-        val headline = glance.readinessPercent?.let { "$it" } ?: (glance.nextDayTitle ?: "REST")
-        val headlineCaption = if (glance.readinessPercent != null) "READY" else "NEXT"
-        val nextLine = glance.nextDayTitle?.takeIf { glance.readinessPercent != null }
+        // The phone's directive owns the answer when it has one (Coach v3 B2) — the wrist shows
+        // the same words, not its own guess. Older phone builds send no directive, so the readiness
+        // figure and next-day fallback still stand.
+        val directive = glance.directiveHeadline?.takeIf { it.isNotBlank() }
+        val headline = directive?.uppercase()
+            ?: glance.readinessPercent?.let { "$it" }
+            ?: (glance.nextDayTitle ?: "REST")
+        val headlineCaption = when {
+            directive != null -> "TODAY"
+            glance.readinessPercent != null -> "READY"
+            else -> "NEXT"
+        }
+        val nextLine = glance.nextDayTitle?.takeIf { directive == null && glance.readinessPercent != null }
         return column(
             label(context, "AVEX · TODAY", MUTED),
             gap(4f),

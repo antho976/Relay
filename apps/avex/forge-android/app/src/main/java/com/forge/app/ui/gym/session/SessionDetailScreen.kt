@@ -2,6 +2,9 @@ package com.forge.app.ui.gym.session
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -29,6 +32,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import com.forge.app.ui.common.ForgeOutlineCapsule
 import com.forge.app.ui.common.ForgePrimaryCapsule
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -105,11 +109,23 @@ fun SessionDetailScreen(
     }
 
     var metric by rememberSaveable { mutableStateOf(SessionMetric.WEIGHT) }
+    /** A1: the session-type picker (tiny-input dialog), opened from the page-end sidekick capsule. */
+    var showTypePicker by rememberSaveable { mutableStateOf(false) }
     // Bars/line is per-stat now — each metric carries its own style instead of one page-wide switch.
     var weightStyle by rememberSaveable { mutableStateOf(SessionChartStyle.BARS) }
     var volumeStyle by rememberSaveable { mutableStateOf(SessionChartStyle.BARS) }
     var repsStyle by rememberSaveable { mutableStateOf(SessionChartStyle.BARS) }
     var rpeStyle by rememberSaveable { mutableStateOf(SessionChartStyle.BARS) }
+
+    if (showTypePicker) {
+        state.data?.let { data ->
+            SessionTypeDialog(
+                current = data.sessionType,
+                onPick = { viewModel.setSessionType(it) },
+                onDismiss = { showTypePicker = false }
+            )
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -228,7 +244,14 @@ fun SessionDetailScreen(
                                 .padding(top = 8.dp),
                             contentAlignment = Alignment.Center
                         ) {
-                            ForgePrimaryCapsule("Log again today", onClick = { viewModel.reLogToday() })
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                ForgePrimaryCapsule("Log again today", onClick = { viewModel.reLogToday() })
+                                Spacer(Modifier.height(10.dp))
+                                // Sidekick (§8 ②) to the filled capsule: tag what kind of session this
+                                // was. The current tag renders in the header eyebrow, so this says the
+                                // action alone — state is never drawn twice.
+                                ForgeOutlineCapsule("Session type", onClick = { showTypePicker = true })
+                            }
                         }
                     }
                 }

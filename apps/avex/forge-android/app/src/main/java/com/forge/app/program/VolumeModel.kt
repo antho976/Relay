@@ -67,7 +67,14 @@ object VolumeModel {
         focus: Set<MuscleGroup> = emptySet(),
         volumeFactor: Double = 1.0,
         minSets: Int = MIN_SETS,
-        bias: Map<MuscleGroup, Int> = emptyMap()
+        bias: Map<MuscleGroup, Int> = emptyMap(),
+        /**
+         * Per-muscle weekly ceilings measured from THIS athlete (Coach v3 D's `PersonalProfile`),
+         * overriding the population defaults in [weeklyCap] where they've been earned. Empty until
+         * the profile has months of history, at which point generation stops using a number that
+         * was never about this person.
+         */
+        personalCaps: Map<MuscleGroup, Int> = emptyMap()
     ): List<List<Int>> {
         val result: List<IntArray> = days.map { day ->
             IntArray(day.targets.size) { si ->
@@ -100,7 +107,7 @@ object VolumeModel {
             // Focused muscles get a little headroom above the cap so the emphasis isn't immediately
             // trimmed away — but bounded (not slots.size × bonus, which on a high-frequency split let a
             // prioritised muscle blow well past the junk-volume ceiling).
-            val cap = (weeklyCap[muscle] ?: return@forEach) +
+            val cap = (personalCaps[muscle] ?: weeklyCap[muscle] ?: return@forEach) +
                 if (muscle in focus) minOf(slots.size * EMPHASIS_BONUS_SETS, MAX_EMPHASIS_HEADROOM) else 0
             var total = slots.sumOf { (di, si) -> result[di][si] }
             while (total > cap) {
