@@ -50,8 +50,49 @@ data class CoachDecision(
     /** Type-specific apply argument: swap = replacement lib id; volume = new set count; rep_shift = new range; revert = original decision id. */
     @ColumnInfo(name = "payload") val payload: String? = null,
     @ColumnInfo(name = "applied_at") val appliedAt: Long? = null,
-    /** Watcher verdict: "pending" until the window closes → "ok" | "failed". */
+    /**
+     * Watcher verdict: "pending" until the window closes → "ok" | "failed" | "not_followed".
+     * "not_followed" (A2 column plumbing, B1 behavior) means the user never did the thing — it feeds
+     * dose reduction and re-planning, and must never demote trust or fold into bias: skipping a
+     * suggestion is user behavior, not bad advice.
+     */
     @ColumnInfo(name = "outcome") val outcome: String = "pending",
     /** Before-state for single-change undo; null = not undoable (deload regenerates). */
-    @ColumnInfo(name = "undo_data") val undoData: String? = null
-)
+    @ColumnInfo(name = "undo_data") val undoData: String? = null,
+    /**
+     * The Academy lesson this decision's reason can link to (A2). Nullable and unused until lessons
+     * ship: a missing lesson renders the reason exactly as before (additive, like every new signal).
+     */
+    @ColumnInfo(name = "lesson_id") val lessonId: String? = null,
+    /**
+     * What cadence this decision belongs to: "week" (the weekly pass — every pre-A2 row),
+     * "day" (a directive), or "session" (a post-session adjustment). The weekly pass is keyed by
+     * ISO week, but the coach's later cadences are not, so the ledger carries its own scope rather
+     * than forcing daily work into a week id.
+     */
+    @ColumnInfo(name = "scope") val scope: String = SCOPE_WEEK,
+    /** The scope's key: the ISO week id, an ISO date ("2026-07-24"), or a session id. */
+    @ColumnInfo(name = "scope_key") val scopeKey: String = "",
+    /**
+     * When this change stops being one-tap undoable (A2 column, E behavior). LIFO undo can't unwind
+     * a structural change the user has trained under for a week; past this stamp the coach offers
+     * "revert forward" (regenerate the old shape, keep every logged session) instead.
+     */
+    @ColumnInfo(name = "undo_expires_at") val undoExpiresAt: Long? = null
+) {
+    companion object {
+        const val SCOPE_WEEK = "week"
+        const val SCOPE_DAY = "day"
+        const val SCOPE_SESSION = "session"
+
+        const val OUTCOME_PENDING = "pending"
+        const val OUTCOME_OK = "ok"
+        const val OUTCOME_FAILED = "failed"
+
+        /**
+         * The user didn't do it. Judged like any other verdict so the write stays watched, but it
+         * is neither a win nor a loss: excluded from trust and from bias folding.
+         */
+        const val OUTCOME_NOT_FOLLOWED = "not_followed"
+    }
+}

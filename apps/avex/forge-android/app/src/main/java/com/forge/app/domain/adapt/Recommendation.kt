@@ -27,6 +27,15 @@ sealed interface Recommendation {
     val system: AdviceSystem
 
     /**
+     * The Academy lesson behind this recommendation's reason (Coach v3 A2), or null.
+     *
+     * A nullable sibling of [reason] rather than a `Reason` value type on purpose: the type would
+     * touch every advisor and every UI consumer for no behavioral gain. Absent lesson ⇒ the reason
+     * renders exactly as it always has — additive, like every other new signal.
+     */
+    val lessonId: String? get() = null
+
+    /**
      * Change the working weight on one exercise. [inputText] is expressed in the exercise's
      * *input unit* and is always parseable by [com.forge.app.domain.parser.WeightParser] —
      * a plate count like "3 plates" on PLATES exercises, a plain lb number on DUMBBELL.
@@ -118,7 +127,8 @@ sealed interface Recommendation {
     data class ReadinessScale(
         val percent: Int,
         override val reason: String,
-        override val confidence: Confidence
+        override val confidence: Confidence,
+        override val lessonId: String? = null
     ) : Recommendation {
         override val id: String get() = "readiness.scale"
         override val system: AdviceSystem get() = AdviceSystem.READINESS

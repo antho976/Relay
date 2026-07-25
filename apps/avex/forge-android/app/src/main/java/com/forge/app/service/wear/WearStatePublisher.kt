@@ -40,6 +40,7 @@ class WearStatePublisher @Inject constructor(
     private val timerHolder: SessionTimerHolder,
     private val settingsRepo: SettingsRepository,
     private val adaptationRepo: AdaptationRepository,
+    private val directiveRepo: com.forge.app.data.repo.DirectiveRepository,
     private val statsRepo: StatsRepository,
     private val clock: Clock
 ) {
@@ -102,9 +103,15 @@ class WearStatePublisher @Inject constructor(
         val nextDayTitle = week?.nextUpDayKey
             ?.takeIf { !freestyle && Program.days.isNotEmpty() }
             ?.let { Program.dayDisplayName(it) }
+        // The wrist shows the SAME answer the phone does (B2) — the tile consumes the directive
+        // verbatim rather than re-deriving "what now?" from next-up, which is how two surfaces
+        // start disagreeing. Null-safe: an unavailable directive falls back to next-planned-day.
+        val answer = runCatching { directiveRepo.today() }.getOrNull()
         val dto = GlanceTodayDto(
             readinessPercent = readiness?.percent,
             nextDayTitle = nextDayTitle,
+            directiveHeadline = answer?.directive?.headline,
+            directiveReason = answer?.directive?.reason,
             weekSessionsDone = week?.workouts ?: 0,
             // The weekly target only means something with a real plan — freestyle shows the bare count.
             weekSessionsPlanned = settingsRepo.daysPerWeek.first()

@@ -16,6 +16,8 @@ data class AdaptThresholds(
     val rpeEasyMax: Double = 8.0,
     /** Per-set RPE at or above this counts as brutal → back off. */
     val rpeBrutalMin: Double = 9.5,
+    /** Per-set RPE at or above this reads as a near-maximal bout in [EffortModel] (stall signature). */
+    val rpeHighEffortMin: Double = 9.0,
     /** Multipliers applied to dumbbell suggestions for the session's intensity intent (#123). */
     val intensityLightScale: Double = 0.9,
     val intensityHardScale: Double = 1.05,
@@ -83,6 +85,19 @@ data class AdaptThresholds(
      *  rise over the prior-month baseline that reads as "not recovered". */
     val deloadMinRestingHrSamples: Int = 4,
     val deloadRestingHrDeltaBpm: Int = 5,
+    /** Mood driver (A1): post-session moods needed in-window, and the share of them at
+     *  drained/off that reads as accumulated fatigue rather than one rough day. */
+    val deloadMinMoods: Int = 4,
+    val deloadLowMoodShare: Double = 0.5,
+    /** HRV driver (A1, Health Connect W6): RMSSD samples needed in each of window/prior, and the
+     *  fractional drop below the prior-month baseline that reads as autonomic fatigue. HRV is
+     *  noisy per-night, so this is a trend-vs-own-baseline read, never an absolute number. */
+    val deloadMinHrvSamples: Int = 5,
+    val deloadHrvDropFraction: Double = 0.12,
+    /** Daily-steps driver (A1, Health Connect W6): days needed in-window, and the average daily
+     *  step count above which off-gym movement is itself a meaningful recovery cost. */
+    val deloadMinStepDays: Int = 7,
+    val deloadHighDailySteps: Int = 14_000,
     /** "Overdue" driver: no deload week inside the last N weeks of training history. */
     val deloadNoDeloadWeeks: Int = 8,
     /** Plateau driver: ≥ N currently-stalled lifts (from System 1). */
@@ -109,6 +124,29 @@ data class AdaptThresholds(
     val readinessCardioLoadMinutes: Int = 60,
     /** Percent shaved off readiness when [readinessCardioLoadMinutes] is exceeded in the last day. */
     val readinessCardioLoadPenalty: Int = 1,
+    /** Mood window (A1): how far back a post-session mood still speaks about today's readiness. */
+    val readinessMoodHours: Int = 48,
+    /** Readiness at/below −this reads as "today should not be a hard session" (B2 directive). */
+    val readinessRestThreshold: Int = 3,
+    /** Check-in window (B1): how long this morning's answers speak for. */
+    val readinessCheckinHours: Int = 20,
+    /** Percent removed while a sick flag is live — illness outranks every other reading (B1). */
+    val readinessSickPenalty: Int = 5,
+    /** Percent removed during the return ramp after a layoff (B1). */
+    val readinessComebackPenalty: Int = 3,
+    /** Measured sleep (HC): minutes at/below which last night reads short, and at/above which it reads long. */
+    val readinessShortSleepMinutes: Int = 360,
+    val readinessGoodSleepMinutes: Int = 480,
+    /** Resting-HR readiness read: prior-fortnight samples needed, and the bpm rise that speaks. */
+    val readinessMinRestingHrSamples: Int = 4,
+    val readinessRestingHrDeltaBpm: Int = 5,
+    /** HRV drop (%) below your own fortnight baseline that shaves a readiness point (F). */
+    val readinessHrvDropPercent: Int = 12,
+    /** Steps yesterday past which a long day on your feet counts against today's session. */
+    val readinessHighStepDay: Int = 18_000,
+    /** Readiness percent for a drained/off (−) or strong (+) mood inside [readinessMoodHours]. */
+    val readinessLowMoodPenalty: Int = 2,
+    val readinessStrongMoodBonus: Int = 1,
 
     // ── Insights (System 4) ────────────────────────────────────────────────────
     /** Time-of-day rule: total sets before the pattern is worth stating. */

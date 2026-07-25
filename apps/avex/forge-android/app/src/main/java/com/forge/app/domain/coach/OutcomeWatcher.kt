@@ -9,9 +9,13 @@ import com.forge.app.domain.adapt.bestE1rm
 /** The watcher's verdict on one applied change. */
 data class WatchVerdict(
     val decisionId: Long,
-    /** "ok" | "failed" — pending decisions simply get no verdict this pass. */
+    /**
+     * "ok" | "failed" | "not_followed" — pending decisions simply get no verdict this pass.
+     * NOT FOLLOWED (B1) means the window was unlivable (illness, a training gap), so the change
+     * is closed out without counting for or against the coach.
+     */
     val outcome: String,
-    /** Why it failed — becomes the revert proposal's reason. */
+    /** Why it failed, or why it couldn't be judged — becomes the revert proposal's reason. */
     val failReason: String? = null
 )
 
@@ -43,7 +47,13 @@ object OutcomeWatcher {
     fun evaluate(
         applied: List<CoachDecision>,
         s: AdaptationSnapshot,
-        t: AdaptThresholds = AdaptThresholds()
+        t: AdaptThresholds = AdaptThresholds(),
+        /**
+         * The athlete's life during these windows (B1). Illness or a training gap makes a window
+         * unjudgeable: nothing happened, so the change neither worked nor failed. Those close as
+         * NOT FOLLOWED — watched, recorded, and counted against nobody.
+         */
+        life: LifeEvents.State = LifeEvents.State.NONE
     ): List<WatchVerdict> {
         // Only volume_up decisions need the fatigue score — compute it at most once, lazily, instead
         // of once per decision inside the loop.
@@ -51,6 +61,16 @@ object OutcomeWatcher {
         return applied.mapNotNull { d ->
         val appliedAt = d.appliedAt ?: return@mapNotNull null
         val windowClosed = s.nowMs - appliedAt >= WINDOW_DAYS * DAY_MS
+        // Adherence before efficacy: a window the athlete wasn't there for says nothing about the
+        // advice. Only judged once the window closes, so a live window still gets its real verdict.
+        if (windowClosed &&
+            LifeEvents.suppressesVerdict(appliedAt, appliedAt + WINDOW_DAYS * DAY_MS, life)
+        ) {
+            return@mapNotNull WatchVerdict(
+                d.id, CoachDecision.OUTCOME_NOT_FOLLOWED,
+                "you were away or unwell for this window, so it isn't judged"
+            )
+        }
         when (d.type) {
             "swap" -> {
                 val boutsSince = s.exerciseHistory[d.targetKey].orEmpty()

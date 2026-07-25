@@ -227,8 +227,8 @@ per the locked pattern. Consumers, all gated and additive:
 - **Coach:** intra-session HR strain into fatigue/deload drivers; a live source for Coach
   v3's cardio-interference term. `AdaptationSnapshot.HealthSnap` today has only
   restingHr + sleepNights — new fields are additive, `AdaptThresholds`-gated. Declare
-  `watch_hr` in the SignalRegistry when Coach v3 Phase A lands it (registry verified
-  unbuilt today).
+  `watch_hr` in the SignalRegistry when Coach v3 **Phase A2** lands it (declared there as
+  COMING_SOON — the source ships, the consumer doesn't yet).
 - **HC write-back upgraded:** HR series attached to the written session
   (`WRITE_HEART_RATE` joins the session write set), and **real watch calories replace the
   MET estimate** in `maybeWriteActiveCalories` when present.
@@ -316,7 +316,7 @@ phone-only, watch-app-independent, and shippable immediately after W0.
 - **Complications**: readiness (short-text/ranged), next session (short-text), rest timer
   during active session — built on **`TimeDifferenceComplicationText`** so the countdown
   renders locally without burning the complication update budget.
-- **Coach v3 handshake**: when Coach v3 Phase B ships the Today Directive, the Today tile
+- **Coach v3 handshake**: when Coach v3 **Phase B2** ships the Today Directive, the Today tile
   consumes it verbatim. Until then: next-planned-day + readiness, degrade-never-blank
   (readinessScale() verified nullable below data gates — the degrade path is real).
 

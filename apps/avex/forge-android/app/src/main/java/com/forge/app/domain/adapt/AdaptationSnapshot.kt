@@ -1,10 +1,12 @@
 package com.forge.app.domain.adapt
 
+import com.forge.app.data.db.entities.BodyweightEntry
 import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.data.db.entities.LoggedSet
 import com.forge.app.data.db.entities.MoodEntry
 import com.forge.app.data.db.entities.Session
 import com.forge.app.data.db.types.EffortRating
+import com.forge.app.domain.session.SessionType
 import com.forge.app.program.ExerciseTag
 import com.forge.app.program.ExerciseUnit
 import com.forge.app.program.MuscleGroup
@@ -36,6 +38,12 @@ data class AdaptationSnapshot(
     val moods: List<MoodEntry> = emptyList(),
     /** Cardio entries, newest-first — restReason sore/sick feeds recovery (System 5/6). */
     val cardio: List<CardioEntry> = emptyList(),
+    /**
+     * Bodyweight log, newest-first (A1). The one body series the engine was missing: weight phase
+     * (cut/maintain/bulk) reinterprets stalls, and readiness reads weight flux. Empty until the
+     * user logs a weight — additive like every other signal.
+     */
+    val bodyweight: List<BodyweightEntry> = emptyList(),
     val prefs: PrefsSnap,
     /**
      * Off-app recovery signals read from Health Connect (sleep, resting HR), when the user has
@@ -114,8 +122,32 @@ data class ExerciseBout(
     val hitFullTarget: Boolean,
     val skipped: Boolean,
     val swappedName: String?,
-    val sets: List<LoggedSet>
+    val sets: List<LoggedSet>,
+    /**
+     * The parent session's type key ([com.forge.app.domain.session.SessionType]), carried onto the
+     * bout in A1 so advisors can exclude sessions that aren't ordinary training. Defaults to
+     * "normal" — a bout with no known parent type reads as a normal training bout, which is what
+     * every pre-A1 row is.
+     */
+    val sessionType: String = SessionType.NORMAL.key
 )
+
+/**
+ * Session types whose bouts must not feed progression, plateau or fatigue reads (A1):
+ * a TEST day's top single is not a working bout, a TECHNIQUE day is deliberately light, and a
+ * FIRST_BACK ramp is a return-from-layoff week. Counting any of them as ordinary training reads
+ * as a stall (or a PR) that never happened. DELOAD stays *in*: a deload week is planned training
+ * and the fatigue model already reasons about it explicitly.
+ */
+val EXCLUDED_FROM_PROGRESSION: Set<String> = setOf(
+    SessionType.TEST.key,
+    SessionType.TECHNIQUE.key,
+    SessionType.FIRST_BACK.key
+)
+
+/** True when this bout is ordinary training — see [EXCLUDED_FROM_PROGRESSION]. */
+val ExerciseBout.countsForProgression: Boolean
+    get() = sessionType !in EXCLUDED_FROM_PROGRESSION
 
 /** Settings the engine needs, snapshotted from DataStore. */
 data class PrefsSnap(

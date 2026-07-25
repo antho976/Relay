@@ -46,6 +46,9 @@ class AdaptationRepository @Inject constructor(
     private val loggedSetDao: LoggedSetDao,
     private val moodDao: MoodDao,
     private val cardioDao: CardioDao,
+    private val bodyweightDao: com.forge.app.data.db.dao.BodyweightDao,
+    private val checkinDao: com.forge.app.data.db.dao.CheckinDao,
+    private val injuryDao: com.forge.app.data.db.dao.InjuryRestrictionDao,
     private val adviceEventDao: AdviceEventDao,
     private val vacationDao: com.forge.app.data.db.dao.VacationDao,
     private val programRepository: ProgramRepository,
@@ -68,6 +71,15 @@ class AdaptationRepository @Inject constructor(
         val needDays = (t.deloadWindowDays + t.deloadPriorBaselineDays + 7).toLong()
         maxOf(signalWindowMs, needDays * 24 * 60 * 60 * 1000)
     }
+
+    /** How far back [readinessScale] reads moods — the advisor's own mood window (A1). */
+    private val readinessMoodWindowMs: Long = AdaptThresholds().readinessMoodHours * 60L * 60 * 1000
+
+    /** Check-in + life-event window (B1): long enough to see a layoff's sick days, still one query. */
+    private val checkinWindowMs: Long = 30L * 24 * 60 * 60 * 1000
+
+    /** Readiness reads only recent health: last night's sleep and a fortnight of resting HR. */
+    private val readinessHealthLookbackMs: Long = 18L * 24 * 60 * 60 * 1000
 
     /** Dismissing or applying advice mutes that id for this long — no re-nagging. */
     private val adviceCooldownMs = 14L * 24 * 60 * 60 * 1000
@@ -121,6 +133,14 @@ class AdaptationRepository @Inject constructor(
             .mapNotNull { runCatching { Equipment.valueOf(it) }.getOrNull() }.toSet()
         val disliked = settingsRepository.dislikedExercises.first()
         val frozenIds = settingsRepository.frozenExerciseIds.first()
+        // B1: an injured movement (or anything hitting an injured muscle) is off the table until
+        // cleared, so the coach can never propose swapping INTO it. Treated as an exclusion at the
+        // candidate-pool seam rather than a special case downstream — one rule, one place.
+        val life = lifeEvents(clock.nowMs())
+        val restrictedIds = life.restrictedExerciseIds +
+            ExerciseLibrary.all
+                .filter { it.muscle in life.restrictedMuscles }
+                .map { it.id }
         val prefs = PrefsSnap(
             plateLb = settingsRepository.plateWeightLb.first(),
             likedIds = settingsRepository.likedExercises.first(),
@@ -144,7 +164,7 @@ class AdaptationRepository @Inject constructor(
             nowMs = now,
             program = effectiveDays,
             swapCandidateIds = { plan ->
-                ExerciseLibrary.swapCandidates(plan.muscle, equipment, disliked, frozenIds)
+                ExerciseLibrary.swapCandidates(plan.muscle, equipment, disliked + restrictedIds, frozenIds)
                     .map { it.id }
                     .filter { it != plan.id }
             },
@@ -154,6 +174,8 @@ class AdaptationRepository @Inject constructor(
             prefs = prefs,
             moods = moodDao.since(now - signalWindowMs),
             cardio = cardioDao.since(now - signalWindowMs),
+            // Bodyweight over the same signal window (A1): the body series the engine was missing.
+            bodyweight = bodyweightDao.since(now - signalWindowMs),
             // Off-app recovery signals (sleep, resting HR). Returns empty unless the user has
             // connected Health Connect AND granted access — so this is a no-op for everyone else.
             // Fetch back far enough to cover DeloadAdvisor's prior-month baseline (its resting-HR
@@ -192,9 +214,32 @@ class AdaptationRepository @Inject constructor(
             cardio = cardioDao.since(now - signalWindowMs),
             nowMs = now,
             zoneId = java.time.ZoneId.systemDefault(),
-            onVacation = com.forge.app.domain.vacation.VacationCalendar.onVacation(vacationDao.all())
+            onVacation = com.forge.app.domain.vacation.VacationCalendar.onVacation(vacationDao.all()),
+            // One more small query, in the spirit of this path staying light: how the last session
+            // felt is the cheapest readiness signal there is (A1).
+            moods = moodDao.since(now - readinessMoodWindowMs),
+            // B1: this morning's check-in and the athlete's life state. Each is one small query;
+            // the path stays far lighter than a whole-history fan-out.
+            checkins = checkinDao.since(now - checkinWindowMs),
+            health = healthConnectManager.readRecovery(now - readinessHealthLookbackMs, now),
+            lifeEvents = lifeEvents(now)
         )
     }
+
+    /**
+     * The athlete's current life state (B1) — illness, a training gap, injury restrictions. Read
+     * here so every consumer (readiness, the watcher, the directive) sees one answer.
+     */
+    suspend fun lifeEvents(nowMs: Long = clock.nowMs()): com.forge.app.domain.coach.LifeEvents.State =
+        runCatching {
+            com.forge.app.domain.coach.LifeEvents.assess(
+                sessions = sessionDao.allFinished().filter { !it.isUntracked },
+                checkins = checkinDao.since(nowMs - checkinWindowMs),
+                cardio = cardioDao.since(nowMs - checkinWindowMs),
+                restrictions = injuryDao.active(),
+                nowMs = nowMs
+            )
+        }.getOrDefault(com.forge.app.domain.coach.LifeEvents.State.NONE)
 
     /**
      * The Overview coach feed off ONE snapshot: actionable arbitrated recommendations (deload +
@@ -303,7 +348,12 @@ class AdaptationRepository @Inject constructor(
             // prescribe dumbbell movements above the user's heaviest available dumbbell.
             dbMaxLb = settingsRepository.maxDbWeightLb.first(),
             deload = true,
-            frozenIds = settingsRepository.frozenExerciseIds.first()
+            frozenIds = settingsRepository.frozenExerciseIds.first(),
+            // D: the learning loop, closed — generation now uses the caps measured from this
+            // athlete's own weeks rather than the population defaults, where they've been earned.
+            personalCaps = runCatching {
+                com.forge.app.domain.coach.PersonalProfile.build(snapshotOrEmpty()).volumeCaps
+            }.getOrDefault(emptyMap())
         )
         // Persist the deload BEFORE regenerating: generate() leaves a deload marker untouched but
         // clears it for any non-deload regenerate, so a later manual "Generate" exits the deload (#18).

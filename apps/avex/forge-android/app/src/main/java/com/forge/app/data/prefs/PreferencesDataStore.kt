@@ -199,6 +199,12 @@ object PreferenceKeys {
     val USER_GOAL = stringPreferencesKey("user_goal")
     /** User's sex for bodyweight-relative strength standards: "male" | "female" | "" (unspecified). */
     val USER_SEX = stringPreferencesKey("user_sex")
+
+    /** Age in years (Engine E-A): the Tanaka max-HR estimate needs it, and nothing else does. */
+    val USER_AGE_YEARS = intPreferencesKey("user_age_years")
+
+    /** An explicit max heart rate, when the user knows theirs. Always beats the estimate. */
+    val MAX_HR_OVERRIDE = intPreferencesKey("max_hr_override")
     /** "Go with the flow" — no fixed program; the home leads with freestyle logging instead of day
      *  cards. A seed program still exists under the hood; this only changes what the UI surfaces. */
     val FREESTYLE_MODE = booleanPreferencesKey("freestyle_mode")

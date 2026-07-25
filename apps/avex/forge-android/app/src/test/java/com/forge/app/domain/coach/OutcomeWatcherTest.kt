@@ -199,4 +199,62 @@ class OutcomeWatcherTest {
         val proposals = OutcomeWatcher.revertProposalsFor(listOf(older, newer))
         assertEquals(listOf("9", "3"), proposals.map { it.payload })
     }
+
+    // ── Three-valued verdicts (B1) ─────────────────────────────────────────────
+
+    @Test
+    fun aWindowSpentAwayClosesAsNotFollowed() {
+        // Applied, then a three-week break. The change was never actually run, so it neither
+        // worked nor failed — judging it either way would teach the coach from an absence.
+        val life = LifeEvents.State.NONE.copy(
+            layoff = LifeEvents.Layoff(
+                days = 21, away = false, returning = true,
+                returnedAtMs = now - day, gapStartMs = now - 22 * day
+            )
+        )
+        val verdict = OutcomeWatcher.evaluate(
+            listOf(decision(appliedAtDay = 30)), snapshot(), life = life
+        ).single()
+        assertEquals(CoachDecision.OUTCOME_NOT_FOLLOWED, verdict.outcome)
+        assertTrue(verdict.failReason!!.contains("away or unwell"))
+    }
+
+    @Test
+    fun illnessMakesAnOpenWindowUnjudgeable() {
+        val life = LifeEvents.State.NONE.copy(sick = true)
+        val verdict = OutcomeWatcher.evaluate(
+            listOf(decision(appliedAtDay = 40)), snapshot(), life = life
+        ).single()
+        assertEquals(CoachDecision.OUTCOME_NOT_FOLLOWED, verdict.outcome)
+    }
+
+    @Test
+    fun anOrdinaryLifeStillGetsARealVerdict() {
+        val verdict = OutcomeWatcher.evaluate(listOf(decision(appliedAtDay = 40)), snapshot()).single()
+        assertEquals("ok", verdict.outcome)
+    }
+
+    @Test
+    fun aLiveWindowIsNeverPrejudged() {
+        // Suppression only applies once the window closes — an in-flight change stays pending.
+        val life = LifeEvents.State.NONE.copy(sick = true)
+        assertTrue(
+            OutcomeWatcher.evaluate(listOf(decision(appliedAtDay = 58)), snapshot(), life = life).isEmpty()
+        )
+    }
+
+    @Test
+    fun notFollowedNeitherEarnsNorBreaksTrust() {
+        // Two clean applies with an unjudgeable one between them: the streak reads 3, because the
+        // absent window is invisible rather than counted either way.
+        fun applied(id: Long, outcome: String) = decision(id = id, type = "rep_shift").copy(outcome = outcome)
+        val history = listOf(
+            applied(1, "ok"),
+            applied(2, CoachDecision.OUTCOME_NOT_FOLLOWED),
+            applied(3, "ok"),
+            applied(4, "ok")
+        )
+        val trust = TrustLedger.assess(history).first { it.type == "rep_shift" }
+        assertEquals(3, trust.streak)
+    }
 }
