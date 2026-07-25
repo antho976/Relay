@@ -28,7 +28,7 @@ import com.forge.app.domain.coach.AutoCoachPlanner
 import com.forge.app.domain.coach.CoachOutcome
 import com.forge.app.ui.common.EditorialHeader
 import com.forge.app.ui.common.clickableLabeled
-import com.forge.app.ui.gym.stats.components.statsEntrance
+import com.forge.app.ui.common.statsEntrance
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.util.Locale

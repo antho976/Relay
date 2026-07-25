@@ -57,7 +57,8 @@ object ReadinessAdvisor {
             gapDay = gapDay.plusDays(1)
         }
         when {
-            daysSince >= 5 -> { percent -= 3; parts += "first session back after $daysSince days — ease in" }
+            // DESIGN §11: join with a comma, never an em dash.
+            daysSince >= 5 -> { percent -= 3; parts += "first session back after $daysSince days, ease in" }
             daysSince in 2..4 -> { percent += 1; parts += "fresh after $daysSince rest days" }
         }
 

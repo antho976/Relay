@@ -67,7 +67,7 @@ import com.forge.app.ui.theme.LocalForgeSettings
 import com.forge.app.program.Program
 import com.forge.app.program.Trophies
 import com.forge.app.ui.common.InlineEmptyHint
-import com.forge.app.ui.gym.stats.components.statsEntrance
+import com.forge.app.ui.common.statsEntrance
 import com.forge.app.ui.profile.GoalLinesSection
 import com.forge.app.ui.overview.components.OverviewStat
 import com.forge.app.ui.overview.components.RecentRow

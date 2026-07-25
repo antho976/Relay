@@ -26,8 +26,10 @@ object PrMilestone {
         val before = lifetimePrCount - sessionPrCount
         val crossed = MILESTONES.lastOrNull { it in (before + 1)..lifetimePrCount } ?: return null
         return Nudge(
-            title = "$crossed personal records!",
-            body = "That's $crossed all-time PRs logged in Avex. The work is showing — keep chasing them."
+            // DESIGN §11: no exclamation marks, no em dashes, no praise ungrounded in data. The
+            // count is the fact; "the work is showing" was an opinion the app cannot support.
+            title = "$crossed personal records",
+            body = "That's $crossed all-time PRs logged in Avex."
         )
     }
 }

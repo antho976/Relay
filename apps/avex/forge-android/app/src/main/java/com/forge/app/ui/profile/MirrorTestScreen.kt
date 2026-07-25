@@ -54,7 +54,7 @@ import com.forge.app.ui.common.ForgeOutlineCapsule
 import com.forge.app.ui.common.ForgePrimaryCapsule
 import com.forge.app.ui.common.ForgeWordmark
 import com.forge.app.ui.common.SegmentPill
-import com.forge.app.ui.gym.stats.components.statsEntrance
+import com.forge.app.ui.common.statsEntrance
 import com.forge.app.ui.theme.LocalForgeSettings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext

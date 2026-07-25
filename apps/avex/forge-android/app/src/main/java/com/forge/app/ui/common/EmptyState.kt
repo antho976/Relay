@@ -24,7 +24,18 @@ import androidx.compose.ui.unit.dp
 /**
  * Reusable empty-state card. [title] is punchy; [subtitle] adds context.
  * Used on first launch before any data exists (#29 #66).
+ *
+ * DEPRECATED by DESIGN §12: empty is data at zero, DRAWN not written. A boxed card around passive
+ * content also breaks §1 (surfaces are earned by interactivity). Redraw the section's own visual at
+ * zero — a ghost sparkline, a hollow dot rail, an empty meter track — and fall back to
+ * [InlineEmptyHint] only where there is genuinely no zero-shape.
  */
+@Deprecated(
+    "DESIGN §12: draw empty as the section's own mark at zero, not a boxed card. " +
+        "Use InlineEmptyHint only as a last resort.",
+    ReplaceWith("InlineEmptyHint(title, color)"),
+    DeprecationLevel.WARNING
+)
 @Composable
 fun EmptyState(
     title: String,
@@ -84,7 +95,15 @@ fun InlineEmptyHint(
  * Overview welcome, the Profile header, the first session). Distinct from [EmptyState] (centered,
  * emoji-anchored) and [InlineEmptyHint] (one-liner) — this is the multi-line onboarding nudge. Kept
  * here so the first-touch sites share one treatment instead of each hand-rolling the same card.
+ *
+ * DEPRECATED by DESIGN §12 for the same reason as [EmptyState]: a boxed card around passive content
+ * breaks §1, and a first-run nudge is still a zero-state, so it should be drawn.
  */
+@Deprecated(
+    "DESIGN §12: draw the zero-state as the section's own mark. Use InlineEmptyHint as a last resort.",
+    ReplaceWith("InlineEmptyHint(title, color)"),
+    DeprecationLevel.WARNING
+)
 @Composable
 fun FirstTouchTip(
     title: String,

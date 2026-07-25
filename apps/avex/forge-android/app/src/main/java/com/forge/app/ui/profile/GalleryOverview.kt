@@ -39,7 +39,7 @@ import com.forge.app.domain.units.formatWeight
 import com.forge.app.domain.units.formatWeightDelta
 import com.forge.app.ui.common.EditorialHeader
 import com.forge.app.ui.common.bounceClick
-import com.forge.app.ui.gym.stats.components.rememberDrawProgress
+import com.forge.app.ui.common.rememberDrawProgress
 import com.forge.app.ui.theme.ForgeMotion
 import java.io.File
 import java.text.SimpleDateFormat

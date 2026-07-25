@@ -1,11 +1,21 @@
 # Forge — UI & Design Doctrine
 
-**Read before any UI work.** Wins over existing screens for new work; older screens migrate when
-touched. When silent, Home (`ui/overview`) is the feel reference but not gospel (§14 lists its
-defects). `ui/theme/` + `ui/common/` own *values*, this file owns *usage*; a changed decision is
-written here the same turn.
+**Binding for all UI work.** Wins over existing screens for new work; older screens migrate when
+touched. When silent, Home (`ui/overview`) is the feel reference but not gospel (`design/SETTLED.md`
+lists its defects). `ui/theme/` + `ui/common/` own *values*, this file owns *usage*. A decision
+changed during a task is written here the same turn (§16).
 
-## 1. The language
+## 0. Use this file
+
+1. **Pick the archetype** (§3). Everything downstream follows from it.
+2. **Open its recipe** — `app/src/debug/java/com/forge/app/ui/recipes/<Archetype>Recipe.kt`. Copy the
+   scaffold; don't compose a screen from prose. The recipe already encodes rhythm, marks and zero-states.
+3. **Build**, resolving each decision with a ladder (§2) rather than by taste.
+4. **Run the checklist** (§15); `gradle -p forge-android testDebugUnitTest` checks the mechanical half.
+
+**Load always:** this file + the one recipe you need. Everything else is on demand — see §16.
+
+## 1. The language — and why
 
 **"Open editorial"**: content sits directly on the near-black page — no grey boxes around passive
 content. Hierarchy = three type voices (big serif figures, quiet sans prose, tiny mono small-caps
@@ -14,65 +24,99 @@ as data: chart threshold/floor/baseline, table rule). Sections separate by air +
 alone. Color is scarce — one user-chosen accent at fixed intensities, so its presence means
 something. Surfaces/borders are **earned by interactivity**: can't tap it, no box. Modals keep surfaces.
 
-## 2. App map
+*Why it holds together:* a box is a promise of a tap, a line is a claim about data, and colour is a
+claim about importance. Spend any of the three on decoration and it stops meaning anything — which is
+why the rules below are mostly about **not spending**. When a case isn't covered here, ask what the
+element is *promising* and whether that promise is true.
 
-Hub = swipeable 5-tab pager + `ForgeBottomBar`: **Cardio · Stats · Home · Coach · Profile**. Top bar
-everywhere = `←` (sub-screens) + `• Avex` wordmark (`ForgeWordmark`, taps→Home) + ≤1 action,
-**never the screen's own name** (no `TopAppBar` title); **one back affordance per page — the top-bar `←` alone, never a second in-page back arrow**. A screen names itself with a serif content
-hero (Stats "Stats", Profile "Athlete") or not at all (Home "Pull B").
+## 2. Decision ladders
 
-- **Home** `ui/overview` — TODAY hero + Start session, week strip, goals, recent. Feel reference; defects (§14) fixed when touched. THIS WEEK's stat row closes with a **MOVEMENT line** (W6): today's watch steps as one mono reading + a thin today-vs-typical bar (14-day median; bar = the mark, honest at zero), rendered only when the steps grant is held (GYMAP-64 rule: connected → honest zero, else hidden) and refreshed on resume. Deliberately NOT the removed recovery-snapshot card (2026-07-04) — one line + one bar, no card, and the hourly-bars mark stays cardio's (§4.3 one home; Home carries the total + typical compare, a reading no other screen has).
-- **Stats** `ui/gym/stats` — one page: hero figures + muscle map → lens pills Strength/Volume/Effort/Days → drill rows → heatmap → records → Banister.
-- **Cardio** `ui/cardio` — THIS WEEK figures hero (days · min · dist · streak) + a quiet `TODAY · N steps` line under the figures when a watch is connected (GYMAP-64: today's Health Connect step total, loaded eagerly into state on init/resume, honest zero when connected, hidden otherwise) + Mon–Sun accent bars + goal meter (falling back to the **WHO 150-min/week** reference meter when no personal minutes target is set — GYMAP-42, the same `MinutesMeter` bar with a `WHO 150 MIN` caption instead of `GOAL`, on the hero and the week overlay's current week; `WHO_WEEKLY_ACTIVITY_MIN`), GOALS trim (cardio-metric custom goals, shared `GoalProgressLine`, hidden at zero), **RECORDS** block (GYMAP-34: per-activity all-time bests — the longest distance as the accent headline + the fastest pace as meta, one row per type the user has distance sessions for, most-logged first, a row → its longest session; `cardioActivityRecords`, hidden entirely until a distance session lands since the hero carries the zero state), week-pager stats overlay (its current-week page alone carries a **PACE TREND** chart — GYMAP-35: a per-activity pace-over-time `LineChart` + a type `SegmentPill` selector, only types with ≥2 paced sessions; pace is lower-is-faster so a downward line is improvement, said plainly in a dry caption; `cardioPaceSeries`, cross-week so it rides the current page alone and never repeats per week, §4.3), a **FROM YOUR WATCH** section above the recent rows (W5: watch-recorded HC sessions with no matching entry, ≤3 rows, whole-row tap = import via a prefilled log sheet, header `hide` dismisses the batch for good; hidden when empty), recent rows (header carries a small filled `+` circle = log) → session detail (stat rows carry best-pace/longest compare meta + previous-session read; a **HEART RATE** section (W5) draws the matched watch session's HR line — open chart, avg/max as the header reading — plus a "Watch measured …" line with an explicit `use watch stats →` adopt, never a silent overwrite). The activity picker lists the built-in `CardioType`s + the user's **custom activities** (GYMAP-37: name + a glyph from the shared cardio set), with an inline "+ add custom activity" row → `CustomActivityDialog` (a modal reused by the settings manager); custom defs live as a DataStore JSON list (NOT the schema-locked DB — a logged session stores only the `custom_` code), resolved to name/glyph at every cardio surface via `LocalCardioTypes` (a `CompositionLocal` fed once at the nav root, like `LocalGoHome`); a deleted def falls back to "Other". Calories inherit "Other"'s baseline (unknown code → `CardioType.OTHER`; kcal unsurfaced anyway, §14). Managed in Settings → **Cardio activities** (rename/glyph/delete). The log sheet keeps the common case short — a date + **start-time** capsule pair at the head (GYMAP-33: the time capsule sets the time-of-day of the entry's existing `date` timestamp via a Material3 `TimePicker` — no separate start-time column, `combineTime` mirrors `combineDay` — and hides on rest days), then activity + duration/distance up top, everything else (effort · HR zone · HIIT intervals · **conditions** · the **per-type** fields) tucked behind a "More" expander; per-type = one field surfaced only for the activities it fits (GYMAP-38: incline % on treadmill/elliptical, laps on swim, elevation gain on run/walk/hike/cycle — the same idea as intervals showing for HIIT alone), gated on `CardioActivity.optionalFields` so the form never carries an irrelevant field and a value typed then switched away from is never saved; elevation rides the distance-unit toggle (ft with miles, m with km) via `ElevationFormatter`. **Conditions** (GYMAP-39): the weather a session was done in (hot/cold/rain/wind), a multi-select `PillChip` `FlowRow` in "More" (any non-rest activity, never gated by type), stored comma-joined on `cardio_entry.conditions` (DB v28) via `CardioCondition.encode`/`decode`, shown read-only as a ` · `-joined `StatRow` in session detail + a words column in the cardio CSV; descriptive only, never touches a total/pace. A **new** entry seeds its activity to the **last-logged** one (GYMAP-40: `last_cardio_type` in DataStore, written only on a new non-rest save), not always Run.
-- **Coach** `ui/coach` — lens pills Now/Signals/Journey (Now = call + watch + one road-ahead section: milestone rail + brief/verdict/autopilot bars; Signals = lifts + recovery + inputs + learned; Journey = record + trust; old Brief/Lab/Timeline routes = lens deep-links). Coach content renders ONLY here — Settings→Coach is config alone (on/off switch + mode chips + a feeds on/off glance whose silent HC rows tap to Recovery), never a second brief/trust/history home.
-- **Profile** `ui/profile` — blending cover (**untouchable** compositing approach — its edge-fade + text-scrim STOPS were retuned 2026-07-09 (Antho) to remove a hard seam where the cover met the page; the masking technique itself stays frozen; a random default is seeded on first run so it's never empty, tap → `AvatarPickerSheet`), bodyweight-led, ALL-TIME 2×2, then the merged **BODY** section (2026-07-13, Antho — bodyweight, body fat and measurements folded from three separate sections into ONE compact stack, `BodyMetricsSection` in `ProfileBody.kt`): one mono `BODY` header over three compact rows, each a fixed mono label + reading + a right-aligned trend mark. **WEIGHT** = serif figure + ~30-day delta off the 7-day average (a noisy final weigh-in can't flip the arrow) + the smoothed spark keeping the dashed goal on-canvas + `+ log`. **BODY FAT** (GYMAP-62) = serif figure + ~30-day delta in *points* (direction-only arrow, never a good/bad verdict) + a raw-reading spark (logged sparsely, so no smoothing) + `+ log`. **MUSCLE** (W6) = the watch's BIA lean-mass reading, import-only (`lean_mass` v30, `LeanMassRepository`, own `LeanMassViewModel` like measurements): serif figure in the weight unit + ~30-day delta + raw-reading spark + a `sync →` action (no manual log for a watch-authored metric); the row renders only when the HC read is granted or data exists — an HC-only metric never shows an unconnected ghost row here. **SIZES** (GYMAP-52) = five coverage pips (which circumferences are tracked, a mark that works at zero — all hollow) with a whole-row `open →` into `BODY_MEASUREMENTS` (the full Measurements screen, unchanged, owns the values/trends/logging). Empty is DRAWN (§12): an empty metric shows a ghost flat line beside its live siblings, and all-three-empty collapses to ONE `InlineEmptyHint`, never three ghost rows. Storage/sync unchanged and separate: `bodyweight_entry`, the `body_fat` table (v29, sibling of bodyweight — NOT the cm-bounded `body_measurement`, since a % is unitless — fed from a smart scale via Health Connect **or** manual entry, mirrored both ways via a Recovery `Body fat sync` row, `BodyFatSync` mirrors `BodyweightSync`), and `body_measurement` (v24, local-only, canonical cm); measurements keeps its own `BodyMeasurementsViewModel`, read at the section level so ProfileViewModel is untouched. THIS YEAR consistency grid (GYMAP-58 — whole calendar year, one ROW per month · day-of-month columns · dots lit by that day's training count across gym + cardio; a PASSIVE glance below the body cluster, deliberately NOT the Stats week-column 26-week load heatmap (§4.3): different range/layout/metric/interaction, so the two consistency views don't echo; hidden until the year has any activity, `buildYearActivity` in `ProfileRepository`), filmstrip.
-- **Routed** (`Routes.kt`): `GYM_DAY` (`ui/gym/train`, **untouchable**) · `SESSION_HISTORY` (gym+cardio) · `SESSION_DETAIL` (one finished workout's breakdown; a page-end "Log again today" capsule (§8 ①) re-logs it verbatim as today's freestyle session — a full-fidelity data-layer copy incl. set type/RPE/holds, no editor, with an Undo — GYMAP-36. Lives here, NOT as a history-row button: a history row already owns its whole-surface tap for navigation, so a per-row action would be a banned nested tap (§8); an in-list long-press shortcut is a deliberate deferred follow-up) · `CARDIO_SESSION` · `GOALS`/`GOAL_EDITOR` · `TROPHIES` (frozen) · `NUTRITION` · `SETTINGS?page=` · `RECAP` · `NOTES_SEARCH` · `PROGRAM_BUILDER?blank&view` (ONE program screen, GYMAP-28: colour-dot + mono `labelLarge` day anchor + "N SETS" meta, hang-indented name / sets×reps rows (meta at muted@0.7) — the onboarding week preview renders this SAME section formula (GYMAP-21), accent hexes via the shared `parseAccentHex`; `view` = same layout read-only, the top-bar pencil unlocks editing; editor adds tap-into-day + long-press reorder + Save/Add at page end; day detail = rename/type/colour + exercise rows → SetsReps sheet (set stepper + rep-preset pills + in-place swap), duplicate/remove day at page end; removes undo via snackbar, never confirm) · `FREESTYLE_LOG` · `MIRROR_TEST` (the photo **Gallery**, revamped GYMAP-gallery; visual pass 2026-07-13: `statsEntrance` cascade + sparkline draw-in, real `EditorialHeader` anchors (BODYWEIGHT · SAME WEIGHT, DIFFERENT BODY · TIMELINE w/ `Albums →` as the header action), stock-Material content icons and per-cell pose chips removed: overview-first — serif "Gallery" hero + mono count/span eyebrow, a first↔latest **progress band** (corner-16 frames; center = serif span figure + direction-only weight-Δ + `compare →`; prefers a same-pose pair, tap → slider compare) as the §12 mark at zero (ghost frames + add prompt), a bodyweight-through-time sparkline (only ≥2 weigh-ins), an auto-paired **same weight, different body** strip (GYMAP-60: same-pose shots within ~2lb of each other ≥30d apart, longest hold first, tap → compare; hidden when none, excludes the band pair so it never echoes it), pose lens pills (Front/Back/Side/Legs/Arms, only those present) + search/filters/compare **text pills** (one `GalleryChip` vocabulary with the range/sort/density chips) over the month-grouped grid (cells corner-12, date-only — the pose lens carries grouping); compare = select-2 → `CompareSheet` with a draggable **Slider** ⇄ **Split** toggle + time/weight/pose readout (a top-bar **Share** renders a 4:5 before/after card via `BeforeAfterCardRenderer` — GYMAP-55: the two shots + span + pose + **delta-only** weight (never the absolute bodyweight) to `ACTION_SEND`, a sibling of `RankCardRenderer` in the same Pearl-gradient/serif-hero/tinted-wordmark card language; band/same-weight/manual-compare all funnel through this sheet so every before/after path shares for free; adding it retired the Gallery's "never leave your phone" reassurance copy); the full-screen pager viewer doubles as a **metadata editor** (tap-date → DatePicker · pose chips · bodyweight · note · album · delete); albums behind "Albums →"; add via a chooser sheet → import OR the guided camera; photos carry EXIF capture date + a bodyweight snapshot nearest that date and are stored app-private off the DB — `ProgressPhotoRepository` with a reactive `revision` so teaser/gallery/camera stay in sync) · `PROGRESS_CAMERA` (`ui/profile`, CameraX guided capture — live preview + a ~0.3-alpha ghost of your last same-pose shot for alignment, pose chips, rule-of-thirds grid, 3s self-timer, front/rear flip; writes straight to app-private storage; CAMERA permission is optional — deny falls back to import; no INTERNET, never the camera roll) · `BODY_MEASUREMENTS` (`ui/profile`, GYMAP-52: the body-measurement tracker reached from the Profile's MEASUREMENTS card — serif "Measurements" hero + mono "N of 5 tracked" eyebrow, one row per circumference (waist/chest/arms/thighs/hips) = mono label + since-last delta + open serif value + trend `ProfileSparkline`; empty is drawn (a hollow **tracked-rail** of 5 named pips + one hint, §12), untracked-beside-tracked shows a flat ghost line; top-bar `+` opens a five-field log sheet (mirrors `BodyweightLogSheet`). Stored canonically in cm off a per-type Room table (`body_measurement`, one row per type per day), displayed cm/in via the independent `use_cm` Format toggle; local-only, `BodyMeasurementRepository`).
-- **Lock** `security` + `ui/security` (GYMAP-69) — an optional biometric / device-credential lock; no app PIN is stored (`BiometricPrompt` with `BIOMETRIC_STRONG or DEVICE_CREDENTIAL`, failing OPEN when the phone has no screen lock). Two independent Settings → **Security** toggles: **App lock** (an opaque `AppLockScreen` gate over the nav host at cold start / after a configurable background timeout — Immediately·1·5 min — wired in `MainActivity` through the `AppLockManager` singleton + `LocalAppLock`, honouring the existing `userLeaving`/`onUserLeaveHint` guard so a picker/camera/share return never re-locks) and **Photo gallery lock** (gates `MIRROR_TEST` in `ForgeNavHost`). Both share ONE authenticated session — unlocking the app opens the gallery for free, no second prompt — and app lock forces `FLAG_SECURE` app-wide (like Privacy mode, so it also hides recents/screenshots). The unlock screen is the modal archetype: opaque theme-gradient scrim + `• Avex` wordmark + serif "Locked" + one caption + one filled `Unlock` capsule (the OS sheet does the credential entry). Offered as one onboarding opt-in step (shared "about you" block). Settings → Appearance keeps the separate **Privacy mode** FLAG_SECURE toggle.
-- **Sheets**: SessionSummarySheet (minimal), CardioSessionDetailSheet, heatmap "That day", ExerciseLibraryPicker (`singleSelect` = radio-style choose-one for swaps — accent-wash pick, no checkbox), the program SetsReps sheet, AvatarPickerSheet (profile cover — "select your own" + provided default covers by category, `DefaultAvatars`; picked default is baked into `avatar.jpg`).
+Where doctrine says "use judgment", drift starts. These are lookups, not judgment.
 
-Check this map + `ui/common/` before inventing; update it when screens change.
+**① I have a new number.**
+
+| Test | Treatment |
+|---|---|
+| The screen's single most important answer | serif hero figure — **max one per screen** |
+| One of 2–4 headline readings for this screen | `EditorialFigure` in the figure row |
+| Qualifies a row that already exists | row right-meta — a count or reading, never a state word |
+| Explains a mark | mono caption, ≤12 words, ≤1 per section |
+| None of the above | **cut it.** A number with no decision attached is noise. |
+
+**② I have a new section — which mark carries it?** (Words are the caption, never the content.)
+
+| Data shape | Mark | At zero |
+|---|---|---|
+| one value vs a target | meter bar | empty track, honest 0 |
+| one value over time | sparkline | flat ghost line — *only beside a live sibling* |
+| value per day-of-week | 7 accent bars | all-zero bars, never hidden |
+| value per day over months | dot / heat grid | unlit grid |
+| set of items, some present | filled / hollow dot rail | all hollow |
+| ranked comparison | thin bars (3–4dp, rounded) | — |
+| progress to an unlock | n-of-m meter, m = the **real** gate | 0-of-m |
+| one categorical state | *not a section* — fold it into a caption | — |
+
+**③ I have a new action.**
+
+| Test | Treatment |
+|---|---|
+| Navigates somewhere | ③ mono accent `action →` |
+| Does something now, primary | ① filled capsule, ≤1 per section; page-level grouped at the **end** |
+| Its sidekick, or destructive | ② outlined capsule (destructive tinted `error` + Undo, never filled red) |
+| Scoped to one list row | **whole row is the tap target** + a drawn compact outlined pill — never nested taps, never filled per row |
+| Switches which view you see | `SegmentPill`, never a button |
+| Can't actually run | render passive. Nothing looks tappable while doing nothing. |
+
+**④ I have a new screen** → pick from the §3 table, then use only that archetype's toolkit.
+
+**⑤ I have a new state** → §12. All seven are answered there; none may be left undrawn.
+
+**⑥ I have a new component.** First use → local to the screen file. Second → extract within the
+feature package. **Third → promote to `ui/common/` the same turn**, and add it to the recipe.
 
 ## 3. Screen archetypes
 
-Global rules (§4–§13) apply everywhere; beyond them a screen draws ONLY from its archetype's
-toolkit (a settings page with a serif hero + chart cascade is as wrong as a boxed stat card).
+Global rules (§4–§14) apply everywhere; beyond them a screen draws ONLY from its archetype's toolkit
+(a settings page with a serif hero + chart cascade is as wrong as a boxed stat card).
 
 | Archetype | Screens | Toolkit | Not here |
 |---|---|---|---|
-| **Overview / dashboard** | Home, Stats, Coach, Cardio, Profile | Serif hero = mono eyebrow (identity + human date) over ONE serif line ONLY when it carries a decision/result (Coach "Deload week"), else the bare name; status/anticipation is never a verdict (drop the serif line, figures/mark become the hero); never a name over a verdict, never a filler headline. Aside line only for the screen's unique read (a cue no section repeats). 2–4 `EditorialFigure`s + exceptions as quiet lines + primary action above fold; lens pills; open charts; **≥1 mark that works at zero**; `statsEntrance` cascade; scroll ≤2–3 viewports | an all-text screen — every section leads with a mark (§12) |
+| **Overview / dashboard** | Home, Stats, Coach, Cardio, Profile | Serif hero = mono eyebrow (identity + human date) over ONE serif line ONLY when it carries a decision/result (Coach "Deload week"), else the bare name; status/anticipation is never a verdict (drop the serif line, figures/mark become the hero); never a name over a verdict, never a filler headline. Aside line only for the screen's unique read. 2–4 `EditorialFigure`s + exceptions as quiet lines + primary action above fold; lens pills; open charts; **≥1 mark that works at zero**; `statsEntrance` cascade; scroll ≤2–3 viewports | an all-text screen — every section leads with a mark (§12) |
 | **Detail page** | session/cardio detail, lift drill-down | Serif title + context, metric `SegmentPill`s, charts w/ draw-in, set tables; scoped to ONE item | dashboard figure walls, lens pills for unrelated views |
 | **List / browser** | History, Goals, Trophies, pickers | Search-first, trim rows, light stagger; tiny hero (title + ≤1–2 figures) | charts, big hero, draw-in theatrics |
-| **Settings / form / editor** | settings, goal/program editors, onboarding | Mono `SettingsSectionHeader` anchors + air, **no dividers**; each control gets a ≤1-line explainer; navigation = `action →` links, one-shot (do-it-now) actions = capsule buttons (filled · outlined sidekick) **grouped at the END of the page, never mid-scroll**; never toggle-chips; 44dp capsules. Keep each drill-in light — split a dense multi-block area into focused sub-pages, each menu row showing its live value. **Onboarding** (`ui/onboarding`): one decision per step; each page = mono chapter eyebrow → serif `headlineSmall` question (page-title voice, not a hero) → ≤1 caption → content; top chrome = `←` + 4dp accent progress rail + mono `skip →` (no wordmark pre-app); full-width filled capsule CTA; every selectable shares one tile formula (outline@0.35 border → accent border + accent@0.15 wash); all three plan-mode cards carry short pre-rendered vignette videos (alpha WebP authored in `remotion-vignettes/`, rendered to res/raw: generated builds a full week, custom hand-builds a day one exercise at a time, freestyle re-logs a scattered no-frame log in no order — its missing structure IS the message) that play ~twice then FREEZE on the built plan / caught log — a shared `PlanModeSync` starts the videos together so they replay/freeze in lockstep; the live Canvas vignette (`PlanModeVignettes`, its own final frame, one draw per mode) is the decode / pre-28 / reduce-motion fallback; equipment/preset/goal tiles use the `OnboardingIcons` matched glyph family. About-you closes with the wearable pick (Galaxy · Pixel · no watch, keys + labels + source app from `domain/health/WearableBrand`): cards carry the one honest per-brand difference as right-meta ("Routes sync"/"Routes vary"), the pick answers with a mono what-syncs readout + a version caveat caption (feature sets differ by watch generation and companion-app version), and the same enum drives Settings → Recovery's WEARABLE `PillChip` row + brand-aware source-app/routes explainers — the two surfaces may not drift, and the brand is advisory only (HC reads stay vendor-neutral). Each granted Recovery read-signal row carries a post-connect reading (§9, `probeSignalFlow`): `RECEIVING` (onBg) when a record arrived in the last 30d, `NOTHING YET` (muted — quiet nudge, never alarm, since absence is ambiguous) when granted-but-silent, plain `ON` while probing or for the write-only calorie row. HC exposes data PRESENCE, never capability — so the UI never says "unsupported", and grey-out-by-brand is banned (both watches can do every signal on recent versions). Gym setup = TWO steps (GYMAP-20): preset grid (big-app lineup, `equipmentPresets`) + a live "in this setup" gear readout, then a fine-tune page grouped by the shared `equipmentGroups` (Settings → Program → Equipment groups its chips the same way — the two selectors may not drift) | serif heroes, figures, lens pills, chart motion/stagger; section dividers; action buttons floating mid-page; actions as pill toggles; one long multi-block scroll |
-| **Live / flow** | live session, freestyle log | Function-first: big targets, timers, set-log haptics + `bouncy()`, confetti (PR only), keep-screen-on. **Timed holds** (GYMAP-51: plank/dead-hang/wall-sit/side-plank, flagged `ExerciseDef.timed`) log a held DURATION not reps — the set-log row's REPS column becomes HOLD and the input swaps in a `m:ss` readout + a wall-clock-anchored start/stop stopwatch (live session, `SetInputRow`) or a manual `m:ss` field (freestyle); a timed set stores `logged_set.duration_seconds`, carries reps 0, and is excluded from every weight×reps stat (volume/e1RM/PR) — history/detail read it as "0:45" / "Best 0:45" | presentational motion, figures, padding at the cost of reach |
+| **Settings / form / editor** | settings, goal/program editors, onboarding | Mono `SettingsSectionHeader` anchors + air, **no dividers**; each control gets a ≤1-line explainer; navigation = `action →` links, one-shot actions = capsule buttons (filled · outlined sidekick) **grouped at the END of the page, never mid-scroll**; never toggle-chips; 44dp capsules. Keep each drill-in light — split a dense multi-block area into focused sub-pages, each menu row showing its live value. **Onboarding**: one decision per step; each page = mono chapter eyebrow → serif `headlineSmall` question (page-title voice, not a hero) → ≤1 caption → content; chrome = `←` + 4dp accent progress rail + mono `skip →` (no wordmark pre-app); full-width filled capsule CTA; every selectable shares ONE tile formula (outline@0.35 border → accent border + accent@0.15 wash) | serif heroes, figures, lens pills, chart motion/stagger; section dividers; action buttons mid-page; actions as pill toggles; one long multi-block scroll |
+| **Live / flow** | live session, freestyle log | Function-first: big targets, timers, set-log haptics + `bouncy()`, confetti (PR only), keep-screen-on | presentational motion, figures, padding at the cost of reach |
 | **Modal** | sheets, dialogs | Surface fill, `large` top corners; dialogs = confirmations/tiny inputs only | open-editorial bare background |
+
+Each archetype has a compiling recipe under `ui/recipes/` — start there, not from this table.
 
 ## 4. Composition & interactivity (global)
 
 1. **Overview-first**: every feature leads with one at-a-glance page answering "where I stand + what to know" at zero interaction; deep dives live in sibling lenses/sub-screens.
-2. **Interaction earns its content**: no prose behind a tap ("Why this?/show more" banned — surviving content stays visible, the rest is cut not folded); no bare hyperlinks (a link exists only as `view all →` beside a trim of its destination, Home GOALS; nothing to preview → no link). Data drill-downs (Stats rows, set tables) are fine — navigation-in-place.
-3. **Prose budget + one home.** A section's primary content is data-shaped (figure/bar/chart/tag/row); a sentences-only section is redesigned to data or cut. Max ONE muted caption (~12 words) per section beyond the hero's context line; mechanics narration is cut not trimmed (the state changing IS the explanation; explainers only beside a non-obvious control, §13). **One home**: a fact appears once per screen (a caption on its element, never a floating footer or repeated across lenses); likewise a MARK — a visual that only repeats another screen's/lens's answer (Home's week strip, the heatmap, a summary of another lens) is cut, not copied. (Empty section: hint vs caption per §12.)
+2. **Interaction earns its content**: no prose behind a tap ("Why this?/show more" banned — surviving content stays visible, the rest is cut not folded); no bare hyperlinks (a link exists only as `view all →` beside a trim of its destination; nothing to preview → no link). Data drill-downs (Stats rows, set tables) are fine — navigation-in-place.
+3. **Prose budget + one home.** A section's primary content is data-shaped (figure/bar/chart/tag/row); a sentences-only section is redesigned to data or cut. Max ONE muted caption (~12 words) per section beyond the hero's context line; mechanics narration is cut not trimmed (the state changing IS the explanation; explainers only beside a non-obvious control, §13). **One home**: a fact appears once per screen (a caption on its element, never a floating footer or repeated across lenses); likewise a MARK — a visual that only repeats another screen's/lens's answer is cut, not copied.
 4. **Sub-paging = lens pills** (`SegmentPill` row, labels ONE short word). Routed sub-screen = real sub-feature w/ own hero; sheet = transient detail of one tapped item.
 5. **Data is explorable**: aggregate visuals (heatmap cell, chart point, row) answer a tap with detail; every interaction passes "you'd miss it" or "wow"; nothing looks tappable while doing nothing.
-6. **Chrome earns its tap**: top bar = wordmark + `←` + ≤1 action, never the screen name (§2).
+6. **Chrome earns its tap**: top bar = `• Avex` wordmark (`ForgeWordmark`, taps→Home) + `←` + ≤1 action, **never the screen's own name** (no `TopAppBar` title). A screen names itself with a serif content hero or not at all. **One back affordance per page** — the top-bar `←` alone, never a second in-page back arrow.
 7. **Build flow = two-shot**: overview first → Antho device-checks → then subs/lenses.
 8. **Lead with the live — placement is rank.** Within a screen/lens: real data/decisions sit under the pills, mixed reached/ahead ladders next, pure countdown/unlock meters last; a section of all-zero marks never opens a lens with a live sibling; a ladder and its countdowns sit adjacent.
-9. **Show the reading, not just the conclusion.** Surface the engine's underlying readings, not only its verdict — both beside a conclusion (the deciding reading as row meta: "38% hard · +2", "7.2h avg") and BEFORE one exists (per-item readings render as soon as they're computable, not when a score/verdict unlocks — the recovery panel's ~8 checks read from session one). Below a gate the reading is progress toward it ("3 of 12 rated sets"), never "n/a". A panel of named checks each with its own reading is data, not §12 repetition; each lens stands on its OWN data without copying another's marks (§4.3). "Not enough data yet" is a last resort; when a reading panel arrives, any row elsewhere that only restated it goes. A dense panel may CLOSE with one muted line naming what the readings feed (recovery checks → "a deload is called when enough cross their line") so the numbers aren't unexplained.
-10. **A checklist is not a section.** A run of >~4 uniform dot-text rows is the "AI look" — redraw as ONE mark + a single focused detail (the 9-row milestone ladder → a segmented rail "2 OF 9" + only the NEXT milestone). Rows earn a list only when each carries a distinct reading/action. Adjacent road-ahead content shares one visual language (all bars).
+9. **Show the reading, not just the conclusion.** Surface the engine's underlying readings, not only its verdict — both beside a conclusion (the deciding reading as row meta: "38% hard · +2", "7.2h avg") and BEFORE one exists (per-item readings render as soon as they're computable, not when a score unlocks). Below a gate the reading is progress toward it ("3 of 12 rated sets"), never "n/a". A panel of named checks each with its own reading is data, not §12 repetition; each lens stands on its OWN data. "Not enough data yet" is a last resort; when a reading panel arrives, any row elsewhere that only restated it goes. A dense panel may CLOSE with one muted line naming what the readings feed.
+10. **A checklist is not a section.** A run of >~4 uniform dot-text rows is the "AI look" — redraw as ONE mark + a single focused detail (a 9-row ladder → a segmented rail "2 OF 9" + only the NEXT item). Rows earn a list only when each carries a distinct reading/action. Adjacent road-ahead content shares one visual language (all bars).
 
 ## 5. Color (`Color.kt`; via `MaterialTheme.colorScheme`, never raw vals)
 
 Pearl (dark default): bg `#0E0E11` · gradient `#131318→#090909` (behind every screen) · surface
 `#15161B` (sheets) · surfaceVariant `#1C1D24` (interactive tile fill) · outline `#2E2E38` · onBg
-`#EEEEF2` · muted `#B4B4C2` (AA-safe to 0.7). AMOLED: bg black, surface `#080808`, surfaceVar
-`#111111`, gradient `#000000→#050507`.
+`#EEEEF2` · muted `#B4B4C2`. AMOLED: bg black, surface `#080808`, surfaceVar `#111111`, gradient
+`#000000→#050507`.
 
 Accent = user-picked (Navy `#3D4F73` default · Red `#8B3535` · Olive `#4D6040` · Gold `#7A6435`);
-`primary`=accent, `primaryContainer`=@0.15, `secondary`=@0.6. Design against muted navy — needing
-a vivid accent means too much accent. Accent can be **disabled** (Appearance → monochrome): `primary`
-falls back to a near-white neutral (onBg) so highlights stay legible and distinct without colour, and
-`onPrimary` flips to bg for any light/neutral accent (so a filled-primary control never goes same-on-same).
+`primary`=accent, `primaryContainer`=@0.15, `secondary`=@0.6. Design against muted navy — needing a
+vivid accent means too much accent. Accent can be **disabled** (Appearance → monochrome): `primary`
+falls back to a near-white neutral (onBg) so highlights stay legible without colour, and `onPrimary`
+flips to bg for any light/neutral accent (so a filled-primary control never goes same-on-same).
 
-**Intensity ladder — the only allowed alphas** (snap strays when editing):
+**Intensity ladder — the only allowed alphas** (snap strays when editing; enforced by §14's gate):
 
 | Rung | Use |
 |---|---|
@@ -81,9 +125,12 @@ falls back to a near-white neutral (onBg) so highlights stay legible and distinc
 | accent 0.15 (`primaryContainer`) | tonal fills: selected pill bg, active-row wash |
 | onBg 1.0 | primary text, serif figures |
 | muted 1.0 | secondary text, mono labels, ↓ delta |
-| muted 0.65–0.7 | captions, deselected pill text (floor — never dimmer) |
+| muted 0.65 | captions, deselected pill text — **hard floor, measured 4.54:1** (§14) |
 | outline 0.35 | borders on unselected controls |
-| outline 0.25 | hairlines (`EditorialHairline` applies it) |
+| outline 0.25 | **data lines only** (`EditorialHairline`) — never a section separator, §1 |
+
+Two named exceptions and no others: a **placeholder** in a text field may dim below the muted floor
+(it is a ghost affordance, not content); a **gradient or scrim** interpolates freely between rungs.
 
 Bars: fill `primary` 1.0 on track outline 0.25–0.35. Error mirrors accent (full text/stroke,
 container 0.15). **Reserved**: PR gold `#E3B341` (PR star + gold set row only) · `△ LAST` green
@@ -97,8 +144,11 @@ container 0.15). **Reserved**: PR gold `#E3B341` (PR star + gold set row only) �
 | **Sans** | titleL 18M · titleM 16M · titleS 14M · bodyL 16 · bodyM 14 · bodyS 12 | row titles, prose, button text | section anchors, big numbers |
 | **Mono** (letter-spaced) | labelL 13 · labelM 11 · labelS 10 | UPPERCASE micro-labels: section headers = labelL 13 (`EditorialHeader`), figure captions + meta = labelM/S | sentences, titles |
 
-- Mono labels `.uppercase()` in code; only off-scale sizes: 8–9sp figure captions.
-- *Italic* = the aside voice (wordmark, coach one-liners, taglines): bodyM/S italic, muted.
+- **Always take a style from `MaterialTheme.typography`** — never `fontSize =` at a call site. The
+  three voices ARE the meaning system; an inline size opts out of it. Only sanctioned off-scale use:
+  8–9sp figure captions.
+- Mono labels `.uppercase()` in code. *Italic* = the aside voice (wordmark, coach one-liners,
+  taglines): bodyM/S italic, muted.
 - One serif hero per screen, everything else steps down; animating numbers use tnum styles.
 
 ## 7. Spacing & shape
@@ -109,36 +159,59 @@ container 0.15). **Reserved**: PR gold `#E3B341` (PR star + gold set row only) �
 between a header/caption/aside/row (put a Spacer(≥8) before the first row; don't lean on the row's
 own bottom padding). Figure rows: gap 20, label 2 under number. List/data rows: **ONE vertical
 padding for ALL of a lens's rows** (coach shares `COACH_ROW_PAD` = 6, i.e. 12 total) — sibling
-sections never mix 4/5/6, the page reads as one rhythm; a text-link inside a row stays at vertical
-2 so it doesn't inflate that row above its neighbours. Interactive tile inner padding 14×12. Shapes (`Shape.kt`): 4/8/12/16/24, pills
-`RoundedCornerShape(50)`, tiles 12, sheet top 16 — no custom radii. Photos: rounded 16 clips,
-captions on bottom scrims, full-bleed strips (Profile cover/filmstrip = reference).
+sections never mix 4/5/6, the page reads as one rhythm; a text-link inside a row stays at vertical 2
+so it doesn't inflate that row above its neighbours.
+
+**Sanctioned off-grid values** — deliberate, do not "fix": interactive tile inner padding **14×12**;
+`SegmentPill` **12×5**. Shapes (`Shape.kt`): 4/8/12/16/24, pills `RoundedCornerShape(50)`, tiles 12,
+sheet top 16 — no custom radii. Photos: rounded 16 clips, captions on bottom scrims, full-bleed strips
+(Profile cover/filmstrip = reference).
 
 ## 8. Components & controls (`ui/common/` — reuse, never re-implement)
 
-`EditorialHeader` (section anchor, mono labelLarge 13sp; onSurfaceVariant + primary) ·
-`EditorialHairline` (**data lines only** — chart threshold/table rule, never a section separator,
-§1) · `EditorialFigure` (serif number + mono caption + ↑/↓ delta) · `EditorialLegend` · `SegmentPill`
-(all filter/lens toggles) · `ForgeSwitch` · `InlineEmptyHint` (§12) · `ForgeWordmark` · `bounceClick` / `bounceCombinedClick`
-(latter adds a long-press hook — Home CTA tap = start, hold = skip warmup) ·
-`clickableLabeled` (plain tappable + TalkBack label) · `ForgePrimaryCapsule`/`ForgeOutlineCapsule`
-(the ①/② capsules below — sheets/editors use these; settings/onboarding wrappers match them) ·
-`ForgeShimmer` · `ConfettiOverlay` (only celebration) · `statsEntrance` · `SnackbarController`
-(GYMAP-66: the app's ONE Undo snackbar — an injected `@Singleton` any VM reaches via `showUndo(msg){ restore }`,
-rendered once at the app root by `SnackbarControllerHost` beside `ProgramChangeGuardHost`; §13's undo-over-confirm
-soft-delete uses it — delete now, re-insert the captured row on undo — so a reversible delete never gets a confirm
-dialog. Styled dark: `surface` plate, onBg text, accent Undo. Reuse it for any new soft-delete; don't re-roll a
-per-screen `SnackbarHostState`). A pattern used on a 3rd
-screen gets promoted here the same turn.
+**The kit** — check here before writing any component. `EditorialHeader` · `EditorialHairline` ·
+`EditorialFigure` · `EditorialLegend` · `SegmentPill` · `ForgeSwitch` · `InlineEmptyHint` ·
+`ForgeWordmark` · `AvexWordmark` · `AvexIntro` · `IconLaunchScene` · `bounceClick` /
+`bounceCombinedClick` · `clickableLabeled` · `GlyphButton` · `ForgePrimaryCapsule` /
+`ForgeOutlineCapsule` · `ForgeShimmer` · `ConfettiOverlay` · `statsEntrance` · `EntranceItem` ·
+`rememberDrawProgress` · `CountUpText` · `ExerciseLibraryPicker` · `ProvideTouchExploration` ·
+`SnackbarController`. **A pattern used on a 3rd
+screen gets promoted here the same turn (§2⑥)** — `DoctrineParityTest` checks this list against the
+package both ways, so it cannot drift.
+
+What a signature won't tell you: `EditorialHairline` is **data lines only** (§1) · `SegmentPill` carries
+every filter/lens toggle · `ConfettiOverlay` is celebration only · `bounceCombinedClick` adds the
+long-press hook (Home CTA tap = start, hold = skip warmup) · `GlyphButton` guarantees the ≥48dp target
+a padded `Text` kept missing · `ProvideTouchExploration` feeds the TalkBack flag that restores ripple
+(§9) · `SnackbarController` is the app's ONE Undo snackbar, an injected `@Singleton` any VM reaches via
+`showUndo(msg){ restore }`, rendered once at the app root by `SnackbarControllerHost` beside
+`ProgramChangeGuardHost`; §12's
+undo-over-confirm soft-delete uses it (delete now, re-insert the captured row on undo) so a reversible
+delete never gets a confirm dialog. Don't re-roll a per-screen `SnackbarHostState`.
 
 **Buttons — three levels only**: ① filled light capsule = do-it-now, ≤1/section; ② outlined capsule =
 its sidekick (a destructive one-shot = level ② tinted `error` via `ForgeOutlineCapsule(contentColor)`,
-paired with an Undo snackbar, never a filled red button). ③ mono accent `action →` = navigation. No M3 default/floating-text/icon buttons in content.
-Settings reuse `SettingsPrimaryAction` (do-it-now) / `SettingsOutlineAction` (sidekick) / `SettingsActionLink` (`action →` nav) from `SettingsPrimitives.kt`; group the page-level action buttons at the END of the page, never mid-scroll.
-**Per-row action = compact OUTLINED pill, never filled.** A do-it-now action scoped to a single list row/integration (Recovery's Connect) renders as a right-aligned compact OUTLINED pill (`SettingsOutlineAction` weight — border only, onBg text, sentence case) with the WHOLE row as its tap target (the pill is drawn, not independently clickable — no nested tap). NEVER a filled-white capsule per row — five of those stack into a button wall (Recovery failed exactly this way); the ONE filled capsule stays page-level, grouped at the END (e.g. Get/Update Health Connect). A bare mono accent `connect →` link is too dim against a muted accent — prefer the pill. A connected row shows a passive `• ON` (accent disc + mono) on the right, and a list of connectables leads with its filled-disc/muted-ring dot rail (§12; ring at 1.5dp muted@0.55 so the empty state reads on near-black). Rows without a usable action render passive — no affordance that can't run. Coach + Recovery draw this dot and pill through the shared `StatusDot` / `ConnectPill` (`SettingsPrimitives.kt`) — reuse them, don't redraw.
-**Sizing — trim, never chunky** (48dp touch from padding, not visual size): hero CTA ~60dp (Home
-Start session only); standard capsules **44dp** (14sp); `ForgeSwitch` **40×24** track (thumb 14→17,
-press ~20); `SegmentPill` 12×5, 10sp.
+paired with an Undo snackbar, never a filled red button); ③ mono accent `action →` = navigation. No M3
+default/floating-text/icon buttons in content. Settings reuse `SettingsPrimaryAction` (do-it-now) /
+`SettingsOutlineAction` (sidekick) / `SettingsActionLink` (`action →` nav) from `SettingsPrimitives.kt`;
+group page-level action buttons at the END of the page, never mid-scroll.
+
+**Per-row action = compact OUTLINED pill, never filled.** A do-it-now action scoped to a single list
+row/integration (Recovery's Connect) renders as a right-aligned compact OUTLINED pill
+(`SettingsOutlineAction` weight — border only, onBg text, sentence case) with the WHOLE row as its tap
+target (the pill is drawn, not independently clickable — no nested tap). NEVER a filled capsule per
+row: five of those stack into a *button wall* (`FAILURES.md`; Recovery failed exactly this way). The
+ONE filled capsule stays page-level, grouped at the END. A bare mono accent `connect →` link is too dim
+against a muted accent — prefer the pill. A connected row shows a passive `• ON` (accent disc + mono)
+on the right, and a list of connectables leads with its filled-disc/muted-ring dot rail (§12; ring at
+1.5dp muted@0.55 so the empty state reads on near-black). Rows without a usable action render passive —
+no affordance that can't run. Coach + Recovery draw this dot and pill through the shared `StatusDot` /
+`ConnectPill` (`SettingsPrimitives.kt`) — reuse them, don't redraw.
+
+**Sizing — trim, never chunky** (48dp touch from padding, not visual size — and these are *minimums*
+that grow with font scale, §14): hero CTA ~60dp (Home Start session only); standard capsules **44dp**
+(14sp); `ForgeSwitch` **40×24** track (thumb 14→17, press ~20); `SegmentPill` 12×5, 10sp.
+
 **Icons**: chrome (nav/gear/back/share) + a muted leading glyph on settings/list nav rows for
 wayfinding. Row/content glyphs come from the matched custom families (`SettingsIcons`/`NavIcons`/
 `ExerciseIcons`), never Material stock, never accent-tinted; TOP-BAR chrome may use Material stock
@@ -146,14 +219,14 @@ until a custom chrome set lands (content never). Exercise rows in browsers/picke
 `ExerciseIcons.forEquipment` equipment-class glyph (one glyph per implement class, custom moves =
 pencil); elsewhere content is text-first, glyphs `→ ↑ ↓ △ • ·` carry meaning — no decorative
 icons/emoji. (Known gap: `CardioType.icon` still mixes Material stock into its custom family.) The
-families share only their builder plumbing via `VectorBuilders.kt` (icon/fillPath/strokePath/circle/
-roundRect); glyph shapes stay per-family so each still evolves on its own.
+families share only their builder plumbing via `VectorBuilders.kt`; glyph shapes stay per-family.
+
 **Don't render state twice, and flag only exceptions.** A leading `•` dot is earned only when its
 COLOR flags something the eye should catch — a failure (error), a win/active (accent) — never the
-neutral/default/inactive majority (a column of identical grey dots is noise). Paint the dot only
-for the exception; the common rows reserve the gutter (`CoachFlagDot(null)`) so they still align,
-dotless. Likewise a row's right meta is a count or reading only, never a state word the dot or
-reason line already carries.
+neutral/default/inactive majority (a column of identical grey dots is noise → *grey dot column*,
+`FAILURES.md`). Paint the dot only for the exception; the common rows reserve the gutter
+(`CoachFlagDot(null)`) so they still align, dotless. Likewise a row's right meta is a count or reading
+only, never a state word the dot or reason line already carries.
 
 ## 9. Motion & feel (`Motion.kt` — never literal durations/easings at call sites)
 
@@ -165,28 +238,30 @@ Decelerate-in / Accelerate-out / Standard / DrawDecelerate (chart reveals). Spri
 - **Press = bounce everywhere** (scale 0.97, no ripple; auto-ripple under TalkBack); migrate rippling M3 buttons when touched.
 - Feel (don't retune casually): bounceClick MediumBouncy/MediumLow; ForgeSwitch position 0.68/900, thumb resize no-bounce/1400 + press-stretch.
 - **Haptics rare** (`forgeHaptic`): set logged, PR/finish, timer ticks — nothing else.
-- **Launch**: `AvexIntro` settles the serif "Avex" wordmark once per cold launch over the first screen, then the plate fades to reveal it. The system splash is background-only (`splash_blank`, no icon) so the wordmark is the brand beat; honors reduce-motion (short still hold, no fade). **The intro themes to the chosen app icon through the WORDMARK itself** (`AvexWordmark`): the name has a narrative arc in the icon's palette (`AppIcon.launchPalette`, deep→mid→bright) inside the stock envelope — it ENTERS with the family's verb (Metal sheen-sweep · Gem glint + jagged crystal chunks GROWING out of the letterforms, stroke-scale, staggered (probe shader, 33+) · Aurora northern lights RISING out of the glyph tops, waving + hue-shifting (probe shader, 33+; pre-33 drifting fill) · Nebula weightless float · Molten white-hot heat-shimmer (AGSL `RenderEffect`, 33+) · Solid plate-colour wipe · Stealth slow HUD flicker-in (~14Hz over ~1s) · Default plain), holds legible, then DIES the family's death overlapping the plate fade (Molten MELTS decelerating over 650ms, smooth slump + thin drip streams · Nebula is dragged into a BLACK HOLE vortex, modest twist (33+; pre-33 spin-shrink) · Solid wipes back out · Metal/Gem/Aurora/Stealth fade). Reduce-motion = settled still, plain fade. **The theming is user-optional** (Appearance → **Custom startup animation**, `themedLaunchIntro`, default on): off resolves the intro to `AppIcon.Default` so the plain black-and-white Avex settle plays with no family effect/exit — MainActivity reads the flag in the same first-frame prefs pass as the icon key so there's no themed flash. Full-screen launch SCENES (`ui/common/LaunchScenes.kt`: family→AGSL registry, per-pixel `RuntimeShader`, Aurora/Nebula/Molten/Gem device-approved + Stealth radar) are deliberately UNWIRED (2026-07-10 — every-launch spectacle wears out) but kept intact; re-wire via `IconLaunchScene` behind the wordmark + the 950ms themed hold. This deliberately spends colour off the one-accent rule (§1/§5) for a pre-app moment only. The launcher/adaptive icon **defaults** to the emblem (`ic_launcher_foreground`) but is user-selectable (Appearance → App icon, GYMAP-icons): one `.icon.*` `activity-alias` per icon, exactly one enabled at a time via `AppIconManager` (`PackageManager` component toggle). A settings row shows the current icon + name and opens a `ModalBottomSheet` grid (mirrors `AvatarPickerSheet`: family `EditorialHeader`s, ring the current pick, scroll edge-fade); warns it "updates after a moment" (OEM-launcher lag). Family + tile order = the `AppIcon` enum declaration order (the picker derives headers from `entries…distinct()`), kept in the design-reference sequence Default → Solid → Metal → Stealth → Molten → Nebula → Aurora → Gem; persistence is by enum `name`, so reordering never migrates a pick.
+- **Reduce-motion is global**, not per-feature: entrance cascade, chart draw-ins, confetti, launch intro and press bounce all degrade to a settled still state. Never gate meaning on motion.
+- **Launch**: `AvexIntro` settles the serif "Avex" wordmark once per cold launch over the first screen, themed to the chosen app icon, then the plate fades to reveal it. The system splash is background-only so the wordmark is the brand beat. This deliberately spends colour off the one-accent rule (§1/§5) for a pre-app moment only. Per-family mechanics, the icon picker and the unwired launch scenes are recorded in `design/MAP.md`.
 
 ## 10. Charts (overview/detail archetypes)
 
 Stroke + dots `primary`; secondary series `secondary`; area fades to transparent (≤0.15 top); grid =
 hairline. Open on the page — no plot frames. Legends `EditorialLegend`; axis labels mono labelS muted.
-Values tnum; draw in once with `drawTween()`. Comparison bars thin (3–4dp), rounded.
+Values tnum; draw in once with `drawTween()`. Comparison bars thin (3–4dp), rounded. Every chart is a
+Canvas and therefore invisible to TalkBack until given semantics — §14.
 
 ## 11. Copy, voice & glyphs
 
 **Voice — dry, specific, earned.** Every generated line (coach/milestones/recaps/opinions/
-notifications/hints) states a fact or instruction grounded in the user's data, and VARIES with
-those numbers rather than repeating one generic cue (a quiet-week line reads the week's PRs / volume
-trend / session pace, never the same "keep doing what works" every time); an understated nod only
-when earned ("Clean sweep. You beat every comparable set."). Coach speaks imperative + "you",
-never "I", never names itself. **Banned in any rendered string**: exclamation marks (confetti is the
-exclamation mark); em dashes (split, or join with a comma / " · "); hype/bro-speak ("beast",
-"crush"); poster clichés ("moves the needle"); praise ungrounded in data. Offenders rewritten when touched.
+notifications/hints) states a fact or instruction grounded in the user's data, and VARIES with those
+numbers rather than repeating one generic cue (a quiet-week line reads the week's PRs / volume trend /
+session pace, never the same "keep doing what works" every time); an understated nod only when earned
+("Clean sweep. You beat every comparable set."). Coach speaks imperative + "you", never "I", never
+names itself. **Banned in any rendered string**: exclamation marks (confetti is the exclamation mark);
+em dashes (split, or join with a comma / " · "); hype/bro-speak ("beast", "crush"); poster clichés
+("moves the needle"); praise ungrounded in data. Offenders rewritten when touched. Enforced by §14.
 
-**Headlines & verdicts.** Serif hero/title takes NO terminal period ("Coach", "Pull B" — periods
-only in body/italic-aside prose). A verdict states what it means FOR THE USER, not internal state
-("Ready to coach", not "Baseline set"); if it needs system vocab, reword and let the subline carry the why.
+**Headlines & verdicts.** Serif hero/title takes NO terminal period ("Coach", "Pull B" — periods only
+in body/italic-aside prose). A verdict states what it means FOR THE USER, not internal state ("Ready
+to coach", **not** "Baseline set"); if it needs system vocab, reword and let the subline carry the why.
 
 **Translate the machine.** Machine identifiers never render ("2026-W27"→"Week of Jun 29", a status
 enum→its word, a slot key→its exercise name). Machine PROSE too: paren-plurals ("3 session(s)"), em
@@ -196,104 +271,139 @@ still forming · 3 of 4 sessions"), since pass rows are immutable — the transl
 **Naming state & the future.** A status never stands alone — attach the referent the screen knows (a
 held week shows its reason; a pending verdict names its change; a collapsed group names members only
 when they fit ONE line, else count alone; a countdown names its landing day). An upcoming item is
-worded forward under a `NEXT` eyebrow, never a past-tense achievement label. (Right-meta = count or
-reading, never a duplicated state word — §8.)
+worded forward under a `NEXT` eyebrow, never a past-tense achievement label.
 
 **Glyphs & numbers.** Mono small-caps section headers, else sentence case (buttons included). Actions
 end ` →` / `+ log` (accent mono); meta joins with `·`; deltas `↑`(accent)/`↓`(muted), `△ LAST`;
-wordmark = "• Avex" via `ForgeWordmark()`. Numbers k-abbrev ≥10,000 ("4.5k"); RPE/RIR via
-`Format.kt` (no ".0"); weights honor the unit setting (never hardcode lb/kg; unit suffix uppercase
-only in mono captions). **Weight unit is a tri-state `WeightUnit` (lb·kg·st), always via `WeightFormatter`** —
-read `LocalForgeSettings.current.weightUnit`, never a `useKg: Boolean` (a legacy bridge lingers on the
-formatter + `ForgeUiSettings.useKg` but new code passes `weightUnit`). Stones (GYMAP-72) render as a
-`stone + pounds` compound ("12 st 4 lb") via `formatWeight`, but AGGREGATES stay one decimal in every
-unit ("1.2k st", `formatVolume`); editable single fields hold decimal stones and bodyweight logs stone+lb
-as a two-field pair; the plate calculator has no stone denomination so it falls back to lb. Coach lines =
-quiet italic asides, never banners.
+wordmark = "• Avex" via `ForgeWordmark()`. Numbers k-abbrev ≥10,000 ("4.5k"); RPE/RIR via `Format.kt`
+(no ".0"); **weights always via `WeightFormatter`** reading `LocalForgeSettings.current.weightUnit` — a
+tri-state `WeightUnit` (lb·kg·st), never a `useKg: Boolean` (a legacy bridge lingers on the formatter +
+`ForgeUiSettings.useKg`; new code passes `weightUnit`). Never hardcode lb/kg anywhere. Stones render as a `stone + pounds` compound
+("12 st 4 lb"), but AGGREGATES stay one decimal in every unit ("1.2k st"). Unit suffix uppercase only
+in mono captions. Coach lines = quiet italic asides, never banners.
 
-## 12. Empty & first-run states
+## 12. The seven states
+
+**Every section answers all seven.** Most bad UI is not ugly — it is a state nobody drew.
+
+| State | Treatment | Never |
+|---|---|---|
+| **zero** | the section's own visual at zero/ghost (§2②) | status words; hiding the section |
+| **one** | a list row | a chart of one point; a strip of tiny cells |
+| **many** | the mark; rows only if each carries a distinct reading | >4 uniform rows (§4.10) |
+| **overflow** | trim + `view all →` beside the trim | a bare link; "show more" |
+| **loading** | nothing — local DB is instant; screens appear with the entrance cascade. `ForgeShimmer` only for real latency (photos, Health Connect) | spinners, blocking loads |
+| **error** | quiet inline line in error color, wording the consequence | banners, toasts, dialogs |
+| **stale / denied** | last-known reading + its age ("2H AGO"); honest zero when connected; hidden when the grant was never given | "unsupported"; grey-out-by-capability; an error banner for an absent signal |
+
+*Health Connect exposes data PRESENCE, never capability — so the UI never says "unsupported", and
+disabling a signal by device brand is banned.*
 
 **Empty is data at zero — drawn, not written.** A zero-state reuses the SAME vocabulary it shows with
-data (bars/meters/sparklines/dot rows) at zero/ghost, never a list of status words ("forming" /
-"not connected" repeated per row = barebones and texty at once).
+data (bars/meters/sparklines/dot rows), never a list of status words.
 
-- **Every data section leads with a MARK** (words are its caption, never its content); no section is a bare text row. A section that can only ever be text isn't a section — fold it into a caption.
-- **Zero-state = the section's own visual at zero**: forming lift = flat ghost sparkline or "n/2" pip; unconnected inputs = filled/hollow dot row; threshold-gated = progress-to-unlock meter. Plumb the count into the ViewModel — a visual earns the wiring.
-- **Collapse repetition**: N rows sharing one empty status → ONE line naming the concrete unlock ("3 lifts building history · first read after two sessions"), never N identical rows. Its ghost mark shows ONLY beside a live sibling mark (contrast reads as "still forming"); an all-ghost group drops the mark (a lone flat line reads as broken). Ghost VISUALS good, ghost DATA (fake numbers) banned.
+- **Every data section leads with a MARK** (words are its caption, never its content); no section is a bare text row. A section that can only ever be text isn't a section — fold it into a caption. At *screen* scope this means ≥1 mark that works at zero (§3). Plumb the count into the ViewModel — a visual earns the wiring.
+- **Collapse repetition**: N rows sharing one empty status → ONE line naming the concrete unlock ("3 lifts building history · first read after two sessions"), never N identical rows. A ghost mark shows ONLY beside a live sibling (contrast reads as "still forming"); an all-ghost group drops the mark — a lone flat line reads as broken. Ghost VISUALS good, ghost DATA (fake numbers) banned.
 - **n-of-m meters** measure only a real unlock threshold, and m is the REAL gate (a bar filling to the wrong gate unlocks nothing); stacked gates → show the unfilled one. Never "data availability" jargon ("lifts with a trend: 3 of 8" promises a chart it doesn't show) — render items that HAVE data with their real trend, ghost-collapse the rest.
 - **A mark needs visual mass at the data's REAL size**: a strip of tiny cells below ~a row reads as debris; at small counts use list rows. Design each section at its emptiest realistic state, not its fullest.
 - **Figures show honest zeros** ("0 WORKOUTS"), never a dash, never hidden.
 - **`InlineEmptyHint` is the last resort**, ≤1 per lens, only where there's no zero-shape; it REPLACES the caption (never both); terse, no em dashes. Boxed `EmptyState`/`FirstTouchTip` deprecated.
+- **Feedback: undo over confirm** — reversible acts get a short Undo snackbar via `SnackbarController` ("Set logged · Undo"); dialogs only for destructive/irreversible acts (wording the consequence); no success toasts for what the UI already shows.
 
-## 13. Inputs, loading & feedback
+## 13. Inputs
 
-- **Text inputs** (interactive → bordered): `OutlinedTextField`, unfocused = outline rung, focused = accent, muted placeholder (placeholder text is a ghost affordance — it may dim below the §5 muted floor); search = leading magnifier + trailing clear, either bordered (History `SearchField`) or a filled rounded field (surfaceVariant — the standard phone-search look, Settings + timezone picker). Hot-path numbers = steppers + inline edit, never keyboard-first.
-- **Loading**: local DB is instant — no spinners/blocking loads ever; screens appear with the entrance cascade; `ForgeShimmer` only for real latency (photos, Health Connect).
-- **Feedback**: undo over confirm — reversible acts get a short Undo snackbar ("Set logged · Undo"); dialogs only for destructive/irreversible acts (wording the consequence); no success toasts for what the UI already shows; errors = quiet inline line in error color, never banners.
+- **Text inputs** (interactive → bordered): `OutlinedTextField`, unfocused = outline rung, focused = accent, muted placeholder (a ghost affordance — it may dim below the §5 muted floor); search = leading magnifier + trailing clear, either bordered (History `SearchField`) or a filled rounded field (surfaceVariant — the standard phone-search look, Settings + timezone picker).
+- Hot-path numbers = steppers + inline edit, never keyboard-first.
+- An explainer belongs beside a non-obvious control only (§4.3), ≤1 line.
 
-## 14. Settled — do not reintroduce / do not touch
+## 14. Physics — scale, contrast, touch, semantics
 
-**Removed on purpose**: boxed cards for passive content · full-screen PR takeover (PR = confetti +
-gold row) · accent-tinted "important" prose · session-summary extras (share card/tags/ghost/vs-last/
-what's-next — the SESSION-summary card specifically; the Profile before/after share card `BeforeAfterCardRenderer` (GYMAP-55) is a separate, deliberate shareable artifact and stays) · cardio big-number hero · cardio kcal estimates (return only with real watch burn data) · new gamification surfaces (wait-listed) · Profile
-identity-first restructure · mood/subjective coach drivers · Coach hero week-dot calendar, "Pulse",
-pass-square record strip · Coach status serif verdicts AND status/anticipation asides (status states
-= eyebrow + figures) · Coach pre-baseline signal dot-checklist in the hero (→ one labeled Baseline
-bar in the "Coming up" idiom; the effort/HC inputs it spelled out live in Signals only, §4.3,
-GYMAP-24) · hairline section separators (§1) · the 9-row milestone ladder (→ rail + next, §4.10).
-**Facts**: dark-only (Indigo light scheme in `Color.kt` unshipped — never build light variants);
-portrait phone only (no adaptive/tablet/landscape).
-**Untouchable**: live-session screen · Profile blending cover (compositing approach; edge-fade/scrim
-stops retuned 2026-07-09) · statsEntrance/draw tuning · `BodyAnatomy.kt` (generated).
-**Known defects, fix when touched**: Home's GOALS section placement · Stats' 16dp gutter (§7 says 24 —
-left because re-flowing the polished screen needs Antho's eyes) · any screen still drawing section
-hairlines → migrate to air rhythm (§7). (Home's accent eyebrows + the Home/Stats section hairlines
-were fixed 2026-07-08, GYMAP-4.)
+The screen must survive the biggest font, the longest string, no data, no network and no permission.
+These are measured, not felt. The mechanical half is enforced by `DesignDoctrineTest`.
+
+**Font scale — the app must survive 200%.**
+- Text sizes in `sp`, always from `MaterialTheme.typography` (§6). Never `fontSize =` at a call site.
+- **A container holding text sizes to its content** — no fixed `.height()` on a row, tile, capsule or
+  cell that contains text. Use padding, `heightIn(min = …)` or `wrapContentHeight`.
+- **44dp / 48dp are minimums, not sizes.** Controls grow with scale; touch target comes from padding.
+- No `maxLines = 1` on user content (names, notes, exercise titles). Chrome and mono labels may clamp.
+- Figure rows wrap rather than clip. The serif *hero* may clamp its own scaling at ~1.3× so a 52sp
+  display figure stays on-screen — clamping the hero is allowed, clamping content is not.
+- Check every touched screen at 100% and 200%. `RecipeScreenshotTest` pins the six archetypes as
+  golden images at both scales (plus AMOLED and monochrome); CI diffs them. A changed golden is a
+  question, not a chore — look at the diff before re-recording.
+
+**Contrast — measured on Pearl `#0E0E11`.** Text ≥4.5:1. Data marks that carry meaning ≥3:1.
+
+| Element | Ratio | |
+|---|---|---|
+| onBg `#EEEEF2` | 16.66:1 | ✓ |
+| muted 1.0 | 9.41:1 | ✓ |
+| muted @0.7 | 5.07:1 | ✓ |
+| **muted @0.65** | **4.54:1** | ✓ the floor — 0.6 gives 4.05:1 and **fails** |
+| PR gold · △ green · success · warning | 7.1–9.9:1 | ✓ |
+| **accent as text** — Navy 2.35 · Red 2.44 · Olive 2.81 · Gold 3.40 | **2.35–3.40:1** | ✗ **fails AA** |
+| **error `#BF4040` as text** | **3.69:1** | ✗ **fails AA** |
+
+The last two are live defects this doctrine currently *mandates* (`action →` in accent; §12's inline
+error line), recorded in `SETTLED.md` as open decisions. **Do not add new accent-coloured or
+error-coloured body text until they are resolved** — use onBg text with an accent glyph or mark
+instead. Structural hairlines and tonal washes (`outline` rungs, `primaryContainer`) are **exempt**:
+they are decorative boundaries, not content or state, and raising them to 3:1 would destroy §1.
+
+**Touch**: ≥48dp from padding, not visual size. ONE tap target per row — never nested (§2③).
+
+**Semantics**: every Canvas mark (sparkline, meter, dot rail, heatmap, chart) carries a
+`contentDescription` reading its *value*, not its shape ("This week, 4 of 5 sessions", not "bar
+chart"). Purely decorative marks take `null`. `EditorialHeader` marks itself a heading. Interactive
+non-Button elements use `clickableLabeled`. Bounce-press auto-restores ripple under TalkBack (§9).
+
+**Resilience**: design against the longest realistic string, not the demo one; layouts stay
+RTL-correct (`start`/`end`, never `left`/`right`).
 
 ## 15. Checklist before calling UI work done
 
-- [ ] Right archetype toolkit (§3); no borrowed patterns.
-- [ ] Overview answers state + conclusions + exceptions at zero interaction, ≤2–3 viewports.
-- [ ] No prose behind taps, no bare links; aggregate visuals tap to detail; nothing fake-tappable. Top bar = wordmark + `←` + ≤1 action, never the screen name, one back arrow (no in-page duplicate). Serif titles/verdicts no terminal period.
-- [ ] Passive content bare; only interactive elements + modals get fills/borders.
-- [ ] One serif hero; mono headers + air rhythm, **no section hairlines** (lines = data only); alphas only from the §5 ladder; colors via `colorScheme`; ≥8dp between text lines of different roles.
-- [ ] Controls trim (§8); bounce press no ripple; touch ≥48dp + TalkBack labels.
-- [ ] Motion per archetype via shared modifiers only (§9).
-- [ ] Empty = data at zero, drawn (§12): every section leads with a mark at zero/ghost, repeats collapse to one, ≤1 hint/lens, never a bare text row or caption+hint.
+**Every screen**
+
+- [ ] Right archetype toolkit (§3), started from its recipe; no borrowed patterns.
+- [ ] All seven states drawn (§12) — especially zero, overflow, and stale/denied.
+- [ ] One serif hero; mono headers + air rhythm; **no section hairlines** (lines = data only); alphas only from the §5 ladder; colors via `colorScheme`; ≥8dp between text lines of different roles.
 - [ ] Prose budget + one home (§4.3): data-led sections, ≤1 caption, no mechanics narration, no fact/mark repeated across lenses.
-- [ ] Generated text: dry + earned, imperative + "you", no exclamations/em-dashes/hype (§11).
-- [ ] Inputs/loading/feedback (§13); shared primitives reused, 3rd-use promoted; screens ~300 / VMs ~150 lines as a guide (split at seams, don't contort to hit it); §2 map updated; overview shown before subs.
+- [ ] Top bar = wordmark + `←` + ≤1 action, never the screen name, one back arrow. Serif titles/verdicts no terminal period.
+- [ ] Passive content bare; only interactive elements + modals get fills/borders. Nothing fake-tappable; no nested taps.
+- [ ] Controls trim (§8); bounce press, no ripple; motion per archetype via shared modifiers only (§9).
+- [ ] Generated text dry + earned, imperative + "you", no exclamations/em-dashes/hype (§11).
+- [ ] **Renders at 200% font scale** without clipping or lost content; touch ≥48dp; Canvas marks carry value-reading `contentDescription`s (§14).
+- [ ] Shared primitives reused, 3rd use promoted (§2⑥); screens ~300 / VMs ~150 lines as a guide (split at seams, don't contort to hit it); `design/MAP.md` updated; `gradle -p forge-android testDebugUnitTest` green.
 
-## 16. Wear addendum (`:wear` — Galaxy Watch 6 Classic reference; Wear OS 3+, round)
+**Overview** — answers state + conclusions + exceptions at zero interaction, ≤2–3 viewports; ≥1 mark
+that works at zero; primary action above the fold; `statsEntrance` cascade present; overview shown to
+Antho before subs (§4.7).
+**Detail** — scoped to ONE item; no figure wall; charts draw in once, not on scroll.
+**List** — search-first; trim rows; no charts, no big hero, no draw-in theatrics.
+**Settings** — no dividers; every control has its ≤1-line explainer; one-shot actions grouped at the
+END; navigation as `action →`; no serif hero, no figures, no lens pills.
+**Live** — reach and target size beat padding; no presentational motion; keep-screen-on; haptics only
+at set-log / PR / timer.
 
-The doctrine translated to a 1.4" round AMOLED, not reinvented. The watch answers "what now,
-this instant?" only (§Principle 2 of `docs/WEAR_OS_PLAN.md`) — no stats, no history, no settings.
+## 16. Satellites & change protocol
 
-- **Ground**: pure black (`#000000`) always — AMOLED battery + bezel blend; no gradient plate.
-  Surfaces exist only on interactive capsules (`#15161B`); passive content sits bare (§1 holds).
-- **Accent**: the phone's accent arrives via `/config` (hex + enabled) and obeys the §5 ladder
-  (1.0 strokes/actions · 0.6 secondary · 0.15 washes). Monochrome mode maps to onBg like the phone.
-  Disconnected/stale state renders mono only — color is earned by live data. PR gold `#E3B341`
-  reserved exactly as on the phone (PR flash only).
-- **Type**: ONE serif figure per screen (timer countdown / target weight) — `headlineL`-scale,
-  tnum; everything else mono uppercase micro-labels (10–13sp) or `bodyM` sans. Never two serif
-  voices on one round screen. Curved text only for the top eyebrow label (time/exercise name),
-  never prose.
-- **Layout**: center-weighted single column; safe inset 8% of diameter; one decision per screen;
-  swipe-dismiss preserved (no custom back). Screens: idle home · session (figure big) · rest
-  timer · RPE picker (post-log, reached from the transient undo/`rate →` row on timer + set
-  views) · one 20s "Finished" beat when the session ends (points at the phone for notes/details).
-  Bezel/rotary = the primary adjust input; touch ± steppers always present (44dp touch, 34dp
-  visual, flanking the figure). **The serif figure IS the adjust target**: weight big by default,
-  tap the small reps line to bring reps up (and back) — bezel and steppers always change the big
-  number; bodyweight slots pin reps big. Guard rails answer with a **Confirm capsule** (one more
-  tap), never "do it on the phone". Status/error lines sit ABOVE the capsule (below clips on
-  round). Nothing fake-tappable (§4 holds).
-- **Ambient**: dimmed mono only — onBg text at 0.6, no accent, no surfaces, burn-in-safe (no
-  large filled areas); timer keeps the serif countdown, everything else drops.
-- **Haptics**: timer-done = the one strong buzz (with phone-suppression ack); set-logged = short
-  tick; PR = double-tick + gold flash. Nothing else vibrates.
-- **Copy**: §11 voice verbatim — dry imperative, no exclamation marks, mono labels uppercase.
-  Disconnect state says "Reconnecting" + last-known data with its age, never an error banner.
-- **Tiles/complications**: data-age stamped (mono labelS muted, "2H AGO"); degrade to
-  next-day + readiness, never blank (§12 spirit: honest zero over hidden).
+| File | Read it when |
+|---|---|
+| `design/MAP.md` | you need to know what already exists, or why a thing sits where it does |
+| `design/SETTLED.md` | **before re-adding anything that feels missing** — and for open defects |
+| `design/FAILURES.md` | a layout feels off and you want the named diagnosis |
+| `design/AUDIT.md` | picking up doctrine debt — what is broken today, ranked |
+| `design/DECISIONS.md` | why a rule is the way it is, or changed |
+| `design/WEAR.md` | touching `:wear` only |
+| `ui/recipes/*.kt` | starting any screen — copy the scaffold |
+
+**Protocol.** A design decision made or changed during a task is written down the same turn. New
+*rules* go in this file; new *screens/features* go in `MAP.md`; *removals* go in `SETTLED.md`; a newly
+named mistake goes in `FAILURES.md`. If a rule is mechanically checkable, add it to
+`DesignDoctrineTest` rather than relying on it being read.
+
+**Budget: 420 lines.** Adding a rule means finding one that can leave, move to a satellite, or become
+a test. The pre-split doctrine hit 2.5× its stated budget because nothing ever left. `DoctrineSelfCheckTest`
+enforces this number and asserts that §16 and the test agree, so the cap can be raised deliberately
+but never quietly exceeded. (Raised from 400 on 2026-07-24 — see `design/DECISIONS.md`.)
