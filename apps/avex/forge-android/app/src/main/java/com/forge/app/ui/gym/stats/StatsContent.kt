@@ -26,7 +26,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.domain.units.WeightUnit
 import com.forge.app.ui.common.InlineEmptyHint
 import com.forge.app.ui.gym.session.SegmentRow
-import com.forge.app.ui.gym.stats.components.statsEntrance
+import com.forge.app.ui.common.statsEntrance
 import com.forge.app.ui.gym.stats.state.StatsUiState
 import com.forge.app.ui.theme.LocalForgeSettings
 

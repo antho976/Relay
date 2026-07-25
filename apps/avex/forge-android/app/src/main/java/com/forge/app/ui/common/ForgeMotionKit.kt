@@ -1,4 +1,4 @@
-package com.forge.app.ui.gym.stats.components
+package com.forge.app.ui.common
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FiniteAnimationSpec
@@ -22,7 +22,11 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
- * The Stats tabs' shared one-shot motion kit. Three primitives, all derived from
+ * The app's shared one-shot motion kit. Promoted here from ui/gym/stats/components/ (2026-07-24):
+ * four feature packages use it, well past DESIGN §2⑥'s promote-on-third-use rule, and §8 already
+ * listed it as living in ui/common/. A pure relocation — the tuning is untouchable (SETTLED.md).
+ *
+ * Primitives, all derived from
  * [ForgeMotion] so the system reduced-motion preference collapses everything
  * automatically (springs snap, tweens hit 0 ms, stagger delays vanish):
  *

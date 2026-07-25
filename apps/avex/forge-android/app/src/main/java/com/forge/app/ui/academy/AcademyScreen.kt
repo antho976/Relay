@@ -38,7 +38,7 @@ import com.forge.app.domain.academy.AcademyRegistry
 import com.forge.app.ui.common.EditorialHeader
 import com.forge.app.ui.common.ForgeWordmark
 import com.forge.app.ui.common.clickableLabeled
-import com.forge.app.ui.gym.stats.components.statsEntrance
+import com.forge.app.ui.common.statsEntrance
 
 /**
  * The Academy (Coach v3 B3) — the knowledge half of the coach, and the reason it can make itself

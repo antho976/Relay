@@ -39,7 +39,7 @@ import com.forge.app.service.ForgeNotifications
 import com.forge.app.ui.common.ConfettiOverlay
 import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.gym.stats.components.BodyHeatmap
-import com.forge.app.ui.gym.stats.components.statsEntrance
+import com.forge.app.ui.common.statsEntrance
 import com.forge.app.ui.theme.LocalForgeSettings
 import com.forge.app.ui.gym.train.state.SessionSummary
 

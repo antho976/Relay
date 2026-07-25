@@ -29,6 +29,7 @@ class PrMilestoneTest {
     @Test fun `picks the highest milestone when several are crossed`() {
         // 8 → 60 clears 10, 25 and 50; the notification celebrates 50.
         val n = PrMilestone.check(lifetimePrCount = 60, sessionPrCount = 52)
-        assertEquals("50 personal records!", n?.title)
+        // No exclamation mark: DESIGN §11 bans them in every rendered string, notifications included.
+        assertEquals("50 personal records", n?.title)
     }
 }

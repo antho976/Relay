@@ -31,7 +31,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.ui.common.ForgeWordmark
 import com.forge.app.ui.gym.session.SegmentRow
-import com.forge.app.ui.gym.stats.components.statsEntrance
+import com.forge.app.ui.common.statsEntrance
 import com.forge.app.ui.theme.LocalForgeSettings
 
 /** The three reads the Coach page offers, the Stats lens-pill pattern applied to coaching. */

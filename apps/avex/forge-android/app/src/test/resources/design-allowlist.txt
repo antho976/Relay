@@ -1,0 +1,427 @@
+# Frozen design-doctrine debt — see DesignDoctrineTest.
+#
+# One line per (rule, file, token): "<count> <rule> <path> <token>". The count is EXACT.
+# Adding a violation fails the build; fixing one also fails it, with a message naming the
+# new number — so paying debt down shows in the diff instead of vanishing silently.
+#
+# Counting per TOKEN, not per file, is deliberate: it means fixing three alphas while
+# introducing a fourth cannot net out to "looks like progress".
+#
+# During a redesign, bank your cleanups safely with -Dforge.paydown=true, which lowers
+# counts but REFUSES to raise any.
+#
+# This file is debt, not permission. Lower a number whenever you touch its file.
+# Regenerate deliberately after a doctrine change:
+#
+#   gradle -p forge-android :app:testDebugUnitTest --tests '*RegenerateAllowlist*' -Dforge.regen=true
+
+1 alpha ui/cardio/components/CardioLogSheet.kt 0.45
+1 alpha ui/coach/GoalPickerDialog.kt 0.4
+1 alpha ui/common/AvexWordmark.kt 0.90
+1 alpha ui/common/EmptyState.kt 0.5
+1 alpha ui/common/ForgeShimmer.kt 0.07
+1 alpha ui/common/LaunchScenes.kt 0.12
+1 alpha ui/common/LaunchScenes.kt 0.18
+1 alpha ui/common/LaunchScenes.kt 0.20
+1 alpha ui/common/LaunchScenes.kt 0.30
+1 alpha ui/common/LaunchScenes.kt 0.40
+3 alpha ui/gym/freestyle/ExerciseBrowserScreen.kt 0.12
+1 alpha ui/gym/freestyle/ExerciseBrowserScreen.kt 0.28
+1 alpha ui/gym/freestyle/ExerciseBrowserScreen.kt 0.3
+1 alpha ui/gym/freestyle/FreestyleLogScreen.kt 0.14
+1 alpha ui/gym/freestyle/FreestyleLogScreen.kt 0.3
+1 alpha ui/gym/freestyle/FreestyleLogScreen.kt 0.4
+2 alpha ui/gym/freestyle/FreestyleLogScreen.kt 0.5
+1 alpha ui/gym/session/SessionDetailComponents.kt 0.12
+2 alpha ui/gym/session/SessionDetailComponents.kt 0.26
+2 alpha ui/gym/session/SessionDetailComponents.kt 0.34
+1 alpha ui/gym/stats/StatsAdherence.kt 0.18
+1 alpha ui/gym/stats/StatsBody.kt 0.30
+1 alpha ui/gym/stats/StatsInterest.kt 0.12
+1 alpha ui/gym/stats/StatsOverview.kt 0.26
+1 alpha ui/gym/stats/StatsOverview.kt 0.34
+1 alpha ui/gym/stats/StatsStrength.kt 0.10
+1 alpha ui/gym/stats/StatsStrength.kt 0.12
+1 alpha ui/gym/stats/StatsStrength.kt 0.18
+1 alpha ui/gym/stats/StatsVolume.kt 0.18
+1 alpha ui/gym/stats/StatsVolume.kt 0.3
+2 alpha ui/gym/stats/StatsVolume.kt 0.55
+1 alpha ui/gym/stats/components/Sparkline.kt 0.12
+1 alpha ui/gym/stats/components/Sparkline.kt 0.5
+1 alpha ui/gym/train/DaySessionContent.kt 0.12
+3 alpha ui/gym/train/DaySessionContent.kt 0.2
+1 alpha ui/gym/train/DaySessionContent.kt 0.4
+1 alpha ui/gym/train/DaySessionContent.kt 0.8
+1 alpha ui/gym/train/components/AddExerciseSheet.kt 0.3
+2 alpha ui/gym/train/components/AddExerciseSheet.kt 0.4
+1 alpha ui/gym/train/components/DayCard.kt 0.20
+1 alpha ui/gym/train/components/DayCard.kt 0.22
+1 alpha ui/gym/train/components/DayCard.kt 0.50
+1 alpha ui/gym/train/components/DayCard.kt 0.55
+1 alpha ui/gym/train/components/DayCard.kt 0.75
+1 alpha ui/gym/train/components/DayCardComponents.kt 0.12
+2 alpha ui/gym/train/components/DayCardComponents.kt 0.18
+1 alpha ui/gym/train/components/DayCardComponents.kt 0.38
+1 alpha ui/gym/train/components/DayCardComponents.kt 0.70
+2 alpha ui/gym/train/components/DifficultyRater.kt 0.3
+1 alpha ui/gym/train/components/ExerciseCard.kt 0.12
+1 alpha ui/gym/train/components/ExerciseCard.kt 0.2
+1 alpha ui/gym/train/components/ExerciseCard.kt 0.3
+1 alpha ui/gym/train/components/ExerciseCard.kt 0.55
+1 alpha ui/gym/train/components/ExerciseCard.kt 0.75
+1 alpha ui/gym/train/components/ExerciseCardComponents.kt 0.12
+3 alpha ui/gym/train/components/ExerciseCardComponents.kt 0.2
+1 alpha ui/gym/train/components/ExerciseCardComponents.kt 0.4
+1 alpha ui/gym/train/components/ExerciseCardComponents.kt 0.45
+3 alpha ui/gym/train/components/ExerciseCardComponents.kt 0.5
+2 alpha ui/gym/train/components/ExerciseCardComponents.kt 0.55
+1 alpha ui/gym/train/components/ExerciseCardComponents.kt 0.75
+2 alpha ui/gym/train/components/ExerciseCardComponents.kt 0.8
+1 alpha ui/gym/train/components/ExerciseChartSheet.kt 0.2
+1 alpha ui/gym/train/components/ExerciseChartSheet.kt 0.3
+1 alpha ui/gym/train/components/NoteField.kt 0.5
+1 alpha ui/gym/train/components/RestTimerBubble.kt 0.08
+1 alpha ui/gym/train/components/RestTimerBubble.kt 0.10
+1 alpha ui/gym/train/components/RestTimerBubble.kt 0.2
+1 alpha ui/gym/train/components/RestTimerBubble.kt 0.4
+1 alpha ui/gym/train/components/RestTimerBubble.kt 0.45
+1 alpha ui/gym/train/components/SessionSummaryComponents.kt 0.05
+2 alpha ui/gym/train/components/SessionSummaryComponents.kt 0.08
+1 alpha ui/gym/train/components/SessionSummaryComponents.kt 0.2
+1 alpha ui/gym/train/components/SessionSummarySheet.kt 0.2
+1 alpha ui/gym/train/components/SessionSummarySheet.kt 0.26
+1 alpha ui/gym/train/components/SessionSummarySheet.kt 0.34
+1 alpha ui/gym/train/components/SessionSummarySheet.kt 0.4
+2 alpha ui/gym/train/components/SetInputRow.kt 0.05
+1 alpha ui/gym/train/components/SetInputRow.kt 0.3
+4 alpha ui/gym/train/components/SetInputRow.kt 0.5
+1 alpha ui/gym/train/components/SetInputRow.kt 0.75
+3 alpha ui/gym/train/components/SetRow.kt 0.4
+1 alpha ui/gym/train/components/SetRow.kt 0.45
+1 alpha ui/gym/train/components/SetRow.kt 0.5
+1 alpha ui/gym/train/components/SetRow.kt 0.8
+1 alpha ui/gym/train/components/SetRow.kt 0.85
+1 alpha ui/gym/train/components/SwapPickerSheet.kt 0.2
+1 alpha ui/gym/train/components/SwapPickerSheet.kt 0.3
+2 alpha ui/gym/train/components/WarmupGate.kt 0.5
+1 alpha ui/overview/OverviewScreen.kt 0.10
+2 alpha ui/overview/OverviewScreen.kt 0.12
+1 alpha ui/overview/OverviewScreen.kt 0.14
+1 alpha ui/overview/OverviewScreen.kt 0.3
+1 alpha ui/overview/SummarySheet.kt 0.2
+2 alpha ui/overview/components/DayEditComponents.kt 0.3
+4 alpha ui/overview/components/DayEditComponents.kt 0.4
+1 alpha ui/overview/components/DayEditComponents.kt 0.5
+1 alpha ui/overview/components/DayEditComponents.kt 0.55
+1 alpha ui/overview/components/NavTile.kt 0.08
+1 alpha ui/overview/components/NavTile.kt 0.10
+1 alpha ui/overview/components/NavTile.kt 0.28
+1 alpha ui/overview/components/OverviewComponents.kt 0.55
+2 alpha ui/overview/components/OverviewComponents.kt 0.75
+2 alpha ui/overview/components/OverviewComponents.kt 0.85
+2 alpha ui/overview/components/OverviewComponents.kt 0.9
+1 alpha ui/overview/components/OverviewTiles.kt 0.2
+2 alpha ui/overview/components/OverviewTiles.kt 0.5
+1 alpha ui/overview/components/OverviewTiles.kt 0.75
+1 alpha ui/overview/components/OverviewTiles.kt 0.82
+1 alpha ui/profile/BodyMeasurementsScreen.kt 0.3
+1 alpha ui/profile/BodyMeasurementsScreen.kt 0.55
+1 alpha ui/profile/GalleryOverview.kt 0.4
+1 alpha ui/profile/GalleryOverview.kt 0.5
+1 alpha ui/profile/GalleryOverview.kt 0.75
+1 alpha ui/profile/GalleryOverview.kt 0.92
+1 alpha ui/profile/GallerySameWeight.kt 0.92
+1 alpha ui/profile/MirrorTestCompare.kt 0.55
+2 alpha ui/profile/MirrorTestCompare.kt 0.85
+1 alpha ui/profile/MirrorTestCompare.kt 0.95
+1 alpha ui/profile/MirrorTestComponents.kt 0.28
+1 alpha ui/profile/MirrorTestComponents.kt 0.85
+1 alpha ui/profile/MirrorTestComponents.kt 0.92
+1 alpha ui/profile/MirrorTestViewer.kt 0.85
+1 alpha ui/profile/MirrorTestViewer.kt 0.94
+1 alpha ui/profile/ProfileBody.kt 0.3
+1 alpha ui/profile/ProfileBody.kt 0.55
+1 alpha ui/profile/ProfileExtras.kt 0.4
+2 alpha ui/profile/ProfileExtras.kt 0.92
+1 alpha ui/profile/ProfileHeader.kt 0.18
+1 alpha ui/profile/ProfileHeader.kt 0.75
+1 alpha ui/profile/ProfileHeader.kt 0.85
+2 alpha ui/profile/ProfileHeader.kt 0.9
+1 alpha ui/profile/ProfileScreen.kt 0.5
+1 alpha ui/profile/ProfileYearHeatmap.kt 0.18
+1 alpha ui/profile/ProgressCameraScreen.kt 0.18
+1 alpha ui/profile/ProgressCameraScreen.kt 0.28
+1 alpha ui/profile/ProgressCameraScreen.kt 0.3
+1 alpha ui/profile/ProgressCameraScreen.kt 0.5
+2 alpha ui/profile/ProgressCameraScreen.kt 0.85
+1 alpha ui/profile/ProgressPhotoImage.kt 0.4
+1 alpha ui/profile/RankEmblem.kt 0.14
+1 alpha ui/profile/RankEmblem.kt 0.16
+1 alpha ui/profile/RankEmblem.kt 0.2
+1 alpha ui/profile/RankEmblem.kt 0.38
+1 alpha ui/profile/RankEmblem.kt 0.45
+1 alpha ui/profile/RankEmblem.kt 0.5
+2 alpha ui/profile/RankEmblem.kt 0.85
+1 alpha ui/profile/RankSection.kt 0.06
+1 alpha ui/profile/RankSection.kt 0.30
+1 alpha ui/profile/RankSection.kt 0.40
+1 alpha ui/programbuilder/ProgramBuilderDayDetail.kt 0.5
+1 alpha ui/programbuilder/ProgramBuilderScreen.kt 0.5
+1 alpha ui/settings/AccentColorPicker.kt 0.22
+1 alpha ui/settings/AccentColorPicker.kt 0.4
+2 alpha ui/settings/SettingsAboutPage.kt 0.85
+1 alpha ui/settings/SettingsMainList.kt 0.55
+2 alpha ui/settings/SettingsPrimitives.kt 0.2
+1 alpha ui/settings/SettingsPrimitives.kt 0.4
+1 alpha ui/settings/SettingsPrimitives.kt 0.5
+1 alpha ui/settings/SettingsPrimitives.kt 0.55
+1 alpha ui/settings/SettingsStoragePage.kt 0.3
+4 alpha ui/settings/SettingsSubPages.kt 0.5
+1 alpha ui/settings/SettingsSubPages.kt 0.8
+1 alpha ui/trophies/TrophiesComponents.kt 0.18
+1 alpha ui/trophies/TrophiesComponents.kt 0.2
+1 alpha ui/trophies/TrophiesScreen.kt 0.18
+1 alpha ui/trophies/components/TrophyIconBadge.kt 0.20
+1 alpha ui/trophies/components/TrophyIconBadge.kt 0.30
+1 alpha ui/trophies/components/TrophyIconBadge.kt 0.55
+1 alpha wear/ui/WearComponents.kt 0.55
+6 bang data/db/dao/CardioDao.kt ! in string
+2 bang data/db/dao/CoachDao.kt ! in string
+1 bang domain/coach/AutoCoachPlanner.kt ! in string
+1 bang service/WeeklyRecapWorker.kt ! in string
+1 bang ui/gym/freestyle/ExerciseBrowserScreen.kt ! in string
+1 bang ui/gym/train/DayScreen.kt ! in string
+1 bang ui/overview/OverviewScreen.kt ! in string
+1 bang ui/profile/MirrorTestComponents.kt ! in string
+3 divider ui/cardio/components/CardioLogComponents.kt Divider(
+1 divider ui/cardio/components/CardioWeekStatsPage.kt Divider(
+1 divider ui/common/Editorial.kt Divider(
+1 divider ui/gym/freestyle/FreestyleLogScreen.kt Divider(
+1 divider ui/gym/stats/StatsOverview.kt Divider(
+4 divider ui/gym/train/DaySessionContent.kt Divider(
+1 divider ui/gym/train/components/AddExerciseSheet.kt Divider(
+3 divider ui/gym/train/components/ExerciseCard.kt Divider(
+6 divider ui/gym/train/components/ExerciseCardComponents.kt Divider(
+1 divider ui/gym/train/components/ExerciseChartSheet.kt Divider(
+1 divider ui/gym/train/components/RestTimerBubble.kt Divider(
+1 divider ui/gym/train/components/SessionSummaryComponents.kt Divider(
+1 divider ui/gym/train/components/SessionSummarySheet.kt Divider(
+1 divider ui/gym/train/components/SetInputRow.kt Divider(
+2 divider ui/gym/train/components/SwapPickerSheet.kt Divider(
+1 divider ui/gym/train/components/TrainingHelpers.kt Divider(
+1 divider ui/gym/train/components/WarmupGate.kt Divider(
+1 divider ui/nav/ForgeBottomBar.kt Divider(
+1 divider ui/overview/SummarySheet.kt Divider(
+1 divider ui/settings/SettingsDialogs.kt Divider(
+1 divider ui/trophies/TrophiesComponents.kt Divider(
+1 divider ui/trophies/TrophiesScreen.kt Divider(
+1 em-dash data/importer/ImportModels.kt em dash in string
+2 em-dash data/repo/CoachRepository.kt em dash in string
+3 em-dash data/repo/PdfExportRepository.kt em dash in string
+20 em-dash data/repo/ProgramRepository.kt em dash in string
+10 em-dash domain/adapt/InsightEngine.kt em dash in string
+12 em-dash domain/adapt/ProgressionAdvisor.kt em dash in string
+3 em-dash domain/coach/AutoCoachPlanner.kt em dash in string
+1 em-dash domain/coach/GoalPortfolio.kt em dash in string
+4 em-dash domain/coach/OutcomeWatcher.kt em dash in string
+1 em-dash domain/engine/ZoneCoach.kt em dash in string
+5 em-dash domain/notify/TrainingReminder.kt em dash in string
+74 em-dash program/ExerciseLibrary.kt em dash in string
+19 em-dash program/Program.kt em dash in string
+1 em-dash security/LocalAppLock.kt em dash in string
+2 em-dash service/WeeklyRecapWorker.kt em dash in string
+2 em-dash ui/coach/CoachUi.kt em dash in string
+1 em-dash ui/gym/freestyle/FreestyleLogScreen.kt em dash in string
+2 em-dash ui/gym/train/DayDialogs.kt em dash in string
+1 em-dash ui/gym/train/DayListScreen.kt em dash in string
+1 em-dash ui/gym/train/DayScreen.kt em dash in string
+2 em-dash ui/gym/train/DaySwapHandlers.kt em dash in string
+1 em-dash ui/gym/train/DayViewModelBuilders.kt em dash in string
+2 em-dash ui/gym/train/components/ExerciseCard.kt em dash in string
+1 em-dash ui/gym/train/components/ExerciseCardComponents.kt em dash in string
+1 em-dash ui/gym/train/components/ExerciseChartSheet.kt em dash in string
+1 em-dash ui/gym/train/components/SetInputRow.kt em dash in string
+1 em-dash ui/gym/train/components/SetRow.kt em dash in string
+1 em-dash ui/gym/train/components/SwapPickerSheet.kt em dash in string
+1 em-dash ui/gym/train/components/WarmupGate.kt em dash in string
+1 em-dash ui/profile/MirrorTestViewer.kt em dash in string
+1 em-dash ui/settings/SettingsBackupPage.kt em dash in string
+1 em-dash ui/theme/ColorExt.kt em dash in string
+2 em-dash ui/trophies/TrophiesComponents.kt em dash in string
+4 em-dash wear/glance/WearComplications.kt em dash in string
+2 em-dash wear/ui/SessionScreen.kt em dash in string
+1 em-dash wear/ui/WearRoot.kt em dash in string
+2 em-dash widget/ForgeWidget.kt em dash in string
+2 font-size ui/academy/AcademyScreen.kt fontSize=
+1 font-size ui/academy/LessonBlocks.kt fontSize=
+8 font-size ui/cardio/CardioComponents.kt fontSize=
+2 font-size ui/cardio/components/CardioEntryRow.kt fontSize=
+3 font-size ui/cardio/components/CardioLogComponents.kt fontSize=
+1 font-size ui/cardio/components/CardioLogSheet.kt fontSize=
+1 font-size ui/cardio/components/CardioPaceTrendSection.kt fontSize=
+3 font-size ui/cardio/components/CardioSessionDetailSheet.kt fontSize=
+1 font-size ui/cardio/components/CardioWatchBanner.kt fontSize=
+6 font-size ui/cardio/components/CardioWeekDetailComponents.kt fontSize=
+1 font-size ui/cardio/components/CardioWeekDetailSheet.kt fontSize=
+5 font-size ui/cardio/components/CardioWeekStatsPage.kt fontSize=
+2 font-size ui/cardio/components/CustomActivityDialog.kt fontSize=
+2 font-size ui/checkin/CheckinSheet.kt fontSize=
+1 font-size ui/coach/CoachBlockSection.kt fontSize=
+7 font-size ui/coach/CoachCharts.kt fontSize=
+1 font-size ui/coach/CoachHero.kt fontSize=
+1 font-size ui/coach/CoachProjectSection.kt fontSize=
+1 font-size ui/coach/CoachSignalsSection.kt fontSize=
+1 font-size ui/coach/CoachUi.kt fontSize=
+1 font-size ui/coach/GoalPickerDialog.kt fontSize=
+3 font-size ui/common/Editorial.kt fontSize=
+1 font-size ui/common/SegmentPill.kt fontSize=
+1 font-size ui/goals/GoalsScreen.kt fontSize=
+11 font-size ui/gym/freestyle/FreestyleLogScreen.kt fontSize=
+2 font-size ui/gym/freestyle/FreestyleTemplatePicker.kt fontSize=
+6 font-size ui/gym/history/HistoryRows.kt fontSize=
+3 font-size ui/gym/session/SessionDetailCharts.kt fontSize=
+9 font-size ui/gym/session/SessionDetailComponents.kt fontSize=
+2 font-size ui/gym/session/SessionDetailMetricCards.kt fontSize=
+1 font-size ui/gym/session/SessionTypeDialog.kt fontSize=
+1 font-size ui/gym/stats/StatsDayDetailSheet.kt fontSize=
+2 font-size ui/gym/stats/StatsOverview.kt fontSize=
+1 font-size ui/gym/stats/StatsReadiness.kt fontSize=
+3 font-size ui/gym/stats/StatsStrength.kt fontSize=
+2 font-size ui/gym/stats/StatsVolume.kt fontSize=
+5 font-size ui/gym/train/DaySessionContent.kt fontSize=
+3 font-size ui/gym/train/components/DayCardComponents.kt fontSize=
+7 font-size ui/gym/train/components/ExerciseCard.kt fontSize=
+13 font-size ui/gym/train/components/ExerciseCardComponents.kt fontSize=
+6 font-size ui/gym/train/components/ExerciseChartSheet.kt fontSize=
+1 font-size ui/gym/train/components/RestTimerBubble.kt fontSize=
+12 font-size ui/gym/train/components/SessionSummaryComponents.kt fontSize=
+3 font-size ui/gym/train/components/SessionSummarySheet.kt fontSize=
+11 font-size ui/gym/train/components/SetInputRow.kt fontSize=
+11 font-size ui/gym/train/components/SetRow.kt fontSize=
+3 font-size ui/gym/train/components/WarmupGate.kt fontSize=
+1 font-size ui/nav/ForgeBottomBar.kt fontSize=
+1 font-size ui/overview/HistoryComponents.kt fontSize=
+9 font-size ui/overview/OverviewScreen.kt fontSize=
+4 font-size ui/overview/SummarySheet.kt fontSize=
+5 font-size ui/overview/components/DayEditComponents.kt fontSize=
+1 font-size ui/overview/components/NavTile.kt fontSize=
+12 font-size ui/overview/components/OverviewComponents.kt fontSize=
+10 font-size ui/overview/components/OverviewTiles.kt fontSize=
+3 font-size ui/profile/BodyMeasurementsScreen.kt fontSize=
+4 font-size ui/profile/GalleryOverview.kt fontSize=
+2 font-size ui/profile/GallerySameWeight.kt fontSize=
+3 font-size ui/profile/MirrorTestComponents.kt fontSize=
+3 font-size ui/profile/MirrorTestViewer.kt fontSize=
+2 font-size ui/profile/ProfileBody.kt fontSize=
+3 font-size ui/profile/ProfileExtras.kt fontSize=
+4 font-size ui/profile/ProfileHeader.kt fontSize=
+4 font-size ui/profile/ProfileLedger.kt fontSize=
+3 font-size ui/profile/ProfileTiles.kt fontSize=
+1 font-size ui/profile/ProfileYearHeatmap.kt fontSize=
+8 font-size ui/profile/RankSection.kt fontSize=
+5 font-size ui/profile/TrophyCaseSection.kt fontSize=
+2 font-size ui/settings/AccentColorPicker.kt fontSize=
+2 font-size ui/settings/AppIconPicker.kt fontSize=
+8 font-size ui/settings/ImportDialog.kt fontSize=
+5 font-size ui/settings/SettingsAboutPage.kt fontSize=
+1 font-size ui/settings/SettingsBackupPage.kt fontSize=
+8 font-size ui/settings/SettingsDialogs.kt fontSize=
+1 font-size ui/settings/SettingsMainList.kt fontSize=
+2 font-size ui/settings/SettingsPrimitives.kt fontSize=
+1 font-size ui/settings/SettingsQuietHours.kt fontSize=
+1 font-size ui/settings/SettingsSecurityPage.kt fontSize=
+2 font-size ui/settings/SettingsSubPages.kt fontSize=
+1 font-size ui/settings/SettingsWhatsNewPage.kt fontSize=
+6 font-size ui/trophies/TrophiesComponents.kt fontSize=
+1 hype domain/coach/SessionOpinion.kt "moves the needle"
+2 hype program/ExerciseLibrary.kt "insane"
+1 hype program/Trophies.kt "Beast"
+1 hype ui/onboarding/OnboardingScreen.kt "Let's go"
+1 hype ui/overview/OverviewUiStateMapper.kt "beast"
+1 literal-duration ui/common/AvexWordmark.kt literal duration
+1 literal-duration ui/common/ForgeShimmer.kt literal duration
+1 literal-duration ui/common/LaunchScenes.kt literal duration
+2 literal-duration ui/gym/train/components/RestTimerBubble.kt literal duration
+1 literal-duration ui/overview/OverviewScreen.kt literal duration
+16 literal-duration ui/profile/TrophyIconMotion.kt literal duration
+1 max-lines ui/coach/CoachGoalsSection.kt maxLines=1
+1 max-lines ui/coach/CoachSignalsSection.kt maxLines=1
+1 max-lines ui/coach/CoachUi.kt maxLines=1
+1 max-lines ui/coach/CoachWeekSection.kt maxLines=1
+1 max-lines ui/common/Editorial.kt maxLines=1
+2 max-lines ui/goals/GoalsComponents.kt maxLines=1
+1 max-lines ui/gym/freestyle/FreestyleTemplatePicker.kt maxLines=1
+3 max-lines ui/gym/session/SessionDetailMetricCards.kt maxLines=1
+2 max-lines ui/gym/stats/StatsOverview.kt maxLines=1
+1 max-lines ui/gym/stats/StatsStrength.kt maxLines=1
+3 max-lines ui/gym/train/DaySessionContent.kt maxLines=1
+1 max-lines ui/gym/train/components/DifficultyRater.kt maxLines=1
+1 max-lines ui/gym/train/components/SetRow.kt maxLines=1
+2 max-lines ui/onboarding/OnboardingGymSteps.kt maxLines=1
+2 max-lines ui/overview/components/OverviewComponents.kt maxLines=1
+1 max-lines ui/profile/MirrorTestComponents.kt maxLines=1
+1 max-lines ui/profile/ProfileBody.kt maxLines=1
+3 max-lines ui/profile/ProfileHeader.kt maxLines=1
+1 max-lines ui/profile/ProfileTiles.kt maxLines=1
+1 max-lines ui/profile/ProfileYearHeatmap.kt maxLines=1
+2 max-lines ui/programbuilder/ProgramBuilderDayDetail.kt maxLines=1
+2 max-lines ui/programbuilder/ProgramBuilderScreen.kt maxLines=1
+1 max-lines ui/settings/AppIconPicker.kt maxLines=1
+1 max-lines ui/settings/ImportDialog.kt maxLines=1
+3 max-lines ui/settings/SettingsSubPages.kt maxLines=1
+1 max-lines ui/settings/SettingsWhatsNewPage.kt maxLines=1
+6 paren-plural data/repo/CoachRepository.kt (s)
+2 paren-plural domain/trophy/TrophyEvaluator.kt (s)
+1 paren-plural ui/coach/CoachUi.kt (s)
+3 paren-plural ui/gym/train/components/ExerciseCardComponents.kt (s)
+2 raw-color ui/gym/train/components/ExerciseCardComponents.kt Color(0x
+2 raw-color wear/ui/WearComponents.kt Color(0x
+7 raw-color wear/ui/WearTheme.kt Color(0x
+1 screen-name-title ui/coach/GoalPickerDialog.kt title={Text(
+1 screen-name-title ui/common/ProgramChangeGuardHost.kt title={Text(
+1 screen-name-title ui/gym/session/SessionTypeDialog.kt title={Text(
+4 screen-name-title ui/gym/train/DayDialogs.kt title={Text(
+4 screen-name-title ui/gym/train/DayListScreen.kt title={Text(
+2 screen-name-title ui/gym/train/DayScreen.kt title={Text(
+1 screen-name-title ui/gym/train/DaySessionContent.kt title={Text(
+1 screen-name-title ui/gym/train/components/DislikeSwapPromptDialog.kt title={Text(
+2 screen-name-title ui/gym/train/components/TrainingHelpers.kt title={Text(
+2 screen-name-title ui/onboarding/OnboardingScreen.kt title={Text(
+1 screen-name-title ui/profile/MirrorTestComponents.kt title={Text(
+1 screen-name-title ui/programbuilder/ProgramBuilderDayDetail.kt title={Text(
+2 screen-name-title ui/programbuilder/ProgramBuilderScreen.kt title={Text(
+2 screen-name-title ui/settings/SettingsAboutPage.kt title={Text(
+2 screen-name-title ui/settings/SettingsDialogs.kt title={Text(
+3 screen-name-title ui/settings/SettingsScreen.kt title={Text(
+1 screen-name-title ui/settings/SettingsSecurityPage.kt title={Text(
+1 screen-name-title ui/settings/SettingsSubPages.kt title={Text(
+1 screen-name-title ui/settings/SettingsVacationPage.kt title={Text(
+2 snackbar-host ui/gym/session/SessionDetailScreen.kt SnackbarHostState
+2 snackbar-host ui/gym/train/DayScreen.kt SnackbarHostState
+2 snackbar-host ui/programbuilder/ProgramBuilderDayDetail.kt SnackbarHostState
+2 snackbar-host ui/programbuilder/ProgramBuilderScreen.kt SnackbarHostState
+2 toast ui/gym/session/SessionDetailScreen.kt Toast
+1 unlabelled-clickable ui/common/BounceClick.kt .clickable(
+2 unlabelled-clickable ui/gym/history/HistoryRows.kt .clickable(
+1 unlabelled-clickable ui/gym/session/SessionDetailComponents.kt .clickable(
+1 unlabelled-clickable ui/gym/session/SessionDetailMetricCards.kt .clickable(
+1 unlabelled-clickable ui/gym/stats/StatsStrength.kt .clickable(
+1 unlabelled-clickable ui/gym/train/DayListScreen.kt .clickable(
+1 unlabelled-clickable ui/gym/train/components/AddExerciseSheet.kt .clickable(
+1 unlabelled-clickable ui/gym/train/components/ExerciseCard.kt .clickable(
+6 unlabelled-clickable ui/gym/train/components/ExerciseCardComponents.kt .clickable(
+4 unlabelled-clickable ui/gym/train/components/RestTimerBubble.kt .clickable(
+1 unlabelled-clickable ui/gym/train/components/SetInputRow.kt .clickable(
+4 unlabelled-clickable ui/gym/train/components/WarmupGate.kt .clickable(
+1 unlabelled-clickable ui/overview/OverviewScreen.kt .clickable(
+3 unlabelled-clickable ui/overview/components/OverviewTiles.kt .clickable(
+1 unlabelled-clickable ui/security/AppLockScreen.kt .clickable(
+2 unlabelled-clickable ui/settings/AccentColorPicker.kt .clickable(
+2 unlabelled-clickable ui/settings/ImportDialog.kt .clickable(
+1 unlabelled-clickable ui/settings/SettingsBackupPage.kt .clickable(
+2 unlabelled-clickable ui/settings/SettingsDialogs.kt .clickable(
+2 unlabelled-clickable ui/settings/SettingsPrimitives.kt .clickable(
+1 unlabelled-clickable ui/settings/SettingsQuietHours.kt .clickable(
+1 unlabelled-clickable ui/settings/SettingsSecurityPage.kt .clickable(
+3 unlabelled-clickable ui/settings/SettingsSubPages.kt .clickable(
+1 unlabelled-clickable ui/settings/SettingsVacationPage.kt .clickable(

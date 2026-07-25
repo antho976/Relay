@@ -95,7 +95,8 @@ object ReadinessAdvisor {
         // Suppressed while a layoff already spoke — one home for "you've been away" (§4.3).
         if (lifeEvents.layoff == null) {
             when {
-                daysSince >= 5 -> { percent -= 3; parts += "first session back after $daysSince days — ease in" }
+                // DESIGN §11: join with a comma, never an em dash.
+                daysSince >= 5 -> { percent -= 3; parts += "first session back after $daysSince days, ease in" }
                 daysSince in 2..4 -> { percent += 1; parts += "fresh after $daysSince rest days" }
             }
         }

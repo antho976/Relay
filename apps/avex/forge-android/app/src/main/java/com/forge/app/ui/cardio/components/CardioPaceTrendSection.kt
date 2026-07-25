@@ -29,7 +29,7 @@ import com.forge.app.ui.common.EditorialHeader
 import com.forge.app.ui.common.SegmentPill
 import com.forge.app.ui.gym.stats.components.LineChart
 import com.forge.app.ui.gym.stats.components.olsTrend
-import com.forge.app.ui.gym.stats.components.rememberDrawProgress
+import com.forge.app.ui.common.rememberDrawProgress
 import com.forge.app.ui.theme.ForgeMotion
 import kotlin.math.roundToInt
 

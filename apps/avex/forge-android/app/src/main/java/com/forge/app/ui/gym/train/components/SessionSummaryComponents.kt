@@ -26,8 +26,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.forge.app.domain.units.formatVolume
 import com.forge.app.ui.common.bounceClick
-import com.forge.app.ui.gym.stats.components.CountUpText
-import com.forge.app.ui.gym.stats.components.statsEntrance
+import com.forge.app.ui.common.CountUpText
+import com.forge.app.ui.common.statsEntrance
 import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.theme.LocalForgeSettings
 import androidx.compose.ui.unit.sp
