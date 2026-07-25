@@ -23,6 +23,15 @@ interface BodyweightDao {
     @Query("SELECT * FROM bodyweight_entry ORDER BY date_key DESC, recorded_at DESC")
     suspend fun all(): List<BodyweightEntry>
 
+    /**
+     * Weigh-ins recorded at/after [sinceMs], newest first — the adaptation snapshot's bodyweight
+     * series (A1). Windowed like the mood/cardio reads so the engine never loads a whole history
+     * it can't use. Filters on `recorded_at` (an epoch-ms column) rather than the ISO `date_key`,
+     * so the comparison is numeric.
+     */
+    @Query("SELECT * FROM bodyweight_entry WHERE recorded_at >= :sinceMs ORDER BY recorded_at DESC")
+    suspend fun since(sinceMs: Long): List<BodyweightEntry>
+
     @Query("DELETE FROM bodyweight_entry WHERE id = :id")
     suspend fun delete(id: Long)
 

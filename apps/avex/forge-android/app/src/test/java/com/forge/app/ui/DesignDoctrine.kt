@@ -40,15 +40,18 @@ object DesignDoctrine {
         setOf("0", "1", "0.15", "0.25", "0.35", "0.6", "0.65", "0.7", "1.0", "1f", "0f")
 
     /**
-     * Total frozen debt (2026-07-24): 906 across ui 709 · program 96 · data 40 · domain 38 ·
-     * wear 17 · service 3 · widget 2 · security 1.
+     * Total frozen debt (2026-07-24): 933.
      *
-     * It moved 831 -> 810 as the recipes were cleaned and §5's two named exceptions (placeholder,
-     * gradient/scrim) moved out of the allowlist into the scanner where they belong, then 810 -> 906
-     * when `program`, `widget` and `security` were added to the copy scope. That last jump is not a
-     * regression: `program` holds every exercise description rendered in the swap picker, and 93 em
-     * dashes had been sitting there unseen the whole time. Debt going UP because the net got wider
-     * is the system working.
+     * The trail: 831 -> 810 as the recipes were cleaned and §5's two named exceptions (placeholder,
+     * gradient/scrim) moved out of the allowlist into the scanner where they belong; 810 -> 906 when
+     * `program`, `widget` and `security` joined the copy scope (that jump is not a regression —
+     * `program` holds every exercise description in the swap picker, and 93 em dashes had been
+     * sitting there unseen); 906 -> 917 when `.clickable { }` stopped being invisible; and
+     * 917 -> 933 when main's Coach v3 work merged in with 16 violations of its own.
+     *
+     * The 16 from that merge are listed in `design/AUDIT.md` and belong to the incoming feature, not
+     * to this branch. They were frozen rather than rewritten, because a merge resolution is the
+     * wrong place to edit another branch's UI.
      *
      * Three rules — `m3-card`, `spinner`, `rtl` — carry ZERO debt. They cost nothing today and exist
      * so the doctrine's most load-bearing bans can never quietly regress.
@@ -56,7 +59,7 @@ object DesignDoctrine {
      * Lower this as debt is paid down; raising it is a reviewable decision, not a convenience.
      * `design/AUDIT.md` has the per-rule breakdown and the recommended order of paydown.
      */
-    const val ALLOWLIST_BASELINE = 917
+    const val ALLOWLIST_BASELINE = 933
 
     data class Violation(val rule: String, val path: String, val token: String, val line: Int) {
         /**

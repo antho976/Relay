@@ -82,6 +82,26 @@ Measured and recorded in `SETTLED.md` under *Open decisions*. Two failures the d
 mandates — accent-coloured `action →` links (2.35–3.40:1) and the inline error line (3.69:1) — need a
 product call, not a silent fix. Everything else measures clean.
 
+## Arrived with the Coach v3 merge (2026-07-24)
+
+Sixteen violations came in when `origin/main` merged. They belong to that feature, not to the
+doctrine work, and were frozen rather than rewritten: a merge resolution is the wrong place to edit
+another branch's UI. Worth a pass when Coach v3 is next touched.
+
+| Rule | Where |
+|---|---|
+| `font-size` ×2 | `ui/academy/AcademyScreen.kt` |
+| `font-size` ×2 | `ui/checkin/CheckinSheet.kt` |
+| `font-size` | `ui/academy/LessonBlocks.kt` · `ui/coach/CoachBlockSection.kt` · `ui/coach/CoachProjectSection.kt` · `ui/coach/GoalPickerDialog.kt` · `ui/gym/session/SessionTypeDialog.kt` |
+| `screen-name-title` | `ui/coach/GoalPickerDialog.kt` · `ui/gym/session/SessionTypeDialog.kt` |
+| `em-dash` | `domain/coach/GoalPortfolio.kt` · `domain/engine/ZoneCoach.kt` |
+| `bang` | `ui/overview/OverviewScreen.kt` |
+| `max-lines` | `ui/coach/CoachGoalsSection.kt` |
+| `alpha` 0.4 | `ui/coach/GoalPickerDialog.kt` |
+
+The four copy ones (`em-dash` ×2, `bang`) are one-line fixes with no visual risk and would be the
+cheapest thing to clear.
+
 ## Suggested order
 
 1. **`em-dash` (32) + `bang` (3)** — pure copy, no visual risk, closes §11 completely.

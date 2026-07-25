@@ -1,5 +1,6 @@
 package com.forge.app.domain.adapt
 
+import com.forge.app.data.db.entities.BodyweightEntry
 import com.forge.app.data.db.entities.LoggedExercise
 import com.forge.app.data.db.entities.LoggedSet
 import com.forge.app.data.db.entities.Session
@@ -94,5 +95,57 @@ class SnapshotAssemblerTest {
         val firstSlot = snap.program.first().slots.first()
         assertEquals(listOf("swap-for-${firstSlot.exerciseId}"), firstSlot.swapCandidateIds)
         assertTrue(snap.exerciseHistory.isEmpty())
+    }
+
+    // ── A1: session type on the bout, bodyweight series ────────────────────────
+
+    @Test
+    fun boutsCarryTheirParentSessionType() {
+        val typed = Session(id = 3, dayKey = "upper-a", startedAt = 300, finishedAt = 301, sessionType = "test")
+        val snap = assemble(
+            sessions = listOf(session(1, startedAt = 100), typed),
+            les = listOf(le(10, sessionId = 1), le(30, sessionId = 3)),
+            sets = listOf(set(10, 0), set(30, 0))
+        )
+        val bouts = snap.exerciseHistory.getValue("ua1")
+        assertEquals("normal", bouts[0].sessionType)
+        assertEquals("test", bouts[1].sessionType)
+        assertTrue(bouts[0].countsForProgression)
+        assertTrue(!bouts[1].countsForProgression)
+    }
+
+    @Test
+    fun preA1Rows_defaultToNormalTraining() {
+        val snap = assemble(
+            sessions = listOf(session(1, startedAt = 100)),
+            les = listOf(le(10, sessionId = 1)),
+            sets = listOf(set(10, 0))
+        )
+        assertTrue(snap.exerciseHistory.getValue("ua1").single().countsForProgression)
+    }
+
+    @Test
+    fun bodyweightSeriesIsCarriedNewestFirst() {
+        val snap = SnapshotAssembler.assemble(
+            nowMs = 1_000L,
+            program = Program.seedDays,
+            swapCandidateIds = { emptyList() },
+            sessions = emptyList(),
+            loggedExercises = emptyList(),
+            loggedSets = emptyList(),
+            prefs = PrefsSnap(),
+            bodyweight = listOf(
+                BodyweightEntry(dateKey = "2026-07-01", weightLb = 180.0, recordedAt = 100),
+                BodyweightEntry(dateKey = "2026-07-03", weightLb = 178.0, recordedAt = 300),
+                BodyweightEntry(dateKey = "2026-07-02", weightLb = 179.0, recordedAt = 200)
+            ),
+            zoneId = java.time.ZoneId.of("UTC")
+        )
+        assertEquals(listOf(300L, 200L, 100L), snap.bodyweight.map { it.recordedAt })
+    }
+
+    @Test
+    fun bodyweightDefaultsEmpty_forUsersWhoNeverWeighIn() {
+        assertTrue(assemble(emptyList(), emptyList(), emptyList()).bodyweight.isEmpty())
     }
 }

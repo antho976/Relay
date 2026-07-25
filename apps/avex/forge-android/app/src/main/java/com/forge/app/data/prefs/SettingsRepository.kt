@@ -762,6 +762,21 @@ class SettingsRepository @Inject constructor(
     suspend fun setUserSex(sex: String) =
         context.forgePreferences.edit { it[PreferenceKeys.USER_SEX] = sex }
 
+    /**
+     * Age in years, for the Engine's max-HR estimate (E-A). 0 = not given, and the coach then makes
+     * NO zone claims at all rather than assuming an age it was never told.
+     */
+    val userAgeYears: Flow<Int> = context.forgePreferences.data
+        .map { it[PreferenceKeys.USER_AGE_YEARS] ?: 0 }
+    suspend fun setUserAgeYears(years: Int) =
+        context.forgePreferences.edit { it[PreferenceKeys.USER_AGE_YEARS] = years.coerceIn(0, 120) }
+
+    /** An explicit max heart rate. Beats the age estimate; 0 = not set. */
+    val maxHrOverride: Flow<Int> = context.forgePreferences.data
+        .map { it[PreferenceKeys.MAX_HR_OVERRIDE] ?: 0 }
+    suspend fun setMaxHrOverride(bpm: Int) =
+        context.forgePreferences.edit { it[PreferenceKeys.MAX_HR_OVERRIDE] = bpm.coerceIn(0, 240) }
+
     /** "Go with the flow": no fixed program — the home surfaces freestyle logging instead of day
      *  cards. A seed program still exists; this flag only changes what the UI leads with. */
     val freestyleMode: Flow<Boolean> = context.forgePreferences.data

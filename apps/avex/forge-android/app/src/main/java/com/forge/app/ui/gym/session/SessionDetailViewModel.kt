@@ -115,4 +115,21 @@ class SessionDetailViewModel @Inject constructor(
     }
 
     fun clearReLoggedSessionId() { _reLoggedSessionId.value = null }
+
+    /**
+     * Tag what kind of session this was (Coach v3 A1). The stored key drives the header pill AND the
+     * adaptation engine: test / technique / first-back sessions are excluded from progression, stall
+     * and fatigue reads, so a top-single test day never anchors the next prescription and a light
+     * technique day never reads as a plateau. Retro-tagging is deliberate — you know a session was a
+     * test day once it's done, and the engine only ever reads finished sessions.
+     */
+    fun setSessionType(key: String) {
+        if (sessionId < 0) return
+        val current = _state.value.data ?: return
+        if (current.sessionType == key) return
+        // Optimistic: the row is a single column write that can't meaningfully fail, and the header
+        // pill re-reading instantly is the whole feedback (§13 — no toast for what the UI shows).
+        _state.value = _state.value.copy(data = current.copy(sessionType = key))
+        viewModelScope.launch { workoutRepo.setSessionType(sessionId, key) }
+    }
 }

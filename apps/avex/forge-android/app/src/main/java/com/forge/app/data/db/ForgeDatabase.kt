@@ -25,6 +25,12 @@ import com.forge.app.data.db.dao.ProgramDao
 import com.forge.app.data.db.dao.RestEventDao
 import com.forge.app.data.db.dao.AdviceEventDao
 import com.forge.app.data.db.dao.CoachDao
+import com.forge.app.data.db.dao.CheckinDao
+import com.forge.app.data.db.dao.CoachProjectDao
+import com.forge.app.data.db.dao.TrainingBlockDao
+import com.forge.app.data.db.dao.CoachGoalDao
+import com.forge.app.data.db.dao.InjuryRestrictionDao
+import com.forge.app.data.db.dao.LessonEventDao
 import com.forge.app.data.db.dao.SuggestionOutcomeDao
 import com.forge.app.data.db.dao.SessionSegmentDao
 import com.forge.app.data.db.dao.WarmupRoutineDao
@@ -38,6 +44,8 @@ import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.data.db.entities.DayNameOverride
 import com.forge.app.data.db.entities.ExerciseCustomization
 import com.forge.app.data.db.entities.ExerciseGoal
+import com.forge.app.data.db.entities.InjuryRestriction
+import com.forge.app.data.db.entities.LessonEvent
 import com.forge.app.data.db.entities.LoggedExercise
 import com.forge.app.data.db.entities.LoggedSet
 import com.forge.app.data.db.entities.MoodEntry
@@ -52,10 +60,14 @@ import com.forge.app.data.db.entities.ProgramDay
 import com.forge.app.data.db.entities.ProgramSlot
 import com.forge.app.data.db.entities.RestEvent
 import com.forge.app.data.db.entities.AdviceEvent
+import com.forge.app.data.db.entities.CheckinEntry
+import com.forge.app.data.db.entities.CoachGoal
 import com.forge.app.data.db.entities.CoachPass
+import com.forge.app.data.db.entities.CoachProject
 import com.forge.app.data.db.entities.CoachDecision
 import com.forge.app.data.db.entities.SuggestionOutcome
 import com.forge.app.data.db.entities.SessionHrSample
+import com.forge.app.data.db.entities.TrainingBlock
 import com.forge.app.data.db.entities.SessionSegment
 import com.forge.app.data.db.entities.SessionBreak
 import com.forge.app.data.db.entities.VacationPeriod
@@ -126,9 +138,15 @@ import com.forge.app.data.db.entities.VacationPeriod
         CoachDecision::class,
         SuggestionOutcome::class,
         SessionSegment::class,
-        SessionHrSample::class
+        SessionHrSample::class,
+        CoachGoal::class,
+        LessonEvent::class,
+        CheckinEntry::class,
+        InjuryRestriction::class,
+        TrainingBlock::class,
+        CoachProject::class
     ],
-    version = 31,
+    version = 35,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -158,6 +176,12 @@ abstract class ForgeDatabase : RoomDatabase() {
     abstract fun restEventDao(): RestEventDao
     abstract fun adviceEventDao(): AdviceEventDao
     abstract fun coachDao(): CoachDao
+    abstract fun coachGoalDao(): CoachGoalDao
+    abstract fun checkinDao(): CheckinDao
+    abstract fun trainingBlockDao(): TrainingBlockDao
+    abstract fun coachProjectDao(): CoachProjectDao
+    abstract fun injuryRestrictionDao(): InjuryRestrictionDao
+    abstract fun lessonEventDao(): LessonEventDao
     abstract fun suggestionOutcomeDao(): SuggestionOutcomeDao
     abstract fun sessionSegmentDao(): SessionSegmentDao
 }

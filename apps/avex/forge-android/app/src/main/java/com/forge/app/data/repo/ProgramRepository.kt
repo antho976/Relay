@@ -50,6 +50,9 @@ class ProgramRepository @Inject constructor(
     private val sessionDao: SessionDao,
     private val coachDao: com.forge.app.data.db.dao.CoachDao,
     private val settings: SettingsRepository,
+    // Lazy on purpose: AdaptationRepository depends on this repository, so a direct injection would
+    // be a construction cycle. The caps read happens long after both exist.
+    private val adaptationRepositoryLazy: dagger.Lazy<AdaptationRepository>,
     @ApplicationContext private val context: Context
 ) {
     private val _revision = MutableStateFlow(0L)
@@ -175,8 +178,19 @@ class ProgramRepository @Inject constructor(
             .mapNotNull { runCatching { MuscleGroup.fromCode(it) }.getOrNull() }.toSet(),
         pinned = settings.pinnedExercises.first(),
         dbMaxLb = settings.maxDbWeightLb.first(),
-        frozenIds = settings.frozenExerciseIds.first()
+        frozenIds = settings.frozenExerciseIds.first(),
+        // D: personal volume ceilings where the athlete's own history has earned them; empty
+        // otherwise, which is exactly the pre-D behavior.
+        personalCaps = personalCaps()
     )
+
+    /**
+     * The athlete's measured per-muscle caps (Coach v3 D). Never throws: a failed read degrades to
+     * the population defaults rather than blocking a regenerate.
+     */
+    private suspend fun personalCaps(): Map<MuscleGroup, Int> = runCatching {
+        com.forge.app.domain.coach.PersonalProfile.build(adaptationRepositoryLazy.get().snapshotOrEmpty()).volumeCaps
+    }.getOrDefault(emptyMap())
 
     private suspend fun currentEquipment(): Set<Equipment> = settings.availableEquipment.first()
         .mapNotNull { runCatching { Equipment.valueOf(it) }.getOrNull() }.toSet()

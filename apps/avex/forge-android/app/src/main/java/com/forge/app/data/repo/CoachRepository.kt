@@ -137,6 +137,7 @@ data class CoachMilestone(val label: String, val detail: String, val reached: Bo
 class CoachRepository @Inject constructor(
     private val coachDao: CoachDao,
     private val adaptationRepository: AdaptationRepository,
+    private val blockRepository: BlockRepository,
     private val settings: SettingsRepository,
     private val vacationDao: VacationDao,
     private val customizationRepo: CustomizationRepository,
@@ -189,6 +190,11 @@ class CoachRepository @Inject constructor(
         // auto-apply step is skipped. Surfacing stays gated at the call sites (pendingBanner, the hub
         // tab, the Overview sections). Freestyle bails before ever reaching here (its own gate).
         val proposeStatus = if (coachOff) STATUS_SHADOW else STATUS_PROPOSED
+
+        // Coach v3 C: the weekly pass is the block's clock. Advancing is idempotent per ISO week,
+        // so a second pass in the same week moves nothing, and a high fatigue score can still pull
+        // the planned deload forward.
+        runCatching { blockRepository.advanceForWeek(weekId) }
 
         var decisions: List<CoachDecision> = emptyList()
         val pass = runCatching {
@@ -350,7 +356,12 @@ class CoachRepository @Inject constructor(
         // / the cap / an error (seam fix, finding 4). A folded-then-failed change isn't revertable in
         // place (the overlay is gone); it self-heals by dropping out of the bias at the next generate.
         val pending = coachDao.pendingOutcome()
-        val verdicts = OutcomeWatcher.evaluate(pending, snapshot)
+        val verdicts = OutcomeWatcher.evaluate(
+            pending,
+            snapshot,
+            life = runCatching { adaptationRepository.lifeEvents(snapshot.nowMs) }
+                .getOrDefault(com.forge.app.domain.coach.LifeEvents.State.NONE)
+        )
         verdicts.forEach { coachDao.setOutcome(it.decisionId, it.outcome) }
         val reverts = OutcomeWatcher.revertProposalsFor(coachDao.appliedFailed())
 
@@ -407,7 +418,15 @@ class CoachRepository @Inject constructor(
             volumeLockedMuscles = volumeLocked,
             volumeNetByMuscle = net,
             revertProposals = reverts,
-            declinedStructural = declined
+            declinedStructural = declined,
+            blockPhase = runCatching { blockRepository.phase() }.getOrNull(),
+            // E: initiative earned on this coach's own record.
+            changesPerWeek = runCatching {
+                com.forge.app.domain.coach.TrustLadder.assess(
+                    decisions = coachDao.allDecisions(),
+                    weeksCoached = coachDao.recentPasses(52).size
+                ).changesPerWeek
+            }.getOrNull()
         )
     }
 
@@ -605,7 +624,9 @@ class CoachRepository @Inject constructor(
                     // Exclude inert SHADOW rows (recorded while the coach was off): they were never
                     // proposed, so they mustn't make the review think a deload already exists and
                     // suppress the real recommendation.
-                    hasDeloadShadow = decisions.any { it.type == "deload" && it.status != STATUS_SHADOW }
+                    hasDeloadShadow = decisions.any { it.type == "deload" && it.status != STATUS_SHADOW },
+                    // A real block, when one is running, replaces the inferred mesocycle copy (C).
+                    block = runCatching { blockRepository.active() }.getOrNull()
                 )
             }.getOrNull()
         }
