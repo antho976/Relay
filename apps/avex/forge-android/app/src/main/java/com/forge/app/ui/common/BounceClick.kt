@@ -21,10 +21,14 @@ import androidx.compose.ui.graphics.graphicsLayer
  * feedback alone reads as "this is tappable" without needing any other affordance.
  *
  * Spring is intentionally fast + lightly damped: subtle bounce, not a wobble.
+ *
+ * [onClickLabel] names the action for TalkBack (§14) — pass it whenever the element's own text does
+ * not already say what a tap does; a labelled tile does not need the separate [clickableLabeled].
  */
 fun Modifier.bounceClick(
     pressedScale: Float = 0.97f,
     enabled: Boolean = true,
+    onClickLabel: String? = null,
     onClick: () -> Unit
 ): Modifier = composed {
     val interactionSource = remember { MutableInteractionSource() }
@@ -49,6 +53,7 @@ fun Modifier.bounceClick(
             interactionSource = interactionSource,
             indication = if (touchExploration) ripple() else null,
             enabled = enabled,
+            onClickLabel = onClickLabel,
             onClick = onClick
         )
 }
