@@ -17,14 +17,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.forge.app.data.repo.CoachRepository
 import com.forge.app.domain.coach.AutoCoachPlanner
+import com.forge.app.domain.coach.PersonalProfile
 import com.forge.app.domain.coach.TypeTrust
 import com.forge.app.ui.common.InlineEmptyHint
 
 /**
- * The Journey lens: how far the coach has come. The week-by-week record as a changelog —
- * newest first, one row per pass, the week's calls and their outcomes underneath — then the
- * autopilot trust per change type. The record leads (§4.10): real rows outrank unlock meters.
- * The milestone ladder lives on the Now lens.
+ * The Journey lens: how far the coach has come, and what it has worked out about you. The
+ * week-by-week record leads (§4.8, real rows outrank unlock meters), then the autopilot trust per
+ * change type, then what it has learned.
+ *
+ * Trust lives here and only here. The Now lens used to carry an "Autopilot" countdown reading the
+ * closest-to-earning type while this lens read types earned — one word, two numbers, one page
+ * (`design/FAILURES.md`, *Mark echo*).
  */
 internal fun LazyListScope.coachJourneyLens(
     state: CoachViewModel.UiState,
@@ -48,8 +52,8 @@ internal fun LazyListScope.coachJourneyLens(
         CoachSection(c, title = "The record", index = 2) {
             val now = remember { System.currentTimeMillis() }
             // A pre-baseline learning hold isn't a record of anything: no calls, and its one line just
-            // restates the baseline countdown the hero eyebrow + Now lens already carry (§4.3, one home).
-            // Drop those weeks — the record is the changelog of real calls, not the wait for the first.
+            // restates the baseline countdown the hero already carries (§4.3, one home). Drop those
+            // weeks — the record is the changelog of real calls, not the wait for the first.
             val recordWeeks = remember(timeline.weeks) {
                 timeline.weeks.filterNot { w ->
                     w.decisions.isEmpty() && AutoCoachPlanner.isLearningHold(w.pass.holdReason)
@@ -73,47 +77,79 @@ internal fun LazyListScope.coachJourneyLens(
     }
 
     // ── Earned autopilot ──────────────────────────────────────────────────────
-    item("journey-trust") {
-        val on = state.watch?.autopilot == true
-        val trust = timeline.trust
-        val earnedCount = trust.count { it.earned }
-        val anyProgress = trust.any { it.streak > 0 || it.earned }
-        CoachSection(c, title = "Earned autopilot", index = 3) {
-            // The state leads on its own line so it can't be buried (the accent colour flags the active
-            // ON state, §8); the right meta is a plain count of how many types have earned it (§8).
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+    if (timeline.trust.isNotEmpty()) {
+        item("journey-trust") {
+            val on = state.watch?.autopilot == true
+            val trust = timeline.trust
+            val earnedCount = trust.count { it.earned }
+            CoachSection(c, title = "Earned autopilot", index = 3) {
+                // The state leads on its own line so it can't be buried (the accent colour flags the
+                // active ON state, §8); the right meta is a plain count (§8).
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        if (on) "On" else "Off",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = if (on) c.accent else c.onBg,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Text(
+                        "$earnedCount of ${trust.size} earned",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = c.muted
+                    )
+                }
+                Spacer(Modifier.height(2.dp))
+                // ONE caption saying what the state MEANS for the user (§11), not the mechanics of a bar.
                 Text(
-                    if (on) "On" else "Off",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = if (on) c.accent else c.onBg,
-                    modifier = Modifier.weight(1f)
-                )
-                Text(
-                    "$earnedCount of ${trust.size} earned",
-                    style = MaterialTheme.typography.labelSmall,
+                    if (on) "A change applies on its own once its type's bar fills."
+                    else "Autopilot is off; earned changes still wait for your tap.",
+                    style = MaterialTheme.typography.bodySmall,
                     color = c.muted
                 )
-            }
-            Spacer(Modifier.height(2.dp))
-            // ONE caption saying what the state MEANS for the user (§11), not the mechanics of a bar.
-            Text(
-                if (on) "A change applies on its own once its type's bar fills."
-                else "Autopilot is off; earned changes still wait for your tap.",
-                style = MaterialTheme.typography.bodySmall,
-                color = c.muted
-            )
-            Spacer(Modifier.height(12.dp))
-            if (anyProgress) {
-                // Each type carries a distinct reading, so the bars earn their list (§4.10).
+                Spacer(Modifier.height(12.dp))
+                // The bars draw at zero rather than collapsing to a line: each row names a real
+                // change type and carries its own "0 of 3", which is a reading, not a ghost — and an
+                // empty track is a container, not a value (`design/FAILURES.md`, *Empty by omission*).
                 trust.forEach { t -> TrustRow(t, c) }
-            } else {
-                // §12: an all-ghost group drops the mark — a lone flat bar reads as broken, and a meter
-                // on "types earned of total" is the wrong gate (autopilot is earned per type, by that
-                // type's OWN streak). Collapse to ONE line naming the real per-type unlock.
-                InlineEmptyHint(
-                    "No type has earned autopilot yet. Fill a change type's bar and it earns it on its own.",
-                    color = c.muted
-                )
+            }
+        }
+    }
+
+    // ── Learned so far ────────────────────────────────────────────────────────
+    // Moved off the Signals lens: what the coach has WORKED OUT belongs with its record, not with
+    // the live readings it takes each week. Omitted when there is nothing learned — that is an
+    // absent subject, and "The record" at zero already says no calls have landed (§4.3).
+    val biases = state.watch?.learnedBiases.orEmpty()
+    if (biases.isNotEmpty()) {
+        item("journey-learned") {
+            CoachSection(
+                c, title = "Learned so far", index = 4,
+                caption = "Carried into every regenerated plan."
+            ) {
+                biases.forEach { b ->
+                    Column(Modifier.fillMaxWidth().padding(vertical = COACH_ROW_PAD)) {
+                        Text(b.label, style = MaterialTheme.typography.bodyMedium, color = c.onBg)
+                        Text(b.detail, style = MaterialTheme.typography.bodySmall, color = c.muted)
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Your numbers ──────────────────────────────────────────────────────────
+    // The per-athlete constants that replaced the coach's defaults. These used to hang off the
+    // bottom of the Project section under a hand-sized mono label, which made them a second section
+    // wearing the first one's header.
+    val profile = state.profile
+    if (profile.hasPersonalData) {
+        item("journey-numbers") {
+            CoachSection(
+                c, title = "Your numbers", index = 5,
+                caption = profile.recoveryDays?.let {
+                    "Best spacing: $it ${if (it == 1) "day" else "days"} between sessions."
+                }
+            ) {
+                VolumeCapBars(profile, c)
             }
         }
     }
@@ -121,10 +157,45 @@ internal fun LazyListScope.coachJourneyLens(
 
 private const val RECORD_WEEKS = 8
 
+/**
+ * Weekly set caps the coach has measured for this athlete, as a ranked comparison — §2②'s shape for
+ * exactly this data. The bar is the mark; the count beside each name is its reading.
+ */
+@Composable
+private fun VolumeCapBars(profile: PersonalProfile.Profile, c: CoachColors) {
+    val caps = profile.volumeCaps.entries.sortedByDescending { it.value }.take(VOLUME_CAPS_SHOWN)
+    if (caps.isEmpty()) {
+        CoachMeter(null, c)
+        return
+    }
+    val max = caps.maxOf { it.value }.coerceAtLeast(1)
+    caps.forEach { (muscle, cap) ->
+        Column(Modifier.fillMaxWidth().padding(vertical = COACH_ROW_PAD)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    muscle.displayName,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = c.onBg,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    "$cap sets a week",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = c.muted
+                )
+            }
+            Spacer(Modifier.height(6.dp))
+            CoachMeter(cap.toFloat() / max, c, height = 4.dp)
+        }
+    }
+}
+
+private const val VOLUME_CAPS_SHOWN = 5
+
 /** One change type's trust bar, fully visible: label, streak state, segmented meter. */
 @Composable
 private fun TrustRow(t: TypeTrust, c: CoachColors) {
-    Column(Modifier.fillMaxWidth().padding(bottom = 12.dp)) {
+    Column(Modifier.fillMaxWidth().padding(bottom = COACH_BLOCK_GAP)) {
         Row(Modifier.fillMaxWidth()) {
             Text(
                 t.label,

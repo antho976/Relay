@@ -47,7 +47,14 @@ fun TrustProgressBar(
         androidx.compose.material3.MaterialTheme.colorScheme.primary
     else
         androidx.compose.material3.MaterialTheme.colorScheme.secondary
-    val track = androidx.compose.material3.MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)
+    // With a fill riding it the track is a groove and takes the §5 bar-track rung. With NOTHING on
+    // it — a change type that has never earned a streak — the track IS the mark, and `outline @0.25`
+    // measures ~1.08:1 on near-black, i.e. invisible (`design/FAILURES.md`, *Invisible ghost*). A
+    // solid empty bar takes `muted @0.30` instead, low enough not to out-shout a real reading.
+    val empty = !earned && streak <= 0
+    val track =
+        if (empty) androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.30f)
+        else androidx.compose.material3.MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)
     val segmentGap = androidx.compose.material3.MaterialTheme.colorScheme.background
 
     // Milestone pop: the bar gives a one-shot vertical pulse the moment a type's trust is earned

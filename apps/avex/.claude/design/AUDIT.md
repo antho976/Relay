@@ -101,11 +101,28 @@ the fixed Profile code (`relay/term-3`) in the same tree. Worth doing once they 
 the one state every new user sees and the one nobody re-checks. It needs Hilt/ViewModel plumbing in
 the test, which the recipes deliberately avoid, so it is real work rather than another `@Test` line.
 
-## Arrived with the Coach v3 merge (2026-07-24)
+## Empty-mark alphas are not on the §5 ladder (opened 2026-07-26)
+
+`design/FAILURES.md` (*Invisible ghost*) prescribes two rungs for a mark that has nothing filled on
+top of it — `muted @0.55` for thin strokes, `muted @0.30` for solid bars — because §5's bar-track
+rung measures ~1.08:1 on Pearl and cannot be seen. Neither value is in §5's ladder, so every screen
+that follows FAILURES.md correctly lands a **new** `alpha` violation and allowlists it. There are
+now ~20 such entries (Profile, Stats, Trophies, LaunchScenes, and Coach as of the rework).
+
+That is a doctrine inconsistency, not per-screen debt: the satellite mandates a value the core bans.
+Either §5 gains the two empty-mark rungs (a 420-line-budget edit, so something has to leave) or
+FAILURES.md picks values already on the ladder. Needs a call; until then the allowlist grows by one
+entry per screen that does the right thing, which is the wrong signal.
+
+## Arrived with the Coach v3 merge (2026-07-24) — CLEARED 2026-07-26
 
 Sixteen violations came in when `origin/main` merged. They belong to that feature, not to the
 doctrine work, and were frozen rather than rewritten: a merge resolution is the wrong place to edit
 another branch's UI. Worth a pass when Coach v3 is next touched.
+
+**The eight coach-side ones were cleared in the Coach rework** (`docs/COACH_UI_REWORK.md`), along
+with four `max-lines` entries the table below does not list: 12 buckets paid down, total frozen debt
+936 → 924. The Academy / Checkin / SessionTypeDialog / OverviewScreen entries remain.
 
 | Rule | Where |
 |---|---|
