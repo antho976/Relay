@@ -30,7 +30,14 @@ The genuine 200% risk lives somewhere else entirely — in clamped content and t
 ## 1 — Fixed height on a text-bearing container (HIGH, ~2 sites)
 
 - `ui/nav/ForgeBottomBar.kt:60` — `.height(58.dp)` on the `Row` holding all five tab labels.
-  At 200% the labels clip. **Confirmed.** Fix: `heightIn(min = 58.dp)`.
+  At 200% the labels clip to "Cardi" / "Profi". **Confirmed on device 2026-07-25.**
+  **The `heightIn(min = 58.dp)` fix recorded here was WRONG — tried and reverted.** The binding
+  constraint is horizontal, not vertical: at 200% the label cannot fit a fifth of the screen width,
+  so freeing the height just lets it wrap to two lines, which grows the bar into the middle of the
+  page and pushes the content off. Height was never what clipped it.
+  Real options, none of them one-liners: drop to icon-only above a scale threshold; abbreviate the
+  labels; let the bar scroll horizontally; or cap the label's effective scale. **This is a design
+  decision, not a mechanical fix** — leave it until it can be made deliberately.
 - `ui/gym/freestyle/ExerciseBrowserScreen.kt:351` — `.height(190.dp)` on a section that includes
   rows of text. Worth a look.
 
@@ -81,6 +88,18 @@ consequence, which would take the largest rule count down by ~40%.
 Measured and recorded in `SETTLED.md` under *Open decisions*. Two failures the doctrine itself
 mandates — accent-coloured `action →` links (2.35–3.40:1) and the inline error line (3.69:1) — need a
 product call, not a silent fix. Everything else measures clean.
+
+## Deferred: real-screen first-run goldens
+
+The screenshot suite covers the six archetype recipes, not real screens. That gap let Profile's BODY
+section ship with no marks at all on a new account (see *Empty by omission* in `FAILURES.md`) — the
+static gate could not see it, because nothing about it is mechanically wrong, and no golden rendered
+it.
+
+The fix is a first-run golden of the real Profile, which needs the Roborazzi setup (this branch) and
+the fixed Profile code (`relay/term-3`) in the same tree. Worth doing once they meet: first-run is
+the one state every new user sees and the one nobody re-checks. It needs Hilt/ViewModel plumbing in
+the test, which the recipes deliberately avoid, so it is real work rather than another `@Test` line.
 
 ## Arrived with the Coach v3 merge (2026-07-24)
 
