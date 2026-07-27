@@ -121,6 +121,25 @@ another branch's UI. Worth a pass when Coach v3 is next touched.
 The four copy ones (`em-dash` ×2, `bang`) are one-line fixes with no visual risk and would be the
 cheapest thing to clear.
 
+## Unthemed M3 container tones (2026-07-25)
+
+`ForgeTheme` sets `background`/`surface`/`surfaceVariant`/`outline`/`primary`, but never the
+`surfaceContainer*` family, `outlineVariant` or `surfaceTint`, so anything reaching for one silently
+falls through to **Material's stock dark palette** — a lighter, purple-leaning grey that belongs to no
+theme here. `ModalBottomSheet` defaults to `surfaceContainerLow`, `DatePickerDialog` to
+`surfaceContainerHigh`, its header rule to `outlineVariant`, and a `TextButton` to navy-on-that
+(~1.6:1). Found on device: the body-log sheets read as a pale slab on near-black.
+
+§5 states the call-site rule (a modal is `containerColor = surface`). These still owe it:
+
+| Kind | Where |
+|---|---|
+| sheets | `AvatarPickerSheet` · `BodyMeasurementLogSheet` · `RankSection` · `MirrorTestScreen` · `ProgramBuilderDayDetail` · `AppIconPicker` |
+| pickers | `CardioLogSheetSections` · `MirrorTestViewer` · `SettingsVacationPage` |
+
+The one-line root fix is to give `pearlColorScheme` real Pearl container tones; until then every call
+site pays.
+
 ## Suggested order
 
 1. **`em-dash` (32) + `bang` (3)** — pure copy, no visual risk, closes §11 completely.

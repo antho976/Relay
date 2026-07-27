@@ -53,11 +53,20 @@ private val BannerHeight = 240.dp
 /**
  * Vertical alpha mask (used via [BlendMode.DstIn]) that fades the cover to transparent at the top and
  * bottom edges, so the photo dissolves into the app background instead of ending on a hard rectangle.
+ *
+ * The bottom half is an EASED ramp, not a straight line (2026-07-24, Antho): a linear alpha slope
+ * hands most of its falloff to the last few dp and lands as a visible edge, so the tail is stretched
+ * — 62% → 78% does the bulk, then a long thin toe carries the last ~10% of the photo out to nothing.
+ * The dissolve is now the ONLY thing between cover and page; there is no second scrim on top of it.
  */
 private val EdgeFade = Brush.verticalGradient(
     0f to Color.Transparent,
-    0.16f to Color.Black,
-    0.60f to Color.Black,
+    0.14f to Color.Black,
+    0.50f to Color.Black,
+    0.62f to Color.Black.copy(alpha = 0.72f),
+    0.72f to Color.Black.copy(alpha = 0.40f),
+    0.82f to Color.Black.copy(alpha = 0.18f),
+    0.91f to Color.Black.copy(alpha = 0.06f),
     1f to Color.Transparent
 )
 
@@ -138,24 +147,17 @@ internal fun ProfileHeaderCard(
             }
         }
 
-        // Text-protection scrim — a bottom gradient OUTSIDE the fade mask. It PEAKS under the name/since
-        // then eases back toward transparent at the very bottom edge, so the banner's lip lands on the
-        // bare page background (identical to the content below) instead of a solid 0.82 black band that
-        // sat darker than the page and read as a hard seam where the cover met it (Antho 2026-07-09).
-        Box(
-            Modifier.fillMaxSize().background(
-                Brush.verticalGradient(
-                    0f to Color.Transparent,
-                    0.42f to Color.Transparent,
-                    0.86f to Color.Black.copy(alpha = 0.85f),
-                    1f to Color.Transparent
-                )
-            )
-        )
+        // No second scrim. The 2026-07-09 version peaked at 0.85 black under the name and then
+        // released back to transparent — which painted a band DARKER than the page background and
+        // then lifted off it, so the "seam hider" was itself the seam Antho could see (2026-07-24).
+        // The eased [EdgeFade] tail alone carries the photo to nothing, and it can only ever
+        // approach the page background, never overshoot past it. The name and meta keep their own
+        // [NameShadow] / [MetaShadow] haloes for legibility over a bright cover.
 
         // Identity laid over the bottom-left of the cover.
         Column(
-            Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp)
+            // 24dp = the page gutter (§7), so the name starts on the same rail as every section below.
+            Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp)
         ) {
             // Streak meta (achievements): "BEST n-DAY STREAK" + the gold current-streak chip when
             // active. "Since …" moved out to below the name (GYMAP-23), so this row is streaks alone.

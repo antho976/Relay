@@ -91,10 +91,11 @@ internal fun YearConsistencySection(
             }
         }
         Spacer(Modifier.height(10.dp))
+        // Mono is the uppercase micro-label voice (§6) — a reading joined with · , not a sentence.
         Text(
-            "$activeDays active days in $year",
+            "$activeDays ACTIVE DAYS · $year",
             style = MaterialTheme.typography.labelSmall,
-            color = muted
+            color = muted, fontSize = 9.sp, letterSpacing = 1.sp
         )
     }
 }

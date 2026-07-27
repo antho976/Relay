@@ -28,6 +28,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.Icon
@@ -78,7 +79,7 @@ import java.util.Locale
 /**
  * Full-screen, swipeable photo viewer + metadata editor. Opens on the tapped photo and pages through
  * the exact list the grid showed. Each page shows the whole photo (Fit) over a dark scrim; the bottom
- * sheet edits its date, pose, bodyweight, note and album, and deletes. Note + weight edits commit on
+ * sheet edits its date, title, pose, bodyweight, note and album, and deletes. Title + note + weight commit on
  * swipe / dismiss; pose, album and date reflect at once.
  */
 @Composable
@@ -89,6 +90,7 @@ internal fun GalleryViewerPager(
     weightUnit: WeightUnit,
     fileFor: (ProgressPhoto) -> File,
     onSaveNote: (ProgressPhoto, String) -> Unit,
+    onSaveTitle: (ProgressPhoto, String) -> Unit,
     onMove: (ProgressPhoto, String) -> Unit,
     onSetPose: (ProgressPhoto, String) -> Unit,
     onSetWeight: (ProgressPhoto, Double?) -> Unit,
@@ -105,11 +107,13 @@ internal fun GalleryViewerPager(
     // page to a photo again, over the (frozen) `photos` snapshot.
     var editingFile by remember { mutableStateOf(current.fileName) }
     val noteOverride = remember { mutableStateMapOf<String, String>() }
+    val titleOverride = remember { mutableStateMapOf<String, String>() }
     val albumOverride = remember { mutableStateMapOf<String, String>() }
     val poseOverride = remember { mutableStateMapOf<String, String>() }
     val weightOverride = remember { mutableStateMapOf<String, Double?>() }
     val dateOverride = remember { mutableStateMapOf<String, Long>() }
     var noteInput by remember { mutableStateOf(noteOverride[current.fileName] ?: current.note) }
+    var titleInput by remember { mutableStateOf(titleOverride[current.fileName] ?: current.title) }
     var weightInput by remember {
         mutableStateOf(current.weightLb?.let { weightInputValue(it, weightUnit) } ?: "")
     }
@@ -124,6 +128,9 @@ internal fun GalleryViewerPager(
         val trimmed = noteInput.trim()
         noteOverride[editingFile] = trimmed
         if (trimmed != original.note) onSaveNote(original, trimmed)
+        val trimmedTitle = titleInput.trim()
+        titleOverride[editingFile] = trimmedTitle
+        if (trimmedTitle != original.title) onSaveTitle(original, trimmedTitle)
         // Compare in DISPLAY units, not lb: weightInput was seeded via weightInputValue (which rounds to
         // the display step), so a 0.1-kg rounding is ~0.11 lb and an untouched field would trip a raw-lb
         // threshold and silently rewrite the snapshot. Same display text as seeded ⇒ untouched ⇒ no write.
@@ -140,6 +147,7 @@ internal fun GalleryViewerPager(
             commit()
             editingFile = current.fileName
             noteInput = noteOverride[current.fileName] ?: current.note
+            titleInput = titleOverride[current.fileName] ?: current.title
             weightInput = (weightOverride[current.fileName] ?: current.weightLb)?.let { weightInputValue(it, weightUnit) } ?: ""
         }
     }
@@ -183,7 +191,28 @@ internal fun GalleryViewerPager(
                         Icon(Icons.Filled.Delete, contentDescription = "Delete photo", tint = MaterialTheme.colorScheme.error)
                     }
                 }
+                // TITLE — the short label the grid and the day header show, above the long-form note
+                // it sits over. Same bare-field treatment as the note (§1: the page IS the surface),
+                // one type step up so the two read as caption-then-body rather than two equal fields.
                 Spacer(Modifier.height(8.dp))
+                BasicTextField(
+                    value = titleInput,
+                    onValueChange = { titleInput = it.take(60) },
+                    singleLine = true,
+                    textStyle = MaterialTheme.typography.titleMedium.copy(color = onSurface),
+                    cursorBrush = SolidColor(accent),
+                    decorationBox = { inner ->
+                        Box {
+                            if (titleInput.isEmpty()) Text(
+                                "Add a title…", style = MaterialTheme.typography.titleMedium,
+                                color = muted.copy(alpha = 0.6f), fontStyle = FontStyle.Italic
+                            )
+                            inner()
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(6.dp))
                 BasicTextField(
                     value = noteInput,
                     onValueChange = { noteInput = it.take(140) },
@@ -259,8 +288,11 @@ internal fun GalleryViewerPager(
 
     if (showDatePicker) {
         val dpState = rememberDatePickerState(initialSelectedDateMillis = currentDate)
+        // Shared §5 tones — M3's own default lands this dialog on an unthemed, markedly paler slab.
+        val pickerColors = forgeDatePickerColors()
         DatePickerDialog(
             onDismissRequest = { showDatePicker = false },
+            colors = pickerColors,
             confirmButton = {
                 TextButton(onClick = {
                     dpState.selectedDateMillis?.let { picked ->
@@ -271,10 +303,21 @@ internal fun GalleryViewerPager(
                         onSetDate(current, ms)
                     }
                     showDatePicker = false
-                }) { Text("Set") }
+                },
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.onBackground
+                    )
+                ) { Text("Set") }
             },
-            dismissButton = { TextButton(onClick = { showDatePicker = false }) { Text("Cancel") } }
-        ) { DatePicker(state = dpState) }
+            dismissButton = {
+                TextButton(
+                    onClick = { showDatePicker = false },
+                    colors = ButtonDefaults.textButtonColors(
+                        contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                ) { Text("Cancel") }
+            }
+        ) { DatePicker(state = dpState, colors = pickerColors) }
     }
 }
 

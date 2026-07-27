@@ -12,6 +12,23 @@ import androidx.compose.ui.unit.sp
 // keep proportional figures; label styles are already Monospace, so tabular comes for free there.
 private const val TabularFigures = "tnum"
 
+/**
+ * §6 mono — the SECTION-ANCHOR rung (15sp), one step above `labelLarge`'s 13sp.
+ *
+ * Added 2026-07-25. The row labels moved up to 13sp, which put them on the anchor's own rung, and a
+ * section anchor is usually a SHORT word ("BODY") with wide tracking against long rows ("BODY FAT"):
+ * equal type size, less visual mass, so the header read as the smallest thing in its own section.
+ * Measured on device — all four were an identical 26px cap height — which is exactly why matching
+ * sizes was not enough. Owned by `EditorialHeader`; nothing else should reach for it.
+ */
+val MonoSectionAnchor = TextStyle(
+    fontFamily = FontFamily.Monospace,
+    fontWeight = FontWeight.Medium,
+    fontSize = 15.sp,
+    lineHeight = 18.sp,
+    letterSpacing = 1.sp
+)
+
 val ForgeTypography = Typography(
     displayLarge = TextStyle(
         fontFamily = FontFamily.Serif,

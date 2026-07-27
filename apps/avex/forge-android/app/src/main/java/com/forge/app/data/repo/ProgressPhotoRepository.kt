@@ -34,7 +34,14 @@ data class ProgressPhoto(
     val note: String = "",
     val album: String = "",
     val pose: String = "",
-    val weightLb: Double? = null
+    val weightLb: Double? = null,
+    /**
+     * A short user label for the shot ("morning, fasted", "week 12"). Distinct from [note]: the title
+     * is the caption the grid and the day header can show at a glance, the note is the long-form text
+     * behind it. Optional and blank by default — added 2026-07-25 so the gallery search can match a
+     * name you chose rather than only what the app recorded.
+     */
+    val title: String = ""
 )
 
 /**
@@ -137,6 +144,7 @@ class ProgressPhotoRepository @Inject constructor(
     }
 
     suspend fun setNote(photo: ProgressPhoto, note: String) = updatePhoto(photo) { it.copy(note = note) }
+    suspend fun setTitle(photo: ProgressPhoto, title: String) = updatePhoto(photo) { it.copy(title = title.trim()) }
     suspend fun setPose(photo: ProgressPhoto, pose: String) = updatePhoto(photo) { it.copy(pose = pose) }
     suspend fun setWeight(photo: ProgressPhoto, weightLb: Double?) = updatePhoto(photo) { it.copy(weightLb = weightLb) }
     /** Re-date a photo (its EXIF date was wrong/absent); re-snapshots the bodyweight for the new date. */
@@ -265,7 +273,8 @@ class ProgressPhotoRepository @Inject constructor(
                     o.optString("note"),
                     o.optString("album"),
                     o.optString("pose"),
-                    if (o.has("weightLb") && !o.isNull("weightLb")) o.optDouble("weightLb") else null
+                    if (o.has("weightLb") && !o.isNull("weightLb")) o.optDouble("weightLb") else null,
+                    o.optString("title")
                 )
             }
         }.getOrDefault(emptyList())
@@ -280,6 +289,7 @@ class ProgressPhotoRepository @Inject constructor(
                 put("note", p.note)
                 put("album", p.album)
                 put("pose", p.pose)
+                if (p.title.isNotBlank()) put("title", p.title)
                 if (p.weightLb != null) put("weightLb", p.weightLb)
             })
         }
