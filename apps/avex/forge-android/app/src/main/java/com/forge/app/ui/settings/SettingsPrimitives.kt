@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.ui.common.EditorialHeader
+import com.forge.app.ui.common.ForgeRowPill
 import com.forge.app.ui.common.ForgeSwitch
 import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.common.clickableLabeled
@@ -192,18 +193,7 @@ internal fun StatusDot(active: Boolean, size: Dp = 8.dp) {
  * nests a second click. Shared by the Coach feed glance and the Recovery integration rows.
  */
 @Composable
-internal fun ConnectPill(label: String = "Connect") {
-    val onBg = MaterialTheme.colorScheme.onBackground
-    val outline = MaterialTheme.colorScheme.outline
-    Box(
-        modifier = Modifier
-            .border(1.dp, outline.copy(alpha = 0.35f), RoundedCornerShape(50))
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(label, style = MaterialTheme.typography.labelMedium, color = onBg, letterSpacing = 0.3.sp)
-    }
-}
+internal fun ConnectPill(label: String = "Connect") = ForgeRowPill(label)
 
 /** A quiet mono accent navigation link ("action →") — jumping to another screen (DESIGN §8 ③).
  *  Self-contained: bakes the 24dp gutter + a tappable inset, so call it directly and stack. */

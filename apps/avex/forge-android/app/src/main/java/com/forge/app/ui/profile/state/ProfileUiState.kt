@@ -5,7 +5,6 @@ import com.forge.app.data.repo.TrophyCell
 import com.forge.app.domain.rank.RankInfo
 import com.forge.app.domain.rank.StandingMetric
 import com.forge.app.domain.rank.XpBreakdown
-import com.forge.app.ui.overview.state.OnThisDayMemory
 
 /**
  * The "You" hub state. Most fields are surfaced from data the app already computes; the rank/XP
@@ -55,9 +54,6 @@ data class ProfileUiState(
     val trophyTotal: Int = 0,
     val trophyGrid: List<TrophyCell> = emptyList(),
     val closestTrophy: String? = null,
-
-    // Memory
-    val memory: OnThisDayMemory? = null,
 
     // Cumulative lifted volume (lb), one point per finished session, oldest → newest — the All-Time graph.
     val lifetimeVolumeSeriesLb: List<Double> = emptyList(),

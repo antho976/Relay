@@ -1,4 +1,4 @@
-@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class, androidx.compose.material3.ExperimentalMaterial3Api::class)
+@file:OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 
 package com.forge.app.ui.profile
 
@@ -6,11 +6,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -27,7 +23,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberModalBottomSheetState
@@ -43,9 +38,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.forge.app.data.db.entities.BodyweightEntry
 import com.forge.app.data.repo.ProgressPhoto
 import com.forge.app.domain.photo.PhotoPose
 import com.forge.app.domain.units.WeightUnit
@@ -53,11 +48,12 @@ import com.forge.app.ui.common.EditorialHeader
 import com.forge.app.ui.common.ForgeOutlineCapsule
 import com.forge.app.ui.common.ForgePrimaryCapsule
 import com.forge.app.ui.common.ForgeWordmark
-import com.forge.app.ui.common.SegmentPill
+import com.forge.app.ui.common.InlineEmptyHint
 import com.forge.app.ui.gym.stats.components.statsEntrance
 import com.forge.app.ui.theme.LocalForgeSettings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.time.ZoneId
 
 /** A frozen snapshot of the list the viewer pages through, plus the index it opened on. */
@@ -70,6 +66,10 @@ private data class ViewerTarget(val photos: List<ProgressPhoto>, val index: Int)
  * month-grouped grid; "Albums →" rides the TIMELINE header. Sections cascade in via [statsEntrance].
  * Tapping a photo opens a swipeable full-screen viewer + metadata editor. Private, app-private files
  * only (see [MirrorTestViewModel] / [com.forge.app.data.repo.ProgressPhotoRepository]).
+ *
+ * The screen is written for an EMPTY library first: it opens here, not on a grid. Photos gate the
+ * sections that would be dishonest without them, never the page itself, and each browse control is
+ * gated on having something to narrow — see [OverviewLevel] and [GalleryTimeline].
  */
 @Composable
 fun MirrorTestScreen(
@@ -88,7 +88,7 @@ fun MirrorTestScreen(
     var poseFilter by remember { mutableStateOf<PhotoPose?>(null) }
     var query by remember { mutableStateOf("") }
     var sort by remember { mutableStateOf(GallerySort.NEWEST) }
-    var columns by remember { mutableStateOf(3) }
+    var columns by remember { mutableStateOf(GALLERY_DEFAULT_COLUMNS) }
     var compareMode by remember { mutableStateOf(false) }
     val compareSel = remember { mutableStateListOf<ProgressPhoto>() }
     // The pair shown in the compare sheet — set from the band (first↔latest) or from a 2-photo selection.
@@ -110,11 +110,16 @@ fun MirrorTestScreen(
     val settings = LocalForgeSettings.current
     val firstDayMonday = settings.firstDayMonday
     val weightUnit = settings.weightUnit
-    val searching = query.isNotBlank()
 
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+    // MULTI-select (2026-07-25). It was `PickVisualMedia`, one photo per trip through the system
+    // picker — so documenting a session from several angles, which is the whole point of a physique
+    // gallery, meant repeating the entire add flow per shot. The storage layer never had a per-day
+    // limit (photos are UUID-named with no dedup), so this was purely the picker under-asking.
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) { uris ->
         // Imports into the open album (or Unsorted), auto-tagged with the active pose lens on the grid.
-        uri?.let { viewModel.addPhoto(it, if (showAlbums) (openAlbum ?: "") else "", poseFilter?.name ?: "") }
+        if (uris.isNotEmpty()) {
+            viewModel.addPhotos(uris, if (showAlbums) (openAlbum ?: "") else "", poseFilter?.name ?: "")
+        }
     }
     fun importPhoto() = picker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
 
@@ -150,6 +155,36 @@ fun MirrorTestScreen(
     fun closeSearch() { searchOpen = false; query = "" }
     fun toggleFilters() { filtersOpen = !filtersOpen; if (filtersOpen) closeSearch() }
     LaunchedEffect(searchOpen) { if (searchOpen) runCatching { searchFocus.requestFocus() } }
+
+    val poses = remember(state.photos) { posesPresent(state.photos) }
+    // A filter can outlive the control that set it: delete the last Back shot and the pose lens stops
+    // drawing, delete down past the tool threshold and Search stops drawing, either way leaving the
+    // grid narrowed by something the user can no longer see or undo. Drop the filter with its control.
+    LaunchedEffect(poses) { poseFilter?.let { if (it !in poses) poseFilter = null } }
+    LaunchedEffect(state.photos.size) {
+        if (state.photos.size < GALLERY_TOOLS_MIN) {
+            query = ""; searchOpen = false; filtersOpen = false; range = GalleryRange.ALL
+        }
+    }
+
+    val tools = GalleryTools(
+        query = query,
+        onQueryChange = { query = it },
+        range = range,
+        onRangeChange = { range = it },
+        pose = poseFilter,
+        onPoseChange = { poseFilter = it },
+        sort = sort,
+        onToggleSort = { sort = if (sort == GallerySort.NEWEST) GallerySort.OLDEST else GallerySort.NEWEST },
+        columns = columns,
+        onCycleColumns = { columns = GALLERY_DENSITIES[(GALLERY_DENSITIES.indexOf(columns) + 1) % GALLERY_DENSITIES.size] },
+        searchOpen = searchOpen,
+        onToggleSearch = { if (searchOpen) closeSearch() else openSearch() },
+        filtersOpen = filtersOpen,
+        onToggleFilters = { toggleFilters() },
+        onClear = { closeSearch(); range = GalleryRange.ALL; poseFilter = null },
+        searchFocus = searchFocus
+    )
 
     // Back drills out: compare → grid; album → folder grid → photo grid → leave the screen.
     fun goBack() {
@@ -213,25 +248,13 @@ fun MirrorTestScreen(
                     )
                 }
                 !showAlbums -> OverviewLevel(
+                    loading = state.loading,
                     photos = state.photos,
                     visiblePhotos = galleryPhotos,
                     bodyweight = bodyweight,
-                    searching = searching,
-                    query = query,
-                    onQueryChange = { query = it },
-                    range = range,
-                    onRangeChange = { range = it },
-                    poseFilter = poseFilter,
-                    onPoseChange = { poseFilter = it },
-                    sort = sort,
-                    onToggleSort = { sort = if (sort == GallerySort.NEWEST) GallerySort.OLDEST else GallerySort.NEWEST },
-                    columns = columns,
-                    onCycleColumns = { columns = GALLERY_DENSITIES[(GALLERY_DENSITIES.indexOf(columns) + 1) % GALLERY_DENSITIES.size] },
-                    searchOpen = searchOpen,
-                    filtersOpen = filtersOpen,
-                    onToggleSearch = { if (searchOpen) closeSearch() else openSearch() },
-                    onToggleFilters = { toggleFilters() },
-                    searchFocus = searchFocus,
+                    poses = poses,
+                    tools = tools,
+                    albumCount = state.albumNames.size,
                     zone = zone,
                     weightUnit = weightUnit,
                     onOpenAlbums = { showAlbums = true },
@@ -283,6 +306,7 @@ fun MirrorTestScreen(
             weightUnit = weightUnit,
             fileFor = viewModel::fileFor,
             onSaveNote = { p, n -> viewModel.setNote(p, n) },
+            onSaveTitle = { p, t -> viewModel.setTitle(p, t) },
             onMove = { p, a -> viewModel.setAlbum(p, a) },
             onSetPose = { p, pose -> viewModel.setPose(p, pose) },
             onSetWeight = { p, w -> viewModel.setWeight(p, w) },
@@ -332,30 +356,24 @@ fun MirrorTestScreen(
 }
 
 /**
- * The default Gallery level: the hero, the progress band, the bodyweight line, the pose lens + tool
- * row, then the month-grouped grid. Empty (no photos) is carried entirely by the band's ghost frames.
+ * The default Gallery level: the hero, the progress band, the bodyweight line, the auto-paired
+ * same-weight strip, then the TIMELINE (pose lens + tools + month-grouped grid).
+ *
+ * Every state below is a real page, not a truncation of the full one. At ZERO the band's tagged ghost
+ * frames are the mark, one filled capsule is the way in, and the bodyweight line still draws when
+ * there are weigh-ins, so the ghosts sit beside something live (§12). At ONE the shot fills FIRST with
+ * the empty NOW frame beside it. Sections still absent themselves when they'd be dishonest (a compare
+ * strip with nothing paired, a lens with one pose), but the page never ends after the hero.
  */
 @Composable
 private fun OverviewLevel(
+    loading: Boolean,
     photos: List<ProgressPhoto>,
     visiblePhotos: List<ProgressPhoto>,
-    bodyweight: List<com.forge.app.data.db.entities.BodyweightEntry>,
-    searching: Boolean,
-    query: String,
-    onQueryChange: (String) -> Unit,
-    range: GalleryRange,
-    onRangeChange: (GalleryRange) -> Unit,
-    poseFilter: PhotoPose?,
-    onPoseChange: (PhotoPose?) -> Unit,
-    sort: GallerySort,
-    onToggleSort: () -> Unit,
-    columns: Int,
-    onCycleColumns: () -> Unit,
-    searchOpen: Boolean,
-    filtersOpen: Boolean,
-    onToggleSearch: () -> Unit,
-    onToggleFilters: () -> Unit,
-    searchFocus: FocusRequester,
+    bodyweight: List<BodyweightEntry>,
+    poses: List<PhotoPose>,
+    tools: GalleryTools,
+    albumCount: Int,
     zone: ZoneId,
     weightUnit: WeightUnit,
     onOpenAlbums: () -> Unit,
@@ -363,30 +381,40 @@ private fun OverviewLevel(
     onBandCompare: (ProgressPhoto, ProgressPhoto) -> Unit,
     onAdd: () -> Unit,
     onView: (ProgressPhoto) -> Unit,
-    fileFor: (ProgressPhoto) -> java.io.File,
+    fileFor: (ProgressPhoto) -> File,
     onBg: Color, muted: Color, accent: Color, outline: Color
 ) {
     val (before, after) = remember(photos) { bestComparePair(photos) }
 
     Column(Modifier.fillMaxWidth().statsEntrance(0)) {
-        GalleryHero(photos, zone, onBg, muted)
+        GalleryHero(photos, loading, onBg, muted)
         Spacer(Modifier.height(20.dp))
         // Signature mark — works at zero (ghost frames + add prompt), so no separate empty text row (§12).
         ProgressBand(
-            before = before, after = after, zone = zone, weightUnit = weightUnit, fileFor = fileFor,
-            onCompare = onBandCompare, onAdd = onAdd,
+            before = before, after = after, loading = loading, zone = zone, weightUnit = weightUnit,
+            fileFor = fileFor, onCompare = onBandCompare, onAdd = onAdd,
             onBg = onBg, muted = muted, accent = accent, outline = outline
         )
+        if (!loading && photos.isEmpty()) {
+            Spacer(Modifier.height(18.dp))
+            // Albums can outlive their photos, so keep the door open when any exist (§2 capability).
+            GalleryStart(onAdd, if (albumCount > 0) onOpenAlbums else null, accent)
+        }
     }
 
-    if (photos.isEmpty()) return
+    // Nothing below the band is known until the index is off disk; the band shimmers meanwhile.
+    if (loading) return
 
+    // The trend the photos are set against. Deliberately NOT gated on photos: with none it is the one
+    // live mark beside the band's ghosts, and it is what the first shot will be read against anyway.
     if (bodyweight.size >= 2) {
         Spacer(Modifier.height(28.dp))
         Column(Modifier.fillMaxWidth().statsEntrance(1)) {
             BodyweightSparkline(bodyweight, photos, weightUnit, onBg, muted, accent)
         }
     }
+
+    if (photos.isEmpty()) return
 
     // Auto-paired "scale held, body changed" shots — excludes the band pair so it never echoes it.
     // Pairing is O(n²) over every weighed photo, so it runs off the main thread (like the figure/decode
@@ -405,105 +433,53 @@ private fun OverviewLevel(
 
     // ── Timeline: header + pose lens + tool pills over the month-grouped grid ──
     Spacer(Modifier.height(28.dp))
-    Column(Modifier.fillMaxWidth().statsEntrance(3)) {
-        EditorialHeader("Timeline", muted, accent, action = "Albums →", onAction = onOpenAlbums)
-        Spacer(Modifier.height(10.dp))
-
-        val poses = remember(photos) { posesPresent(photos) }
-        if (poses.isNotEmpty()) {
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                SegmentPill("All", selected = poseFilter == null, onClick = { onPoseChange(null) }, accent, onBg, muted, outline)
-                poses.forEach { p ->
-                    SegmentPill(p.label, selected = poseFilter == p, onClick = { onPoseChange(p) }, accent, onBg, muted, outline)
-                }
-            }
-            Spacer(Modifier.height(10.dp))
-        }
-
-        // Tool pills — one pill vocabulary with the range chips below, no stock icons in content (§8).
-        val filtersActive = range != GalleryRange.ALL || sort != GallerySort.NEWEST || columns != 3
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            GalleryChip("Search", selected = searchOpen) { onToggleSearch() }
-            GalleryChip("Filters", selected = filtersOpen || filtersActive) { onToggleFilters() }
-            if (photos.size >= 2) GalleryChip("Compare", selected = false) { onStartCompare() }
-        }
-
-        // Revealed controls: the search field OR the range/sort/density panel — never both at once.
-        when {
-            searchOpen -> {
-                Spacer(Modifier.height(10.dp))
-                GallerySearchBar(query, onQueryChange, focusRequester = searchFocus)
-            }
-            filtersOpen -> {
-                Spacer(Modifier.height(10.dp))
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    GalleryRange.entries.forEach { r -> GalleryChip(r.label, selected = r == range) { onRangeChange(r) } }
-                }
-                Spacer(Modifier.height(10.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    GalleryChip(if (sort == GallerySort.NEWEST) "Newest first" else "Oldest first", selected = false) { onToggleSort() }
-                    GalleryChip("$columns across", selected = false) { onCycleColumns() }
-                }
-            }
-        }
-    }
-
-    Spacer(Modifier.height(16.dp))
-    Column(Modifier.fillMaxWidth().statsEntrance(4)) {
-        when {
-            visiblePhotos.isEmpty() -> Text(
-                if (searching) "No photos match “$query”." else "No photos in this view.",
-                style = MaterialTheme.typography.bodyMedium, color = muted
-            )
-            else -> {
-                if (searching) {
-                    Text(
-                        "${visiblePhotos.size} result${if (visiblePhotos.size == 1) "" else "s"}",
-                        style = MaterialTheme.typography.labelMedium, color = muted
-                    )
-                    Spacer(Modifier.height(12.dp))
-                }
-                MonthGroupedGrid(visiblePhotos, columns, zone, fileFor, muted, accent, onView)
-            }
-        }
-    }
+    GalleryTimeline(
+        photos = photos, visiblePhotos = visiblePhotos, poses = poses, tools = tools, zone = zone,
+        entrance = 3, onOpenAlbums = onOpenAlbums, onStartCompare = onStartCompare, onView = onView,
+        fileFor = fileFor, onBg = onBg, muted = muted, accent = accent, outline = outline
+    )
 }
 
-/** Compare mode: an instruction line then a selectable grid of every photo (newest first). */
+/**
+ * Compare mode: a selectable grid of every photo (newest first). The sticky [CompareBar] at the foot
+ * carries the instruction and the count, so nothing is repeated up here (§4.3).
+ */
 @Composable
 private fun CompareLevel(
     photos: List<ProgressPhoto>,
     zone: ZoneId,
     onToggle: (ProgressPhoto) -> Unit,
     selectionIndexOf: (ProgressPhoto) -> Int?,
-    fileFor: (ProgressPhoto) -> java.io.File,
+    fileFor: (ProgressPhoto) -> File,
     muted: Color, accent: Color
 ) {
-    Text("Pick two photos to see them side by side.", style = MaterialTheme.typography.bodyMedium, color = muted)
-    Spacer(Modifier.height(16.dp))
     if (photos.isEmpty()) {
-        Text("Add a few photos first.", style = MaterialTheme.typography.bodyMedium, color = muted)
+        InlineEmptyHint("Add two shots before comparing.", muted)
         return
     }
-    MonthGroupedGrid(
+    DayGroupedGrid(
         photos = photos, columns = 3, zone = zone, fileFor = fileFor, muted = muted, accent = accent,
         onPhotoClick = onToggle, selectable = true, selectionIndexOf = selectionIndexOf
     )
 }
 
-/** The add-a-photo chooser sheet: the guided camera (do-it-now) or a gallery import (sidekick). */
+/**
+ * The add-a-photo chooser sheet: the guided camera (do-it-now) or a gallery import (sidekick). Two
+ * capsules and their anchor, nothing else — the "shots stay on your phone" reassurance line was
+ * retired with the before/after share card (§2) and is not re-added here.
+ */
 @Composable
 internal fun AddPhotoChooser(onCamera: () -> Unit, onImport: () -> Unit, onDismiss: () -> Unit) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState()) {
+    val accent = MaterialTheme.colorScheme.primary
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(),
+        // §5: a modal is a `surface` fill — M3 defaults to the unthemed `surfaceContainerLow`.
+        containerColor = MaterialTheme.colorScheme.surface
+    ) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 32.dp)) {
-            Text("ADD PHOTO", style = MaterialTheme.typography.labelLarge, color = muted, letterSpacing = 1.5.sp)
-            Spacer(Modifier.height(4.dp))
-            Text(
-                "Shots stay on your phone.",
-                style = MaterialTheme.typography.bodySmall, color = muted,
-                fontStyle = androidx.compose.ui.text.font.FontStyle.Italic
-            )
+            EditorialHeader("Add photo", muted, accent)
             Spacer(Modifier.height(18.dp))
             ForgePrimaryCapsule("Take a photo", onClick = onCamera, modifier = Modifier.fillMaxWidth())
             Spacer(Modifier.height(10.dp))

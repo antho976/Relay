@@ -15,6 +15,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 
 /**
  * The two capsule button levels of DESIGN §8, promoted on their third re-implementation
@@ -72,6 +73,30 @@ fun ForgeOutlineCapsule(
             label,
             style = MaterialTheme.typography.titleSmall,
             color = (contentColor ?: MaterialTheme.colorScheme.onBackground).copy(alpha = alpha)
+        )
+    }
+}
+
+/**
+ * §8's per-row action: a COMPACT outlined pill, right-aligned in a list row whose WHOLE surface is
+ * the tap target — so the pill is drawn, never independently clickable (no nested tap). Promoted out
+ * of `settings/SettingsPrimitives.ConnectPill` on its third screen (Coach · Recovery · the Profile's
+ * BODY rows, 2026-07-24). Deliberately border-only: a filled capsule per row stacks into a button
+ * wall, and a bare mono accent link reads too dim against a muted accent.
+ */
+@Composable
+fun ForgeRowPill(label: String, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f), RoundedCornerShape(50))
+            .padding(horizontal = 14.dp, vertical = 7.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onBackground,
+            letterSpacing = 0.3.sp
         )
     }
 }

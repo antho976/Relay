@@ -25,6 +25,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.forge.app.ui.theme.MonoSectionAnchor
 
 /**
  * The app-wide "open editorial" building blocks — the language of the Home screen, the live-session
@@ -53,10 +54,12 @@ fun EditorialHeader(
     ) {
         Text(
             label.uppercase(),
-            // labelLarge (13sp) — section anchors read as present, not incidental (§6, 2026-07-05).
-            style = MaterialTheme.typography.labelLarge,
+            // The mono SECTION-ANCHOR rung (15sp) — one step above the 13sp its rows sit on, so the
+            // anchor leads on size rather than relying on tracking. At a matched 13sp a short header
+            // like "BODY" carried less visual mass than the "BODY FAT" row beneath it and read as
+            // the smaller of the two (§6, 2026-07-25; was labelLarge 13sp from 2026-07-05).
+            style = MonoSectionAnchor,
             color = muted,
-            letterSpacing = 1.sp,
             modifier = Modifier.semantics { heading() }
         )
         if (action != null) Text(action, style = MaterialTheme.typography.labelSmall, color = accent)

@@ -1,23 +1,19 @@
 package com.forge.app.ui.profile
 
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.DatePicker
-import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.SelectableDates
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -32,10 +28,7 @@ import com.forge.app.data.db.entities.BodyFatEntry
 import com.forge.app.ui.common.ForgeOutlineCapsule
 import com.forge.app.ui.common.ForgePrimaryCapsule
 import com.forge.app.ui.common.bounceClick
-import java.time.Instant
 import java.time.LocalDate
-import java.time.ZoneId
-import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.time.format.TextStyle
 import java.util.Locale
@@ -54,6 +47,9 @@ internal fun parseSaneBodyFat(input: String): Double? =
  * backdate to any past day (the day's existing reading re-seeds the field so a missed day
  * round-trips), and when Health Connect is connected AND you're on today, pull the latest reading
  * with one tap. Saving closes the sheet; importing keeps it open so the result line is visible.
+ *
+ * Shares its surface, field treatment and backdating calendar with [BodyweightLogSheet] — the two
+ * sheets are the same modal and must not drift.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -65,9 +61,10 @@ internal fun BodyFatLogSheet(
     onImport: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    val onBg = MaterialTheme.colorScheme.onBackground
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val accent = MaterialTheme.colorScheme.primary
+    val cs = MaterialTheme.colorScheme
+    val onBg = cs.onBackground
+    val muted = cs.onSurfaceVariant
+    val accent = cs.primary
     val sheetState = rememberModalBottomSheetState()
 
     val today = remember { LocalDate.now() }
@@ -96,17 +93,30 @@ internal fun BodyFatLogSheet(
         if (isToday) "TODAY · $md"
         else "${date.dayOfWeek.getDisplayName(TextStyle.SHORT, Locale.getDefault()).uppercase()} · $md"
     }
+    val supportingLine = when {
+        invalid -> "Enter ${MIN_BODY_FAT_PCT.toInt()}–${MAX_BODY_FAT_PCT.toInt()}%."
+        isToday -> "One entry per day, saving replaces today's."
+        else -> "One entry per day, saving replaces this day's."
+    }
 
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        // §3/§5: a modal is a `surface` fill (#15161B, #080808 on AMOLED). M3's own default is
+        // `surfaceContainerLow` — a tone this theme never defines, so it fell through to the
+        // baseline dark palette's #1D1B20: lighter and purple-leaning, which is exactly the pale
+        // grey slab that read wrong on the near-black page.
+        containerColor = cs.surface
+    ) {
         Column(
             Modifier.fillMaxWidth()
                 .verticalScroll(rememberScrollState())
                 .imePadding()
                 .padding(horizontal = 24.dp)
-                .padding(bottom = 32.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+                .padding(bottom = 32.dp)
         ) {
             Text("Log body fat", style = MaterialTheme.typography.headlineSmall, color = onBg)
+            Spacer(Modifier.height(8.dp))
             // Accent mono = the tappable idiom (§5): tap to backdate to any past day.
             Text(
                 dateLabel,
@@ -114,6 +124,7 @@ internal fun BodyFatLogSheet(
                 color = accent,
                 modifier = Modifier.bounceClick { showDatePicker = true }.padding(vertical = 6.dp)
             )
+            Spacer(Modifier.height(12.dp))
             OutlinedTextField(
                 value = input,
                 onValueChange = { v ->
@@ -125,18 +136,17 @@ internal fun BodyFatLogSheet(
                 label = { Text("Body fat (%)") },
                 singleLine = true,
                 isError = invalid,
-                supportingText = {
-                    Text(
-                        when {
-                            invalid -> "Enter ${MIN_BODY_FAT_PCT.toInt()}–${MAX_BODY_FAT_PCT.toInt()}%."
-                            isToday -> "One entry per day, saving replaces today's."
-                            else -> "One entry per day, saving replaces this day's."
-                        }
-                    )
-                },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                shape = BodyLogFieldShape,
+                colors = bodyLogFieldColors(),
                 modifier = Modifier.fillMaxWidth()
             )
+            // On the page gutter rather than in the field's own `supportingText` slot, so the
+            // explainer keeps the sheet's 24dp rhythm (§7) and matches the bodyweight sheet.
+            BodyLogSupportingLine(supportingLine, invalid)
+            // §8: the page's actions group at the END — one filled do-it-now capsule ① and its
+            // outlined sidekick ②, nothing else.
+            Spacer(Modifier.height(20.dp))
             ForgePrimaryCapsule(
                 label = "Save",
                 onClick = { parsed?.let { onSave(it, date) } },
@@ -145,6 +155,7 @@ internal fun BodyFatLogSheet(
             )
             // Import pulls the newest HC reading (dated by HC) — only meaningful on today, hidden while backdating.
             if (canImport && isToday) {
+                Spacer(Modifier.height(10.dp))
                 ForgeOutlineCapsule(
                     label = "Import latest from Health Connect",
                     onClick = onImport,
@@ -152,37 +163,17 @@ internal fun BodyFatLogSheet(
                 )
             }
             message?.let {
+                Spacer(Modifier.height(12.dp))
                 Text(it, style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic)
             }
         }
     }
 
     if (showDatePicker) {
-        // No future days — a reading can't be recorded ahead, and a future date would distort the trend.
-        val maxDateMs = remember { System.currentTimeMillis() }
-        val dpState = rememberDatePickerState(
-            initialSelectedDateMillis = date.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli(),
-            selectableDates = remember(maxDateMs) {
-                object : SelectableDates {
-                    override fun isSelectableDate(utcTimeMillis: Long) = utcTimeMillis <= maxDateMs
-                    override fun isSelectableYear(year: Int) =
-                        year <= Instant.ofEpochMilli(maxDateMs).atZone(ZoneId.systemDefault()).year
-                }
-            }
+        BodyLogDatePickerDialog(
+            date = date,
+            onPicked = { date = it },
+            onDismiss = { showDatePicker = false }
         )
-        DatePickerDialog(
-            onDismissRequest = { showDatePicker = false },
-            confirmButton = {
-                TextButton(onClick = {
-                    dpState.selectedDateMillis?.let { picked ->
-                        date = Instant.ofEpochMilli(picked).atZone(ZoneOffset.UTC).toLocalDate()
-                    }
-                    showDatePicker = false
-                }) { Text("OK") }
-            },
-            dismissButton = { TextButton(onClick = { showDatePicker = false }) { Text("Cancel") } }
-        ) {
-            DatePicker(state = dpState)
-        }
     }
 }
