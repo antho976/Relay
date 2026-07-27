@@ -51,7 +51,7 @@ import com.forge.app.domain.units.toDisplayLength
 import com.forge.app.ui.common.ForgePrimaryCapsule
 import com.forge.app.ui.common.ForgeWordmark
 import com.forge.app.ui.common.bounceCombinedClick
-import com.forge.app.ui.gym.stats.components.statsEntrance
+import com.forge.app.ui.common.statsEntrance
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.util.Locale

@@ -509,4 +509,119 @@ class ProgressionAdvisorTest {
         val s = suggest(listOf(set(45.0, 10)), EffortRating.JUST_RIGHT, fastStep = true, dbMaxLb = 47.5)
         assertEquals(47.5, s!!.targetWeightLb, 0.0001)
     }
+
+    // ── Session types that aren't ordinary training (A1) ───────────────────────
+
+    @Test
+    fun techniqueBouts_doNotCountTowardAStall() {
+        // A stall of 4 would fire — but three of those bouts were deliberately-light technique
+        // days, so only 2 training bouts remain and the whole slot drops below the gate.
+        val bouts = stalledBouts(4).mapIndexed { i, b ->
+            if (i in 2..4) b.copy(sessionType = "technique") else b
+        }
+        assertTrue(ProgressionAdvisor.evaluate(snapshot(bouts)).isEmpty())
+    }
+
+    @Test
+    fun testDayTopSingle_doesNotBecomeTheAnchorWeight() {
+        // Four flat 45 lb bouts (a real stall) plus a test-day single at 95. If the test day
+        // counted, it would both break the stall and anchor the next prescription at 95.
+        val bouts = stalledBouts(4) + bout(95.0, 1, EffortRating.BRUTAL, at = 99).copy(sessionType = "test")
+        val recs = ProgressionAdvisor.evaluate(snapshot(bouts))
+        assertEquals(1, recs.size)
+        val r = recs.single() as Recommendation.WeightChange
+        assertEquals("anchor must stay on the working weight", 45.0, r.previousMaxLb, 0.0001)
+    }
+
+    @Test
+    fun firstBackRamp_isNotAStall() {
+        val bouts = stalledBouts(4).map { it.copy(sessionType = "first_back") }
+        assertTrue(ProgressionAdvisor.evaluate(snapshot(bouts)).isEmpty())
+    }
+
+    @Test
+    fun deloadBouts_stillCount_becauseADeloadIsPlannedTraining() {
+        val bouts = stalledBouts(4).map { it.copy(sessionType = "deload") }
+        assertEquals(1, ProgressionAdvisor.evaluate(snapshot(bouts)).size)
+    }
+
+    // ── Phase-aware stall interpretation (A2) ──────────────────────────────────
+
+    /** [count] weigh-ins over 5 weeks drifting [perWeek] lb/week — enough to pass WeightPhase's gates. */
+    private fun weighIns(perWeek: Double, count: Int = 10): List<com.forge.app.data.db.entities.BodyweightEntry> {
+        val day = 24L * 60 * 60 * 1000
+        return (0 until count).map { i ->
+            com.forge.app.data.db.entities.BodyweightEntry(
+                dateKey = "d$i",
+                weightLb = 200.0 + perWeek * (i * 4) / 7.0,
+                recordedAt = i * 4L * day
+            )
+        }
+    }
+
+    private fun snapshotWithWeight(
+        bouts: List<ExerciseBout>,
+        weight: List<com.forge.app.data.db.entities.BodyweightEntry>
+    ): AdaptationSnapshot {
+        val s = slot()
+        return AdaptationSnapshot(
+            nowMs = 40L * 24 * 60 * 60 * 1000,
+            program = listOf(ProgramDaySnap("upper-a", "Upper A", listOf(s))),
+            sessions = emptyList(),
+            exerciseHistory = mapOf(s.exerciseId to bouts),
+            bodyweight = weight,
+            prefs = PrefsSnap()
+        )
+    }
+
+    @Test
+    fun flatLiftWhileCutting_isNotEscalated() {
+        // The exact fixture that fires a plateau in maintenance: held e1RM for 4 bouts.
+        val bouts = stalledBouts(4)
+        assertEquals("control: this is a plateau at stable weight", 1, ProgressionAdvisor.evaluate(snapshot(bouts)).size)
+        val cutting = snapshotWithWeight(bouts, weighIns(perWeek = -1.0))
+        assertTrue(
+            "holding strength in a deficit is a win, not a plateau",
+            ProgressionAdvisor.evaluate(cutting).isEmpty()
+        )
+    }
+
+    @Test
+    fun decliningLiftWhileCutting_stillSpeaks() {
+        // Holding is fine; sliding is not — the suppression must not silence a real regression.
+        val declining = listOf(bout(50.0, 8, at = 0)) + (1..4).map { i -> bout(42.5, 8, at = i.toLong()) }
+        val cutting = snapshotWithWeight(declining, weighIns(perWeek = -1.0))
+        assertEquals(1, ProgressionAdvisor.evaluate(cutting).size)
+    }
+
+    @Test
+    fun flatLiftWhileBulking_isStillAPlateau() {
+        val bulking = snapshotWithWeight(stalledBouts(4), weighIns(perWeek = 1.0))
+        assertEquals(1, ProgressionAdvisor.evaluate(bulking).size)
+    }
+
+    @Test
+    fun sparseWeighIns_changeNothing() {
+        // Below WeightPhase's gates the phase is UNKNOWN, so behavior is exactly pre-A2.
+        val unknown = snapshotWithWeight(stalledBouts(4), weighIns(perWeek = -1.0, count = 3))
+        assertEquals(1, ProgressionAdvisor.evaluate(unknown).size)
+    }
+
+    // ── Effort model on the plateau ladder (A1) ────────────────────────────────
+
+    @Test
+    fun stallWithSetsLoggedToFailure_readsAsHighEffort_andResetsDown() {
+        // No RPE and no BRUTAL rating anywhere — only the to-failure checkbox. Pre-A1 this read
+        // as a low-effort stall and nudged the weight UP.
+        val failureSets = listOf(
+            LoggedSet(loggedExerciseId = 1, setIndex = 0, weightText = "45", weightLb = 45.0,
+                reps = 8, completedAt = 0, toFailure = true)
+        )
+        val bouts = listOf(bout(45.0, 8, at = 0)) + (1..4).map { i ->
+            ExerciseBout(sessionStartedAt = i.toLong(), effort = null, hitFullTarget = false,
+                skipped = false, swappedName = null, sets = failureSets)
+        }
+        val r = ProgressionAdvisor.evaluate(snapshot(bouts)).single() as Recommendation.WeightChange
+        assertTrue("grinding to failure at a stall should reset down", r.deltaLb < 0)
+    }
 }

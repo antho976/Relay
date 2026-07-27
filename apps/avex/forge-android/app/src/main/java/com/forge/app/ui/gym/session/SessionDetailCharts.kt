@@ -36,8 +36,8 @@ import com.forge.app.ui.common.rpeLabel
 import com.forge.app.ui.gym.session.state.ExerciseDetail
 import com.forge.app.ui.gym.session.state.SessionChartStyle
 import com.forge.app.ui.gym.session.state.SessionMetric
-import com.forge.app.ui.gym.stats.components.rememberDrawProgress
-import com.forge.app.ui.gym.stats.components.staggeredProgress
+import com.forge.app.ui.common.rememberDrawProgress
+import com.forge.app.ui.common.staggeredProgress
 import com.forge.app.ui.theme.ForgeMotion
 
 /** Volume/weight/reps value as a short label for the chosen metric (weight & volume honor the kg setting). */

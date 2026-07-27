@@ -162,6 +162,20 @@ internal fun LazyListScope.coachSignalsLens(
         }
     }
 
+    // ── Every slot the coach declares (A2) ────────────────────────────────────
+    // The registry beside the live inputs: what it reads on your data, what is wired and waiting,
+    // and what is declared but not built. The dot IS the state (§12) — no status words.
+    item("signals-slots") {
+        CoachSection(
+            c,
+            title = "What it can read",
+            caption = "Filled reads you now, hollow is waiting on your data, dim is on the way.",
+            index = 5
+        ) {
+            SignalSlotRail(state.signals, c)
+        }
+    }
+
     // ── The inputs it reads ───────────────────────────────────────────────────
     // One row per input in plain language — its name and the repo's own count ("12 in the last
     // two weeks"). Inputs with data draw their chart directly under their row; an unconnected

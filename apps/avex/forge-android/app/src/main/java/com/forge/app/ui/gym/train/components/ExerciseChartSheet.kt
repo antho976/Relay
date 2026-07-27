@@ -35,7 +35,7 @@ import androidx.compose.ui.unit.sp
 import com.forge.app.domain.units.formatVolume
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.domain.units.unitLabel
-import com.forge.app.ui.gym.stats.components.rememberDrawProgress
+import com.forge.app.ui.common.rememberDrawProgress
 import com.forge.app.ui.gym.train.state.ExerciseSessionPoint
 import com.forge.app.ui.theme.LocalForgeSettings
 import java.time.Instant

@@ -67,7 +67,7 @@ import com.forge.app.ui.theme.LocalForgeSettings
 import com.forge.app.program.Program
 import com.forge.app.program.Trophies
 import com.forge.app.ui.common.InlineEmptyHint
-import com.forge.app.ui.gym.stats.components.statsEntrance
+import com.forge.app.ui.common.statsEntrance
 import com.forge.app.ui.profile.GoalLinesSection
 import com.forge.app.ui.overview.components.OverviewStat
 import com.forge.app.ui.overview.components.RecentRow
@@ -163,6 +163,8 @@ private fun CoachHomeBlock(headline: String, body: String, clickLabel: String, o
 @Composable
 fun OverviewScreen(
     onStartSession: (dayKey: String) -> Unit,
+    /** Opens the Academy on the cold-start lesson the directive is carrying (B3). */
+    onOpenAcademy: () -> Unit = {},
     onStartSessionSkipWarmup: (dayKey: String) -> Unit = onStartSession,
     onViewProgram: () -> Unit,
     onGoToCardio: () -> Unit,
@@ -195,7 +197,12 @@ fun OverviewScreen(
     val movementLifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     androidx.compose.runtime.DisposableEffect(movementLifecycleOwner) {
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
-            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) viewModel.refreshMovement()
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                viewModel.refreshMovement()
+                // The answer is date- and session-sensitive: a directive that still says "Push day"
+                // after you trained, or after midnight, is worse than none (B2).
+                viewModel.refreshDirective()
+            }
         }
         movementLifecycleOwner.lifecycle.addObserver(observer)
         onDispose { movementLifecycleOwner.lifecycle.removeObserver(observer) }
@@ -412,32 +419,77 @@ fun OverviewScreen(
                     HeroCta("Log a workout →", "Log a workout", onLogFreestyle)
                 }
             } else {
-                // ── Next workout ─────────────────────────────────────────────────
-                // If you've already trained today, the next session is tomorrow — say so.
+                // ── Today's directive (Coach v3 B2) ──────────────────────────────
+                // The coach's one answer OWNS this slot (plan M7): it replaces the bare
+                // next-workout name rather than stacking beside it, so the page never says the
+                // same thing twice. Until the first read lands, the old next-up name stands in —
+                // the hero is never blank.
+                val directive = state.directive
                 val trainedToday = todayDow in state.weekDaysTrained
-                Text(if (trainedToday) "TOMORROW" else "TODAY",
-                    style = MaterialTheme.typography.labelSmall, fontSize = 13.sp, color = muted)
+                Text(
+                    when {
+                        directive == null && trainedToday -> "TOMORROW"
+                        else -> "TODAY"
+                    },
+                    style = MaterialTheme.typography.labelSmall, fontSize = 13.sp, color = muted
+                )
                 Spacer(Modifier.height(2.dp))
                 Text(
-                    state.customDayName ?: nextDay?.defaultName ?: "Ready",
+                    directive?.headline ?: state.customDayName ?: nextDay?.defaultName ?: "Ready",
                     style = MaterialTheme.typography.displayLarge,
                     color = onBg,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     modifier = if (nextDay != null) Modifier.clickableLabeled("Edit this day's program") { onBuildPlan() } else Modifier
                 )
-                if (nextDay != null) {
+                // The reason is the hero's one prose line — always present, never a menu (§4.3).
+                if (directive != null) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        directive.reason,
+                        style = MaterialTheme.typography.bodyMedium.copy(fontStyle = FontStyle.Italic),
+                        color = muted
+                    )
+                    directive.secondary?.let { secondary ->
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            secondary,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = muted.copy(alpha = 0.7f)
+                        )
+                    }
+                    // While the coach is still learning you, the curriculum carries the day: one
+                    // lesson, tappable, never a wall of onboarding text (B3 cold-start mode).
+                    state.coldStartLesson?.let { lesson ->
+                        Spacer(Modifier.height(10.dp))
+                        Text(
+                            "Read: ${lesson.title} →",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = accent,
+                            modifier = Modifier
+                                .clickableLabeled("Open the lesson: ${lesson.title}") { onOpenAcademy() }
+                                .padding(vertical = 4.dp)
+                        )
+                    }
+                    // Today's targets, three lines of it: what the session will actually ask for.
+                    state.brief?.targets?.filter { it.targetWeightLb != null }?.take(3)?.let { targets ->
+                        if (targets.isNotEmpty()) {
+                            Spacer(Modifier.height(10.dp))
+                            targets.forEach { t ->
+                                Text(
+                                    "${t.name} · ${t.setsText}×${t.repsText} @ ${com.forge.app.domain.units.formatWeight(t.targetWeightLb!!, LocalForgeSettings.current.weightUnit)}",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = muted
+                                )
+                            }
+                        }
+                    }
+                } else if (nextDay != null) {
                     Spacer(Modifier.height(10.dp))
                     Text(
                         "${nextDay.subtitle} · ${nextDay.exercises.size} exercises",
                         style = MaterialTheme.typography.bodyMedium.copy(fontStyle = FontStyle.Italic),
                         color = muted
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        "Tap the day name to edit its program",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = muted.copy(alpha = 0.7f)
                     )
                 }
 

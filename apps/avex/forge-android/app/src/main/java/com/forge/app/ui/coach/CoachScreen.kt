@@ -31,7 +31,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.ui.common.ForgeWordmark
 import com.forge.app.ui.gym.session.SegmentRow
-import com.forge.app.ui.gym.stats.components.statsEntrance
+import com.forge.app.ui.common.statsEntrance
 import com.forge.app.ui.theme.LocalForgeSettings
 
 /** The three reads the Coach page offers, the Stats lens-pill pattern applied to coaching. */
@@ -57,12 +57,23 @@ fun CoachScreen(
     initialLens: CoachLens = CoachLens.NOW,
     // Lands on Settings → Recovery; the Signals lens's unconnected inputs carry it as "connect →".
     onConnectHealth: (() -> Unit)? = null,
+    /** Opens the Academy (Coach v3 B3) — the knowledge layer beside the decisions. */
+    onOpenAcademy: (() -> Unit)? = null,
     viewModel: CoachViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val weightUnit = LocalForgeSettings.current.weightUnit
     val c = rememberCoachColors()
     var lens by rememberSaveable { mutableStateOf(initialLens) }
+    /** A2: the add-a-goal tiny input, opened from the Goals section's action line. */
+    var showGoalPicker by rememberSaveable { mutableStateOf(false) }
+
+    if (showGoalPicker) {
+        GoalPickerDialog(
+            onPick = { kind, targetKey, target -> viewModel.addGoal(kind, targetKey, target) },
+            onDismiss = { showGoalPicker = false }
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -122,14 +133,43 @@ fun CoachScreen(
                 }
 
                 when (lens) {
-                    CoachLens.NOW -> coachNowLens(
-                        state = state,
-                        c = c,
-                        onApply = viewModel::apply,
-                        onSkip = viewModel::skip,
-                        onUndo = viewModel::undo,
-                        onApplyAll = viewModel::applyAll
-                    )
+                    CoachLens.NOW -> {
+                        // A2: what you're chasing sits above the week's mechanics — "toward what?"
+                        // outranks "what changed" (§4.8, lead with the live).
+                        coachGoalsSection(
+                            state = state,
+                            c = c,
+                            index = 2,
+                            onAddGoal = { showGoalPicker = true },
+                            onArchiveGoal = viewModel::archiveGoal,
+                            onOpenAcademy = { onOpenAcademy?.invoke() }
+                        )
+                        // C: what the next few weeks are for, above the week's own mechanics.
+                        coachBlockSection(
+                            block = state.block,
+                            c = c,
+                            index = 3,
+                            onStart = viewModel::startBlock,
+                            onEnd = viewModel::endBlock
+                        )
+                        // D: the one lever the coach is hunting, plus what it has measured about you.
+                        coachProjectSection(
+                            state = state,
+                            c = c,
+                            index = 4,
+                            onAccept = viewModel::acceptProject,
+                            onComplete = viewModel::completeProject,
+                            onAbandon = viewModel::abandonProject
+                        )
+                        coachNowLens(
+                            state = state,
+                            c = c,
+                            onApply = viewModel::apply,
+                            onSkip = viewModel::skip,
+                            onUndo = viewModel::undo,
+                            onApplyAll = viewModel::applyAll
+                        )
+                    }
                     CoachLens.SIGNALS -> coachSignalsLens(state, weightUnit, c, onConnectHealth)
                     CoachLens.JOURNEY -> coachJourneyLens(state, c)
                 }

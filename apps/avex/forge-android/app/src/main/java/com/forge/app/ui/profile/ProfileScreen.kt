@@ -54,7 +54,7 @@ import com.forge.app.data.repo.ProgressPhoto
 import com.forge.app.ui.common.ConfettiOverlay
 import com.forge.app.ui.common.ForgeWordmark
 import com.forge.app.ui.common.bounceClick
-import com.forge.app.ui.gym.stats.components.statsEntrance
+import com.forge.app.ui.common.statsEntrance
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext

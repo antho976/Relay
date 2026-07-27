@@ -36,6 +36,7 @@ class BackupRepository @Inject constructor(
     private val loggedExerciseDao: LoggedExerciseDao,
     private val loggedSetDao: LoggedSetDao,
     private val cardioDao: CardioDao,
+    private val coachGoalDao: com.forge.app.data.db.dao.CoachGoalDao,
     private val settingsRepo: SettingsRepository,
     private val photoRepo: ProgressPhotoRepository,
     private val avatarRepo: AvatarRepository,
@@ -149,6 +150,7 @@ class BackupRepository @Inject constructor(
     suspend fun exportFullDataJson(): File {
         val allSessions = sessionDao.allFinished()
         val allCardio = cardioDao.since(0L)
+        val allCoachGoals = coachGoalDao.all()
 
         val root = JSONObject().apply {
             put("exportVersion", 1)
@@ -232,6 +234,25 @@ class BackupRepository @Inject constructor(
                 })
             }
             put("cardio", cardioArr)
+
+            // Coach goals (v3 A2). The ZIP backup carries every table automatically; this hand-rolled
+            // JSON does not, so each coach phase adds its own rows here — goals are exactly the kind of
+            // thing a user wants out of the app, and they were invisible to the JSON export before.
+            val goalsArr = JSONArray()
+            allCoachGoals.forEach { g ->
+                goalsArr.put(JSONObject().apply {
+                    put("kind", g.kind)
+                    put("targetKey", g.targetKey)
+                    put("targetValue", g.targetValue ?: "")
+                    put("priority", g.priority)
+                    put("createdAt", g.createdAt)
+                    put("completedAt", g.completedAt ?: "")
+                    put("archivedAt", g.archivedAt ?: "")
+                    put("source", g.source)
+                    put("note", g.note)
+                })
+            }
+            put("coachGoals", goalsArr)
         }
 
         // Fixed filename (overwrite) — see #84; avoids unbounded accumulation in filesDir.

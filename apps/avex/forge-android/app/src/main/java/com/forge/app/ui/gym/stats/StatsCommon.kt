@@ -17,7 +17,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.ui.common.bounceClick
-import com.forge.app.ui.gym.stats.components.statsEntrance
+import com.forge.app.ui.common.statsEntrance
 
 /** Theme colors bundled so the per-tier section builders don't each take a fistful of color params. */
 data class StatsColors(

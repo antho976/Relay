@@ -8,6 +8,12 @@ import com.forge.app.data.db.ForgeDatabase
 import com.forge.app.data.db.dao.BodyFatDao
 import com.forge.app.data.db.dao.BodyMeasurementDao
 import com.forge.app.data.db.dao.BodyweightDao
+import com.forge.app.data.db.dao.CheckinDao
+import com.forge.app.data.db.dao.CoachProjectDao
+import com.forge.app.data.db.dao.TrainingBlockDao
+import com.forge.app.data.db.dao.CoachGoalDao
+import com.forge.app.data.db.dao.InjuryRestrictionDao
+import com.forge.app.data.db.dao.LessonEventDao
 import com.forge.app.data.db.dao.CardioDao
 import com.forge.app.data.db.dao.DayNameOverrideDao
 import com.forge.app.data.db.dao.ExerciseCustomizationDao
@@ -63,6 +69,12 @@ object DatabaseModule {
     @Provides fun provideRestDayDao(db: ForgeDatabase): RestDayDao = db.restDayDao()
     @Provides fun provideTrophyNearMissDao(db: ForgeDatabase): TrophyNearMissDao = db.trophyNearMissDao()
     @Provides fun provideBodyweightDao(db: ForgeDatabase): BodyweightDao = db.bodyweightDao()
+    @Provides fun provideCoachGoalDao(db: ForgeDatabase): CoachGoalDao = db.coachGoalDao()
+    @Provides fun provideCheckinDao(db: ForgeDatabase): CheckinDao = db.checkinDao()
+    @Provides fun provideTrainingBlockDao(db: ForgeDatabase): TrainingBlockDao = db.trainingBlockDao()
+    @Provides fun provideCoachProjectDao(db: ForgeDatabase): CoachProjectDao = db.coachProjectDao()
+    @Provides fun provideInjuryRestrictionDao(db: ForgeDatabase): InjuryRestrictionDao = db.injuryRestrictionDao()
+    @Provides fun provideLessonEventDao(db: ForgeDatabase): LessonEventDao = db.lessonEventDao()
     @Provides fun provideBodyFatDao(db: ForgeDatabase): BodyFatDao = db.bodyFatDao()
     @Provides fun provideLeanMassDao(db: ForgeDatabase): com.forge.app.data.db.dao.LeanMassDao = db.leanMassDao()
     @Provides fun provideSessionHrSampleDao(db: ForgeDatabase): com.forge.app.data.db.dao.SessionHrSampleDao = db.sessionHrSampleDao()

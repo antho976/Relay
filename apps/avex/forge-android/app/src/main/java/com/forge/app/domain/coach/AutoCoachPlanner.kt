@@ -65,7 +65,18 @@ data class CoachPassInputs(
      * swap/rep_shift whose latest decision was skipped or reverted. The planner won't re-propose the
      * identical change, so a rejected swap stops reappearing every week (seam fix, finding 19).
      */
-    val declinedStructural: Set<String> = emptySet()
+    val declinedStructural: Set<String> = emptySet(),
+    /**
+     * The live training block's phase (Coach v3 C), or null when the coach is running reactively.
+     * A deload week silences the plateau ladder entirely: the week is meant to ask for less, and a
+     * coach proposing resets during its own deload is arguing with itself.
+     */
+    val blockPhase: BlockPhase? = null,
+    /**
+     * How many changes this pass may make, from the trust ladder (Coach v3 E). Null keeps v2's
+     * experience-keyed cap, which is what an unproven coach still gets.
+     */
+    val changesPerWeek: Int? = null
 )
 
 /**
@@ -135,7 +146,7 @@ object AutoCoachPlanner {
             )
         }
 
-        val ladder = ProgressionAdvisor.evaluate(s, t)
+        val ladder = ProgressionAdvisor.evaluate(s, t, inputs.blockPhase)
         val stalledIds = ladder.mapNotNull {
             when (it) {
                 is Recommendation.VariationSwap -> it.exerciseId
@@ -210,7 +221,9 @@ object AutoCoachPlanner {
             }
         }
 
-        val cap = if (inputs.experience == "beginner") 1 else 2
+        // E: the cap scales with earned initiative. A beginner's coach still moves slowly; a coach
+        // with a long good record may make more calls in one week, because it has shown it can.
+        val cap = inputs.changesPerWeek ?: if (inputs.experience == "beginner") 1 else 2
         return CoachPassResult(CoachPassStatus.SHADOW, null, candidates.take(cap))
     }
 

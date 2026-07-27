@@ -47,8 +47,8 @@ import com.forge.app.ui.common.InlineEmptyHint
 import com.forge.app.ui.common.SegmentPill
 import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.common.forgeShimmer
-import com.forge.app.ui.gym.stats.components.rememberDrawProgress
-import com.forge.app.ui.gym.stats.components.statsEntrance
+import com.forge.app.ui.common.rememberDrawProgress
+import com.forge.app.ui.common.statsEntrance
 import com.forge.app.ui.theme.ForgeMotion
 import java.io.File
 import java.text.SimpleDateFormat

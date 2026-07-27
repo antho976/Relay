@@ -16,6 +16,9 @@ object Routes {
     const val RECAP = "recap"
     const val COACH_BRIEF = "coach-brief"
     const val COACH_LAB = "coach-lab"
+
+    /** The Academy (Coach v3 B3) — the knowledge layer, reachable from any lesson link. */
+    const val ACADEMY = "academy"
     const val COACH_TIMELINE = "coach-timeline"
     const val PROFILE = "profile"
     const val GOALS = "goals"

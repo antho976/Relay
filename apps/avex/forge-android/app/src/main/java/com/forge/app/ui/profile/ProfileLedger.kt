@@ -169,7 +169,7 @@ internal fun StandingSection(
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Column(modifier = Modifier.width(96.dp)) {
-                    Text(m.label.uppercase(), style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp)
+                    Text(m.label.uppercase(), style = MaterialTheme.typography.labelSmall, color = muted)
                     Text(m.valueText, style = MaterialTheme.typography.labelSmall, color = onBg, fontSize = 9.sp)
                 }
                 val frac = ((100 - m.topPercent) / 100f).coerceIn(0f, 1f)
@@ -186,7 +186,7 @@ internal fun StandingSection(
                     Box(Modifier.fillMaxWidth(w).fillMaxHeight().clip(RoundedCornerShape(50)).background(accent))
                 }
                 Text(
-                    "TOP ${m.topPercent}%", style = MaterialTheme.typography.labelSmall, color = onBg, fontSize = 10.sp,
+                    "TOP ${m.topPercent}%", style = MaterialTheme.typography.labelSmall, color = onBg,
                     modifier = Modifier.width(58.dp)
                 )
             }

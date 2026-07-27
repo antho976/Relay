@@ -271,7 +271,7 @@ internal fun FolderGrid(
                     Text(folder.displayName, style = MaterialTheme.typography.bodyMedium, color = onBg, maxLines = 1)
                     Text(
                         "${folder.count} photo${if (folder.count == 1) "" else "s"}",
-                        style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp
+                        style = MaterialTheme.typography.labelSmall, color = muted
                     )
                 }
             }

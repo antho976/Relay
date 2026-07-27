@@ -244,9 +244,13 @@ fun ForgeNavHost(initialDayKey: String? = null) {
         }
         // The lab and timeline are now lenses of the one Coach page; the routes stay so every
         // existing "what it's watching" and "learning timeline" link lands on the right lens.
+        composable(Routes.ACADEMY) {
+            com.forge.app.ui.academy.AcademyScreen(onBack = { nav.popBackStack() })
+        }
         composable(Routes.COACH_LAB) {
             CoachScreen(
                 onBack = { nav.popBackStack() },
+                onOpenAcademy = { nav.navigate(Routes.ACADEMY) },
                 initialLens = CoachLens.SIGNALS,
                 onConnectHealth = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) }
             )

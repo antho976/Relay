@@ -11,6 +11,8 @@ import com.forge.app.data.repo.CoachWatch
 import com.forge.app.domain.adapt.AdaptThresholds
 import com.forge.app.domain.adapt.AdaptationSnapshot
 import com.forge.app.domain.adapt.bestE1rm
+import com.forge.app.domain.coach.GoalPortfolio
+import com.forge.app.domain.coach.SignalRegistry
 import com.forge.app.ui.common.ProgramChangeGuard
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -33,6 +35,10 @@ class CoachViewModel @Inject constructor(
     private val coachRepo: CoachRepository,
     private val adaptationRepo: AdaptationRepository,
     private val settingsRepo: SettingsRepository,
+    private val goalRepo: com.forge.app.data.repo.CoachGoalRepository,
+    private val academyRepo: com.forge.app.data.repo.AcademyRepository,
+    private val blockRepo: com.forge.app.data.repo.BlockRepository,
+    private val projectRepo: com.forge.app.data.repo.ProjectRepository,
     private val programChangeGuard: ProgramChangeGuard
 ) : ViewModel() {
 
@@ -62,7 +68,23 @@ class CoachViewModel @Inject constructor(
         val e1rmBySlot: Map<String, List<Double>> = emptyMap(),
         val health: HealthSeries = HealthSeries(),
         /** Whole days until the next weekly brief (next Monday); 0 when unknown. */
-        val daysToNextBrief: Int = 0
+        val daysToNextBrief: Int = 0,
+        /** A2: the Goal Portfolio, priority order, each with its live reading and ETA. */
+        val goals: List<GoalPortfolio.GoalState> = emptyList(),
+        /** Goals that fight, with the coach's sequencing proposal. */
+        val goalConflicts: List<GoalPortfolio.GoalConflict> = emptyList(),
+        /** A2: every declared signal slot with its live status — the Signals lens's slot rail. */
+        val signals: List<Pair<SignalRegistry.Slot, SignalRegistry.Availability>> = emptyList(),
+        /** Unlocked-but-unread Academy lessons. */
+        val newLessons: Int = 0,
+        /** The live training block (C), or null when the coach is running reactively. */
+        val block: com.forge.app.data.db.entities.TrainingBlock? = null,
+        /** D: the running project, and the next one the coach would propose. */
+        val project: com.forge.app.data.db.entities.CoachProject? = null,
+        val projectProposal: com.forge.app.domain.coach.ProjectScanner.Candidate? = null,
+        /** D: what the coach has measured about this athlete specifically. */
+        val profile: com.forge.app.domain.coach.PersonalProfile.Profile =
+            com.forge.app.domain.coach.PersonalProfile.Profile.DEFAULTS
     )
 
     private val _state = MutableStateFlow(UiState())
@@ -85,6 +107,9 @@ class CoachViewModel @Inject constructor(
         val timeline = runCatching { coachRepo.timeline() }.getOrNull()
         // brief()/coachLab() just snapshotted; this reuses their cache instead of a fresh fan-out.
         val snap = runCatching { adaptationRepo.snapshotCached() }.getOrNull()
+        // A2: the coach's own moments — a stall held because the athlete is cutting unlocks its
+        // lesson the first time it happens. Idempotent, so calling it on every open is fine.
+        runCatching { academyRepo.syncCoachMoments() }
         _state.value = UiState(
             loading = false,
             brief = brief,
@@ -92,7 +117,17 @@ class CoachViewModel @Inject constructor(
             timeline = timeline,
             e1rmBySlot = snap?.let(::e1rmSeries).orEmpty(),
             health = snap?.let(::healthSeries) ?: HealthSeries(),
-            daysToNextBrief = snap?.let { 7 - todayIndex(it) } ?: 0
+            daysToNextBrief = snap?.let { 7 - todayIndex(it) } ?: 0,
+            goals = runCatching { goalRepo.states() }.getOrDefault(emptyList()),
+            goalConflicts = runCatching { goalRepo.conflicts() }.getOrDefault(emptyList())
+                .also { if (it.isNotEmpty()) runCatching { academyRepo.onGoalConflict() } },
+            signals = snap?.let { SignalRegistry.statuses(it) }.orEmpty(),
+            newLessons = runCatching { academyRepo.newCount() }.getOrDefault(0),
+            block = runCatching { blockRepo.active() }.getOrNull(),
+            project = runCatching { projectRepo.active() }.getOrNull(),
+            projectProposal = runCatching { projectRepo.proposal() }.getOrNull(),
+            profile = snap?.let { com.forge.app.domain.coach.PersonalProfile.build(it) }
+                ?: com.forge.app.domain.coach.PersonalProfile.Profile.DEFAULTS
         )
         // Opening the page clears the Overview "new report" banner for this week.
         brief?.let { runCatching { coachRepo.markSeen(it.pass.weekId) } }
@@ -130,6 +165,69 @@ class CoachViewModel @Inject constructor(
             brief = runCatching { coachRepo.refreshBrief() }.getOrNull() ?: s.brief,
             watch = runCatching { coachRepo.coachLab() }.getOrNull() ?: s.watch,
             timeline = runCatching { coachRepo.timeline() }.getOrNull() ?: s.timeline
+        )
+    }
+
+    // ─── Goal portfolio (A2) ───────────────────────────────────────────────────
+
+    fun addGoal(kind: com.forge.app.domain.coach.CoachGoalKind, targetKey: String, targetValue: Double?) =
+        viewModelScope.launch {
+            runCatching { goalRepo.add(kind, targetKey, targetValue) }
+            refreshGoals()
+        }
+
+    fun archiveGoal(id: Long) = viewModelScope.launch {
+        runCatching { goalRepo.archive(id) }
+        refreshGoals()
+    }
+
+    private suspend fun refreshGoals() {
+        val s = _state.value
+        _state.value = s.copy(
+            goals = runCatching { goalRepo.states() }.getOrDefault(s.goals),
+            goalConflicts = runCatching { goalRepo.conflicts() }.getOrDefault(s.goalConflicts)
+        )
+    }
+
+    // ─── Training block (C) ────────────────────────────────────────────────────
+
+    /** Start a block around the athlete's top goal. Announced, never silent. */
+    fun startBlock() = viewModelScope.launch {
+        val weekId = _state.value.brief?.pass?.weekId ?: return@launch
+        runCatching { blockRepo.start(weekId = weekId) }
+        _state.value = _state.value.copy(block = runCatching { blockRepo.active() }.getOrNull())
+    }
+
+    /** End it early — the user's veto is always one tap away. */
+    fun endBlock() = viewModelScope.launch {
+        runCatching { blockRepo.end() }
+        _state.value = _state.value.copy(block = null)
+    }
+
+    // ─── Projects (D) ──────────────────────────────────────────────────────────
+
+    /** Accept the proposed project. Propose-only at this phase: nothing starts without this tap. */
+    fun acceptProject() = viewModelScope.launch {
+        val candidate = _state.value.projectProposal ?: return@launch
+        runCatching { projectRepo.accept(candidate) }
+        refreshProjects()
+    }
+
+    fun completeProject() = viewModelScope.launch {
+        _state.value.project?.let { runCatching { projectRepo.complete(it.id) } }
+        refreshProjects()
+    }
+
+    fun abandonProject() = viewModelScope.launch {
+        _state.value.project?.let { runCatching { projectRepo.abandon(it.id) } }
+        refreshProjects()
+    }
+
+    private suspend fun refreshProjects() {
+        _state.value = _state.value.copy(
+            project = runCatching { projectRepo.active() }.getOrNull(),
+            projectProposal = runCatching { projectRepo.proposal() }.getOrNull(),
+            newLessons = runCatching { academyRepo.newCount() }.getOrDefault(_state.value.newLessons)
         )
     }
 
