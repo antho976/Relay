@@ -230,7 +230,7 @@ object GoalPortfolio {
             return GoalConflict(
                 first = weightGoal, second = liftGoal,
                 explanation = "Losing weight and adding to a max draw on the same recovery budget.",
-                proposal = "Run the weight goal first, then a strength block — holding strength while you cut already counts as winning."
+                proposal = "Run the weight goal first, then a strength block. Holding strength while you cut already counts as winning."
             )
         }
         if (ka == CoachGoalKind.BODYWEIGHT && kb == CoachGoalKind.MUSCLE_VOLUME ||

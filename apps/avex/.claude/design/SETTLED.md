@@ -20,6 +20,15 @@ pass-square record strip · the Profile's ON THIS DAY (Home's `OnThisDayCard` ow
 = eyebrow + figures) · Coach pre-baseline signal dot-checklist in the hero (→ one labeled Baseline
 bar in the "Coming up" idiom; the effort/HC inputs it spelled out live in Signals only, §4.3,
 GYMAP-24) · hairline section separators (§1) · the 9-row milestone ladder (→ rail + next, §4.10).
+**Removed in the 2026-07-26 Coach rework** (`docs/COACH_UI_REWORK.md`): Coach's "What it can read"
+signal-slot rail (eleven uniform dot rows — the *checklist* shape removed twice before; it also
+listed Sleep and Resting heart rate a second time against "What it reads", and advertised slots the
+engine does not read; its one honest fact survives as a coverage line) · the Block section's "what a
+block is" explainer (mechanics narration, §4.3 — the phase rail IS the explanation) · the Academy
+link inside the Goals section (→ the Now lens's closing line) · the Autopilot countdown on the Now
+lens (trust reads once, on Journey; the two bars quoted different numbers) · the pre-baseline
+SESSIONS figure (echoed BASELINE) · Project's four-paragraph body (→ why as the caption, finish line
+as a meter, plan as the content).
 **Facts**: dark-only (Indigo light scheme in `Color.kt` unshipped — never build light variants);
 portrait phone only (no adaptive/tablet/landscape).
 **Untouchable**: live-session screen · Profile blending cover (the compositing approach only — its
