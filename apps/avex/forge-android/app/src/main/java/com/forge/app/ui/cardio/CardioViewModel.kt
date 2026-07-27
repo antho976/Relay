@@ -21,7 +21,11 @@ import com.forge.app.domain.cardio.CardioType
 import com.forge.app.domain.cardio.CardioWearableDay
 import com.forge.app.domain.cardio.CustomCardioType
 import com.forge.app.domain.cardio.RoutePoint
+import com.forge.app.data.health.HcExerciseTypes
 import com.forge.app.domain.goal.GoalMetric
+import com.forge.app.domain.health.HrPoint
+import com.forge.app.domain.health.WatchWorkout
+import com.forge.app.domain.health.downsampleHr
 import com.forge.app.ui.cardio.state.CardioDayCell
 import com.forge.app.ui.cardio.state.CardioUiState
 import com.forge.app.ui.common.SnackbarController
@@ -81,15 +85,37 @@ class CardioViewModel @Inject constructor(
     fun refreshConnection() = viewModelScope.launch {
         val steps = healthConnectManager.canReadSteps()
         val routes = healthConnectManager.canReadExercise()
+        val hr = healthConnectManager.canReadHeartRate()
         // Read today's steps only when granted; fail-soft to null so a read error just hides the line.
         val todaySteps = if (steps) runCatching { loadStepsForDay(clock.nowMs()).totalSteps }.getOrNull() else null
-        connection.value = WearableConnection(steps = steps, routes = routes, todaySteps = todaySteps)
+        connection.value = WearableConnection(steps = steps, routes = routes, todaySteps = todaySteps, hr = hr)
+        // Candidate watch workouts for "recorded with your watch — import?" (W5). Already-logged and
+        // dismissed sessions are filtered downstream against the live entry list.
+        watchCandidates.value = if (routes) {
+            val now = clock.nowMs()
+            healthConnectManager.recentWatchWorkouts(now - IMPORT_LOOKBACK_MS, now, limit = 6)
+        } else emptyList()
     }
+
+    // Raw watch-session candidates from Health Connect, refreshed with the connection (init/resume).
+    private val watchCandidates = MutableStateFlow<List<WatchWorkout>>(emptyList())
 
     // One shared subscription to the full history — both the derived aggregates and the cardio-goals
     // recompute read it, so a cardio write runs the whole-history query once, not once per consumer.
     private val entriesFlow = cardioRepo.observeAll()
         .shareIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), replay = 1)
+
+    // Candidates minus sessions that already have a matching cardio entry, minus dismissed ones —
+    // recomputed reactively when entries land or a suggestion is dismissed, capped for the section.
+    private val importSuggestionsFlow = combine(
+        watchCandidates, entriesFlow, settingsRepo.hcDismissedWatchImports
+    ) { candidates, entries, dismissed ->
+        candidates
+            .filterNot { it.recordId in dismissed }
+            .filterNot { w -> entries.any { e -> overlapsEntry(w, e) } }
+            .filter { it.durationMin >= 1 }
+            .take(3)
+    }.flowOn(Dispatchers.Default)
 
     // All DB-derived aggregates (streak, weekly/last-week totals, the Mon–Sun cells) are computed
     // here off the DB flow and on Dispatchers.Default — NOT in the combine with `transient` below,
@@ -154,6 +180,8 @@ class CardioViewModel @Inject constructor(
             sessionWearable = tr.sessionWearable,
             sessionRoute = tr.sessionRoute,
             sessionRouteConsentId = tr.sessionRouteConsentId,
+            sessionHr = tr.sessionHr,
+            sessionWatch = tr.sessionWatch,
             weekWearable = tr.weekWearable,
             historyExpanded = tr.historyExpanded,
             wearableHintDismissed = hintDismissed
@@ -161,9 +189,14 @@ class CardioViewModel @Inject constructor(
     }.combine(settingsRepo.useMiles) { st, useMiles ->
         st.copy(useMiles = useMiles)
     }.combine(connection) { st, conn ->
-        st.copy(stepsConnected = conn.steps, routesConnected = conn.routes, todaySteps = conn.todaySteps)
+        st.copy(
+            stepsConnected = conn.steps, routesConnected = conn.routes,
+            todaySteps = conn.todaySteps, hrConnected = conn.hr
+        )
     }.combine(settingsRepo.lastCardioType) { st, lastType ->
         st.copy(lastCardioType = lastType)
+    }.combine(importSuggestionsFlow) { st, suggestions ->
+        st.copy(importSuggestions = suggestions)
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(stopTimeoutMillis = 5_000),
@@ -197,7 +230,10 @@ class CardioViewModel @Inject constructor(
      *  or switched the overlay. */
     fun openSessionDetail(id: Long) {
         transient.update {
-            it.copy(sessionDetailId = id, sessionWearable = null, sessionRoute = null, sessionRouteConsentId = null)
+            it.copy(
+                sessionDetailId = id, sessionWearable = null, sessionRoute = null,
+                sessionRouteConsentId = null, sessionHr = null, sessionWatch = null
+            )
         }
         viewModelScope.launch {
             val entry = cardioRepo.get(id) ?: return@launch
@@ -208,17 +244,66 @@ class CardioViewModel @Inject constructor(
             val steps = healthConnectManager.readStepsDay(startMs, endMs)
             // A matched route either arrives ready to draw, or as a consent id the UI must confirm first.
             val match = healthConnectManager.matchSessionRoute(entry.date, entry.durationMin, startMs, endMs)
+            // The same time-window match, for the watch's measured stats + HR series (W5) — each
+            // independently fail-soft, so a missing grant just hides its section.
+            val watch = healthConnectManager.matchWatchSession(entry.date, entry.durationMin, startMs, endMs)
+            val hr = watch?.let {
+                downsampleHr(healthConnectManager.readHrSeries(it.startMs, it.endMs)).takeIf { s -> s.size >= 2 }
+            }
             transient.update {
                 if (it.sessionDetailId == id) it.copy(
                     sessionWearable = steps,
                     sessionRoute = match?.route,
-                    sessionRouteConsentId = if (match?.route == null) match?.recordId else null
+                    sessionRouteConsentId = if (match?.route == null) match?.recordId else null,
+                    sessionHr = hr,
+                    sessionWatch = watch
                 ) else it
             }
         }
     }
     fun closeSessionDetail() = transient.update {
-        it.copy(sessionDetailId = null, sessionWearable = null, sessionRoute = null, sessionRouteConsentId = null)
+        it.copy(
+            sessionDetailId = null, sessionWearable = null, sessionRoute = null,
+            sessionRouteConsentId = null, sessionHr = null, sessionWatch = null
+        )
+    }
+
+    /**
+     * Adopt the matched watch session's measured duration/distance onto the open entry (W5) —
+     * explicit and undoable, never a silent overwrite. Only fields the watch actually measured
+     * change; everything the user typed (effort, note, conditions) stays.
+     */
+    fun adoptWatchStats() = viewModelScope.launch {
+        val id = transient.value.sessionDetailId ?: return@launch
+        val watch = transient.value.sessionWatch ?: return@launch
+        val original = cardioRepo.get(id) ?: return@launch
+        val updated = original.copy(
+            durationMin = watch.durationMin.takeIf { it > 0 } ?: original.durationMin,
+            distanceKm = watch.distanceKm ?: original.distanceKm
+        )
+        if (updated == original) return@launch
+        cardioRepo.update(updated)
+        snackbar.showUndo("Watch stats applied") { cardioRepo.update(original) }
+    }
+
+    /** Open the log sheet prefilled from a watch workout (W5 import). Saving inserts a NEW entry. */
+    fun importWatchWorkout(w: WatchWorkout) = transient.update {
+        it.copy(
+            sheetOpen = true,
+            editing = CardioEntry(
+                id = 0,
+                date = w.startMs,
+                type = HcExerciseTypes.toCardioCode(w.exerciseType),
+                durationMin = w.durationMin,
+                distanceKm = w.distanceKm
+            )
+        )
+    }
+
+    /** Hide the current import suggestions (whole-section dismiss; they stay hidden for good). */
+    fun dismissWatchImports() = viewModelScope.launch {
+        val ids = state.value.importSuggestions.map { it.recordId }.toSet()
+        if (ids.isNotEmpty()) settingsRepo.addDismissedWatchImports(ids)
     }
 
     /** Health Connect returned (or denied) the route after the consent screen. A non-null route with
@@ -273,7 +358,8 @@ class CardioViewModel @Inject constructor(
         elevationM: Double?,
         conditions: Set<CardioCondition>
     ) {
-        val editingId = transient.value.editing?.id
+        // id 0 = a PREFILL (watch import, W5): the sheet showed it via `editing`, but saving inserts.
+        val editingId = transient.value.editing?.id?.takeIf { it != 0L }
         viewModelScope.launch {
             val entry = CardioEntry(
                 id = editingId ?: 0,
@@ -314,7 +400,23 @@ class CardioViewModel @Inject constructor(
     }
 
     /** The Health Connect grants Avex holds for the cardio screen's wearable data. */
-    private data class WearableConnection(val steps: Boolean = false, val routes: Boolean = false, val todaySteps: Int? = null)
+    private data class WearableConnection(
+        val steps: Boolean = false,
+        val routes: Boolean = false,
+        val todaySteps: Int? = null,
+        /** HeartRateRecord read granted (W5) — drives the session HR graph. */
+        val hr: Boolean = false
+    )
+
+    /** A watch workout already has a home when a NON-REST entry overlaps its span (or starts within
+     *  the slack of it) — those never surface as import suggestions. Pure; slack absorbs watch-vs-
+     *  manual start-time fuzz. */
+    private fun overlapsEntry(w: WatchWorkout, e: CardioEntry): Boolean {
+        if (e.type == CardioType.REST.code) return false
+        val entryStart = e.date
+        val entryEnd = e.date + e.durationMin.coerceAtLeast(0) * 60_000L
+        return entryStart < w.endMs + IMPORT_OVERLAP_SLACK_MS && w.startMs < entryEnd + IMPORT_OVERLAP_SLACK_MS
+    }
 
     private data class TransientState(
         val sheetOpen: Boolean = false,
@@ -324,6 +426,10 @@ class CardioViewModel @Inject constructor(
         val sessionWearable: CardioWearableDay? = null,
         val sessionRoute: List<RoutePoint>? = null,
         val sessionRouteConsentId: String? = null,
+        /** Downsampled HR series of the open session's matched watch workout (W5); null when none. */
+        val sessionHr: List<HrPoint>? = null,
+        /** The open session's matched watch workout with its measured stats (W5); null when none. */
+        val sessionWatch: WatchWorkout? = null,
         val weekWearable: CardioWearableDay? = null,
         val historyExpanded: Boolean = false
     )
@@ -362,6 +468,11 @@ class CardioViewModel @Inject constructor(
                 }
             }
         }
+
+        /** How far back the watch-workout import suggestions look (W5). */
+        private const val IMPORT_LOOKBACK_MS = 14L * 24 * 60 * 60 * 1000
+        /** Start/overlap slack when deciding a watch workout already has a cardio entry (W5). */
+        private const val IMPORT_OVERLAP_SLACK_MS = 45L * 60 * 1000
 
         /** Distinct calendar days among [weekEntries] that carry an active (non-rest) session.
          *  Two runs on the same day count once; rest-only days don't count. Drives the hero headline. */

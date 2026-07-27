@@ -318,6 +318,170 @@ val MIGRATION_28_29 = object : Migration(28, 29) {
     }
 }
 
+/**
+ * v29 → v30: lean body mass (W6). `lean_mass` holds per-day lean-body-mass readings from a watch's
+ * BIA measurement, imported from Health Connect — one row per day via the unique index, the exact
+ * shape of `body_fat`. New empty table — additive, no existing data touched. Import-only (no manual
+ * log, no write-back): the watch is the sole author of this metric.
+ */
+val MIGRATION_29_30 = object : Migration(29, 30) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `lean_mass` (" +
+                "`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "`date_key` TEXT NOT NULL, " +
+                "`weight_lb` REAL NOT NULL, " +
+                "`recorded_at` INTEGER NOT NULL)"
+        )
+        db.execSQL(
+            "CREATE UNIQUE INDEX IF NOT EXISTS `index_lean_mass_date_key` ON `lean_mass` (`date_key`)"
+        )
+    }
+}
+
+/**
+ * v30 → v31: live session heart rate (W3). `session_hr_sample` holds the watch's HR stream during
+ * a workout — (session_id, at_ms) keyed so re-sent batches stay idempotent, CASCADE with the
+ * session. New empty table — additive, no existing data touched.
+ */
+val MIGRATION_30_31 = object : Migration(30, 31) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `session_hr_sample` (" +
+                "`session_id` INTEGER NOT NULL, " +
+                "`at_ms` INTEGER NOT NULL, " +
+                "`bpm` INTEGER NOT NULL, " +
+                "PRIMARY KEY(`session_id`, `at_ms`), " +
+                "FOREIGN KEY(`session_id`) REFERENCES `session`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE)"
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_session_hr_sample_session_id` ON `session_hr_sample` (`session_id`)"
+        )
+    }
+}
+
+/**
+ * v32 — Coach v3 A2: the Goal Portfolio (`coach_goal`), the Academy read ledger (`lesson_event`),
+ * and four additive columns on `coach_decision` (a lesson link, the decision's cadence scope +
+ * key, and an undo expiry). All new tables are empty and all new columns are nullable or
+ * defaulted, so existing coach history reads back exactly as it did: every pre-A2 decision is a
+ * week-scoped row with no lesson and no expiry.
+ */
+val MIGRATION_31_32 = object : Migration(31, 32) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `coach_goal` (" +
+                "`id` INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, " +
+                "`kind` TEXT NOT NULL, " +
+                "`target_key` TEXT NOT NULL, " +
+                "`target_value` REAL, " +
+                "`priority` INTEGER NOT NULL, " +
+                "`created_at` INTEGER NOT NULL, " +
+                "`completed_at` INTEGER, " +
+                "`archived_at` INTEGER, " +
+                "`source` TEXT NOT NULL, " +
+                "`note` TEXT NOT NULL)"
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_coach_goal_kind` ON `coach_goal` (`kind`)")
+
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `lesson_event` (" +
+                "`id` INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, " +
+                "`lesson_id` TEXT NOT NULL, " +
+                "`kind` TEXT NOT NULL, " +
+                "`at_ms` INTEGER NOT NULL)"
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS `index_lesson_event_lesson_id` ON `lesson_event` (`lesson_id`)")
+
+        db.execSQL("ALTER TABLE `coach_decision` ADD COLUMN `lesson_id` TEXT")
+        db.execSQL("ALTER TABLE `coach_decision` ADD COLUMN `scope` TEXT NOT NULL DEFAULT 'week'")
+        db.execSQL("ALTER TABLE `coach_decision` ADD COLUMN `scope_key` TEXT NOT NULL DEFAULT ''")
+        db.execSQL("ALTER TABLE `coach_decision` ADD COLUMN `undo_expires_at` INTEGER")
+    }
+}
+
+/**
+ * v33 — Coach v3 B1: the morning check-in (`checkin_entry`, one row per ISO day, unique on
+ * `date_key`) and injury restrictions (`injury_restriction`). Two new empty tables; nothing
+ * existing is touched, and a user who never opens the check-in sheet has an app that behaves
+ * exactly as it did.
+ */
+val MIGRATION_32_33 = object : Migration(32, 33) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `checkin_entry` (" +
+                "`id` INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, " +
+                "`date_key` TEXT NOT NULL, " +
+                "`sleep_quality` INTEGER, " +
+                "`soreness` INTEGER, " +
+                "`stress` INTEGER, " +
+                "`motivation` INTEGER, " +
+                "`sick` INTEGER NOT NULL DEFAULT 0, " +
+                "`sore_muscles` TEXT NOT NULL DEFAULT '', " +
+                "`skipped` INTEGER NOT NULL DEFAULT 0, " +
+                "`recorded_at` INTEGER NOT NULL)"
+        )
+        db.execSQL(
+            "CREATE UNIQUE INDEX IF NOT EXISTS `index_checkin_entry_date_key` " +
+                "ON `checkin_entry` (`date_key`)"
+        )
+
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `injury_restriction` (" +
+                "`id` INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, " +
+                "`scope` TEXT NOT NULL, " +
+                "`target_key` TEXT NOT NULL, " +
+                "`note` TEXT NOT NULL, " +
+                "`started_at` INTEGER NOT NULL, " +
+                "`cleared_at` INTEGER)"
+        )
+    }
+}
+
+/**
+ * v34 — Coach v3 C: the training block (`training_block`). One new empty table; a user who never
+ * starts a block sees no change at all, and the coach falls back to its v2 reactive behavior.
+ */
+val MIGRATION_33_34 = object : Migration(33, 34) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `training_block` (" +
+                "`id` INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, " +
+                "`phase` TEXT NOT NULL, " +
+                "`week_index` INTEGER NOT NULL, " +
+                "`planned_weeks` INTEGER NOT NULL, " +
+                "`focus_goal_id` INTEGER NOT NULL, " +
+                "`intent` TEXT NOT NULL, " +
+                "`started_at` INTEGER NOT NULL, " +
+                "`last_advanced_week` TEXT NOT NULL, " +
+                "`ended_at` INTEGER)"
+        )
+    }
+}
+
+/**
+ * v35 — Coach v3 D: proactive projects (`coach_project`). One new empty table; the scanner only
+ * ever proposes, so a user who accepts nothing sees no change.
+ */
+val MIGRATION_34_35 = object : Migration(34, 35) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `coach_project` (" +
+                "`id` INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, " +
+                "`kind` TEXT NOT NULL, " +
+                "`name` TEXT NOT NULL, " +
+                "`why` TEXT NOT NULL, " +
+                "`plan` TEXT NOT NULL, " +
+                "`finish_line` TEXT NOT NULL, " +
+                "`target_key` TEXT NOT NULL, " +
+                "`weeks` INTEGER NOT NULL, " +
+                "`started_at` INTEGER NOT NULL, " +
+                "`completed_at` INTEGER, " +
+                "`abandoned_at` INTEGER)"
+        )
+    }
+}
+
 /** All migrations, in order. Register every new one here. */
 val ALL_MIGRATIONS: Array<Migration> = arrayOf(
     MIGRATION_12_13,
@@ -336,5 +500,11 @@ val ALL_MIGRATIONS: Array<Migration> = arrayOf(
     MIGRATION_25_26,
     MIGRATION_26_27,
     MIGRATION_27_28,
-    MIGRATION_28_29
+    MIGRATION_28_29,
+    MIGRATION_29_30,
+    MIGRATION_30_31,
+    MIGRATION_31_32,
+    MIGRATION_32_33,
+    MIGRATION_33_34,
+    MIGRATION_34_35
 )

@@ -41,6 +41,20 @@
          Connect's daily energy total. Without this the write permission can never be granted. -->
     <uses-permission android:name="android.permission.health.WRITE_ACTIVE_CALORIES_BURNED" />
 
+    <!-- W0: write finished gym + cardio sessions to Health Connect (opt-in, Settings → Recovery). -->
+    <uses-permission android:name="android.permission.health.WRITE_EXERCISE" />
+    <!-- W3: the watch's live HR trace attaches to the written session as an HR series. -->
+    <uses-permission android:name="android.permission.health.WRITE_HEART_RATE" />
+
+    <!-- W5: read watch workouts' HR series + measured distance/calories (opt-in, Settings → Recovery). -->
+    <uses-permission android:name="android.permission.health.READ_HEART_RATE" />
+    <uses-permission android:name="android.permission.health.READ_DISTANCE" />
+    <uses-permission android:name="android.permission.health.READ_TOTAL_CALORIES_BURNED" />
+
+    <!-- W6: overnight HRV (readiness input) + the watch's BIA lean-mass reading (opt-in, Recovery). -->
+    <uses-permission android:name="android.permission.health.READ_HEART_RATE_VARIABILITY" />
+    <uses-permission android:name="android.permission.health.READ_LEAN_BODY_MASS" />
+
     <!-- Lets us detect / launch the Health Connect provider to check availability + manage grants. -->
     <queries>
         <package android:name="com.google.android.apps.healthdata" />
@@ -514,6 +528,25 @@
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Keeps the rest timer reliable during an active workout session" />
+        </service>
+
+        <!-- W1: the phone's ear for wrist commands. The Data Layer wakes this even when the app
+             was killed — commands still land in Room (the plan's phone-in-the-bag guarantee). -->
+        <service
+            android:name=".service.wear.WearSyncService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED" />
+                <data android:scheme="wear" android:host="*" android:pathPrefix="/cmd" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED" />
+                <data android:scheme="wear" android:host="*" android:pathPrefix="/haptic" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED" />
+                <data android:scheme="wear" android:host="*" android:pathPrefix="/hr" />
+            </intent-filter>
         </service>
 
         <!-- Shares exported files (JSON/CSV/PDF) out of app storage via the system share sheet. -->

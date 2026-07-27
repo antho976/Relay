@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.forge.app.data.repo.BackupRepository
 import com.forge.app.data.repo.StatsRepository
+import com.forge.app.data.repo.WorkoutRepository
 import com.forge.app.ui.gym.session.state.SessionDetailUiState
 import com.forge.app.ui.nav.Routes
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -24,6 +25,7 @@ import javax.inject.Inject
 class SessionDetailViewModel @Inject constructor(
     private val statsRepo: StatsRepository,
     private val backupRepo: BackupRepository,
+    private val workoutRepo: WorkoutRepository,
     savedStateHandle: SavedStateHandle
 ) : ViewModel() {
 
@@ -40,6 +42,35 @@ class SessionDetailViewModel @Inject constructor(
         viewModelScope.launch {
             val data = if (sessionId >= 0) statsRepo.getSessionDetail(sessionId) else null
             _state.value = SessionDetailUiState(isLoading = false, data = data)
+            // The watch's HR trace (W3), analyzed AFTER the page renders — additive: no watch, no
+            // section. Sets attribute samples to exercises; rest events power the HRR read.
+            if (sessionId >= 0) {
+                val samples = workoutRepo.hrSamplesForSession(sessionId)
+                    .map { com.forge.app.domain.health.HrPoint(timeMs = it.atMs, bpm = it.bpm) }
+                if (samples.isNotEmpty()) {
+                    val exercises = workoutRepo.loggedExercisesForSession(sessionId)
+                    val nameByLoggedId = exercises.associate { le ->
+                        le.id to (le.swappedName?.takeIf { it.isNotBlank() }
+                            ?: com.forge.app.program.Program.exercise(le.exerciseId)?.name
+                            ?: le.exerciseId)
+                    }
+                    val sets = workoutRepo.allSetsForSession(sessionId).map {
+                        com.forge.app.domain.health.HrSetRef(
+                            completedAtMs = it.completedAt,
+                            exerciseName = nameByLoggedId[it.loggedExerciseId] ?: ""
+                        )
+                    }
+                    val rests = workoutRepo.restEventsForSession(sessionId).map {
+                        com.forge.app.domain.health.HrRestRef(
+                            endedAtMs = it.loggedAt,
+                            realizedSeconds = it.realizedSeconds
+                        )
+                    }
+                    _state.value = _state.value.copy(
+                        hrView = com.forge.app.domain.health.buildSessionHrView(samples, sets, rests)
+                    )
+                }
+            }
         }
     }
 
@@ -55,4 +86,21 @@ class SessionDetailViewModel @Inject constructor(
     }
 
     fun clearExportPath() { _exportPath.value = null }
+
+    /**
+     * Tag what kind of session this was (Coach v3 A1). The stored key drives the header pill AND the
+     * adaptation engine: test / technique / first-back sessions are excluded from progression, stall
+     * and fatigue reads, so a top-single test day never anchors the next prescription and a light
+     * technique day never reads as a plateau. Retro-tagging is deliberate — you know a session was a
+     * test day once it's done, and the engine only ever reads finished sessions.
+     */
+    fun setSessionType(key: String) {
+        if (sessionId < 0) return
+        val current = _state.value.data ?: return
+        if (current.sessionType == key) return
+        // Optimistic: the row is a single column write that can't meaningfully fail, and the header
+        // pill re-reading instantly is the whole feedback (§13 — no toast for what the UI shows).
+        _state.value = _state.value.copy(data = current.copy(sessionType = key))
+        viewModelScope.launch { workoutRepo.setSessionType(sessionId, key) }
+    }
 }

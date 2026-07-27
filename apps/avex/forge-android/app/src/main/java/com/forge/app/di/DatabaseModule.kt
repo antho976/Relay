@@ -2,11 +2,18 @@ package com.forge.app.di
 
 import android.content.Context
 import androidx.room.Room
+import com.forge.app.BuildConfig
 import com.forge.app.data.db.ALL_MIGRATIONS
 import com.forge.app.data.db.ForgeDatabase
 import com.forge.app.data.db.dao.BodyFatDao
 import com.forge.app.data.db.dao.BodyMeasurementDao
 import com.forge.app.data.db.dao.BodyweightDao
+import com.forge.app.data.db.dao.CheckinDao
+import com.forge.app.data.db.dao.CoachProjectDao
+import com.forge.app.data.db.dao.TrainingBlockDao
+import com.forge.app.data.db.dao.CoachGoalDao
+import com.forge.app.data.db.dao.InjuryRestrictionDao
+import com.forge.app.data.db.dao.LessonEventDao
 import com.forge.app.data.db.dao.CardioDao
 import com.forge.app.data.db.dao.DayNameOverrideDao
 import com.forge.app.data.db.dao.ExerciseCustomizationDao
@@ -38,6 +45,16 @@ object DatabaseModule {
             // Only the pre-lock versions (≤11) may still reset rather than crash. Future bumps
             // without a migration will fail loudly at startup instead of silently wiping data.
             .fallbackToDestructiveMigrationFrom(true, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)
+            .apply {
+                // Debug only: parallel feature branches sit at different schema versions, so
+                // sideloading an older-schema build over a newer on-disk DB opens as a DOWNGRADE
+                // (e.g. installed v31, then a v29 branch) — a path Room can't satisfy, and it
+                // crashes at startup. In dev that data is disposable, so recreate destructively
+                // instead. Release deliberately keeps the loud crash: a real downgrade can only
+                // come from a shipped version rollback, and we'd rather fail than silently wipe a
+                // user's history (matches the "never silently wipe data" lock above).
+                if (BuildConfig.DEBUG) fallbackToDestructiveMigrationOnDowngrade(true)
+            }
             .build()
 
     @Provides fun provideSessionDao(db: ForgeDatabase): SessionDao = db.sessionDao()
@@ -52,7 +69,15 @@ object DatabaseModule {
     @Provides fun provideRestDayDao(db: ForgeDatabase): RestDayDao = db.restDayDao()
     @Provides fun provideTrophyNearMissDao(db: ForgeDatabase): TrophyNearMissDao = db.trophyNearMissDao()
     @Provides fun provideBodyweightDao(db: ForgeDatabase): BodyweightDao = db.bodyweightDao()
+    @Provides fun provideCoachGoalDao(db: ForgeDatabase): CoachGoalDao = db.coachGoalDao()
+    @Provides fun provideCheckinDao(db: ForgeDatabase): CheckinDao = db.checkinDao()
+    @Provides fun provideTrainingBlockDao(db: ForgeDatabase): TrainingBlockDao = db.trainingBlockDao()
+    @Provides fun provideCoachProjectDao(db: ForgeDatabase): CoachProjectDao = db.coachProjectDao()
+    @Provides fun provideInjuryRestrictionDao(db: ForgeDatabase): InjuryRestrictionDao = db.injuryRestrictionDao()
+    @Provides fun provideLessonEventDao(db: ForgeDatabase): LessonEventDao = db.lessonEventDao()
     @Provides fun provideBodyFatDao(db: ForgeDatabase): BodyFatDao = db.bodyFatDao()
+    @Provides fun provideLeanMassDao(db: ForgeDatabase): com.forge.app.data.db.dao.LeanMassDao = db.leanMassDao()
+    @Provides fun provideSessionHrSampleDao(db: ForgeDatabase): com.forge.app.data.db.dao.SessionHrSampleDao = db.sessionHrSampleDao()
     @Provides fun provideBodyMeasurementDao(db: ForgeDatabase): BodyMeasurementDao = db.bodyMeasurementDao()
     @Provides fun provideVacationDao(db: ForgeDatabase): com.forge.app.data.db.dao.VacationDao = db.vacationDao()
     @Provides fun provideExtendedGoalDao(db: ForgeDatabase): com.forge.app.data.db.dao.ExtendedGoalDao = db.extendedGoalDao()

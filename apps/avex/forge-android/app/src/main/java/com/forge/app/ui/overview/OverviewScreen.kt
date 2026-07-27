@@ -67,7 +67,7 @@ import com.forge.app.ui.theme.LocalForgeSettings
 import com.forge.app.program.Program
 import com.forge.app.program.Trophies
 import com.forge.app.ui.common.InlineEmptyHint
-import com.forge.app.ui.gym.stats.components.statsEntrance
+import com.forge.app.ui.common.statsEntrance
 import com.forge.app.ui.profile.GoalLinesSection
 import com.forge.app.ui.overview.components.OverviewStat
 import com.forge.app.ui.overview.components.RecentRow
@@ -163,6 +163,8 @@ private fun CoachHomeBlock(headline: String, body: String, clickLabel: String, o
 @Composable
 fun OverviewScreen(
     onStartSession: (dayKey: String) -> Unit,
+    /** Opens the Academy on the cold-start lesson the directive is carrying (B3). */
+    onOpenAcademy: () -> Unit = {},
     onStartSessionSkipWarmup: (dayKey: String) -> Unit = onStartSession,
     onViewProgram: () -> Unit,
     onGoToCardio: () -> Unit,
@@ -188,6 +190,23 @@ fun OverviewScreen(
     val orphanNotice by viewModel.orphanNotice.collectAsStateWithLifecycle()
     val selectedItem by viewModel.selectedItem.collectAsStateWithLifecycle()
     val summaryLines by viewModel.sessionExerciseLines.collectAsStateWithLifecycle()
+    val movement by viewModel.movement.collectAsStateWithLifecycle()
+
+    // Keep the movement line current across a day of glances (W6) — steps taken while away should
+    // show on return, same resume-refresh rule as the cardio hero's TODAY line (GYMAP-64).
+    val movementLifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(movementLifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                viewModel.refreshMovement()
+                // The answer is date- and session-sensitive: a directive that still says "Push day"
+                // after you trained, or after midnight, is worse than none (B2).
+                viewModel.refreshDirective()
+            }
+        }
+        movementLifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { movementLifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     // A milestone "fires and vanishes" otherwise (it's marked shown immediately) — capture it into a
     // transient banner so the user actually sees it (#Overview pendingMilestone).
     var milestoneToast by remember { mutableStateOf<MilestoneEvent?>(null) }
@@ -400,32 +419,77 @@ fun OverviewScreen(
                     HeroCta("Log a workout →", "Log a workout", onLogFreestyle)
                 }
             } else {
-                // ── Next workout ─────────────────────────────────────────────────
-                // If you've already trained today, the next session is tomorrow — say so.
+                // ── Today's directive (Coach v3 B2) ──────────────────────────────
+                // The coach's one answer OWNS this slot (plan M7): it replaces the bare
+                // next-workout name rather than stacking beside it, so the page never says the
+                // same thing twice. Until the first read lands, the old next-up name stands in —
+                // the hero is never blank.
+                val directive = state.directive
                 val trainedToday = todayDow in state.weekDaysTrained
-                Text(if (trainedToday) "TOMORROW" else "TODAY",
-                    style = MaterialTheme.typography.labelSmall, fontSize = 13.sp, color = muted)
+                Text(
+                    when {
+                        directive == null && trainedToday -> "TOMORROW"
+                        else -> "TODAY"
+                    },
+                    style = MaterialTheme.typography.labelSmall, fontSize = 13.sp, color = muted
+                )
                 Spacer(Modifier.height(2.dp))
                 Text(
-                    state.customDayName ?: nextDay?.defaultName ?: "Ready",
+                    directive?.headline ?: state.customDayName ?: nextDay?.defaultName ?: "Ready",
                     style = MaterialTheme.typography.displayLarge,
                     color = onBg,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     modifier = if (nextDay != null) Modifier.clickableLabeled("Edit this day's program") { onBuildPlan() } else Modifier
                 )
-                if (nextDay != null) {
+                // The reason is the hero's one prose line — always present, never a menu (§4.3).
+                if (directive != null) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        directive.reason,
+                        style = MaterialTheme.typography.bodyMedium.copy(fontStyle = FontStyle.Italic),
+                        color = muted
+                    )
+                    directive.secondary?.let { secondary ->
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            secondary,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = muted.copy(alpha = 0.7f)
+                        )
+                    }
+                    // While the coach is still learning you, the curriculum carries the day: one
+                    // lesson, tappable, never a wall of onboarding text (B3 cold-start mode).
+                    state.coldStartLesson?.let { lesson ->
+                        Spacer(Modifier.height(10.dp))
+                        Text(
+                            "Read: ${lesson.title} →",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = accent,
+                            modifier = Modifier
+                                .clickableLabeled("Open the lesson: ${lesson.title}") { onOpenAcademy() }
+                                .padding(vertical = 4.dp)
+                        )
+                    }
+                    // Today's targets, three lines of it: what the session will actually ask for.
+                    state.brief?.targets?.filter { it.targetWeightLb != null }?.take(3)?.let { targets ->
+                        if (targets.isNotEmpty()) {
+                            Spacer(Modifier.height(10.dp))
+                            targets.forEach { t ->
+                                Text(
+                                    "${t.name} · ${t.setsText}×${t.repsText} @ ${com.forge.app.domain.units.formatWeight(t.targetWeightLb!!, LocalForgeSettings.current.weightUnit)}",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = muted
+                                )
+                            }
+                        }
+                    }
+                } else if (nextDay != null) {
                     Spacer(Modifier.height(10.dp))
                     Text(
                         "${nextDay.subtitle} · ${nextDay.exercises.size} exercises",
                         style = MaterialTheme.typography.bodyMedium.copy(fontStyle = FontStyle.Italic),
                         color = muted
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text(
-                        "Tap the day name to edit its program",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = muted.copy(alpha = 0.7f)
                     )
                 }
 
@@ -513,6 +577,14 @@ fun OverviewScreen(
                     value = if (state.cardioWeeklyTargetMin > 0) "$animCardio/${state.cardioWeeklyTargetMin}" else "$animCardio",
                     label = "CARDIO MIN", modifier = Modifier.weight(1f)
                 )
+            }
+
+            // ── Movement today (W6) — the watch's step count against a typical day. Rendered only
+            // when steps are connected (GYMAP-64 rule: honest zero when connected, hidden otherwise);
+            // the bar is the mark and works at zero (§12). "Typical" = median of the last 14 days.
+            movement?.let { m ->
+                Spacer(Modifier.height(16.dp))
+                MovementLine(m, onBg = onBg, muted = muted, outline = outline, accent = accent)
             }
 
             // ── Coach (adaptation engine: actionable advice only) ────────────
@@ -678,5 +750,59 @@ private fun OnThisDayCard(
         Spacer(Modifier.height(2.dp))
         Text("You trained ${memory.dayName} · $vol moved$prText",
             style = MaterialTheme.typography.bodyMedium, color = onBg)
+    }
+}
+
+/**
+ * The Home movement line (W6): today's watch steps against a typical day (14-day median), the
+ * quiet daily-movement read between sessions. One thin bar (fill `primary` on an outline track,
+ * §5) + one mono reading — honest at zero, hidden entirely when steps aren't connected.
+ */
+@Composable
+private fun MovementLine(
+    movement: OverviewViewModel.TodayMovement,
+    onBg: Color,
+    muted: Color,
+    outline: Color,
+    accent: Color
+) {
+    val reading = buildString {
+        append("%,d".format(movement.steps))
+        append(" STEPS")
+        movement.typicalSteps?.let { append(" · TYPICAL ~%,d".format(it)) }
+    }
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("MOVEMENT", style = MaterialTheme.typography.labelMedium, color = muted)
+            Text(
+                reading,
+                style = MaterialTheme.typography.labelSmall,
+                color = muted, fontSize = 9.sp, letterSpacing = 0.5.sp
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        // Today against the typical-day mark; with no baseline yet the bar shows today against
+        // itself (full when any steps, empty at zero) — a real reading either way, never fake.
+        val target = movement.typicalSteps ?: movement.steps
+        val fraction = if (target <= 0) 0f else (movement.steps.toFloat() / target).coerceIn(0f, 1f)
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(4.dp)
+                .background(outline.copy(alpha = 0.3f), RoundedCornerShape(2.dp))
+        ) {
+            if (fraction > 0f) {
+                Box(
+                    Modifier
+                        .fillMaxWidth(fraction)
+                        .height(4.dp)
+                        .background(accent, RoundedCornerShape(2.dp))
+                )
+            }
+        }
     }
 }

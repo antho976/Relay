@@ -129,7 +129,8 @@ class WeeklyRecapWorker @AssistedInject constructor(
                     append(" · On this day ($ago ago): ${mem.dayName}")
                 }
             }
-            val title = if (isStreakMilestone) "${stats.streakDays}-day streak!" else "Weekly recap"
+            // DESIGN §11: no exclamation marks in a rendered string.
+            val title = if (isStreakMilestone) "${stats.streakDays}-day streak" else "Weekly recap"
             ForgeNotifications.ensureChannel(ctx, CHANNEL_ID, "Weekly recap", "Your weekly training summary")
             nm.notify(NOTIF_ID, ForgeNotifications.build(ctx, CHANNEL_ID, title, body))
         }

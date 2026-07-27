@@ -2,6 +2,7 @@ package com.forge.app.domain.adapt
 
 import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.data.db.entities.LoggedSet
+import com.forge.app.data.db.entities.MoodEntry
 import com.forge.app.data.db.entities.Session
 import com.forge.app.data.db.types.EffortRating
 import org.junit.Assert.assertEquals
@@ -246,6 +247,118 @@ class DeloadAdvisorTest {
         assertEquals(Confidence.MEDIUM, rec.confidence)
         assertTrue(rec.reason.contains("sleep"))
         assertTrue(rec.reason.contains("resting HR"))
+    }
+
+    // ── A1 drivers: mood, HRV, daily steps (additive, gated) ───────────────────
+
+    private fun moods(low: Int, good: Int): List<MoodEntry> =
+        (0 until low).map { MoodEntry(dayKey = "upper-a", mood = "drained", recordedAt = now - (1 + it) * day) } +
+            (0 until good).map { MoodEntry(dayKey = "upper-a", mood = "good", recordedAt = now - (8 + it) * day) }
+
+    private fun hrv(windowMs: Double, priorMs: Double, count: Int = 6): List<HrvSample> =
+        (0 until count).map { HrvSample(timeMs = now - (1 + it) * day, rmssdMs = windowMs) } +
+            (0 until count).map { HrvSample(timeMs = (20 + it) * day, rmssdMs = priorMs) }
+
+    private fun steps(perDay: Int, days: Int = 8): List<DailySteps> =
+        (0 until days).map { DailySteps(dayStartMs = now - (1 + it) * day, steps = perDay) }
+
+    private fun moodSnapshot(moods: List<MoodEntry>) = AdaptationSnapshot(
+        nowMs = now, program = emptyList(), sessions = baseSessions(),
+        exerciseHistory = mapOf("ua1" to calmBouts()), moods = moods, prefs = PrefsSnap()
+    )
+
+    @Test
+    fun mood_firesWhenMostRecentSessionsFeltRough() {
+        // 4 of 6 window ratings drained (67% ≥ 50%) → +1 on an otherwise-silent snapshot.
+        val f = DeloadAdvisor.fatigue(moodSnapshot(moods(low = 4, good = 2)))
+        assertNotNull(f)
+        assertEquals(1, f!!.score)
+        assertTrue(f.drivers.any { it.contains("felt drained or off") })
+    }
+
+    @Test
+    fun mood_silentWhenSessionsFeelFine_orTooFewRatings() {
+        assertEquals(0, DeloadAdvisor.fatigue(moodSnapshot(moods(low = 1, good = 5)))!!.score)
+        // Below the 4-rating gate: sparse data must not speak.
+        assertEquals(0, DeloadAdvisor.fatigue(moodSnapshot(moods(low = 3, good = 0)))!!.score)
+    }
+
+    @Test
+    fun hrv_firesWhenSuppressedBelowOwnBaseline() {
+        // Window 44 ms vs prior 55 ms = −20% ≥ 12% threshold → +2.
+        val f = DeloadAdvisor.fatigue(
+            snapshot(history = mapOf("ua1" to calmBouts()), health = HealthSnap(hrv = hrv(44.0, 55.0)))
+        )
+        assertNotNull(f)
+        assertEquals(2, f!!.score)
+        assertTrue(f.drivers.any { it.contains("HRV down 20%") })
+    }
+
+    @Test
+    fun hrv_silentWithinNormalNoise_orTooFewReadings() {
+        // −5% is night-to-night noise, not fatigue.
+        assertEquals(0, DeloadAdvisor.fatigue(
+            snapshot(history = mapOf("ua1" to calmBouts()), health = HealthSnap(hrv = hrv(52.0, 55.0)))
+        )!!.score)
+        // Below the 5-sample gate on each side.
+        assertEquals(0, DeloadAdvisor.fatigue(
+            snapshot(history = mapOf("ua1" to calmBouts()), health = HealthSnap(hrv = hrv(40.0, 55.0, count = 3)))
+        )!!.score)
+    }
+
+    @Test
+    fun dailySteps_fireOnlyOnSustainedHighMovement() {
+        val busy = DeloadAdvisor.fatigue(
+            snapshot(history = mapOf("ua1" to calmBouts()), health = HealthSnap(dailySteps = steps(16_000)))
+        )
+        assertEquals(1, busy!!.score)
+        assertTrue(busy.drivers.any { it.contains("steps a day") })
+        // An ordinary week of walking is not fatigue.
+        assertEquals(0, DeloadAdvisor.fatigue(
+            snapshot(history = mapOf("ua1" to calmBouts()), health = HealthSnap(dailySteps = steps(7_000)))
+        )!!.score)
+        // Too few days to judge.
+        assertEquals(0, DeloadAdvisor.fatigue(
+            snapshot(history = mapOf("ua1" to calmBouts()), health = HealthSnap(dailySteps = steps(16_000, days = 4)))
+        )!!.score)
+    }
+
+    @Test
+    fun a1Drivers_areAbsentWithoutTheirData() {
+        // The pre-A1 clean stage must still score 0 — every new driver is additive.
+        val f = DeloadAdvisor.fatigue(snapshot(history = mapOf("ua1" to calmBouts())))
+        assertEquals(0, f!!.score)
+        assertTrue(f.checks.any { it.name == "Session mood" && it.reading == "no data" })
+        assertTrue(f.checks.any { it.name == "Heart-rate variability" && it.reading == "no data" })
+        assertTrue(f.checks.any { it.name == "Daily movement" && it.reading == "no data" })
+    }
+
+    // ── Session types that aren't ordinary training (A1) ───────────────────────
+
+    @Test
+    fun techniqueAndTestBouts_doNotFeedFatigueDrivers() {
+        // Same brutal bouts that normally fire effort inflation (+2), but logged on technique days.
+        val techniqueBouts = brutalWindowBouts().map { it.copy(sessionType = "technique") }
+        val f = DeloadAdvisor.fatigue(snapshot(history = mapOf("ua1" to techniqueBouts)))
+        assertNotNull(f)
+        assertEquals(0, f!!.score)
+    }
+
+    @Test
+    fun testDayPr_doesNotMaskARealRegression() {
+        // Prior month best 50 lb; the window's only *training* bout regressed to 42.5, but a test
+        // day hit 55. Counting the test day would hide the regression on both lifts.
+        fun lift() = listOf(
+            bout(startDay = 36, effort = null, sets = listOf(set(50.0, 8))),
+            bout(startDay = 50, effort = null, sets = listOf(set(42.5, 8))),
+            bout(startDay = 52, effort = null, sets = listOf(set(55.0, 1))).copy(sessionType = "test")
+        )
+        val f = DeloadAdvisor.fatigue(
+            snapshot(history = mapOf("ua1" to calmBouts(), "ua2" to lift(), "ua3" to lift()))
+        )
+        assertNotNull(f)
+        assertEquals(2, f!!.score)
+        assertTrue(f.drivers.any { it.contains("2 lifts below last month's strength") })
     }
 
     // ── Determinism ────────────────────────────────────────────────────────────

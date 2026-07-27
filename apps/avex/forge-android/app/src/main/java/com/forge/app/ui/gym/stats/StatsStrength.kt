@@ -43,8 +43,8 @@ import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.ui.gym.stats.components.LineChart
 import com.forge.app.ui.gym.stats.components.ScatterChart
-import com.forge.app.ui.gym.stats.components.rememberDrawProgress
-import com.forge.app.ui.gym.stats.components.staggeredProgress
+import com.forge.app.ui.common.rememberDrawProgress
+import com.forge.app.ui.common.staggeredProgress
 import com.forge.app.ui.gym.stats.state.E1rmLift
 import com.forge.app.ui.gym.stats.state.PrEntry
 import com.forge.app.ui.gym.stats.state.StrengthCurve

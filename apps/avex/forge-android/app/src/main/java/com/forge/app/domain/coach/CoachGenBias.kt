@@ -52,11 +52,19 @@ object CoachGenBias {
 
     private fun CoachDecision.isActive() = status == "applied" || status == "folded"
 
+    /**
+     * Whether this decision's outcome may shape future generation. A failed change obviously
+     * can't — and neither can one the athlete never actually ran (B1's NOT FOLLOWED): an unlived
+     * window is not evidence, and folding it in would teach the generator from a fiction.
+     */
+    private fun CoachDecision.countsForBias() =
+        outcome != "failed" && outcome != CoachDecision.OUTCOME_NOT_FOLLOWED
+
     fun from(decisions: List<CoachDecision>): GenBias {
         if (decisions.isEmpty()) return GenBias.NEUTRAL
 
         val volume = decisions
-            .filter { it.isActive() && it.type.startsWith("volume") && it.outcome != "failed" }
+            .filter { it.isActive() && it.type.startsWith("volume") && it.countsForBias() }
             .mapNotNull { d ->
                 ExerciseLibrary.byId(d.targetKey)?.muscle
                     ?.let { it to if (d.type == "volume_up") 1 else -1 }
@@ -68,7 +76,7 @@ object CoachGenBias {
         // Latest non-failed rep_shift per exercise wins (associate keeps the last entry; ascending id
         // order makes "last" the most recent).
         val repBias = decisions
-            .filter { it.isActive() && it.type == "rep_shift" && it.outcome != "failed" && it.payload != null }
+            .filter { it.isActive() && it.type == "rep_shift" && it.countsForBias() && it.payload != null }
             .sortedBy { it.id }
             .associate { it.targetKey to it.payload!! }
 
@@ -78,7 +86,7 @@ object CoachGenBias {
         // watcher can still judge an in-window folded swap (CoachDao.pendingOutcome), one it rules
         // failed must drop out of prefer and into avoid (auto-coach seam audit 2026-06-15, finding P1).
         val prefer = swaps
-            .filter { (it.status == "folded" && it.outcome != "failed") || (it.status == "applied" && it.outcome == "ok") }
+            .filter { (it.status == "folded" && it.countsForBias()) || (it.status == "applied" && it.outcome == "ok") }
             .mapNotNull { it.payload }.toSet()
         val avoid = swaps.filter { it.outcome == "failed" }
             .mapNotNull { it.payload }.toSet() - prefer

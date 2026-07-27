@@ -131,6 +131,7 @@ fun HubScreen(
                     title = "Stats"
                 )
                 BottomTab.HOME -> OverviewScreen(
+                    onOpenAcademy = { nav.navigate(Routes.ACADEMY) },
                     // A cardio "day" is logged on the Cardio page, so its start CTA swipes there.
                     onStartSession = { dayKey -> if (dayKey.startsWith("cardio")) goToTab(BottomTab.CARDIO) else nav.navigate(Routes.gymDay(dayKey)) },
                     onStartSessionSkipWarmup = { dayKey -> if (dayKey.startsWith("cardio")) goToTab(BottomTab.CARDIO) else nav.navigate(Routes.gymDay(dayKey, skipWarmup = true)) },
@@ -155,6 +156,7 @@ fun HubScreen(
                     onBuildPlan = { nav.navigate(Routes.programBuilder()) }
                 )
                 BottomTab.COACH -> CoachScreen(
+                    onOpenAcademy = { nav.navigate(Routes.ACADEMY) },
                     onConnectHealth = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) }
                 )
                 BottomTab.PROFILE -> ProfileScreen(

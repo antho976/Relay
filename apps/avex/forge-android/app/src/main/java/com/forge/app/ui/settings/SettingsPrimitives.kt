@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.ui.common.EditorialHeader
+import com.forge.app.ui.common.ForgeRowPill
 import com.forge.app.ui.common.ForgeSwitch
 import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.common.clickableLabeled
@@ -144,14 +145,20 @@ internal fun PillChip(label: String, selected: Boolean, enabled: Boolean = true,
 internal fun SettingsPrimaryAction(label: String, enabled: Boolean = true, onClick: () -> Unit) {
     val onBg = MaterialTheme.colorScheme.onBackground
     val bg = MaterialTheme.colorScheme.background
-    Box(
-        modifier = Modifier
-            .background(onBg.copy(alpha = if (enabled) 1f else 0.35f), RoundedCornerShape(50))
-            .then(if (enabled) Modifier.bounceClick(onClick = onClick) else Modifier)
-            .padding(horizontal = 16.dp, vertical = 9.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(label, style = MaterialTheme.typography.labelMedium, color = bg, letterSpacing = 0.3.sp)
+    // The gutter Row bounds the capsule to the page width (§7). Without it the Box sized to the
+    // label's intrinsic width, which fits at 100% and runs off BOTH edges at 200% font scale —
+    // found by RecipeScreenshotTest's 200% golden, invisible to every static check and to the eye
+    // at normal scale (§14).
+    Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
+        Box(
+            modifier = Modifier
+                .background(onBg.copy(alpha = if (enabled) 1f else 0.35f), RoundedCornerShape(50))
+                .then(if (enabled) Modifier.bounceClick(onClick = onClick) else Modifier)
+                .padding(horizontal = 16.dp, vertical = 9.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(label, style = MaterialTheme.typography.labelMedium, color = bg, letterSpacing = 0.3.sp)
+        }
     }
 }
 
@@ -162,14 +169,17 @@ internal fun SettingsOutlineAction(label: String, enabled: Boolean = true, onCli
     val onBg = MaterialTheme.colorScheme.onBackground
     val outline = MaterialTheme.colorScheme.outline
     val alpha = if (enabled) 1f else 0.35f
-    Box(
-        modifier = Modifier
-            .border(1.dp, outline.copy(alpha = 0.35f * alpha), RoundedCornerShape(50))
-            .then(if (enabled) Modifier.bounceClick(onClick = onClick) else Modifier)
-            .padding(horizontal = 14.dp, vertical = 9.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(label, style = MaterialTheme.typography.labelMedium, color = onBg.copy(alpha = alpha), letterSpacing = 0.3.sp)
+    // Same gutter fix as SettingsPrimaryAction above (§14, 200% overflow).
+    Row(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
+        Box(
+            modifier = Modifier
+                .border(1.dp, outline.copy(alpha = 0.35f * alpha), RoundedCornerShape(50))
+                .then(if (enabled) Modifier.bounceClick(onClick = onClick) else Modifier)
+                .padding(horizontal = 14.dp, vertical = 9.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(label, style = MaterialTheme.typography.labelMedium, color = onBg.copy(alpha = alpha), letterSpacing = 0.3.sp)
+        }
     }
 }
 
@@ -192,18 +202,7 @@ internal fun StatusDot(active: Boolean, size: Dp = 8.dp) {
  * nests a second click. Shared by the Coach feed glance and the Recovery integration rows.
  */
 @Composable
-internal fun ConnectPill(label: String = "Connect") {
-    val onBg = MaterialTheme.colorScheme.onBackground
-    val outline = MaterialTheme.colorScheme.outline
-    Box(
-        modifier = Modifier
-            .border(1.dp, outline.copy(alpha = 0.35f), RoundedCornerShape(50))
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(label, style = MaterialTheme.typography.labelMedium, color = onBg, letterSpacing = 0.3.sp)
-    }
-}
+internal fun ConnectPill(label: String = "Connect") = ForgeRowPill(label)
 
 /** A quiet mono accent navigation link ("action →") — jumping to another screen (DESIGN §8 ③).
  *  Self-contained: bakes the 24dp gutter + a tappable inset, so call it directly and stack. */

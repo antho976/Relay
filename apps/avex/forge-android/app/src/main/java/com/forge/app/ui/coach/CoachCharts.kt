@@ -225,6 +225,47 @@ internal fun CoachWatchBar(fraction: Float, color: Color, c: CoachColors) {
 }
 
 /**
+ * One value against its target (§2②). The TRACK is drawn unconditionally — it is a container, not a
+ * reading, so a goal with no number set still has a shape instead of the section going text-only
+ * (`design/FAILURES.md`, *Empty by omission*). The fill appears only when there is a fraction to
+ * state, and an honest zero draws no fill at all.
+ *
+ * The track takes two different rungs on purpose (*Invisible ghost*): with a fill riding it, it is a
+ * groove and takes the §5 bar-track rung; standing alone it IS the mark and takes `muted @0.30`,
+ * because `outline @0.25` measures ~1.08:1 on near-black and simply cannot be seen.
+ */
+@Composable
+internal fun CoachMeter(
+    fraction: Float?,
+    c: CoachColors,
+    modifier: Modifier = Modifier,
+    color: Color = c.accent,
+    height: androidx.compose.ui.unit.Dp = 5.dp
+) {
+    val progress = rememberCoachDraw("meter-${fraction ?: -1f}")
+    Box(
+        modifier
+            .fillMaxWidth()
+            .height(height)
+            .clip(RoundedCornerShape(50))
+            .background(
+                if (fraction == null) c.muted.copy(alpha = 0.30f)
+                else c.outline.copy(alpha = 0.25f)
+            )
+    ) {
+        if (fraction != null && fraction > 0f) {
+            Box(
+                Modifier
+                    .fillMaxWidth((fraction * progress).coerceIn(0f, 1f))
+                    .fillMaxHeight()
+                    .clip(RoundedCornerShape(50))
+                    .background(color)
+            )
+        }
+    }
+}
+
+/**
  * One dashboard progression row: two mono end labels over a bar. [segments] draws the earned
  * style segmented meter (n of m); [fraction] draws a continuous fill. The page's answer to
  * "how long until the next thing", drawn instead of written.
@@ -240,7 +281,7 @@ internal fun CoachProgressRow(
     sub: String? = null,
     barColor: Color = c.accent
 ) {
-    Column(modifier.fillMaxWidth().padding(bottom = 14.dp)) {
+    Column(modifier.fillMaxWidth().padding(bottom = COACH_BLOCK_GAP)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(
                 label.uppercase(), style = MaterialTheme.typography.labelSmall,

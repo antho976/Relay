@@ -26,6 +26,9 @@ interface LoggedSetDao {
     @Delete
     suspend fun delete(set: LoggedSet)
 
+    @Query("SELECT * FROM logged_set WHERE id = :id")
+    suspend fun get(id: Long): LoggedSet?
+
     @Query("SELECT * FROM logged_set WHERE logged_exercise_id = :loggedExerciseId ORDER BY set_index")
     suspend fun forLoggedExercise(loggedExerciseId: Long): List<LoggedSet>
 
@@ -265,6 +268,16 @@ interface LoggedSetDao {
         ORDER BY ls.completed_at ASC
     """)
     suspend fun allForSession(sessionId: Long): List<LoggedSet>
+
+    /** Reactive per-session sets — drives the watch's /session/live mirror (W1): every set log or
+     *  undo re-emits, so the wrist's ticks track Room, not any ViewModel. */
+    @Query("""
+        SELECT ls.* FROM logged_set ls
+        INNER JOIN logged_exercise le ON ls.logged_exercise_id = le.id
+        WHERE le.session_id = :sessionId
+        ORDER BY ls.completed_at
+    """)
+    fun observeAllForSession(sessionId: Long): Flow<List<LoggedSet>>
 
     /**
      * Every set across finished, tracked sessions — pairs with

@@ -30,12 +30,28 @@ biometric = "1.1.0"
 # Async
 coroutines = "1.9.0"
 
+# Serialization (W1 — the wear Data Layer protocol DTOs in :shared)
+kotlinx-serialization = "1.7.3"
+
+# Wear OS (W1–W4: watch app, tiles, complications, live HR)
+wear-compose = "1.4.1"
+play-services-wearable = "19.0.0"
+wear-tiles = "1.4.1"
+protolayout = "1.2.1"
+watchface-complications = "1.2.1"
+wear-ongoing = "1.0.0"
+health-services = "1.0.0"
+concurrent-futures = "1.2.0"
+
 # WorkManager
 work = "2.10.1"
 hilt-work = "1.2.0"
 
 # Test
 junit = "4.13.2"
+# Screenshot testing (Roborazzi runs on the JVM via Robolectric, so no emulator and no AGP coupling).
+roborazzi = "1.70.0"
+robolectric = "4.14.1"
 androidx-test-junit = "1.2.1"
 espresso = "3.6.1"
 
@@ -60,6 +76,10 @@ compose-ui = { group = "androidx.compose.ui", name = "ui" }
 compose-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
 compose-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
 compose-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
+roborazzi = { group = "io.github.takahirom.roborazzi", name = "roborazzi", version.ref = "roborazzi" }
+roborazzi-compose = { group = "io.github.takahirom.roborazzi", name = "roborazzi-compose", version.ref = "roborazzi" }
+roborazzi-junit-rule = { group = "io.github.takahirom.roborazzi", name = "roborazzi-junit-rule", version.ref = "roborazzi" }
+robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
 compose-material3 = { group = "androidx.compose.material3", name = "material3" }
 compose-material-icons = { group = "androidx.compose.material", name = "material-icons-extended" }
 
@@ -93,6 +113,25 @@ androidx-biometric = { group = "androidx.biometric", name = "biometric", version
 
 # Coroutines
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
+kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "coroutines" }
+kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutines" }
+kotlinx-coroutines-play-services = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-play-services", version.ref = "coroutines" }
+
+# Serialization (W1 protocol)
+kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
+
+# Wear OS (W1–W4)
+play-services-wearable = { group = "com.google.android.gms", name = "play-services-wearable", version.ref = "play-services-wearable" }
+wear-compose-material = { group = "androidx.wear.compose", name = "compose-material", version.ref = "wear-compose" }
+wear-compose-foundation = { group = "androidx.wear.compose", name = "compose-foundation", version.ref = "wear-compose" }
+wear-tiles = { group = "androidx.wear.tiles", name = "tiles", version.ref = "wear-tiles" }
+protolayout = { group = "androidx.wear.protolayout", name = "protolayout", version.ref = "protolayout" }
+protolayout-material = { group = "androidx.wear.protolayout", name = "protolayout-material", version.ref = "protolayout" }
+protolayout-expression = { group = "androidx.wear.protolayout", name = "protolayout-expression", version.ref = "protolayout" }
+watchface-complications-data-source-ktx = { group = "androidx.wear.watchface", name = "watchface-complications-data-source-ktx", version.ref = "watchface-complications" }
+wear-ongoing = { group = "androidx.wear", name = "wear-ongoing", version.ref = "wear-ongoing" }
+health-services-client = { group = "androidx.health", name = "health-services-client", version.ref = "health-services" }
+concurrent-futures-ktx = { group = "androidx.concurrent", name = "concurrent-futures-ktx", version.ref = "concurrent-futures" }
 
 # WorkManager
 work-runtime-ktx = { group = "androidx.work", name = "work-runtime-ktx", version.ref = "work" }
@@ -114,8 +153,11 @@ androidx-test-uiautomator = { group = "androidx.test.uiautomator", name = "uiaut
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 hilt = { id = "com.google.dagger.hilt.android", version.ref = "hilt" }
 android-test = { id = "com.android.test", version.ref = "agp" }
 androidx-baselineprofile = { id = "androidx.baselineprofile", version.ref = "benchmark" }
+roborazzi = { id = "io.github.takahirom.roborazzi", version.ref = "roborazzi" }

@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -16,18 +15,24 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontStyle
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.forge.app.data.db.entities.CoachDecision
 import com.forge.app.data.repo.CoachRepository
+import com.forge.app.domain.coach.AutoCoachPlanner
+import com.forge.app.ui.common.ForgePrimaryCapsule
+import com.forge.app.ui.common.InlineEmptyHint
+import com.forge.app.ui.common.statsEntrance
 import kotlin.math.ceil
 
 /**
- * The Now lens, ordered by what's live (§4.10): the week's call with the evidence and the
- * actions in the open, the changes under watch from the last brief, then ONE road-ahead
- * section — the countdown bars with the milestone rail folded in (§4.12). Nothing folds
- * (§4.2); holds and errors speak once, in the hero. The deep dives live in Signals; trust
- * and the week-by-week record live in Journey.
+ * The Now lens, and the whole of it — one emitter, so section order and the entrance cascade cannot
+ * disagree. They used to: the lens was assembled from four call sites that each numbered their own
+ * `statsEntrance`, so six sections shared three stagger steps and one lens cascaded out of order.
+ *
+ * Ordered by what is live (§4.8, placement is rank): the week's call with its evidence and actions,
+ * the changes still under watch, then what the training is FOR (goals, block, project), then the
+ * pure countdowns last. The setup prompts used to open the lens, which meant a new user met three
+ * things to configure before a single reading.
  */
 internal fun LazyListScope.coachNowLens(
     state: CoachViewModel.UiState,
@@ -35,49 +40,99 @@ internal fun LazyListScope.coachNowLens(
     onApply: (Long) -> Unit,
     onSkip: (Long) -> Unit,
     onUndo: (Long) -> Unit,
-    onApplyAll: (String) -> Unit
+    onApplyAll: (String) -> Unit,
+    onAddGoal: () -> Unit,
+    onStartBlock: () -> Unit,
+    onEndBlock: () -> Unit,
+    onAcceptProject: () -> Unit,
+    onCompleteProject: () -> Unit,
+    onAbandonProject: () -> Unit,
+    onOpenAcademy: () -> Unit
 ) {
-    val brief = state.brief
-
-    // ── The call — only when the week actually produced decisions ────────────
-    if (brief != null && brief.decisions.isNotEmpty()) {
-        item("coach-call") {
-            CoachSection(c, title = "The call", index = 2) {
-                brief.decisions.forEach { d ->
-                    DecisionRow(d, state, c, onApply, onSkip, onUndo)
-                }
-                val open = brief.decisions.count { it.status == CoachRepository.STATUS_PROPOSED }
-                if (open > 1) {
-                    CoachAction("Apply all $open →", c.accent, "Apply every open change") {
-                        onApplyAll(brief.pass.weekId)
-                    }
-                }
-            }
-        }
-    }
-
-    // ── Under watch: last brief's changes, each with its window drawn ─────────
-    if (brief != null && brief.previousApplied.isNotEmpty()) {
-        item("coach-watching") {
-            CoachSection(
-                c, title = "Under watch", index = 3,
-                caption = "Two weeks to prove out; undo any time."
-            ) {
-                val now = remember { System.currentTimeMillis() }
-                brief.previousApplied.forEach { d -> WatchedRow(d, now, c) }
-            }
-        }
-    }
-
-    // ── Coming up: the road ahead as ONE section of labeled bars ──────────────
-    // The milestone ladder folds in here as a segmented rail + the next step (§4.12), sharing
-    // the countdowns' bar language — a 9-row checklist above a stack of bars didn't fit together.
-    coachComingUpSection(state, c)
+    coachCallSection(state, c, index = 2, onApply, onSkip, onUndo, onApplyAll)
+    coachWatchSection(state, c, index = 3)
+    coachGoalsSection(state, c, index = 4, onAddGoal = onAddGoal)
+    coachBlockSection(state.block, c, index = 5, onStart = onStartBlock, onEnd = onEndBlock)
+    coachProjectSection(state, c, index = 6, onAcceptProject, onCompleteProject, onAbandonProject)
+    coachComingUpSection(state, c, index = 7)
+    coachAcademyLink(state, c, index = 8, onOpenAcademy)
 }
 
 /**
- * One decision, fully in the open: the summary with its status word, the coach's why as a
- * quiet aside, the evidence chart, and the actions. No folding, nothing behind a tap.
+ * The week's call: every decision in the open with its evidence and its actions. Nothing folds
+ * (§4.2); holds and errors speak once, in the hero.
+ *
+ * At zero it renders ONLY while the coach is still learning, where it names the gate the hero's
+ * BASELINE figure counts toward — the caption belongs on the thing it gates (§4.3). Once the
+ * baseline is in and a week simply produced nothing, the hero's verdict and aside already say so,
+ * and a section here would be pure echo (`design/FAILURES.md`, *Mark echo*), so it stands down.
+ */
+private fun LazyListScope.coachCallSection(
+    state: CoachViewModel.UiState,
+    c: CoachColors,
+    index: Int,
+    onApply: (Long) -> Unit,
+    onSkip: (Long) -> Unit,
+    onUndo: (Long) -> Unit,
+    onApplyAll: (String) -> Unit
+) {
+    val brief = state.brief
+    val decisions = brief?.decisions.orEmpty()
+    val learning = brief == null || brief.sessionsToGo > 0
+    if (decisions.isEmpty() && !learning) return
+
+    item("coach-call") {
+        CoachSection(c, title = "The call", index = index) {
+            if (decisions.isEmpty()) {
+                val needed = state.watch?.minSessions
+                    ?: state.brief?.minSessions?.takeIf { it > 0 }
+                    ?: AutoCoachPlanner.MIN_SESSIONS
+                // The lens's ONE hint (§12): a call that does not exist yet has no shape of its own,
+                // and the count itself is already drawn as the hero's fourth figure.
+                InlineEmptyHint(
+                    "The first call lands once the coach has $needed sessions to read.",
+                    color = c.muted
+                )
+            } else {
+                decisions.forEach { d -> DecisionRow(d, state, c, onApply, onSkip, onUndo) }
+                val open = decisions.count { it.status == CoachRepository.STATUS_PROPOSED }
+                if (open > 1 && brief != null) {
+                    // §8: ONE filled capsule per section, grouped at its END. Per-decision actions
+                    // stay level ② / ③ text so five open calls can never stack into a button wall.
+                    ForgePrimaryCapsule(
+                        label = "Apply all $open",
+                        onClick = { onApplyAll(brief.pass.weekId) },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** Last brief's changes, each with its two-week window drawn and its live verdict. */
+private fun LazyListScope.coachWatchSection(
+    state: CoachViewModel.UiState,
+    c: CoachColors,
+    index: Int
+) {
+    val previous = state.brief?.previousApplied.orEmpty()
+    if (previous.isEmpty()) return
+
+    item("coach-watching") {
+        CoachSection(
+            c, title = "Under watch", index = index,
+            caption = "Two weeks to prove out; undo any time."
+        ) {
+            val now = remember { System.currentTimeMillis() }
+            previous.forEach { d -> WatchedRow(d, now, c) }
+        }
+    }
+}
+
+/**
+ * One decision, fully in the open: the summary with its status word, the coach's why as a quiet
+ * aside, the evidence chart, and the actions. No folding, nothing behind a tap.
  */
 @Composable
 private fun DecisionRow(
@@ -92,18 +147,17 @@ private fun DecisionRow(
     val status = coachDecisionStatusWord(d, now)
     val statusColor = if (d.status == CoachRepository.STATUS_PROPOSED) c.accent else c.muted
 
-    Column(Modifier.fillMaxWidth().padding(bottom = 16.dp)) {
+    Column(Modifier.fillMaxWidth().padding(bottom = COACH_BLOCK_GAP)) {
         Row(
             Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
+            verticalAlignment = Alignment.Top
         ) {
+            // §14: a decision summary names the user's own exercise, so it wraps rather than clips.
             Text(
                 d.summary,
                 style = MaterialTheme.typography.bodyMedium,
                 color = c.onBg,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f)
             )
             if (status.isNotEmpty()) {
@@ -161,11 +215,9 @@ private fun WatchedRow(d: CoachDecision, now: Long, c: CoachColors) {
         d.outcome == "ok" -> c.accent
         else -> c.secondary
     }
-    Column(Modifier.fillMaxWidth().padding(bottom = 12.dp)) {
-        Text(
-            d.summary, style = MaterialTheme.typography.bodyMedium, color = c.onBg,
-            maxLines = 1, overflow = TextOverflow.Ellipsis
-        )
+    Column(Modifier.fillMaxWidth().padding(bottom = COACH_BLOCK_GAP)) {
+        // §14: user content wraps. A change's summary carries an exercise name.
+        Text(d.summary, style = MaterialTheme.typography.bodyMedium, color = c.onBg)
         Spacer(Modifier.height(6.dp))
         CoachWatchBar(fraction, barColor, c)
         Spacer(Modifier.height(4.dp))
@@ -188,12 +240,20 @@ private fun watchStatusLine(d: CoachDecision, now: Long): String {
 }
 
 /**
- * The road ahead as small graphs: every countdown the coach knows about drawn as a progress
- * bar — the next brief, pending verdicts, the change type closest to autopilot, milestones.
+ * The road ahead as small graphs: the next brief, the closest pending verdict, and the milestone
+ * ladder as ONE rail plus the next step (§4.10).
+ *
+ * Autopilot used to have a bar here too, reading the closest-to-earning type ("0 of 3") while the
+ * Journey lens read types earned ("0 of 4") — the same word, two numbers, one page. Trust lives on
+ * Journey now and this section does not mention it (§4.3, one home).
  */
-private fun LazyListScope.coachComingUpSection(state: CoachViewModel.UiState, c: CoachColors) {
+private fun LazyListScope.coachComingUpSection(
+    state: CoachViewModel.UiState,
+    c: CoachColors,
+    index: Int
+) {
     item("coach-coming") {
-        CoachSection(c, title = "Coming up", index = 4) {
+        CoachSection(c, title = "Coming up", index = index) {
             val brief = state.brief
             val now = remember { System.currentTimeMillis() }
 
@@ -226,26 +286,8 @@ private fun LazyListScope.coachComingUpSection(state: CoachViewModel.UiState, c:
                     )
                 }
 
-            // The change type closest to earning autopilot.
-            state.timeline?.trust?.takeIf { it.isNotEmpty() }?.let { trust ->
-                val next = trust.filter { !it.earned }
-                    .maxByOrNull { it.streak.toFloat() / it.required }
-                if (next != null) {
-                    CoachProgressRow(
-                        label = "Autopilot",
-                        value = "${next.streak} of ${next.required}",
-                        c = c,
-                        segments = next.streak to next.required,
-                        sub = next.label
-                    )
-                } else {
-                    CoachProgressRow(label = "Autopilot", value = "earned", c = c, segments = 1 to 1)
-                }
-            }
-
-            // Milestones: the achievement ladder as ONE segmented rail (§4.12), sharing the
-            // countdowns' bar language, with only the NEXT step named beneath it — the reached
-            // ones are history the rail already counts, the 9-row checklist is gone.
+            // Milestones: the achievement ladder as ONE segmented rail (§4.10) with only the NEXT
+            // step named beneath it — the reached ones are history the rail already counts.
             state.timeline?.milestones?.takeIf { it.isNotEmpty() }?.let { milestones ->
                 val reached = milestones.count { it.reached }
                 val next = milestones.firstOrNull { !it.reached }
@@ -256,9 +298,8 @@ private fun LazyListScope.coachComingUpSection(state: CoachViewModel.UiState, c:
                     segments = reached to milestones.size
                 )
                 if (next != null) {
-                    // The next milestone under a NEXT eyebrow so it reads as a forward target,
-                    // not a done thing (§11) — no dot, the eyebrow does the framing.
-                    Column(Modifier.padding(bottom = 6.dp)) {
+                    // Under a NEXT eyebrow so it reads as a forward target, not a done thing (§11).
+                    Column(Modifier.padding(bottom = COACH_ROW_PAD)) {
                         CoachChartLabel("Next", c)
                         Spacer(Modifier.height(4.dp))
                         Text(next.label, style = MaterialTheme.typography.bodyMedium, color = c.onBg)
@@ -266,6 +307,32 @@ private fun LazyListScope.coachComingUpSection(state: CoachViewModel.UiState, c:
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * The knowledge half of the coach, one tap from its decisions (B3). It closes the lens rather than
+ * sitting inside the goals section, where it was an unrelated destination stacked under an unrelated
+ * action — two accent links in a row, the first thing a new user met on this page.
+ */
+private fun LazyListScope.coachAcademyLink(
+    state: CoachViewModel.UiState,
+    c: CoachColors,
+    index: Int,
+    onOpenAcademy: () -> Unit
+) {
+    item("coach-academy") {
+        Column(
+            Modifier.fillMaxWidth().statsEntrance(index)
+                .padding(horizontal = COACH_GUTTER, vertical = 20.dp)
+        ) {
+            CoachAction(
+                if (state.newLessons > 0) "Academy · ${state.newLessons} new →" else "Academy →",
+                c.accent,
+                "Open the Academy",
+                onOpenAcademy
+            )
         }
     }
 }

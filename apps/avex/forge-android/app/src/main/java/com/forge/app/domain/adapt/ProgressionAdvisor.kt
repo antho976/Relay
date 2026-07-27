@@ -2,6 +2,7 @@ package com.forge.app.domain.adapt
 
 import com.forge.app.data.db.entities.LoggedSet
 import com.forge.app.data.db.types.EffortRating
+import com.forge.app.domain.coach.WeightPhase
 import com.forge.app.program.ExerciseUnit
 import kotlin.math.roundToInt
 
@@ -106,18 +107,12 @@ object ProgressionAdvisor {
             }
         }
 
-        // Per-set RPE outranks the coarse exercise rating when present.
-        val maxRpe = working.mapNotNull { it.rpe }.maxOrNull()
-        val backOff: Boolean
-        val backOffReason: String
-        if (maxRpe != null) {
-            backOff = maxRpe >= t.rpeBrutalMin
-            backOffReason = "last RPE hit ${trim(maxRpe)}"
-        } else {
-            backOff = prevEffort == EffortRating.BRUTAL
-            backOffReason = "last rated brutal"
-        }
-        val okToProgress = isEasyEnough(maxRpe, prevEffort, t)
+        // How hard was that? One model, all the logged evidence (A1) — per-set RPE first, then
+        // failure/technique flags, then the difficulty tag, then the coarse exercise rating.
+        val effort = EffortModel.read(working, prevEffort, t)
+        val backOff = effort.backOff
+        val backOffReason = effort.backOffReason
+        val okToProgress = effort.roomToProgress
 
         val range = RepRange.parse(repsText)
         val topSets = working.filter { it.weightLb == prevMax }
@@ -176,9 +171,8 @@ object ProgressionAdvisor {
         if (prevMaxReps <= 0) return null
         val range = RepRange.parse(repsText) ?: return null
 
-        // Per-set RPE outranks the coarse exercise rating — the same gate as the weighted chip.
-        val maxRpe = working.mapNotNull { it.rpe }.maxOrNull()
-        val okToProgress = isEasyEnough(maxRpe, prevEffort, t)
+        // The same effort gate as the weighted chip (A1: EffortModel owns it).
+        val okToProgress = EffortModel.read(working, prevEffort, t).roomToProgress
 
         // Only nudge once every working set has cleared the top of the range at acceptable effort.
         if (!working.all { it.reps >= range.max } || !okToProgress) return null
@@ -196,15 +190,6 @@ object ProgressionAdvisor {
             confidence = Confidence.MEDIUM
         )
     }
-
-    /**
-     * Effort gate shared by both chip entry points ([suggestNextLoad] / [suggestNextReps]): progress
-     * only when the last bout was easy enough. Per-set RPE (when logged) outranks the coarse per-exercise
-     * [EffortRating]; with neither logged we give the benefit of the doubt and allow progress.
-     */
-    private fun isEasyEnough(maxRpe: Double?, prevEffort: EffortRating?, t: AdaptThresholds): Boolean =
-        if (maxRpe != null) maxRpe <= t.rpeEasyMax
-        else prevEffort == null || prevEffort == EffortRating.EASY || prevEffort == EffortRating.JUST_RIGHT
 
     private fun progressSuggestion(
         exerciseId: String,
@@ -300,14 +285,31 @@ object ProgressionAdvisor {
      *   stall ≥ [AdaptThresholds.repShiftAfterStalledBouts] → rep-range shift
      *   stall ≥ [AdaptThresholds.swapAfterStalledBouts]     → variation swap
      */
-    fun evaluate(s: AdaptationSnapshot, t: AdaptThresholds = AdaptThresholds()): List<Recommendation> {
+    fun evaluate(
+        s: AdaptationSnapshot,
+        t: AdaptThresholds = AdaptThresholds(),
+        /**
+         * The live block's phase (Coach v3 C), or null when no block is running. A deload week
+         * suppresses escalation entirely: the whole point of the week is to ask for less, and a
+         * coach that proposes resets and swaps during it is arguing with its own plan.
+         */
+        phase: com.forge.app.domain.coach.BlockPhase? = null
+    ): List<Recommendation> {
+        if (phase == com.forge.app.domain.coach.BlockPhase.DELOAD) return emptyList()
         val out = mutableListOf<Recommendation>()
         val seen = HashSet<String>()
+        // Reads UNKNOWN until the weigh-ins support a claim, and UNKNOWN changes nothing (A2).
+        val weightPhase = WeightPhase.of(s.bodyweight)
         for (day in s.program) {
             for (slot in day.slots) {
                 if (!seen.add(slot.exerciseId)) continue
                 if (slot.unit == ExerciseUnit.BODYWEIGHT) continue
                 val bouts = (s.exerciseHistory[slot.exerciseId] ?: continue)
+                    // A1: test / technique / first-back bouts are not ordinary training — a top
+                    // single on a test day would anchor the weight, and a deliberately light
+                    // technique day reads as a stall. Filtering here removes them from the e1RM
+                    // series, the stall counter AND the prevMax anchor in one place.
+                    .filter { b -> b.countsForProgression }
                     .filter { b -> !b.skipped && b.sets.any { it.weightLb != null && !it.isAssisted } }
                 if (bouts.size <= t.plateauMinBouts) continue
 
@@ -323,8 +325,49 @@ object ProgressionAdvisor {
                 val stall = e1rms.lastIndex - lastImprovedIdx
                 if (stall < t.plateauMinBouts) continue
 
+                // A2: holding strength in a deficit is the expected — and good — outcome, so a flat
+                // line while cutting is not a plateau to fix. Escalating it would tell a lifter who
+                // is doing everything right to reset their weights. Regression still speaks: this
+                // only suppresses a HOLD, never a decline (`e1rms.last() >= best`).
+                if (weightPhase == WeightPhase.CUT && e1rms.last() >= best * (1 - t.stallTolerance)) continue
+
                 val confidence = if (stall >= t.highConfidenceStall) Confidence.HIGH else Confidence.MEDIUM
                 out += plateauSuggestion(slot, bouts, stall, confidence, s.prefs.plateLb, s.prefs.maxDbLb, t)
+            }
+        }
+        return out
+    }
+
+    /**
+     * Exercise ids whose stall [evaluate] is deliberately NOT escalating because the athlete is in
+     * a deficit (A2). Same rule, exposed as a reading: the Coach Lab can say what it held and why,
+     * and the Academy can unlock `coach.strength_on_a_cut` the first time it happens — the coach's
+     * most counterintuitive behavior should never be invisible.
+     */
+    fun cutSuppressedStalls(s: AdaptationSnapshot, t: AdaptThresholds = AdaptThresholds()): List<String> {
+        if (WeightPhase.of(s.bodyweight) != WeightPhase.CUT) return emptyList()
+        val out = mutableListOf<String>()
+        val seen = HashSet<String>()
+        for (day in s.program) {
+            for (slot in day.slots) {
+                if (!seen.add(slot.exerciseId)) continue
+                if (slot.unit == ExerciseUnit.BODYWEIGHT) continue
+                val bouts = (s.exerciseHistory[slot.exerciseId] ?: continue)
+                    .filter { b -> b.countsForProgression }
+                    .filter { b -> !b.skipped && b.sets.any { it.weightLb != null && !it.isAssisted } }
+                if (bouts.size <= t.plateauMinBouts) continue
+                val e1rms = bouts.map { bestE1rm(it.sets) }
+                var best = e1rms.first()
+                var lastImprovedIdx = 0
+                for (i in 1 until e1rms.size) {
+                    if (e1rms[i] > best * (1 + t.stallTolerance)) {
+                        best = e1rms[i]
+                        lastImprovedIdx = i
+                    }
+                }
+                val stall = e1rms.lastIndex - lastImprovedIdx
+                if (stall < t.plateauMinBouts) continue
+                if (e1rms.last() >= best * (1 - t.stallTolerance)) out += slot.exerciseId
             }
         }
         return out
@@ -365,12 +408,11 @@ object ProgressionAdvisor {
             )
         }
 
-        // Effort signature over the recent window decides reset vs micro-load.
+        // Effort signature over the recent window decides reset vs micro-load. A1: the reading now
+        // also counts sets logged to failure and past-failure techniques (EffortModel), so a lifter
+        // who logs the checkbox instead of an RPE gets the same "stalled while grinding" verdict.
         val window = bouts.takeLast(minOf(stall, t.plateauMinBouts))
-        val highEffortCount = window.count { b ->
-            val rpe = b.sets.mapNotNull { it.rpe }.maxOrNull()
-            (rpe != null && rpe >= 9.0) || b.effort == EffortRating.HARD || b.effort == EffortRating.BRUTAL
-        }
+        val highEffortCount = window.count { b -> EffortModel.read(b, t).highEffort }
         return if (highEffortCount >= t.highEffortCountInWindow) {
             val target = when (slot.unit) {
                 ExerciseUnit.PLATES -> (prevMax - plateLb).coerceAtLeast(plateLb)

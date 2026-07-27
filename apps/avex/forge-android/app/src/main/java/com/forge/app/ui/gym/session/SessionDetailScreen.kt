@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
@@ -21,8 +22,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import com.forge.app.ui.common.ForgeOutlineCapsule
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -33,7 +36,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.ui.gym.session.state.SessionChartStyle
 import com.forge.app.ui.gym.session.state.SessionMetric
-import com.forge.app.ui.gym.stats.components.statsEntrance
+import com.forge.app.ui.common.statsEntrance
 
 /**
  * Full-screen breakdown of a single finished training: a header that pairs the title/summary with a
@@ -84,11 +87,23 @@ fun SessionDetailScreen(
     }
 
     var metric by rememberSaveable { mutableStateOf(SessionMetric.WEIGHT) }
+    /** A1: the session-type picker (tiny-input dialog), opened from the page-end sidekick capsule. */
+    var showTypePicker by rememberSaveable { mutableStateOf(false) }
     // Bars/line is per-stat now — each metric carries its own style instead of one page-wide switch.
     var weightStyle by rememberSaveable { mutableStateOf(SessionChartStyle.BARS) }
     var volumeStyle by rememberSaveable { mutableStateOf(SessionChartStyle.BARS) }
     var repsStyle by rememberSaveable { mutableStateOf(SessionChartStyle.BARS) }
     var rpeStyle by rememberSaveable { mutableStateOf(SessionChartStyle.BARS) }
+
+    if (showTypePicker) {
+        state.data?.let { data ->
+            SessionTypeDialog(
+                current = data.sessionType,
+                onPick = { viewModel.setSessionType(it) },
+                onDismiss = { showTypePicker = false }
+            )
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -184,6 +199,30 @@ fun SessionDetailScreen(
                                     )
                                 }
                             }
+                        }
+                    }
+                    // The watch's HR trace (W3): rendered only when the watch streamed this session —
+                    // no watch, no section, no empty shell (the trace is watch-authored data).
+                    state.hrView?.let { hrView ->
+                        item("heart-rate") {
+                            Box(Modifier.statsEntrance(3).padding(top = 20.dp)) {
+                                SessionHrSection(hrView, onBg, muted, accent, outline)
+                            }
+                        }
+                    }
+                    // Tag what kind of session this was — the page's only end-of-page action (§8 ②
+                    // outlined; nothing here is a do-it-now, so there is no filled capsule to lead it).
+                    // The current tag renders in the header eyebrow, so this says the action alone —
+                    // state is never drawn twice.
+                    item("session-type") {
+                        Box(
+                            Modifier
+                                .statsEntrance(3)
+                                .fillMaxWidth()
+                                .padding(top = 8.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            ForgeOutlineCapsule("Session type", onClick = { showTypePicker = true })
                         }
                     }
                 }

@@ -54,10 +54,37 @@ class OverviewViewModel @Inject constructor(
     private val sampleDataSeeder: com.forge.app.data.repo.SampleDataSeeder,
     private val adaptationRepo: com.forge.app.data.repo.AdaptationRepository,
     private val coachRepo: com.forge.app.data.repo.CoachRepository,
+    private val directiveRepo: com.forge.app.data.repo.DirectiveRepository,
     private val programRepo: com.forge.app.data.repo.ProgramRepository,
     private val programChangeGuard: com.forge.app.ui.common.ProgramChangeGuard,
+    private val healthConnectManager: com.forge.app.data.health.HealthConnectManager,
     private val clock: Clock
 ) : ViewModel() {
+
+    /** Today's watch steps against a typical day (W6) — null hides the Home movement line entirely. */
+    data class TodayMovement(val steps: Int, val typicalSteps: Int?)
+
+    private val _movement = MutableStateFlow<TodayMovement?>(null)
+    val movement: StateFlow<TodayMovement?> = _movement
+
+    /**
+     * Refresh the Home movement line (W6): today's Health Connect step total + the median of the
+     * previous 14 full days as "typical" (null below 3 days of history — no fake baseline). Fail-soft:
+     * not granted / no provider / read error → null → the line simply doesn't render (GYMAP-64 rule).
+     */
+    fun refreshMovement() = viewModelScope.launch {
+        if (!healthConnectManager.canReadSteps()) { _movement.value = null; return@launch }
+        val zone = java.time.ZoneId.systemDefault()
+        val now = clock.nowMs()
+        val today = java.time.Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
+        val todayStartMs = today.atStartOfDay(zone).toInstant().toEpochMilli()
+        val sinceMs = today.minusDays(14).atStartOfDay(zone).toInstant().toEpochMilli()
+        val days = healthConnectManager.readDailyStepTotals(sinceMs, now)
+        val todaySteps = days.lastOrNull { it.dayStartMs == todayStartMs }?.steps ?: 0
+        val prior = days.filter { it.dayStartMs < todayStartMs && it.steps > 0 }.map { it.steps }.sorted()
+        val typical = if (prior.size >= 3) prior[prior.size / 2] else null
+        _movement.value = TodayMovement(steps = todaySteps, typicalSteps = typical)
+    }
 
     private val _onThisDayMemory = MutableStateFlow<OnThisDayMemory?>(null)
     private val _coach = MutableStateFlow<List<CoachItem>>(emptyList())
@@ -69,6 +96,12 @@ class OverviewViewModel @Inject constructor(
     private val _coachFatigue = MutableStateFlow<com.forge.app.ui.overview.state.FatigueHint?>(null)
 
     /** "New report ready" banner (auto-coach) — null when this week's brief has been seen. */
+    /**
+     * Today's directive (Coach v3 B2) — the hero's content. Loaded once per open and refreshed on
+     * resume, like the movement line: the answer changes with the day, not with every emission.
+     */
+    private val _directive = MutableStateFlow<com.forge.app.data.repo.DirectiveRepository.TodayAnswer?>(null)
+
     private val _coachBanner = MutableStateFlow<com.forge.app.data.repo.CoachBanner?>(null)
     val coachBanner: StateFlow<com.forge.app.data.repo.CoachBanner?> = _coachBanner
 
@@ -165,6 +198,8 @@ class OverviewViewModel @Inject constructor(
         // force-stop mid-first-gen): don't offer to resume a day that no longer exists — Program.day()
         // would silently resolve the stale key to the wrong day. An invalid key reads as no resume here.
         s.copy(activeSessionDayKey = active?.dayKey?.takeIf { it in com.forge.app.program.Program.dayKeys })
+    }.combine(_directive) { s, answer ->
+        s.copy(directive = answer?.directive, brief = answer?.brief, coldStartLesson = answer?.coldStartLesson)
     }.combine(_coach) { s, coach ->
         s.copy(coach = coach)
     }.combine(_coachLearning) { s, hint ->
@@ -229,6 +264,8 @@ class OverviewViewModel @Inject constructor(
     init {
         viewModelScope.launch { _onThisDayMemory.value = statsRepo.findOnThisDayMemory() }
         viewModelScope.launch { reloadCoach() }
+        refreshDirective()
+        refreshMovement()
         // Backfill the first-touch flag for users who already have history, so the onboarding cards
         // never reappear for a returning user (e.g. after a data wipe). finishWorkout() sets it going forward.
         viewModelScope.launch {
@@ -257,6 +294,14 @@ class OverviewViewModel @Inject constructor(
                     "Cleared an empty leftover session from a workout day that's no longer in your program."
             }
         }
+    }
+
+    /**
+     * Recompute today's answer (Coach v3 B2). Called at open and on resume: a directive that still
+     * says "Push day" after you've trained, or after midnight, is worse than no directive.
+     */
+    fun refreshDirective() = viewModelScope.launch {
+        _directive.value = runCatching { directiveRepo.today() }.getOrNull()
     }
 
     /** Dismiss the "new report" banner without opening the brief — still marks it seen. */

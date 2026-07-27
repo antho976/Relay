@@ -5,11 +5,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -26,7 +23,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.data.repo.ExtendedGoalRepository
@@ -36,11 +32,9 @@ import com.forge.app.domain.photo.PhotoPose
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.domain.units.weightInputValue
 import com.forge.app.ui.common.bounceClick
-import com.forge.app.ui.common.monthsAgoPhrase
 import com.forge.app.ui.goals.GoalProgressLine
 import com.forge.app.ui.goals.customGoalTitle
 import com.forge.app.ui.goals.customGoalValueLine
-import com.forge.app.ui.overview.state.OnThisDayMemory
 import com.forge.app.ui.theme.LocalForgeSettings
 import java.io.File
 import java.text.SimpleDateFormat
@@ -167,42 +161,73 @@ internal fun GalleryStrip(
     muted: Color,
     outline: Color
 ) {
-    Box(Modifier.padding(horizontal = 20.dp)) {
+    Box(Modifier.padding(horizontal = 24.dp)) {
         // Mirrors GOALS (§4.2): the header link opens the full Gallery, folding in the count once
-        // the strip stops showing them all; empty = nothing to view, so no link.
+        // the strip stops showing them all.
+        //
+        // The link stays at zero. It used to disappear when there were no photos — "nothing to
+        // preview, no link" (§4.2) — but the Gallery is where importing, the guided camera and the
+        // albums live, so with no photos the screen became unreachable entirely. §4.2's rule is
+        // about not linking to an empty destination; here the destination is where you GO to make it
+        // non-empty, and the ghost strip below is a real preview of it.
         SectionHeader(
             "GALLERY", muted,
             action = when {
-                photos.isEmpty() -> null
+                photos.isEmpty() -> "gallery →"
                 photos.size > 10 -> "all ${photos.size} →"
                 else -> "view all →"
             },
-            onAction = if (photos.isNotEmpty()) onViewAll else null
+            onAction = onViewAll
         )
     }
     if (photos.isEmpty()) {
-        Column(Modifier.padding(horizontal = 20.dp)) {
-            Box(
-                Modifier.width(StripCellWidth).height(StripCellHeight)
-                    .clip(RoundedCornerShape(16.dp))
-                    .border(1.dp, outline.copy(alpha = 0.35f), RoundedCornerShape(16.dp))
-                    .bounceClick { onAdd() },
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("＋", style = MaterialTheme.typography.headlineSmall, color = muted)
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        "FIRST PHOTO", style = MaterialTheme.typography.labelSmall,
-                        color = muted, fontSize = 8.sp, letterSpacing = 1.5.sp
-                    )
+        // Empty is drawn (§12), and the zero-shape is the STRIP — a run of ghost cells that runs off
+        // the edge exactly as the real filmstrip does, not a single boxed frame. One frame alone read
+        // as a lone empty container rather than as this section with nothing in it yet.
+        Row(
+            Modifier.padding(start = 24.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            repeat(3) { i ->
+                // The trailing cells recede, so the strip reads as continuing rather than as three
+                // equal empty boxes competing for attention.
+                //
+                // Off the MUTED ramp, not the outline one. These frames are the section's whole mark
+                // at zero, and at outline 0.35/0.25 the border measured 1.10:1 against the page on
+                // device — a box you cannot see is not an empty state, it is a blank strip (§12). The
+                // lead cell takes §12's `muted@0.55`, which is also what §1 asks for: it is the one
+                // cell you can actually tap, so it is the one that earns a visible border.
+                val fade = muted.copy(alpha = if (i == 0) 0.55f else 0.30f)
+                Box(
+                    Modifier.width(StripCellWidth).height(StripCellHeight)
+                        .clip(RoundedCornerShape(16.dp))
+                        .border(1.dp, fade, RoundedCornerShape(16.dp))
+                        .then(if (i == 0) Modifier.bounceClick { onAdd() } else Modifier),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (i == 0) {
+                        // §14: the accent carries the glyph, the words stay on onBg. Accent text
+                        // measures 2.35:1 on Pearl, and this prompt is the only content in the cell.
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                "+ ",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                "first photo",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onBackground
+                            )
+                        }
+                    }
                 }
             }
         }
         return
     }
     LazyRow(
-        contentPadding = PaddingValues(horizontal = 20.dp),
+        contentPadding = PaddingValues(horizontal = 24.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         items(photos.take(10), key = { it.fileName }) { photo ->
@@ -243,22 +268,7 @@ private fun StripPhotoCell(photo: ProgressPhoto, file: File, onView: (ProgressPh
     }
 }
 
-/** ON THIS DAY — a single-line throwback to a workout from a previous month, set like a pull quote. */
-@Composable
-internal fun OnThisDaySection(memory: OnThisDayMemory, onBg: Color, muted: Color, accent: Color) {
-    val weightUnit = LocalForgeSettings.current.weightUnit
-    SectionHeader("ON THIS DAY", muted)
-    val ago = monthsAgoPhrase(memory.monthsAgo)
-    Row(Modifier.height(IntrinsicSize.Min)) {
-        Box(
-            Modifier.width(2.dp).fillMaxHeight()
-                .clip(RoundedCornerShape(50)).background(accent.copy(alpha = 0.6f))
-        )
-        Spacer(Modifier.width(12.dp))
-        Text(
-            "$ago you trained ${memory.dayName} · ${formatVolume(memory.totalVolumeLb, weightUnit)} ${unitLabel(weightUnit)}" +
-                if (memory.prCount > 0) " · ${memory.prCount} PR${if (memory.prCount == 1) "" else "s"}" else "",
-            style = MaterialTheme.typography.bodyMedium, color = onBg, fontStyle = FontStyle.Italic
-        )
-    }
-}
+// ON THIS DAY was cut from the profile 2026-07-24: Home already renders the same throwback
+// (OverviewScreen's OnThisDayCard), and a mark that only repeats another screen's answer is cut,
+// not copied (§4.3). It was also the page's one prose-only section, hung off a decorative accent
+// rule (§1: a line exists only as data).

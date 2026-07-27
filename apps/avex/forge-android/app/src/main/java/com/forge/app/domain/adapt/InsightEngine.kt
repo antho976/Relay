@@ -157,7 +157,8 @@ object InsightEngine {
         if (dominant.value / total <= t.insightBalanceDominantShare) return null
         return insight(
             "dominance", "Muscle balance",
-            "${dominant.key.displayName} is over ${(t.insightBalanceDominantShare * 100).roundToInt()}% of this week's volume — consider balancing."
+            // DESIGN §11: join with a comma, never an em dash.
+            "${dominant.key.displayName} is over ${(t.insightBalanceDominantShare * 100).roundToInt()}% of this week's volume, consider balancing."
         )
     }
 
@@ -196,7 +197,7 @@ object InsightEngine {
         val skew = if (rc.setsA.toDouble() / rc.setsB > rc.healthyHigh) rc.labelA else rc.labelB
         return insight(
             rc.key, title,
-            "Last ${t.insightRatioWindowDays} days: ${rc.setsA} ${rc.labelA} sets vs ${rc.setsB} ${rc.labelB} — leaning $skew-heavy."
+            "Last ${t.insightRatioWindowDays} days: ${rc.setsA} ${rc.labelA} sets vs ${rc.setsB} ${rc.labelB}, leaning $skew-heavy."
         )
     }
 

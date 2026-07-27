@@ -1,6 +1,7 @@
 package com.forge.app.domain.adapt
 
 import com.forge.app.data.db.types.EffortRating
+import com.forge.app.domain.mood.Mood
 import com.forge.app.domain.session.SessionType
 import kotlin.math.roundToInt
 
@@ -18,11 +19,18 @@ import kotlin.math.roundToInt
  *  - cardio rest reasons (+2 sick / +1 sore): the body is already asking for recovery
  *  - sleep debt (+2): averaging below the nightly target over ≥ N nights (Health Connect)
  *  - elevated resting HR (+2): window resting HR ≥ N bpm above the prior month (Health Connect)
+ *  - session mood (+1): most recent sessions rated drained/off (A1)
+ *  - HRV suppression (+2): window RMSSD below the prior month's baseline (Health Connect, A1)
+ *  - daily movement (+1): sustained high daily steps on top of training (Health Connect, A1)
  *  - overdue (+1): no deload week in the last N weeks of training history
  *  - plateaus (+1): ≥ N lifts currently stalled (System 1's stall detection)
  *
- * The two Health Connect drivers are additive and gated: with no connected health data the
- * snapshot's [AdaptationSnapshot.health] is empty, so they contribute nothing.
+ * Every Health Connect driver is additive and gated: with no connected health data the
+ * snapshot's [AdaptationSnapshot.health] is empty, so they contribute nothing. The mood driver
+ * behaves the same way when the user never rates sessions.
+ *
+ * Bouts from test / technique / first-back sessions are excluded from every driver (A1) — they
+ * are not ordinary training and would read as fatigue that isn't there.
  *
  * Gates: ≥ [AdaptThresholds.deloadMinSessions] finished sessions AND at least one full
  * window of history; a deload inside the last [AdaptThresholds.deloadRecentDeloadSuppressDays]
@@ -40,6 +48,10 @@ object DeloadAdvisor {
     /** Health Connect recovery signals (off-app), gated on the user having connected it. */
     private const val POINTS_SLEEP_DEBT = 2
     private const val POINTS_RESTING_HR = 2
+    /** A1 drivers: the in-app mood log, plus the two W6 Health Connect series nothing read. */
+    private const val POINTS_MOOD = 1
+    private const val POINTS_HRV = 2
+    private const val POINTS_DAILY_STEPS = 1
 
     private const val DAY_MS = 24L * 60 * 60 * 1000
 
@@ -122,8 +134,10 @@ object DeloadAdvisor {
         // Overdue measures from the last deload, or from the first session if none has happened.
         val sinceRef = lastDeloadAt ?: sessions.firstOrNull()?.startedAt ?: s.nowMs
         val checks = mutableListOf<FatigueCheck>()
+        // A1: test/technique/first-back bouts are excluded everywhere fatigue is read — a light
+        // technique day would look like effort inflation collapsing, a test day like a rep drop-off.
         val windowBouts = s.exerciseHistory.values.flatten()
-            .filter { it.sessionStartedAt >= windowStart && !it.skipped }
+            .filter { it.countsForProgression && it.sessionStartedAt >= windowStart && !it.skipped }
 
         // ── Effort inflation: working harder for the same (or less) output ────────
         val rated = windowBouts.mapNotNull { it.effort }
@@ -165,8 +179,9 @@ object DeloadAdvisor {
 
         // ── e1RM regression on multiple lifts ──────────────────────────────────────
         val regressing = s.exerciseHistory.values.count { bouts ->
-            val inWindow = bouts.filter { it.sessionStartedAt >= windowStart && !it.skipped }
-            val prior = bouts.filter { it.sessionStartedAt in priorStart until windowStart && !it.skipped }
+            val training = bouts.filter { it.countsForProgression && !it.skipped }
+            val inWindow = training.filter { it.sessionStartedAt >= windowStart }
+            val prior = training.filter { it.sessionStartedAt in priorStart until windowStart }
             val windowBest = bestE1rm(inWindow) ?: return@count false
             val priorBest = bestE1rm(prior) ?: return@count false
             windowBest < priorBest * t.deloadRegressionFraction
@@ -231,6 +246,70 @@ object DeloadAdvisor {
             },
             POINTS_RESTING_HR, hrFired, gated = hrBuilding,
             driver = if (hrFired) "resting HR up ${hrDelta.roundToInt()} bpm vs your baseline" else null
+        )
+
+        // ── Post-session mood (A1) ────────────────────────────────────────────────
+        // Moods were captured since v1 and read by nobody. How training *feels* is the cheapest
+        // fatigue signal there is, and the research on subjective monitoring says it outperforms
+        // most gadgets. Gated on enough ratings in the window so one rough day never fires it.
+        val windowMoods = s.moods.filter { it.recordedAt >= windowStart }
+        val lowMoods = windowMoods.count { m ->
+            val mood = Mood.fromCode(m.mood)
+            mood == Mood.DRAINED || mood == Mood.OFF
+        }
+        val moodShare = if (windowMoods.isEmpty()) 0.0 else lowMoods.toDouble() / windowMoods.size
+        val moodGated = windowMoods.isNotEmpty() && windowMoods.size < t.deloadMinMoods
+        val moodFired = windowMoods.size >= t.deloadMinMoods && moodShare >= t.deloadLowMoodShare
+        checks += FatigueCheck(
+            "Session mood",
+            when {
+                windowMoods.isEmpty() -> "no data"
+                moodGated -> "${windowMoods.size} of ${t.deloadMinMoods} ratings"
+                else -> "$lowMoods of ${windowMoods.size} rough"
+            },
+            POINTS_MOOD, moodFired, gated = moodGated,
+            driver = if (moodFired) "$lowMoods of your last ${windowMoods.size} sessions felt drained or off" else null
+        )
+
+        // ── HRV vs your own baseline (A1, Health Connect W6) ──────────────────────
+        // Overnight RMSSD is noisy night-to-night and meaningful as a trend, so this compares the
+        // window average against the prior month's — never an absolute number, never a single night.
+        val windowHrv = s.health.hrv.filter { it.timeMs >= windowStart }
+        val priorHrv = s.health.hrv.filter { it.timeMs in priorStart until windowStart }
+        val hrvGated = windowHrv.isNotEmpty() &&
+            (windowHrv.size < t.deloadMinHrvSamples || priorHrv.size < t.deloadMinHrvSamples)
+        val hrvReady = windowHrv.size >= t.deloadMinHrvSamples && priorHrv.size >= t.deloadMinHrvSamples
+        val priorHrvAvg = if (hrvReady) priorHrv.map { it.rmssdMs }.average() else 0.0
+        val windowHrvAvg = if (hrvReady) windowHrv.map { it.rmssdMs }.average() else 0.0
+        val hrvDropPct = if (hrvReady && priorHrvAvg > 0) (priorHrvAvg - windowHrvAvg) / priorHrvAvg else 0.0
+        val hrvFired = hrvReady && priorHrvAvg > 0 && hrvDropPct >= t.deloadHrvDropFraction
+        checks += FatigueCheck(
+            "Heart-rate variability",
+            when {
+                windowHrv.isEmpty() -> "no data"
+                hrvGated -> "${windowHrv.size} of ${t.deloadMinHrvSamples} readings"
+                else -> "${if (hrvDropPct > 0) "−" else "+"}${(kotlin.math.abs(hrvDropPct) * 100).roundToInt()}%"
+            },
+            POINTS_HRV, hrvFired, gated = hrvGated,
+            driver = if (hrvFired) "HRV down ${(hrvDropPct * 100).roundToInt()}% against your own baseline" else null
+        )
+
+        // ── Off-gym movement (A1, Health Connect W6) ──────────────────────────────
+        // A very active life is training the coach can't see. Sustained high daily steps means the
+        // recovery budget is already being spent, so the same lifting load costs more.
+        val windowSteps = s.health.dailySteps.filter { it.dayStartMs >= windowStart }
+        val stepsAvg = if (windowSteps.isEmpty()) 0.0 else windowSteps.map { it.steps }.average()
+        val stepsGated = windowSteps.isNotEmpty() && windowSteps.size < t.deloadMinStepDays
+        val stepsFired = windowSteps.size >= t.deloadMinStepDays && stepsAvg >= t.deloadHighDailySteps
+        checks += FatigueCheck(
+            "Daily movement",
+            when {
+                windowSteps.isEmpty() -> "no data"
+                stepsGated -> "${windowSteps.size} of ${t.deloadMinStepDays} days"
+                else -> "${stepsAvg.roundToInt()} steps/day"
+            },
+            POINTS_DAILY_STEPS, stepsFired, gated = stepsGated,
+            driver = if (stepsFired) "averaging ${stepsAvg.roundToInt()} steps a day on top of training" else null
         )
 
         // ── Overdue: long stretch with no deload week ──────────────────────────────

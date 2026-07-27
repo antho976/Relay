@@ -4,6 +4,8 @@ import androidx.room.Database
 import androidx.room.RoomDatabase
 import androidx.room.TypeConverters
 import com.forge.app.data.db.dao.BodyFatDao
+import com.forge.app.data.db.dao.LeanMassDao
+import com.forge.app.data.db.dao.SessionHrSampleDao
 import com.forge.app.data.db.dao.BodyMeasurementDao
 import com.forge.app.data.db.dao.BodyweightDao
 import com.forge.app.data.db.dao.CardioDao
@@ -23,18 +25,27 @@ import com.forge.app.data.db.dao.ProgramDao
 import com.forge.app.data.db.dao.RestEventDao
 import com.forge.app.data.db.dao.AdviceEventDao
 import com.forge.app.data.db.dao.CoachDao
+import com.forge.app.data.db.dao.CheckinDao
+import com.forge.app.data.db.dao.CoachProjectDao
+import com.forge.app.data.db.dao.TrainingBlockDao
+import com.forge.app.data.db.dao.CoachGoalDao
+import com.forge.app.data.db.dao.InjuryRestrictionDao
+import com.forge.app.data.db.dao.LessonEventDao
 import com.forge.app.data.db.dao.SuggestionOutcomeDao
 import com.forge.app.data.db.dao.SessionSegmentDao
 import com.forge.app.data.db.dao.WarmupRoutineDao
 import com.forge.app.data.db.dao.SessionBreakDao
 import com.forge.app.data.db.dao.VacationDao
 import com.forge.app.data.db.entities.BodyFatEntry
+import com.forge.app.data.db.entities.LeanMassEntry
 import com.forge.app.data.db.entities.BodyMeasurementEntry
 import com.forge.app.data.db.entities.BodyweightEntry
 import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.data.db.entities.DayNameOverride
 import com.forge.app.data.db.entities.ExerciseCustomization
 import com.forge.app.data.db.entities.ExerciseGoal
+import com.forge.app.data.db.entities.InjuryRestriction
+import com.forge.app.data.db.entities.LessonEvent
 import com.forge.app.data.db.entities.LoggedExercise
 import com.forge.app.data.db.entities.LoggedSet
 import com.forge.app.data.db.entities.MoodEntry
@@ -49,15 +60,24 @@ import com.forge.app.data.db.entities.ProgramDay
 import com.forge.app.data.db.entities.ProgramSlot
 import com.forge.app.data.db.entities.RestEvent
 import com.forge.app.data.db.entities.AdviceEvent
+import com.forge.app.data.db.entities.CheckinEntry
+import com.forge.app.data.db.entities.CoachGoal
 import com.forge.app.data.db.entities.CoachPass
+import com.forge.app.data.db.entities.CoachProject
 import com.forge.app.data.db.entities.CoachDecision
 import com.forge.app.data.db.entities.SuggestionOutcome
+import com.forge.app.data.db.entities.SessionHrSample
+import com.forge.app.data.db.entities.TrainingBlock
 import com.forge.app.data.db.entities.SessionSegment
 import com.forge.app.data.db.entities.SessionBreak
 import com.forge.app.data.db.entities.VacationPeriod
 
 /**
- * Schema is v29 (v29 added `body_fat` — per-day body-fat-% history for GYMAP-62, a new empty
+ * Schema is v31 (v31 added `session_hr_sample` — the watch's live HR stream per session for W3,
+ * a new empty table, additive, CASCADE with its session;
+ * v30 added `lean_mass` — per-day lean-body-mass history for W6, a new empty
+ * table, additive; import-only from Health Connect (a watch's BIA measurement), sibling of `body_fat`;
+ * v29 added `body_fat` — per-day body-fat-% history for GYMAP-62, a new empty
  * table, additive; readings come from Health Connect (a smart scale) or manual entry;
  * v28 added `cardio_entry.conditions` — comma-joined weather/environment tags
  * (hot/cold/rain/wind) a session was done in for GYMAP-39, an additive nullable column; null = none tagged;
@@ -103,6 +123,7 @@ import com.forge.app.data.db.entities.VacationPeriod
         TrophyNearMiss::class,
         BodyweightEntry::class,
         BodyFatEntry::class,
+        LeanMassEntry::class,
         BodyMeasurementEntry::class,
         VacationPeriod::class,
         ExtendedGoal::class,
@@ -116,9 +137,16 @@ import com.forge.app.data.db.entities.VacationPeriod
         CoachPass::class,
         CoachDecision::class,
         SuggestionOutcome::class,
-        SessionSegment::class
+        SessionSegment::class,
+        SessionHrSample::class,
+        CoachGoal::class,
+        LessonEvent::class,
+        CheckinEntry::class,
+        InjuryRestriction::class,
+        TrainingBlock::class,
+        CoachProject::class
     ],
-    version = 29,
+    version = 35,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -136,6 +164,8 @@ abstract class ForgeDatabase : RoomDatabase() {
     abstract fun trophyNearMissDao(): TrophyNearMissDao
     abstract fun bodyweightDao(): BodyweightDao
     abstract fun bodyFatDao(): BodyFatDao
+    abstract fun leanMassDao(): LeanMassDao
+    abstract fun sessionHrSampleDao(): SessionHrSampleDao
     abstract fun bodyMeasurementDao(): BodyMeasurementDao
     abstract fun vacationDao(): VacationDao
     abstract fun extendedGoalDao(): ExtendedGoalDao
@@ -146,6 +176,12 @@ abstract class ForgeDatabase : RoomDatabase() {
     abstract fun restEventDao(): RestEventDao
     abstract fun adviceEventDao(): AdviceEventDao
     abstract fun coachDao(): CoachDao
+    abstract fun coachGoalDao(): CoachGoalDao
+    abstract fun checkinDao(): CheckinDao
+    abstract fun trainingBlockDao(): TrainingBlockDao
+    abstract fun coachProjectDao(): CoachProjectDao
+    abstract fun injuryRestrictionDao(): InjuryRestrictionDao
+    abstract fun lessonEventDao(): LessonEventDao
     abstract fun suggestionOutcomeDao(): SuggestionOutcomeDao
     abstract fun sessionSegmentDao(): SessionSegmentDao
 }

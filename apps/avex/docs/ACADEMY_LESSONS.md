@@ -1,22 +1,31 @@
 # Avex Academy — Lesson Curriculum (authoring order)
 
-> Derived from `COACH_V3_PLAN.md` (AcademyRegistry, per-phase Academy notes) and
-> `ENGINE_PLAN.md` (Academy track "The Engine"). This is the authoring guide: every
-> lesson the plans call for, in the order the machinery that unlocks it ships.
-> ~33 lessons total — inside the plan's 30–40 budget.
+> Derived from `COACH_V3_PLAN.md` (AcademyRegistry, Mechanics M5, per-phase Academy
+> notes) and `ENGINE_PLAN.md` (Academy track "The Engine"). This is the authoring guide:
+> every lesson the plans call for, in the order the machinery that unlocks it ships.
+> 33 lessons total — inside the plan's 30–40 budget.
+> **Rev 3** (2026-07-24): re-keyed to the split phases (A2 / B1 / B2 / B3), C3 moved to
+> Phase A2 where its machinery ships, C5 corrected to rate-based demotion, F6's trigger
+> reconciled with the sick signal that already exists.
 
 ## Rules that shape this list (recap of plan invariants)
 
 - **Just-in-time, not curriculum-first.** Only Fundamentals is sequential for the user
   (cold-start). Everything else unlocks the first time its coach moment fires.
   "In order" below therefore means *authoring order* (which phase writes it), not a
-  course index the user marches through.
+  course index the user marches through. Unlock triggers are of two kinds — coach-ledger
+  moments AND app-usage moments (first rest-timer use, first readiness tap). Both persist
+  as `LessonEvent` rows; same idempotent-recompute rule.
 - **Teach exactly what the coach does — no more.** Each lesson exists because a coach
-  reason links to it (`reason.lessonId`). If a concept below ever gets cut from the
-  coach, cut its lesson too.
-- **1–3 min read, plain language, offline asset.** The "Read more" pointers below are
-  for the *author* (you) to verify the science — lessons themselves cite nothing and
-  link nowhere (no internet permission).
+  reason links to it (`lessonId`, per plan M3). If a concept below ever gets cut from the
+  coach, cut its lesson too. Conversely: a phase that ships a coach concept ships its
+  lesson in the same phase — which is why C3 sits in A2, not B3.
+- **1–3 min read, plain language, offline.** Lessons are structured blocks
+  (`Heading | Paragraph | Bullets | Callout | Example`), not markdown — there is no
+  markdown renderer in the app and plan M5 rules out adding one. `Example` blocks may
+  interpolate the user's own live numbers. The "Read more" pointers below are for the
+  *author* (you) to verify the science — lessons themselves cite nothing and link
+  nowhere (no internet permission).
 - **Write per phase, never ahead.** Content is the real cost; a lesson written before
   its machinery exists describes a coach that doesn't.
 
@@ -24,15 +33,31 @@
 
 | Track | Lessons | Ships with |
 |---|---|---|
-| Fundamentals | F1–F10 | Phase B (cold-start curriculum) |
-| Coach Concepts | C1–C6 | B (C1–C3), D (C4), E (C5–C6) |
+| Fundamentals | F1–F10 | Phase B3 (cold-start curriculum) |
+| Coach Concepts | C1–C6 | A2 (C3), B3 (C1–C2), D (C4), E (C5–C6) |
 | Programming | P1–P8 | Phase C (P1–P4), Phase D (P5–P8) |
 | Signals | S1–S3 | Phase F (one per slot activation) |
 | The Engine | E1–E6 | Engine E-B (E1–E3), E-C (E4–E5), E-D (E6) |
 
 ---
 
-## Batch 1 — Phase B: Fundamentals (the cold-start track)
+## Batch 0 — Phase A2: the first lesson (ships with `WeightPhase`)
+
+A2 turns on phase-aware stall interpretation, which is a live coach concept the moment it
+lands — so it ships its lesson with it, and with the miniature version of the M5 block
+renderer that B3 later completes. One lesson, one component.
+
+**C3 · `coach.strength_on_a_cut` — Holding strength while cutting is winning**
+- Unlock: first time stall-suppression triggers in a cut phase (`WeightPhase = CUT`).
+- Teaches: in a deficit the default outcome is *losing* strength; a held e1RM while
+  bodyweight drops means you kept muscle and got relatively stronger. That's why the
+  coach celebrates a flat line here and refuses to escalate "stalls" it expected.
+- Read more: Murphy & Koehler 2022 (deficits blunt hypertrophy, strength is largely
+  defended); strongerbyscience.com on training in a deficit.
+
+---
+
+## Batch 1 — Phase B3: Fundamentals (the cold-start track)
 
 The only sequential track. During the data-starved window these ARE the Today
 Directive, one per step, paired with the prepped template session.
@@ -79,7 +104,11 @@ Directive, one per step, paired with the prepped template session.
   recovery in athletes* (Int J Sports Med).
 
 **F6 · `fundamentals.soreness_vs_injury` — Soreness vs injury**
-- Unlock: first soreness flag / sick-day flag.
+- Unlock: first soreness or illness signal of any kind. Note the signal predates the
+  lesson: a "sick" rest-day reason already exists and already moves readiness
+  (`ReadinessAdvisor.kt:79`), and Coach v3 B1's sick flag subsumes it (plan M6). The
+  trigger therefore reads the unified flag, not the check-in specifically — a user who
+  has only ever logged a sick rest day still unlocks this.
 - Teaches: DOMS (dull, symmetric, peaks 24–72 h, fades with a warm-up) vs injury (sharp,
   local, joint-y, worsens under load). Soreness is not the goal and not proof of a good
   session — the repeated-bout effect makes it fade even as progress continues. When the
@@ -121,7 +150,7 @@ Directive, one per step, paired with the prepped template session.
 - Read more: Zourdos et al. 2016 (RIR accuracy in trained vs novice lifters); internal —
   the data-gate thresholds in `AdaptThresholds`.
 
-## Batch 1b — Phase B: first Coach Concepts (hooks built in Phase A)
+## Batch 1b — Phase B3: first Coach Concepts (hooks built in A2)
 
 **C1 · `coach.readiness_built_from` — What your score is built from**
 - Unlock: tapping the readiness score (first live coach-moment link in the app).
@@ -141,14 +170,6 @@ Directive, one per step, paired with the prepped template session.
 - Read more: Murphy & Koehler 2022, *Energy deficiency impairs resistance training gains
   in lean mass but not strength* (Scand J Med Sci Sports); Helms, *The Muscle & Strength
   Pyramid: Nutrition* (goal-sequencing chapters).
-
-**C3 · `coach.strength_on_a_cut` — Holding strength while cutting is winning**
-- Unlock: first time stall-suppression triggers in a cut phase (`WeightPhase = CUT`).
-- Teaches: in a deficit the default outcome is *losing* strength; a held e1RM while
-  bodyweight drops means you kept muscle and got relatively stronger. That's why the
-  coach celebrates a flat line here and refuses to escalate "stalls" it expected.
-- Read more: Murphy & Koehler 2022 (same meta-analysis — deficits blunt hypertrophy,
-  strength is largely defended); strongerbyscience.com on training in a deficit.
 
 ---
 
@@ -245,10 +266,13 @@ The "tool, not strangle" lessons — ship exactly when autonomy ships.
 - Unlock: first tier change (and re-surfaced at every change, both directions).
 - Teaches: T0 observe → T1 propose → T2 auto-apply earned types → T3 proactive (plans
   blocks, starts projects, sends directive nudges) → T4 full autonomy (owns the program,
-  acts first, informs after). Trust is earned from *outcomes* (accepted proposals ×
-  watcher win-rate), any failure demotes, and you can cap the tier in Settings. Key
-  framing: appropriate reliance — trust the automation exactly as much as its track
-  record earns, no more.
+  acts first, informs after — and only ever after you say yes to it). Trust is earned
+  from *outcomes* (accepted proposals × watcher win-rate). Demotion is by failure *rate*,
+  not a single miss — a coach making many calls will get some wrong, and one bad week
+  shouldn't reset months of record; skipping something the coach suggested ("not
+  followed") is not a failure at all and never costs it trust. You can cap the tier in
+  Settings at any time. Key framing: appropriate reliance — trust the automation exactly
+  as much as its track record earns, no more.
 - Read more: Lee & See 2004, *Trust in automation: designing for appropriate reliance*
   (Human Factors) — the classic on calibrated trust; internal — `TrustLedger`.
 
@@ -352,13 +376,25 @@ drift alert, first base-trend readout).
 
 ## Authoring order at a glance
 
-1. **Phase B batch (13):** F1–F10, C1, C2, C3 — the big one; F1–F10 double as the
-   cold-start directive.
-2. **Phase C batch (4):** P1–P4.
-3. **Phase D batch (5):** P5–P8, C4.
-4. **Phase E batch (2):** C5–C6.
-5. **Phase F batch (3):** S1–S3 — written only as each slot activates.
-6. **Engine batches (6):** E1–E3 with E-B, E4–E5 with E-C, E6 with E-D.
+1. **Phase A2 batch (1):** C3 — ships with `WeightPhase`, and forces the first version of
+   the lesson-block renderer.
+2. **Phase B3 batch (12):** F1–F10, C1, C2 — the big one; F1–F10 double as the cold-start
+   directive.
+3. **Phase C batch (4):** P1–P4.
+4. **Phase D batch (5):** P5–P8, C4.
+5. **Phase E batch (2):** C5–C6.
+6. **Phase F batch (3):** S1–S3 — written only as each slot activates.
+7. **Engine batches (6):** E1–E3 with E-B, E4–E5 with E-C, E6 with E-D.
+
+Total 33. Phases B1 and B2 write no lessons — their concepts (readiness parts, the
+directive) are taught by C1 and the Fundamentals track in B3, which is why B3 follows
+them directly rather than trailing the phase.
+
+**When the 1:1 audit is enforced.** At the end of each *release series* — v3.0 (A1+A2),
+v3.1 (B1+B2+B3), then each later phase on its own. Within a series an intermediate phase
+may ship a concept whose lesson lands a phase later (ReadinessV2 in B1, taught by C1/F9
+in B3); no series ever ends with an unlessoned concept or an orphan lesson. This is why
+C3 cannot wait: A2 ends the v3.0 series.
 
 Audit rule per batch (from the plan): every shipped coach concept has a lesson, every
 lesson is reachable from a live coach moment, cold-start never renders blank.

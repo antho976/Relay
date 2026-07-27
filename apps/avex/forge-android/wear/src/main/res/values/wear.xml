@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Declares the wear app on the node — the phone checks reachability against this capability
+         before suppressing its own timer haptic (WearProtocol.CAPABILITY_WEAR_APP). -->
+    <string-array name="android_wear_capabilities">
+        <item>avex_wear_app</item>
+    </string-array>
+</resources>

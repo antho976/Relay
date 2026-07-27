@@ -3,21 +3,28 @@ package com.forge.app.ui.profile
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDefaults
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.SelectableDates
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextFieldColors
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -72,9 +79,10 @@ internal fun BodyweightLogSheet(
     val weightUnit = LocalForgeSettings.current.weightUnit
     // Stones (GYMAP-72) enters as a stone + pounds pair (the British idiom); kg/lb keep one decimal field.
     val stones = weightUnit == WeightUnit.ST
-    val onBg = MaterialTheme.colorScheme.onBackground
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val accent = MaterialTheme.colorScheme.primary
+    val cs = MaterialTheme.colorScheme
+    val onBg = cs.onBackground
+    val muted = cs.onSurfaceVariant
+    val accent = cs.primary
     val sheetState = rememberModalBottomSheetState()
 
     val today = remember { LocalDate.now() }
@@ -131,16 +139,24 @@ internal fun BodyweightLogSheet(
         else -> "One entry per day, saving replaces this day's."
     }
 
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        // §3/§5: a modal is a `surface` fill (#15161B, #080808 on AMOLED). M3's own default is
+        // `surfaceContainerLow` — a tone this theme never defines, so it fell through to the
+        // baseline dark palette's #1D1B20: lighter and purple-leaning, which is exactly the pale
+        // grey slab that read wrong on the near-black page.
+        containerColor = cs.surface
+    ) {
         Column(
             Modifier.fillMaxWidth()
                 .verticalScroll(rememberScrollState())
                 .imePadding()
                 .padding(horizontal = 24.dp)
-                .padding(bottom = 32.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+                .padding(bottom = 32.dp)
         ) {
             Text("Log bodyweight", style = MaterialTheme.typography.headlineSmall, color = onBg)
+            Spacer(Modifier.height(8.dp))
             // Accent mono = the tappable idiom (§5): tap to backdate to any past day.
             Text(
                 dateLabel,
@@ -148,6 +164,7 @@ internal fun BodyweightLogSheet(
                 color = accent,
                 modifier = Modifier.bounceClick { showDatePicker = true }.padding(vertical = 6.dp)
             )
+            Spacer(Modifier.height(12.dp))
             if (stones) {
                 // Stone + pounds pair — the British compound entry. The two fields sum to lb on Save.
                 Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
@@ -158,6 +175,8 @@ internal fun BodyweightLogSheet(
                         singleLine = true,
                         isError = invalid,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        shape = BodyLogFieldShape,
+                        colors = bodyLogFieldColors(),
                         modifier = Modifier.weight(1f)
                     )
                     OutlinedTextField(
@@ -167,14 +186,11 @@ internal fun BodyweightLogSheet(
                         singleLine = true,
                         isError = invalid,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        shape = BodyLogFieldShape,
+                        colors = bodyLogFieldColors(),
                         modifier = Modifier.weight(1f)
                     )
                 }
-                Text(
-                    supportingLine,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (invalid) MaterialTheme.colorScheme.error else muted
-                )
             } else {
                 OutlinedTextField(
                     value = input,
@@ -188,18 +204,28 @@ internal fun BodyweightLogSheet(
                     label = { Text("Weight (${unitLabel(weightUnit)})") },
                     singleLine = true,
                     isError = invalid,
-                    supportingText = { Text(supportingLine) },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    shape = BodyLogFieldShape,
+                    colors = bodyLogFieldColors(),
                     modifier = Modifier.fillMaxWidth()
                 )
             }
+            // The explainer sits on the page gutter in BOTH unit branches (§7 rhythm) rather than
+            // inside one field's `supportingText` slot, which would indent it off the 24dp rhythm.
+            BodyLogSupportingLine(supportingLine, invalid)
+            Spacer(Modifier.height(12.dp))
             OutlinedTextField(
                 value = note,
                 onValueChange = { note = it.take(140) },
                 label = { Text("Note (optional)") },
                 singleLine = true,
+                shape = BodyLogFieldShape,
+                colors = bodyLogFieldColors(),
                 modifier = Modifier.fillMaxWidth()
             )
+            // §8: the page's actions group at the END — one filled do-it-now capsule ① and its
+            // outlined sidekick ②, nothing else.
+            Spacer(Modifier.height(20.dp))
             ForgePrimaryCapsule(
                 label = "Save",
                 onClick = { parsed?.let { onSave(it, date, note) } },
@@ -208,6 +234,7 @@ internal fun BodyweightLogSheet(
             )
             // Import pulls the newest HC reading (dated by HC) — only meaningful on today, hidden while backdating.
             if (canImport && isToday) {
+                Spacer(Modifier.height(10.dp))
                 ForgeOutlineCapsule(
                     label = "Import latest from Health Connect",
                     onClick = onImport,
@@ -215,38 +242,122 @@ internal fun BodyweightLogSheet(
                 )
             }
             message?.let {
+                Spacer(Modifier.height(12.dp))
                 Text(it, style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic)
             }
         }
     }
 
     if (showDatePicker) {
-        // No future days — a weigh-in can't be recorded ahead, and a future date would distort the trend.
-        val maxDateMs = remember { System.currentTimeMillis() }
-        val dpState = rememberDatePickerState(
-            initialSelectedDateMillis = date.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli(),
-            selectableDates = remember(maxDateMs) {
-                object : SelectableDates {
-                    override fun isSelectableDate(utcTimeMillis: Long) = utcTimeMillis <= maxDateMs
-                    override fun isSelectableYear(year: Int) =
-                        year <= Instant.ofEpochMilli(maxDateMs).atZone(ZoneId.systemDefault()).year
-                }
-            }
+        BodyLogDatePickerDialog(
+            date = date,
+            onPicked = { date = it },
+            onDismiss = { showDatePicker = false }
         )
-        DatePickerDialog(
-            onDismissRequest = { showDatePicker = false },
-            confirmButton = {
-                TextButton(onClick = {
+    }
+}
+
+// ── Shared body-log sheet furniture ───────────────────────────────────────────
+// Used by BodyweightLogSheet + BodyFatLogSheet. Both are the same modal (§3): one dated reading,
+// one field, one Save. If a third sheet needs these, promote them to `ui/common` (§8).
+
+/** §7: fields are interactive tiles, radius 12 — not M3's 4dp extra-small corner. */
+internal val BodyLogFieldShape = RoundedCornerShape(12.dp)
+
+/**
+ * §13's text-input treatment on the Pearl ground: unfocused border at the outline rung (§5 — 0.35),
+ * focus and cursor on the accent, value text at onBackground. M3's own defaults draw the resting
+ * border at full-strength `outline`, a rung brighter than the ladder allows. Mirrors the treatment
+ * already used by the cardio `CustomActivityDialog`.
+ */
+@Composable
+internal fun bodyLogFieldColors(): TextFieldColors = OutlinedTextFieldDefaults.colors(
+    focusedBorderColor = MaterialTheme.colorScheme.primary,
+    unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
+    cursorColor = MaterialTheme.colorScheme.primary,
+    focusedTextColor = MaterialTheme.colorScheme.onBackground,
+    unfocusedTextColor = MaterialTheme.colorScheme.onBackground,
+    focusedLabelColor = MaterialTheme.colorScheme.primary,
+    unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant
+)
+
+/** The one-line explainer under a log field (§13) — caption rung (muted 0.7), full `error` when the
+ *  typed value is out of range. §7 keeps it ≥8dp off the field it belongs to. */
+@Composable
+internal fun BodyLogSupportingLine(text: String, invalid: Boolean) {
+    Spacer(Modifier.height(8.dp))
+    Text(
+        text,
+        style = MaterialTheme.typography.bodySmall,
+        color = if (invalid) MaterialTheme.colorScheme.error
+        else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+    )
+}
+
+/**
+ * The §5 tones for any `DatePickerDialog` in this app — pass to BOTH the dialog and the nested
+ * `DatePicker`, since the dialog itself only consumes `containerColor` from them.
+ *
+ * M3's date-picker palette is authored for its baseline dark scheme, which this theme replaces: the
+ * dialog lands on `surfaceContainerHigh` (#2B2930) with an `outlineVariant` (#49454F) rule under the
+ * header, both markedly paler than the sheet that opened it. Pinned to the ladder instead.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun forgeDatePickerColors() = DatePickerDefaults.colors(
+    containerColor = MaterialTheme.colorScheme.surface,
+    headlineContentColor = MaterialTheme.colorScheme.onBackground,
+    weekdayContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+    dividerColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)
+)
+
+/**
+ * The backdating calendar shared by both body-log sheets. No future days — a reading can't be
+ * recorded ahead, and a future date would distort the trend. The confirm/dismiss labels drop M3's
+ * accent default (a muted navy at ~2:1 on this ground) for onBackground and muted.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun BodyLogDatePickerDialog(
+    date: LocalDate,
+    onPicked: (LocalDate) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val cs = MaterialTheme.colorScheme
+    val maxDateMs = remember { System.currentTimeMillis() }
+    val dpState = rememberDatePickerState(
+        initialSelectedDateMillis = date.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli(),
+        selectableDates = remember(maxDateMs) {
+            object : SelectableDates {
+                override fun isSelectableDate(utcTimeMillis: Long) = utcTimeMillis <= maxDateMs
+                override fun isSelectableYear(year: Int) =
+                    year <= Instant.ofEpochMilli(maxDateMs).atZone(ZoneId.systemDefault()).year
+            }
+        }
+    )
+    val pickerColors = forgeDatePickerColors()
+    DatePickerDialog(
+        onDismissRequest = onDismiss,
+        colors = pickerColors,
+        confirmButton = {
+            TextButton(
+                onClick = {
                     // DatePicker returns UTC midnight — map that calendar day to a LocalDate.
                     dpState.selectedDateMillis?.let { picked ->
-                        date = Instant.ofEpochMilli(picked).atZone(ZoneOffset.UTC).toLocalDate()
+                        onPicked(Instant.ofEpochMilli(picked).atZone(ZoneOffset.UTC).toLocalDate())
                     }
-                    showDatePicker = false
-                }) { Text("OK") }
-            },
-            dismissButton = { TextButton(onClick = { showDatePicker = false }) { Text("Cancel") } }
-        ) {
-            DatePicker(state = dpState)
+                    onDismiss()
+                },
+                colors = ButtonDefaults.textButtonColors(contentColor = cs.onBackground)
+            ) { Text("OK") }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                colors = ButtonDefaults.textButtonColors(contentColor = cs.onSurfaceVariant)
+            ) { Text("Cancel") }
         }
+    ) {
+        DatePicker(state = dpState, colors = pickerColors)
     }
 }

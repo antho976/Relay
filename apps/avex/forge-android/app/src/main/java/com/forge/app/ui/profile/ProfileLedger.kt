@@ -36,6 +36,7 @@ import com.forge.app.domain.units.formatVolumeCompact
 import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.domain.units.unitLabel
+import com.forge.app.ui.common.EditorialFigure
 import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.theme.LocalForgeSettings
@@ -72,14 +73,13 @@ internal fun ProfileBlock(
 }
 
 /**
- * ALL-TIME — lifetime tallies as big open serif figures (two-up, no boxes), the count figures each
- * carrying a small ↑/↓ "vs last week" badge. The cumulative lifted-volume curve is a separate
- * [LifetimeVolumeGraph] so the bodyweight figure can sit between the tallies and the curve.
+ * ALL-TIME — the lifetime tallies as one open row of serif figures (the shared [EditorialFigure],
+ * §8), each carrying a small ↑/↓ "vs last week" badge. Counts only: lifted volume is the
+ * [LifetimeVolumeGraph]'s own reading below, so the number appears once on the page (§4.3).
  */
 @Composable
 internal fun AllTimeSection(
     sessions: Int,
-    volumeLb: Double,
     prs: Int,
     sets: Int,
     xp: Long,
@@ -91,28 +91,29 @@ internal fun AllTimeSection(
     muted: Color,
     accent: Color
 ) {
-    val weightUnit = LocalForgeSettings.current.weightUnit
     SectionHeader("ALL-TIME", muted)
-    // At zero sessions the grid still renders — honest zeros ARE the empty state (§12), the
+    // At zero sessions the row still renders — honest zeros ARE the empty state (§12), the
     // figures fill in from the first logged set.
-    val specs = buildList {
-        add(StatCellSpec("$sessions", "WORKOUTS", delta = workoutsDelta))
-        add(StatCellSpec(formatVolume(volumeLb, weightUnit), "LIFETIME ${unitLabel(weightUnit).uppercase()}"))
-        add(StatCellSpec("$prs", "PRs", delta = prsDelta))
-        add(StatCellSpec(formatCount(sets), "SETS", delta = setsDelta))
-        if (Features.SHOW_GAMIFICATION) add(StatCellSpec("$xp", "XP"))
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+        EditorialFigure("$sessions", "workouts", onBg, muted, accent, Modifier.weight(1f), delta = workoutsDelta)
+        EditorialFigure(formatCount(sets), "sets", onBg, muted, accent, Modifier.weight(1f), delta = setsDelta)
+        EditorialFigure("$prs", "PRs", onBg, muted, accent, Modifier.weight(1f), delta = prsDelta)
+        if (Features.SHOW_GAMIFICATION) {
+            EditorialFigure("$xp", "xp", onBg, muted, accent, Modifier.weight(1f))
+        }
     }
-    StatCellGrid(specs, accent, muted, onBg)
 }
 
 /**
- * The cumulative lifetime-volume curve (session by session), drawn full-width as its own quiet chart.
- * Split from [AllTimeSection] so the bodyweight figure can sit above it and below the ALL-TIME
- * tallies. Draws nothing under two logged sessions.
+ * LIFETIME VOLUME — every pound you've moved, as the section's serif reading over the cumulative
+ * session-by-session curve. Sits between the bodyweight cluster and the year grid; it owns the
+ * lifetime-volume number outright, so ALL-TIME above stays counts alone (§4.3). Draws nothing under
+ * two logged sessions — one session has no curve, and the total then is just that session's.
  */
 @Composable
 internal fun LifetimeVolumeGraph(
     volumeSeriesLb: List<Double>,
+    onBg: Color,
     muted: Color,
     accent: Color,
     modifier: Modifier = Modifier
@@ -121,9 +122,23 @@ internal fun LifetimeVolumeGraph(
     val weightUnit = LocalForgeSettings.current.weightUnit
     val series = volumeSeriesLb.map { toDisplayWeight(it, weightUnit) }
     Column(modifier) {
+        SectionHeader("LIFETIME VOLUME", muted)
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text(
+                formatVolume(volumeSeriesLb.last(), weightUnit),
+                style = MaterialTheme.typography.headlineMedium, color = onBg
+            )
+            Spacer(Modifier.width(4.dp))
+            Text(
+                unitLabel(weightUnit).uppercase(),
+                style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp,
+                modifier = Modifier.padding(bottom = 4.dp)
+            )
+        }
+        Spacer(Modifier.height(10.dp))
         ProfileSparkline(series, accent, Modifier.fillMaxWidth().height(72.dp))
         Spacer(Modifier.height(8.dp))
-        ChartCaption(accent, "LIFETIME VOLUME · SESSION BY SESSION", muted)
+        ChartCaption(accent, "SESSION BY SESSION", muted)
     }
 }
 
@@ -154,7 +169,7 @@ internal fun StandingSection(
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Column(modifier = Modifier.width(96.dp)) {
-                    Text(m.label.uppercase(), style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp)
+                    Text(m.label.uppercase(), style = MaterialTheme.typography.labelSmall, color = muted)
                     Text(m.valueText, style = MaterialTheme.typography.labelSmall, color = onBg, fontSize = 9.sp)
                 }
                 val frac = ((100 - m.topPercent) / 100f).coerceIn(0f, 1f)
@@ -171,7 +186,7 @@ internal fun StandingSection(
                     Box(Modifier.fillMaxWidth(w).fillMaxHeight().clip(RoundedCornerShape(50)).background(accent))
                 }
                 Text(
-                    "TOP ${m.topPercent}%", style = MaterialTheme.typography.labelSmall, color = onBg, fontSize = 10.sp,
+                    "TOP ${m.topPercent}%", style = MaterialTheme.typography.labelSmall, color = onBg,
                     modifier = Modifier.width(58.dp)
                 )
             }

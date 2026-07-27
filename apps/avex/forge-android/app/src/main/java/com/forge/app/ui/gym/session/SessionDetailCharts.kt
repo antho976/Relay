@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -35,8 +36,8 @@ import com.forge.app.ui.common.rpeLabel
 import com.forge.app.ui.gym.session.state.ExerciseDetail
 import com.forge.app.ui.gym.session.state.SessionChartStyle
 import com.forge.app.ui.gym.session.state.SessionMetric
-import com.forge.app.ui.gym.stats.components.rememberDrawProgress
-import com.forge.app.ui.gym.stats.components.staggeredProgress
+import com.forge.app.ui.common.rememberDrawProgress
+import com.forge.app.ui.common.staggeredProgress
 import com.forge.app.ui.theme.ForgeMotion
 
 /** Volume/weight/reps value as a short label for the chosen metric (weight & volume honor the kg setting). */
@@ -226,6 +227,93 @@ private fun SetBars(values: List<Double>, metric: SessionMetric, accent: Color) 
                 modifier = Modifier.weight(1f).fillMaxHeight(frac)
                     .clip(RoundedCornerShape(topStart = 3.dp, topEnd = 3.dp))
                     .background(if (i == values.lastIndex) accent else secondary)
+            )
+        }
+    }
+}
+
+/**
+ * The watch's heart rate over the session (W3): an open line (stroke `primary`, §10) with the
+ * logged sets as on-line accent dots and exercise boundaries as vertical data hairlines. Header
+ * meta carries AVG · MAX; the per-exercise readings + HRR line render beneath as §4.9 rows.
+ */
+@Composable
+internal fun SessionHrSection(
+    hr: com.forge.app.domain.health.SessionHrView,
+    onBg: Color,
+    muted: Color,
+    accent: Color,
+    outline: Color
+) {
+    androidx.compose.foundation.layout.Column(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            com.forge.app.ui.common.EditorialHeader(label = "Heart rate", muted = muted, accent = accent)
+            Text(
+                "AVG ${hr.avgBpm} · MAX ${hr.maxBpm} BPM",
+                style = MaterialTheme.typography.labelSmall,
+                color = muted, fontSize = 9.sp, letterSpacing = 0.5.sp
+            )
+        }
+        androidx.compose.foundation.layout.Spacer(Modifier.height(10.dp))
+        val progress = rememberDrawProgress()
+        Canvas(Modifier.fillMaxWidth().height(110.dp)) {
+            val pts = hr.points
+            if (pts.size < 2) return@Canvas
+            val t0 = pts.first().timeMs
+            val t1 = pts.last().timeMs
+            val span = (t1 - t0).coerceAtLeast(1L).toFloat()
+            val minBpm = pts.minOf { it.bpm }.toFloat()
+            val maxBpm = pts.maxOf { it.bpm }.toFloat()
+            val range = (maxBpm - minBpm).coerceAtLeast(1f)
+            fun x(ms: Long) = ((ms - t0) / span) * size.width
+            fun y(bpm: Int) = size.height - ((bpm - minBpm) / range) * (size.height * 0.9f) - size.height * 0.05f
+
+            // Exercise boundaries — lines as data (§1).
+            hr.exerciseBoundariesMs.forEach { ms ->
+                if (ms in t0..t1) drawLine(
+                    color = outline.copy(alpha = 0.25f),
+                    start = Offset(x(ms), 0f), end = Offset(x(ms), size.height),
+                    strokeWidth = 1.dp.toPx()
+                )
+            }
+            clipRect(right = size.width * progress) {
+                val path = Path()
+                pts.forEachIndexed { i, p ->
+                    if (i == 0) path.moveTo(x(p.timeMs), y(p.bpm)) else path.lineTo(x(p.timeMs), y(p.bpm))
+                }
+                drawPath(path, color = accent, style = Stroke(2.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
+                // Set markers ride the line: the moment each set was logged.
+                hr.setMarkersMs.forEach { ms ->
+                    if (ms in t0..t1) {
+                        val nearest = pts.minByOrNull { kotlin.math.abs(it.timeMs - ms) } ?: return@forEach
+                        drawCircle(color = accent, radius = 2.5.dp.toPx(), center = Offset(x(ms), y(nearest.bpm)))
+                    }
+                }
+            }
+        }
+        androidx.compose.foundation.layout.Spacer(Modifier.height(8.dp))
+        hr.perExercise.forEach { ex ->
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(ex.name, style = MaterialTheme.typography.bodySmall, color = muted)
+                Text(
+                    "AVG ${ex.avgBpm}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = onBg, fontSize = 9.sp, letterSpacing = 0.5.sp
+                )
+            }
+        }
+        hr.avgHrr60?.let { drop ->
+            androidx.compose.foundation.layout.Spacer(Modifier.height(4.dp))
+            Text(
+                "Recovery · you shed $drop bpm in the first minute of rest",
+                style = MaterialTheme.typography.bodySmall, color = muted
             )
         }
     }

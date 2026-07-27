@@ -29,6 +29,11 @@ data class GenerationParams(
      * [VolumeModel.allocate] so a regenerate keeps the coach's applied volume changes.
      */
     val volumeBias: Map<MuscleGroup, Int> = emptyMap(),
+    /**
+     * Per-muscle weekly caps measured from THIS athlete (Coach v3 D's PersonalProfile). Empty means
+     * population defaults, which is what every generate used before the learning loop closed.
+     */
+    val personalCaps: Map<MuscleGroup, Int> = emptyMap(),
     /** Movements the coach tried that didn't land — softly down-weighted, never hard-banned. */
     val avoid: Set<String> = emptySet(),
     /**
@@ -103,7 +108,8 @@ object ProgramGenerator {
         // beginner's 2-set accessories would floor at 2 and the deload would be a no-op for them).
         val setsByDay = VolumeModel.allocate(
             template, focus, volumeFactor, minSets = if (params.deload) 1 else VolumeModel.MIN_SETS,
-            bias = params.volumeBias
+            bias = params.volumeBias,
+            personalCaps = params.personalCaps
         )
         val maxDifficulty = GoalProfiles.maxDifficulty(params.experience)
         // Tracks picks across the WHOLE week so a muscle trained on two days gets different movements.

@@ -1,8 +1,6 @@
 package com.forge.app.ui.coach
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -17,12 +15,11 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.forge.app.data.repo.RecoverySignal
 import com.forge.app.data.repo.TrackedLift
 import com.forge.app.domain.adapt.DeloadAdvisor
+import com.forge.app.domain.coach.SignalRegistry
 import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.ui.common.clickableLabeled
@@ -31,10 +28,17 @@ import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /**
- * The Signals lens: what the coach reads, drawn as data (§4.4), ordered by what's live
- * (§4.10) — the lifts on watch with their real deltas and trends first, then recovery load
- * with its live drivers, each recovery input as a plain-language row with its chart inline,
- * and the learned biases.
+ * The Signals lens: what the coach reads, drawn as data (§4.3), ordered by what is live (§4.8) —
+ * the lifts on watch with their real deltas and trends first, then recovery load with its live
+ * drivers, then each recovery input as a plain-language row with its chart inline.
+ *
+ * The "What it can read" rail that used to sit in the middle is gone. It was eleven uniform
+ * dot-text rows, which is the checklist shape this codebase has already removed twice
+ * (`design/FAILURES.md`, *Checklist section*; `design/SETTLED.md`); it listed Sleep and Resting
+ * heart rate a second time, eight rows above where "What it reads" lists them (*Mark echo*); and it
+ * advertised slots the engine does not read yet, inside the lens whose whole job is evidence. Its
+ * one honest fact — how much of itself the coach can currently see — survives as the closing line
+ * of "What it reads" (§4.9 sanctions a dense panel closing on one muted line).
  */
 internal fun LazyListScope.coachSignalsLens(
     state: CoachViewModel.UiState,
@@ -72,7 +76,7 @@ internal fun LazyListScope.coachSignalsLens(
                         name = lift.name,
                         statusWord = word,
                         statusColor = color,
-                        // The read plus its depth (§4.11): the live e1RM and how many
+                        // The read plus its depth (§4.9): the live e1RM and how many
                         // sessions of history stand behind the trend.
                         valueText = "${formatWeight(series.last(), weightUnit)} · " +
                             "${lift.bouts} session${if (lift.bouts == 1) "" else "s"}",
@@ -114,13 +118,8 @@ internal fun LazyListScope.coachSignalsLens(
             val score = watch.fatigueScore
             when {
                 score != null -> CoachFatigueMeter(score, watch.fatigueThreshold, c)
-                muted -> Box(
-                    Modifier
-                        .fillMaxWidth()
-                        .height(5.dp)
-                        .clip(RoundedCornerShape(50))
-                        .background(c.outline.copy(alpha = 0.25f))
-                )
+                // A muted advisor still draws its track: a container, not a value (§12).
+                muted -> CoachMeter(null, c)
                 watch.sessionsLogged < gate -> CoachProgressRow(
                     label = "Building a baseline",
                     value = "${watch.sessionsLogged} of $gate sessions",
@@ -141,9 +140,8 @@ internal fun LazyListScope.coachSignalsLens(
             val panel = watch.fatigueChecks.filter { it.reading != "no data" }
             if (panel.isNotEmpty()) {
                 // §4.9: this panel of named checks is DATA, not §12 repetition — each renders its OWN
-                // reading from session one (below its gate that reading is progress toward it, e.g.
-                // "0 of 6 rated sets"), never collapsed to a countless "still building" line. Ordered
-                // live-first (§4.10): a check that has woken surfaces above ones still short of a gate.
+                // reading from session one. Ordered live-first (§4.8): a check that has woken
+                // surfaces above ones still short of a gate.
                 val (dormant, live) = panel.partition { it.gated }
                 Spacer(Modifier.height(12.dp))
                 live.forEach { FatigueCheckRow(it, c) }
@@ -182,40 +180,47 @@ internal fun LazyListScope.coachSignalsLens(
                     sig.label.contains("heart", ignoreCase = true) && state.health.restingHr.size >= 2 -> {
                         Spacer(Modifier.height(6.dp))
                         CoachHrLine(state.health.restingHr, state.health.hrBaseline, c)
+                        // Overnight HRV rides the heart row as one more reading (W6) — window
+                        // average vs its own baseline, shown only once enough samples exist.
+                        state.health.hrvWindowAvg?.let { hrv ->
+                            Spacer(Modifier.height(4.dp))
+                            CoachChartLabel(
+                                buildString {
+                                    append("HRV $hrv ms")
+                                    state.health.hrvBaseline?.let { append(" · baseline $it ms") }
+                                },
+                                c
+                            )
+                        }
                         Spacer(Modifier.height(12.dp))
                     }
                 }
             }
-        }
-    }
-
-    // ── Learned so far ────────────────────────────────────────────────────────
-    // A learned-biases list has no zero-shape, so this is the lens's one allowed hint (§12) —
-    // and when it shows, it REPLACES the caption (never both on one section).
-    item("signals-learned") {
-        val learnedEmpty = watch.learnedBiases.isEmpty()
-        CoachSection(
-            c, title = "Learned so far", index = 5,
-            caption = if (learnedEmpty) null else "Carried into every regenerated plan."
-        ) {
-            if (learnedEmpty) {
-                InlineEmptyHint(
-                    "Nothing yet. The changes you apply and keep are what teach it.",
-                    color = c.muted
-                )
-            } else {
-                watch.learnedBiases.forEach { b ->
-                    Column(Modifier.padding(bottom = 8.dp)) {
-                        Text(b.label, style = MaterialTheme.typography.bodyMedium, color = c.onBg)
-                        Text(b.detail, style = MaterialTheme.typography.bodySmall, color = c.muted)
-                    }
-                }
+            signalCoverageLine(state.signals)?.let { line ->
+                Spacer(Modifier.height(8.dp))
+                Text(line, style = MaterialTheme.typography.bodySmall, color = c.muted)
             }
         }
     }
 }
 
 private const val LIFTS_SHOWN = 8
+
+/**
+ * How much of itself the coach can currently see, in one line. Counts only slots that are BUILT —
+ * a declared-but-unbuilt slot is a roadmap entry, and a roadmap does not belong in a reading (its
+ * old home, the eleven-row rail, is gone). Null when there is nothing honest to say.
+ */
+private fun signalCoverageLine(
+    slots: List<Pair<SignalRegistry.Slot, SignalRegistry.Availability>>
+): String? {
+    val active = slots.count { it.second == SignalRegistry.Availability.ACTIVE }
+    val awaiting = slots.count { it.second == SignalRegistry.Availability.AWAITING_DATA }
+    val usable = active + awaiting
+    if (usable == 0) return null
+    return if (awaiting > 0) "Reading $active of $usable signals · the rest wait on your data."
+    else "Reading all $usable signals it can use."
+}
 
 /** One fatigue check on the instrument panel: the check's name and its live reading (no dot —
  *  the name color + the "+N" already carry fired-ness, §8). Fired checks carry their points. */
@@ -312,13 +317,12 @@ private fun FormingLiftsRow(forming: List<TrackedLift>, showGhost: Boolean, c: C
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(Modifier.weight(1f)) {
+            // §14: when a single lift is named this is user content, so it wraps rather than clips.
             Text(
                 if (forming.size == 1) forming.first().name
                 else "${forming.size} lifts building history",
                 style = MaterialTheme.typography.bodyMedium,
-                color = c.muted,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+                color = c.muted
             )
             Text(
                 "first read after two sessions",

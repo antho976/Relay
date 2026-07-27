@@ -19,7 +19,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.data.db.entities.CoachDecision
@@ -28,7 +27,7 @@ import com.forge.app.domain.coach.AutoCoachPlanner
 import com.forge.app.domain.coach.CoachOutcome
 import com.forge.app.ui.common.EditorialHeader
 import com.forge.app.ui.common.clickableLabeled
-import com.forge.app.ui.gym.stats.components.statsEntrance
+import com.forge.app.ui.common.statsEntrance
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -39,6 +38,14 @@ internal val COACH_GUTTER = 24.dp
 /** The ONE vertical padding every coach data/list row uses (§7: 12 total), so the page reads as a
  *  single rhythm — recovery checks, signal inputs, watched lifts all share it, no per-row values. */
 internal val COACH_ROW_PAD = 6.dp
+
+/**
+ * The ONE gap between composite blocks — a decision with its evidence and actions, a watched change
+ * with its window, a progress row with its sub-line. Same intent as [COACH_ROW_PAD] one level up
+ * (§7): sibling sections never mix their own values. The page previously ran 6 / 8 / 12 / 14 / 16
+ * side by side, which is exactly the drift that rule exists to stop.
+ */
+internal val COACH_BLOCK_GAP = 16.dp
 
 /**
  * "2026-W27" → "Week of Jun 29" — machine ids never render (§11). Null when the id doesn't
@@ -191,12 +198,11 @@ internal fun LiftTrendRow(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(Modifier.weight(1f)) {
+            // §14: an exercise name is user content — it wraps, it never clips to an ellipsis.
             Text(
                 name,
                 style = MaterialTheme.typography.bodyMedium,
-                color = c.onBg,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+                color = c.onBg
             )
             Row {
                 Text(statusWord, style = MaterialTheme.typography.labelSmall, color = statusColor)

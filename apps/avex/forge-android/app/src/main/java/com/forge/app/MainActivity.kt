@@ -420,6 +420,12 @@ class MainActivity : FragmentActivity() {
                                     ForgeNavHost(initialDayKey = pendingWidgetDayKey)
                                     NotifPermissionRationale()
                                     RestoreConfirmedDialog(restoreJustCompleted)
+                                    // The morning check-in (Coach v3 B1): offered once a day as a
+                                    // top banner over whatever screen the app resumed to, and
+                                    // silent for anyone who has stopped answering it. Inside this
+                                    // branch so it never rides over onboarding, and below the lock
+                                    // and launch-intro overlays that follow.
+                                    com.forge.app.ui.checkin.CheckinHost()
                                 }
                                 null -> {} // DataStore still loading; the theme's gradient shows briefly
                             }

@@ -7,6 +7,7 @@ plugins {
     alias(libs.plugins.ksp)
     alias(libs.plugins.hilt)
     alias(libs.plugins.androidx.baselineprofile)
+    alias(libs.plugins.roborazzi)
 }
 
 // Release signing — reads credentials from forge-android/keystore.properties (gitignored).
@@ -93,6 +94,41 @@ android {
 
     // Make the exported Room schemas available to the migration test (androidTest).
     sourceSets["androidTest"].assets.srcDir("$projectDir/schemas")
+
+    testOptions {
+        // Roborazzi renders real Compose through Robolectric, which needs packaged resources.
+        unitTests.isIncludeAndroidResources = true
+        unitTests.all {
+            // Forward -Dforge.regen to the test JVM so RegenerateAllowlist can rewrite the frozen
+            // design-doctrine baseline on demand (DesignDoctrineTest). Defaults to off, so a normal
+            // CI run can never rewrite the baseline it is supposed to be enforcing.
+            it.systemProperty("forge.regen", System.getProperty("forge.regen") ?: "false")
+            it.systemProperty("forge.paydown", System.getProperty("forge.paydown") ?: "false")
+
+            // The doctrine tests read .claude/ and the golden screenshots, which Gradle cannot infer
+            // from the classpath. Without declaring them, editing DESIGN.md leaves the test task
+            // UP-TO-DATE and the parity/self-check suites silently do not run — the doc could drift
+            // all the way to a release without one of them firing.
+            it.inputs.files(rootProject.fileTree("../.claude"))
+                .withPropertyName("designDoctrine")
+                .withPathSensitivity(PathSensitivity.RELATIVE)
+
+            // Print the full assertion message on failure. DesignDoctrineTest's messages name the
+            // rule, the offending lines and the exact allowlist edit to make — useless if the
+            // console only says "AssertionError" and points at an HTML report.
+            it.testLogging {
+                exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+                showExceptions = true
+                showCauses = true
+                showStackTraces = false
+                // The allowlist maintenance tasks report what they changed via println, which
+                // Gradle hides by default. Surface it only when one of them was actually asked for,
+                // so ordinary runs stay quiet.
+                showStandardStreams = System.getProperty("forge.paydown") == "true" ||
+                    System.getProperty("forge.regen") == "true"
+            }
+        }
+    }
 }
 
 // Room schema export directory (required because we set exportSchema = true)
@@ -101,6 +137,14 @@ ksp {
 }
 
 dependencies {
+    // The pure protocol/timer core shared with the watch (W1). api: its coroutines/serialization
+    // types appear in :app signatures.
+    api(project(":shared"))
+
+    // Wearable Data Layer — Bluetooth IPC to the watch app; no network involved (W1).
+    implementation(libs.play.services.wearable)
+    implementation(libs.kotlinx.coroutines.play.services)
+
     // Core + lifecycle
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.core.splashscreen)
@@ -175,6 +219,12 @@ dependencies {
 
     // Test
     testImplementation(libs.junit)
+    // Screenshot testing of the archetype recipes (DESIGN §14: the app must survive 200% font).
+    testImplementation(libs.robolectric)
+    testImplementation(libs.roborazzi)
+    testImplementation(libs.roborazzi.compose)
+    testImplementation(libs.roborazzi.junit.rule)
+    testImplementation(libs.compose.ui.test.junit4)
     androidTestImplementation(libs.androidx.test.junit)
     androidTestImplementation("androidx.room:room-testing:2.7.2")
     androidTestImplementation(libs.androidx.test.espresso.core)

@@ -221,7 +221,12 @@ internal fun RankInfoSheet(
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val accent = MaterialTheme.colorScheme.primary
 
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        // §5: a modal is a `surface` fill — M3 defaults to the unthemed `surfaceContainerLow`.
+        containerColor = MaterialTheme.colorScheme.surface
+    ) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp).padding(bottom = 32.dp)) {
             Text("How XP works", style = MaterialTheme.typography.headlineSmall, color = onBg, fontStyle = FontStyle.Italic)
             Spacer(Modifier.height(4.dp))

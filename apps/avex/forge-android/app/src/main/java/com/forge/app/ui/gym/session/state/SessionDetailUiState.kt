@@ -103,5 +103,7 @@ data class SessionDetailData(
 
 data class SessionDetailUiState(
     val isLoading: Boolean = true,
-    val data: SessionDetailData? = null
+    val data: SessionDetailData? = null,
+    /** The watch's HR trace, analyzed for the HEART RATE section (W3); null = no watch data. */
+    val hrView: com.forge.app.domain.health.SessionHrView? = null
 )

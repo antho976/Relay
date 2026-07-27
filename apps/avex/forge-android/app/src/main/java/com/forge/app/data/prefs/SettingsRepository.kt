@@ -257,6 +257,21 @@ class SettingsRepository @Inject constructor(
     suspend fun setHcWriteCalories(value: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.HC_WRITE_CALORIES] = value }
 
+    /** Watch workouts the user dismissed from the cardio import suggestions (W5), by HC record id. */
+    val hcDismissedWatchImports: Flow<Set<String>> = context.forgePreferences.data
+        .map { it[PreferenceKeys.HC_DISMISSED_WATCH_IMPORTS] ?: emptySet() }
+    suspend fun addDismissedWatchImports(ids: Set<String>) =
+        context.forgePreferences.edit {
+            it[PreferenceKeys.HC_DISMISSED_WATCH_IMPORTS] =
+                (it[PreferenceKeys.HC_DISMISSED_WATCH_IMPORTS] ?: emptySet()) + ids
+        }
+
+    /** Write each finished gym + cardio session to Health Connect (W0). Opt-in, off by default. */
+    val hcWriteSessions: Flow<Boolean> = context.forgePreferences.data
+        .map { it[PreferenceKeys.HC_WRITE_SESSIONS] ?: false }
+    suspend fun setHcWriteSessions(value: Boolean) =
+        context.forgePreferences.edit { it[PreferenceKeys.HC_WRITE_SESSIONS] = value }
+
     /** Whether the one-time HC weight-history backfill has run (GYMAP-63). Default false. */
     val hcWeightHistoryImported: Flow<Boolean> = context.forgePreferences.data
         .map { it[PreferenceKeys.HC_WEIGHT_HISTORY_IMPORTED] ?: false }
@@ -746,6 +761,21 @@ class SettingsRepository @Inject constructor(
         .map { it[PreferenceKeys.USER_SEX] ?: "" }
     suspend fun setUserSex(sex: String) =
         context.forgePreferences.edit { it[PreferenceKeys.USER_SEX] = sex }
+
+    /**
+     * Age in years, for the Engine's max-HR estimate (E-A). 0 = not given, and the coach then makes
+     * NO zone claims at all rather than assuming an age it was never told.
+     */
+    val userAgeYears: Flow<Int> = context.forgePreferences.data
+        .map { it[PreferenceKeys.USER_AGE_YEARS] ?: 0 }
+    suspend fun setUserAgeYears(years: Int) =
+        context.forgePreferences.edit { it[PreferenceKeys.USER_AGE_YEARS] = years.coerceIn(0, 120) }
+
+    /** An explicit max heart rate. Beats the age estimate; 0 = not set. */
+    val maxHrOverride: Flow<Int> = context.forgePreferences.data
+        .map { it[PreferenceKeys.MAX_HR_OVERRIDE] ?: 0 }
+    suspend fun setMaxHrOverride(bpm: Int) =
+        context.forgePreferences.edit { it[PreferenceKeys.MAX_HR_OVERRIDE] = bpm.coerceIn(0, 240) }
 
     /** "Go with the flow": no fixed program — the home surfaces freestyle logging instead of day
      *  cards. A seed program still exists; this flag only changes what the UI leads with. */

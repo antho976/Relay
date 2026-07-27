@@ -51,6 +51,15 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
     val calorieLauncher = rememberLauncherForActivityResult(
         contract = PermissionController.createRequestPermissionResultContract()
     ) { viewModel.refresh() }
+    val sessionLauncher = rememberLauncherForActivityResult(
+        contract = PermissionController.createRequestPermissionResultContract()
+    ) { viewModel.refresh() }
+    val watchWorkoutLauncher = rememberLauncherForActivityResult(
+        contract = PermissionController.createRequestPermissionResultContract()
+    ) { viewModel.refresh() }
+    val leanMassLauncher = rememberLauncherForActivityResult(
+        contract = PermissionController.createRequestPermissionResultContract()
+    ) { viewModel.refresh() }
     val stepsLauncher = rememberLauncherForActivityResult(
         contract = PermissionController.createRequestPermissionResultContract()
     ) { viewModel.refresh() }
@@ -59,10 +68,12 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
     ) { viewModel.refresh() }
 
     val sleepConnected = state.granted && state.available
-    // Row order = rail order: sleep · bodyweight · body fat · calories · steps · routes.
+    // Row order = rail order: sleep · bodyweight · body fat · muscle mass · calories · sessions ·
+    // watch workouts · steps · routes.
     val railStates = listOf(
-        sleepConnected, state.weightGranted, state.bodyFatGranted,
-        state.calorieGranted, state.stepsGranted, state.exerciseGranted
+        sleepConnected, state.weightGranted, state.bodyFatGranted, state.leanMassGranted,
+        state.calorieGranted, state.sessionGranted, state.watchWorkoutGranted,
+        state.stepsGranted, state.exerciseGranted
     )
     val connectable = state.available && !state.loading
 
@@ -113,7 +124,9 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
             explainer = "Short sleep or a high resting heart rate sharpen the deload call.",
             connected = sleepConnected,
             connectable = connectable,
-            onConnect = { sleepLauncher.launch(viewModel.permissions) },
+            // HRV rides the same grant flow (W6): one sleep-and-heart row, one concept. The row's
+            // connected state still keys on sleep + resting HR alone, so existing grants stay valid.
+            onConnect = { sleepLauncher.launch(viewModel.permissions + viewModel.hrvPermissions) },
             receiving = state.signalFlow?.sleepOrHr
         )
         RecoveryRow(
@@ -160,6 +173,22 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
             }
         }
         RecoveryRow(
+            title = "Muscle mass sync",
+            explainer = "Pulls your watch's body-composition muscle reading into Profile.",
+            connected = state.leanMassGranted,
+            connectable = connectable,
+            onConnect = { leanMassLauncher.launch(viewModel.leanMassPermissions) }
+        )
+        if (state.leanMassGranted) {
+            SettingsActionLink("Import latest muscle mass →") { viewModel.importLeanMassNow() }
+            state.leanMassImportMessage?.let {
+                Text(
+                    it, style = MaterialTheme.typography.bodySmall, color = muted,
+                    modifier = Modifier.padding(horizontal = 24.dp)
+                )
+            }
+        }
+        RecoveryRow(
             title = "Workout calories",
             explainer = "Adds each session's estimated burn to your daily energy total.",
             connected = state.calorieGranted,
@@ -173,6 +202,27 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
                 onCheckedChange = { viewModel.setWriteCalories(it) }
             )
         }
+        RecoveryRow(
+            title = "Workout sessions",
+            explainer = "Puts each finished session in Samsung Health or Google Fit, as itself.",
+            connected = state.sessionGranted,
+            connectable = connectable,
+            onConnect = { sessionLauncher.launch(viewModel.sessionWritePermissions) }
+        )
+        if (state.sessionGranted) {
+            RecoveryToggleRow(
+                label = "Write my workouts to Health Connect",
+                checked = state.writeSessions,
+                onCheckedChange = { viewModel.setWriteSessions(it) }
+            )
+        }
+        RecoveryRow(
+            title = "Watch workouts",
+            explainer = "Shows heart rate and real stats on watch-recorded sessions, and offers imports.",
+            connected = state.watchWorkoutGranted,
+            connectable = connectable,
+            onConnect = { watchWorkoutLauncher.launch(viewModel.watchWorkoutPermissions) }
+        )
         RecoveryRow(
             title = "Steps & activity",
             explainer = "Shows your steps through the day on cardio sessions.",

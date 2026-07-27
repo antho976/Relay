@@ -70,6 +70,13 @@ object PreferenceKeys {
     /** When ON (and the ActiveCaloriesBurned write permission is granted), Avex writes each finished
      *  session's estimated active calories to Health Connect (HC-4). Off by default — strictly opt-in. */
     val HC_WRITE_CALORIES = booleanPreferencesKey("hc_write_calories")
+    /** Health Connect record ids of watch workouts the user dismissed from the cardio page's
+     *  "recorded with your watch — import?" suggestions (W5), so a hidden suggestion stays hidden. */
+    val HC_DISMISSED_WATCH_IMPORTS = stringSetPreferencesKey("hc_dismissed_watch_imports")
+    /** When ON (and the ExerciseSessionRecord write permission is granted), Avex writes each finished
+     *  gym + cardio session to Health Connect so it appears in Samsung Health / Google Fit (W0).
+     *  Off by default — write-back is strictly opt-in. */
+    val HC_WRITE_SESSIONS = booleanPreferencesKey("hc_write_sessions")
     /** Which watch the user wears ([com.forge.app.domain.health.WearableBrand] key: "galaxy" /
      *  "pixel" / "none"; absent = never asked). Advisory only — tailors the Recovery page's setup
      *  pointers; every Health Connect read stays vendor-neutral. */
@@ -192,6 +199,12 @@ object PreferenceKeys {
     val USER_GOAL = stringPreferencesKey("user_goal")
     /** User's sex for bodyweight-relative strength standards: "male" | "female" | "" (unspecified). */
     val USER_SEX = stringPreferencesKey("user_sex")
+
+    /** Age in years (Engine E-A): the Tanaka max-HR estimate needs it, and nothing else does. */
+    val USER_AGE_YEARS = intPreferencesKey("user_age_years")
+
+    /** An explicit max heart rate, when the user knows theirs. Always beats the estimate. */
+    val MAX_HR_OVERRIDE = intPreferencesKey("max_hr_override")
     /** "Go with the flow" — no fixed program; the home leads with freestyle logging instead of day
      *  cards. A seed program still exists under the hood; this only changes what the UI surfaces. */
     val FREESTYLE_MODE = booleanPreferencesKey("freestyle_mode")

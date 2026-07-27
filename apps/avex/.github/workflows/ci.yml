@@ -38,10 +38,38 @@ jobs:
         with:
           gradle-version: "9.4.1"
 
-      - name: Unit tests
-        run: gradle -p forge-android testDebugUnitTest --no-daemon
+      - name: Cache Robolectric runtime jars
+        # Robolectric fetches its android-all jars at TEST time into ~/.m2, outside Gradle's
+        # dependency resolution — so setup-gradle's cache does not cover them. Without this, every
+        # CI run re-downloads a few hundred MB and inherits Maven Central's bad days as flaky tests.
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository/org/robolectric
+          key: robolectric-${{ runner.os }}-${{ hashFiles('forge-android/gradle/libs.versions.toml') }}
+          restore-keys: robolectric-${{ runner.os }}-
 
-      - name: Assemble debug APK
+      - name: Unit tests
+        # testDebugUnitTest covers the Android modules (:app + :wear); :shared is a pure Kotlin/JVM
+        # library whose task is `test` — without it the protocol + rest-timer suites would silently
+        # never run in CI (W1).
+        run: gradle -p forge-android testDebugUnitTest :shared:test --no-daemon
+
+      - name: Screenshot goldens (design doctrine §14)
+        # Renders the six archetype recipes at 100% and 200% font scale, on Pearl and AMOLED, with
+        # and without accent, and diffs them against the committed goldens in
+        # app/src/test/screenshots/. Catches what no static rule can: clipping, overlap and spacing
+        # regressions. Re-record deliberately with :app:recordRoborazziDebug and LOOK at the diff.
+        run: gradle -p forge-android :app:verifyRoborazziDebug --no-daemon
+
+      - name: Upload screenshot diffs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: roborazzi-diffs
+          path: forge-android/app/build/outputs/roborazzi/**
+          if-no-files-found: ignore
+
+      - name: Assemble debug APKs (phone + wear)
         run: gradle -p forge-android assembleDebug --no-daemon
 
       - name: Assemble release (unsigned, exercises R8)
@@ -51,5 +79,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: forge-debug-apk
-          path: forge-android/app/build/outputs/apk/debug/*.apk
+          path: |
+            forge-android/app/build/outputs/apk/debug/*.apk
+            forge-android/wear/build/outputs/apk/debug/*.apk
           if-no-files-found: warn

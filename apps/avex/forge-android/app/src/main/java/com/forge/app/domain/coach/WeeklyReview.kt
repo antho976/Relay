@@ -52,6 +52,8 @@ object WeeklyReview {
         weekStartMs: Long,
         sessionsTarget: Int,
         hasDeloadShadow: Boolean,
+        /** The live training block (Coach v3 C), when one is running. */
+        block: com.forge.app.data.db.entities.TrainingBlock? = null,
         t: AdaptThresholds = AdaptThresholds()
     ): WeeklyReviewData {
         val lastWeekStart = weekStartMs - 7 * DAY_MS
@@ -111,7 +113,10 @@ object WeeklyReview {
             stalled > 0 -> "Chase the top of your rep ranges on the stalled lifts. Finishing the range is what restarts progress."
             // A real training block names its phase; otherwise a line grounded in the week's own
             // numbers, never the same generic cue every quiet week.
-            else -> mesocycleFocus(s, weekStartMs, t)
+            // A REAL block (Coach v3 C) speaks for itself; the inferred phase copy is only the
+            // fallback for users who never started one, and pure guesswork gets last say.
+            else -> block?.let { BlockPlanner.describe(it) }
+                ?: mesocycleFocus(s, weekStartMs, t)
                 ?: quietFocus(lastWeek.size, sessionsTarget, prs, lastVol, priorVol)
         }
 

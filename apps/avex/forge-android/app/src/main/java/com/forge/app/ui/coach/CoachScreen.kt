@@ -31,7 +31,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.ui.common.ForgeWordmark
 import com.forge.app.ui.gym.session.SegmentRow
-import com.forge.app.ui.gym.stats.components.statsEntrance
+import com.forge.app.ui.common.statsEntrance
 import com.forge.app.ui.theme.LocalForgeSettings
 
 /** The three reads the Coach page offers, the Stats lens-pill pattern applied to coaching. */
@@ -57,12 +57,23 @@ fun CoachScreen(
     initialLens: CoachLens = CoachLens.NOW,
     // Lands on Settings → Recovery; the Signals lens's unconnected inputs carry it as "connect →".
     onConnectHealth: (() -> Unit)? = null,
+    /** Opens the Academy (Coach v3 B3) — the knowledge layer beside the decisions. */
+    onOpenAcademy: (() -> Unit)? = null,
     viewModel: CoachViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val weightUnit = LocalForgeSettings.current.weightUnit
     val c = rememberCoachColors()
     var lens by rememberSaveable { mutableStateOf(initialLens) }
+    /** A2: the add-a-goal tiny input, opened from the Goals section's action line. */
+    var showGoalPicker by rememberSaveable { mutableStateOf(false) }
+
+    if (showGoalPicker) {
+        GoalPickerDialog(
+            onPick = { kind, targetKey, target -> viewModel.addGoal(kind, targetKey, target) },
+            onDismiss = { showGoalPicker = false }
+        )
+    }
 
     Scaffold(
         topBar = {
@@ -121,6 +132,9 @@ fun CoachScreen(
                     }
                 }
 
+                // Each lens owns its own section order and its own entrance numbering, in ONE
+                // emitter — splitting the Now lens across four call sites is what let its cascade
+                // run out of order and its setup prompts float above the week's actual call.
                 when (lens) {
                     CoachLens.NOW -> coachNowLens(
                         state = state,
@@ -128,7 +142,14 @@ fun CoachScreen(
                         onApply = viewModel::apply,
                         onSkip = viewModel::skip,
                         onUndo = viewModel::undo,
-                        onApplyAll = viewModel::applyAll
+                        onApplyAll = viewModel::applyAll,
+                        onAddGoal = { showGoalPicker = true },
+                        onStartBlock = viewModel::startBlock,
+                        onEndBlock = viewModel::endBlock,
+                        onAcceptProject = viewModel::acceptProject,
+                        onCompleteProject = viewModel::completeProject,
+                        onAbandonProject = viewModel::abandonProject,
+                        onOpenAcademy = { onOpenAcademy?.invoke() }
                     )
                     CoachLens.SIGNALS -> coachSignalsLens(state, weightUnit, c, onConnectHealth)
                     CoachLens.JOURNEY -> coachJourneyLens(state, c)
