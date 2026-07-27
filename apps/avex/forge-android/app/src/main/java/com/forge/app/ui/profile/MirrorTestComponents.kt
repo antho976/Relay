@@ -35,6 +35,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.data.repo.ProgressPhoto
+import com.forge.app.domain.photo.PhotoPose
 import com.forge.app.ui.common.bounceClick
 import java.io.File
 import java.text.SimpleDateFormat
@@ -54,6 +55,9 @@ internal enum class GalleryRange(val label: String) {
 }
 
 internal val MONTH_HEADER_FMT: DateTimeFormatter = DateTimeFormatter.ofPattern("MMMM yyyy", Locale.getDefault())
+/** Day-group headers — "MON 21 JUL", widened to "MON 21 JUL 2025" outside the current year. */
+private val DAY_HEADER_FMT: DateTimeFormatter = DateTimeFormatter.ofPattern("EEE d MMM", Locale.getDefault())
+private val DAY_HEADER_YEAR_FMT: DateTimeFormatter = DateTimeFormatter.ofPattern("EEE d MMM yyyy", Locale.getDefault())
 
 /** True if [takenAtMs] falls inside [range]. [firstDayMonday] only affects the "This week" window. */
 internal fun galleryRangeMatches(takenAtMs: Long, range: GalleryRange, zone: ZoneId, firstDayMonday: Boolean): Boolean {
@@ -75,12 +79,22 @@ internal fun galleryRangeMatches(takenAtMs: Long, range: GalleryRange, zone: Zon
 }
 
 /**
- * A chronological photo grid grouped under month headers. [photos] is already filtered + sorted the
- * way it should display, so the month groups follow that order. When [selectable] the cells carry a
- * selection ring + numeric badge (compare mode).
+ * A chronological photo grid grouped under DAY headers — the phone-gallery shape (2026-07-25, Antho:
+ * "a gallery of photos like phones, with metadata, classed per day, in order").
+ *
+ * It grouped by MONTH until then, which is the wrong grain for this library: you shoot a set of
+ * angles in one session, so the meaningful unit is the day you took them, not the month they fell in.
+ * A month header also silently hid the thing that makes the gallery useful — that several shots
+ * belong to one sitting.
+ *
+ * The header names the day the way you'd say it ("TODAY", "YESTERDAY", "MON 21 JUL", plus the year
+ * once it isn't this one) and carries the day's own metadata as meta: how many shots, and the titles
+ * or poses they carry. [photos] arrives already filtered and sorted, so the day groups follow that
+ * order — newest-first or oldest-first, whichever the sort chip says. When [selectable] the cells
+ * carry a selection ring + numeric badge (compare mode).
  */
 @Composable
-internal fun MonthGroupedGrid(
+internal fun DayGroupedGrid(
     photos: List<ProgressPhoto>,
     columns: Int,
     zone: ZoneId,
@@ -91,16 +105,51 @@ internal fun MonthGroupedGrid(
     selectable: Boolean = false,
     selectionIndexOf: (ProgressPhoto) -> Int? = { null }
 ) {
-    // groupBy keeps first-seen order, so months follow the list's sort (newest- or oldest-first).
-    val grouped = remember(photos) {
-        photos.groupBy { YearMonth.from(Instant.ofEpochMilli(it.takenAtMs).atZone(zone)) }
+    // groupBy keeps first-seen order, so days follow the list's sort.
+    val grouped = remember(photos, zone) {
+        photos.groupBy { Instant.ofEpochMilli(it.takenAtMs).atZone(zone).toLocalDate() }
     }
-    grouped.forEach { (month, monthPhotos) ->
-        Text(month.format(MONTH_HEADER_FMT).uppercase(), style = MaterialTheme.typography.labelMedium, color = muted, letterSpacing = 1.sp)
+    val today = remember(zone) { LocalDate.now(zone) }
+    grouped.forEach { (day, dayPhotos) ->
+        Text(
+            dayHeaderLabel(day, today),
+            style = MaterialTheme.typography.labelMedium, color = muted, letterSpacing = 1.sp
+        )
+        dayMetaLine(dayPhotos)?.let { meta ->
+            Spacer(Modifier.height(2.dp))
+            // What the day's shots ARE, at the day's own level — so a set of angles reads as one
+            // sitting rather than as N anonymous thumbnails (§4.10: the group carries the reading).
+            Text(
+                meta,
+                style = MaterialTheme.typography.labelSmall,
+                color = muted.copy(alpha = 0.7f), fontSize = 9.sp, letterSpacing = 0.5.sp
+            )
+        }
         Spacer(Modifier.height(8.dp))
-        PhotoRows(monthPhotos, columns, fileFor, muted, accent, onPhotoClick, selectable, selectionIndexOf)
+        PhotoRows(dayPhotos, columns, fileFor, muted, accent, onPhotoClick, selectable, selectionIndexOf)
         Spacer(Modifier.height(16.dp))
     }
+}
+
+/** "TODAY" · "YESTERDAY" · "MON 21 JUL" · "MON 21 JUL 2025" once the year isn't the current one. */
+private fun dayHeaderLabel(day: LocalDate, today: LocalDate): String = when (day) {
+    today -> "TODAY"
+    today.minusDays(1) -> "YESTERDAY"
+    else -> day.format(if (day.year == today.year) DAY_HEADER_FMT else DAY_HEADER_YEAR_FMT).uppercase()
+}
+
+/**
+ * The day's metadata line: the shot count once there's more than one, then what those shots are —
+ * the titles the user gave them, or their poses when they're untitled. Null when a lone untitled
+ * photo would leave nothing worth saying (the cell already carries its own date).
+ */
+private fun dayMetaLine(dayPhotos: List<ProgressPhoto>): String? {
+    val labels = dayPhotos.mapNotNull { p ->
+        p.title.trim().ifBlank { PhotoPose.fromKey(p.pose)?.label }
+    }.distinct()
+    val count = if (dayPhotos.size > 1) "${dayPhotos.size} SHOTS" else null
+    val what = labels.takeIf { it.isNotEmpty() }?.joinToString(" · ") { it.uppercase() }
+    return listOfNotNull(count, what).takeIf { it.isNotEmpty() }?.joinToString(" · ")
 }
 
 /** Lays [photos] out in rows of [columns], padding the last row so cells keep an even width. */
@@ -222,7 +271,7 @@ internal fun FolderGrid(
                     Text(folder.displayName, style = MaterialTheme.typography.bodyMedium, color = onBg, maxLines = 1)
                     Text(
                         "${folder.count} photo${if (folder.count == 1) "" else "s"}",
-                        style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp
+                        style = MaterialTheme.typography.labelSmall, color = muted
                     )
                 }
             }
@@ -262,7 +311,7 @@ internal fun AlbumPhotos(
         Text("No photos in this album yet. Tap + to add one.", style = MaterialTheme.typography.bodyMedium, color = muted)
         return
     }
-    MonthGroupedGrid(photos, columns, zone, fileFor, muted, accent, onView)
+    DayGroupedGrid(photos, columns, zone, fileFor, muted, accent, onView)
 }
 
 /** A pill chip used for both the time-range filters and the move-to-album picker. */

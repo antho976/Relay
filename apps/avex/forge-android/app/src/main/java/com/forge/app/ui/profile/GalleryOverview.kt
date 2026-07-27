@@ -1,11 +1,15 @@
+@file:OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+
 package com.forge.app.ui.profile
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -14,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -28,7 +33,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.data.db.entities.BodyweightEntry
@@ -38,8 +42,13 @@ import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.domain.units.formatWeightDelta
 import com.forge.app.ui.common.EditorialHeader
+import com.forge.app.ui.common.ForgePrimaryCapsule
+import com.forge.app.ui.common.InlineEmptyHint
+import com.forge.app.ui.common.SegmentPill
 import com.forge.app.ui.common.bounceClick
+import com.forge.app.ui.common.forgeShimmer
 import com.forge.app.ui.common.rememberDrawProgress
+import com.forge.app.ui.common.statsEntrance
 import com.forge.app.ui.theme.ForgeMotion
 import java.io.File
 import java.text.SimpleDateFormat
@@ -53,17 +62,9 @@ import java.util.Locale
 
 /** The screen's serif name over a mono eyebrow that carries the count + span (§3 hero rule). */
 @Composable
-internal fun GalleryHero(photos: List<ProgressPhoto>, zone: ZoneId, onBg: Color, muted: Color) {
-    val eyebrow = remember(photos) {
-        if (photos.isEmpty()) "PROGRESS PHOTOS"
-        else {
-            val count = "${photos.size} PHOTO${if (photos.size == 1) "" else "S"}"
-            val oldest = photos.minByOrNull { it.takenAtMs }
-            val since = oldest?.let {
-                SimpleDateFormat("MMM yyyy", Locale.getDefault()).format(Date(it.takenAtMs)).uppercase()
-            }
-            if (since != null && photos.size > 1) "$count · SINCE $since" else count
-        }
+internal fun GalleryHero(photos: List<ProgressPhoto>, loading: Boolean, onBg: Color, muted: Color) {
+    val eyebrow = remember(photos, loading) {
+        galleryEyebrow(photos.size, photos.minOfOrNull { it.takenAtMs }, loading)
     }
     Text(eyebrow, style = MaterialTheme.typography.labelMedium, color = muted, letterSpacing = 1.sp)
     Spacer(Modifier.height(4.dp))
@@ -76,13 +77,17 @@ internal fun GalleryHero(photos: List<ProgressPhoto>, zone: ZoneId, onBg: Color,
 /**
  * The overview's headline comparison: your first shot beside your latest, with the span, weight
  * change and a compare affordance between them. Tapping it opens the slider compare. Drawn at every
- * count — one photo shows the shot beside a ghost "next" frame, none shows two ghost frames with an
- * add prompt — so the section is a mark at zero, not a text row (§12).
+ * count — one photo fills FIRST beside a ghost NOW (the slot the next shot lands in), none shows two
+ * ghost frames — so this is the screen's mark at zero, not a text row (§12). Both ends keep their
+ * FIRST / NOW tag empty or full, so the band says what it is without a sentence explaining it.
+ * While the index is still loading the frames sit as shimmer plates: an add prompt shown over photos
+ * that simply haven't been read off disk yet is a lie, and it was the first thing the screen said.
  */
 @Composable
 internal fun ProgressBand(
     before: ProgressPhoto?,
     after: ProgressPhoto?,
+    loading: Boolean,
     zone: ZoneId,
     weightUnit: WeightUnit,
     fileFor: (ProgressPhoto) -> File,
@@ -91,29 +96,34 @@ internal fun ProgressBand(
     onBg: Color, muted: Color, accent: Color, outline: Color
 ) {
     val pair = before != null && after != null && before.fileName != after.fileName
-    val mod = if (pair) Modifier.fillMaxWidth().bounceClick { onCompare(before!!, after!!) }
-    else Modifier.fillMaxWidth().bounceClick { onAdd() }
+    val mod = when {
+        loading -> Modifier.fillMaxWidth()
+        pair -> Modifier.fillMaxWidth().bounceClick { onCompare(before!!, after!!) }
+        else -> Modifier.fillMaxWidth().bounceClick { onAdd() }
+    }
 
     Row(mod, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        BandFrame("FIRST", before, zone, fileFor, muted, outline, Modifier.weight(1f))
+        BandFrame("FIRST", before, loading, fileFor, muted, outline, Modifier.weight(1f))
         BandMeta(before, after, zone, weightUnit, pair, muted, accent, onBg)
-        BandFrame("NOW", after, zone, fileFor, muted, outline, Modifier.weight(1f))
+        BandFrame("NOW", after, loading, fileFor, muted, outline, Modifier.weight(1f))
     }
-    if (!pair) {
+    if (!loading && !pair) {
         Spacer(Modifier.height(8.dp))
-        Text(
-            if (after == null) "Add your first shot to start the timeline" else "Add another to compare",
-            style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic
+        // The one hint this lens spends (§12) — it captions the ghost frame rather than replacing it.
+        InlineEmptyHint(
+            if (before == null && after == null) "Add your first shot to start the timeline."
+            else "Add a second shot and the compare opens.",
+            muted
         )
     }
 }
 
-/** One end of the band: a portrait photo (dated, tagged) or a ghost frame when there's nothing yet. */
+/** One end of the band: a portrait photo (dated, tagged) or a tagged ghost frame when nothing's there. */
 @Composable
 private fun BandFrame(
     tag: String,
     photo: ProgressPhoto?,
-    zone: ZoneId,
+    loading: Boolean,
     fileFor: (ProgressPhoto) -> File,
     muted: Color,
     outline: Color,
@@ -121,27 +131,41 @@ private fun BandFrame(
 ) {
     // Rounded 16 — the photo idiom (§7), a step up from the grid's 12 so the band reads as the hero.
     Box(modifier.aspectRatio(0.8f).clip(RoundedCornerShape(16.dp))) {
-        if (photo != null) {
-            ProgressPhotoImage(fileFor(photo), Modifier.fillMaxSize(), reqPx = 480)
-            Box(
-                Modifier.matchParentSize().background(
-                    Brush.verticalGradient(0.55f to Color.Transparent, 1f to Color.Black.copy(alpha = 0.6f))
+        when {
+            photo != null -> {
+                ProgressPhotoImage(fileFor(photo), Modifier.fillMaxSize(), reqPx = 480)
+                Box(
+                    Modifier.matchParentSize().background(
+                        Brush.verticalGradient(0.55f to Color.Transparent, 1f to Color.Black.copy(alpha = 0.6f))
+                    )
                 )
-            )
-            Column(Modifier.align(Alignment.BottomStart).padding(horizontal = 9.dp, vertical = 8.dp)) {
-                Text(tag, style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.75f), fontSize = 8.sp, letterSpacing = 1.sp)
-                Text(
-                    SimpleDateFormat("MMM d", Locale.getDefault()).format(Date(photo.takenAtMs)).uppercase(),
-                    style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.92f), fontSize = 9.sp
-                )
+                Column(Modifier.align(Alignment.BottomStart).padding(horizontal = 9.dp, vertical = 8.dp)) {
+                    Text(tag, style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.75f), fontSize = 8.sp, letterSpacing = 1.sp)
+                    Text(
+                        SimpleDateFormat("MMM d", Locale.getDefault()).format(Date(photo.takenAtMs)).uppercase(),
+                        style = MaterialTheme.typography.labelSmall, color = Color.White.copy(alpha = 0.92f), fontSize = 9.sp
+                    )
+                }
             }
-        } else {
-            Box(
-                Modifier.matchParentSize()
-                    .border(1.dp, outline.copy(alpha = 0.35f), RoundedCornerShape(16.dp)),
-                contentAlignment = Alignment.Center
-            ) {
-                Text("＋", style = MaterialTheme.typography.headlineSmall, color = muted.copy(alpha = 0.6f))
+            loading -> Box(Modifier.matchParentSize().forgeShimmer())
+            else -> {
+                // Empty end: the same frame, the same tag position, nothing in it (§12 ghost visual).
+                // Border off the MUTED ramp at §12's `muted@0.55`, not the outline one: these frames
+                // are this page's entire mark at zero, and at outline 0.35 the border measured 1.13:1
+                // against the page on device — a frame you cannot see is a blank page, not a ghost.
+                Box(
+                    Modifier.matchParentSize()
+                        .border(1.dp, muted.copy(alpha = 0.55f), RoundedCornerShape(16.dp)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text("＋", style = MaterialTheme.typography.headlineSmall, color = muted.copy(alpha = 0.6f))
+                }
+                Text(
+                    tag,
+                    style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.7f),
+                    fontSize = 8.sp, letterSpacing = 1.sp,
+                    modifier = Modifier.align(Alignment.BottomStart).padding(horizontal = 9.dp, vertical = 8.dp)
+                )
             }
         }
     }
@@ -192,6 +216,135 @@ private fun BandMeta(
     }
 }
 
+// ── Zero-state start block ───────────────────────────────────────────────────
+
+/**
+ * What an empty Gallery offers instead of a blank page: the one filled capsule (§8 ①) that opens the
+ * camera-or-import chooser, and — only when albums already exist without photos in them — the way
+ * back into them. Shown at zero alone; once a photo lands the top-bar `+` and the band carry adding,
+ * so the capsule leaves rather than sitting over a live grid.
+ */
+@Composable
+internal fun GalleryStart(onAdd: () -> Unit, onOpenAlbums: (() -> Unit)?, accent: Color) {
+    ForgePrimaryCapsule("Add a photo", onClick = onAdd, modifier = Modifier.fillMaxWidth())
+    if (onOpenAlbums != null) {
+        Spacer(Modifier.height(14.dp))
+        Text(
+            "Albums →",
+            style = MaterialTheme.typography.labelSmall, color = accent,
+            modifier = Modifier.bounceClick { onOpenAlbums() }.padding(vertical = 4.dp)
+        )
+    }
+}
+
+// ── Timeline (lens pills + tools + grid) ─────────────────────────────────────
+
+/**
+ * The browse half of the overview: the TIMELINE anchor (with "Albums →" as its header action), the
+ * pose lens pills, the search / filters / compare text pills, and the month-grouped grid underneath.
+ *
+ * Every control here is gated on there being something for it to do — pose pills need two poses to
+ * choose between, Search and Filters need more photos than fit on one screen ([GALLERY_TOOLS_MIN]),
+ * Compare needs two shots. A control that can only ever return the same grid is an affordance that
+ * does nothing (§4.5), which is exactly how this section read with one photo in it.
+ */
+@Composable
+internal fun GalleryTimeline(
+    photos: List<ProgressPhoto>,
+    visiblePhotos: List<ProgressPhoto>,
+    poses: List<PhotoPose>,
+    tools: GalleryTools,
+    zone: ZoneId,
+    entrance: Int,
+    onOpenAlbums: () -> Unit,
+    onStartCompare: () -> Unit,
+    onView: (ProgressPhoto) -> Unit,
+    fileFor: (ProgressPhoto) -> File,
+    onBg: Color, muted: Color, accent: Color, outline: Color
+) {
+    // Tool pills — one pill vocabulary with the range chips below, no stock icons in content (§8).
+    val showSift = photos.size >= GALLERY_TOOLS_MIN
+    val showCompare = photos.size >= 2
+    val hasControls = poses.size >= 2 || showSift || showCompare
+
+    Column(Modifier.fillMaxWidth().statsEntrance(entrance)) {
+        EditorialHeader("Timeline", muted, accent, action = "Albums →", onAction = onOpenAlbums)
+        Spacer(Modifier.height(10.dp))
+
+        // Lens pills: only with two poses to switch between (one pose + "All" filters nothing).
+        if (poses.size >= 2) {
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                SegmentPill("All", selected = tools.pose == null, onClick = { tools.onPoseChange(null) }, accent, onBg, muted, outline)
+                poses.forEach { p ->
+                    SegmentPill(p.label, selected = tools.pose == p, onClick = { tools.onPoseChange(p) }, accent, onBg, muted, outline)
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+        }
+
+        // The search field stands ALWAYS OPEN once the library is worth searching (2026-07-25). It
+        // used to hide behind a "Search" chip, which is a tool-drawer idiom — a photo library's
+        // search is the thing you reach for first, and a gallery that makes you find its search
+        // doesn't read as a gallery. Its placeholder names what it matches, so the fields it covers
+        // (title, note, pose, date) are discoverable without a caption explaining them.
+        if (showSift) {
+            GallerySearchBar(tools.query, tools.onQueryChange, focusRequester = tools.searchFocus)
+            Spacer(Modifier.height(10.dp))
+        }
+
+        if (showSift || showCompare) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (showSift) {
+                    GalleryChip("Filters", selected = tools.filtersOpen || tools.filtersActive) { tools.onToggleFilters() }
+                }
+                if (showCompare) GalleryChip("Compare", selected = false) { onStartCompare() }
+            }
+        }
+
+        if (showSift && tools.filtersOpen) {
+            Spacer(Modifier.height(10.dp))
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                GalleryRange.entries.forEach { r -> GalleryChip(r.label, selected = r == tools.range) { tools.onRangeChange(r) } }
+            }
+            Spacer(Modifier.height(10.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                GalleryChip(
+                    if (tools.sort == GallerySort.NEWEST) "Newest first" else "Oldest first",
+                    selected = false
+                ) { tools.onToggleSort() }
+                GalleryChip("${tools.columns} across", selected = false) { tools.onCycleColumns() }
+            }
+        }
+    }
+
+    // With no controls drawn the header's own 10dp is already the section's air (§7).
+    if (hasControls) Spacer(Modifier.height(16.dp))
+    Column(Modifier.fillMaxWidth().statsEntrance(entrance + 1)) {
+        if (visiblePhotos.isEmpty()) {
+            // A narrowed-to-nothing grid always carries its way out, so the view is never a dead end.
+            InlineEmptyHint(
+                if (tools.searching) "Nothing matches “${tools.query}”." else "No photos in this window.",
+                muted
+            )
+            if (tools.narrowed) {
+                Spacer(Modifier.height(12.dp))
+                GalleryChip(if (tools.searching) "Clear search" else "Clear filters", selected = false) { tools.onClear() }
+            }
+            return@Column
+        }
+        if (tools.searching) {
+            Text(
+                "${visiblePhotos.size} result${if (visiblePhotos.size == 1) "" else "s"}",
+                style = MaterialTheme.typography.labelMedium, color = muted
+            )
+            Spacer(Modifier.height(12.dp))
+        }
+        // A lone cell three-across reads as debris (§12) — thin galleries widen their cells instead.
+        val columns = if (visiblePhotos.size <= 2) minOf(tools.columns, 2) else tools.columns
+        DayGroupedGrid(visiblePhotos, columns, zone, fileFor, muted, accent, onView)
+    }
+}
+
 // ── Bodyweight sparkline ─────────────────────────────────────────────────────
 
 /**
@@ -199,7 +352,8 @@ private fun BandMeta(
  * section anchor, the latest reading as a small serif figure, and the line drawing in left-to-right
  * once (§9/§10). Only rendered with ≥2 weigh-ins (a lone point isn't a trend); the band already
  * carries the per-shot weight delta, so nothing is repeated when this is absent. Photo dates ride
- * the bottom axis as faint ticks.
+ * the bottom axis as faint ticks — an empty [photos] just means no ticks, which is why this section
+ * also draws on a photo-less gallery: it is the one live mark beside the band's ghost frames (§12).
  */
 @Composable
 internal fun BodyweightSparkline(
@@ -286,7 +440,9 @@ internal fun posesPresent(photos: List<ProgressPhoto>): List<PhotoPose> =
 internal fun bestComparePair(photos: List<ProgressPhoto>): Pair<ProgressPhoto?, ProgressPhoto?> {
     if (photos.isEmpty()) return null to null
     val newest = photos.maxByOrNull { it.takenAtMs }!!
-    if (photos.size == 1) return null to newest
+    // A lone shot IS the first one — it fills FIRST and the empty NOW frame is where the next lands.
+    // (It used to sit under NOW with a ghost FIRST, which read as a missing past rather than a start.)
+    if (photos.size == 1) return newest to null
     val samePoseOldest = photos
         .filter { it.pose == newest.pose && it.fileName != newest.fileName }
         .minByOrNull { it.takenAtMs }

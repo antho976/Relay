@@ -19,7 +19,6 @@ import com.forge.app.domain.trophy.TrophyStatsSnapshot
 import com.forge.app.program.Trophy
 import com.forge.app.program.TrophyIcon
 import com.forge.app.program.Trophies
-import com.forge.app.ui.overview.state.OnThisDayMemory
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -67,7 +66,6 @@ data class ProfileData(
     val trophyTotal: Int,
     val trophyGrid: List<TrophyCell>,
     val closestTrophy: String?,
-    val memory: OnThisDayMemory?,
     /** Lifetime total sets logged — an All-Time tile alongside workouts/volume/PRs. */
     val totalSets: Int = 0,
     /** This-week vs last-week tallies (ISO weeks) — power the All-Time tiles' "vs last week" arrows. */
@@ -123,7 +121,6 @@ class ProfileRepository @Inject constructor(
         val sessionsD = async { sessionDao.allFinished().filter { !it.isUntracked } }
         val unlockedDatesD = async { trophyRepo.unlockedDatesById() }
         val snapshotD = async { runCatching { trophyRepo.snapshot() }.getOrNull() }
-        val memoryD = async { runCatching { statsRepo.findOnThisDayMemory() }.getOrNull() }
         // Focused streak read (two queries) rather than subscribing the whole weekly fan-out just
         // to pull one Int — see StatsRepository.currentStreakDays.
         val streakD = async { runCatching { statsRepo.currentStreakDays() }.getOrDefault(0) }
@@ -213,7 +210,6 @@ class ProfileRepository @Inject constructor(
             trophyTotal = Trophies.all.size,
             trophyGrid = trophyGrid,
             closestTrophy = closestTrophy,
-            memory = memoryD.await(),
             totalSets = totalSets,
             workoutsThisWeek = workoutsThisWeek,
             workoutsLastWeek = workoutsLastWeek,

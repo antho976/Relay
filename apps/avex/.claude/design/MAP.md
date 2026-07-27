@@ -88,28 +88,64 @@ rows tap to Recovery), never a second brief/trust/history home.
 
 ### Profile — `ui/profile`
 
-blending cover (**untouchable** compositing approach — its edge-fade + text-scrim STOPS were retuned
-2026-07-09 (Antho) to remove a hard seam where the cover met the page; the masking technique itself
-stays frozen; a random default is seeded on first run so it's never empty, tap →
-`AvatarPickerSheet`), bodyweight-led, ALL-TIME 2×2, then the merged **BODY** section (2026-07-13,
-Antho — bodyweight, body fat and measurements folded from three separate sections into ONE compact
-stack, `BodyMetricsSection` in `ProfileBody.kt`): one mono `BODY` header over three compact rows,
-each a fixed mono label + reading + a right-aligned trend mark. **WEIGHT** = serif figure + ~30-day
-delta off the 7-day average (a noisy final weigh-in can't flip the arrow) + the smoothed spark
-keeping the dashed goal on-canvas + `+ log`. **BODY FAT** (GYMAP-62) = serif figure + ~30-day delta
-in *points* (direction-only arrow, never a good/bad verdict) + a raw-reading spark (logged sparsely,
-so no smoothing) + `+ log`. **MUSCLE** (W6) = the watch's BIA lean-mass reading, import-only
-(`lean_mass` v30, `LeanMassRepository`, own `LeanMassViewModel` like measurements): serif figure in
-the weight unit + ~30-day delta + raw-reading spark + a `sync →` action (no manual log for a
-watch-authored metric); the row renders only when the HC read is granted or data exists — an HC-only
-metric never shows an unconnected ghost row here. **SIZES** (GYMAP-52) = five coverage pips (which
-circumferences are tracked, a mark that works at zero — all hollow) with a whole-row `open →` into
-`BODY_MEASUREMENTS` (the full Measurements screen, unchanged, owns the values/trends/logging). Empty
-is DRAWN (§12): an empty metric shows a ghost flat line beside its live siblings, and
-all-three-empty collapses to ONE `InlineEmptyHint`, never three ghost rows. Storage/sync unchanged
-and separate: `bodyweight_entry`, the `body_fat` table (v29, sibling of bodyweight — NOT the
-cm-bounded `body_measurement`, since a % is unitless — fed from a smart scale via Health Connect
-**or** manual entry, mirrored both ways via a Recovery `Body fat sync` row, `BodyFatSync` mirrors
+blending cover (**untouchable** compositing approach — the offscreen `DstIn` edge-fade mask itself
+stays frozen; its STOPS are not: the 2026-07-09 retune kept a second text-scrim that PEAKED at 0.85
+black under the name then released, painting a band darker than the page and reading as the very
+seam it was meant to hide, so 2026-07-24 (Antho) **deleted the scrim outright** and eased the mask's
+bottom tail instead (62/72/82/91% ramp, not one linear slope — a straight alpha slope lands as a
+visible edge). The dissolve can now only approach the page background, never overshoot it; name/meta
+keep their own shadow haloes. A random default is seeded on first run so it's never empty, tap →
+`AvatarPickerSheet`), bodyweight-led, **ALL-TIME** = ONE row of shared `EditorialFigure`s, COUNTS
+only (workouts · sets · PRs + their week arrows) — lifted volume is deliberately NOT a figure here,
+it is the **LIFETIME VOLUME** section's own serif reading sitting over its cumulative
+session-by-session curve, so the number has one home (§4.3, 2026-07-24; the old 2×2 grid of 36sp
+figures and its local `StatCell` copy of `EditorialFigure` are both retired) — then the merged
+**BODY** section (2026-07-13, Antho — bodyweight, body fat and measurements folded from three
+separate sections into ONE compact stack, `BodyMetricsSection` in `ProfileBody.kt`): one mono `BODY`
+header over a row per metric built on exactly TWO RAILS and nothing between them (rebuilt
+2026-07-24, Antho — the old row was a fixed 84dp label column, a figure floating loose in the
+middle, and a bare accent `+ log` / `open →` text link stranded at the far edge): LEFT = the mono
+metric name with its serif reading (`headlineMedium`, matching the ALL-TIME row) glued directly
+beneath it, unit + ~30-day delta on the baseline; RIGHT = the trend mark, then the row's action as a
+compact `ForgeRowPill` (Log · Log · Sync · Open). The WHOLE row is the tap target and the pill is
+drawn only, so a stack of body metrics never becomes a column of accent text links (§8). **WEIGHT**
+= serif figure + ~30-day delta off the 7-day average (a noisy final weigh-in can't flip the arrow) +
+the smoothed spark keeping the dashed goal on-canvas + `+ log`. **BODY FAT** (GYMAP-62) = serif
+figure + ~30-day delta in *points* (direction-only arrow, never a good/bad verdict) + a raw-reading
+spark (logged sparsely, so no smoothing) + `+ log`. **MUSCLE** (W6) = the watch's BIA lean-mass
+reading, import-only (`lean_mass` v30, `LeanMassRepository`, own `LeanMassViewModel` like
+measurements): serif figure in the weight unit + ~30-day delta + raw-reading spark + a `sync →`
+action (no manual log for a watch-authored metric); the row renders only when the HC read is granted
+or data exists — an HC-only metric never shows an unconnected ghost row here. **SIZES** (GYMAP-52) =
+ONE named circumference. Its label reads at the 15sp **anchor** rung, not the 11sp metric-name rung
+its siblings use (2026-07-25, Antho: "SIZES is a separator like BODY"): "SIZES" is not the name of a
+measurement the way WEIGHT and BODY FAT are — it is a GROUP, and the meta line under it names which
+member is showing, so inside its row it does exactly what "BODY" does over the section. The site's
+name therefore sits on the meta line at the metric-name rung, its value as the serif figure, its
+unit and its total change since the FIRST reading, and its spark as the mark (2026-07-25, Antho).
+Coverage pips and an `n OF 5` count were tried first and struck out on two counts: anonymous pips
+cannot say WHICH site they stand for, and **coverage is not a reading** — you do not measure
+yourself once, so `5 OF 5` saturates within a fortnight and then reports the same fact forever,
+occupying the row where every sibling carries a live number. Featured site = WAIST by convention,
+falling back to whichever site was logged most recently. Whole-row `Open` into `BODY_MEASUREMENTS`
+(the full Measurements screen, unchanged, owns the values/trends/logging). Empty is DRAWN (§12) and
+**the rows themselves ARE the zero-shape**: a metric with no readings still renders its name + its
+action pill, so a brand-new profile gets an actionable section. The old all-three-empty collapse to
+ONE `InlineEmptyHint` is GONE (2026-07-24, Antho — it replaced the whole redesigned section with a
+single italic sentence, and a hint is the last resort only where there IS no zero-shape). A metric
+with no readings draws **NO MARK AT ALL** — the slot keeps its width so the marks and pills still
+share one right edge, but nothing is painted in it. Empty TRACKS were tried in between (2026-07-24)
+and struck out a day later: a container with nothing in it is decoration, not an empty state, and on
+device the whole section read as two flat grey dashes and a row of dots that said nothing. The
+zero-shape is the ROW — a named metric with a real action pill — not a drawn stand-in for data that
+doesn't exist. (2026-07-25, after a first-run profile rendered WEIGHT / BODY FAT / SIZES as label +
+pill and nothing else: each mark independently and correctly chose to draw nothing, and with the
+section wholly at zero every mark took that branch at once — locally sound, globally a settings
+page. Any rule worded "only draw X when Y" needs a defined answer for "no Y", and that answer may
+not be "nothing" for every mark in a section simultaneously.) Storage/sync unchanged and separate:
+`bodyweight_entry`, the `body_fat` table (v29, sibling of bodyweight — NOT the cm-bounded
+`body_measurement`, since a % is unitless — fed from a smart scale via Health Connect **or** manual
+entry, mirrored both ways via a Recovery `Body fat sync` row, `BodyFatSync` mirrors
 `BodyweightSync`), and `body_measurement` (v24, local-only, canonical cm); measurements keeps its
 own `BodyMeasurementsViewModel`, read at the section level so ProfileViewModel is untouched. THIS
 YEAR consistency grid (GYMAP-58 — whole calendar year, one ROW per month · day-of-month columns ·
@@ -144,39 +180,84 @@ any activity, `buildYearActivity` in `ProfileRepository`), filmstrip.
 - `FREESTYLE_LOG`
 - `MIRROR_TEST` (the photo **Gallery**, revamped GYMAP-gallery; visual pass 2026-07-13:
   `statsEntrance` cascade + sparkline draw-in, real `EditorialHeader` anchors (BODYWEIGHT · SAME
-  WEIGHT, DIFFERENT BODY · TIMELINE w/ `Albums →` as the header action), stock-Material content icons
-  and per-cell pose chips removed: overview-first — serif "Gallery" hero + mono count/span eyebrow, a
-  first↔latest **progress band** (corner-16 frames; center = serif span figure + direction-only
-  weight-Δ + `compare →`; prefers a same-pose pair, tap → slider compare) as the §12 mark at zero
-  (ghost frames + add prompt), a bodyweight-through-time sparkline (only ≥2 weigh-ins), an auto-paired
-  **same weight, different body** strip (GYMAP-60: same-pose shots within ~2lb of each other ≥30d
-  apart, longest hold first, tap → compare; hidden when none, excludes the band pair so it never
-  echoes it), pose lens pills (Front/Back/Side/Legs/Arms, only those present) + search/filters/compare
-  **text pills** (one `GalleryChip` vocabulary with the range/sort/density chips) over the
-  month-grouped grid (cells corner-12, date-only — the pose lens carries grouping); compare = select-2
-  → `CompareSheet` with a draggable **Slider** ⇄ **Split** toggle + time/weight/pose readout (a
-  top-bar **Share** renders a 4:5 before/after card via `BeforeAfterCardRenderer` — GYMAP-55: the two
-  shots + span + pose + **delta-only** weight (never the absolute bodyweight) to `ACTION_SEND`, a
-  sibling of `RankCardRenderer` in the same Pearl-gradient/serif-hero/tinted-wordmark card language;
-  band/same-weight/manual-compare all funnel through this sheet so every before/after path shares for
-  free; adding it retired the Gallery's "never leave your phone" reassurance copy); the full-screen
-  pager viewer doubles as a **metadata editor** (tap-date → DatePicker · pose chips · bodyweight ·
-  note · album · delete); albums behind "Albums →"; add via a chooser sheet → import OR the guided
-  camera; photos carry EXIF capture date + a bodyweight snapshot nearest that date and are stored
-  app-private off the DB — `ProgressPhotoRepository` with a reactive `revision` so
-  teaser/gallery/camera stay in sync)
+  WEIGHT, DIFFERENT BODY · TIMELINE w/ `Albums →` as the header action), stock-Material content
+  icons and per-cell pose chips removed: overview-first — serif "Gallery" hero + mono count/span
+  eyebrow, a first↔latest **progress band** (corner-16 frames; center = serif span figure +
+  direction-only weight-Δ + `compare →`; prefers a same-pose pair, tap → slider compare) as the §12
+  mark at zero (ghost frames + add prompt), a bodyweight-through-time sparkline (only ≥2 weigh-ins),
+  an auto-paired **same weight, different body** strip (GYMAP-60: same-pose shots within ~2lb of
+  each other ≥30d apart, longest hold first, tap → compare; hidden when none, excludes the band pair
+  so it never echoes it), pose lens pills (Front/Back/Side/Legs/Arms, only those present) +
+  search/filters/compare **text pills** (one `GalleryChip` vocabulary with the range/sort/density
+  chips) over the month-grouped grid (cells corner-12, date-only — the pose lens carries grouping);
+  compare = select-2 → `CompareSheet` with a draggable **Slider** ⇄ **Split** toggle +
+  time/weight/pose readout (a top-bar **Share** renders a 4:5 before/after card via
+  `BeforeAfterCardRenderer` — GYMAP-55: the two shots + span + pose + **delta-only** weight (never
+  the absolute bodyweight) to `ACTION_SEND`, a sibling of `RankCardRenderer` in the same
+  Pearl-gradient/serif-hero/tinted-wordmark card language; band/same-weight/manual-compare all
+  funnel through this sheet so every before/after path shares for free; adding it retired the
+  Gallery's "never leave your phone" reassurance copy); the full-screen pager viewer doubles as a
+  **metadata editor** (tap-date → DatePicker · pose chips · bodyweight · note · album · delete);
+  albums behind "Albums →"; add via a chooser sheet → import OR the guided camera; photos carry EXIF
+  capture date + a bodyweight snapshot nearest that date and are stored app-private off the DB —
+  `ProgressPhotoRepository` with a reactive `revision` so teaser/gallery/camera stay in sync. **A
+  photo LIBRARY first, a compare tool second (2026-07-25, Antho: "it was supposed to be a gallery of
+  photos like phones, with metadata, classed per day, in order, with filters and a search bar").**
+  The grid groups by **DAY**, not month — you shoot a set of angles in one sitting, so the day is
+  the unit, and a month header hid the very thing that makes the library useful. Each day header
+  names itself the way you'd say it (`TODAY` · `YESTERDAY` · `THU 16 JUL`, plus the year outside
+  this one) over a meta line carrying the day's own reading: the shot count once there's more than
+  one, then the titles those shots carry or their poses when untitled. **Photos carry a `title`**
+  (short label, ≤60 chars, edited in the viewer above the note, stored in the photo index JSON —
+  photos are deliberately off the schema, so no migration). **Search matches what the photo IS**:
+  title · note · **pose** · album · date in several spellings. Pose and title were both missing
+  until this pass, so the two most natural queries in a physique gallery — "arms", or whatever you
+  named the shot — returned nothing. Pose matches on the enum LABEL, not the stored key. The field
+  stands **always open**, never behind a chip: a gallery that makes you find its search doesn't read
+  as a gallery, and its placeholder names the dimensions it matches so they need no caption.
+  **Import is MULTI-select** (`PickMultipleVisualMedia`) — several photos per day was always allowed
+  by storage (UUID filenames, no dedup anywhere) and was blocked purely by the picker asking for
+  one. **The screen is whole at every count** — `OverviewLevel` used to `return` right after the
+  band when there were no photos, so a new user got eyebrow + hero + two ghost frames + one italic
+  line and then a BLANK page, with `Albums →` unreachable because it hangs off the TIMELINE header
+  inside the returned-early region. The zero page now runs: honest `0 PHOTOS` eyebrow → serif hero →
+  ghost frames **keeping their FIRST/NOW tags** (the mark states its own structure, it doesn't lean
+  on the prose beneath it) → one hint → one filled `Add a photo` capsule → and BODYWEIGHT with its
+  real figure and spark, which is no longer photo-gated (it is the live sibling the ghosts read
+  against, §12). At ONE photo the shot takes **FIRST**, not NOW — a lone shot in NOW beside a ghost
+  FIRST reads as a missing past rather than a start. **Browse controls are count-gated, never
+  rendered over nothing**: compare ≥2 · search/filters ≥4 · pose pills only once ≥2 poses exist;
+  dropping below a threshold CLEARS the state that control set, so a filter can't outlive its
+  control, and a filtered-to-empty grid carries its own `Clear search`/`Clear filters` chip rather
+  than being a dead end. The grid widens to 2-across at ≤2 photos (3-across put a single shot on
+  screen as a ~100dp speck, §12 debris). **Loading is its own state**: `index.json` is read off disk
+  async, so before this every entry — including a 200-photo library — rendered the zero state for
+  the first frames and flashed "add your first shot" before snapping to content; the band now
+  shimmers while `loading` and everything below it waits.)
 - `PROGRESS_CAMERA` (`ui/profile`, CameraX guided capture — live preview + a ~0.3-alpha ghost of
   your last same-pose shot for alignment, pose chips, rule-of-thirds grid, 3s self-timer, front/rear
   flip; writes straight to app-private storage; CAMERA permission is optional — deny falls back to
   import; no INTERNET, never the camera roll)
-- `BODY_MEASUREMENTS` (`ui/profile`, GYMAP-52: the body-measurement tracker reached from the
-  Profile's MEASUREMENTS card — serif "Measurements" hero + mono "N of 5 tracked" eyebrow, one row per
-  circumference (waist/chest/arms/thighs/hips) = mono label + since-last delta + open serif value +
-  trend `ProfileSparkline`; empty is drawn (a hollow **tracked-rail** of 5 named pips + one hint,
-  §12), untracked-beside-tracked shows a flat ghost line; top-bar `+` opens a five-field log sheet
-  (mirrors `BodyweightLogSheet`). Stored canonically in cm off a per-type Room table
-  (`body_measurement`, one row per type per day), displayed cm/in via the independent `use_cm` Format
-  toggle; local-only, `BodyMeasurementRepository`)
+- `BODY_MEASUREMENTS` (`ui/profile`, GYMAP-52: the body-measurement tracker reached from the Profile
+  BODY section's SIZES row. Reworked 2026-07-25 — mono `3 OF 5 TRACKED` eyebrow + serif
+  "Measurements" hero whose MARK is a full-width **five-segment coverage rail** (accent where that
+  site has a reading, empty track where it does not), captioned by the names of the sites still
+  missing (`NOT TRACKED · THIGHS · HIPS`; at zero the names alone, at 5-of-5 no caption). Then a
+  `TRACKED` anchor over one row per **tracked** site ONLY, on the same two rails as the Profile BODY
+  row: LEFT = mono site name + open serif value + unit + total change **since the first reading,
+  naming it** (`↓ 1.5 SINCE MAR 3` — a circumference is logged sparsely, so a bare "since last" is a
+  delta over an unknown gap; direction-only arrow, never a verdict); RIGHT = the 140dp trend lane
+  stamped underneath with the last reading's DATE, so a value logged in March never reads as current
+  beside one from last week. One reading draws `SingleReadingMark` — the empty track carrying its
+  single accent dot — because `ProfileSparkline` needs two points and the row otherwise went blank
+  the moment you first used it. **Untracked sites get no rows at all**: they are the rail's hollow
+  segments and its caption (§12 — N rows sharing one empty status collapse to ONE mark; the old
+  screen drew four identical grey dashes for the untracked while the one LIVE row had no mark). At
+  zero: hollow rail + the five names + one filled `Log measurements` capsule, no hint.
+  `statsEntrance` cascade; top-bar `+` opens the same five-field log sheet (mirrors
+  `BodyweightLogSheet`). Stored canonically in cm off a per-type Room table (`body_measurement`, one
+  row per type per day), displayed cm/in via the independent `use_cm` Format toggle; local-only,
+  `BodyMeasurementRepository`).
 
 ### Lock — `security`
 

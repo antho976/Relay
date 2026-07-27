@@ -8,6 +8,18 @@ an entry whenever a rule is added, changed or retired.
 
 ---
 
+## 2026-07-25 — §6 gains a mono anchor rung: equal size is not equal presence
+
+Row labels moved from 11 → 13 to stop being the smallest thing on a page whose job is naming metrics
+— which put them on the section anchor's own rung. A section anchor is usually a SHORT word with wide
+tracking ("BODY") sitting over long rows ("BODY FAT"): at a matched 13sp both measured an identical
+26px cap height on device, the anchor carried less visual mass, and the header read as the *smaller*
+of the two.
+
+So `EditorialHeader` now takes `MonoSectionAnchor` (15sp) — one step above the rows beneath it. The
+general rule §6 keeps: **when two labels must rank, rank them by SIZE**; tracking and colour cannot
+carry a hierarchy on their own.
+
 ## 2026-07-24 — Fourth audit pass: reviewing the templates as design, not as regex
 
 Much quieter round: one real defect, one hardening, and three angles that came back clean.
