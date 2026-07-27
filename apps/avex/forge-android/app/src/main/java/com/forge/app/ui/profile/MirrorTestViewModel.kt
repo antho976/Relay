@@ -95,8 +95,19 @@ class MirrorTestViewModel @Inject constructor(
         photoRepo.add(uri, album = album, pose = pose)
     }
 
+    /**
+     * Import a whole selection in one go. Sequential on purpose: each add copies bytes and rewrites
+     * the shared JSON index under the repository's write lock, so running them concurrently would
+     * only contend for that lock. One `revision` bump per photo keeps the grid filling in as they
+     * land rather than appearing all at once at the end.
+     */
+    fun addPhotos(uris: List<Uri>, album: String, pose: String = "") = viewModelScope.launch {
+        uris.forEach { photoRepo.add(it, album = album, pose = pose) }
+    }
+
     fun setAlbum(photo: ProgressPhoto, album: String) = viewModelScope.launch { photoRepo.setAlbum(photo, album) }
     fun setNote(photo: ProgressPhoto, note: String) = viewModelScope.launch { photoRepo.setNote(photo, note) }
+    fun setTitle(photo: ProgressPhoto, title: String) = viewModelScope.launch { photoRepo.setTitle(photo, title) }
     fun setPose(photo: ProgressPhoto, pose: String) = viewModelScope.launch { photoRepo.setPose(photo, pose) }
     fun setWeight(photo: ProgressPhoto, weightLb: Double?) = viewModelScope.launch { photoRepo.setWeight(photo, weightLb) }
     fun setTakenAt(photo: ProgressPhoto, takenAtMs: Long) = viewModelScope.launch { photoRepo.setTakenAt(photo, takenAtMs) }

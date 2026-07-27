@@ -235,7 +235,6 @@ class ProfileViewModel @Inject constructor(
         trophyTotal = data.trophyTotal,
         trophyGrid = data.trophyGrid,
         closestTrophy = data.closestTrophy,
-        memory = data.memory,
         lifetimeVolumeSeriesLb = data.lifetimeVolumeSeriesLb,
         activityByDay = data.activityByDay
     )

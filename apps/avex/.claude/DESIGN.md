@@ -110,6 +110,12 @@ Pearl (dark default): bg `#0E0E11` · gradient `#131318→#090909` (behind every
 `#EEEEF2` · muted `#B4B4C2`. AMOLED: bg black, surface `#080808`, surfaceVar `#111111`, gradient
 `#000000→#050507`.
 
+**M3's container tones are NOT themed — pass them explicitly on every M3 component that fills.**
+`ForgeTheme` never sets the `surfaceContainer*` family, `outlineVariant` or `surfaceTint`, so anything
+reaching for one falls through to Material's stock dark palette, a lighter purple-leaning grey belonging
+to no theme here. **A modal is `containerColor = surface`**, its dividers the outline 0.25 rung, its
+confirm/dismiss `onBackground`/muted (2026-07-25; `design/AUDIT.md` carries the call sites still owing).
+
 Accent = user-picked (Navy `#3D4F73` default · Red `#8B3535` · Olive `#4D6040` · Gold `#7A6435`);
 `primary`=accent, `primaryContainer`=@0.15, `secondary`=@0.6. Design against muted navy — needing a
 vivid accent means too much accent. Accent can be **disabled** (Appearance → monochrome): `primary`
@@ -142,11 +148,13 @@ container 0.15). **Reserved**: PR gold `#E3B341` (PR star + gold set row only) �
 |---|---|---|---|
 | **Serif** (tnum) | display 52 · headlineL 36 · headlineM 28 · headlineS 22 | THE one big thing per section: page titles, hero figures | prose, buttons, labels |
 | **Sans** | titleL 18M · titleM 16M · titleS 14M · bodyL 16 · bodyM 14 · bodyS 12 | row titles, prose, button text | section anchors, big numbers |
-| **Mono** (letter-spaced) | labelL 13 · labelM 11 · labelS 10 | UPPERCASE micro-labels: section headers = labelL 13 (`EditorialHeader`), figure captions + meta = labelM/S | sentences, titles |
+| **Mono** (letter-spaced) | anchor 15 · labelL 13 · labelM 11 · labelS 10 | UPPERCASE micro-labels: section anchors = **`MonoSectionAnchor` 15** (`EditorialHeader` only) · row/metric labels = labelL 13 · figure captions + meta = labelM/S | sentences, titles |
 
 - **Always take a style from `MaterialTheme.typography`** — never `fontSize =` at a call site. The
   three voices ARE the meaning system; an inline size opts out of it. Only sanctioned off-scale use:
   8–9sp figure captions.
+- **Rank two mono labels by SIZE, never by tracking or colour alone** — hence the anchor rung above
+  the 13sp row label (`design/DECISIONS.md`, 2026-07-25).
 - Mono labels `.uppercase()` in code. *Italic* = the aside voice (wordmark, coach one-liners,
   taglines): bodyM/S italic, muted.
 - One serif hero per screen, everything else steps down; animating numbers use tnum styles.
@@ -173,7 +181,7 @@ sheet top 16 — no custom radii. Photos: rounded 16 clips, captions on bottom s
 `EditorialFigure` · `EditorialLegend` · `SegmentPill` · `ForgeSwitch` · `InlineEmptyHint` ·
 `ForgeWordmark` · `AvexWordmark` · `AvexIntro` · `IconLaunchScene` · `bounceClick` /
 `bounceCombinedClick` · `clickableLabeled` · `GlyphButton` · `ForgePrimaryCapsule` /
-`ForgeOutlineCapsule` · `ForgeShimmer` · `ConfettiOverlay` · `statsEntrance` · `EntranceItem` ·
+`ForgeOutlineCapsule` · `ForgeRowPill` · `ForgeShimmer` · `ConfettiOverlay` · `statsEntrance` · `EntranceItem` ·
 `rememberDrawProgress` · `CountUpText` · `ExerciseLibraryPicker` · `ProvideTouchExploration` ·
 `SnackbarController`. **A pattern used on a 3rd
 screen gets promoted here the same turn (§2⑥)** — `DoctrineParityTest` checks this list against the
@@ -197,8 +205,10 @@ default/floating-text/icon buttons in content. Settings reuse `SettingsPrimaryAc
 group page-level action buttons at the END of the page, never mid-scroll.
 
 **Per-row action = compact OUTLINED pill, never filled.** A do-it-now action scoped to a single list
-row/integration (Recovery's Connect) renders as a right-aligned compact OUTLINED pill
-(`SettingsOutlineAction` weight — border only, onBg text, sentence case) with the WHOLE row as its tap
+row/integration (Recovery's Connect, the Profile BODY rows' Log/Sync/Open) renders as a right-aligned
+compact OUTLINED pill — the shared **`ForgeRowPill`** (`ui/common/Capsules.kt`; promoted out of
+settings on its third screen 2026-07-24, `ConnectPill` now delegates to it) — border only, onBg text,
+sentence case, with the WHOLE row as its tap
 target (the pill is drawn, not independently clickable — no nested tap). NEVER a filled capsule per
 row: five of those stack into a *button wall* (`FAILURES.md`; Recovery failed exactly this way). The
 ONE filled capsule stays page-level, grouped at the END. A bare mono accent `connect →` link is too dim

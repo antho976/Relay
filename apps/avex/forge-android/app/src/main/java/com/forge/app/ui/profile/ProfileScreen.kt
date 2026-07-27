@@ -198,13 +198,14 @@ fun ProfileScreen(
                         "Tap your photo to change it",
                         style = MaterialTheme.typography.bodySmall,
                         color = muted, fontStyle = FontStyle.Italic,
-                        modifier = Modifier.padding(horizontal = 20.dp).padding(top = 8.dp)
+                        modifier = Modifier.padding(horizontal = 24.dp).padding(top = 8.dp)
                     )
                 }
 
-                // Sections sit openly on the page. Each applies the side margins itself so the
-                // gallery filmstrip can break out and run edge-to-edge like the cover above.
-                val pad = Modifier.fillMaxWidth().padding(horizontal = 20.dp)
+                // Sections sit openly on the page at the 24dp page gutter (§7). Each applies the side
+                // margins itself so the gallery filmstrip can break out and run edge-to-edge like the
+                // cover above.
+                val pad = Modifier.fillMaxWidth().padding(horizontal = 24.dp)
 
                 // ── Rank track (gamification, index 1) ───────────────────────────
                 if (Features.SHOW_GAMIFICATION) state.rank?.let { r ->
@@ -220,7 +221,6 @@ fun ProfileScreen(
                 Column(pad.statsEntrance(2)) {
                     AllTimeSection(
                         sessions = state.totalSessions,
-                        volumeLb = state.totalVolumeLb,
                         prs = state.totalPrs,
                         sets = state.totalSets,
                         xp = state.rank?.xpTotal ?: 0L,
@@ -253,7 +253,7 @@ fun ProfileScreen(
                     )
                     if (state.lifetimeVolumeSeriesLb.size >= 2) {
                         Spacer(Modifier.height(28.dp))
-                        LifetimeVolumeGraph(state.lifetimeVolumeSeriesLb, muted, accent)
+                        LifetimeVolumeGraph(state.lifetimeVolumeSeriesLb, onBg, muted, accent)
                     }
                 }
 
@@ -275,8 +275,9 @@ fun ProfileScreen(
                 }
 
                 // Signature + Cardio sections removed 2026-07-03 (Antho), Goals too (they live on
-                // Home and the Goals screen) — the profile keeps the all-time figures + bodyweight
-                // + lifetime-volume graph, gallery and on-this-day.
+                // Home and the Goals screen); ON THIS DAY removed 2026-07-24 (Home owns that
+                // throwback — §4.3) — the profile keeps the all-time figures + bodyweight +
+                // lifetime-volume graph, the year grid and the gallery.
 
                 // ── Gallery filmstrip (index 4) — full-bleed, pads itself ────────
                 Spacer(Modifier.height(28.dp))
@@ -284,16 +285,9 @@ fun ProfileScreen(
                     GalleryStrip(state.photos, viewModel::fileFor, onAdd = { addChooser = true }, onView = { viewing = it }, onViewAll = onOpenPhotoGallery, muted, outline)
                 }
 
-                state.memory?.let { m ->
-                    Spacer(Modifier.height(28.dp))
-                    Column(pad.statsEntrance(5)) {
-                        OnThisDaySection(m, onBg, muted, accent)
-                    }
-                }
-
                 if (Features.SHOW_GAMIFICATION) {
                     Spacer(Modifier.height(28.dp))
-                    Column(pad.statsEntrance(6)) {
+                    Column(pad.statsEntrance(5)) {
                         TrophyCaseSection(state.trophyGrid, state.trophyUnlocked, state.trophyTotal, state.closestTrophy, onOpenTrophies, onBg, muted, accent, outline)
                     }
                 }

@@ -76,7 +76,12 @@ internal fun BodyMeasurementLogSheet(
         .mapNotNull { t -> parsedCm(t)?.let { t to it } }
     val canSave = toSave.isNotEmpty() && BodyMeasurementType.entries.none { isInvalid(it) }
 
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        // §5: a modal is a `surface` fill — M3 defaults to the unthemed `surfaceContainerLow`.
+        containerColor = MaterialTheme.colorScheme.surface
+    ) {
         Column(
             Modifier
                 .fillMaxWidth()

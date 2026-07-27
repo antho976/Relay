@@ -72,7 +72,12 @@ internal fun AvatarPickerSheet(
     // A grid of 21 covers wants the room — open fully rather than at a half-height stop.
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        // §5: a modal is a `surface` fill — M3 defaults to the unthemed `surfaceContainerLow`.
+        containerColor = MaterialTheme.colorScheme.surface
+    ) {
         val gridState = rememberLazyGridState()
         // Decode each cover once per sheet open — the grid disposes off-screen thumbs, so without this
         // scrolling a cover out and back would re-run BitmapFactory (and flash the placeholder). ~21

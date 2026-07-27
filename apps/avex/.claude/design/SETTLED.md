@@ -16,7 +16,7 @@ Also lists what may not be touched, and the known defects to fix opportunistical
 gold row) · accent-tinted "important" prose · session-summary extras (share card/tags/ghost/vs-last/
 what's-next — the SESSION-summary card specifically; the Profile before/after share card `BeforeAfterCardRenderer` (GYMAP-55) is a separate, deliberate shareable artifact and stays) · cardio big-number hero · cardio kcal estimates (return only with real watch burn data) · new gamification surfaces (wait-listed) · Profile
 identity-first restructure · mood/subjective coach drivers · Coach hero week-dot calendar, "Pulse",
-pass-square record strip · Coach status serif verdicts AND status/anticipation asides (status states
+pass-square record strip · the Profile's ON THIS DAY (Home's `OnThisDayCard` owns that throwback — a mark is cut, not copied, §4.3; it was also the page's one prose-only section, hung off a decorative accent rule) · Coach status serif verdicts AND status/anticipation asides (status states
 = eyebrow + figures) · Coach pre-baseline signal dot-checklist in the hero (→ one labeled Baseline
 bar in the "Coming up" idiom; the effort/HC inputs it spelled out live in Signals only, §4.3,
 GYMAP-24) · hairline section separators (§1) · the 9-row milestone ladder (→ rail + next, §4.10).
@@ -31,8 +31,10 @@ SESSIONS figure (echoed BASELINE) · Project's four-paragraph body (→ why as t
 as a meter, plan as the content).
 **Facts**: dark-only (Indigo light scheme in `Color.kt` unshipped — never build light variants);
 portrait phone only (no adaptive/tablet/landscape).
-**Untouchable**: live-session screen · Profile blending cover (compositing approach; edge-fade/scrim
-stops retuned 2026-07-09) · statsEntrance/draw tuning · `BodyAnatomy.kt` (generated).
+**Untouchable**: live-session screen · Profile blending cover (the compositing approach only — its
+mask stops are tuning, retuned 2026-07-09 and again 2026-07-24 when the extra text-scrim was deleted
+for good; never reintroduce a second scrim over the fade) · statsEntrance/draw tuning ·
+`BodyAnatomy.kt` (generated).
 **Known defects, fix when touched**: Home's GOALS section placement · Stats' 16dp gutter (§7 says 24 —
 left because re-flowing the polished screen needs Antho's eyes) · any screen still drawing section
 hairlines → migrate to air rhythm (§7). (Home's accent eyebrows + the Home/Stats section hairlines
