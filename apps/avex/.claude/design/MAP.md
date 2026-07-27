@@ -204,6 +204,26 @@ Appearance keeps the separate **Privacy mode** FLAG_SECURE toggle.
 - the program SetsReps sheet
 - AvatarPickerSheet (profile cover — "select your own" + provided default covers by category,
   `DefaultAvatars`; picked default is baked into `avatar.jpg`)
+- the morning check-in (`ui/checkin`) — see below; asked for from a banner, never self-opened
+
+### Morning check-in — banner first, sheet on request
+
+`CheckinHost` is the one app-root entry point (`MainActivity`, inside the onboarding-done branch so
+it never rides over onboarding, and before the lock/intro overlays so those still cover it). It
+renders two things off one `CheckinViewModel`: `prompting` puts `CheckinPromptBanner` at the top,
+`visible` puts `CheckinSheet` up. The sheet no longer opens itself — `CheckinRepository.shouldPrompt`
+still decides whether to ask, but "ask" now means the banner.
+
+`CheckinPromptBanner` (`ui/checkin/CheckinBanner.kt`) is the app's **prompt banner** pattern: a
+top-anchored surface plate in a full-size unpainted Box (same shape as `SnackbarControllerHost`, so
+taps outside it reach the screen beneath), sliding in on `ForgeMotion.enterTween`. Mono eyebrow +
+one imperative line, the whole plate tapping through to the sheet, a `GlyphButton("×")` skipping the
+day. It earns its surface by being tappable (§1) — and it is **not** a licence for banners generally:
+§12 still keeps errors as quiet inline lines and §11 still keeps coach lines as italic asides. The
+banner is an invitation to a modal, nothing else.
+
+Both exits record through the same `skip()`, so the repository's back-off still counts a dismissed
+banner as a dismissed day.
 
 Check this map + `ui/common/` before inventing; update it when screens change.
 
