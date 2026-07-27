@@ -48,6 +48,52 @@ than as "no data yet".
 carries the meaning. An all-ghost group drops the mark entirely and collapses to ONE line naming the
 concrete unlock (§12): "3 lifts building history · first read after two sessions".
 
+## Empty by omission
+
+**Symptom** A whole section renders with no marks at all — a column of mono labels each with an
+action pill beside it, and nothing in between. Every individual rule was followed; the section still
+looks like a settings page.
+**Cause** Two or more marks each decided, correctly and independently, to draw *nothing* in their own
+empty case. §12 says a ghost only reads as "still forming" beside a live sibling, so each mark
+reasoned "no live sibling, therefore stay silent" — and with the section entirely at zero, every mark
+took that branch at once. Locally sound, globally a section with no content.
+**Fix** A mark's empty case is a **container, not a value**: a chart baseline, an empty meter track,
+a rail of unfilled slots. Those are always safe to draw because they cannot be mistaken for a reading
+of zero, which is the thing the ghost rule was protecting against. Keep the ghost-beside-live-sibling
+rule for the *value* layer; put the container underneath it unconditionally. §1 already permits this
+line: "a line exists only as data — chart threshold/floor/baseline".
+**Seen in** Profile BODY on a brand-new account, 2026-07-24: `GhostSpark` drew nothing without a live
+sibling and `MeasurementRail` returned early with nothing tracked, so WEIGHT, BODY FAT and SIZES all
+rendered as label + pill. Fixed by making the sparkline baseline and the coverage rail unconditional.
+
+**The general shape:** any rule worded "only draw X when Y" needs a defined answer for "no Y", and
+that answer must not be "nothing" for every mark in the section simultaneously. When reviewing, check
+the all-zero state of a section, not just of each row.
+
+## Invisible ghost
+
+**Symptom** A section's empty state is drawn, reviewed, and correct in code — and still looks like a
+blank page on the phone. The marks are there; you cannot see them.
+**Cause** Reaching for §5's **bar-track** rung (`outline @0.25–0.35`) for a mark that has nothing
+filled on top of it. That rung is calibrated for a track with an accent fill riding it, where the
+FILL carries the contrast and the track is only a groove. Standing alone on near-black it measures
+**~1.08:1** — indistinguishable from the page.
+**Fix** When the track/ring/frame **IS** the mark, it takes §12's empty-state rung, not the bar-track
+one. Thin strokes (a 1.5dp ring, a 1dp frame) take `muted @0.55` — the value §8 already fixes for
+`StatusDot`, measuring ~3.54:1. Solid bars take `muted @0.30` (~1.90:1), lower because a solid shape
+covers far more area and must not out-shout the live reading it stands in for.
+**Verify by measuring, not by looking.** A downscaled screenshot flatters low contrast; sample the
+rendered pixels (`magick shot.png -format "%[pixel:p{x,y}]" info:`) and compute the ratio against the
+page. Every one of these passed visual review before the numbers were taken.
+**Seen in** 2026-07-25, all at once, in code written the same day *to fix* an empty-state bug:
+Profile's `GhostSpark` track and `MeasurementRail` pips, the Gallery filmstrip's ghost cells, the
+Gallery band's ghost frames, and Measurements' `CoverageRail`.
+
+**The trap underneath it:** the navy accent itself measures only **2.39:1** on Pearl, so there is no
+alpha at which an empty mark is both clearly visible AND dimmer than a filled one. Distinguish
+filled from empty by **shape and hue** — disc vs ring, solid bar vs ringed slot — never by luminance
+alone. See *Open decisions* in `SETTLED.md`; the accent's dimness is the root of it.
+
 ## Status-word empty
 
 **Symptom** An empty state written rather than drawn: rows of "Not connected", "Forming", "No data".
