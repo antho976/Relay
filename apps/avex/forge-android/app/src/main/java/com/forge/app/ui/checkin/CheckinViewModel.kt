@@ -15,10 +15,8 @@ import javax.inject.Inject
 /**
  * The morning check-in (Coach v3 B1). Four taps, all optional, always skippable.
  *
- * Two surfaces, two flags. Once a day at first open the repository says to ask, and the top
- * [CheckinPromptBanner] carries the invitation ([prompting]); the sheet ([visible]) opens only on a
- * deliberate tap. Whether to ask at all stays in the repository so no surface re-implements it, and
- * it stops asking someone who never answers.
+ * The sheet asks once per day at first open and stops asking someone who never answers — the
+ * repository owns that rule so no surface can re-implement it differently.
  */
 @HiltViewModel
 class CheckinViewModel @Inject constructor(
@@ -27,9 +25,6 @@ class CheckinViewModel @Inject constructor(
 ) : ViewModel() {
 
     data class UiState(
-        /** The top banner is up — today's check-in is offered, nothing is blocked. */
-        val prompting: Boolean = false,
-        /** The sheet is up — asked for, never self-opened. */
         val visible: Boolean = false,
         val sleepQuality: Int? = null,
         val soreness: Int? = null,
@@ -52,14 +47,13 @@ class CheckinViewModel @Inject constructor(
         viewModelScope.launch {
             val answered = checkinRepo.today()?.hasAnswers == true
             _state.value = _state.value.copy(
-                prompting = runCatching { checkinRepo.shouldPrompt() }.getOrDefault(false),
+                visible = runCatching { checkinRepo.shouldPrompt() }.getOrDefault(false),
                 answeredToday = answered
             )
         }
     }
 
-    /** Open the sheet — from the banner, or by hand once daily prompting has backed off. The fresh
-     *  [UiState] also drops [UiState.prompting]: the invitation was taken. */
+    /** Open it by hand — the coach surfaces this once daily prompting has backed off. */
     fun open() {
         viewModelScope.launch {
             val today = checkinRepo.today()
@@ -105,16 +99,14 @@ class CheckinViewModel @Inject constructor(
                 // Morning is weigh-in time; logging it here saves a trip to the profile.
                 s.weightText.toDoubleOrNull()?.let { bodyweightRepo.log(it) }
             }
-            _state.value = _state.value.copy(prompting = false, visible = false, answeredToday = true)
+            _state.value = _state.value.copy(visible = false, answeredToday = true)
         }
     }
 
-    /** Not today — from the banner's `×` or the sheet's own skip. Both record the dismissal, so the
-     *  repository can learn to stop asking, and neither comes back before tomorrow. */
     fun skip() {
         viewModelScope.launch {
             runCatching { checkinRepo.skipToday() }
-            _state.value = _state.value.copy(prompting = false, visible = false)
+            _state.value = _state.value.copy(visible = false)
         }
     }
 

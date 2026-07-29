@@ -24,6 +24,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.text.KeyboardOptions
 import com.forge.app.domain.coach.BalancePair
 import com.forge.app.domain.coach.CoachGoalKind
@@ -55,9 +56,13 @@ internal fun GoalPickerDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = MaterialTheme.colorScheme.surface,
-        // Extracted rather than inlined: §4.6's gate reads any `title = { Text(` as a screen naming
-        // itself in its chrome, which is the top-bar rule. A dialog IS allowed a title (§3, modal).
-        title = { PickerTitle(kind?.displayName ?: "What are you chasing", onBg) },
+        title = {
+            Text(
+                if (kind == null) "What are you chasing" else kind!!.displayName,
+                style = MaterialTheme.typography.titleMedium,
+                color = onBg
+            )
+        },
         text = {
             Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
                 val chosen = kind
@@ -71,11 +76,11 @@ internal fun GoalPickerDialog(
                 } else {
                     when (chosen.scope) {
                         CoachGoalKind.Scope.EXERCISE -> {
-                            // §6: the style IS the size; bodySmall is already 12sp.
                             Text(
                                 "Which lift",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = muted
+                                color = muted,
+                                fontSize = 12.sp
                             )
                             Spacer(Modifier.height(8.dp))
                             Program.days.flatMap { it.exercises }.distinctBy { it.id }.take(24).forEach { plan ->
@@ -123,9 +128,7 @@ internal fun GoalPickerDialog(
             Text(
                 "Add",
                 style = MaterialTheme.typography.bodyMedium,
-                // §5: 0.65 is the hard floor (4.54:1); 0.4 reads as broken rather than as waiting.
-                // The control renders passive until it can run, never tappable-but-dead (§2③).
-                color = if (ready) MaterialTheme.colorScheme.primary else muted.copy(alpha = 0.65f),
+                color = if (ready) MaterialTheme.colorScheme.primary else muted.copy(alpha = 0.4f),
                 fontWeight = FontWeight.Medium,
                 modifier = Modifier
                     .clip(RoundedCornerShape(50))
@@ -150,11 +153,6 @@ internal fun GoalPickerDialog(
             )
         }
     )
-}
-
-@Composable
-private fun PickerTitle(text: String, onBg: Color) {
-    Text(text, style = MaterialTheme.typography.titleMedium, color = onBg)
 }
 
 @Composable
