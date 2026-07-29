@@ -61,7 +61,6 @@ import com.forge.app.program.ExerciseLibrary
 import com.forge.app.program.MuscleGroup
 import com.forge.app.ui.common.EditorialHeader
 import com.forge.app.ui.common.ForgePrimaryCapsule
-import com.forge.app.ui.common.ForgeWordmark
 import com.forge.app.ui.common.InlineEmptyHint
 import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.common.clickableLabeled
@@ -131,8 +130,8 @@ fun ExerciseBrowserScreen(
             containerColor = Color.Transparent,
             topBar = {
                 TopAppBar(
-                    // §2: wordmark + back, never the screen's name.
-                    title = { ForgeWordmark() },
+                    // §4.6: bell + back, never the screen's name.
+                    title = {},
                     navigationIcon = {
                         IconButton(onClick = onClose) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Close") }
                     },

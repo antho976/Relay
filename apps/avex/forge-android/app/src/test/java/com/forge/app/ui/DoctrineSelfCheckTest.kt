@@ -156,7 +156,9 @@ class DoctrineSelfCheckTest {
         )
     }
 
-    /** The wordmark is "Avex". The old loader said "Forge" for months. */
+    /** The wordmark is "Avex". The old loader said "Forge" for months. It left the top bar on
+     *  2026-07-27 (the bell took that slot) but still plays at launch, so the name still has to be
+     *  right wherever the docs mention it. */
     @Test
     fun theWordmarkIsNamedConsistently() {
         val offenders = mutableListOf<String>()
@@ -167,7 +169,7 @@ class DoctrineSelfCheckTest {
             if (Regex("""[•·]\s*Forge\b""").containsMatchIn(f.readText())) offenders += f.name
         }
         assertTrue(
-            "\n\nThese files call the wordmark '• Forge'. It is '• Avex' (ForgeWordmark renders " +
+            "\n\nThese files call the wordmark '• Forge'. It is '• Avex' (AvexWordmark renders " +
                 "Avex; the package name is historical): $offenders\n",
             offenders.isEmpty()
         )

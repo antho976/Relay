@@ -19,7 +19,11 @@ internal object AcademyAutonomy {
         track = LessonTrack.COACH,
         title = "What each trust tier means",
         summary = "Five levels, earned from outcomes. You can cap it anywhere, any time.",
-        unlockedBy = "Your first tier change",
+        unlock = LessonUnlock(
+            label = "When the coach's trust tier moves",
+            detail = "Tiers are earned from outcomes, and you can cap them in Settings at any time.",
+            byYou = false
+        ),
         blocks = listOf(
             Paragraph(
                 "The coach's authority is earned rather than assumed. It starts by watching, and " +
@@ -55,7 +59,11 @@ internal object AcademyAutonomy {
         track = LessonTrack.COACH,
         title = "How to take any decision back",
         summary = "Every act is watched, undoable, and cappable. The whole point is that you can stop using it.",
-        unlockedBy = "The coach's first act on its own",
+        unlock = LessonUnlock(
+            label = "The first time the coach acts on its own",
+            detail = "Only ever after you've raised its tier that far.",
+            byYou = false
+        ),
         blocks = listOf(
             Paragraph(
                 "Everything the coach does is written through the same paths you use, which means " +

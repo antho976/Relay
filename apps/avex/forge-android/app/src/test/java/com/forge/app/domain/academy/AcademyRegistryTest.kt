@@ -34,7 +34,22 @@ class AcademyRegistryTest {
         AcademyRegistry.lessons.forEach { l ->
             assertTrue("${l.id} needs a title", l.title.isNotBlank())
             assertTrue("${l.id} needs a summary", l.summary.isNotBlank())
-            assertTrue("${l.id} needs an unlock description", l.unlockedBy.isNotBlank())
+            assertTrue("${l.id} needs an unlock label", l.unlock.label.isNotBlank())
+            assertTrue("${l.id} needs an unlock detail", l.unlock.detail.isNotBlank())
+            // The detail earns its line only by adding something the label didn't say.
+            assertTrue(
+                "${l.id}: unlock detail just restates its label",
+                !l.unlock.detail.equals(l.unlock.label, ignoreCase = true)
+            )
+            // byYou promises the reader can act: those read as instructions, not as observations.
+            if (l.unlock.byYou) assertTrue(
+                "${l.id}: a by-you unlock must be an instruction, not a 'When ...' moment",
+                !l.unlock.label.startsWith("When ", ignoreCase = true)
+            ) else assertTrue(
+                "${l.id}: a coach-side unlock must name the moment, so it can't read as a task",
+                l.unlock.label.startsWith("When ", ignoreCase = true) ||
+                    l.unlock.label.startsWith("The first time", ignoreCase = true)
+            )
             assertTrue("${l.id} needs content", l.blocks.isNotEmpty())
         }
     }
@@ -50,7 +65,8 @@ class AcademyRegistryTest {
         // §11: no exclamation marks, no em dashes in rendered strings.
         AcademyRegistry.lessons.forEach { lesson ->
             val text = buildList {
-                add(lesson.title); add(lesson.summary); add(lesson.unlockedBy)
+                add(lesson.title); add(lesson.summary)
+                add(lesson.unlock.label); add(lesson.unlock.detail)
                 lesson.blocks.forEach { b ->
                     when (b) {
                         is LessonBlock.Heading -> add(b.text)

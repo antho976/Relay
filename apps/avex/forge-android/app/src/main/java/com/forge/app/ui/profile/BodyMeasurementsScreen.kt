@@ -49,7 +49,6 @@ import com.forge.app.domain.units.lengthInputValue
 import com.forge.app.domain.units.lengthUnitLabel
 import com.forge.app.domain.units.toDisplayLength
 import com.forge.app.ui.common.ForgePrimaryCapsule
-import com.forge.app.ui.common.ForgeWordmark
 import com.forge.app.ui.common.bounceCombinedClick
 import com.forge.app.ui.common.statsEntrance
 import java.time.LocalDate
@@ -98,8 +97,8 @@ fun BodyMeasurementsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                // §2: wordmark in the chrome — the serif "Measurements" hero below names the screen.
-                title = { ForgeWordmark() },
+                // §4.6: the bell in the chrome — the serif "Measurements" hero below names the screen.
+                title = {},
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")

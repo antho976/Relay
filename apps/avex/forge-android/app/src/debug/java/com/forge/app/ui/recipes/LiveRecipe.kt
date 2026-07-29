@@ -32,7 +32,6 @@ import androidx.compose.ui.unit.dp
 import com.forge.app.ui.common.EditorialHeader
 import com.forge.app.ui.common.ForgeHapticType
 import com.forge.app.ui.common.ForgePrimaryCapsule
-import com.forge.app.ui.common.ForgeWordmark
 import com.forge.app.ui.common.GlyphButton
 import com.forge.app.ui.common.forgeHaptic
 import com.forge.app.ui.theme.ForgeTheme
@@ -45,7 +44,7 @@ import com.forge.app.ui.theme.LocalForgeSettings
  * sometimes sweating. Reach and target size beat elegance, and presentational motion is banned —
  * NO entrance cascade, NO draw-in, NO decorative figures.
  *
- *   top bar (wordmark + ≤1 action)
+ *   top bar (← + ≤1 action)
  *   ├─ the target        the one number that matters, big                    §6
  *   ├─ steppers          hot-path numbers are ± targets, never keyboard-first §13
  *   └─ log action        haptic on commit, Undo over confirm                  §9, §12
@@ -68,7 +67,7 @@ fun LiveRecipe() {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { ForgeWordmark() },
+                title = {},
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
             )
         },

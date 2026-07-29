@@ -67,9 +67,7 @@ fun CardioWeekDetailSheet(
     todayDow: Int,
     zone: ZoneId,
     onOpenSession: (Long) -> Unit,
-    onBack: () -> Unit,
-    /** Tapping the Avex wordmark — defaults to "go Home"; the cardio tab overrides it to close first. */
-    onHome: () -> Unit = com.forge.app.ui.common.LocalGoHome.current
+    onBack: () -> Unit
 ) {
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
@@ -109,7 +107,7 @@ fun CardioWeekDetailSheet(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { com.forge.app.ui.common.ForgeWordmark(onClick = onHome) },
+                title = {},
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = muted)

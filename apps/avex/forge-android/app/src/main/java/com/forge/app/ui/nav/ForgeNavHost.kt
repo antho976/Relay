@@ -46,7 +46,6 @@ import com.forge.app.ui.coach.CoachLens
 import com.forge.app.ui.coach.CoachScreen
 import com.forge.app.ui.gym.freestyle.FreestyleLogScreen
 import com.forge.app.ui.programbuilder.ProgramBuilderScreen
-import com.forge.app.ui.common.ForgeWordmark
 import com.forge.app.ui.common.ProgramChangeGuardHost
 import com.forge.app.ui.gym.history.SessionHistoryScreen
 import com.forge.app.ui.gym.session.SessionDetailScreen
@@ -78,7 +77,7 @@ fun ForgeNavHost(initialDayKey: String? = null) {
     val dur = ForgeMotion.DurationEmphasized
     val slide: (Int) -> Int = { it / 6 }       // horizontal distance — modest, not full width
     val rise: (Int) -> Int = { it / 4 }        // vertical distance for modal mode screens
-    // The five hubs (Cardio/Stats/Overview/Coach/Profile) are pages of HubScreen's pager, reached by
+    // The five hubs (Cardio/Stats/Overview/Coach/Academy) are pages of HubScreen's pager, reached by
     // swipe — they aren't nav destinations. Only the deep "mode" screens remain, and they RISE as modals.
     val modalRoutes = setOf(Routes.GYM_DAY, Routes.RECAP, Routes.PROGRAM_BUILDER, Routes.COACH_BRIEF, Routes.FREESTYLE_LOG)
     // One-shot fade so the first screen eases in on cold launch instead of snapping on.
@@ -106,11 +105,31 @@ fun ForgeNavHost(initialDayKey: String? = null) {
     // hub, which animates to the page then clears it via onPendingConsumed.
     var pendingHubPage by remember { mutableStateOf<Int?>(null) }
 
-    // Tapping the Avex wordmark anywhere returns Home in one tap: pop every deep route back to the
-    // hub and select Home. No-op-safe when already on the hub (popBackStack just returns false).
+    // Long-pressing the notifications bell anywhere returns Home in one gesture: pop every deep route
+    // back to the hub and select Home. No-op-safe when already on the hub (popBackStack returns false).
     val goHome: () -> Unit = {
         pendingHubPage = BottomTab.HOME.ordinal
         nav.popBackStack(Routes.OVERVIEW, false)
+    }
+
+    // The bell's tap, from any screen's chrome. Guarded so a double-tap can't stack two copies of the
+    // page on the back stack.
+    val openNotifications: () -> Unit = {
+        if (nav.currentDestination?.route != Routes.NOTIFICATIONS) nav.navigate(Routes.NOTIFICATIONS)
+    }
+
+    // The unread count feeding every bell. Held once here (rather than per screen) so the chrome and
+    // the page read the same feed, and re-polled on resume — the weekly coach pass and the Health
+    // Connect grants can both change while the app is backgrounded.
+    val notificationsVm: com.forge.app.ui.notifications.NotificationsViewModel = hiltViewModel()
+    val notices by notificationsVm.notices.collectAsStateWithLifecycle()
+    val notificationsLifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(notificationsLifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) notificationsVm.refresh()
+        }
+        notificationsLifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { notificationsLifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
     // User-defined cardio activities, fed once here so every cardio surface can resolve a `custom_`
@@ -120,6 +139,8 @@ fun ForgeNavHost(initialDayKey: String? = null) {
 
     CompositionLocalProvider(
         com.forge.app.ui.common.LocalGoHome provides goHome,
+        com.forge.app.ui.common.LocalOpenNotifications provides openNotifications,
+        com.forge.app.ui.common.LocalUnreadNotifications provides notices.size,
         com.forge.app.ui.cardio.LocalCardioTypes provides cardioTypes
     ) {
     NavHost(
@@ -214,6 +235,18 @@ fun ForgeNavHost(initialDayKey: String? = null) {
             val dayKey = entry.arguments?.getString(Routes.ARG_DAY_KEY).orEmpty()
             DayScreen(dayKey = dayKey, onBack = { nav.popBackStack() })
         }
+        // Profile left the bottom bar for the Home top bar (2026-07-27), so it is a pushed route
+        // now and brings its own back arrow. Settings is reached from inside it.
+        composable(Routes.PROFILE) {
+            com.forge.app.ui.profile.ProfileScreen(
+                onBack = { nav.popBackStack() },
+                onOpenSettings = { nav.navigate(Routes.settings()) },
+                onOpenTrophies = { nav.navigate(Routes.TROPHIES) },
+                onOpenPhotoGallery = { nav.navigate(Routes.MIRROR_TEST) },
+                onOpenCamera = { nav.navigate(Routes.PROGRESS_CAMERA) },
+                onOpenMeasurements = { nav.navigate(Routes.BODY_MEASUREMENTS) }
+            )
+        }
         composable(Routes.TROPHIES) {
             TrophiesScreen(onBack = { nav.popBackStack() })
         }
@@ -236,6 +269,31 @@ fun ForgeNavHost(initialDayKey: String? = null) {
         composable(Routes.RECAP) {
             RecapScreen(onBack = { nav.popBackStack() })
         }
+        composable(Routes.NOTIFICATIONS) {
+            com.forge.app.ui.notifications.NotificationsScreen(
+                onBack = { nav.popBackStack() },
+                // Acting on a notice leaves the feed behind rather than stacking on top of it, so Back
+                // from the session (or the brief) returns to where the user actually was.
+                onResumeSession = { dayKey ->
+                    nav.popBackStack()
+                    if (dayKey.startsWith("cardio")) {
+                        pendingHubPage = BottomTab.CARDIO.ordinal
+                    } else {
+                        nav.navigate(Routes.gymDay(dayKey))
+                    }
+                },
+                onOpenCoachBrief = { nav.popBackStack(); pendingHubPage = BottomTab.COACH.ordinal },
+                onConnectWearable = {
+                    nav.popBackStack()
+                    nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name))
+                },
+                // Kept on the stack, not popped: the per-notification toggles live there, so Back
+                // returns to the feed you were just looking at to see the effect.
+                onOpenNotificationSettings = {
+                    nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Notifications.name))
+                }
+            )
+        }
         composable(Routes.COACH_BRIEF) {
             CoachScreen(
                 onBack = { nav.popBackStack() },
@@ -245,7 +303,20 @@ fun ForgeNavHost(initialDayKey: String? = null) {
         // The lab and timeline are now lenses of the one Coach page; the routes stay so every
         // existing "what it's watching" and "learning timeline" link lands on the right lens.
         composable(Routes.ACADEMY) {
-            com.forge.app.ui.academy.AcademyScreen(onBack = { nav.popBackStack() })
+            com.forge.app.ui.academy.AcademyScreen(
+                onBack = { nav.popBackStack() },
+                onOpenTrack = { nav.navigate(Routes.academyTrack(it.code)) }
+            )
+        }
+        composable(
+            route = Routes.ACADEMY_TRACK,
+            arguments = listOf(navArgument(Routes.ARG_TRACK_CODE) { type = NavType.StringType })
+        ) { entry ->
+            val code = entry.arguments?.getString(Routes.ARG_TRACK_CODE)
+            val track = com.forge.app.domain.academy.LessonTrack.entries.firstOrNull { it.code == code }
+            // An unknown code can only come from a stale deep link; fall back rather than crash.
+            if (track == null) nav.popBackStack()
+            else com.forge.app.ui.academy.AcademyTrackScreen(track = track, onBack = { nav.popBackStack() })
         }
         composable(Routes.COACH_LAB) {
             CoachScreen(
@@ -322,8 +393,8 @@ private fun NutritionPlaceholderScreen(onBack: () -> Unit) {
     Scaffold(
         topBar = {
             TopAppBar(
-                // §2: wordmark + back in the chrome, never the screen's own name.
-                title = { ForgeWordmark() },
+                // §4.6: bell + back in the chrome, never the screen's own name.
+                title = {},
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(

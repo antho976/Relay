@@ -21,7 +21,11 @@ internal object AcademyFundamentals {
         track = LessonTrack.FUNDAMENTALS,
         title = "What a program is",
         summary = "A repeatable structure is what makes progress measurable. Change everything every week and nothing can be judged.",
-        unlockedBy = "Your first day with a program",
+        unlock = LessonUnlock(
+            label = "Open your first program day",
+            detail = "Unlocks as soon as there's a plan to open.",
+            byYou = true
+        ),
         blocks = listOf(
             Paragraph(
                 "A program is a repeatable structure: a set of days, each with a set of exercise " +
@@ -50,7 +54,11 @@ internal object AcademyFundamentals {
         track = LessonTrack.FUNDAMENTALS,
         title = "Sets, reps, and how hard is hard",
         summary = "Reps are what you do, RPE is how close to your limit you did it. The coach needs both.",
-        unlockedBy = "Your first logged set",
+        unlock = LessonUnlock(
+            label = "Log a set",
+            detail = "Start any session and log one working set.",
+            byYou = true
+        ),
         blocks = listOf(
             Paragraph(
                 "A prescription like 3 by 8 to 10 means three working sets, each landing somewhere " +
@@ -84,7 +92,11 @@ internal object AcademyFundamentals {
         track = LessonTrack.FUNDAMENTALS,
         title = "Form first, load second",
         summary = "Load only counts for the muscle actually doing the work.",
-        unlockedBy = "Your first technique-tagged session",
+        unlock = LessonUnlock(
+            label = "Tag a session as technique work",
+            detail = "Finish a session and add the technique tag. The coach then leaves those sets out of stall detection.",
+            byYou = true
+        ),
         blocks = listOf(
             Paragraph(
                 "Weight on the bar is a means, not the goal. A heavier lift performed with a shorter " +
@@ -112,7 +124,11 @@ internal object AcademyFundamentals {
         track = LessonTrack.FUNDAMENTALS,
         title = "Progressive overload",
         summary = "Doing slightly more over time is the signal that forces adaptation. Everything else is detail.",
-        unlockedBy = "Your first automatic weight suggestion",
+        unlock = LessonUnlock(
+            label = "When the coach first suggests a weight",
+            detail = "It needs two sessions of the same lift to compare before it will.",
+            byYou = false
+        ),
         blocks = listOf(
             Paragraph(
                 "Your body adapts to demands it keeps meeting. If the demand never rises, there is " +
@@ -140,7 +156,11 @@ internal object AcademyFundamentals {
         track = LessonTrack.FUNDAMENTALS,
         title = "Rest is where you grow",
         summary = "Training is the stimulus. The adaptation happens between sessions.",
-        unlockedBy = "Your first rest timer, or your first rest-day directive",
+        unlock = LessonUnlock(
+            label = "Use a rest timer",
+            detail = "It starts itself the moment you log a set in a session.",
+            byYou = true
+        ),
         blocks = listOf(
             Paragraph(
                 "Two clocks matter. The one between sets, and the one between sessions."
@@ -166,7 +186,11 @@ internal object AcademyFundamentals {
         track = LessonTrack.FUNDAMENTALS,
         title = "Soreness vs injury",
         summary = "Soreness is dull, spread out and fades with a warm-up. Injury is sharp, local and worse under load.",
-        unlockedBy = "The first time you flag soreness or illness",
+        unlock = LessonUnlock(
+            label = "Flag soreness or illness",
+            detail = "From the daily check-in, or by logging a rest day as sick.",
+            byYou = true
+        ),
         blocks = listOf(
             Paragraph(
                 "Delayed soreness peaks a day or two after training, feels dull and spread across " +
@@ -197,7 +221,11 @@ internal object AcademyFundamentals {
         track = LessonTrack.FUNDAMENTALS,
         title = "Why warm-ups are in your session",
         summary = "A warm-up raises tissue temperature and rehearses the movement. It should never tire you out.",
-        unlockedBy = "Your first warm-up routine",
+        unlock = LessonUnlock(
+            label = "Start a session with its warm-up",
+            detail = "Warm-up sets lead a session unless you hold the start button to skip them.",
+            byYou = true
+        ),
         blocks = listOf(
             Paragraph(
                 "Warming up makes tissue more pliable and gives your nervous system a rehearsal of " +
@@ -219,7 +247,11 @@ internal object AcademyFundamentals {
         track = LessonTrack.FUNDAMENTALS,
         title = "How your coach works",
         summary = "Snapshot your data, propose a change, watch what happens, and keep score of itself.",
-        unlockedBy = "Your first week brief",
+        unlock = LessonUnlock(
+            label = "When your first week brief lands",
+            detail = "The coach writes one after a week with training in it.",
+            byYou = false
+        ),
         blocks = listOf(
             Paragraph(
                 "The coach runs one loop. It reads a snapshot of everything you have logged, its " +
@@ -248,7 +280,11 @@ internal object AcademyFundamentals {
         track = LessonTrack.FUNDAMENTALS,
         title = "What readiness means",
         summary = "A small nudge to today's targets, built from how you slept, felt and trained.",
-        unlockedBy = "Your first readiness score",
+        unlock = LessonUnlock(
+            label = "When a readiness score first appears",
+            detail = "Needs recovery data: a check-in answer, or sleep and resting heart rate from a watch.",
+            byYou = false
+        ),
         blocks = listOf(
             Paragraph(
                 "Readiness answers one question: how much should today ask of you? It is built from " +
@@ -274,7 +310,11 @@ internal object AcademyFundamentals {
         track = LessonTrack.FUNDAMENTALS,
         title = "Log honestly",
         summary = "Every decision upstream is a function of your log. Inflated numbers don't cheat the coach, they mis-aim it.",
-        unlockedBy = "The end of the fundamentals track",
+        unlock = LessonUnlock(
+            label = "Finish the fundamentals track",
+            detail = "Read the nine lessons above. This one closes it.",
+            byYou = true
+        ),
         blocks = listOf(
             Paragraph(
                 "The coach has no eyes. Everything it believes about you comes from what you logged: " +

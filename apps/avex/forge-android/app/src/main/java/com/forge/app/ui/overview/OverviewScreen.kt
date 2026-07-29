@@ -1,10 +1,5 @@
 package com.forge.app.ui.overview
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.animateIntAsState
 import androidx.compose.animation.core.tween
@@ -19,17 +14,15 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -48,10 +41,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.semantics.Role
 import com.forge.app.Features
+import com.forge.app.ui.common.NotificationBell
+import com.forge.app.ui.nav.NavIcons
 import com.forge.app.ui.common.bounceCombinedClick
 import com.forge.app.ui.common.clickableLabeled
-import com.forge.app.ui.theme.ForgeMotion
-import com.forge.app.ui.overview.state.MilestoneEvent
 import com.forge.app.ui.overview.state.OnThisDayMemory
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontStyle
@@ -75,42 +68,6 @@ import com.forge.app.ui.overview.components.TrophiesTile
 import com.forge.app.ui.overview.components.WeekDayBox
 import java.time.LocalDate
 
-/**
- * A dismissible info strip (e.g. the auto-resolved orphan-session notice, E8). The close affordance
- * is a 48 dp touch target — the [Icon] itself stays 16 dp, but its hit area meets the a11y minimum.
- */
-@Composable
-private fun DismissibleNotice(text: String, onBg: Color, muted: Color, onDismiss: () -> Unit) {
-    Spacer(Modifier.height(16.dp))
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(muted.copy(alpha = 0.10f))
-            .padding(start = 14.dp, end = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Text(
-            text, style = MaterialTheme.typography.bodySmall, color = onBg,
-            modifier = Modifier.weight(1f).padding(vertical = 12.dp)
-        )
-        Box(
-            modifier = Modifier
-                .size(48.dp)
-                .clip(CircleShape)
-                .clickable(onClick = onDismiss),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                Icons.Default.Close, contentDescription = "Dismiss",
-                tint = muted.copy(alpha = 0.7f),
-                modifier = Modifier.size(16.dp)
-            )
-        }
-    }
-}
-
 /** The freestyle/no-plan hero CTA — the same white-capsule idiom as Start session (§8/§9: bounce, no ripple). */
 @Composable
 private fun HeroCta(text: String, label: String, onClick: () -> Unit) {
@@ -126,11 +83,21 @@ private fun HeroCta(text: String, label: String, onClick: () -> Unit) {
     }
 }
 
+/** Half the slack between a top-bar icon's 44dp touch target and its 20dp glyph. Shifting a glyph
+ *  out by this puts its edge on the page's 24dp gutter while the target keeps its full size. */
+private val GUTTER_SLACK = 12.dp
+
 /** Top-bar icon with a ≥44dp tappable area + spoken label, while the glyph stays visually small. */
 @Composable
-private fun TopBarIconButton(icon: ImageVector, label: String, tint: Color, onClick: () -> Unit) {
+private fun TopBarIconButton(
+    icon: ImageVector,
+    label: String,
+    tint: Color,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
     Box(
-        modifier = Modifier
+        modifier = modifier
             .sizeIn(minWidth = 44.dp, minHeight = 44.dp)
             .clickableLabeled(label, onClick = onClick),
         contentAlignment = Alignment.Center
@@ -171,7 +138,6 @@ fun OverviewScreen(
     onGoToTrophies: () -> Unit,
     onOpenNotes: () -> Unit = {},
     onGoToNutrition: () -> Unit = {},
-    onGoToSettings: () -> Unit = {},
     onOpenCoachBrief: () -> Unit = {},
     onOpenCoachLab: () -> Unit = {},
     onOpenGoals: () -> Unit = {},
@@ -186,8 +152,6 @@ fun OverviewScreen(
     val freestyleMode by viewModel.freestyleMode.collectAsStateWithLifecycle()
     val coachEnabled by viewModel.coachEnabled.collectAsStateWithLifecycle()
     val programEmpty by viewModel.programEmpty.collectAsStateWithLifecycle()
-    val coachBanner by viewModel.coachBanner.collectAsStateWithLifecycle()
-    val orphanNotice by viewModel.orphanNotice.collectAsStateWithLifecycle()
     val selectedItem by viewModel.selectedItem.collectAsStateWithLifecycle()
     val summaryLines by viewModel.sessionExerciseLines.collectAsStateWithLifecycle()
     val movement by viewModel.movement.collectAsStateWithLifecycle()
@@ -207,19 +171,11 @@ fun OverviewScreen(
         movementLifecycleOwner.lifecycle.addObserver(observer)
         onDispose { movementLifecycleOwner.lifecycle.removeObserver(observer) }
     }
-    // A milestone "fires and vanishes" otherwise (it's marked shown immediately) — capture it into a
-    // transient banner so the user actually sees it (#Overview pendingMilestone).
-    var milestoneToast by remember { mutableStateOf<MilestoneEvent?>(null) }
-
+    // Firing a milestone persists it (so it can't recompute/re-fire) AND queues it in the
+    // notifications feed. It used to flash here as a six-second toast, which meant a milestone earned
+    // while the app was closed was gone before it was ever read; it now waits under the bell.
     LaunchedEffect(state.pendingMilestone) {
-        state.pendingMilestone?.let { event ->
-            milestoneToast = event
-            viewModel.onMilestoneShown(event.id) // persist so it won't recompute/re-fire
-        }
-    }
-    // Auto-dismiss the celebratory banner after a few seconds (it's a toast, not a task).
-    LaunchedEffect(milestoneToast) {
-        if (milestoneToast != null) { kotlinx.coroutines.delay(6000); milestoneToast = null }
+        state.pendingMilestone?.let { viewModel.onMilestoneShown(it.id) }
     }
 
     // Rise + fade entrance, but ONLY on the first show after a cold launch — not every time you
@@ -283,115 +239,26 @@ fun OverviewScreen(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(5.dp).background(accent, CircleShape))
-                    Spacer(Modifier.width(6.dp))
-                    Text("Avex", style = MaterialTheme.typography.bodyMedium,
-                        fontStyle = FontStyle.Italic, color = onBg)
-                }
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    // ≥44dp touch target (a11y) — the glyph stays small, the tappable area doesn't.
-                    // Cardio, Stats and Profile now live in the bottom bar; Settings stays here.
-                    TopBarIconButton(Icons.Default.Settings, "Settings", muted.copy(alpha = 0.7f)) { onGoToSettings() }
-                }
+                // Both glyphs are pulled OUT by half the slack between their 44dp target and their
+                // 20dp glyph, so the glyph edges land on the page's 24dp gutter — level with the
+                // serif hero and the mono headers below. Centred in the target they sat 12dp inboard
+                // of everything else, which is what read as "weirdly placed" (Antho, 2026-07-27).
+                // `offset` (not `absoluteOffset`) so the pair mirrors under RTL.
+                NotificationBell(modifier = Modifier.offset(x = (-GUTTER_SLACK)))
+                // Profile took the slot Settings held: the gear moved inside Profile, which is where
+                // you go to change things about yourself anyway.
+                TopBarIconButton(
+                    NavIcons.Profile, "Profile", muted.copy(alpha = 0.7f),
+                    modifier = Modifier.offset(x = GUTTER_SLACK)
+                ) { onOpenProfile() }
             }
 
-            // Milestone banner — the celebratory moment that used to fire and vanish silently.
-            milestoneToast?.let { ms ->
-                Spacer(Modifier.height(12.dp))
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(accent.copy(alpha = 0.14f))
-                        .clickableLabeled("Dismiss") { milestoneToast = null }
-                        .padding(horizontal = 14.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text("✦", color = accent, style = MaterialTheme.typography.titleSmall)
-                    Text(ms.message, style = MaterialTheme.typography.bodyMedium, color = onBg, modifier = Modifier.weight(1f))
-                }
-            }
-
-            // ── Coach: a new Week Brief is ready (dismissible; lives in Settings too) ──
-            if (coachEnabled) coachBanner?.let { banner ->
-                Spacer(Modifier.height(16.dp))
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(accent.copy(alpha = 0.12f))
-                        .clickableLabeled("Open the week brief") { viewModel.dismissCoachBanner(); onOpenCoachBrief() }
-                        .padding(start = 14.dp, end = 8.dp, top = 12.dp, bottom = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Column(Modifier.weight(1f)) {
-                        Text("COACH BRIEF", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp)
-                        // banner.text is the brief's one-line summary (summaryFor) — drop its redundant
-                        // "Coach · " prefix so it reads as a clean preview line under the eyebrow.
-                        Text(banner.text.removePrefix("Coach · "), style = MaterialTheme.typography.bodyMedium, color = onBg)
-                    }
-                    Text("→", style = MaterialTheme.typography.bodyLarge, color = accent)
-                    Icon(
-                        Icons.Default.Close, contentDescription = "Dismiss",
-                        tint = muted.copy(alpha = 0.7f),
-                        modifier = Modifier
-                            .padding(start = 8.dp)
-                            .size(16.dp)
-                            .clickableLabeled("Dismiss") { viewModel.dismissCoachBanner() }
-                    )
-                }
-            }
-
-            // ── Orphan-session notice: a zombie session was auto-resolved (E8) ──
-            orphanNotice?.let { notice ->
-                DismissibleNotice(notice, onBg, muted) { viewModel.dismissOrphanNotice() }
-            }
-
-            // ── Resume reminder: an unfinished workout is waiting (slides + fades in) ──
-            val resumeBannerKey = state.activeSessionDayKey
-            // Hold the last real key so the row keeps its name through the exit fade after a finish.
-            var lastResumeKey by remember { mutableStateOf<String?>(null) }
-            if (resumeBannerKey != null) lastResumeKey = resumeBannerKey
-            AnimatedVisibility(
-                visible = resumeBannerKey != null,
-                enter = fadeIn(ForgeMotion.standardTween(ForgeMotion.DurationEmphasized)) +
-                    slideInVertically(ForgeMotion.standardTween(ForgeMotion.DurationEmphasized)) { it / 3 },
-                exit = fadeOut(ForgeMotion.standardTween()) + slideOutVertically(ForgeMotion.standardTween()) { it / 3 }
-            ) {
-                val activeKey = (resumeBannerKey ?: lastResumeKey).orEmpty()
-                Column {
-                    Spacer(Modifier.height(16.dp))
-                    val activeName = Program.days.firstOrNull { it.key == activeKey }?.defaultName ?: "Workout"
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(accent.copy(alpha = 0.12f))
-                            // Gate on the LIVE key, not the held one: during the exit fade after a
-                            // finish, resumeBannerKey is null, so a stray tap can't re-enter the
-                            // just-completed session.
-                            .clickableLabeled("Resume your workout") {
-                                resumeBannerKey?.let { onStartSession(it) }
-                            }
-                            .padding(horizontal = 14.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column {
-                            Text("IN PROGRESS", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp)
-                            Text("$activeName · tap to resume", style = MaterialTheme.typography.bodyMedium, color = onBg)
-                        }
-                        Text("→", style = MaterialTheme.typography.bodyLarge, color = accent)
-                    }
-                }
-            }
-
-            // The comeback / recovery-snapshot / cardio-load nudge cards that sat here were removed
-            // (Antho 2026-07-04) — only functional banners (resume, coach brief, milestone, orphan
-            // notice) remain above the TODAY block.
+            // Every banner that used to stack here — milestone, coach brief, orphan-session notice
+            // and the resume reminder — moved to the notifications page behind the bell above
+            // (2026-07-27). The nudge cards had already gone (Antho 2026-07-04), so the top of Home
+            // is now the top bar and then the answer: nothing between the two. The resume path is not
+            // lost with the strip, because the hero CTA below already reads "Resume session →"
+            // whenever a session is live.
 
             Spacer(Modifier.height(20.dp))
 

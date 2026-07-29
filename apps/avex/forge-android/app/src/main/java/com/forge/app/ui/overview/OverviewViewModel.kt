@@ -53,7 +53,6 @@ class OverviewViewModel @Inject constructor(
     private val sessionDao: SessionDao,
     private val sampleDataSeeder: com.forge.app.data.repo.SampleDataSeeder,
     private val adaptationRepo: com.forge.app.data.repo.AdaptationRepository,
-    private val coachRepo: com.forge.app.data.repo.CoachRepository,
     private val directiveRepo: com.forge.app.data.repo.DirectiveRepository,
     private val programRepo: com.forge.app.data.repo.ProgramRepository,
     private val programChangeGuard: com.forge.app.ui.common.ProgramChangeGuard,
@@ -95,19 +94,11 @@ class OverviewViewModel @Inject constructor(
     /** Sub-threshold fatigue nudge (Tier 3) — null unless the active coach is quiet but fatigue builds. */
     private val _coachFatigue = MutableStateFlow<com.forge.app.ui.overview.state.FatigueHint?>(null)
 
-    /** "New report ready" banner (auto-coach) — null when this week's brief has been seen. */
     /**
      * Today's directive (Coach v3 B2) — the hero's content. Loaded once per open and refreshed on
      * resume, like the movement line: the answer changes with the day, not with every emission.
      */
     private val _directive = MutableStateFlow<com.forge.app.data.repo.DirectiveRepository.TodayAnswer?>(null)
-
-    private val _coachBanner = MutableStateFlow<com.forge.app.data.repo.CoachBanner?>(null)
-    val coachBanner: StateFlow<com.forge.app.data.repo.CoachBanner?> = _coachBanner
-
-    /** One-time notice after a zombie/orphan active session was auto-resolved at open (E8). */
-    private val _orphanNotice = MutableStateFlow<String?>(null)
-    val orphanNotice: StateFlow<String?> = _orphanNotice
 
     /** "Go with the flow" — when on, the home leads with freestyle logging instead of a next-up day. */
     val freestyleMode: StateFlow<Boolean> =
@@ -271,27 +262,26 @@ class OverviewViewModel @Inject constructor(
         viewModelScope.launch {
             if (statsRepo.observeWeeklyStats().first().totalFinishedSessions > 0) settingsRepo.setFirstWorkoutDone()
         }
-        // First open of a new week triggers the Weekly Coach Pass (idempotent by week id) and
-        // surfaces the banner only if this week's brief hasn't been seen. The repo stamps errors
-        // as their own pass status; this guard only protects Overview.
-        viewModelScope.launch {
-            runCatching { coachRepo.pendingBanner() }
-                .onSuccess { _coachBanner.value = it }
-        }
         // Detect + resolve a zombie active session (force-stop / regenerate artifact) so it can't drive
         // a misleading resume or block a fresh start; surface what happened once (E8). Await ensureLoaded
         // FIRST: Program.dayKeys reports the hard-coded SEED split until the DB program is loaded, so
         // resolving against it on a cold start could finish a perfectly valid session whose day simply
         // isn't in the seed. ensureLoaded is idempotent + serialized, so this just waits out startup.
+        //
+        // The notice is WRITTEN rather than held in memory: it now surfaces in the notifications feed,
+        // which has to be able to show it long after the open that resolved it.
         viewModelScope.launch {
             runCatching {
                 programRepo.ensureLoaded()
                 workoutRepo.resolveOrphanSession(com.forge.app.program.Program.dayKeys.toSet())
             }.getOrNull()?.let { res ->
-                _orphanNotice.value = if (res.finishedToHistory)
-                    "Saved an unfinished workout from a day that's no longer in your program. It's in your history now."
-                else
-                    "Cleared an empty leftover session from a workout day that's no longer in your program."
+                settingsRepo.addSystemNotice(
+                    com.forge.app.data.repo.NotificationFeed.NOTICE_ORPHAN_SESSION,
+                    if (res.finishedToHistory)
+                        "Saved an unfinished workout from a day that's no longer in your program. It's in your history now."
+                    else
+                        "Cleared an empty leftover session from a workout day that's no longer in your program."
+                )
             }
         }
     }
@@ -303,16 +293,6 @@ class OverviewViewModel @Inject constructor(
     fun refreshDirective() = viewModelScope.launch {
         _directive.value = runCatching { directiveRepo.today() }.getOrNull()
     }
-
-    /** Dismiss the "new report" banner without opening the brief — still marks it seen. */
-    fun dismissCoachBanner() {
-        val weekId = _coachBanner.value?.weekId ?: return
-        _coachBanner.value = null
-        viewModelScope.launch { runCatching { coachRepo.markSeen(weekId) } }
-    }
-
-    /** Dismiss the one-time orphan-session notice (E8). */
-    fun dismissOrphanNotice() { _orphanNotice.value = null }
 
     /**
      * "Try demo data" opt-in (Cat 10): wire the otherwise-unreachable [SampleDataSeeder] to the

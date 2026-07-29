@@ -83,9 +83,7 @@ fun CardioLogSheet(
     useMiles: Boolean = false,
     /** The last-logged activity code (GYMAP-40) — seeds a NEW entry's activity instead of always
      *  defaulting to Run. Null (and ignored while editing) falls back to Run. */
-    lastUsedType: String? = null,
-    /** Tapping the Avex wordmark — defaults to "go Home"; the cardio tab overrides it to close first. */
-    onHome: () -> Unit = com.forge.app.ui.common.LocalGoHome.current
+    lastUsedType: String? = null
 ) {
     // Keyed on the edited entry's id so the form re-seeds if the sheet is ever reused for a different
     // entry without leaving composition — fields can't carry over from the previously-opened entry.
@@ -174,7 +172,7 @@ fun CardioLogSheet(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { com.forge.app.ui.common.ForgeWordmark(onClick = onHome) },
+                title = {},
                 navigationIcon = {
                     IconButton(onClick = onDismiss) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = muted)

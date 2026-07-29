@@ -60,13 +60,8 @@ internal fun LazyListScope.coachGoalsSection(
                 }
             }
             CoachAction("Add a goal →", c.accent, "Add a coach goal", onAddGoal)
-            // The knowledge half of the coach lives one tap from its decisions (B3).
-            CoachAction(
-                if (state.newLessons > 0) "Academy · ${state.newLessons} new →" else "Academy →",
-                c.accent,
-                "Open the Academy",
-                onOpenAcademy
-            )
+            // The Academy link that sat here is gone (2026-07-27): the knowledge half of the coach
+            // is its own tab now, so a link from a sibling tab is redundant navigation (§4.2).
         }
     }
 }

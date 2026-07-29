@@ -20,7 +20,11 @@ internal object AcademyYourNumbers {
         track = LessonTrack.PROGRAMMING,
         title = "MEV and MRV: your volume landmarks",
         summary = "The least volume that still works, and the most you can recover from. The useful zone is between them.",
-        unlockedBy = "The first time a personal volume cap changes an allocation",
+        unlock = LessonUnlock(
+            label = "When it measures your own volume ceiling",
+            detail = "It starts from population defaults and replaces them as your log shows what you recover from.",
+            byYou = false
+        ),
         blocks = listOf(
             Paragraph(
                 "Two numbers bracket useful training for any muscle. The minimum effective volume " +
@@ -51,7 +55,11 @@ internal object AcademyYourNumbers {
         track = LessonTrack.PROGRAMMING,
         title = "Your recovery curve",
         summary = "How many days you personally need before a muscle performs again.",
-        unlockedBy = "The first time your own spacing shapes the schedule",
+        unlock = LessonUnlock(
+            label = "When your recovery pace changes the schedule",
+            detail = "Estimated from how you perform bout to bout on the same muscle.",
+            byYou = false
+        ),
         blocks = listOf(
             Paragraph(
                 "Everyone is told to train a muscle every two to three days. That range exists " +
@@ -76,7 +84,11 @@ internal object AcademyYourNumbers {
         track = LessonTrack.PROGRAMMING,
         title = "Your sweet-spot rep ranges",
         summary = "Muscle grows across a wide rep range. Within it, your log shows where you actually progress.",
-        unlockedBy = "The first rep prescription biased by your own history",
+        unlock = LessonUnlock(
+            label = "When your best rep range emerges",
+            detail = "Your log has to show where you actually progress before prescriptions lean there.",
+            byYou = false
+        ),
         blocks = listOf(
             Paragraph(
                 "Growth happens across a wide span of rep ranges, roughly five to thirty, as long " +
@@ -97,7 +109,11 @@ internal object AcademyYourNumbers {
         track = LessonTrack.PROGRAMMING,
         title = "Imbalances, and why the coach hunts them",
         summary = "Ratios between opposing groups, measured in your own sets and strength.",
-        unlockedBy = "Your first imbalance project",
+        unlock = LessonUnlock(
+            label = "When it finds a side-to-side gap",
+            detail = "It watches push against pull, and quads against hamstrings, in both volume and strength.",
+            byYou = false
+        ),
         blocks = listOf(
             Paragraph(
                 "An imbalance is a persistent gap between opposing groups: pushing against pulling, " +
@@ -121,7 +137,11 @@ internal object AcademyYourNumbers {
         track = LessonTrack.COACH,
         title = "What a project is",
         summary = "One named improvement at a time, with a why, a plan and a finish line.",
-        unlockedBy = "Your first proposed project",
+        unlock = LessonUnlock(
+            label = "When the coach proposes a project",
+            detail = "It hunts for your biggest single lever and runs one at a time.",
+            byYou = false
+        ),
         blocks = listOf(
             Paragraph(
                 "The coach permanently scans for your single biggest available improvement: a " +

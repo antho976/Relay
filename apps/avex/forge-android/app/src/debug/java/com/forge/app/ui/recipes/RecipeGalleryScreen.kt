@@ -28,7 +28,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.forge.app.ui.common.EditorialHeader
-import com.forge.app.ui.common.ForgeWordmark
 import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.theme.ForgeTheme
 
@@ -91,7 +90,7 @@ private fun RecipeIndex(onPick: (Recipe) -> Unit) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { ForgeWordmark() },
+                title = {},
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
             )
         },

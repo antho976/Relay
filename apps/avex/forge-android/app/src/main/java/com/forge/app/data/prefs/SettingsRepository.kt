@@ -47,7 +47,13 @@ enum class SettingsSection(val keys: List<Preferences.Key<*>>) {
         listOf(
             PreferenceKeys.QUIET_HOURS_ENABLED, PreferenceKeys.QUIET_HOURS_START, PreferenceKeys.QUIET_HOURS_END,
             PreferenceKeys.QUIET_HOURS_SCHEDULE,
-            PreferenceKeys.TRAINING_REMINDER_ENABLED, PreferenceKeys.TRAINING_REMINDER_HOUR
+            PreferenceKeys.TRAINING_REMINDER_ENABLED, PreferenceKeys.TRAINING_REMINDER_HOUR,
+            // The notifications feed (2026-07-27). Clearing these is the ONLY way back for the two
+            // one-shot invites: both are dismissed for good, and neither had an un-dismiss before —
+            // the old cardio banner's × was a one-way door too. Resetting the section now restores
+            // every switch on this page, which is what "reset this section" should have meant.
+            PreferenceKeys.DISABLED_NOTICE_KINDS, PreferenceKeys.CARDIO_WEARABLE_HINT_DISMISSED,
+            PreferenceKeys.NOTIF_PERM_ASKED
         )
     )
 }
@@ -66,12 +72,73 @@ class SettingsRepository @Inject constructor(
     val shownMilestones: Flow<Set<String>> = context.forgePreferences.data
         .map { prefs -> prefs[PreferenceKeys.SHOWN_MILESTONES] ?: emptySet() }
 
+    /** Fire a milestone: it can never fire again, and it waits in the notifications feed until cleared. */
     suspend fun markMilestoneShown(milestoneId: String) {
         context.forgePreferences.edit { prefs ->
             val current = prefs[PreferenceKeys.SHOWN_MILESTONES] ?: emptySet()
             prefs[PreferenceKeys.SHOWN_MILESTONES] = current + milestoneId
+            val unread = prefs[PreferenceKeys.UNREAD_MILESTONES] ?: emptySet()
+            prefs[PreferenceKeys.UNREAD_MILESTONES] = unread + milestoneId
         }
     }
+
+    // ─── Notifications tab ────────────────────────────────────────────────────
+
+    /** Milestones that have fired but are still waiting in the notifications feed. */
+    val unreadMilestones: Flow<Set<String>> = context.forgePreferences.data
+        .map { prefs -> prefs[PreferenceKeys.UNREAD_MILESTONES] ?: emptySet() }
+
+    /** Clear (or, on undo, re-queue) one milestone's place in the feed. [SHOWN_MILESTONES] is left
+     *  alone either way — a cleared milestone must never fire a second time. */
+    suspend fun setMilestoneUnread(milestoneId: String, unread: Boolean) {
+        context.forgePreferences.edit { prefs ->
+            val current = prefs[PreferenceKeys.UNREAD_MILESTONES] ?: emptySet()
+            prefs[PreferenceKeys.UNREAD_MILESTONES] =
+                if (unread) current + milestoneId else current - milestoneId
+        }
+    }
+
+    /** A one-shot result line waiting in the notifications feed. */
+    data class SystemNotice(val id: String, val text: String)
+
+    /** Pending one-shot result lines (leftover session resolved, import finished, backup restored). */
+    val systemNotices: Flow<List<SystemNotice>> = context.forgePreferences.data
+        .map { prefs ->
+            (prefs[PreferenceKeys.SYSTEM_NOTICES] ?: emptySet())
+                .mapNotNull { entry ->
+                    val id = entry.substringBefore('|', missingDelimiterValue = "")
+                    val text = entry.substringAfter('|', missingDelimiterValue = "")
+                    if (id.isBlank() || text.isBlank()) null else SystemNotice(id, text)
+                }
+                // Stored as a Set, so sort for a stable order rather than whatever the set iterates.
+                .sortedBy { it.id }
+        }
+
+    /** Queue a result line, replacing any earlier one with the same [id] — a second import result
+     *  supersedes the first rather than stacking two "here's what came in" rows. */
+    suspend fun addSystemNotice(id: String, text: String) =
+        context.forgePreferences.edit { prefs ->
+            val kept = (prefs[PreferenceKeys.SYSTEM_NOTICES] ?: emptySet())
+                .filterNot { it.startsWith("$id|") }
+            prefs[PreferenceKeys.SYSTEM_NOTICES] = (kept + "$id|$text").toSet()
+        }
+
+    /** `NoticeKind.key`s switched off — those rows never reach the feed. */
+    val disabledNoticeKinds: Flow<Set<String>> = context.forgePreferences.data
+        .map { prefs -> prefs[PreferenceKeys.DISABLED_NOTICE_KINDS] ?: emptySet() }
+
+    suspend fun setNoticeKindEnabled(key: String, enabled: Boolean) =
+        context.forgePreferences.edit { prefs ->
+            val current = prefs[PreferenceKeys.DISABLED_NOTICE_KINDS] ?: emptySet()
+            prefs[PreferenceKeys.DISABLED_NOTICE_KINDS] =
+                if (enabled) current - key else current + key
+        }
+
+    suspend fun removeSystemNotice(id: String) =
+        context.forgePreferences.edit { prefs ->
+            prefs[PreferenceKeys.SYSTEM_NOTICES] =
+                (prefs[PreferenceKeys.SYSTEM_NOTICES] ?: emptySet()).filterNot { it.startsWith("$id|") }.toSet()
+        }
 
     // ─── Per-day accent color (#65) ───────────────────────────────────────────
 
@@ -424,11 +491,13 @@ class SettingsRepository @Inject constructor(
     suspend fun setRestTimerAlertEnabled(value: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.REST_TIMER_ALERT_ENABLED] = value }
 
-    /** Whether the one-time notification-permission rationale has been shown (N1). */
+    /** Whether the user has dealt with the notification-permission ask (N1) — it was a one-time
+     *  launch dialog until 2026-07-27, and is now a clearable row in the notifications feed.
+     *  Settable both ways so clearing that row stays undoable (DESIGN §12). */
     val notifPermAsked: Flow<Boolean> = context.forgePreferences.data
         .map { it[PreferenceKeys.NOTIF_PERM_ASKED] ?: false }
-    suspend fun setNotifPermAsked() =
-        context.forgePreferences.edit { it[PreferenceKeys.NOTIF_PERM_ASKED] = true }
+    suspend fun setNotifPermAsked(asked: Boolean = true) =
+        context.forgePreferences.edit { it[PreferenceKeys.NOTIF_PERM_ASKED] = asked }
 
     /** True once the first workout is finished — gates the first-touch onboarding cards so they never
      *  reappear for a returning user (survives a DB wipe; see [PreferenceKeys.FIRST_WORKOUT_DONE]). */
@@ -608,8 +677,10 @@ class SettingsRepository @Inject constructor(
     /** Whether the user has dismissed the "connect a watch/ring" hint for good (cardio screen). */
     val cardioWearableHintDismissed: Flow<Boolean> = context.forgePreferences.data
         .map { it[PreferenceKeys.CARDIO_WEARABLE_HINT_DISMISSED] ?: false }
-    suspend fun setCardioWearableHintDismissed() =
-        context.forgePreferences.edit { it[PreferenceKeys.CARDIO_WEARABLE_HINT_DISMISSED] = true }
+    /** [dismissed] is settable both ways so clearing the invite from the notifications feed stays
+     *  undoable (DESIGN §12: undo over confirm). */
+    suspend fun setCardioWearableHintDismissed(dismissed: Boolean = true) =
+        context.forgePreferences.edit { it[PreferenceKeys.CARDIO_WEARABLE_HINT_DISMISSED] = dismissed }
 
     /** The last cardio activity code logged (GYMAP-40) — the log sheet's new-entry default. Null until
      *  the first non-rest session; the stored code is resolved to an activity at the call site. */

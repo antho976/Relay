@@ -28,17 +28,17 @@ import androidx.compose.ui.unit.dp
 import androidx.fragment.app.FragmentActivity
 import com.forge.app.security.BiometricAuthenticator
 import com.forge.app.ui.common.ForgePrimaryCapsule
-import com.forge.app.ui.common.ForgeWordmark
 import com.forge.app.ui.theme.LocalForgeSettings
 import com.forge.app.ui.theme.forgeBackgroundGradient
 import kotlinx.coroutines.delay
 
 /**
  * The full-screen unlock gate (GYMAP-69) for both the app lock and the gallery lock. It is the modal
- * archetype (DESIGN §3): an OPAQUE theme-gradient scrim over whatever it covers, the `• Avex`
- * wordmark, one serif "Locked" line (§11, no terminal period), one ≤12-word caption, and a single
- * filled capsule that re-invokes the system prompt. The credential entry itself is the OS
- * [BiometricPrompt] sheet, so this screen stays deliberately minimal — no icons, no boxes.
+ * archetype (DESIGN §3): an OPAQUE theme-gradient scrim over whatever it covers, one serif "Locked"
+ * line (§11, no terminal period), one ≤12-word caption, and a single filled capsule that re-invokes
+ * the system prompt. The credential entry itself is the OS [BiometricPrompt] sheet, so this screen
+ * stays deliberately minimal — no icons, no boxes. It carries no chrome at all: the notifications
+ * bell every other screen shows would be an entry point into data this gate exists to withhold.
  *
  * The prompt auto-invokes once [promptReady] is true (the caller withholds it while the launch intro
  * plays). If the device has no enrolled credential we FAIL OPEN — a user must never be trapped out of
@@ -112,8 +112,6 @@ fun AppLockScreen(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        ForgeWordmark(onClick = {})
-        Spacer(Modifier.height(24.dp))
         Text(
             "Locked",
             style = MaterialTheme.typography.headlineSmall,

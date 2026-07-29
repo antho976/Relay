@@ -30,7 +30,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import com.forge.app.ui.common.ForgeWordmark
 import com.forge.app.ui.settings.ConnectPill
 import com.forge.app.ui.settings.SettingsActionLink
 import com.forge.app.ui.settings.SettingsOutlineAction
@@ -47,7 +46,7 @@ import com.forge.app.ui.theme.ForgeTheme
  * The archetype most often got wrong, because the editorial kit is tempting and all of it is banned
  * here. NO serif hero. NO figures. NO lens pills. NO chart motion or entrance cascade. NO dividers.
  *
- *   top bar (wordmark + ← + ≤1 action)
+ *   top bar (← + ≤1 action; the bell is Home only)
  *   ├─ SettingsSectionHeader  mono anchor + air, never a divider          §3, §7
  *   ├─ rows                   each control gets a ≤1-line explainer       §3
  *   │                         nav rows show their LIVE value              §3
@@ -70,7 +69,7 @@ fun SettingsRecipe(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { ForgeWordmark() },     // §4.6 — never "Settings" here
+                title = {},     // §4.6 — never "Settings" here
                 navigationIcon = {
                     // §4.6 — ONE back affordance per page. No second in-page back arrow.
                     IconButton(onClick = onBack) {

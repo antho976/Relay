@@ -16,7 +16,15 @@ Also lists what may not be touched, and the known defects to fix opportunistical
 gold row) · accent-tinted "important" prose · session-summary extras (share card/tags/ghost/vs-last/
 what's-next — the SESSION-summary card specifically; the Profile before/after share card `BeforeAfterCardRenderer` (GYMAP-55) is a separate, deliberate shareable artifact and stays) · cardio big-number hero · cardio kcal estimates (return only with real watch burn data) · new gamification surfaces (wait-listed) · Profile
 identity-first restructure · mood/subjective coach drivers · Coach hero week-dot calendar, "Pulse",
-pass-square record strip · the Profile's ON THIS DAY (Home's `OnThisDayCard` owns that throwback — a mark is cut, not copied, §4.3; it was also the page's one prose-only section, hung off a decorative accent rule) · Coach status serif verdicts AND status/anticipation asides (status states
+pass-square record strip · **every page-level banner** (2026-07-27: Home's milestone toast, coach-brief
+strip, orphan-session notice and resume reminder; Cardio's connect-a-watch invite — all moved to the
+notifications feed behind the bell, §4.6. Do not re-add a strip above a page's own answer; if it is
+dismissible or "waiting on you", it is a notice, and notices live in the feed) · **the three
+launch/result dialogs** (share-import result, backup-restored confirmation, POST_NOTIFICATIONS
+rationale — same date, same destination; an OK button is not a decision, and nothing should
+interrupt a cold launch to ask for a permission) · the `• Avex` chrome
+wordmark and `ForgeWordmark` itself (2026-07-27, replaced by `NotificationBell`; the name survives as
+the launch beat and on exported artifacts only) · the Profile's ON THIS DAY (Home's `OnThisDayCard` owns that throwback — a mark is cut, not copied, §4.3; it was also the page's one prose-only section, hung off a decorative accent rule) · Coach status serif verdicts AND status/anticipation asides (status states
 = eyebrow + figures) · Coach pre-baseline signal dot-checklist in the hero (→ one labeled Baseline
 bar in the "Coming up" idiom; the effort/HC inputs it spelled out live in Signals only, §4.3,
 GYMAP-24) · hairline section separators (§1) · the 9-row milestone ladder (→ rail + next, §4.10).
