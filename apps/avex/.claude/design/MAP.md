@@ -80,22 +80,9 @@ a new non-rest save), not always Run.
 
 ### Coach — `ui/coach`
 
-Reworked 2026-07-26 (`docs/COACH_UI_REWORK.md`). Hero = mono eyebrow + a serif verdict ONLY once
-there is one + a figure row that renders **from session one**, its fourth figure counting the
-baseline down while the coach is still learning (pre-baseline the SESSIONS figure drops out, since
-BASELINE is already a session count). Lens pills Now/Signals/Journey, each emitted by ONE function
-so section order and the `statsEntrance` numbering cannot disagree — they did, and six sections
-shared three stagger steps.
-
-**Now** (`CoachNowLens.kt`) = the call (each decision + its evidence chart + Apply/Skip, with ONE
-filled `Apply all N` capsule at the section's end) → under watch → working toward (a meter per goal)
-→ block (4-phase rail, filled up to the live phase) → project (finish-line meter) → coming up
-(countdowns) → Academy. Ordered live-first (§4.8): the setup prompts sit BELOW the week's call, not
-above it. **Signals** = lifts on watch + recovery load (meter + the named-check panel) + what it
-reads, closing on one signal-coverage line. **Journey** = the record + earned autopilot (the ONLY
-home for trust) + learned so far + your numbers (per-muscle volume caps as ranked bars).
-
-Old Brief/Lab/Timeline routes = lens deep-links. Coach content renders ONLY here —
+lens pills Now/Signals/Journey (Now = call + watch + one road-ahead section: milestone rail +
+brief/verdict/autopilot bars; Signals = lifts + recovery + inputs + learned; Journey = record +
+trust; old Brief/Lab/Timeline routes = lens deep-links). Coach content renders ONLY here —
 Settings→Coach is config alone (on/off switch + mode chips + a feeds on/off glance whose silent HC
 rows tap to Recovery), never a second brief/trust/history home.
 
