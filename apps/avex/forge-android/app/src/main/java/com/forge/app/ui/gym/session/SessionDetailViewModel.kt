@@ -38,6 +38,10 @@ class SessionDetailViewModel @Inject constructor(
     private val _exportPath = MutableStateFlow<String?>(null)
     val exportPath: StateFlow<String?> = _exportPath.asStateFlow()
 
+    /** Id of the session just created by "Log again today" — drives the screen's Undo snackbar (GYMAP-36). */
+    private val _reLoggedSessionId = MutableStateFlow<Long?>(null)
+    val reLoggedSessionId: StateFlow<Long?> = _reLoggedSessionId.asStateFlow()
+
     init {
         viewModelScope.launch {
             val data = if (sessionId >= 0) statsRepo.getSessionDetail(sessionId) else null
@@ -86,6 +90,31 @@ class SessionDetailViewModel @Inject constructor(
     }
 
     fun clearExportPath() { _exportPath.value = null }
+
+    /** In-flight re-log so a double-tap can't create two copies of the same session. */
+    private var reLogJob: Job? = null
+
+    /**
+     * "Log again today" (GYMAP-36): duplicate this finished session as a fresh session dated now,
+     * then surface the new id so the screen can offer an Undo. No-op when the source has nothing to
+     * copy (the repo returns null and the button is only shown for a session with logged exercises).
+     */
+    fun reLogToday() {
+        // Block while a re-log is in flight OR one is still pending its Undo (reLoggedSessionId stays set
+        // until the snackbar clears) — otherwise a second tap after the fast transaction finishes silently
+        // creates a duplicate the single-shot Undo can never reach.
+        if (sessionId < 0 || reLogJob?.isActive == true || _reLoggedSessionId.value != null) return
+        reLogJob = viewModelScope.launch {
+            workoutRepo.reLogSession(sessionId)?.let { _reLoggedSessionId.value = it }
+        }
+    }
+
+    /** Reverse a just-created re-log (Undo) — CASCADE removes its copied exercises and sets. */
+    fun undoReLog(newSessionId: Long) {
+        viewModelScope.launch { workoutRepo.discardSession(newSessionId) }
+    }
+
+    fun clearReLoggedSessionId() { _reLoggedSessionId.value = null }
 
     /**
      * Tag what kind of session this was (Coach v3 A1). The stored key drives the header pill AND the

@@ -420,12 +420,6 @@ class MainActivity : FragmentActivity() {
                                     ForgeNavHost(initialDayKey = pendingWidgetDayKey)
                                     NotifPermissionRationale()
                                     RestoreConfirmedDialog(restoreJustCompleted)
-                                    // The morning check-in (Coach v3 B1): offered once a day as a
-                                    // top banner over whatever screen the app resumed to, and
-                                    // silent for anyone who has stopped answering it. Inside this
-                                    // branch so it never rides over onboarding, and below the lock
-                                    // and launch-intro overlays that follow.
-                                    com.forge.app.ui.checkin.CheckinHost()
                                 }
                                 null -> {} // DataStore still loading; the theme's gradient shows briefly
                             }
@@ -448,6 +442,10 @@ class MainActivity : FragmentActivity() {
                             // The app's one Undo snackbar (§13) — hosted here so a "deleted · Undo"
                             // message rides over any screen, including one popped back to after a delete.
                             com.forge.app.ui.common.SnackbarControllerHost()
+                            // The morning check-in (Coach v3 B1): asked once a day at first open,
+                            // hosted here so it rides over whatever screen the app resumed to, and
+                            // silent for anyone who has stopped answering it.
+                            com.forge.app.ui.checkin.CheckinSheet()
                         }
                         }
                     }

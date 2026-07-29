@@ -31,22 +31,6 @@ import com.forge.app.ui.common.SegmentPill
 import com.forge.app.ui.common.clickableLabeled
 
 /**
- * The morning check-in, hosted once at the app root: the [CheckinPromptBanner] offers it, the
- * [CheckinSheet] answers it. Nothing here opens itself — the sheet used to, and arriving unasked
- * over whatever the app was opened for is what made a four-tap question feel like a toll gate.
- */
-@Composable
-fun CheckinHost(viewModel: CheckinViewModel = hiltViewModel()) {
-    val state by viewModel.state.collectAsStateWithLifecycle()
-    CheckinPromptBanner(
-        visible = state.prompting,
-        onOpen = viewModel::open,
-        onDismiss = viewModel::skip
-    )
-    CheckinSheet(state, viewModel)
-}
-
-/**
  * The morning check-in sheet (Coach v3 B1) — the coach's only daily question, and the capture point
  * for illness and per-muscle soreness.
  *
@@ -56,7 +40,8 @@ fun CheckinHost(viewModel: CheckinViewModel = hiltViewModel()) {
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun CheckinSheet(state: CheckinViewModel.UiState, viewModel: CheckinViewModel) {
+fun CheckinSheet(viewModel: CheckinViewModel = hiltViewModel()) {
+    val state by viewModel.state.collectAsStateWithLifecycle()
     if (!state.visible) return
 
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
