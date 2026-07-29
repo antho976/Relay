@@ -20,6 +20,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -52,7 +53,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.Features
 import com.forge.app.data.repo.ProgressPhoto
 import com.forge.app.ui.common.ConfettiOverlay
-import com.forge.app.ui.common.ForgeWordmark
 import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.common.statsEntrance
 import kotlinx.coroutines.Dispatchers
@@ -74,6 +74,8 @@ import java.util.Locale
 fun ProfileScreen(
     // Null when shown as a hub pager page (no redundant back arrow); a real callback as a deep route.
     onBack: (() -> Unit)? = null,
+    /** Settings moved here from the Home top bar (2026-07-27) — this page's one action (§4.6). */
+    onOpenSettings: () -> Unit = {},
     onOpenTrophies: () -> Unit,
     onOpenPhotoGallery: () -> Unit = {},
     onOpenCamera: () -> Unit = {},
@@ -135,12 +137,15 @@ fun ProfileScreen(
         Scaffold(
             topBar = {
                 TopAppBar(
-                    // §2: wordmark in the chrome — the bumped avatar + name hero below stays the page's identity.
-                    title = { ForgeWordmark() },
+                    // §4.6: the bell in the chrome — the bumped avatar + name hero below stays the page's identity.
+                    title = {},
                     navigationIcon = {
                         if (onBack != null) IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
                     },
                     actions = {
+                        IconButton(onClick = onOpenSettings) {
+                            Icon(Icons.Filled.Settings, contentDescription = "Settings", tint = muted)
+                        }
                         if (Features.SHOW_GAMIFICATION) state.rank?.let { r ->
                             IconButton(onClick = {
                                 scope.launch {

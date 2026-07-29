@@ -47,7 +47,6 @@ import com.forge.app.domain.units.WeightUnit
 import com.forge.app.ui.common.EditorialHeader
 import com.forge.app.ui.common.ForgeOutlineCapsule
 import com.forge.app.ui.common.ForgePrimaryCapsule
-import com.forge.app.ui.common.ForgeWordmark
 import com.forge.app.ui.common.InlineEmptyHint
 import com.forge.app.ui.common.statsEntrance
 import com.forge.app.ui.theme.LocalForgeSettings
@@ -203,8 +202,8 @@ fun MirrorTestScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                // §2: wordmark in the chrome — the serif "Gallery" hero below names the screen.
-                title = { ForgeWordmark() },
+                // §4.6: the bell in the chrome — the serif "Gallery" hero below names the screen.
+                title = {},
                 navigationIcon = {
                     IconButton(onClick = { goBack() }) {
                         Icon(

@@ -55,7 +55,6 @@ import com.forge.app.domain.units.unitLabel
 import com.forge.app.domain.units.weightInputValue
 import com.forge.app.ui.common.ExerciseIcons
 import com.forge.app.ui.common.ForgePrimaryCapsule
-import com.forge.app.ui.common.ForgeWordmark
 import com.forge.app.ui.common.SegmentPill
 import com.forge.app.ui.common.clickableLabeled
 import com.forge.app.ui.common.filterLibrary
@@ -156,8 +155,8 @@ fun GoalEditorScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                // §2: wordmark + back, never the step's name — the content title line below carries it.
-                title = { ForgeWordmark() },
+                // §4.6: bell + back, never the step's name — the content title line below carries it.
+                title = {},
                 navigationIcon = {
                     IconButton(onClick = { goBack() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
                 },

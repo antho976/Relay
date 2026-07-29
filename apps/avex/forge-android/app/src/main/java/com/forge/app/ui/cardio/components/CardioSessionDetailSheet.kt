@@ -88,9 +88,7 @@ fun CardioSessionDetailSheet(
     onAdoptWatchStats: (() -> Unit)? = null,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
-    onBack: () -> Unit,
-    /** Tapping the Avex wordmark — defaults to "go Home"; the cardio tab overrides it to close first. */
-    onHome: () -> Unit = com.forge.app.ui.common.LocalGoHome.current
+    onBack: () -> Unit
 ) {
     val activity = CardioActivity.resolve(entry.type, com.forge.app.ui.cardio.LocalCardioTypes.current)
     val onBg = MaterialTheme.colorScheme.onBackground
@@ -107,7 +105,7 @@ fun CardioSessionDetailSheet(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { com.forge.app.ui.common.ForgeWordmark(onClick = onHome) },
+                title = {},
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = muted)

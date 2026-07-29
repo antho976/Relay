@@ -29,7 +29,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.forge.app.ui.common.ForgeWordmark
 import com.forge.app.ui.gym.session.SegmentRow
 import com.forge.app.ui.common.statsEntrance
 import com.forge.app.ui.theme.LocalForgeSettings
@@ -78,9 +77,9 @@ fun CoachScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                // §2: the top bar never names the screen — just the wordmark (home button) and,
+                // §4.6: the top bar never names the screen — just the bell and,
                 // on a routed entry, the back arrow. The hero verdict is the screen's identity.
-                title = { ForgeWordmark() },
+                title = {},
                 navigationIcon = {
                     if (onBack != null) IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = c.muted)

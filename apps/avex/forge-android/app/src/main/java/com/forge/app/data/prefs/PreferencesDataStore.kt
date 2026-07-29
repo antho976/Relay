@@ -21,8 +21,24 @@ val Context.forgePreferences: DataStore<Preferences> by preferencesDataStore(nam
 /** Centralised keys so misspellings are caught at compile time. */
 object PreferenceKeys {
     val WELCOMED = androidx.datastore.preferences.core.booleanPreferencesKey("welcomed")
-    /** IDs of one-shot milestone toasts already shown to the user (#56). */
+    /** IDs of one-shot milestones already fired, so none can re-fire (#56). */
     val SHOWN_MILESTONES = stringSetPreferencesKey("shown_milestones")
+
+    // ─── Notifications tab ────────────────────────────────────────────────────
+    /** IDs of fired milestones still waiting in the notifications feed. A subset of
+     *  [SHOWN_MILESTONES] (firing writes both): "shown" means it can never fire again, "unread"
+     *  means the user hasn't cleared it yet. */
+    val UNREAD_MILESTONES = stringSetPreferencesKey("unread_milestones")
+
+    /** One-shot "here's what happened" lines waiting in the feed, each stored as `"id|text"`.
+     *  These are the results that used to be an OK-button dialog over whatever screen was up: a
+     *  resolved leftover session (E8), a finished share-to-app import, a restored backup. Stored
+     *  rather than kept in memory so they survive the process, like every other notification. */
+    val SYSTEM_NOTICES = stringSetPreferencesKey("system_notices")
+
+    /** `NoticeKind.key`s the user has switched OFF on Settings → Notifications. Stored as the
+     *  DISABLED set so every kind added later is on by default — an opt-out, not an opt-in. */
+    val DISABLED_NOTICE_KINDS = stringSetPreferencesKey("disabled_notice_kinds")
 
     // ─── Per-day accent color (#65) ───────────────────────────────────────────
     /** Stored as hex e.g. "#FF5733". Key per day: "day_color_upper-a". */

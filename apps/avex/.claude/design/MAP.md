@@ -10,11 +10,105 @@ not need it to know *how* to build — that is the core doctrine.
 
 ## App map
 
-Hub = swipeable 5-tab pager + `ForgeBottomBar`: **Cardio · Stats · Home · Coach · Profile**. Top bar
-everywhere = `←` (sub-screens) + `• Avex` wordmark (`ForgeWordmark`, taps→Home) + ≤1 action,
-**never the screen's own name** (no `TopAppBar` title); **one back affordance per page — the top-bar
-`←` alone, never a second in-page back arrow**. A screen names itself with a serif content
-hero (Stats "Stats", Profile "Athlete") or not at all (Home "Pull B").
+Hub = swipeable 5-tab pager + `ForgeBottomBar`: **Cardio · Stats · Home · Coach · Academy**
+(Academy took Profile's slot 2026-07-27 — it had been a link buried inside Coach, and it is half
+the coach, not a footnote to it. **Profile** moved to the Home top bar, in the slot Settings held;
+**Settings** moved inside Profile as its one action, which is where you go to change things about
+yourself anyway. Profile is a pushed route now and brings its own back arrow). Top bar
+everywhere = `←` (sub-screens) + ≤1 action, **never the screen's own name** (no `TopAppBar` title);
+**one back affordance per page — the top-bar `←` alone, never a second in-page back arrow**. The
+notifications bell is **Home only** (2026-07-27): it sat in all ~20 top bars, which made an unread
+badge follow you into every screen you had already navigated away from it to reach. A screen names
+itself with a serif content hero (Stats "Stats", Profile "Athlete") or not at all (Home "Pull B").
+On **Home** the two chrome glyphs are pulled out by `GUTTER_SLACK` (12dp, half the gap between a
+44dp target and its 20dp glyph) so their edges land on the 24dp page gutter, level with the serif
+hero below; centred in their targets they sat 12dp inboard of everything else. This is Home's own
+Row, not a `TopAppBar`, so no Material inset fights it — and with the bell now Home-only there is no
+longer a second alignment to disagree with.
+The bell replaced the `• Avex` wordmark on 2026-07-27; "Avex" now appears only in the cold-launch
+`AvexIntro` beat and on exported artifacts (rank / before-after cards, the PDF footer).
+
+### Notifications — `ui/notifications`
+
+The one feed for everything that used to be a page-level banner, reached from any screen's bell.
+List archetype **minus the search field** (it tops out at a handful of rows, all visible at once — a
+search box that can never earn a tap). Tiny hero + `N WAITING` count, rows ranked live-first (§4.8):
+in-progress session → coach brief → milestones → results (import / backup restored / a resolved
+leftover session) → the two invites (turn on notifications, connect a watch). A row
+that goes somewhere is bordered and bounces; a celebration or housekeeping note is bare and passive
+(§2③). No per-row `×` — that would nest a tap inside the row's own target — so acting on a row
+clears it, and the top bar's ONE action (a gear) opens `NotificationsOptionsSheet`, a bottom sheet
+holding the two page-scoped actions: **Notification settings** and **Clear all notifications** (with
+Undo, §12; both rows render passive when there's nothing to clear). The sheet is the modal archetype
+— `containerColor = surface` — but takes NO divider between its rows: §5 permits a modal one and
+every other sheet in the app took that permission, yet two rows don't need a line to be told apart.
+
+Rows carry **no outline**. §1 earns a border with interactivity, but one bordered box per notice
+stacks into a wall on a page whose whole job is to be scanned; the glyph chip IS the row's mark
+(§12), and boxing a mark is not the same as boxing passive content. With the border gone the accent
+` →` is the only thing separating a row that goes somewhere from one that just happened, so it is
+load-bearing rather than decoration. The mono eyebrow went with the border — the glyph names the
+kind, and says it aloud through its `contentDescription` (§4.3 one home, §14).
+
+Every row leads with a glyph from **`NoticeIcons`** (`ui/notifications/NoticeIcons.kt`) — the fourth
+matched custom family, same 24dp/one-weight house style as `NavIcons` and `SettingsIcons`, built on
+the shared `VectorBuilders` plumbing. Eight glyphs: session, milestone, import, backup,
+housekeeping, bell, watch, and the coach brief which reuses `NavIcons.Coach` outright so a coach row
+speaks one glyph everywhere. Each carries its kind as its `contentDescription`, since the eyebrow
+that used to say it aloud is gone (§14).
+
+**Settings → Notifications** is split by where a thing ARRIVES, not by feature: `ON YOUR PHONE`
+(training reminders · weekly recap · rest timer alerts · silence during quiet hours, with the
+per-day windows) and `IN THE APP` (one `ToggleRow` per `NoticeKind` — unfinished workouts · coach
+briefs · milestones · imports and backups · setup invites). Quiet hours sits INSIDE the phone group
+because it suppresses exactly those three rows and nothing in the app group; trailing it after the
+in-app switches read as though it silenced those too. The two headers are a parallel pair and carry
+the split alone — **no group captions**, which is where the first attempt went wrong (§4.3). Stored
+as the DISABLED set
+(`DISABLED_NOTICE_KINDS`) so any kind added later is on by default, and applied as the LAST filter
+on the feed — a notice stays queued while its kind is off, so switching it back on brings the row
+back rather than having silently dropped it.
+
+Both setup invites are dismissed FOR GOOD and neither has an un-dismiss control (the old cardio
+banner's `×` was a one-way door too), so `SettingsSection.NOTIFICATIONS` now also clears
+`DISABLED_NOTICE_KINDS`, `CARDIO_WEARABLE_HINT_DISMISSED` and `NOTIF_PERM_ASKED` — resetting the
+section is the way back, and covers every switch on the page. `NotificationPrefsTest` pins that,
+plus the round-trip of every write the Undo lambdas make.
+
+`data/repo/NotificationFeed.kt` is the single `@Singleton` source, feeding both the page and every
+bell's unread count through `LocalUnreadNotifications`. Most sources are already observable (active
+session, prefs); the weekly coach pass and the Health Connect grants have no observable, so
+`refresh()` re-polls them at app open and on resume. Milestones and one-shot results are now
+PERSISTED (`UNREAD_MILESTONES`, `SYSTEM_NOTICES`) rather than held in memory — a feed that emptied
+on process death would lose the thing it exists to hold.
+
+Three `MainActivity` dialogs were folded in at the same time: the share-import result, the
+backup-restored confirmation and the POST_NOTIFICATIONS rationale. The first two were pure "here's
+what happened · OK" over whatever screen you were on; the third interrupted a cold launch to ask.
+The permission row now opens the OS app-notification screen rather than re-requesting, so it keeps
+working after any number of denials. **Still dialogs on purpose**: `ProgramChangeGuardHost` (a
+destructive confirm — it must block), `CheckinSheet` and `DislikeSwapPromptDialog` (they ask for
+input at the moment of relevance, not for attention), and Settings → Notifications'
+`NotificationsBlockedBanner`, which is the denied-state of the controls directly beneath it (§12)
+rather than a notice.
+
+### Academy — `ui/academy`
+
+The knowledge half of the coach, and a hub tab since 2026-07-27. Built to the structure
+`COACH_V3_PLAN.md` already specified and the first version ignored: **five tracks**
+(Fundamentals · How the coach works · Programming · Signals · Conditioning), not one flat list of
+31 rows. Hub = hero count, a `START HERE` entry (one already-unlocked, unread lesson) and a track
+row each with its blurb, count and a **`LessonDotRail`** — filled/hollow dots, §2②, deliberately NOT
+a progress bar: the plan bans XP here ("learning is not gamified engagement bait") and a bar that
+fills reads as a score to chase, where a rail reads as inventory. Tracks drill into
+`AcademyTrackScreen` (`Routes.academyTrack`), which splits `OPEN` from `NOT YET`.
+
+**What it is not** is a course index. `docs/ACADEMY_LESSONS.md` is explicit — "just-in-time, not
+curriculum-first" — so only Fundamentals is sequential, there is no next-up ladder, and nothing is
+ever gated on reading. The locked rows carry the reworked `LessonUnlock`: the lesson's own title,
+what opens it, and one line of how, with an **accent dot only on the ones the reader can trigger
+today** (§8 — a dot earns its colour by flagging the exception). "Log a set" versus "When the coach
+first suggests a weight" tells you whose move it is without a word of chrome.
 
 ### Home — `ui/overview`
 

@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.forge.app.data.repo.AcademyRepository
 import com.forge.app.data.repo.AdaptationRepository
 import com.forge.app.domain.academy.AcademyRegistry
+import com.forge.app.domain.academy.LessonTrack
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -25,6 +26,19 @@ class AcademyViewModel @Inject constructor(
     private val adaptationRepo: AdaptationRepository
 ) : ViewModel() {
 
+    /**
+     * One track's standing. Counts only — no score, no percentage, no streak: the plan bans XP here
+     * outright ("learning is not gamified engagement bait"), so this is an inventory of what exists
+     * and what has opened, which is the same thing a locked lesson row has always said.
+     */
+    data class TrackProgress(
+        val track: LessonTrack,
+        val total: Int,
+        val unlocked: Int,
+        val read: Int,
+        val unread: Int
+    )
+
     data class UiState(
         val unlocked: List<AcademyRegistry.LessonState> = emptyList(),
         val upcoming: List<AcademyRegistry.LessonState> = emptyList(),
@@ -33,6 +47,35 @@ class AcademyViewModel @Inject constructor(
         val examples: Map<String, String> = emptyMap()
     ) {
         val newCount: Int get() = unlocked.count { it.isNew }
+
+        private val all: List<AcademyRegistry.LessonState> get() = unlocked + upcoming
+
+        /** Every track, in reading order, whether or not anything in it has opened yet. */
+        val tracks: List<TrackProgress>
+            get() = LessonTrack.entries.map { track ->
+                val mine = all.filter { it.lesson.track == track }
+                TrackProgress(
+                    track = track,
+                    total = mine.size,
+                    unlocked = mine.count { it.unlocked },
+                    read = mine.count { it.opened },
+                    unread = mine.count { it.isNew }
+                )
+            }.filter { it.total > 0 }
+
+        /**
+         * The one lesson to offer next: something already unlocked and unread. Deliberately NOT the
+         * next item of a syllabus — the Academy is just-in-time, so the only lesson it can honestly
+         * push is one whose moment has already fired (`docs/ACADEMY_LESSONS.md`).
+         */
+        val continueLesson: AcademyRegistry.LessonState?
+            get() = unlocked.lastOrNull { it.isNew }
+
+        fun lessonsIn(track: LessonTrack): List<AcademyRegistry.LessonState> =
+            all.filter { it.lesson.track == track }
+                // Unlocked first, then locked; registry order is preserved inside each, which for
+                // Fundamentals IS its reading order.
+                .sortedBy { if (it.unlocked) 0 else 1 }
     }
 
     private val _state = MutableStateFlow(UiState())

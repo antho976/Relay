@@ -103,9 +103,9 @@ class DesignDoctrineTest {
     @Test
     fun topBarNeverCarriesTheScreenName() = check(
         "screen-name-title",
-        "DESIGN §4.6 — the top bar is the wordmark + ← + ≤1 action, never the screen's own name. " +
-            "A screen names itself with a serif content hero, or not at all. Use " +
-            "title = { ForgeWordmark() }."
+        "DESIGN §4.6 — the top bar is ← + ≤1 action, never the screen's own name. A screen names " +
+            "itself with a serif content hero, or not at all. Leave title = {} empty; the " +
+            "notifications bell is Home only."
     )
 
     @Test

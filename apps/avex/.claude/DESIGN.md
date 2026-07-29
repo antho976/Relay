@@ -97,7 +97,7 @@ Each archetype has a compiling recipe under `ui/recipes/` — start there, not f
 3. **Prose budget + one home.** A section's primary content is data-shaped (figure/bar/chart/tag/row); a sentences-only section is redesigned to data or cut. Max ONE muted caption (~12 words) per section beyond the hero's context line; mechanics narration is cut not trimmed (the state changing IS the explanation; explainers only beside a non-obvious control, §13). **One home**: a fact appears once per screen (a caption on its element, never a floating footer or repeated across lenses); likewise a MARK — a visual that only repeats another screen's/lens's answer is cut, not copied.
 4. **Sub-paging = lens pills** (`SegmentPill` row, labels ONE short word). Routed sub-screen = real sub-feature w/ own hero; sheet = transient detail of one tapped item.
 5. **Data is explorable**: aggregate visuals (heatmap cell, chart point, row) answer a tap with detail; every interaction passes "you'd miss it" or "wow"; nothing looks tappable while doing nothing.
-6. **Chrome earns its tap**: top bar = `• Avex` wordmark (`ForgeWordmark`, taps→Home) + `←` + ≤1 action, **never the screen's own name** (no `TopAppBar` title). A screen names itself with a serif content hero or not at all. **One back affordance per page** — the top-bar `←` alone, never a second in-page back arrow.
+6. **Chrome earns its tap**: top bar = `←` + ≤1 action, **never the screen's own name** (no `TopAppBar` title). The bell (`NotificationBell`, tap→the feed, hold→Home) is **HOME ONLY** — a global unread badge on every page is a nag, not chrome. A screen names itself with a serif content hero or not at all. **One back affordance per page** — the top-bar `←` alone, never a second in-page back arrow. **A notice belongs in the feed, not on the page**: anything dismissible, celebratory or "waiting on you" goes behind the bell — a page never opens with a strip above its own answer (`design/SETTLED.md`, 2026-07-27).
 7. **Build flow = two-shot**: overview first → Antho device-checks → then subs/lenses.
 8. **Lead with the live — placement is rank.** Within a screen/lens: real data/decisions sit under the pills, mixed reached/ahead ladders next, pure countdown/unlock meters last; a section of all-zero marks never opens a lens with a live sibling; a ladder and its countdowns sit adjacent.
 9. **Show the reading, not just the conclusion.** Surface the engine's underlying readings, not only its verdict — both beside a conclusion (the deciding reading as row meta: "38% hard · +2", "7.2h avg") and BEFORE one exists (per-item readings render as soon as they're computable, not when a score unlocks). Below a gate the reading is progress toward it ("3 of 12 rated sets"), never "n/a". A panel of named checks each with its own reading is data, not §12 repetition; each lens stands on its OWN data. "Not enough data yet" is a last resort; when a reading panel arrives, any row elsewhere that only restated it goes. A dense panel may CLOSE with one muted line naming what the readings feed.
@@ -127,7 +127,7 @@ flips to bg for any light/neutral accent (so a filled-primary control never goes
 | Rung | Use |
 |---|---|
 | accent 1.0 (`primary`) | chart strokes/dots, selected-pill border, `action →`, ↑ delta, legend dots, active nav |
-| accent 0.6 (`secondary`) | wordmark dot, secondary chart series |
+| accent 0.6 (`secondary`) | launch-wordmark dot, secondary chart series |
 | accent 0.15 (`primaryContainer`) | tonal fills: selected pill bg, active-row wash |
 | onBg 1.0 | primary text, serif figures |
 | muted 1.0 | secondary text, mono labels, ↓ delta |
@@ -179,7 +179,7 @@ sheet top 16 — no custom radii. Photos: rounded 16 clips, captions on bottom s
 
 **The kit** — check here before writing any component. `EditorialHeader` · `EditorialHairline` ·
 `EditorialFigure` · `EditorialLegend` · `SegmentPill` · `ForgeSwitch` · `InlineEmptyHint` ·
-`ForgeWordmark` · `AvexWordmark` · `AvexIntro` · `IconLaunchScene` · `bounceClick` /
+`NotificationBell` · `AvexWordmark` · `AvexIntro` · `IconLaunchScene` · `bounceClick` /
 `bounceCombinedClick` · `clickableLabeled` · `GlyphButton` · `ForgePrimaryCapsule` /
 `ForgeOutlineCapsule` · `ForgeRowPill` · `ForgeShimmer` · `ConfettiOverlay` · `statsEntrance` · `EntranceItem` ·
 `rememberDrawProgress` · `CountUpText` · `ExerciseLibraryPicker` · `ProvideTouchExploration` ·
@@ -224,7 +224,7 @@ that grow with font scale, §14): hero CTA ~60dp (Home Start session only); stan
 
 **Icons**: chrome (nav/gear/back/share) + a muted leading glyph on settings/list nav rows for
 wayfinding. Row/content glyphs come from the matched custom families (`SettingsIcons`/`NavIcons`/
-`ExerciseIcons`), never Material stock, never accent-tinted; TOP-BAR chrome may use Material stock
+`ExerciseIcons`/`NoticeIcons`), never Material stock, never accent-tinted; TOP-BAR chrome may use Material stock
 until a custom chrome set lands (content never). Exercise rows in browsers/pickers lead with their
 `ExerciseIcons.forEquipment` equipment-class glyph (one glyph per implement class, custom moves =
 pencil); elsewhere content is text-first, glyphs `→ ↑ ↓ △ • ·` carry meaning — no decorative
@@ -285,7 +285,7 @@ worded forward under a `NEXT` eyebrow, never a past-tense achievement label.
 
 **Glyphs & numbers.** Mono small-caps section headers, else sentence case (buttons included). Actions
 end ` →` / `+ log` (accent mono); meta joins with `·`; deltas `↑`(accent)/`↓`(muted), `△ LAST`;
-wordmark = "• Avex" via `ForgeWordmark()`. Numbers k-abbrev ≥10,000 ("4.5k"); RPE/RIR via `Format.kt`
+the wordmark "• Avex" is the LAUNCH beat only (`AvexWordmark`), never chrome. Numbers k-abbrev ≥10,000 ("4.5k"); RPE/RIR via `Format.kt`
 (no ".0"); **weights always via `WeightFormatter`** reading `LocalForgeSettings.current.weightUnit` — a
 tri-state `WeightUnit` (lb·kg·st), never a `useKg: Boolean` (a legacy bridge lingers on the formatter +
 `ForgeUiSettings.useKg`; new code passes `weightUnit`). Never hardcode lb/kg anywhere. Stones render as a `stone + pounds` compound
@@ -379,7 +379,7 @@ RTL-correct (`start`/`end`, never `left`/`right`).
 - [ ] All seven states drawn (§12) — especially zero, overflow, and stale/denied.
 - [ ] One serif hero; mono headers + air rhythm; **no section hairlines** (lines = data only); alphas only from the §5 ladder; colors via `colorScheme`; ≥8dp between text lines of different roles.
 - [ ] Prose budget + one home (§4.3): data-led sections, ≤1 caption, no mechanics narration, no fact/mark repeated across lenses.
-- [ ] Top bar = wordmark + `←` + ≤1 action, never the screen name, one back arrow. Serif titles/verdicts no terminal period.
+- [ ] Top bar = the bell + `←` + ≤1 action, never the screen name, one back arrow; no page-level notice strips. Serif titles/verdicts no terminal period.
 - [ ] Passive content bare; only interactive elements + modals get fills/borders. Nothing fake-tappable; no nested taps.
 - [ ] Controls trim (§8); bounce press, no ripple; motion per archetype via shared modifiers only (§9).
 - [ ] Generated text dry + earned, imperative + "you", no exclamations/em-dashes/hype (§11).

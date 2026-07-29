@@ -8,6 +8,7 @@ import com.forge.app.data.repo.StatsRepository
 import com.forge.app.domain.session.SessionType
 import com.forge.app.domain.units.WeightUnit
 import com.forge.app.program.Program
+import com.forge.app.domain.notify.Milestones
 import com.forge.app.ui.overview.state.MilestoneEvent
 import com.forge.app.ui.overview.state.OnThisDayMemory
 import com.forge.app.ui.overview.state.OverviewRecentItem
@@ -23,11 +24,8 @@ import java.util.Locale
 // Pure mapping from the OverviewViewModel's source flows into OverviewUiState.
 // Kept out of the ViewModel so the flow wiring there stays readable.
 
-internal const val MILESTONE_SESSIONS_100 = "sessions_100"
-internal const val MILESTONE_VOLUME_10K = "volume_10k_week"
-internal const val MILESTONE_FIRST_MONTH = "first_full_month"
-/** Weekly-volume milestone threshold, kept in the stored unit (lb) so it triggers the same for everyone. */
-private const val VOLUME_MILESTONE_LB = 10_000.0
+// The ids and the lines themselves live in [Milestones]: a fired milestone waits in the
+// notifications feed, which has to rebuild its line from the id alone (DESIGN §11).
 
 internal fun buildOverviewUiState(
     stats: StatsRepository.WeeklyStats,
@@ -152,21 +150,30 @@ private fun computePendingMilestone(
     shown: Set<String>,
     weightUnit: WeightUnit
 ): MilestoneEvent? {
-    if (stats.totalFinishedSessions >= 100 && MILESTONE_SESSIONS_100 !in shown) {
-        return MilestoneEvent(MILESTONE_SESSIONS_100, "100 workouts complete. You've earned this.")
+    if (stats.totalFinishedSessions >= 100 && Milestones.SESSIONS_100 !in shown) {
+        return MilestoneEvent(
+            Milestones.SESSIONS_100,
+            Milestones.messageFor(Milestones.SESSIONS_100, weightUnit).orEmpty()
+        )
     }
-    if (stats.volumeLb >= VOLUME_MILESTONE_LB && MILESTONE_VOLUME_10K !in shown) {
+    if (stats.volumeLb >= Milestones.VOLUME_THRESHOLD_LB && Milestones.VOLUME_10K_WEEK !in shown) {
         // Threshold stays in lb (the stored unit) so it fires consistently; the label honours the
         // user's unit — "10k lb" / "4.5k kg" — instead of always reading lb.
-        val volLabel = com.forge.app.domain.units.formatVolumeCompact(VOLUME_MILESTONE_LB, weightUnit)
-        return MilestoneEvent(MILESTONE_VOLUME_10K, "$volLabel this week. Volume beast.")
+        // The line itself comes from the catalogue so the feed can rebuild it from the id later.
+        return MilestoneEvent(
+            Milestones.VOLUME_10K_WEEK,
+            Milestones.messageFor(Milestones.VOLUME_10K_WEEK, weightUnit).orEmpty()
+        )
     }
     val firstMs = stats.firstFinishedSessionMs
-    if (firstMs != null && MILESTONE_FIRST_MONTH !in shown) {
+    if (firstMs != null && Milestones.FIRST_FULL_MONTH !in shown) {
         val zone = ZoneId.systemDefault()
         val firstMonth = YearMonth.from(Instant.ofEpochMilli(firstMs).atZone(zone))
         if (firstMonth < YearMonth.now(zone)) {
-            return MilestoneEvent(MILESTONE_FIRST_MONTH, "First full month of training. You're building something real.")
+            return MilestoneEvent(
+                Milestones.FIRST_FULL_MONTH,
+                Milestones.messageFor(Milestones.FIRST_FULL_MONTH, weightUnit).orEmpty()
+            )
         }
     }
     return null

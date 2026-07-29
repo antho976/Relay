@@ -19,7 +19,11 @@ internal object AcademyProgramming {
         track = LessonTrack.PROGRAMMING,
         title = "What a training block is",
         summary = "A few weeks with one intent, because the body adapts to trends rather than to single sessions.",
-        unlockedBy = "Starting your first block",
+        unlock = LessonUnlock(
+            label = "When your first block starts",
+            detail = "The coach plans one once it can see far enough ahead to commit to a few weeks.",
+            byYou = false
+        ),
         blocks = listOf(
             Paragraph(
                 "A block is a stretch of weeks that share a purpose. Instead of asking every session " +
@@ -49,7 +53,11 @@ internal object AcademyProgramming {
         track = LessonTrack.PROGRAMMING,
         title = "Accumulate, intensify, peak, deload",
         summary = "Four phases, four different jobs. The coach changes what it asks of you in each.",
-        unlockedBy = "Your first phase change",
+        unlock = LessonUnlock(
+            label = "When a block changes phase",
+            detail = "A few weeks in, as it moves from building volume to adding load.",
+            byYou = false
+        ),
         blocks = listOf(
             Heading("Accumulate"),
             Paragraph(
@@ -80,7 +88,11 @@ internal object AcademyProgramming {
         track = LessonTrack.PROGRAMMING,
         title = "Deloads are earned, not failures",
         summary = "A scheduled easy week cashes in the work you already did. It is not a step backwards.",
-        unlockedBy = "Your first scheduled deload",
+        unlock = LessonUnlock(
+            label = "When a deload is scheduled",
+            detail = "Planned at the end of a block, or pulled earlier if fatigue earns it.",
+            byYou = false
+        ),
         blocks = listOf(
             Paragraph(
                 "Fatigue builds faster than fitness fades. That gap is why a week of reduced work " +
@@ -107,7 +119,11 @@ internal object AcademyProgramming {
         track = LessonTrack.PROGRAMMING,
         title = "Reading your block card",
         summary = "Week in block, current phase, and how long until the planned deload.",
-        unlockedBy = "Opening the block card",
+        unlock = LessonUnlock(
+            label = "Open your block card",
+            detail = "It's at the top of the Coach page once a block is running.",
+            byYou = true
+        ),
         blocks = listOf(
             Paragraph(
                 "The rail shows the four phases with the live one filled. Under it, the coach states " +

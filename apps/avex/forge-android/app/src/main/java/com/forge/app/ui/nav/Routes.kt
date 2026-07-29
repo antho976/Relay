@@ -14,11 +14,20 @@ object Routes {
     const val CARDIO_SESSION = "cardio/session/{cardioId}"
     const val NOTES_SEARCH = "gym/notes-search"
     const val RECAP = "recap"
+
+    /** The notifications feed — every strip that used to interrupt Home or Cardio. */
+    const val NOTIFICATIONS = "notifications"
     const val COACH_BRIEF = "coach-brief"
     const val COACH_LAB = "coach-lab"
 
     /** The Academy (Coach v3 B3) — the knowledge layer, reachable from any lesson link. */
     const val ACADEMY = "academy"
+
+    /** One Academy track's lessons. [trackCode] is a [com.forge.app.domain.academy.LessonTrack.code]. */
+    const val ACADEMY_TRACK = "academy/track/{trackCode}"
+    const val ARG_TRACK_CODE = "trackCode"
+
+    fun academyTrack(trackCode: String) = "academy/track/$trackCode"
     const val COACH_TIMELINE = "coach-timeline"
     const val PROFILE = "profile"
     const val GOALS = "goals"

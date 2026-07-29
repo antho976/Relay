@@ -34,7 +34,9 @@ enum class BottomTab(val label: String, val icon: ImageVector) {
     STATS("Stats", NavIcons.Stats),
     HOME("Home", NavIcons.Home),
     COACH("Coach", NavIcons.Coach),
-    PROFILE("Profile", NavIcons.Profile),
+    // Took Profile's slot on 2026-07-27: the Academy had been a link inside Coach, which buried the
+    // half of the coach you can read. Profile moved to the Home top bar, where Settings used to sit.
+    ACADEMY("Academy", NavIcons.Academy),
 }
 
 /**

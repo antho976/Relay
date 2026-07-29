@@ -37,7 +37,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.forge.app.ui.common.EditorialHeader
-import com.forge.app.ui.common.ForgeWordmark
 import com.forge.app.ui.common.SegmentPill
 import com.forge.app.ui.common.rememberDrawProgress
 import com.forge.app.ui.theme.ForgeTheme
@@ -48,7 +47,7 @@ import com.forge.app.ui.theme.ForgeTheme
  * Scoped to ONE item: one session, one lift, one cardio entry. The defining constraint is that a
  * detail page is NOT a small dashboard — no figure wall, no lens pills for unrelated views.
  *
- *   top bar (wordmark + ← + ≤1 action)
+ *   top bar (← + ≤1 action; the bell is Home only)
  *   ├─ serif title + context line       the item names itself here, not in the top bar   §4.6
  *   ├─ metric SegmentPills              switching the METRIC of this one item            §4.4
  *   ├─ chart, open on the page          no plot frame, draws in ONCE                     §10
@@ -70,7 +69,7 @@ fun DetailRecipe(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { ForgeWordmark() },
+                title = {},
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")

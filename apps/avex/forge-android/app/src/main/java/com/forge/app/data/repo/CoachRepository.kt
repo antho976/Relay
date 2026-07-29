@@ -748,9 +748,11 @@ class CoachRepository @Inject constructor(
         val ds = coachDao.decisionsFor(pass.weekId)
         val applied = ds.count { it.status == STATUS_APPLIED }
         val open = ds.count { it.status == STATUS_PROPOSED }
+        // Plurals are resolved here, not left as "proposal(s)" — this line renders in the
+        // notifications feed, Settings and the weekly push (DESIGN §11: no paren-plurals).
         return when {
-            open > 0 -> "Coach · $open proposal(s) for this week"
-            applied > 0 -> "Coach · $applied change(s) applied this week"
+            open > 0 -> "Coach · $open ${if (open == 1) "proposal" else "proposals"} for this week"
+            applied > 0 -> "Coach · $applied ${if (applied == 1) "change" else "changes"} applied this week"
             pass.status == STATUS_SHADOW -> "Coach · observations ready for this week"
             else -> "Coach · holding steady this week"
         }

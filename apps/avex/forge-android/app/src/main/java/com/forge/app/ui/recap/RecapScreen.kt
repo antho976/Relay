@@ -36,7 +36,6 @@ import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.formatVolumeCompact
 import com.forge.app.ui.common.EditorialFigure
 import com.forge.app.ui.common.EditorialHeader
-import com.forge.app.ui.common.ForgeWordmark
 import com.forge.app.ui.common.forgeShimmer
 import com.forge.app.ui.theme.LocalForgeSettings
 
@@ -56,8 +55,8 @@ fun RecapScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                // §2: wordmark + back, never the screen's name — the serif hero below carries it.
-                title = { ForgeWordmark() },
+                // §4.6: bell + back, never the screen's name — the serif hero below carries it.
+                title = {},
                 navigationIcon = {
                     IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
                 },

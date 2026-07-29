@@ -18,7 +18,11 @@ internal object AcademyEngine {
         track = LessonTrack.ENGINE,
         title = "Why lifters need an aerobic base",
         summary = "Better recovery between sets, between sessions, and more capacity for hard blocks.",
-        unlockedBy = "Your first cardio prescription",
+        unlock = LessonUnlock(
+            label = "When the coach first prescribes cardio",
+            detail = "Conditioning enters the plan once there's a lifting week to build it around.",
+            byYou = false
+        ),
         blocks = listOf(
             Paragraph(
                 "Between your sets, your body clears the by-products of the last one and rebuilds " +
@@ -46,7 +50,11 @@ internal object AcademyEngine {
         track = LessonTrack.ENGINE,
         title = "What zone 2 actually is",
         summary = "The hardest you can go while still speaking in full sentences. That's the whole test.",
-        unlockedBy = "Your first zone-2 prescription",
+        unlock = LessonUnlock(
+            label = "When your first zone-2 session is prescribed",
+            detail = "The easy end of the range, where you can still talk in full sentences.",
+            byYou = false
+        ),
         blocks = listOf(
             Paragraph(
                 "Zone 2 is easy aerobic work: the intensity where you could keep going for a long " +
@@ -74,7 +82,11 @@ internal object AcademyEngine {
         track = LessonTrack.ENGINE,
         title = "Interference: why placement matters",
         summary = "Hard cardio near hard lifting competes for the same recovery. Managed well, the cost is small.",
-        unlockedBy = "Your first placement-driven prescription",
+        unlock = LessonUnlock(
+            label = "When cardio and lifting start competing",
+            detail = "The coach either moves a session, or takes the cost out of your readiness.",
+            byYou = false
+        ),
         blocks = listOf(
             Paragraph(
                 "The classic finding is that combining hard endurance work with strength training " +
@@ -102,7 +114,11 @@ internal object AcademyEngine {
         track = LessonTrack.ENGINE,
         title = "Reading heart rate: zones, drift, resting",
         summary = "Zones are yours, not a poster's. Drift and resting HR are the two cheapest signals you have.",
-        unlockedBy = "Your first live-HR session",
+        unlock = LessonUnlock(
+            label = "Record a cardio session with heart rate",
+            detail = "Needs a watch or strap feeding Health Connect while you train.",
+            byYou = true
+        ),
         blocks = listOf(
             Heading("Zones"),
             Paragraph(
@@ -129,7 +145,11 @@ internal object AcademyEngine {
         track = LessonTrack.ENGINE,
         title = "Intervals: dose and recovery",
         summary = "They buy top-end fitness at a steep recovery price, which is why they're rationed.",
-        unlockedBy = "Your first interval prescription",
+        unlock = LessonUnlock(
+            label = "When intervals are first prescribed",
+            detail = "Rationed on top of your base, never the default answer.",
+            byYou = false
+        ),
         blocks = listOf(
             Paragraph(
                 "Intervals are the most time-efficient way to raise your ceiling, and the easiest " +
@@ -153,7 +173,11 @@ internal object AcademyEngine {
         track = LessonTrack.ENGINE,
         title = "How your base is measured without a lab",
         summary = "Pace at the same effort, heart-rate drift, and resting heart rate, triangulated.",
-        unlockedBy = "Your first base-trend readout",
+        unlock = LessonUnlock(
+            label = "When your aerobic base shows a trend",
+            detail = "Needs enough sessions to compare pace at the same heart rate.",
+            byYou = false
+        ),
         blocks = listOf(
             Paragraph(
                 "You do not need a lactate test to know whether your base is improving. Three cheap " +

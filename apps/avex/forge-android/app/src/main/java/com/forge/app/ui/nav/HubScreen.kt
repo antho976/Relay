@@ -23,12 +23,12 @@ import com.forge.app.ui.cardio.CardioScreen
 import com.forge.app.ui.coach.CoachScreen
 import com.forge.app.ui.gym.train.DayListScreen
 import com.forge.app.ui.overview.OverviewScreen
-import com.forge.app.ui.profile.ProfileScreen
+import com.forge.app.ui.academy.AcademyScreen
 import com.forge.app.ui.theme.ForgeMotion
 import kotlinx.coroutines.launch
 
 /**
- * The swipeable home: Cardio · Stats · Overview(Home) · Coach · Profile as pages of a
+ * The swipeable home: Cardio · Stats · Overview(Home) · Coach · Academy as pages of a
  * [HorizontalPager] under a shared [ForgeBottomBar], in [BottomTab] order (Home centered). Swipe
  * left/right to glide between hubs (the bar highlight follows the settled page); tapping a bar item
  * animates to that page.
@@ -109,7 +109,6 @@ fun HubScreen(
             when (tabs.getOrElse(page) { BottomTab.HOME }) {
                 BottomTab.CARDIO -> CardioScreen(
                     onOpenHistory = { nav.navigate(Routes.SESSION_HISTORY) },
-                    onConnectWearable = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) },
                     onOpenGoals = { nav.navigate(Routes.GOALS) }
                 )
                 BottomTab.STATS -> DayListScreen(
@@ -131,7 +130,7 @@ fun HubScreen(
                     title = "Stats"
                 )
                 BottomTab.HOME -> OverviewScreen(
-                    onOpenAcademy = { nav.navigate(Routes.ACADEMY) },
+                    onOpenAcademy = { goToTab(BottomTab.ACADEMY) },
                     // A cardio "day" is logged on the Cardio page, so its start CTA swipes there.
                     onStartSession = { dayKey -> if (dayKey.startsWith("cardio")) goToTab(BottomTab.CARDIO) else nav.navigate(Routes.gymDay(dayKey)) },
                     onStartSessionSkipWarmup = { dayKey -> if (dayKey.startsWith("cardio")) goToTab(BottomTab.CARDIO) else nav.navigate(Routes.gymDay(dayKey, skipWarmup = true)) },
@@ -142,12 +141,12 @@ fun HubScreen(
                     onGoToTrophies = { nav.navigate(Routes.TROPHIES) },
                     onOpenNotes = { nav.navigate(Routes.NOTES_SEARCH) },
                     onGoToNutrition = { nav.navigate(Routes.NUTRITION) },
-                    onGoToSettings = { nav.navigate(Routes.settings()) },
+                    // Settings moved inside Profile; Home's top-right opens Profile itself.
+                    onOpenProfile = { nav.navigate(Routes.PROFILE) },
                     // Coach is its own hub page when enabled — swipe to it rather than pushing the modal brief.
                     onOpenCoachBrief = { goToTab(BottomTab.COACH) },
                     onOpenCoachLab = { nav.navigate(Routes.COACH_LAB) },
                     onOpenGoals = { nav.navigate(Routes.GOALS) },
-                    onOpenProfile = { goToTab(BottomTab.PROFILE) },
                     onOpenSession = { sessionId -> nav.navigate(Routes.sessionDetail(sessionId)) },
                     // "View all" opens the real searchable History destination (a proper back-stack
                     // entry) rather than a bottom sheet, so Back from a session returns to the list.
@@ -156,14 +155,12 @@ fun HubScreen(
                     onBuildPlan = { nav.navigate(Routes.programBuilder()) }
                 )
                 BottomTab.COACH -> CoachScreen(
-                    onOpenAcademy = { nav.navigate(Routes.ACADEMY) },
+                    onOpenAcademy = { goToTab(BottomTab.ACADEMY) },
                     onConnectHealth = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) }
                 )
-                BottomTab.PROFILE -> ProfileScreen(
-                    onOpenTrophies = { nav.navigate(Routes.TROPHIES) },
-                    onOpenPhotoGallery = { nav.navigate(Routes.MIRROR_TEST) },
-                    onOpenCamera = { nav.navigate(Routes.PROGRESS_CAMERA) },
-                    onOpenMeasurements = { nav.navigate(Routes.BODY_MEASUREMENTS) }
+                // A pager page, so no back arrow — swiping off it IS the back gesture.
+                BottomTab.ACADEMY -> AcademyScreen(
+                    onOpenTrack = { nav.navigate(Routes.academyTrack(it.code)) }
                 )
             }
         }

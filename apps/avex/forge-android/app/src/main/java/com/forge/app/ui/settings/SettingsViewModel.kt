@@ -47,6 +47,8 @@ data class SettingsUiState(
     val trainingReminderHour: Int = 18,
     /** Per-type notification opt-outs (N2) — both default on. */
     val weeklyRecapEnabled: Boolean = true,
+    /** `NoticeKind.key`s switched OFF for the notifications feed; empty = every kind shows. */
+    val disabledNoticeKinds: Set<String> = emptySet(),
     val restTimerAlertEnabled: Boolean = true,
     val privacyMode: Boolean = false,
     /** App lock (GYMAP-69): require a biometric / device-credential unlock to open the app. */
@@ -229,6 +231,8 @@ class SettingsViewModel @Inject constructor(
         s.copy(trainingReminderHour = v)
     }.combine(settingsRepo.weeklyRecapEnabled) { s, v ->
         s.copy(weeklyRecapEnabled = v)
+    }.combine(settingsRepo.disabledNoticeKinds) { s, v ->
+        s.copy(disabledNoticeKinds = v)
     }.combine(settingsRepo.restTimerAlertEnabled) { s, v ->
         s.copy(restTimerAlertEnabled = v)
     }.combine(settingsRepo.availableEquipment) { s, equip ->
@@ -337,6 +341,10 @@ class SettingsViewModel @Inject constructor(
     }
     fun setWeeklyRecapEnabled(v: Boolean) = viewModelScope.launch { settingsRepo.setWeeklyRecapEnabled(v) }
     fun setRestTimerAlertEnabled(v: Boolean) = viewModelScope.launch { settingsRepo.setRestTimerAlertEnabled(v) }
+
+    /** Show or hide one notification KIND in the feed (Settings → Notifications). */
+    fun setNoticeKindEnabled(key: String, enabled: Boolean) =
+        viewModelScope.launch { settingsRepo.setNoticeKindEnabled(key, enabled) }
 
     fun setTileHidden(id: String, hidden: Boolean) = viewModelScope.launch { settingsRepo.setTileHidden(id, hidden) }
     fun setCompactSetLogging(v: Boolean) = viewModelScope.launch { settingsRepo.setCompactSetLogging(v) }

@@ -59,7 +59,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.ui.common.DraggableItem
 import com.forge.app.ui.common.ForgeOutlineCapsule
 import com.forge.app.ui.common.ForgePrimaryCapsule
-import com.forge.app.ui.common.ForgeWordmark
 import com.forge.app.ui.common.InlineEmptyHint
 import com.forge.app.ui.common.bounceCombinedClick
 import com.forge.app.ui.common.dragContainer
@@ -154,8 +153,8 @@ fun ProgramBuilderScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                // §2: wordmark + back + ≤1 action — the pencil is the viewer's one action.
-                title = { ForgeWordmark() },
+                // §4.6: bell + back + ≤1 action — the pencil is the viewer's one action.
+                title = {},
                 navigationIcon = { IconButton(onClick = { attemptClose() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
                 actions = {
                     if (viewing) IconButton(onClick = { viewing = false }) { Icon(Icons.Filled.Edit, "Edit program") }
