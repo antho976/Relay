@@ -171,9 +171,11 @@ any activity, `buildYearActivity` in `ProfileRepository`), filmstrip.
 
 - `GYM_DAY` (`ui/gym/train`, **untouchable**)
 - `SESSION_HISTORY` (gym+cardio)
-- `SESSION_DETAIL` (one finished workout's breakdown; the watch HR trace when the watch streamed it,
-  and a page-end "Session type" capsule (§8 ②) to retro-tag the session. The "Log again today" re-log
-  that used to lead this page end was removed — see `SETTLED.md`)
+- `SESSION_DETAIL` (one finished workout's breakdown; a page-end "Log again today" capsule (§8 ①)
+  re-logs it verbatim as today's freestyle session — a full-fidelity data-layer copy incl. set
+  type/RPE/holds, no editor, with an Undo — GYMAP-36. Lives here, NOT as a history-row button: a
+  history row already owns its whole-surface tap for navigation, so a per-row action would be a banned
+  nested tap (§8); an in-list long-press shortcut is a deliberate deferred follow-up)
 - `CARDIO_SESSION`
 - `GOALS`/`GOAL_EDITOR`
 - `TROPHIES` (frozen)
@@ -296,26 +298,6 @@ Appearance keeps the separate **Privacy mode** FLAG_SECURE toggle.
 - the program SetsReps sheet
 - AvatarPickerSheet (profile cover — "select your own" + provided default covers by category,
   `DefaultAvatars`; picked default is baked into `avatar.jpg`)
-- the morning check-in (`ui/checkin`) — see below; asked for from a banner, never self-opened
-
-### Morning check-in — banner first, sheet on request
-
-`CheckinHost` is the one app-root entry point (`MainActivity`, inside the onboarding-done branch so
-it never rides over onboarding, and before the lock/intro overlays so those still cover it). It
-renders two things off one `CheckinViewModel`: `prompting` puts `CheckinPromptBanner` at the top,
-`visible` puts `CheckinSheet` up. The sheet no longer opens itself — `CheckinRepository.shouldPrompt`
-still decides whether to ask, but "ask" now means the banner.
-
-`CheckinPromptBanner` (`ui/checkin/CheckinBanner.kt`) is the app's **prompt banner** pattern: a
-top-anchored surface plate in a full-size unpainted Box (same shape as `SnackbarControllerHost`, so
-taps outside it reach the screen beneath), sliding in on `ForgeMotion.enterTween`. Mono eyebrow +
-one imperative line, the whole plate tapping through to the sheet, a `GlyphButton("×")` skipping the
-day. It earns its surface by being tappable (§1) — and it is **not** a licence for banners generally:
-§12 still keeps errors as quiet inline lines and §11 still keeps coach lines as italic asides. The
-banner is an invitation to a modal, nothing else.
-
-Both exits record through the same `skip()`, so the repository's back-off still counts a dismissed
-banner as a dismissed day.
 
 Check this map + `ui/common/` before inventing; update it when screens change.
 

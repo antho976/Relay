@@ -29,10 +29,6 @@ link inside the Goals section (→ the Now lens's closing line) · the Autopilot
 lens (trust reads once, on Journey; the two bars quoted different numbers) · the pre-baseline
 SESSIONS figure (echoed BASELINE) · Project's four-paragraph body (→ why as the caption, finish line
 as a meter, plan as the content).
-**Removed 2026-07-27**: Session Detail's "Log again today" re-log (GYMAP-36) — the page-end filled
-capsule (§8 ①), its `WorkoutRepository.reLogSession` verbatim-copy, and the Undo snackbar that
-confirmed it. Session Detail's page end is now the lone "Session type" outlined capsule (§8 ②); a
-section with no do-it-now action carries no filled capsule rather than promoting its sidekick.
 **Facts**: dark-only (Indigo light scheme in `Color.kt` unshipped — never build light variants);
 portrait phone only (no adaptive/tablet/landscape).
 **Untouchable**: live-session screen · Profile blending cover (the compositing approach only — its

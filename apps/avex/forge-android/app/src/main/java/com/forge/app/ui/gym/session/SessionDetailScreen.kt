@@ -2,6 +2,9 @@ package com.forge.app.ui.gym.session
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -15,6 +18,10 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
@@ -26,6 +33,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import com.forge.app.ui.common.ForgeOutlineCapsule
+import com.forge.app.ui.common.ForgePrimaryCapsule
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -53,6 +61,8 @@ fun SessionDetailScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val exportPath by viewModel.exportPath.collectAsStateWithLifecycle()
+    val reLoggedSessionId by viewModel.reLoggedSessionId.collectAsStateWithLifecycle()
+    val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
@@ -83,6 +93,18 @@ fun SessionDetailScreen(
                 ).show()
             }
             viewModel.clearExportPath()
+        }
+    }
+
+    // "Log again today" (GYMAP-36): confirm the freshly duplicated session with an Undo (§13 —
+    // reversible act, no confirm dialog). Undo discards the copy; the source is untouched either way.
+    reLoggedSessionId?.let { newId ->
+        LaunchedEffect(newId) {
+            val result = snackbarHostState.showSnackbar(
+                message = "Logged again today", actionLabel = "Undo", duration = SnackbarDuration.Short
+            )
+            if (result == SnackbarResult.ActionPerformed) viewModel.undoReLog(newId)
+            viewModel.clearReLoggedSessionId()
         }
     }
 
@@ -125,6 +147,7 @@ fun SessionDetailScreen(
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
             )
         },
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         containerColor = Color.Transparent
     ) { inner ->
         val data = state.data
@@ -210,11 +233,10 @@ fun SessionDetailScreen(
                             }
                         }
                     }
-                    // Tag what kind of session this was — the page's only end-of-page action (§8 ②
-                    // outlined; nothing here is a do-it-now, so there is no filled capsule to lead it).
-                    // The current tag renders in the header eyebrow, so this says the action alone —
-                    // state is never drawn twice.
-                    item("session-type") {
+                    // "Log again today" (GYMAP-36): one-tap re-log of this exact workout as today's
+                    // session — a page-end do-it-now capsule (§8 ①), shown only when there's something
+                    // to copy (the exercises-empty branch never reaches here).
+                    item("relog") {
                         Box(
                             Modifier
                                 .statsEntrance(3)
@@ -222,7 +244,14 @@ fun SessionDetailScreen(
                                 .padding(top = 8.dp),
                             contentAlignment = Alignment.Center
                         ) {
-                            ForgeOutlineCapsule("Session type", onClick = { showTypePicker = true })
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                ForgePrimaryCapsule("Log again today", onClick = { viewModel.reLogToday() })
+                                Spacer(Modifier.height(10.dp))
+                                // Sidekick (§8 ②) to the filled capsule: tag what kind of session this
+                                // was. The current tag renders in the header eyebrow, so this says the
+                                // action alone — state is never drawn twice.
+                                ForgeOutlineCapsule("Session type", onClick = { showTypePicker = true })
+                            }
                         }
                     }
                 }
