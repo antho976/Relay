@@ -80,22 +80,9 @@ a new non-rest save), not always Run.
 
 ### Coach — `ui/coach`
 
-Reworked 2026-07-26 (`docs/COACH_UI_REWORK.md`). Hero = mono eyebrow + a serif verdict ONLY once
-there is one + a figure row that renders **from session one**, its fourth figure counting the
-baseline down while the coach is still learning (pre-baseline the SESSIONS figure drops out, since
-BASELINE is already a session count). Lens pills Now/Signals/Journey, each emitted by ONE function
-so section order and the `statsEntrance` numbering cannot disagree — they did, and six sections
-shared three stagger steps.
-
-**Now** (`CoachNowLens.kt`) = the call (each decision + its evidence chart + Apply/Skip, with ONE
-filled `Apply all N` capsule at the section's end) → under watch → working toward (a meter per goal)
-→ block (4-phase rail, filled up to the live phase) → project (finish-line meter) → coming up
-(countdowns) → Academy. Ordered live-first (§4.8): the setup prompts sit BELOW the week's call, not
-above it. **Signals** = lifts on watch + recovery load (meter + the named-check panel) + what it
-reads, closing on one signal-coverage line. **Journey** = the record + earned autopilot (the ONLY
-home for trust) + learned so far + your numbers (per-muscle volume caps as ranked bars).
-
-Old Brief/Lab/Timeline routes = lens deep-links. Coach content renders ONLY here —
+lens pills Now/Signals/Journey (Now = call + watch + one road-ahead section: milestone rail +
+brief/verdict/autopilot bars; Signals = lifts + recovery + inputs + learned; Journey = record +
+trust; old Brief/Lab/Timeline routes = lens deep-links). Coach content renders ONLY here —
 Settings→Coach is config alone (on/off switch + mode chips + a feeds on/off glance whose silent HC
 rows tap to Recovery), never a second brief/trust/history home.
 
@@ -171,9 +158,11 @@ any activity, `buildYearActivity` in `ProfileRepository`), filmstrip.
 
 - `GYM_DAY` (`ui/gym/train`, **untouchable**)
 - `SESSION_HISTORY` (gym+cardio)
-- `SESSION_DETAIL` (one finished workout's breakdown; the watch HR trace when the watch streamed it,
-  and a page-end "Session type" capsule (§8 ②) to retro-tag the session. The "Log again today" re-log
-  that used to lead this page end was removed — see `SETTLED.md`)
+- `SESSION_DETAIL` (one finished workout's breakdown; a page-end "Log again today" capsule (§8 ①)
+  re-logs it verbatim as today's freestyle session — a full-fidelity data-layer copy incl. set
+  type/RPE/holds, no editor, with an Undo — GYMAP-36. Lives here, NOT as a history-row button: a
+  history row already owns its whole-surface tap for navigation, so a per-row action would be a banned
+  nested tap (§8); an in-list long-press shortcut is a deliberate deferred follow-up)
 - `CARDIO_SESSION`
 - `GOALS`/`GOAL_EDITOR`
 - `TROPHIES` (frozen)
@@ -296,26 +285,6 @@ Appearance keeps the separate **Privacy mode** FLAG_SECURE toggle.
 - the program SetsReps sheet
 - AvatarPickerSheet (profile cover — "select your own" + provided default covers by category,
   `DefaultAvatars`; picked default is baked into `avatar.jpg`)
-- the morning check-in (`ui/checkin`) — see below; asked for from a banner, never self-opened
-
-### Morning check-in — banner first, sheet on request
-
-`CheckinHost` is the one app-root entry point (`MainActivity`, inside the onboarding-done branch so
-it never rides over onboarding, and before the lock/intro overlays so those still cover it). It
-renders two things off one `CheckinViewModel`: `prompting` puts `CheckinPromptBanner` at the top,
-`visible` puts `CheckinSheet` up. The sheet no longer opens itself — `CheckinRepository.shouldPrompt`
-still decides whether to ask, but "ask" now means the banner.
-
-`CheckinPromptBanner` (`ui/checkin/CheckinBanner.kt`) is the app's **prompt banner** pattern: a
-top-anchored surface plate in a full-size unpainted Box (same shape as `SnackbarControllerHost`, so
-taps outside it reach the screen beneath), sliding in on `ForgeMotion.enterTween`. Mono eyebrow +
-one imperative line, the whole plate tapping through to the sheet, a `GlyphButton("×")` skipping the
-day. It earns its surface by being tappable (§1) — and it is **not** a licence for banners generally:
-§12 still keeps errors as quiet inline lines and §11 still keeps coach lines as italic asides. The
-banner is an invitation to a modal, nothing else.
-
-Both exits record through the same `skip()`, so the repository's back-off still counts a dismissed
-banner as a dismissed day.
 
 Check this map + `ui/common/` before inventing; update it when screens change.
 
