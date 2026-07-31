@@ -24,7 +24,11 @@ launch/result dialogs** (share-import result, backup-restored confirmation, POST
 rationale — same date, same destination; an OK button is not a decision, and nothing should
 interrupt a cold launch to ask for a permission) · the `• Avex` chrome
 wordmark and `ForgeWordmark` itself (2026-07-27, replaced by `NotificationBell`; the name survives as
-the launch beat and on exported artifacts only) · the Profile's ON THIS DAY (Home's `OnThisDayCard` owns that throwback — a mark is cut, not copied, §4.3; it was also the page's one prose-only section, hung off a decorative accent rule) · Coach status serif verdicts AND status/anticipation asides (status states
+the launch beat and on exported artifacts only) · **the Coach→Academy link** (2026-07-27: the
+knowledge half of the coach is its own bottom tab now, so a link from a sibling tab is redundant
+navigation, §4.2. Removed from the Goals section; the `onOpenAcademy` wiring into `CoachScreen` went
+with it. Home's lesson card is the one entry point that stays, because it is contextual — it names a
+lesson, not the tab) · the Profile's ON THIS DAY (Home's `OnThisDayCard` owns that throwback — a mark is cut, not copied, §4.3; it was also the page's one prose-only section, hung off a decorative accent rule) · Coach status serif verdicts AND status/anticipation asides (status states
 = eyebrow + figures) · Coach pre-baseline signal dot-checklist in the hero (→ one labeled Baseline
 bar in the "Coming up" idiom; the effort/HC inputs it spelled out live in Signals only, §4.3,
 GYMAP-24) · hairline section separators (§1) · the 9-row milestone ladder (→ rail + next, §4.10).
