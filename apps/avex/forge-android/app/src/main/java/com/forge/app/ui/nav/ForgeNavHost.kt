@@ -321,7 +321,6 @@ fun ForgeNavHost(initialDayKey: String? = null) {
         composable(Routes.COACH_LAB) {
             CoachScreen(
                 onBack = { nav.popBackStack() },
-                onOpenAcademy = { nav.navigate(Routes.ACADEMY) },
                 initialLens = CoachLens.SIGNALS,
                 onConnectHealth = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) }
             )
