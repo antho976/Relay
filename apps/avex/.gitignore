@@ -6,3 +6,7 @@
 .claude/worktrees/
 .claude/scheduled_tasks.lock
 .relay/
+
+# Machine-local SDK path. The tree-root copy exists for the ADE's preflight;
+# forge-android/local.properties is what gradle itself reads.
+local.properties
