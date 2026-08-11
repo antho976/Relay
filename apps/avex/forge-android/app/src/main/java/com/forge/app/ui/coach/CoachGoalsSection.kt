@@ -1,5 +1,6 @@
 package com.forge.app.ui.coach
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -14,44 +15,40 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.forge.app.domain.coach.CoachGoalKind
 import com.forge.app.domain.coach.GoalPortfolio
 import com.forge.app.program.Program
+import com.forge.app.ui.common.InlineEmptyHint
 
 /**
- * What the coach is working toward, on the Now lens (Coach v3 A2).
+ * GOALS on the Now lens (Coach v3 A2) — what the coach is actually working toward, above the
+ * week's mechanics, because "am I making progress, toward what?" outranks "what changed this week".
  *
- * A goal is one value against a target, so §2② fixes the mark without a decision: a meter. Each row
- * is its meter with the reading underneath, in the goal's own unit, and the ETA as right-meta — a
- * reading, never a state word (§8). At zero the TRACK still draws, which is the section's own
- * vocabulary at zero rather than a paragraph (§12).
- *
- * It is called "Working toward", not "Goals", because the app has a separate Goals screen backed by
- * a different store; until those merge, two sections called Goals would be two truths with one name.
+ * Data-led per §4.3: each row is a reading (the number, in the goal's own unit) with its trajectory
+ * as right-meta. No mechanics narration; the conflict line is the one caption the section spends.
  */
 internal fun LazyListScope.coachGoalsSection(
     state: CoachViewModel.UiState,
     c: CoachColors,
     index: Int,
-    onAddGoal: () -> Unit
+    onAddGoal: () -> Unit,
+    onArchiveGoal: (Long) -> Unit,
+    onOpenAcademy: () -> Unit = {}
 ) {
     item("coach-goals") {
-        CoachSection(
-            c,
-            title = "Working toward",
-            index = index,
-            // The section's ONE caption (§4.3), and it only speaks when there is nothing to read.
-            caption = if (state.goals.isEmpty())
-                "Pick what you're chasing and every call names the goal it serves." else null
-        ) {
+        CoachSection(c, title = "Goals", index = index) {
             if (state.goals.isEmpty()) {
-                CoachMeter(null, c)
-                Spacer(Modifier.height(10.dp))
+                // §12: nothing to draw at zero here — a goal list has no shape until it has a goal,
+                // so this is the lens's one allowed hint, and it names the concrete next step.
+                InlineEmptyHint("Pick what you're chasing and every call names the goal it serves.", c.muted)
+                Spacer(Modifier.height(4.dp))
             } else {
-                state.goals.forEach { GoalRow(it, c) }
-                // Conflicts speak once, under the rows they are about — the section's one caption
-                // when there ARE goals, so it never stacks with the empty-state line.
+                state.goals.forEach { g ->
+                    GoalRow(g, c, onArchiveGoal)
+                }
+                // Conflicts speak once, under the rows they're about.
                 state.goalConflicts.firstOrNull()?.let { conflict ->
                     Spacer(Modifier.height(8.dp))
                     Text(
@@ -61,54 +58,54 @@ internal fun LazyListScope.coachGoalsSection(
                         fontStyle = FontStyle.Italic
                     )
                 }
-                Spacer(Modifier.height(6.dp))
             }
             CoachAction("Add a goal →", c.accent, "Add a coach goal", onAddGoal)
+            // The Academy link that sat here is gone (2026-07-27): the knowledge half of the coach
+            // is its own tab now, so a link from a sibling tab is redundant navigation (§4.2).
         }
     }
 }
 
 @Composable
-private fun GoalRow(state: GoalPortfolio.GoalState, c: CoachColors) {
-    Column(Modifier.fillMaxWidth().padding(vertical = COACH_ROW_PAD)) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-            // §14: a goal's subject is an exercise or muscle NAME — user content, never clamped.
+private fun GoalRow(
+    state: GoalPortfolio.GoalState,
+    c: CoachColors,
+    onArchive: (Long) -> Unit
+) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = COACH_ROW_PAD),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // The dot flags the exception only (§8): off track earns a mark, on track is the norm.
+        CoachFlagDot(if (state.onTrack == false) c.muted else null)
+        Spacer(Modifier.width(7.dp))
+        Column(Modifier.weight(1f)) {
             Text(
                 goalTitle(state),
                 style = MaterialTheme.typography.titleSmall,
                 color = c.onBg,
-                modifier = Modifier.weight(1f)
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
-            // Right meta is a reading, never a state word (§8). A reached goal says so with a full
-            // meter and its own reading line, so nothing floats on the right.
-            state.etaWeeks?.takeIf { it > 0 }?.let { weeks ->
-                Spacer(Modifier.width(12.dp))
-                Text(
-                    "~$weeks wk",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = c.muted
-                )
-            }
+            Text(
+                state.reading,
+                style = MaterialTheme.typography.bodySmall,
+                color = c.muted
+            )
         }
-        Spacer(Modifier.height(6.dp))
-        CoachMeter(goalFraction(state), c)
-        Spacer(Modifier.height(4.dp))
-        Text(state.reading, style = MaterialTheme.typography.bodySmall, color = c.muted)
+        Spacer(Modifier.width(12.dp))
+        // Right meta is a reading, never a state word (§8): the ETA, or nothing.
+        state.etaWeeks?.let { weeks ->
+            Text(
+                if (weeks == 0) "reached" else "~$weeks wk",
+                style = MaterialTheme.typography.labelMedium,
+                color = c.muted
+            )
+        }
     }
 }
 
-/**
- * Progress toward the target. Null when the goal carries no number to measure against — the meter
- * then draws its track alone rather than a fake zero, since "no target" is not "no progress".
- */
-private fun goalFraction(s: GoalPortfolio.GoalState): Float? {
-    if (s.reachedNow) return 1f
-    val current = s.current ?: return null
-    val target = s.target?.takeIf { it > 0.0 } ?: return null
-    return (current / target).coerceIn(0.0, 1.0).toFloat()
-}
-
-/** "Bench press · 1rm" — the goal in the user's vocabulary, never the enum's (§11). */
+/** "Bench press · 315 lb" — the goal in the user's vocabulary, never the enum's. */
 private fun goalTitle(state: GoalPortfolio.GoalState): String {
     val kind = state.kind
     val subject = when (kind.scope) {

@@ -12,10 +12,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -55,16 +53,9 @@ private val PLAN_MODE_DETAILS = listOf(
 @Composable
 internal fun StepWelcome(name: String, onNameChange: (String) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("•", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.secondary)
-            Text(
-                "Avex",
-                style = MaterialTheme.typography.bodyLarge,
-                fontStyle = FontStyle.Italic,
-                color = MaterialTheme.colorScheme.onBackground
-            )
-        }
-        Spacer(Modifier.height(8.dp))
+        // The `• Avex` wordmark that opened this step is gone (2026-07-27): §3 already said "no
+        // wordmark pre-app", and the cold-launch AvexIntro plays the name moments earlier, so this
+        // was the second of two in a row. Welcome now matches every sibling step: question, caption.
         StepTitle("What do you go by?")
         StepCaption("Optional, used only for the greeting.")
         OutlinedTextField(

@@ -62,8 +62,6 @@ data class CardioUiState(
     val weekWearable: CardioWearableDay? = null,
     /** False → the main list shows only the 5 most-recent entries; true → the full history. */
     val historyExpanded: Boolean = false,
-    /** True once the user permanently dismisses the "connect a watch/ring" hint banner. */
-    val wearableHintDismissed: Boolean = false,
     /** Avex holds the StepsRecord read grant — drives the steps placeholder (and hides the banner). */
     val stepsConnected: Boolean = false,
     /** Today's watch step total (GYMAP-64) — the hero's quiet "TODAY · N steps" line. Null when no watch

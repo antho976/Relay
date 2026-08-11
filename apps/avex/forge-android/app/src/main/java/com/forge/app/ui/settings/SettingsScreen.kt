@@ -236,7 +236,7 @@ fun SettingsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { com.forge.app.ui.common.ForgeWordmark() },
+                title = {},
                 navigationIcon = {
                     IconButton(onClick = {
                         when {

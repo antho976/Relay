@@ -44,7 +44,6 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.forge.app.ui.common.ForgeWordmark
 import com.forge.app.ui.common.InlineEmptyHint
 import com.forge.app.ui.common.clickableLabeled
 import com.forge.app.ui.gym.history.formatHistoryDate
@@ -83,8 +82,8 @@ fun FreestyleTemplatePicker(
             containerColor = Color.Transparent,
             topBar = {
                 TopAppBar(
-                    // §2: wordmark + back, never the screen's name.
-                    title = { ForgeWordmark() },
+                    // §4.6: bell + back, never the screen's name.
+                    title = {},
                     navigationIcon = {
                         IconButton(onClick = onClose) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Close") }
                     },

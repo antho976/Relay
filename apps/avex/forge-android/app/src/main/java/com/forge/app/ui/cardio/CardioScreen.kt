@@ -41,7 +41,6 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.ui.cardio.components.CardioEntryRow
 import com.forge.app.ui.cardio.components.CardioSessionDetailSheet
-import com.forge.app.ui.cardio.components.CardioWatchBanner
 import com.forge.app.ui.cardio.components.CardioWeekDetailSheet
 import com.forge.app.ui.common.EditorialHeader
 import com.forge.app.ui.common.InlineEmptyHint
@@ -66,14 +65,11 @@ fun CardioScreen(
     // When set, the "See all" row opens the unified History page (where cardio + workouts merge);
     // null falls back to expanding the list inline.
     onOpenHistory: (() -> Unit)? = null,
-    // Tapping the "connect a watch/ring" banner — opens Settings → Recovery to grant the steps/GPS read.
-    onConnectWearable: () -> Unit = {},
     // Opens the full Goals screen — from the GOALS trim's header action / lines.
     onOpenGoals: () -> Unit = {},
     viewModel: CardioViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
-    val goHome = com.forge.app.ui.common.LocalGoHome.current
 
     // Re-check the Health Connect grants whenever the screen resumes — the user can connect steps/GPS
     // in Settings (or the HC app) and come back, and the banner should vanish + the placeholders appear
@@ -120,8 +116,7 @@ fun CardioScreen(
             onCreateCustom = viewModel::addCustomType,
             editing = state.editing,
             useMiles = state.useMiles,
-            lastUsedType = state.lastCardioType,
-            onHome = { viewModel.closeSheet(); goHome() }
+            lastUsedType = state.lastCardioType
         )
         sessionEntry != null -> CardioSessionDetailSheet(
             entry = sessionEntry,
@@ -136,8 +131,7 @@ fun CardioScreen(
             onAdoptWatchStats = viewModel::adoptWatchStats,
             onEdit = { viewModel.editEntry(sessionEntry.id) },
             onDelete = { viewModel.deleteEntry(sessionEntry.id) },
-            onBack = viewModel::closeSessionDetail,
-            onHome = { viewModel.closeSessionDetail(); goHome() }
+            onBack = viewModel::closeSessionDetail
         )
         state.detailOpen -> CardioWeekDetailSheet(
             allEntries = state.entries,
@@ -151,8 +145,7 @@ fun CardioScreen(
             todayDow = todayDow,
             zone = zone,
             onOpenSession = viewModel::openSessionDetail,
-            onBack = viewModel::closeDetail,
-            onHome = { viewModel.closeDetail(); goHome() }
+            onBack = viewModel::closeDetail
         )
         else -> CardioListContent(
             state = state,
@@ -166,9 +159,7 @@ fun CardioScreen(
             onRequestDelete = viewModel::deleteEntry,
             onSeeAll = onOpenHistory ?: viewModel::toggleHistoryExpanded,
             seeAllExpands = onOpenHistory == null,
-            onConnectWearable = onConnectWearable,
             onOpenGoals = onOpenGoals,
-            onDismissHint = viewModel::dismissWearableHint,
             onImportWatch = viewModel::importWatchWorkout,
             onDismissImports = viewModel::dismissWatchImports
         )
@@ -189,9 +180,7 @@ private fun CardioListContent(
     onRequestDelete: (Long) -> Unit,
     onSeeAll: () -> Unit,
     seeAllExpands: Boolean,
-    onConnectWearable: () -> Unit,
     onOpenGoals: () -> Unit,
-    onDismissHint: () -> Unit,
     onImportWatch: (com.forge.app.domain.health.WatchWorkout) -> Unit,
     onDismissImports: () -> Unit
 ) {
@@ -200,15 +189,14 @@ private fun CardioListContent(
     val outline = MaterialTheme.colorScheme.outline
     val accent = MaterialTheme.colorScheme.primary
 
-    // The connect-a-wearable invite rides along until dismissed for good — and never once a watch is
-    // actually connected (steps OR GPS granted), since by then it would just nag.
-    val showWearableHint = !state.wearableHintDismissed &&
-        !(state.stepsConnected || state.routesConnected)
+    // The connect-a-wearable invite moved to the notifications page (2026-07-27) — it was the last
+    // strip standing between this screen's top bar and its hero. The feed applies the same two gates
+    // it did here: gone once dismissed for good, and gone once a watch is actually connected.
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { com.forge.app.ui.common.ForgeWordmark() },
+                title = {},
                 navigationIcon = {
                     if (onBack != null) IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = muted)
@@ -223,16 +211,6 @@ private fun CardioListContent(
             modifier = Modifier.fillMaxSize().padding(inner),
             contentPadding = PaddingValues(bottom = 56.dp)
         ) {
-            if (showWearableHint) {
-                item("watch-hint") {
-                    CardioWatchBanner(
-                        onConnect = onConnectWearable,
-                        onDismiss = onDismissHint,
-                        onBg = onBg, muted = muted, outline = outline
-                    )
-                }
-            }
-
             item("hero") {
                 CardioHero(
                     weekLabel = weekLabel,

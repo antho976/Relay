@@ -34,7 +34,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import com.forge.app.ui.common.ForgeWordmark
 import com.forge.app.ui.common.InlineEmptyHint
 import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.common.forgeItemMotion
@@ -47,7 +46,7 @@ import com.forge.app.ui.theme.ForgeTheme
  * present ones: NO charts, NO big serif hero, NO draw-in theatrics. A list is for finding, not for
  * admiring.
  *
- *   top bar (wordmark + ← + ≤1 action)
+ *   top bar (← + ≤1 action; the bell is Home only)
  *   ├─ tiny hero        title + ≤1–2 figures, not a display-size hero        §3
  *   ├─ search           bordered field, leading magnifier + trailing clear   §13
  *   └─ trim rows        light stagger only, whole-row tap                    §3, §9
@@ -73,7 +72,7 @@ fun ListRecipe(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { ForgeWordmark() },
+                title = {},
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")

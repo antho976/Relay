@@ -61,7 +61,6 @@ import com.forge.app.ui.common.ExerciseIcons
 import com.forge.app.ui.common.ExerciseLibraryPicker
 import com.forge.app.ui.common.ForgeOutlineCapsule
 import com.forge.app.ui.common.ForgePrimaryCapsule
-import com.forge.app.ui.common.ForgeWordmark
 import com.forge.app.ui.common.GlyphButton
 import com.forge.app.ui.common.InlineEmptyHint
 import com.forge.app.ui.common.SegmentPill
@@ -111,8 +110,8 @@ fun ProgramBuilderDayDetail(
     Scaffold(
         topBar = {
             TopAppBar(
-                // §2: wordmark + back, never the screen's name — the day name heads the content.
-                title = { ForgeWordmark() },
+                // §4.6: bell + back, never the screen's name — the day name heads the content.
+                title = {},
                 navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
             )

@@ -16,7 +16,13 @@
             android:exported="true"
             android:label="Avex Recipes"
             android:theme="@style/Theme.Forge">
-            <intent-filter>
+            <!--
+              Negative priority so this loses the launch-by-package race to MainActivity's icon
+              alias. The debug variant has TWO launcher entry points and the merger puts this one
+              first, so "Run on device" (which resolves by package, not by component) was starting
+              the gallery instead of the app. The drawer icon is unaffected.
+            -->
+            <intent-filter android:priority="-100">
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>

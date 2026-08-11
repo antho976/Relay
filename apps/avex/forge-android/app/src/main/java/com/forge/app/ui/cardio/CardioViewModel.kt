@@ -158,9 +158,8 @@ class CardioViewModel @Inject constructor(
     }.flowOn(Dispatchers.Default)
 
     val state: StateFlow<CardioUiState> = combine(
-        derivedFlow, transient, settingsRepo.cardioWeeklyTargetMin,
-        settingsRepo.cardioWearableHintDismissed, cardioGoalsFlow
-    ) { d, tr, target, hintDismissed, cardioGoals ->
+        derivedFlow, transient, settingsRepo.cardioWeeklyTargetMin, cardioGoalsFlow
+    ) { d, tr, target, cardioGoals ->
         CardioUiState(
             isLoading = false,
             weekMinutes = d.weekMinutes,
@@ -183,8 +182,7 @@ class CardioViewModel @Inject constructor(
             sessionHr = tr.sessionHr,
             sessionWatch = tr.sessionWatch,
             weekWearable = tr.weekWearable,
-            historyExpanded = tr.historyExpanded,
-            wearableHintDismissed = hintDismissed
+            historyExpanded = tr.historyExpanded
         )
     }.combine(settingsRepo.useMiles) { st, useMiles ->
         st.copy(useMiles = useMiles)
@@ -322,9 +320,6 @@ class CardioViewModel @Inject constructor(
         val endMs = day.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
         return healthConnectManager.readStepsDay(startMs, endMs)
     }
-
-    /** Permanently dismiss the "connect a watch/ring" hint banner. */
-    fun dismissWearableHint() = viewModelScope.launch { settingsRepo.setCardioWearableHintDismissed() }
 
     /** Reveal the full history below the 5 most-recent entries on the main list (or collapse it). */
     fun toggleHistoryExpanded() = transient.update { it.copy(historyExpanded = !it.historyExpanded) }

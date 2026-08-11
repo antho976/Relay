@@ -19,7 +19,11 @@ internal object AcademySignals {
         track = LessonTrack.SIGNALS,
         title = "What HRV tells you, and what it doesn't",
         summary = "A trend against your own baseline is useful. A single night is mostly noise.",
-        unlockedBy = "Your watch syncing enough overnight HRV to read a trend",
+        unlock = LessonUnlock(
+            label = "Connect a watch that records overnight HRV",
+            detail = "About two weeks of nights before a trend is worth reading.",
+            byYou = true
+        ),
         blocks = listOf(
             Paragraph(
                 "Heart-rate variability is the variation in time between your heartbeats. Higher " +

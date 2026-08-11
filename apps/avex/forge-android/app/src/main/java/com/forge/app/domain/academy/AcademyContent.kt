@@ -15,7 +15,11 @@ internal object AcademyContent {
         track = LessonTrack.COACH,
         title = "What your score is built from",
         summary = "Six readings, each one yours rather than a population average.",
-        unlockedBy = "Tapping your readiness score",
+        unlock = LessonUnlock(
+            label = "Tap your readiness score",
+            detail = "It sits on the Coach page once a score exists.",
+            byYou = true
+        ),
         blocks = listOf(
             LessonBlock.Paragraph(
                 "Readiness is not a mystery number. It is a short list of readings, each worth a " +
@@ -50,7 +54,11 @@ internal object AcademyContent {
         track = LessonTrack.COACH,
         title = "Why some goals fight each other",
         summary = "Physiology has budgets. Two goals drawing on the same one get sequenced, not blended.",
-        unlockedBy = "The first conflict flagged in your goals",
+        unlock = LessonUnlock(
+            label = "When two of your goals compete",
+            detail = "Set more than one, and the coach flags it when they draw on the same recovery.",
+            byYou = false
+        ),
         blocks = listOf(
             LessonBlock.Paragraph(
                 "Some goals are genuinely compatible. A bench target, a consistency habit and an " +
@@ -83,7 +91,11 @@ internal object AcademyContent {
         track = LessonTrack.COACH,
         title = "Holding strength while cutting is winning",
         summary = "In a deficit, a flat lift is a good outcome. That's why the coach stops calling it a plateau.",
-        unlockedBy = "The first time the coach holds its fire on a stalled lift because you're losing weight",
+        unlock = LessonUnlock(
+            label = "When a lift holds while you're losing weight",
+            detail = "The coach explains why it refuses to call that a plateau.",
+            byYou = false
+        ),
         blocks = listOf(
             LessonBlock.Paragraph(
                 "When you're losing weight, the default outcome is losing strength with it. " +

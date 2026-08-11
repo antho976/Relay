@@ -8,6 +8,188 @@ an entry whenever a rule is added, changed or retired.
 
 ---
 
+## 2026-07-27 — §4.6: the chrome slot goes to a notifications bell, and banners stop being a pattern
+
+Home opened with up to four stacked strips (milestone, coach brief, orphan notice, resume reminder)
+and Cardio with a fifth. Each was individually defensible and collectively they meant the two most
+important pages in the app could push their own answer below the fold — the exact thing §1 spends
+its rules preventing. They also each invented a dismissal rule, so "how do I make this go away"
+had five answers.
+
+**The rule.** A notice is not page content. Anything dismissible, celebratory or "waiting on you"
+now lives in one feed (`ui/notifications`), and a page never opens with a strip above its answer.
+The doctrine gains that clause in §4.6 rather than a new section, because it is a chrome rule.
+
+**Why the bell took the wordmark's slot.** The feed needs an entry point on every screen, and the
+top-left chrome slot was held by `• Avex` — a brand mark that cost a tap target on ~20 screens to
+say something the user already knows. Antho called it: the wordmark goes, the bell takes the slot.
+The wordmark's go-Home shortcut survives as the bell's long-press, so nothing was actually lost.
+"Avex" is now the cold-launch beat (`AvexIntro`) and the signature on exported artifacts only —
+those are moments where naming the app is the point, which chrome never was.
+
+**What the gate said.** The change PAID DOWN 11 doctrine violations across five buckets with no new
+ones: the banners carried the off-ladder alphas (0.10 / 0.12 / 0.14), seven `fontSize=` call sites,
+the one unlabelled `.clickable(`, and the "Volume beast" hype string §11 bans by name. That is the
+ratchet working as intended — the debt was concentrated in exactly the surfaces being deleted.
+
+**One thing deliberately not built: per-row dismissal.** An `×` inside a row is a tap nested in the
+row's own tap target (§2③). Acting on a row clears it, and `Clear all` sweeps the rest with an Undo
+(§12). If a per-row clear is ever wanted, it has to be a swipe, not a glyph.
+
+**Where Clear all lives, revised twice the same day (Antho).** It started as an outlined capsule at
+the end of the scroll, per §8's "group page-level actions at the END". That rule exists so buttons
+don't interrupt a *scroll* — but this page's scroll is a handful of rows, so the capsule was the
+last thing on an otherwise empty page, next to nothing it related to. It became a top-bar dropdown,
+then a **bottom sheet** on Antho's call: a dropdown pinned to the corner is a menu, a sheet is a
+place, and the two actions here are page-scoped decisions rather than a corner afterthought. §8's
+end-of-page rule still holds for settings and long pages; a short list whose only actions are
+page-scoped is the case it doesn't cover.
+
+**Rows lost their border, and that changed what the arrow is for.** §1 earns a surface with
+interactivity, which had every actionable notice in its own outlined box — and stacked, those read
+as a wall on a page whose whole job is to be scanned. The border is gone and the leading glyph sits
+in a chip instead. That inverts §1 on its face, so the reading that makes it hold: **the chip is the
+row's MARK (§12), and boxing a mark is not boxing passive content.** The consequence is that the
+accent ` →` is now the ONLY thing distinguishing a row that goes somewhere from one that just
+happened — it stopped being a flourish and became the affordance, which is why passive rows must
+never get one. The mono eyebrow went at the same time: the glyph names the kind, and §4.3 gives a
+fact one home. The glyph therefore carries the kind in its `contentDescription` (§14) — dropping a
+visible label only works if something still says it aloud.
+
+**`error` as a label, refused.** The reference had "Clear all notifications" in red. §14 measures
+`error` text at 3.69:1, fails it, and forbids NEW error-coloured body text until that's resolved —
+naming this exact substitution as the way through. So the bin glyph is tinted and the label stays
+onBg. The doctrine gets to win over a reference screenshot when it has a measurement behind it.
+
+**The settings page split by DESTINATION, not by feature (Antho).** Adding the in-app toggles left
+Settings → Notifications saying two different kinds of thing under one word, with "Quiet hours"
+trailing the in-app switches — where it read as though it might silence those too. It can't; there
+is nothing to silence, an in-app row makes no sound. The page is now two groups named by where the
+thing ARRIVES — `ON YOUR PHONE` (quiet hours folded in as one of its rows, since it suppresses
+exactly those three) and `IN THE APP`.
+
+**The first attempt captioned both groups, and Antho called it cringy.** "Push alerts, delivered
+even when Avex is closed" / "Waiting under the bell. Never sent to your phone." Both were explaining
+push notifications to someone who has owned a phone for fifteen years. The fix was not a better
+sentence — §4.3 says mechanics narration is CUT, not trimmed — it was making the headers a parallel
+pair (`ON YOUR PHONE` / `IN THE APP`) so the split needs no gloss at all. Two labels in the same
+grammatical shape do the work a paragraph was doing badly.
+
+The same test then caught the row explainers: "Unfinished workouts · *A workout you started but
+haven't finished yet*" is a definition of its own label, not information. Every `NoticeKind`
+explainer now says what the ROW will offer ("Resume where you stopped"), which is the only thing a
+reader doesn't already know. **The general rule: an explainer that could be derived from the label
+is condescension with extra steps.**
+
+**And the bug underneath it.** `NotificationsPage` never had `.verticalScroll()`, unlike every
+sibling settings page. It fit before, so nobody noticed; five new toggles pushed quiet hours off the
+bottom with no way to reach it. Worth remembering that a missing scroll modifier is invisible until
+content grows — the page does not look broken, it looks short.
+
+**A test, prompted by a false alarm.** Undo looked broken on device: cleared the list, tapped Undo,
+nothing came back. The cause was `SnackbarDuration.Short` (4s) expiring during the gap between two
+tool calls, not the code. Rather than re-tap and hope, `NotificationPrefsTest` now round-trips every
+write the undo lambdas make. It also pins the fix that fell out of the same session: both setup
+invites are dismissed for good with no un-dismiss control, so `SettingsSection.NOTIFICATIONS` had to
+grow to cover them — "reset this section" now genuinely restores every switch on the page.
+
+**Per-notification toggles, and why they're a filter rather than a mute.** Each `NoticeKind` is one
+switch on Settings → Notifications. Stored as the DISABLED set so kinds added later default ON, and
+applied as the LAST step of the feed — the notice is still QUEUED while its kind is off. Switching
+it back on brings the row back rather than revealing that it was silently dropped, which is the
+difference between a filter and a mute, and the honest one of the two.
+
+**A fourth icon family.** `NoticeIcons` joins `NavIcons`/`SettingsIcons`/`ExerciseIcons` rather than
+reaching for Material stock (§8 permits stock in TOP-BAR chrome only). The coach brief reuses
+`NavIcons.Coach` outright instead of drawing a second compass — a glyph, like a fact, gets one home.
+
+**Then the same test was applied to the modals.** Three `MainActivity` dialogs failed it: the
+share-import result and the backup-restored confirmation were both "here's what happened · OK" over
+whatever screen you were on, and the POST_NOTIFICATIONS rationale interrupted a cold launch to ask.
+All three are rows now. The permission one opens the OS app-notification screen instead of
+re-requesting — that keeps working after any number of denials, which a re-request does not.
+
+The line that decides it: **a dialog is for a decision the app cannot proceed without; a notice is
+everything else.** By that test `ProgramChangeGuardHost` stays (discarding an in-progress workout is
+destructive and irreversible), and `CheckinSheet` and `DislikeSwapPromptDialog` stay (they ask for
+INPUT at the moment it is relevant, which is not the same as asking for attention). Settings →
+Notifications keeps its blocked banner too: it is the denied-state of the controls directly beneath
+it (§12), not a notice about something elsewhere.
+
+## 2026-07-27 — The Academy gets its tracks, and locked lessons start saying something
+
+Antho: "it needs to be like a real academy UI and the tasks are not good at all, nothing is
+explained, it's just useless." Both halves were fair, and the fix for the first one was already
+written down — I was two edits into building the wrong thing when he told me to go read
+`docs/ACADEMY_LESSONS.md` and `COACH_V3_PLAN.md` first. **Read the plan before redesigning the
+thing the plan describes.**
+
+**What the plan already said.** Lessons are "grouped into five tracks" — and the shipped screen
+grouped by nothing, rendering 31 rows as one flat UNLOCKED/AHEAD list. So the "real academy" ask
+and the plan agreed; the build had just skipped it. Tracks now carry the structure, each with a
+dot rail and its own page.
+
+**What the plan forbade, which I was about to build.** "Just-in-time, not curriculum-first —
+lessons attach to coach moments, not a course index", and "no XP; learning is not gamified
+engagement bait". A course-progress UI with percentages and a next-up ladder would have violated
+both. Hence a filled/hollow **rail** rather than a progress bar (inventory, not score), and a
+`START HERE` that offers only a lesson whose moment has ALREADY fired — never the next item of a
+syllabus.
+
+**The tasks.** `unlockedBy` was one string naming an internal moment: "Your first placement-driven
+prescription", "The first time a personal volume cap changes an allocation". Accurate, and useless
+— half of them were the vocabulary the lesson itself exists to teach (§11, translate the machine).
+It is now `LessonUnlock(label, detail, byYou)`, and the split is the whole point: the plan's own
+trigger taxonomy is app-usage moments vs coach-ledger moments, so `byYou` says whether the next
+move is yours. Yours reads as an instruction with an accent dot ("• Log a set"); the coach's names
+the moment ("When a block changes phase") and never pretends to be a task you could go and do.
+`AcademyRegistryTest` enforces that grammar in both directions, and that a detail line never just
+restates its label.
+
+## 2026-07-27 — The bell goes Home-only, and the screenshot gate is weaker than advertised
+
+**Home only.** The bell sat in all ~20 top bars. An unread badge that follows you into every screen
+you navigated away from it to reach is a nag, not chrome — and it made the one piece of chrome that
+ISN'T about the current screen the most persistent thing in the app. §4.6 now reads `←` + ≤1 action,
+with the bell named as a Home exception. It also settles the alignment split noted below: with the
+bell gone from `TopAppBar` screens there is no second inset left to disagree with Home's gutter.
+
+**The Profile glyph was redrawn for chrome.** `NavIcons.Profile` was built for the tab bar — wide,
+bottom-heavy, shoulders chopped flat by the viewport edge. That reads fine above a text label, where
+a glyph is a silhouette; beside a bell it read as squat and cropped. It is narrower now (12.2 units,
+near the bell's own width), lifts off the baseline and rounds its base corners. **A glyph is drawn
+for a slot, not for an app** — moving one between slots is a redraw, not a re-reference.
+
+**And a caveat worth writing down: `verifyRoborazziDebug` did NOT catch this change.** Removing the
+bell from all six recipe top bars left the goldens stale, and verification passed — twice, including
+under `--rerun-tasks` and with `-Droborazzi.test.verify=true` set by hand. Planting a knowingly-wrong
+golden also passed. The cause is `changeThreshold = 0.001f` in `RecipeScreenshotTest`: one 20dp glyph
+is ~0.1% of a 1078×2399 frame, right at the edge of the tolerance. So the gate catches LAYOUT shifts
+(the wordmark→bell swap moved every row down and failed loudly) but can miss a single small element
+appearing or vanishing. Treat "goldens green" as evidence about layout, not about content, and
+re-record deliberately when a change is small and local.
+
+Three moves, all Antho's call, all in the same direction: **put the thing where you'd look for it.**
+
+**Academy takes Profile's tab.** The Academy is the half of the coach you can read — it is why the
+coach can be optional at all — and it was a text link inside the Coach page, one tap deeper than the
+thing it explains. It is a tab now, and the Coach link is gone (a link to a sibling tab is redundant
+navigation, §4.2). The `newLessons` count that link carried has no home yet; if it's wanted, it
+belongs as a badge on the tab, not as a second entry point.
+
+**Profile takes the Settings slot on Home, and Settings moves inside Profile.** Settings was the one
+piece of chrome on Home that wasn't about you or your training. Profile is; and Settings is
+reachable from it, which is where you'd already go to change something about yourself. Profile stops
+being a hub page and becomes a pushed route with its own back arrow — one fewer thing you can swipe
+into by accident.
+
+**Chrome glyphs meet the page gutter.** Home's bell was centred in its 44dp touch target, which put
+the glyph 12dp inboard of the 24dp gutter — so it lined up with nothing, least of all the serif hero
+directly under it. `GUTTER_SLACK` (12dp: half the gap between a 44dp target and a 20dp glyph) pulls
+both glyphs out so their EDGES sit on the gutter while the targets keep their full size. The lesson
+generalises: a touch target is padding, and padding should never decide where a glyph appears to be.
+`TopAppBar` screens still use Material's own title inset (~4dp wider); not worth 18 files to chase.
+
 ## 2026-07-25 — §6 gains a mono anchor rung: equal size is not equal presence
 
 Row labels moved from 11 → 13 to stop being the smallest thing on a page whose job is naming metrics

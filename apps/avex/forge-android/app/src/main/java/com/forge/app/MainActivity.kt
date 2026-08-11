@@ -1,12 +1,9 @@
 package com.forge.app
 
-import android.Manifest
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.database.ContentObserver
 import android.net.Uri
 import android.graphics.drawable.GradientDrawable
-import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -16,10 +13,7 @@ import android.view.WindowManager
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -35,6 +29,7 @@ import androidx.compose.ui.Modifier
 import androidx.core.content.IntentCompat
 import androidx.fragment.app.FragmentActivity
 import com.forge.app.data.importer.ImportResult
+import com.forge.app.data.repo.NotificationFeed
 import com.forge.app.appicon.AppIcon
 import com.forge.app.appicon.AppIconManager
 import com.forge.app.data.importer.WorkoutImportRepository
@@ -76,7 +71,6 @@ class MainActivity : FragmentActivity() {
     @Inject lateinit var appLock: AppLockManager
 
     /** Set when a shared/opened export file has been imported — shows a one-time result dialog (#GYMAP-17). */
-    private var shareImportMessage by mutableStateOf<String?>(null)
 
     /**
      * The widget deep-link day to open. State (not a local) because `launchMode=singleTask` delivers a
@@ -112,7 +106,9 @@ class MainActivity : FragmentActivity() {
         if (uri == null) return
         lifecycleScope.launch {
             val result = runCatching { importRepo.import(uri) }.getOrDefault(ImportResult.ReadError)
-            shareImportMessage = result.userMessage()
+            // Queued for the notifications feed rather than thrown up as an OK dialog over whatever
+            // screen the share landed on (2026-07-27, DESIGN §4.6).
+            settingsRepo.addSystemNotice(NotificationFeed.NOTICE_IMPORT, result.userMessage())
         }
     }
 
@@ -123,18 +119,6 @@ class MainActivity : FragmentActivity() {
         // singleTask reuse: a widget tap arrives here, not in onCreate — pick up the day so the nav
         // host opens it (the deep-link would otherwise be dropped and the tap do nothing).
         intent.getStringExtra(com.forge.app.widget.EXTRA_START_DAY_KEY)?.let { pendingWidgetDayKey = it }
-    }
-
-    /** One-time "here's what came in" dialog after a share-to-Avex import. */
-    @Composable
-    private fun ShareImportResultDialog() {
-        val msg = shareImportMessage ?: return
-        AlertDialog(
-            onDismissRequest = { shareImportMessage = null },
-            title = { Text("Import") },
-            text = { Text(msg) },
-            confirmButton = { TextButton(onClick = { shareImportMessage = null }) { Text("OK") } }
-        )
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
@@ -228,72 +212,27 @@ class MainActivity : FragmentActivity() {
         )
     }
 
-    private val notifPermLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { /* proceed either way; notifications no-op if denied */ }
-
-    /** One-time, explained POST_NOTIFICATIONS request (N1) — shown after onboarding, never a cold blast. */
-    @Composable
-    private fun NotifPermissionRationale() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
-        val asked by settingsRepo.notifPermAsked.collectAsState(initial = true) // true until loaded → no flash
-        var show by remember { mutableStateOf(false) }
-        LaunchedEffect(asked) {
-            show = !asked && this@MainActivity.checkSelfPermission(
-                Manifest.permission.POST_NOTIFICATIONS
-            ) != PackageManager.PERMISSION_GRANTED
-        }
-        if (!show) return
-        val markAsked: () -> Unit = {
-            show = false
-            lifecycleScope.launch { settingsRepo.setNotifPermAsked() }
-        }
-        AlertDialog(
-            onDismissRequest = markAsked,
-            title = { Text("Stay on track?") },
-            text = {
-                Text(
-                    "Avex can nudge you to train, send a weekly recap, and alert you when your rest ends. " +
-                        "You can turn each off any time in Settings → Notifications."
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = { markAsked(); notifPermLauncher.launch(Manifest.permission.POST_NOTIFICATIONS) }) {
-                    Text("Allow")
-                }
-            },
-            dismissButton = { TextButton(onClick = markAsked) { Text("Not now") } }
-        )
-    }
-
     /** True exactly once after a boot-time restore swap (ForgeApp wrote the flag), then cleared. */
     private fun consumeRestoreFlag(): Boolean {
         val f = File(filesDir, ForgeApp.RESTORE_DONE_FLAG)
         return if (f.exists()) { f.delete(); true } else false
     }
 
-    /** One-time "your backup was restored" confirmation — the silent boot-swap otherwise gives no sign.
-     *  rememberSaveable so a rotation mid-dialog keeps it on screen (the flag is already consumed). */
-    @Composable
-    private fun RestoreConfirmedDialog(initiallyShown: Boolean) {
-        var show by rememberSaveable { mutableStateOf(initiallyShown) }
-        if (!show) return
-        AlertDialog(
-            onDismissRequest = { show = false },
-            title = { Text("Backup restored") },
-            text = { Text("Your backup was restored successfully.") },
-            confirmButton = { TextButton(onClick = { show = false }) { Text("OK") } }
-        )
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         val splash = installSplashScreen()
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        // Consume the restore flag before the UI composes so the confirmation shows exactly once.
-        // Only on a fresh launch (not a config-change recreate) — on rotation the dialog's own
-        // rememberSaveable state keeps it visible, since the flag is already gone.
-        val restoreJustCompleted = savedInstanceState == null && consumeRestoreFlag()
+        // Consume the restore flag on a fresh launch only (not a config-change recreate) and queue the
+        // confirmation for the notifications feed — the silent boot-swap otherwise gives no sign at all.
+        // The feed holds it until cleared, so rotation no longer needs saveable dialog state.
+        if (savedInstanceState == null && consumeRestoreFlag()) {
+            lifecycleScope.launch {
+                settingsRepo.addSystemNotice(
+                    NotificationFeed.NOTICE_RESTORE,
+                    "Your backup was restored. Everything in it is back on this device."
+                )
+            }
+        }
 
         // Widget deep-link: a home-screen widget tap carries the day to open (the next-up day, or the
         // active session's day when one is in progress). Read it once on a fresh launch and hand it to
@@ -302,7 +241,7 @@ class MainActivity : FragmentActivity() {
             pendingWidgetDayKey = intent?.getStringExtra(com.forge.app.widget.EXTRA_START_DAY_KEY)
 
         // A cold-start share/open of an export file (#GYMAP-17) — import it once, not again on a
-        // config-change recreate (the dialog's own state keeps the result visible across rotation).
+        // config-change recreate (the queued notice carries the result across rotation).
         if (savedInstanceState == null) handleImportIntent(intent)
 
         // Hold the splash until prefs resolve, so the bare theme gradient (the null onboarding state)
@@ -320,8 +259,10 @@ class MainActivity : FragmentActivity() {
             Settings.Global.getUriFor(Settings.Global.ANIMATOR_DURATION_SCALE), false, durationScaleObserver
         )
 
-        // POST_NOTIFICATIONS is requested through a rationale gate in the UI (N1) — after onboarding,
-        // explained, and only once — instead of a context-free system prompt on cold launch.
+        // POST_NOTIFICATIONS is never requested from here. It was a one-time explained dialog (N1);
+        // since 2026-07-27 it is a row in the notifications feed that opens the OS app-notification
+        // screen — which keeps working however many times the permission was already denied, unlike
+        // a re-request. Nothing interrupts a cold launch to ask.
 
         AutoBackupWorker.schedule(this)
 
@@ -418,14 +359,6 @@ class MainActivity : FragmentActivity() {
                                 false -> OnboardingScreen(onFinished = {})
                                 true -> {
                                     ForgeNavHost(initialDayKey = pendingWidgetDayKey)
-                                    NotifPermissionRationale()
-                                    RestoreConfirmedDialog(restoreJustCompleted)
-                                    // The morning check-in (Coach v3 B1): offered once a day as a
-                                    // top banner over whatever screen the app resumed to, and
-                                    // silent for anyone who has stopped answering it. Inside this
-                                    // branch so it never rides over onboarding, and below the lock
-                                    // and launch-intro overlays that follow.
-                                    com.forge.app.ui.checkin.CheckinHost()
                                 }
                                 null -> {} // DataStore still loading; the theme's gradient shows briefly
                             }
@@ -443,11 +376,13 @@ class MainActivity : FragmentActivity() {
                                 }
                             }
                             if (showIntro) AvexIntro(iconKey = introIconKey, themed = themedIntro, onDone = { showIntro = false })
-                            // Result of a share-to-Avex import — shown over whatever screen is up.
-                            ShareImportResultDialog()
                             // The app's one Undo snackbar (§13) — hosted here so a "deleted · Undo"
                             // message rides over any screen, including one popped back to after a delete.
                             com.forge.app.ui.common.SnackbarControllerHost()
+                            // The morning check-in (Coach v3 B1): asked once a day at first open,
+                            // hosted here so it rides over whatever screen the app resumed to, and
+                            // silent for anyone who has stopped answering it.
+                            com.forge.app.ui.checkin.CheckinSheet()
                         }
                         }
                     }

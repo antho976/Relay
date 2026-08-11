@@ -35,7 +35,6 @@ import androidx.compose.ui.unit.dp
 import com.forge.app.ui.common.EditorialFigure
 import com.forge.app.ui.common.EditorialHeader
 import com.forge.app.ui.common.ForgePrimaryCapsule
-import com.forge.app.ui.common.ForgeWordmark
 import com.forge.app.ui.common.InlineEmptyHint
 import com.forge.app.ui.common.SegmentPill
 import com.forge.app.ui.common.rememberDrawProgress
@@ -51,7 +50,7 @@ import com.forge.app.ui.theme.ForgeTheme
  *
  * The order below is the archetype, not a suggestion:
  *
- *   top bar (wordmark + ≤1 action, never the screen name, §4.6)
+ *   top bar (← + ≤1 action, never the screen name, §4.6)
  *   ├─ hero        mono eyebrow → serif name/verdict            §3
  *   ├─ figures     2–4 EditorialFigure, honest zeros            §2①, §12
  *   ├─ lens pills  SegmentPill row, ONE-word labels             §4.4
@@ -78,9 +77,9 @@ fun OverviewRecipe(
     Scaffold(
         topBar = {
             TopAppBar(
-                // §4.6 — the wordmark is the title. NEVER the screen's own name: the serif hero
+                // §4.6 — the bar carries NO title. NEVER the screen's own name: the serif hero
                 // below names the screen, or nothing does.
-                title = { ForgeWordmark() },
+                title = {},
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
             )
         },

@@ -11,7 +11,8 @@ import androidx.compose.ui.graphics.vector.path
 import androidx.compose.ui.unit.dp
 
 /**
- * Custom glyphs for the five primary [BottomTab]s. Material's stock set reads as
+ * Custom glyphs for the five primary [BottomTab]s, plus [Profile], which left the bar for the
+ * Home top bar on 2026-07-27 but keeps its glyph here with the family it was drawn to match. Material's stock set reads as
  * generic (the running-man for Cardio and the brain-with-gears for Coach in
  * particular), so the whole bar is drawn as one matched family instead:
  *
@@ -19,8 +20,10 @@ import androidx.compose.ui.unit.dp
  *  - [Stats]   — three rounded bars rising left→right (a growth/chart read).
  *  - [Home]    — a pitched-roof house with a doorway notch.
  *  - [Coach]   — a compass: an outline ring with a NE-pointing needle.
+ *  - [Academy] — an open book: two leaves meeting at a spine.
  *  - [Profile] — a head + shoulders bust (no enclosing ring, so it stays
- *    distinct from the Coach compass).
+ *    distinct from the Coach compass). No longer a tab; it leads the Home
+ *    top bar's profile entry.
  *
  * All five are 24dp glyphs at a single visual weight (filled silhouettes, except
  * Cardio which is a stroked line). The source paint is black; callers render them
@@ -94,18 +97,50 @@ object NavIcons {
         }
     }
 
-    /** Head + shoulders bust. */
+    /** Academy — an open book: two leaves meeting at a spine, with a page line on each. */
+    val Academy: ImageVector by lazy {
+        navIcon("NavAcademy") {
+            strokePath(width = 1.9f) {
+                // Left leaf: down the spine, out along the base, up the fore-edge to the top corner.
+                moveTo(12f, 7.2f)
+                curveTo(10.2f, 5.4f, 7.4f, 4.6f, 3.4f, 4.8f)
+                lineTo(3.4f, 17.6f)
+                curveTo(7.4f, 17.4f, 10.2f, 18.2f, 12f, 20f)
+                // Right leaf mirrors it, so the spine reads as one continuous line.
+                curveTo(13.8f, 18.2f, 16.6f, 17.4f, 20.6f, 17.6f)
+                lineTo(20.6f, 4.8f)
+                curveTo(16.6f, 4.6f, 13.8f, 5.4f, 12f, 7.2f)
+                close()
+                // The spine itself.
+                moveTo(12f, 7.2f)
+                lineTo(12f, 20f)
+            }
+        }
+    }
+
+    /**
+     * Head + shoulders bust, drawn for the TOP BAR rather than the tab bar (2026-07-27).
+     *
+     * The nav-bar version was wide and bottom-heavy with its shoulders chopped flat by the viewport
+     * edge — which is right above a text label, where a glyph reads as a silhouette. Beside the
+     * notification bell it read as squat and cut off. This one is narrower (12.2 units across, near
+     * the bell's own width), lifts off the baseline, and rounds its base corners so it reads as a
+     * finished mark rather than a cropped one.
+     */
     val Profile: ImageVector by lazy {
         navIcon("NavProfile") {
             fillPath {
-                circle(12f, 8.6f, 3.7f) // head
+                circle(12f, 7.6f, 3.6f) // head
             }
             fillPath {
-                // Shoulders: a rounded bust rising from the baseline to a domed top.
-                moveTo(4.6f, 21.2f)
-                curveTo(4.6f, 16.0f, 7.8f, 13.7f, 12f, 13.7f)
-                curveTo(16.2f, 13.7f, 19.4f, 16.0f, 19.4f, 21.2f)
-                lineTo(4.6f, 21.2f)
+                // Shoulders: a dome that lands on softly rounded base corners, clear of the edge.
+                moveTo(5.9f, 18.4f)
+                curveTo(5.9f, 14.6f, 8.6f, 12.8f, 12f, 12.8f)
+                curveTo(15.4f, 12.8f, 18.1f, 14.6f, 18.1f, 18.4f)
+                lineTo(18.1f, 18.7f)
+                quadTo(18.1f, 20.1f, 16.7f, 20.1f)
+                lineTo(7.3f, 20.1f)
+                quadTo(5.9f, 20.1f, 5.9f, 18.7f)
                 close()
             }
         }

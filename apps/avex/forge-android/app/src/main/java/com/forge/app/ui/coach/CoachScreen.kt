@@ -29,7 +29,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.forge.app.ui.common.ForgeWordmark
 import com.forge.app.ui.gym.session.SegmentRow
 import com.forge.app.ui.common.statsEntrance
 import com.forge.app.ui.theme.LocalForgeSettings
@@ -78,9 +77,9 @@ fun CoachScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                // §2: the top bar never names the screen — just the wordmark (home button) and,
+                // §4.6: the top bar never names the screen — just the bell and,
                 // on a routed entry, the back arrow. The hero verdict is the screen's identity.
-                title = { ForgeWordmark() },
+                title = {},
                 navigationIcon = {
                     if (onBack != null) IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = c.muted)
@@ -132,25 +131,44 @@ fun CoachScreen(
                     }
                 }
 
-                // Each lens owns its own section order and its own entrance numbering, in ONE
-                // emitter — splitting the Now lens across four call sites is what let its cascade
-                // run out of order and its setup prompts float above the week's actual call.
                 when (lens) {
-                    CoachLens.NOW -> coachNowLens(
-                        state = state,
-                        c = c,
-                        onApply = viewModel::apply,
-                        onSkip = viewModel::skip,
-                        onUndo = viewModel::undo,
-                        onApplyAll = viewModel::applyAll,
-                        onAddGoal = { showGoalPicker = true },
-                        onStartBlock = viewModel::startBlock,
-                        onEndBlock = viewModel::endBlock,
-                        onAcceptProject = viewModel::acceptProject,
-                        onCompleteProject = viewModel::completeProject,
-                        onAbandonProject = viewModel::abandonProject,
-                        onOpenAcademy = { onOpenAcademy?.invoke() }
-                    )
+                    CoachLens.NOW -> {
+                        // A2: what you're chasing sits above the week's mechanics — "toward what?"
+                        // outranks "what changed" (§4.8, lead with the live).
+                        coachGoalsSection(
+                            state = state,
+                            c = c,
+                            index = 2,
+                            onAddGoal = { showGoalPicker = true },
+                            onArchiveGoal = viewModel::archiveGoal,
+                            onOpenAcademy = { onOpenAcademy?.invoke() }
+                        )
+                        // C: what the next few weeks are for, above the week's own mechanics.
+                        coachBlockSection(
+                            block = state.block,
+                            c = c,
+                            index = 3,
+                            onStart = viewModel::startBlock,
+                            onEnd = viewModel::endBlock
+                        )
+                        // D: the one lever the coach is hunting, plus what it has measured about you.
+                        coachProjectSection(
+                            state = state,
+                            c = c,
+                            index = 4,
+                            onAccept = viewModel::acceptProject,
+                            onComplete = viewModel::completeProject,
+                            onAbandon = viewModel::abandonProject
+                        )
+                        coachNowLens(
+                            state = state,
+                            c = c,
+                            onApply = viewModel::apply,
+                            onSkip = viewModel::skip,
+                            onUndo = viewModel::undo,
+                            onApplyAll = viewModel::applyAll
+                        )
+                    }
                     CoachLens.SIGNALS -> coachSignalsLens(state, weightUnit, c, onConnectHealth)
                     CoachLens.JOURNEY -> coachJourneyLens(state, c)
                 }

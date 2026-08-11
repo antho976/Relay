@@ -10,6 +10,14 @@
 
 ## Rules that shape this list (recap of plan invariants)
 
+- **Unlock copy is a two-kind model, in code.** `Lesson.unlock` is a `LessonUnlock(label,
+  detail, byYou)`, not a string. `byYou = true` is something the reader can go and do today and
+  reads as an imperative ("Log a set"); `byYou = false` is the coach's move and names the moment
+  ("When a block changes phase"), with `detail` saying what has to accumulate first. This mirrors
+  the two trigger kinds below — app-usage moments vs coach-ledger moments — and `AcademyRegistryTest`
+  enforces the grammar, so a coach-side unlock can never be written as a task the reader can't do.
+  (2026-07-27: replaced the old single `unlockedBy` string, which named internal moments — "Your
+  first placement-driven prescription" — and told a reader nothing actionable.)
 - **Just-in-time, not curriculum-first.** Only Fundamentals is sequential for the user
   (cold-start). Everything else unlocks the first time its coach moment fires.
   "In order" below therefore means *authoring order* (which phase writes it), not a

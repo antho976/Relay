@@ -16,23 +16,22 @@ Also lists what may not be touched, and the known defects to fix opportunistical
 gold row) · accent-tinted "important" prose · session-summary extras (share card/tags/ghost/vs-last/
 what's-next — the SESSION-summary card specifically; the Profile before/after share card `BeforeAfterCardRenderer` (GYMAP-55) is a separate, deliberate shareable artifact and stays) · cardio big-number hero · cardio kcal estimates (return only with real watch burn data) · new gamification surfaces (wait-listed) · Profile
 identity-first restructure · mood/subjective coach drivers · Coach hero week-dot calendar, "Pulse",
-pass-square record strip · the Profile's ON THIS DAY (Home's `OnThisDayCard` owns that throwback — a mark is cut, not copied, §4.3; it was also the page's one prose-only section, hung off a decorative accent rule) · Coach status serif verdicts AND status/anticipation asides (status states
+pass-square record strip · **every page-level banner** (2026-07-27: Home's milestone toast, coach-brief
+strip, orphan-session notice and resume reminder; Cardio's connect-a-watch invite — all moved to the
+notifications feed behind the bell, §4.6. Do not re-add a strip above a page's own answer; if it is
+dismissible or "waiting on you", it is a notice, and notices live in the feed) · **the three
+launch/result dialogs** (share-import result, backup-restored confirmation, POST_NOTIFICATIONS
+rationale — same date, same destination; an OK button is not a decision, and nothing should
+interrupt a cold launch to ask for a permission) · the `• Avex` chrome
+wordmark and `ForgeWordmark` itself (2026-07-27, replaced by `NotificationBell`; the name survives as
+the launch beat and on exported artifacts only) · **the Coach→Academy link** (2026-07-27: the
+knowledge half of the coach is its own bottom tab now, so a link from a sibling tab is redundant
+navigation, §4.2. Removed from the Goals section; the `onOpenAcademy` wiring into `CoachScreen` went
+with it. Home's lesson card is the one entry point that stays, because it is contextual — it names a
+lesson, not the tab) · the Profile's ON THIS DAY (Home's `OnThisDayCard` owns that throwback — a mark is cut, not copied, §4.3; it was also the page's one prose-only section, hung off a decorative accent rule) · Coach status serif verdicts AND status/anticipation asides (status states
 = eyebrow + figures) · Coach pre-baseline signal dot-checklist in the hero (→ one labeled Baseline
 bar in the "Coming up" idiom; the effort/HC inputs it spelled out live in Signals only, §4.3,
 GYMAP-24) · hairline section separators (§1) · the 9-row milestone ladder (→ rail + next, §4.10).
-**Removed in the 2026-07-26 Coach rework** (`docs/COACH_UI_REWORK.md`): Coach's "What it can read"
-signal-slot rail (eleven uniform dot rows — the *checklist* shape removed twice before; it also
-listed Sleep and Resting heart rate a second time against "What it reads", and advertised slots the
-engine does not read; its one honest fact survives as a coverage line) · the Block section's "what a
-block is" explainer (mechanics narration, §4.3 — the phase rail IS the explanation) · the Academy
-link inside the Goals section (→ the Now lens's closing line) · the Autopilot countdown on the Now
-lens (trust reads once, on Journey; the two bars quoted different numbers) · the pre-baseline
-SESSIONS figure (echoed BASELINE) · Project's four-paragraph body (→ why as the caption, finish line
-as a meter, plan as the content).
-**Removed 2026-07-27**: Session Detail's "Log again today" re-log (GYMAP-36) — the page-end filled
-capsule (§8 ①), its `WorkoutRepository.reLogSession` verbatim-copy, and the Undo snackbar that
-confirmed it. Session Detail's page end is now the lone "Session type" outlined capsule (§8 ②); a
-section with no do-it-now action carries no filled capsule rather than promoting its sidekick.
 **Facts**: dark-only (Indigo light scheme in `Color.kt` unshipped — never build light variants);
 portrait phone only (no adaptive/tablet/landscape).
 **Untouchable**: live-session screen · Profile blending cover (the compositing approach only — its

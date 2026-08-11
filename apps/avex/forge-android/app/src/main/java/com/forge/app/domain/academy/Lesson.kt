@@ -20,17 +20,46 @@ data class Lesson(
     val title: String,
     /** The one-line answer, shown on the card before the lesson is opened. */
     val summary: String,
-    /** What makes this lesson appear, in the user's terms. */
-    val unlockedBy: String,
+    /** What opens this lesson — see [LessonUnlock]. */
+    val unlock: LessonUnlock,
     val blocks: List<LessonBlock>
 )
 
-enum class LessonTrack(val code: String, val displayName: String) {
-    FUNDAMENTALS("fundamentals", "Fundamentals"),
-    COACH("coach", "How the coach works"),
-    PROGRAMMING("programming", "Programming"),
-    SIGNALS("signals", "Signals"),
-    ENGINE("engine", "Conditioning")
+/**
+ * What opens a lesson, written for the reader rather than for the ledger.
+ *
+ * These used to be one string naming the internal moment — "Your first placement-driven
+ * prescription", "The first time a personal volume cap changes an allocation". Accurate, and
+ * useless: a locked row told you nothing you could act on, and half of them were vocabulary the
+ * lesson itself exists to teach (DESIGN §11, translate the machine).
+ *
+ * The split that fixes it is [byYou]. Some lessons are gated on something the reader can go and do
+ * today, and those get an imperative [label] — "Log a set". The rest are gated on the coach having
+ * seen enough to make a move, and pretending otherwise would be a lie dressed as a task; those name
+ * the moment and let [detail] say what has to accumulate first. A reader should never be left
+ * guessing which kind they are looking at.
+ */
+data class LessonUnlock(
+    /** The locked row's line: an imperative when [byYou], otherwise the moment ("When …"). */
+    val label: String,
+    /** One line of what to actually do, or what has to happen first. Never restates [label]. */
+    val detail: String,
+    /** True when the reader can trigger it today; false when it is the coach's move. */
+    val byYou: Boolean
+)
+
+/**
+ * The five tracks the plan groups lessons into. Order here is the reading order the Academy shows,
+ * which is NOT a course index: only [FUNDAMENTALS] is sequential (it doubles as the cold-start
+ * directive), and everything else unlocks the first time its coach moment fires. The tracks exist
+ * to group, not to march through — `docs/ACADEMY_LESSONS.md`, "just-in-time, not curriculum-first".
+ */
+enum class LessonTrack(val code: String, val displayName: String, val blurb: String) {
+    FUNDAMENTALS("fundamentals", "Fundamentals", "What training is made of. Read in order, start to finish."),
+    COACH("coach", "How the coach works", "What it decides, and how to overrule any of it."),
+    PROGRAMMING("programming", "Programming", "Blocks, phases, and the numbers it learns about you."),
+    SIGNALS("signals", "Signals", "What your body is telling it, and how much that counts."),
+    ENGINE("engine", "Conditioning", "Cardio in service of lifting, never instead of it.")
 }
 
 sealed interface LessonBlock {

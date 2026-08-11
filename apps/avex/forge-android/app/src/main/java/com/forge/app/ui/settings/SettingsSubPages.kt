@@ -715,12 +715,22 @@ private fun NotificationsBlockedBanner() {
 
 @Composable
 internal fun NotificationsPage(state: SettingsUiState, vm: SettingsViewModel, modifier: Modifier = Modifier) {
-    Column(modifier.fillMaxSize()) {
+    // Two groups named by where the thing arrives. "On your phone" / "In the app" is a parallel pair
+    // that needs no gloss — the earlier version captioned each ("Push alerts, delivered even when
+    // Avex is closed") and was explaining push notifications to someone who already knows. §4.3: cut
+    // mechanics narration, don't trim it. Quiet hours lives INSIDE the phone group rather than
+    // trailing the in-app switches, where it read as though it silenced those too (Antho).
+    Column(
+        modifier
+            .fillMaxSize()
+            // Was missing, so everything past the fold was unreachable — the quiet-hours toggle fell
+            // off the bottom the moment the in-app group was added. Same idiom as every sibling page.
+            .verticalScroll(rememberScrollState())
+            .padding(bottom = 24.dp)
+    ) {
         NotificationsBlockedBanner()
 
-        // Quiet mono anchors + air, no per-row hairlines (DESIGN §1/§7) — same rhythm as Format.
-        // "Alerts" (what Avex sends) reads cleaner than echoing the page name "Notifications" (§2).
-        SettingsSectionHeader("Alerts", top = 12.dp)
+        SettingsSectionHeader("On your phone", top = 12.dp)
         ToggleRow(
             "Training reminders",
             "A daily nudge to train on scheduled days and keep your streak alive",
@@ -739,17 +749,25 @@ internal fun NotificationsPage(state: SettingsUiState, vm: SettingsViewModel, mo
             "Buzz + notify when your rest ends while the app is in the background",
             state.restTimerAlertEnabled, vm::setRestTimerAlertEnabled
         )
-
-        // Own group: the mute window is a suppressor, not an alert. Toggle is "Silence alerts" so it
-        // doesn't echo the "Quiet hours" header directly above it (§4.3 one-home).
-        SettingsSectionHeader("Quiet hours")
+        // A suppressor rather than an alert, but it suppresses exactly the three above, so it belongs
+        // with them. Worded to name what it silences instead of echoing a header (§4.3).
         ToggleRow(
-            "Silence alerts",
-            "Mute timer and recap notifications during each day's window",
+            "Silence during quiet hours",
+            "Mute the alerts above during each day's window",
             state.quietHoursEnabled, vm::setQuietHoursEnabled
         )
         if (state.quietHoursEnabled) {
             QuietHoursDays(state, vm)
+        }
+
+        SettingsSectionHeader("In the app")
+        com.forge.app.data.repo.NoticeKind.entries.forEach { kind ->
+            ToggleRow(
+                kind.label,
+                kind.explainer,
+                kind.key !in state.disabledNoticeKinds,
+                { enabled -> vm.setNoticeKindEnabled(kind.key, enabled) }
+            )
         }
 
         SectionResetRow(com.forge.app.data.prefs.SettingsSection.NOTIFICATIONS, vm)

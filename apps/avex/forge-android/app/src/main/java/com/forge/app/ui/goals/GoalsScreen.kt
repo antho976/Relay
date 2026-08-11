@@ -35,7 +35,6 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.ui.common.EditorialHeader
-import com.forge.app.ui.common.ForgeWordmark
 import com.forge.app.ui.common.InlineEmptyHint
 import com.forge.app.ui.common.clickableLabeled
 
@@ -79,8 +78,8 @@ fun GoalsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                // §2: the top bar never names the screen — wordmark + back; the serif hero below does.
-                title = { ForgeWordmark() },
+                // §4.6: the top bar never names the screen — bell + back; the serif hero below does.
+                title = {},
                 navigationIcon = {
                     IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
                 },
