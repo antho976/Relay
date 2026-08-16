@@ -130,4 +130,59 @@ class NotificationPrefsTest {
         assertFalse("the notifications invite comes back", repo.notifPermAsked.first())
         assertTrue("every kind is on again", repo.disabledNoticeKinds.first().isEmpty())
     }
+
+    // ── Academy: dismissal and announcement are separate records ───────────────
+
+    @Test
+    fun lessonNoticeDismissalIsReversible() = runBlocking {
+        assertTrue("nothing dismissed to start", repo.dismissedLessonNotices.first().isEmpty())
+
+        repo.setLessonNoticeDismissed("coach.strength_on_a_cut", dismissed = true)
+        assertTrue(
+            "clearing the row hides it",
+            "coach.strength_on_a_cut" in repo.dismissedLessonNotices.first()
+        )
+
+        repo.setLessonNoticeDismissed("coach.strength_on_a_cut", dismissed = false)
+        assertTrue("undo brings it back", repo.dismissedLessonNotices.first().isEmpty())
+    }
+
+    /**
+     * The split that keeps the banner from nagging. A lesson stays UNREAD until it is opened,
+     * possibly for weeks; it is UNANNOUNCED only until its banner has played once. Sharing one flag
+     * would re-announce everything still unread on every app open, which is the exact behaviour the
+     * whole arrival mechanism exists to avoid.
+     */
+    @Test
+    fun announcingIsOneWayAndIndependentOfDismissal() = runBlocking {
+        assertTrue("nothing announced to start", repo.announcedLessonNotices.first().isEmpty())
+
+        repo.markLessonNoticesAnnounced(setOf("fundamentals.warmups", "engine.intervals"))
+        assertEquals(
+            setOf("fundamentals.warmups", "engine.intervals"),
+            repo.announcedLessonNotices.first()
+        )
+
+        // Additive: a later arrival must not wipe the earlier announcements.
+        repo.markLessonNoticesAnnounced(setOf("signals.stress_hrv"))
+        assertEquals(3, repo.announcedLessonNotices.first().size)
+
+        // Dismissing a row does not un-announce it, and vice versa: two separate records.
+        repo.setLessonNoticeDismissed("fundamentals.warmups", dismissed = true)
+        assertTrue(
+            "still announced after dismissal",
+            "fundamentals.warmups" in repo.announcedLessonNotices.first()
+        )
+        repo.setLessonNoticeDismissed("fundamentals.warmups", dismissed = false)
+        assertTrue(
+            "un-dismissing does not replay the banner",
+            "fundamentals.warmups" in repo.announcedLessonNotices.first()
+        )
+    }
+
+    @Test
+    fun announcingNothingIsANoOp() = runBlocking {
+        repo.markLessonNoticesAnnounced(emptySet())
+        assertTrue(repo.announcedLessonNotices.first().isEmpty())
+    }
 }

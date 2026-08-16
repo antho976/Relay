@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -32,6 +33,9 @@ import com.forge.app.domain.photo.PhotoPose
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.domain.units.weightInputValue
 import com.forge.app.ui.common.bounceClick
+import com.forge.app.ui.experiment.CardShape
+import com.forge.app.ui.experiment.SectionAnchor
+import com.forge.app.ui.experiment.SurfacePalette
 import com.forge.app.ui.goals.GoalProgressLine
 import com.forge.app.ui.goals.customGoalTitle
 import com.forge.app.ui.goals.customGoalValueLine
@@ -158,6 +162,8 @@ internal fun GalleryStrip(
     onAdd: () -> Unit,
     onView: (ProgressPhoto) -> Unit,
     onViewAll: () -> Unit,
+    palette: SurfacePalette,
+    onBg: Color,
     muted: Color,
     outline: Color
 ) {
@@ -170,13 +176,17 @@ internal fun GalleryStrip(
         // albums live, so with no photos the screen became unreachable entirely. §4.2's rule is
         // about not linking to an empty destination; here the destination is where you GO to make it
         // non-empty, and the ghost strip below is a real preview of it.
-        SectionHeader(
-            "GALLERY", muted,
+        // design/surface-experiment: `SectionAnchor`, not `SectionHeader`. The two render the same
+        // label but different actions — accent vs onBg — and side by side on one page that reads as
+        // a mistake, which is what Antho saw ("gallery looks bad? it's not the same as the others").
+        SectionAnchor(
+            "Gallery", muted, onBg,
             action = when {
-                photos.isEmpty() -> "gallery →"
-                photos.size > 10 -> "all ${photos.size} →"
-                else -> "view all →"
+                photos.isEmpty() -> "gallery"
+                photos.size > 10 -> "all ${photos.size}"
+                else -> "view all"
             },
+            actionLabel = "Open the gallery",
             onAction = onViewAll
         )
     }
@@ -189,35 +199,60 @@ internal fun GalleryStrip(
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             repeat(3) { i ->
-                // The trailing cells recede, so the strip reads as continuing rather than as three
-                // equal empty boxes competing for attention.
+                // design/surface-experiment v3 — the same dissolve the goals strip uses.
                 //
-                // Off the MUTED ramp, not the outline one. These frames are the section's whole mark
-                // at zero, and at outline 0.35/0.25 the border measured 1.10:1 against the page on
-                // device — a box you cannot see is not an empty state, it is a blank strip (§12). The
-                // lead cell takes §12's `muted@0.55`, which is also what §1 asks for: it is the one
-                // cell you can actually tap, so it is the one that earns a visible border.
-                val fade = muted.copy(alpha = if (i == 0) 0.55f else 0.30f)
+                // v1 was a hollow outline: right on a bare page, where an outline is the only way
+                // to show an empty slot, and wrong beside filled cards. v2 was a flat filled slab:
+                // the colour was right and it still read badly — "stark and seeable" (Antho,
+                // 2026-08-15) — because three solid blocks shout louder than the photos they stand
+                // in for. Now each cell fades downward into the page and each successive one
+                // recedes, so the strip reads as continuing into photos not taken yet.
+                val depth = when (i) {
+                    0 -> 1f
+                    1 -> 0.62f
+                    else -> 0.34f
+                }
                 Box(
                     Modifier.width(StripCellWidth).height(StripCellHeight)
-                        .clip(RoundedCornerShape(16.dp))
-                        .border(1.dp, fade, RoundedCornerShape(16.dp))
-                        .then(if (i == 0) Modifier.bounceClick { onAdd() } else Modifier),
-                    contentAlignment = Alignment.Center
+                        .clip(CardShape)
+                        .background(
+                            Brush.verticalGradient(
+                                listOf(
+                                    palette.card.copy(alpha = depth),
+                                    palette.card.copy(alpha = depth * 0.25f)
+                                )
+                            )
+                        )
+                        .border(
+                            1.dp,
+                            if (i == 0) muted.copy(alpha = 0.25f) else palette.hairline.copy(alpha = depth),
+                            CardShape
+                        )
+                        .then(if (i == 0) Modifier.bounceClick { onAdd() } else Modifier)
+                        .padding(14.dp)
                 ) {
                     if (i == 0) {
-                        // §14: the accent carries the glyph, the words stay on onBg. Accent text
-                        // measures 2.35:1 on Pearl, and this prompt is the only content in the cell.
-                        Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.align(Alignment.BottomStart)) {
+                            // §14: the accent carries the glyph, the words stay on onBg. Accent
+                            // text measures 2.35:1 on Pearl, so it never carries meaning alone.
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    "+ ",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Text(
+                                    "First photo",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onBackground
+                                )
+                            }
+                            Spacer(Modifier.height(5.dp))
                             Text(
-                                "+ ",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                            Text(
-                                "first photo",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onBackground
+                                "Same pose, same light.",
+                                style = MaterialTheme.typography.bodySmall,
+                                // 0.7, the re-measured on-card floor — 0.65 fails AA on the fill.
+                                color = muted.copy(alpha = 0.7f)
                             )
                         }
                     }
@@ -241,7 +276,7 @@ internal fun GalleryStrip(
 private fun StripPhotoCell(photo: ProgressPhoto, file: File, onView: (ProgressPhoto) -> Unit) {
     Box(
         Modifier.width(StripCellWidth).height(StripCellHeight)
-            .clip(RoundedCornerShape(16.dp))
+            .clip(CardShape)
             .bounceClick { onView(photo) }
     ) {
         ProgressPhotoImage(file, Modifier.fillMaxSize(), reqPx = 480)

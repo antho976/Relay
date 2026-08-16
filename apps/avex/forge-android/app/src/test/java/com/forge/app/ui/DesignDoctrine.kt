@@ -265,6 +265,59 @@ object DesignDoctrine {
      */
     private val LADDER_EXEMPT = Regex("""(?i)placeholder|gradient|scrim|Brush\.""")
 
+    // ── BRANCH-SCOPED EXCLUSION — `design/surface-experiment` (2026-08-15) ──────────────────────
+    //
+    // DELETE THIS WHOLE BLOCK (and its three entries in SANCTIONED below) when the branch is
+    // dropped or merged. It is not debt and it is not doctrine: it is a fence around a UI
+    // experiment that deliberately argues with §1, §5 and §7 on exactly two screens.
+    //
+    // Scoped as narrowly as this gate allows — four files, three rules, no shared config touched:
+    //
+    //   ui/experiment/SurfaceKit.kt              the forked card primitives + data palette
+    //   ui/overview/OverviewScreen.kt            Home under test
+    //   ui/overview/components/HomeSurfaceCards.kt   Home's card bodies (split at the §15 seam)
+    //   ui/profile/ProfileSurfaceSections.kt     Profile's card sections
+    //
+    // ProfileScreen.kt is NOT listed: the rewrite left it clean against every mechanical rule.
+    // Every other screen in the app stays fully gated, and no rule is weakened globally.
+    // `-Dforge.regen=true` was NOT run; the allowlist was only ever paid DOWN.
+
+    /**
+     * §5 — the card fill, the hairline and the five data colours are literal hexes.
+     *
+     * They are literal on purpose: this is a fork, so putting them in `ui/theme/Color.kt` would
+     * mean editing the shared palette module, which §16 then requires be mirrored into DESIGN.md's
+     * §5 table — and this branch may not edit the doctrine. Keeping them in the experiment package
+     * is what lets `DoctrineParityTest` stay green while the branch runs.
+     */
+    private val SURFACE_EXPERIMENT_RAW_COLOR = setOf("ui/experiment/SurfaceKit.kt")
+
+    /**
+     * §5 — one alpha off the ladder: the card hairline at **0.06** white.
+     *
+     * There is no rung for it. The ladder's lowest is outline 0.25, which on the `#17171A` fill
+     * measures ~1.6:1 and draws as a visible grey line rather than as an edge. Everything else in
+     * the experiment was moved back onto the ladder rather than sanctioned.
+     */
+    private val SURFACE_EXPERIMENT_ALPHA = setOf("ui/experiment/SurfaceKit.kt")
+
+    /**
+     * §14 — `maxLines = 1` on mono labels, figures and the clamped serif hero.
+     *
+     * §14 itself permits all three ("chrome and mono labels may clamp"; "the serif hero may clamp
+     * its own scaling"), but the regex cannot tell a mono eyebrow from an exercise name, so it
+     * counts them. The two genuine violations this flagged — the user's own name in Home's header
+     * row, and the CTA's button label — were FIXED rather than sanctioned.
+     */
+    private val SURFACE_EXPERIMENT_MAX_LINES = setOf(
+        "ui/experiment/SurfaceKit.kt",
+        "ui/overview/OverviewScreen.kt",
+        "ui/overview/components/HomeSurfaceCards.kt",
+        "ui/profile/ProfileSurfaceSections.kt",
+    )
+
+    // ── end branch-scoped exclusion ─────────────────────────────────────────────────────────────
+
     /**
      * Files that OWN a behaviour the doctrine sanctions, so a hit there is doctrine rather than debt.
      *
@@ -278,7 +331,9 @@ object DesignDoctrine {
         // §8: the app's ONE Undo snackbar is rendered here. Every other SnackbarHostState is debt.
         "snackbar-host" to setOf("ui/common/SnackbarControllerHost.kt"),
         // §5/§14: confetti is the one deliberately polychrome moment, and its palette is literal.
-        "raw-color" to setOf("ui/common/ConfettiOverlay.kt"),
+        "raw-color" to setOf("ui/common/ConfettiOverlay.kt") + SURFACE_EXPERIMENT_RAW_COLOR,
+        "alpha" to SURFACE_EXPERIMENT_ALPHA,
+        "max-lines" to SURFACE_EXPERIMENT_MAX_LINES,
     )
 
     private fun sanctioned(rule: String, path: String) = SANCTIONED[rule]?.contains(path) == true

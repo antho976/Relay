@@ -30,6 +30,7 @@ import com.forge.app.data.db.dao.CoachProjectDao
 import com.forge.app.data.db.dao.TrainingBlockDao
 import com.forge.app.data.db.dao.CoachGoalDao
 import com.forge.app.data.db.dao.InjuryRestrictionDao
+import com.forge.app.data.db.dao.ArticleEventDao
 import com.forge.app.data.db.dao.LessonEventDao
 import com.forge.app.data.db.dao.SuggestionOutcomeDao
 import com.forge.app.data.db.dao.SessionSegmentDao
@@ -45,6 +46,7 @@ import com.forge.app.data.db.entities.DayNameOverride
 import com.forge.app.data.db.entities.ExerciseCustomization
 import com.forge.app.data.db.entities.ExerciseGoal
 import com.forge.app.data.db.entities.InjuryRestriction
+import com.forge.app.data.db.entities.ArticleEvent
 import com.forge.app.data.db.entities.LessonEvent
 import com.forge.app.data.db.entities.LoggedExercise
 import com.forge.app.data.db.entities.LoggedSet
@@ -141,12 +143,13 @@ import com.forge.app.data.db.entities.VacationPeriod
         SessionHrSample::class,
         CoachGoal::class,
         LessonEvent::class,
+        ArticleEvent::class,
         CheckinEntry::class,
         InjuryRestriction::class,
         TrainingBlock::class,
         CoachProject::class
     ],
-    version = 35,
+    version = 36,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -182,6 +185,7 @@ abstract class ForgeDatabase : RoomDatabase() {
     abstract fun coachProjectDao(): CoachProjectDao
     abstract fun injuryRestrictionDao(): InjuryRestrictionDao
     abstract fun lessonEventDao(): LessonEventDao
+    abstract fun articleEventDao(): ArticleEventDao
     abstract fun suggestionOutcomeDao(): SuggestionOutcomeDao
     abstract fun sessionSegmentDao(): SessionSegmentDao
 }

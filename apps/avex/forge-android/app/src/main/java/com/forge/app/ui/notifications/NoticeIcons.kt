@@ -171,5 +171,7 @@ object NoticeIcons {
         NoticeGlyph.HOUSEKEEPING -> Housekeeping
         NoticeGlyph.BELL -> Bell
         NoticeGlyph.WATCH -> Watch
+        // The same glyph the Academy tab carries, so a lesson row is recognisably from there.
+        NoticeGlyph.ACADEMY -> NavIcons.Academy
     }
 }

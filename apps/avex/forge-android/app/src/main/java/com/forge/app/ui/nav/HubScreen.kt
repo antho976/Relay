@@ -49,6 +49,8 @@ fun HubScreen(
     initialPage: Int = BottomTab.HOME.ordinal,
     pendingPage: Int? = null,
     onPendingConsumed: () -> Unit = {},
+    /** Unread lessons, badged on the Academy tab. See `ForgeBottomBar`'s `badges` for why. */
+    academyUnread: Int = 0,
     viewModel: HubViewModel = hiltViewModel(),
 ) {
     val coachEnabled by viewModel.coachEnabled.collectAsStateWithLifecycle()
@@ -94,7 +96,14 @@ fun HubScreen(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         // targetPage (not currentPage) so the highlight tracks the destination the instant a swipe or
         // tap commits, rather than snapping only once the page settles.
-        bottomBar = { ForgeBottomBar(tabs = tabs, selectedIndex = pagerState.targetPage, onSelect = { goTo(it) }) }
+        bottomBar = {
+            ForgeBottomBar(
+                tabs = tabs,
+                selectedIndex = pagerState.targetPage,
+                onSelect = { goTo(it) },
+                badges = mapOf(BottomTab.ACADEMY to academyUnread)
+            )
+        }
     ) { innerPadding ->
         HorizontalPager(
             state = pagerState,
@@ -159,7 +168,8 @@ fun HubScreen(
                 )
                 // A pager page, so no back arrow — swiping off it IS the back gesture.
                 BottomTab.ACADEMY -> AcademyScreen(
-                    onOpenTrack = { nav.navigate(Routes.academyTrack(it.code)) }
+                    onOpenTrack = { nav.navigate(Routes.academyTrack(it.code)) },
+                    onOpenArticle = { nav.navigate(Routes.article(it)) }
                 )
             }
         }

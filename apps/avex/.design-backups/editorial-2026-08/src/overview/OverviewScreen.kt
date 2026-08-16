@@ -1,0 +1,675 @@
+package com.forge.app.ui.overview
+
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.animateIntAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.Role
+import com.forge.app.Features
+import com.forge.app.ui.common.NotificationBell
+import com.forge.app.ui.nav.NavIcons
+import com.forge.app.ui.common.bounceCombinedClick
+import com.forge.app.ui.common.clickableLabeled
+import com.forge.app.ui.overview.state.OnThisDayMemory
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.forge.app.domain.units.toDisplayWeight
+import com.forge.app.domain.units.unitLabel
+import com.forge.app.ui.theme.LocalForgeSettings
+import com.forge.app.program.Program
+import com.forge.app.program.Trophies
+import com.forge.app.ui.common.InlineEmptyHint
+import com.forge.app.ui.common.statsEntrance
+import com.forge.app.ui.profile.GoalLinesSection
+import com.forge.app.ui.overview.components.OverviewStat
+import com.forge.app.ui.overview.components.RecentRow
+import com.forge.app.ui.overview.components.TrophiesTile
+import com.forge.app.ui.overview.components.WeekDayBox
+import java.time.LocalDate
+
+/** The freestyle/no-plan hero CTA — the same white-capsule idiom as Start session (§8/§9: bounce, no ripple). */
+@Composable
+private fun HeroCta(text: String, label: String, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(50))
+            .background(Color.White)
+            .bounceCombinedClick(onClickLabel = label, onClick = onClick)
+            .padding(horizontal = 32.dp, vertical = 18.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(text, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, color = Color.Black)
+    }
+}
+
+/** Half the slack between a top-bar icon's 44dp touch target and its 20dp glyph. Shifting a glyph
+ *  out by this puts its edge on the page's 24dp gutter while the target keeps its full size. */
+private val GUTTER_SLACK = 12.dp
+
+/** Top-bar icon with a ≥44dp tappable area + spoken label, while the glyph stays visually small. */
+@Composable
+private fun TopBarIconButton(
+    icon: ImageVector,
+    label: String,
+    tint: Color,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = modifier
+            .sizeIn(minWidth = 44.dp, minHeight = 44.dp)
+            .clickableLabeled(label, onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(20.dp))
+    }
+}
+
+/** The shared "COACH" home-section scaffold (divider + label + a tappable headline/body). At most one
+ *  of three states fills it — learning countdown, fatigue nudge, or persistent entry — so they share
+ *  one treatment and can't drift apart. Emits into the calling column in order. */
+@Composable
+private fun CoachHomeBlock(headline: String, body: String, clickLabel: String, onClick: () -> Unit) {
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val onBg = MaterialTheme.colorScheme.onBackground
+    val outline = MaterialTheme.colorScheme.outline
+    // §1/§14: sections separate by air + mono header alone — no hairline strips.
+    Spacer(Modifier.height(28.dp))
+    Text("COACH", style = MaterialTheme.typography.labelMedium, color = muted)
+    Spacer(Modifier.height(10.dp))
+    Column(
+        Modifier.fillMaxWidth().clickableLabeled(clickLabel) { onClick() }.padding(vertical = 2.dp)
+    ) {
+        Text(headline, style = MaterialTheme.typography.bodyMedium, color = onBg)
+        Spacer(Modifier.height(2.dp))
+        Text(body, style = MaterialTheme.typography.bodySmall, color = muted)
+    }
+}
+
+@Composable
+fun OverviewScreen(
+    onStartSession: (dayKey: String) -> Unit,
+    /** Opens the Academy on the cold-start lesson the directive is carrying (B3). */
+    onOpenAcademy: () -> Unit = {},
+    onStartSessionSkipWarmup: (dayKey: String) -> Unit = onStartSession,
+    onViewProgram: () -> Unit,
+    onGoToCardio: () -> Unit,
+    onGoToTrophies: () -> Unit,
+    onOpenNotes: () -> Unit = {},
+    onGoToNutrition: () -> Unit = {},
+    onOpenCoachBrief: () -> Unit = {},
+    onOpenCoachLab: () -> Unit = {},
+    onOpenGoals: () -> Unit = {},
+    onOpenProfile: () -> Unit = {},
+    onOpenSession: (Long) -> Unit = {},
+    onViewAllHistory: () -> Unit = {},
+    onLogFreestyle: () -> Unit = {},
+    onBuildPlan: () -> Unit = {},
+    viewModel: OverviewViewModel = hiltViewModel()
+) {
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    val freestyleMode by viewModel.freestyleMode.collectAsStateWithLifecycle()
+    val coachEnabled by viewModel.coachEnabled.collectAsStateWithLifecycle()
+    val programEmpty by viewModel.programEmpty.collectAsStateWithLifecycle()
+    val selectedItem by viewModel.selectedItem.collectAsStateWithLifecycle()
+    val summaryLines by viewModel.sessionExerciseLines.collectAsStateWithLifecycle()
+    val movement by viewModel.movement.collectAsStateWithLifecycle()
+
+    // Keep the movement line current across a day of glances (W6) — steps taken while away should
+    // show on return, same resume-refresh rule as the cardio hero's TODAY line (GYMAP-64).
+    val movementLifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(movementLifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                viewModel.refreshMovement()
+                // The answer is date- and session-sensitive: a directive that still says "Push day"
+                // after you trained, or after midnight, is worse than none (B2).
+                viewModel.refreshDirective()
+            }
+        }
+        movementLifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { movementLifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    // Firing a milestone persists it (so it can't recompute/re-fire) AND queues it in the
+    // notifications feed. It used to flash here as a six-second toast, which meant a milestone earned
+    // while the app was closed was gone before it was ever read; it now waits under the bell.
+    LaunchedEffect(state.pendingMilestone) {
+        state.pendingMilestone?.let { viewModel.onMilestoneShown(it.id) }
+    }
+
+    // Rise + fade entrance, but ONLY on the first show after a cold launch — not every time you
+    // swipe back to Home (Home is a pager page that gets disposed/recomposed as you swipe away and
+    // back). The "played" flag is rememberSaveable so it survives the page leaving the viewport and
+    // returning; after the first play, Home settles in like any other swipable page.
+    var entrancePlayed by rememberSaveable { mutableStateOf(false) }
+    val entry = remember { Animatable(if (entrancePlayed) 1f else 0f) }
+    LaunchedEffect(Unit) {
+        if (!entrancePlayed) {
+            entry.animateTo(1f, animationSpec = tween(450))
+            entrancePlayed = true
+        }
+    }
+
+    val today = LocalDate.now()
+    val todayDow = today.dayOfWeek.value - 1
+
+    val nextDay = Program.days.firstOrNull { it.key == state.nextUpDayKey }
+
+    val onBg = MaterialTheme.colorScheme.onBackground
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val accent = MaterialTheme.colorScheme.primary
+    val outline = MaterialTheme.colorScheme.outline
+
+    if (selectedItem != null) {
+        val item = selectedItem!!
+        SummarySheet(
+            title = item.title,
+            dateMs = item.timestampMs,
+            tag = item.tag,
+            durationMin = item.durationMin,
+            volumeLb = item.volumeLb,
+            prCount = item.prCount,
+            vsAvgPct = item.vsAvgPct,
+            isBest = item.isBest,
+            isGym = item.isGym,
+            distanceKm = item.distanceKm,
+            exerciseLines = summaryLines,
+            onDismiss = { viewModel.clearSelectedItem() }
+        )
+    }
+
+    Scaffold(containerColor = Color.Transparent) { inner ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(inner)
+                .graphicsLayer {
+                    alpha = entry.value
+                    translationY = (1f - entry.value) * 24.dp.toPx()
+                }
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 24.dp)
+        ) {
+            Spacer(Modifier.height(16.dp))
+
+            // ── Top bar ──────────────────────────────────────────────────────
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Both glyphs are pulled OUT by half the slack between their 44dp target and their
+                // 20dp glyph, so the glyph edges land on the page's 24dp gutter — level with the
+                // serif hero and the mono headers below. Centred in the target they sat 12dp inboard
+                // of everything else, which is what read as "weirdly placed" (Antho, 2026-07-27).
+                // `offset` (not `absoluteOffset`) so the pair mirrors under RTL.
+                NotificationBell(modifier = Modifier.offset(x = (-GUTTER_SLACK)))
+                // Profile took the slot Settings held: the gear moved inside Profile, which is where
+                // you go to change things about yourself anyway.
+                TopBarIconButton(
+                    NavIcons.Profile, "Profile", muted.copy(alpha = 0.7f),
+                    modifier = Modifier.offset(x = GUTTER_SLACK)
+                ) { onOpenProfile() }
+            }
+
+            // Every banner that used to stack here — milestone, coach brief, orphan-session notice
+            // and the resume reminder — moved to the notifications page behind the bell above
+            // (2026-07-27). The nudge cards had already gone (Antho 2026-07-04), so the top of Home
+            // is now the top bar and then the answer: nothing between the two. The resume path is not
+            // lost with the strip, because the hero CTA below already reads "Resume session →"
+            // whenever a session is live.
+
+            Spacer(Modifier.height(20.dp))
+
+            if (freestyleMode || programEmpty) {
+                // No fixed plan to surface — lead with a CTA instead of a next-up day card.
+                // freestyle → log what you did; no-plan (custom) → build a plan. Custom is a plan mode,
+                // not the logger, so there's no freestyle fallback in the no-plan state.
+                Text("TODAY", style = MaterialTheme.typography.labelSmall, fontSize = 13.sp, color = muted)
+                Spacer(Modifier.height(2.dp))
+                Text(if (freestyleMode) "Open workout" else "No plan yet",
+                    style = MaterialTheme.typography.displayLarge, color = onBg)
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    if (freestyleMode) "No fixed plan. Log whatever you trained, whenever you want."
+                    else "Build your own plan and Avex will guide each session.",
+                    style = MaterialTheme.typography.bodyMedium.copy(fontStyle = FontStyle.Italic), color = muted
+                )
+                Spacer(Modifier.height(20.dp))
+                if (programEmpty && !freestyleMode) {
+                    // Custom user hasn't built their plan yet — a single CTA into the builder. No
+                    // "log a workout" fallback here: this mode is "make my plan", not the logger.
+                    // Same hero-CTA idiom as Start session below: bounce, no ripple (§8/§9).
+                    HeroCta("Build a plan →", "Build your plan", onBuildPlan)
+                } else {
+                    HeroCta("Log a workout →", "Log a workout", onLogFreestyle)
+                }
+            } else {
+                // ── Today's directive (Coach v3 B2) ──────────────────────────────
+                // The coach's one answer OWNS this slot (plan M7): it replaces the bare
+                // next-workout name rather than stacking beside it, so the page never says the
+                // same thing twice. Until the first read lands, the old next-up name stands in —
+                // the hero is never blank.
+                val directive = state.directive
+                val trainedToday = todayDow in state.weekDaysTrained
+                Text(
+                    when {
+                        directive == null && trainedToday -> "TOMORROW"
+                        else -> "TODAY"
+                    },
+                    style = MaterialTheme.typography.labelSmall, fontSize = 13.sp, color = muted
+                )
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    directive?.headline ?: state.customDayName ?: nextDay?.defaultName ?: "Ready",
+                    style = MaterialTheme.typography.displayLarge,
+                    color = onBg,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = if (nextDay != null) Modifier.clickableLabeled("Edit this day's program") { onBuildPlan() } else Modifier
+                )
+                // The reason is the hero's one prose line — always present, never a menu (§4.3).
+                if (directive != null) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        directive.reason,
+                        style = MaterialTheme.typography.bodyMedium.copy(fontStyle = FontStyle.Italic),
+                        color = muted
+                    )
+                    directive.secondary?.let { secondary ->
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            secondary,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = muted.copy(alpha = 0.7f)
+                        )
+                    }
+                    // While the coach is still learning you, the curriculum carries the day: one
+                    // lesson, tappable, never a wall of onboarding text (B3 cold-start mode).
+                    state.coldStartLesson?.let { lesson ->
+                        Spacer(Modifier.height(10.dp))
+                        Text(
+                            "Read: ${lesson.title} →",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = accent,
+                            modifier = Modifier
+                                .clickableLabeled("Open the lesson: ${lesson.title}") { onOpenAcademy() }
+                                .padding(vertical = 4.dp)
+                        )
+                    }
+                    // Today's targets, three lines of it: what the session will actually ask for.
+                    state.brief?.targets?.filter { it.targetWeightLb != null }?.take(3)?.let { targets ->
+                        if (targets.isNotEmpty()) {
+                            Spacer(Modifier.height(10.dp))
+                            targets.forEach { t ->
+                                Text(
+                                    "${t.name} · ${t.setsText}×${t.repsText} @ ${com.forge.app.domain.units.formatWeight(t.targetWeightLb!!, LocalForgeSettings.current.weightUnit)}",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = muted
+                                )
+                            }
+                        }
+                    }
+                } else if (nextDay != null) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        "${nextDay.subtitle} · ${nextDay.exercises.size} exercises",
+                        style = MaterialTheme.typography.bodyMedium.copy(fontStyle = FontStyle.Italic),
+                        color = muted
+                    )
+                }
+
+                Spacer(Modifier.height(20.dp))
+
+                // ── Start / resume session + skip warmup ─────────────────────────
+                val resumeKey = state.activeSessionDayKey
+                val ctaDayKey = resumeKey ?: state.nextUpDayKey
+                // The column wraps to the button's width, so the hint centres under the CTA. Tap starts
+                // the session; a long-press starts it and skips the warmup (fresh start only, not a resume).
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(50))
+                            .background(Color.White)
+                            .bounceCombinedClick(
+                                onClick = { onStartSession(ctaDayKey) },
+                                onClickLabel = if (resumeKey != null) "Resume session" else "Start session",
+                                onLongClick = if (resumeKey == null) {
+                                    { onStartSessionSkipWarmup(state.nextUpDayKey) }
+                                } else null,
+                                onLongClickLabel = "Start, skipping warmup"
+                            )
+                            .padding(horizontal = 32.dp, vertical = 18.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            if (resumeKey != null) "Resume session →" else "Start session →",
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color.Black
+                        )
+                    }
+                    // Quiet hint just under the CTA — faint, no outline. Where the skip-warmup link used
+                    // to live; the hold gesture replaces it.
+                    if (resumeKey == null) {
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "Hold to skip warmup",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = muted.copy(alpha = 0.65f)
+                        )
+                    }
+                }
+            }
+
+            // §1/§14: air + the mono header separate sections — the hairlines are gone.
+            Spacer(Modifier.height(28.dp))
+
+            // ── This week ────────────────────────────────────────────────────
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically) {
+                Text("THIS WEEK", style = MaterialTheme.typography.labelMedium, color = muted)
+                // The weekly target + program link only make sense with a real plan. Hidden for
+                // freestyle and for a custom user who hasn't built their plan yet (the weekday boxes and
+                // workout/volume/cardio stats below stay — they track actual activity in every mode).
+                if (!freestyleMode && !programEmpty) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("${state.workoutsThisWeek} of ${state.weeklyWorkoutTarget} target", style = MaterialTheme.typography.labelSmall, color = muted)
+                        Text("·", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.65f))
+                        Text("view program →", style = MaterialTheme.typography.labelMedium,
+                            color = onBg,
+                            modifier = Modifier.clickableLabeled("View your program") { onViewProgram() }.padding(vertical = 2.dp))
+                    }
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                listOf("M", "T", "W", "T", "F", "S", "S").forEachIndexed { i, letter ->
+                    WeekDayBox(letter = letter, trained = i in state.weekDaysTrained,
+                        isToday = i == todayDow, outlineColor = outline, modifier = Modifier.weight(1f))
+                }
+            }
+            Spacer(Modifier.height(16.dp))
+
+            val weightUnit = LocalForgeSettings.current.weightUnit
+            val animWorkouts by animateIntAsState(state.workoutsThisWeek.coerceAtLeast(0), label = "workouts")
+            val animVolume by animateIntAsState(toDisplayWeight(state.volumeThisWeekLb, weightUnit).coerceAtLeast(0.0).toInt(), label = "volume")
+            val animCardio by animateIntAsState(state.cardioMinutesThisWeek.coerceAtLeast(0), label = "cardio")
+            Row(modifier = Modifier.fillMaxWidth()) {
+                OverviewStat(value = "$animWorkouts", label = "WORKOUTS", modifier = Modifier.weight(1f))
+                OverviewStat(value = "$animVolume", label = unitLabel(weightUnit).uppercase(), modifier = Modifier.weight(1f))
+                OverviewStat(
+                    value = if (state.cardioWeeklyTargetMin > 0) "$animCardio/${state.cardioWeeklyTargetMin}" else "$animCardio",
+                    label = "CARDIO MIN", modifier = Modifier.weight(1f)
+                )
+            }
+
+            // ── Movement today (W6) — the watch's step count against a typical day. Rendered only
+            // when steps are connected (GYMAP-64 rule: honest zero when connected, hidden otherwise);
+            // the bar is the mark and works at zero (§12). "Typical" = median of the last 14 days.
+            movement?.let { m ->
+                Spacer(Modifier.height(16.dp))
+                MovementLine(m, onBg = onBg, muted = muted, outline = outline, accent = accent)
+            }
+
+            // ── Coach (adaptation engine: actionable advice only) ────────────
+            // Hidden in freestyle (no plan to coach against); shown for generated AND custom — custom
+            // has a real plan, so fatigue/deload/swap advice all apply once they've trained.
+            if (coachEnabled && !freestyleMode && state.coach.isNotEmpty()) {
+                Spacer(Modifier.height(28.dp))
+                Text("COACH", style = MaterialTheme.typography.labelMedium, color = muted)
+                Spacer(Modifier.height(10.dp))
+                // Each coach card cascades in (fade + settle-up), so the section reveals as a
+                // sequence rather than one block. Reduced-motion-safe via the shared motion kit.
+                state.coach.forEachIndexed { index, item ->
+                    Column(Modifier.fillMaxWidth().statsEntrance(index).padding(bottom = 14.dp)) {
+                        Text(item.title, style = MaterialTheme.typography.bodyMedium, color = onBg)
+                        Spacer(Modifier.height(2.dp))
+                        Text(item.body, style = MaterialTheme.typography.bodySmall, color = muted)
+                        Spacer(Modifier.height(6.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                            if (item.applyLabel != null) {
+                                Text(
+                                    "${item.applyLabel} →",
+                                    style = MaterialTheme.typography.labelSmall, color = accent,
+                                    modifier = Modifier
+                                        .clickableLabeled("Apply this suggestion") { viewModel.applyCoach(item) }
+                                        .padding(vertical = 2.dp)
+                                )
+                            }
+                            Text(
+                                "dismiss",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = muted.copy(alpha = 0.7f),
+                                modifier = Modifier
+                                    .clickableLabeled("Dismiss this suggestion") { viewModel.dismissCoach(item) }
+                                    .padding(vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            // ── Coach (home entry) — at most one shows: a learning countdown (CD-1), a fatigue nudge
+            // (Tier 3), or a persistent "quiet but reachable" entry (D3). All share CoachHomeBlock. ──
+            // Same gate as the actionable coach above: present for generated/custom, hidden in freestyle.
+            if (coachEnabled && !freestyleMode) {
+                state.coachFatigue?.let { f ->
+                    CoachHomeBlock(
+                        "Recovery signals building.",
+                        "Fatigue ${f.score} of ${f.threshold}${f.topDriver?.let { " · $it" } ?: ""}. " +
+                            "Not a deload yet, but easing up helps. See what it's tracking →",
+                        clickLabel = "Open Coach Lab", onClick = onOpenCoachLab
+                    )
+                }
+                // The generic "Your coach → see the brief" entry that used to sit here was removed
+                // (Antho 2026-07-03): the coach already has its own tab + a new-analysis pop-up, so the
+                // Home pointer was redundant. Goals took its spot below as the ambient motivator.
+            }
+
+            // ── Goals — folded into THIS WEEK (no separator): the week's figures run straight
+            // into what you're working toward ──
+            Spacer(Modifier.height(26.dp))
+            GoalLinesSection(state.goals, state.customGoals, onOpenGoals, onBg, muted, accent, outline)
+
+            Spacer(Modifier.height(28.dp))
+
+            // ── Recent ───────────────────────────────────────────────────────
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically) {
+                Text("RECENT", style = MaterialTheme.typography.labelMedium, color = muted)
+                Text("view all →", style = MaterialTheme.typography.labelSmall,
+                    color = muted, fontSize = 10.sp,
+                    modifier = Modifier.clickableLabeled("View all sessions") { onViewAllHistory() }.padding(vertical = 2.dp))
+            }
+            Spacer(Modifier.height(10.dp))
+            if (state.recentItems.isEmpty()) {
+                // Point at whichever CTA this mode actually shows above, so the hint isn't a dead end.
+                InlineEmptyHint(
+                    when {
+                        freestyleMode -> "No workouts yet. Tap \"Log a workout\" above and your first shows up here."
+                        programEmpty -> "No workouts yet. Tap \"Build a plan\" above to set up your plan, then start training."
+                        else -> "No workouts yet. Tap \"Start session\" above and your first shows up here."
+                    },
+                    color = muted
+                )
+            } else {
+                state.recentItems.forEach { item ->
+                    RecentRow(item = item, muted = muted, onBg = onBg, outline = outline,
+                        // Gym sessions open the full detail page; cardio keeps the lightweight summary sheet.
+                        onClick = { if (item.isGym) onOpenSession(item.id) else viewModel.selectRecentItem(item) })
+                    Spacer(Modifier.height(14.dp))
+                }
+            }
+
+            // ── On this day: a session from N months ago near today's date (#106) ──
+            state.onThisDayMemory?.let { memory ->
+                Spacer(Modifier.height(16.dp))
+                OnThisDayCard(memory = memory, onBg = onBg, muted = muted, accent = accent, outline = outline)
+            }
+
+            Spacer(Modifier.height(28.dp))
+
+            // ── Trophies (gamification only) ─────────────────────────────────
+            // "Search notes" and the cardio "Moved today?" nudge have been pulled from the home
+            // page (UI only). Their handlers (onOpenNotes / onGoToCardio) stay wired and all backing
+            // state is untouched — so these surfaces can be re-added without re-plumbing.
+            // Trophies (gamification) are parked behind Features.SHOW_GAMIFICATION.
+            if (Features.SHOW_GAMIFICATION) {
+                TrophiesTile(unlocked = state.trophiesUnlocked, total = Trophies.all.size,
+                    onClick = onGoToTrophies, onBg = onBg, muted = muted, outline = outline,
+                    modifier = Modifier.fillMaxWidth())
+            }
+
+            // "Up next" trophy — the locked trophy closest to unlocking (a near-miss retention hook, #136).
+            if (Features.SHOW_GAMIFICATION) state.topNearMiss?.let { nudge ->
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "▲ NEXT TROPHY · $nudge",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = accent,
+                    fontSize = 10.sp,
+                    modifier = Modifier
+                        .clickableLabeled("Trophy almost unlocked, $nudge") { onGoToTrophies() }
+                        .padding(vertical = 2.dp)
+                )
+            }
+
+            Spacer(Modifier.height(8.dp))
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                Text("Nutrition · soon", style = MaterialTheme.typography.labelSmall,
+                    color = muted.copy(alpha = 0.7f), fontSize = 10.sp,
+                    modifier = Modifier.clickableLabeled("Open Nutrition") { onGoToNutrition() }.padding(4.dp))
+            }
+
+            Spacer(Modifier.height(24.dp))
+        }
+    }
+}
+
+/**
+ * "On this day" nostalgia card (#106) — surfaces a session from 1/3/6/12 months ago that lands near
+ * today's date. Display-only; tapping through to the session is a separate roadmap item.
+ */
+@Composable
+private fun OnThisDayCard(
+    memory: OnThisDayMemory,
+    onBg: Color,
+    muted: Color,
+    accent: Color,
+    outline: Color
+) {
+    val weightUnit = LocalForgeSettings.current.weightUnit
+    val agoLabel = com.forge.app.ui.common.monthsAgoPhrase(memory.monthsAgo).uppercase()
+    val vol = com.forge.app.domain.units.formatVolumeCompact(memory.totalVolumeLb, weightUnit)
+    val prText = if (memory.prCount > 0) " · ${memory.prCount} PR${if (memory.prCount > 1) "s" else ""}" else ""
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .border(1.dp, outline.copy(alpha = 0.35f), RoundedCornerShape(12.dp))
+            .padding(horizontal = 14.dp, vertical = 12.dp)
+    ) {
+        Text("ON THIS DAY · $agoLabel", style = MaterialTheme.typography.labelSmall,
+            color = muted, fontSize = 10.sp)
+        Spacer(Modifier.height(2.dp))
+        Text("You trained ${memory.dayName} · $vol moved$prText",
+            style = MaterialTheme.typography.bodyMedium, color = onBg)
+    }
+}
+
+/**
+ * The Home movement line (W6): today's watch steps against a typical day (14-day median), the
+ * quiet daily-movement read between sessions. One thin bar (fill `primary` on an outline track,
+ * §5) + one mono reading — honest at zero, hidden entirely when steps aren't connected.
+ */
+@Composable
+private fun MovementLine(
+    movement: OverviewViewModel.TodayMovement,
+    onBg: Color,
+    muted: Color,
+    outline: Color,
+    accent: Color
+) {
+    val reading = buildString {
+        append("%,d".format(movement.steps))
+        append(" STEPS")
+        movement.typicalSteps?.let { append(" · TYPICAL ~%,d".format(it)) }
+    }
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("MOVEMENT", style = MaterialTheme.typography.labelMedium, color = muted)
+            Text(
+                reading,
+                style = MaterialTheme.typography.labelSmall,
+                color = muted, fontSize = 9.sp, letterSpacing = 0.5.sp
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+        // Today against the typical-day mark; with no baseline yet the bar shows today against
+        // itself (full when any steps, empty at zero) — a real reading either way, never fake.
+        val target = movement.typicalSteps ?: movement.steps
+        val fraction = if (target <= 0) 0f else (movement.steps.toFloat() / target).coerceIn(0f, 1f)
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(4.dp)
+                .background(outline.copy(alpha = 0.3f), RoundedCornerShape(2.dp))
+        ) {
+            if (fraction > 0f) {
+                Box(
+                    Modifier
+                        .fillMaxWidth(fraction)
+                        .height(4.dp)
+                        .background(accent, RoundedCornerShape(2.dp))
+                )
+            }
+        }
+    }
+}

@@ -69,6 +69,7 @@ fun NotificationsScreen(
     onOpenCoachBrief: () -> Unit,
     onConnectWearable: () -> Unit,
     onOpenNotificationSettings: () -> Unit,
+    onOpenLesson: (lessonId: String) -> Unit,
     viewModel: NotificationsViewModel = hiltViewModel(),
 ) {
     val notices by viewModel.notices.collectAsStateWithLifecycle()
@@ -85,6 +86,9 @@ fun NotificationsScreen(
             is NoticeAction.ResumeSession -> onResumeSession(action.dayKey)
             NoticeAction.OpenCoachBrief -> { viewModel.onCoachBriefOpened(); onOpenCoachBrief() }
             NoticeAction.ConnectWearable -> onConnectWearable()
+            // Opening the lesson is what clears its row: the feed shows unlocked-and-unread
+            // lessons, and the Academy records the open. No separate dismissal needed.
+            is NoticeAction.OpenLesson -> onOpenLesson(action.lessonId)
             // The OS app-notification screen rather than a permission request: it works however many
             // times the permission was already denied, which a re-request does not.
             NoticeAction.EnableNotifications -> context.startActivity(

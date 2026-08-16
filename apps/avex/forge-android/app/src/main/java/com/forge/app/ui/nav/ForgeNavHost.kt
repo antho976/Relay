@@ -137,10 +137,15 @@ fun ForgeNavHost(initialDayKey: String? = null) {
     val cardioTypesVm: com.forge.app.ui.cardio.CardioTypesViewModel = hiltViewModel()
     val cardioTypes by cardioTypesVm.types.collectAsStateWithLifecycle()
 
+    // Where the bell sits, so an arrival banner can fly into it. One anchor for the whole app: the
+    // bell is Home-only (§4.6), so at most one is ever composed.
+    val bellAnchor = remember { com.forge.app.ui.common.BellAnchor() }
+
     CompositionLocalProvider(
         com.forge.app.ui.common.LocalGoHome provides goHome,
         com.forge.app.ui.common.LocalOpenNotifications provides openNotifications,
         com.forge.app.ui.common.LocalUnreadNotifications provides notices.size,
+        com.forge.app.ui.common.LocalBellAnchor provides bellAnchor,
         com.forge.app.ui.cardio.LocalCardioTypes provides cardioTypes
     ) {
     NavHost(
@@ -178,7 +183,10 @@ fun ForgeNavHost(initialDayKey: String? = null) {
                 nav = nav,
                 initialPage = initialHubPage,
                 pendingPage = pendingHubPage,
-                onPendingConsumed = { pendingHubPage = null }
+                onPendingConsumed = { pendingHubPage = null },
+                // Counted from the same feed the bell reads, so a kind switched off in Settings
+                // drops out of both at once and they can never disagree.
+                academyUnread = notices.count { it.kind == com.forge.app.data.repo.NoticeKind.ACADEMY }
             )
         }
         composable(Routes.FREESTYLE_LOG) {
@@ -291,6 +299,12 @@ fun ForgeNavHost(initialDayKey: String? = null) {
                 // returns to the feed you were just looking at to see the effect.
                 onOpenNotificationSettings = {
                     nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Notifications.name))
+                },
+                // Popped like the other acting rows, so Back from the lesson returns to where the
+                // user actually was rather than to a feed row that has since cleared itself.
+                onOpenLesson = { lessonId ->
+                    nav.popBackStack()
+                    nav.navigate(Routes.academy(lessonId))
                 }
             )
         }
@@ -302,11 +316,28 @@ fun ForgeNavHost(initialDayKey: String? = null) {
         }
         // The lab and timeline are now lenses of the one Coach page; the routes stay so every
         // existing "what it's watching" and "learning timeline" link lands on the right lens.
-        composable(Routes.ACADEMY) {
+        composable(
+            route = Routes.ACADEMY,
+            arguments = listOf(
+                navArgument(Routes.ARG_LESSON_ID) { type = NavType.StringType; defaultValue = "" }
+            )
+        ) { entry ->
             com.forge.app.ui.academy.AcademyScreen(
                 onBack = { nav.popBackStack() },
-                onOpenTrack = { nav.navigate(Routes.academyTrack(it.code)) }
+                onOpenTrack = { nav.navigate(Routes.academyTrack(it.code)) },
+                onOpenArticle = { nav.navigate(Routes.article(it)) },
+                // A feed row lands straight on its lesson rather than on the hub, so tapping
+                // "new lesson" reads the lesson instead of asking the user to find it.
+                initialLessonId = entry.arguments?.getString(Routes.ARG_LESSON_ID)?.takeIf { it.isNotBlank() }
             )
+        }
+        composable(
+            route = Routes.ARTICLE,
+            arguments = listOf(navArgument(Routes.ARG_ARTICLE_ID) { type = NavType.StringType })
+        ) {
+            // A retired id resolves to null and the screen says so inline (§12) rather than popping
+            // the back stack: a link from an old coach reason should explain itself, not vanish.
+            com.forge.app.ui.academy.ArticleScreen(onBack = { nav.popBackStack() })
         }
         composable(
             route = Routes.ACADEMY_TRACK,
@@ -379,6 +410,11 @@ fun ForgeNavHost(initialDayKey: String? = null) {
             BodyMeasurementsScreen(onBack = { nav.popBackStack() })
         }
     }
+
+    // The arrival banner. Inside the provider so it can read the bell's anchor, and drawn AFTER the
+    // nav host so it overlays every screen without joining any of their layouts (§4.6: a notice
+    // belongs in the feed, and this is only the receipt for one landing there).
+    com.forge.app.ui.common.ArrivalBannerHost()
     }
 
     // App-wide guard: intercepts any program change that would discard an in-progress workout,

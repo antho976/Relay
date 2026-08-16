@@ -13,6 +13,7 @@ import com.forge.app.data.db.dao.CoachProjectDao
 import com.forge.app.data.db.dao.TrainingBlockDao
 import com.forge.app.data.db.dao.CoachGoalDao
 import com.forge.app.data.db.dao.InjuryRestrictionDao
+import com.forge.app.data.db.dao.ArticleEventDao
 import com.forge.app.data.db.dao.LessonEventDao
 import com.forge.app.data.db.dao.CardioDao
 import com.forge.app.data.db.dao.DayNameOverrideDao
@@ -75,6 +76,7 @@ object DatabaseModule {
     @Provides fun provideCoachProjectDao(db: ForgeDatabase): CoachProjectDao = db.coachProjectDao()
     @Provides fun provideInjuryRestrictionDao(db: ForgeDatabase): InjuryRestrictionDao = db.injuryRestrictionDao()
     @Provides fun provideLessonEventDao(db: ForgeDatabase): LessonEventDao = db.lessonEventDao()
+    @Provides fun provideArticleEventDao(db: ForgeDatabase): ArticleEventDao = db.articleEventDao()
     @Provides fun provideBodyFatDao(db: ForgeDatabase): BodyFatDao = db.bodyFatDao()
     @Provides fun provideLeanMassDao(db: ForgeDatabase): com.forge.app.data.db.dao.LeanMassDao = db.leanMassDao()
     @Provides fun provideSessionHrSampleDao(db: ForgeDatabase): com.forge.app.data.db.dao.SessionHrSampleDao = db.sessionHrSampleDao()

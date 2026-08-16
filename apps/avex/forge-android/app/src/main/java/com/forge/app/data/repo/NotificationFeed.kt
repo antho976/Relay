@@ -27,6 +27,9 @@ sealed interface NoticeAction {
     data object OpenCoachBrief : NoticeAction
     data object ConnectWearable : NoticeAction
 
+    /** Opens one Academy lesson. The row exists because its coach moment fired, not on a schedule. */
+    data class OpenLesson(val lessonId: String) : NoticeAction
+
     /** Opens the OS app-notification settings. Not app navigation, so the screen handles it. */
     data object EnableNotifications : NoticeAction
     data object None : NoticeAction
@@ -40,9 +43,23 @@ sealed interface NoticeAction {
 enum class NoticeKind(val key: String, val label: String, val explainer: String) {
     // Each explainer says what the ROW will offer, never what its own label already said — "a workout
     // you started but haven't finished" is a definition of "unfinished workout", not information.
+    //
+    // DECLARATION ORDER IS FEED RANK (DESIGN §4.8, lead with the live): what you are mid-way
+    // through, then what waits on a decision, then what happened, then housekeeping, then invites.
+    // [key] is the stored id and must never change, but reordering these is free and is how a new
+    // kind picks its place in the list.
     ACTIVE_SESSION("active_session", "Unfinished workouts", "Resume where you stopped"),
     COACH_BRIEF("coach_brief", "Coach briefs", "Each week's read, when it's new"),
     MILESTONE("milestone", "Milestones", "100 workouts, your first full month"),
+
+    /**
+     * A lesson the coach just opened for you.
+     *
+     * This kind is the reason the Academy never interrupts. A new lesson is knowledge that became
+     * relevant, not a decision waiting on you, so it waits behind the bell until you go looking.
+     * The toggle exists for readers who would rather find lessons themselves.
+     */
+    ACADEMY("academy", "New lessons", "When the coach opens one for you"),
     RESULT("result", "Imports and backups", "What an import or restore brought in"),
     SETUP("setup", "Setup invites", "Connect a watch, turn on alerts"),
 }
@@ -51,7 +68,7 @@ enum class NoticeKind(val key: String, val label: String, val explainer: String)
  * Which glyph leads a row. A symbol rather than an `ImageVector` so the feed stays free of UI types;
  * `ui/notifications/NoticeIcons.kt` owns the drawing.
  */
-enum class NoticeGlyph { SESSION, COACH, MILESTONE, IMPORT, BACKUP, HOUSEKEEPING, BELL, WATCH }
+enum class NoticeGlyph { SESSION, COACH, MILESTONE, IMPORT, BACKUP, HOUSEKEEPING, BELL, WATCH, ACADEMY }
 
 /**
  * One row of the notifications feed. [eyebrow] is the mono kind label, [title] the line itself and
@@ -88,6 +105,7 @@ class NotificationFeed @Inject constructor(
     private val workoutRepo: WorkoutRepository,
     private val coachRepo: CoachRepository,
     private val healthConnect: HealthConnectManager,
+    private val academyRepo: AcademyRepository,
 ) {
     private val coachBrief = MutableStateFlow<CoachBanner?>(null)
 
@@ -103,6 +121,11 @@ class NotificationFeed @Inject constructor(
      * keyed by ISO week, and the grant reads are local IPC.
      */
     suspend fun refresh() {
+        // Fire whatever Academy moments the current data implies, BEFORE anything reads the ledger.
+        // Without this a lesson would only unlock on a visit to the Academy tab, so the one surface
+        // meant to tell you a lesson exists could never be the thing that told you first. Every
+        // unlock is idempotent, so calling it on each resume is free.
+        runCatching { academyRepo.syncCoachMoments() }
         coachBrief.value = runCatching { coachRepo.pendingBanner() }.getOrNull()
         wearableConnected.value = runCatching {
             healthConnect.canReadSteps() || healthConnect.canReadExercise()
@@ -110,6 +133,36 @@ class NotificationFeed @Inject constructor(
         notificationsAllowed.value = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
             context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) ==
             PackageManager.PERMISSION_GRANTED
+    }
+
+    /**
+     * Lessons whose moment has fired but that haven't been read, minus any the user cleared.
+     *
+     * Derived rather than stored: a lesson row exists exactly while the lesson is unlocked and
+     * unopened, so opening one clears its row with no extra bookkeeping. Only the DISMISSAL needs a
+     * record of its own, and it lives in prefs rather than the ledger — the ledger is append-only
+     * and records what happened, and writing a fake "opened" event to silence a row would corrupt
+     * the read history the Academy derives everything from.
+     */
+    private val academyNotices: Flow<List<AppNotice>> = combine(
+        academyRepo.observeStates(),
+        settings.dismissedLessonNotices,
+    ) { states, dismissed ->
+        states
+            .filter { it.isNew && it.lesson.id !in dismissed }
+            // Newest unlock first, so a burst of moments reads in the order they happened.
+            .sortedByDescending { it.unlockedAtMs ?: 0L }
+            .map { state ->
+                AppNotice(
+                    id = "$PREFIX_LESSON${state.lesson.id}",
+                    kind = NoticeKind.ACADEMY,
+                    glyph = NoticeGlyph.ACADEMY,
+                    eyebrow = "NEW LESSON",
+                    title = state.lesson.title,
+                    detail = state.lesson.summary,
+                    action = NoticeAction.OpenLesson(state.lesson.id),
+                )
+            }
     }
 
     /**
@@ -214,6 +267,11 @@ class NotificationFeed @Inject constructor(
                 )
             )
         }
+    }.combine(academyNotices) { rows, academy ->
+        // Sorted by kind rather than appended, so a new kind's place in the feed is decided by its
+        // position in the enum (§4.8) instead of by where its builder happened to be called. The
+        // sort is stable and the existing rows were already in kind order, so nothing else moves.
+        (rows + academy).sortedBy { it.kind.ordinal }
     }.combine(settings.disabledNoticeKinds) { rows, disabled ->
         // A kind switched off on Settings → Notifications never reaches the feed. Applied last so a
         // notice is still QUEUED while its kind is off — switching it back on brings the row back
@@ -223,6 +281,36 @@ class NotificationFeed @Inject constructor(
 
     /** How many notices are waiting — the bell's unread count. */
     val unreadCount: Flow<Int> = notices.map { it.size }
+
+    /** How many of those are lessons — the Academy tab's badge. Reads from the same list as the
+     *  bell, so a kind switched off in Settings drops out of both at once. */
+    val academyUnreadCount: Flow<Int> = notices.map { rows -> rows.count { it.kind == NoticeKind.ACADEMY } }
+
+    /**
+     * Lesson notices that have never had their arrival banner played.
+     *
+     * Separate from "unread" because the two answer different questions. A lesson stays UNREAD
+     * until you open it, possibly for weeks; it is UNANNOUNCED only until the banner has flown to
+     * the bell once. Without the split, every app open would re-announce everything still sitting
+     * unread, which is the nagging this whole mechanism exists to avoid.
+     */
+    val pendingAnnouncements: Flow<List<AppNotice>> = combine(
+        academyNotices,
+        settings.announcedLessonNotices,
+        settings.disabledNoticeKinds,
+    ) { rows, announced, disabled ->
+        // A kind switched off announces nothing, the same way it shows no rows.
+        if (NoticeKind.ACADEMY.key in disabled) emptyList()
+        else rows.filter { it.id.removePrefix(PREFIX_LESSON) !in announced }
+    }
+
+    /** Mark arrival banners as played. One-way: an announcement happens once, ever. */
+    suspend fun markAnnounced(noticeIds: List<String>) =
+        settings.markLessonNoticesAnnounced(
+            noticeIds.filter { it.startsWith(PREFIX_LESSON) }
+                .map { it.removePrefix(PREFIX_LESSON) }
+                .toSet()
+        )
 
     /**
      * Clear one notice and hand back the operation that puts it back, so the caller can offer an Undo
@@ -245,6 +333,12 @@ class NotificationFeed @Inject constructor(
             val milestoneId = id.removePrefix(PREFIX_MILESTONE)
             settings.setMilestoneUnread(milestoneId, unread = false)
             ({ settings.setMilestoneUnread(milestoneId, unread = true) })
+        }
+
+        id.startsWith(PREFIX_LESSON) -> {
+            val lessonId = id.removePrefix(PREFIX_LESSON)
+            settings.setLessonNoticeDismissed(lessonId, dismissed = true)
+            ({ settings.setLessonNoticeDismissed(lessonId, dismissed = false) })
         }
 
         id.startsWith(PREFIX_SYSTEM) -> {
@@ -291,6 +385,7 @@ class NotificationFeed @Inject constructor(
         private const val PREFIX_COACH = "coach."
         private const val PREFIX_MILESTONE = "milestone."
         private const val PREFIX_SYSTEM = "system."
+        private const val PREFIX_LESSON = "lesson."
 
         private fun eyebrowFor(noticeId: String): String = when (noticeId) {
             NOTICE_IMPORT -> "IMPORT"

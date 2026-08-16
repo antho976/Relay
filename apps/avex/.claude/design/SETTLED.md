@@ -19,7 +19,8 @@ identity-first restructure · mood/subjective coach drivers · Coach hero week-d
 pass-square record strip · **every page-level banner** (2026-07-27: Home's milestone toast, coach-brief
 strip, orphan-session notice and resume reminder; Cardio's connect-a-watch invite — all moved to the
 notifications feed behind the bell, §4.6. Do not re-add a strip above a page's own answer; if it is
-dismissible or "waiting on you", it is a notice, and notices live in the feed) · **the three
+dismissible or "waiting on you", it is a notice, and notices live in the feed. **Narrowed
+2026-08-15**, see "Two rules narrowed" below) · **the three
 launch/result dialogs** (share-import result, backup-restored confirmation, POST_NOTIFICATIONS
 rationale — same date, same destination; an OK button is not a decision, and nothing should
 interrupt a cold launch to ask for a permission) · the `• Avex` chrome
@@ -42,6 +43,44 @@ for good; never reintroduce a second scrim over the fade) · statsEntrance/draw 
 left because re-flowing the polished screen needs Antho's eyes) · any screen still drawing section
 hairlines → migrate to air rhythm (§7). (Home's accent eyebrows + the Home/Stats section hairlines
 were fixed 2026-07-08, GYMAP-4.)
+
+## Two rules narrowed — the Academy arrival receipt (2026-08-15)
+
+Phase 2 of the Academy rework needed two things §4.6 had ruled out. Both are **narrowings with a
+stated boundary**, not exceptions, and both are here so the next reader does not simply delete them
+as violations.
+
+**1. A transient banner may cross a page. A resident strip still may not.**
+
+The 2026-07-27 ban was written against strips that sit above a page's own answer and push its
+content down: Home's milestone toast, the coach-brief strip, the connect-a-watch invite. Every one
+of them was *resident* (present when you arrived, present when you came back) and *dismissible*
+(a decision the page asked you to make before it would show you its content).
+
+`ArrivalBannerHost` is a different object on all three counts. It is an overlay in a `fillMaxSize`
+Box above the nav host, so **nothing on the page moves**; it has **no dismiss affordance** because
+it leaves on its own after ~1.6s; and it **cannot be present when you next look at the page**,
+because each arrival is announced exactly once and the announcement is persisted
+(`announcedLessonNotices`). It carries no decision — the decision stays in the feed, where the ban
+put it. The banner only says "that went behind the bell", which is the sentence the ban's own
+logic requires somebody to say.
+
+Test for whether a future banner is allowed: **if it can still be there when you come back, it is a
+strip and it is banned.**
+
+**2. A tab may badge its own count. The bell stays Home-only.**
+
+§4.6 called a global unread badge on every page "a nag", and that judgement stands for the BELL:
+it counts everything waiting on you, so putting it on every screen turns every screen into an
+inbox. The Academy tab badge is a narrower claim — one count, for one destination, of something a
+reader can ignore forever with no consequence — and it appears on a control that is already
+permanently on screen, so it adds no chrome. A page still may not repeat the bell's count.
+
+**3. The bell's dot became a count.** A dot answered "something happened" and stopped. That was
+enough while notices were rare; once the Academy feeds the feed, two waiting things and five
+waiting things are different decisions about whether to look now. `CountBadge` draws the numeral in
+`onPrimary` **on** the accent fill rather than as accent-coloured text, because accent as text
+fails AA at all four accents (§14) — the open contrast defect below is not to be widened.
 
 ## Open decisions — accessibility contrast (2026-07-24)
 
