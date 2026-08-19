@@ -110,6 +110,59 @@ what opens it, and one line of how, with an **accent dot only on the ones the re
 today** (§8 — a dot earns its colour by flagging the exception). "Log a set" versus "When the coach
 first suggests a weight" tells you whose move it is without a word of chrome.
 
+**Two lenses since 2026-08-15** (§4.4 `SegmentPill` row, `AcademyLens`), because the tab now holds
+two different promises and a reader has to be able to tell which one they are in:
+
+| Lens | Contract | Archetype |
+|---|---|---|
+| **Lessons** | earned — each attaches to a coach moment and opens when it first fires | the overview above |
+| **Library** | open — every article readable from install, no gate, no order, no score | list (`libraryPane`) → detail (`ArticleScreen`) |
+
+The **serif hero stays "Academy" across both** so the tab keeps one identity (§6); only the eyebrow
+and the italic aside switch, since those are the genuinely lens-specific parts. Lessons is the
+default lens on entry: it is the half that can have something new in it.
+
+**Library** — `domain/academy/Article.kt` + `ArticleRegistry`, rendered by `libraryPane` and
+`ArticleScreen`, ledgered in `article_event` (v36) via `LibraryRepository`. A deliberate sibling of
+`Lesson`, not an extension: folding articles in would force `Lesson.unlock` to be a lie on every
+row. They share the block renderer (`BlockBody`), so both halves read in one voice.
+
+- **Filter is topic, never difficulty.** "What is this about" is answerable before opening
+  something; "how hard is it" is not, so difficulty rides as a row label beside read time
+  (`HYPERTROPHY · APPLIED · 3 MIN`) rather than hiding articles behind a judgement the reader has
+  not made yet. Topic pills scroll horizontally and **only topics that hold an article appear**
+  (§12 — design at the emptiest realistic state; eight shelves against four articles would open the
+  Library as a promise nothing keeps).
+- **Read time is derived from word count**, never authored, so it cannot drift when a paragraph is
+  edited. Ceiling ~30 minutes: past that it is a book, not a lesson.
+- **Every article is sourced**, and `ArticleRegistryTest` fails the build on an empty source list —
+  the only mechanical guard on the Library being research rather than opinion. Sources render as
+  plain text at the end, never links: no INTERNET permission, so a tappable citation would be an
+  affordance that cannot run (§2③).
+- **`AcademyLink`** resolves an id to whichever half holds it. Articles are namespaced `library.*`,
+  lessons are not, so the coach's existing nullable `lessonId` slots (`Recommendation`,
+  `TodayDirective`, `CoachSignal`, `ConditioningPlanner`, `GoalPortfolio`) can point at an article
+  with no schema change and no call-site churn. The test pins the two id spaces disjoint.
+- **No XP, no streaks, no percentage.** The plan's ban on gamifying the Academy applies here at
+  least as hard as to lessons: a library that scores you is a course wearing a disguise.
+
+**The Academy never interrupts** (2026-08-15). A newly unlocked lesson is knowledge that became
+relevant, not a decision waiting on you, so it goes to the feed as `NoticeKind.ACADEMY` and waits.
+The row exists exactly while the lesson is unlocked-and-unopened, so opening one clears it with no
+bookkeeping; only a DISMISSAL needs its own record, and it lives in prefs rather than the ledger
+(writing a fake "opened" event to silence a row would corrupt the read history). `NotificationFeed`
+now sorts by `NoticeKind` ordinal, so **declaration order in that enum IS feed rank** (§4.8) rather
+than something emergent from builder order, and `refresh()` runs `syncCoachMoments()` first so a
+lesson can unlock without a visit to the Academy tab.
+
+Its arrival is announced by `ArrivalBannerHost` — a transient overlay that settles over whatever is
+on screen, then flies into the bell and bumps its `CountBadge`. The queue lives in `ArrivalController`,
+a plain singleton with no Compose types, so the ordering and de-dup rules are unit-tested without a
+device. `announcedLessonNotices` (persisted, one-way) is separate from unread, or every app open
+would re-announce everything still unread. Two doctrine rules were narrowed to allow this and both
+carry a stated boundary in `design/SETTLED.md`, 2026-08-15 — read it before deleting either as a
+violation.
+
 ### Home — `ui/overview`
 
 TODAY hero + Start session, week strip, goals, recent. Feel reference; defects (`SETTLED.md`) fixed

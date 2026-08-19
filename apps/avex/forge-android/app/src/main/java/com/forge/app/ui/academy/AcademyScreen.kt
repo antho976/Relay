@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Icon
@@ -23,8 +22,12 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.Alignment
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontStyle
@@ -32,34 +35,53 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.domain.academy.LessonTrack
-import com.forge.app.ui.common.EditorialHeader
-import com.forge.app.ui.common.clickableLabeled
+import com.forge.app.ui.common.SegmentPill
 import com.forge.app.ui.common.statsEntrance
 
 /**
  * The Academy (Coach v3 B3) — the knowledge half of the coach, and the reason it can make itself
  * optional. Everything the coach decides, you can learn to decide yourself.
  *
- * Overview archetype, and organised the way the plan already described but the first build ignored:
- * **five tracks**, not one flat list of 31 rows. Each track carries a dot rail of what it holds and
- * what has opened, and drills into its own page (§4.1 — overview first, deep dives in sub-screens).
+ * Two lenses under one name, because the tab holds two different promises and a reader has to be
+ * able to tell which one they are looking at:
  *
- * What this screen deliberately is NOT is a course index. `docs/ACADEMY_LESSONS.md` is explicit:
- * "just-in-time, not curriculum-first" — lessons attach to coach moments, and only Fundamentals is
- * sequential. So there is no "next up" ladder and no percentage complete; the one lesson offered is
- * one whose moment has already fired and that hasn't been read. Reading nothing changes nothing.
+ *  - **Lessons** are earned. Each attaches to a coach moment and opens the first time that moment
+ *    fires, so the track rails read as an inventory of what has happened to you.
+ *  - **Library** is not. Every article is readable from install by anyone, with no gate, no order
+ *    and no score. It answers "I want to read about this tonight" rather than "why did the coach
+ *    just do that".
+ *
+ * §4.4 makes that split a `SegmentPill` row rather than two tabs or two screens. The serif hero
+ * stays constant across both so the tab keeps ONE identity (§6, one hero per screen); only the
+ * eyebrow and the aside change, since those are the parts that are actually lens-specific.
  */
 @Composable
 fun AcademyScreen(
     onBack: (() -> Unit)? = null,
     onOpenTrack: (LessonTrack) -> Unit = {},
-    viewModel: AcademyViewModel = hiltViewModel()
+    onOpenArticle: (String) -> Unit = {},
+    /** Opens straight onto one lesson's sheet — how a notifications-feed row lands here. */
+    initialLessonId: String? = null,
+    viewModel: AcademyViewModel = hiltViewModel(),
+    libraryViewModel: LibraryViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val libraryState by libraryViewModel.state.collectAsStateWithLifecycle()
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val accent = MaterialTheme.colorScheme.primary
     val outline = MaterialTheme.colorScheme.outline
+
+    // Saveable so the lens survives a rotation and a swipe away to another hub page. It does NOT
+    // persist across launches: the Academy opens on Lessons, because that is the half that can
+    // have something new in it.
+    var lens by rememberSaveable { mutableStateOf(AcademyLens.LESSONS) }
+
+    // Keyed on the id so a second arrival for a different lesson still opens, while a rotation on
+    // the same one does not re-open a sheet the reader just dismissed.
+    LaunchedEffect(initialLessonId) {
+        initialLessonId?.let { viewModel.open(it) }
+    }
 
     LessonSheet(state, viewModel, onBg)
 
@@ -86,9 +108,12 @@ fun AcademyScreen(
         ) {
             item("hero") {
                 Column(Modifier.fillMaxWidth().statsEntrance(0).padding(vertical = 8.dp)) {
-                    // §12: an honest count, and it reads correctly at zero.
+                    // §12: an honest count, and it reads correctly at zero in either lens.
                     Text(
-                        "$unlockedTotal OF $allTotal UNLOCKED",
+                        when (lens) {
+                            AcademyLens.LESSONS -> "$unlockedTotal OF $allTotal UNLOCKED"
+                            AcademyLens.LIBRARY -> libraryEyebrow(libraryState)
+                        },
                         style = MaterialTheme.typography.labelMedium,
                         color = muted
                     )
@@ -96,69 +121,53 @@ fun AcademyScreen(
                     Text("Academy", style = MaterialTheme.typography.headlineLarge, color = onBg)
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        "Everything the coach knows, explained the moment it matters.",
+                        when (lens) {
+                            AcademyLens.LESSONS ->
+                                "Everything the coach knows, explained the moment it matters."
+                            AcademyLens.LIBRARY ->
+                                "The research behind the training, condensed and cited."
+                        },
                         style = MaterialTheme.typography.bodyMedium.copy(fontStyle = FontStyle.Italic),
                         color = muted
                     )
                 }
             }
 
-            // The only thing this screen pushes: a lesson whose moment already fired, unread.
-            state.continueLesson?.let { next ->
-                item("continue") {
-                    Spacer(Modifier.height(28.dp))
-                    EditorialHeader(label = "Start here", muted = muted, accent = accent)
-                    Spacer(Modifier.height(10.dp))
-                    Column(
-                        Modifier
-                            .fillMaxWidth()
-                            .statsEntrance(1)
-                            .clickableLabeled("Read: ${next.lesson.title}") { viewModel.open(next.lesson.id) }
-                            .padding(vertical = 2.dp)
-                    ) {
-                        Text(next.lesson.title, style = MaterialTheme.typography.titleMedium, color = onBg)
-                        Spacer(Modifier.height(3.dp))
-                        Text(next.lesson.summary, style = MaterialTheme.typography.bodySmall, color = muted)
-                        Spacer(Modifier.height(6.dp))
-                        Text("read →", style = MaterialTheme.typography.labelMedium, color = accent)
-                    }
-                }
-            }
-
-            item("tracks-header") {
-                Spacer(Modifier.height(28.dp))
-                EditorialHeader(label = "Tracks", muted = muted, accent = accent)
-                Spacer(Modifier.height(10.dp))
-            }
-
-            itemsIndexed(state.tracks, key = { _, t -> t.track.code }) { index, t ->
-                Column(
-                    Modifier
-                        .fillMaxWidth()
-                        .statsEntrance(index + 2)
-                        .clickableLabeled("Open ${t.track.displayName}") { onOpenTrack(t.track) }
-                        .padding(vertical = 10.dp)
-                ) {
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(t.track.displayName, style = MaterialTheme.typography.titleSmall, color = onBg)
-                        Text(
-                            if (t.unread > 0) "${t.unread} NEW" else "${t.unlocked} OF ${t.total}",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = if (t.unread > 0) accent else muted
+            item("lens") {
+                Spacer(Modifier.height(16.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    AcademyLens.entries.forEach { option ->
+                        SegmentPill(
+                            text = option.label,
+                            selected = lens == option,
+                            onClick = { lens = option },
+                            accent = accent, onBg = onBg, muted = muted, outline = outline
                         )
                     }
-                    Spacer(Modifier.height(3.dp))
-                    Text(t.track.blurb, style = MaterialTheme.typography.bodySmall, color = muted)
-                    Spacer(Modifier.height(10.dp))
-                    LessonDotRail(total = t.total, unlocked = t.unlocked, accent = accent, outline = outline)
                 }
             }
 
-            item("tail") { Spacer(Modifier.height(56.dp)) }
+            when (lens) {
+                AcademyLens.LESSONS -> academyLessonsPane(
+                    state = state,
+                    viewModel = viewModel,
+                    onOpenTrack = onOpenTrack,
+                    onBg = onBg, muted = muted, accent = accent, outline = outline
+                )
+
+                AcademyLens.LIBRARY -> libraryPane(
+                    state = libraryState,
+                    viewModel = libraryViewModel,
+                    onOpenArticle = onOpenArticle,
+                    onBg = onBg, muted = muted, accent = accent, outline = outline
+                )
+            }
         }
     }
+}
+
+/** The two halves of the Academy. §4.4: lens labels are ONE short word. */
+enum class AcademyLens(val label: String) {
+    LESSONS("Lessons"),
+    LIBRARY("Library")
 }

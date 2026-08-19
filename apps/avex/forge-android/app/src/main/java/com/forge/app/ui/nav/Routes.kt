@@ -20,14 +20,28 @@ object Routes {
     const val COACH_BRIEF = "coach-brief"
     const val COACH_LAB = "coach-lab"
 
-    /** The Academy (Coach v3 B3) — the knowledge layer, reachable from any lesson link. */
-    const val ACADEMY = "academy"
+    /** The Academy (Coach v3 B3) — the knowledge layer, reachable from any lesson link.
+     *  [lessonId] opens straight onto that lesson's sheet, which is how a feed row lands. */
+    const val ACADEMY = "academy?lesson={lessonId}"
+    const val ARG_LESSON_ID = "lessonId"
+
+    fun academy(lessonId: String? = null) = "academy?lesson=${lessonId.orEmpty()}"
 
     /** One Academy track's lessons. [trackCode] is a [com.forge.app.domain.academy.LessonTrack.code]. */
     const val ACADEMY_TRACK = "academy/track/{trackCode}"
     const val ARG_TRACK_CODE = "trackCode"
 
     fun academyTrack(trackCode: String) = "academy/track/$trackCode"
+
+    /**
+     * One Library article. [articleId] is a `library.*` id: lowercase, dots and underscores only,
+     * which is why it can sit in the path un-encoded. `ArticleRegistryTest` pins that id grammar,
+     * so a future article cannot quietly introduce a slash and break this route.
+     */
+    const val ARTICLE = "academy/article/{articleId}"
+    const val ARG_ARTICLE_ID = "articleId"
+
+    fun article(articleId: String) = "academy/article/$articleId"
     const val COACH_TIMELINE = "coach-timeline"
     const val PROFILE = "profile"
     const val GOALS = "goals"

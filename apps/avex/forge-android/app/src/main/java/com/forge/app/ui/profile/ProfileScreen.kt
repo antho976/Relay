@@ -55,6 +55,9 @@ import com.forge.app.data.repo.ProgressPhoto
 import com.forge.app.ui.common.ConfettiOverlay
 import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.common.statsEntrance
+import com.forge.app.ui.experiment.SectionAnchor
+import com.forge.app.ui.experiment.SurfaceCard
+import com.forge.app.ui.experiment.surfacePalette
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -64,11 +67,24 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * The "You" hub: an identity card (avatar · name · streak), a dashboard of stat tiles, signature
- * lifts, the private gallery and an on-this-day throwback. The rank ladder, offline
- * standing and trophy case stay gated behind [Features.SHOW_GAMIFICATION]. All local — no account.
- * See [ProfileViewModel] / `data/repo/ProfileRepository` / `domain/rank`.
+ * # Profile — design/surface-experiment (2026-08-15)
+ *
+ * The "You" hub in the card-led language, built to sit UNDER the blending cover rather than beside
+ * it. The cover ([ProfileHeaderCard]) is byte-for-byte the shipped one: it is the piece of the
+ * current design that already has the warmth this branch is chasing, so nothing here competes with
+ * it — no second photo, no gradient, no second elevation, and a full 28dp of air before the first
+ * card so the dissolve lands on bare page.
+ *
+ * The open-editorial original is at `.design-backups/editorial-2026-08/src/profile/`; one command
+ * restores it. Every shipped section (`AllTimeSection`, `BodyMetricsSection`, `LifetimeVolumeGraph`,
+ * `SectionHeader`, `ChartCaption`) is still in the package, untouched and simply no longer called.
+ *
+ * All local — no account. See [ProfileViewModel] / `data/repo/ProfileRepository` / `domain/rank`.
  */
+
+/** The page gutter (§7). Sections apply it themselves so the strips can break out full-bleed. */
+private val GUTTER = 24.dp
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ProfileScreen(
@@ -125,6 +141,7 @@ fun ProfileScreen(
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val accent = MaterialTheme.colorScheme.primary
     val outline = MaterialTheme.colorScheme.outline
+    val palette = surfacePalette()
 
     Box(Modifier.fillMaxSize()) {
         // Soft rank-tier wash bleeding down from the top bar (parked with the rest of the rank UI).
@@ -137,7 +154,7 @@ fun ProfileScreen(
         Scaffold(
             topBar = {
                 TopAppBar(
-                    // §4.6: the bell in the chrome — the bumped avatar + name hero below stays the page's identity.
+                    // §4.6: never the screen's own name. The cover's bumped name below is the identity.
                     title = {},
                     navigationIcon = {
                         if (onBack != null) IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
@@ -178,7 +195,7 @@ fun ProfileScreen(
                 // (behind the status bar), filling the whole page. Only the bottom bar is cleared.
                 Modifier.fillMaxSize().padding(bottom = inner.calculateBottomPadding()).verticalScroll(rememberScrollState())
             ) {
-                // ── Full-bleed identity banner (entrance index 0) — the profile photo as a cover ──
+                // ── The blending cover — UNTOUCHED (entrance index 0) ────────────
                 Box(Modifier.statsEntrance(0)) {
                     ProfileHeaderCard(
                         name = state.name,
@@ -189,111 +206,135 @@ fun ProfileScreen(
                         avatarFile = viewModel.avatarFile(),
                         avatarStamp = state.avatarStamp,
                         onSetName = viewModel::setUserName,
-                        // GYMAP-22: the cover tap now opens the photo picker sheet (own photo + provided
-                        // defaults), not the system picker directly; dismiss the one-time hint on tap.
                         onPickAvatar = { viewModel.dismissAvatarHint(); showAvatarSheet = true },
                         onBg = onBg, muted = muted, accent = accent,
                         topInset = inner.calculateTopPadding()
                     )
                 }
 
-                // One-time nudge teaching the (now photo-seeded) cover is tappable to change (GYMAP-22).
+                // One-time nudge teaching the cover is tappable to change (GYMAP-22). Left OFF a
+                // card on purpose: it is transient chrome, and boxing it would promise a tap it
+                // does not have.
                 if (state.showAvatarHint) {
                     Text(
                         "Tap your photo to change it",
                         style = MaterialTheme.typography.bodySmall,
                         color = muted, fontStyle = FontStyle.Italic,
-                        modifier = Modifier.padding(horizontal = 24.dp).padding(top = 8.dp)
+                        modifier = Modifier.padding(horizontal = GUTTER).padding(top = 8.dp)
                     )
                 }
 
-                // Sections sit openly on the page at the 24dp page gutter (§7). Each applies the side
-                // margins itself so the gallery filmstrip can break out and run edge-to-edge like the
-                // cover above.
-                val pad = Modifier.fillMaxWidth().padding(horizontal = 24.dp)
+                val pad = Modifier.fillMaxWidth().padding(horizontal = GUTTER)
 
                 // ── Rank track (gamification, index 1) ───────────────────────────
                 if (Features.SHOW_GAMIFICATION) state.rank?.let { r ->
                     Spacer(Modifier.height(20.dp))
-                    Column(pad.statsEntrance(1)) {
+                    SurfaceCard(palette, pad.statsEntrance(1)) {
                         RankSection(r, muted, accent, outline, onInfo = { showXpInfo = true })
                     }
                 }
 
-                // ── All-time figures → bodyweight → lifetime volume curve (index 2) ─
-                //    Bodyweight sits between the tallies and the curve (Antho 2026-07-03).
+                // ── Hero card: lifetime volume over its curve (index 1) ──────────
+                // 28dp so the cover's dissolve lands on bare page before the first fill starts.
                 Spacer(Modifier.height(28.dp))
-                Column(pad.statsEntrance(2)) {
-                    AllTimeSection(
-                        sessions = state.totalSessions,
-                        prs = state.totalPrs,
-                        sets = state.totalSets,
-                        xp = state.rank?.xpTotal ?: 0L,
-                        workoutsDelta = state.workoutsThisWeek - state.workoutsLastWeek,
-                        setsDelta = state.setsThisWeek - state.setsLastWeek,
-                        prsDelta = state.prsThisWeek - state.prsLastWeek,
-                        onBg = onBg, muted = muted, accent = accent
-                    )
-                    Spacer(Modifier.height(28.dp))
-                    // BODY (Antho 2026-07-13) — bodyweight, body fat and measurements merged into one
-                    // compact stack so the "your body" cluster reads as a single section, not three.
-                    BodyMetricsSection(
-                        bodyweight = bodyweight,
-                        bodyweightGoalLb = bodyweightGoalLb,
-                        bodyFat = bodyFat,
-                        onLogWeight = {
-                            // Fresh sheet: drop any prior result line and re-check HC permission so a
-                            // grant made in Settings since this screen opened surfaces the import option.
-                            viewModel.clearBodyweightMessage()
-                            viewModel.refreshWeightConnected()
-                            showWeightSheet = true
-                        },
-                        onLogBodyFat = {
-                            viewModel.clearBodyFatMessage()
-                            viewModel.refreshBodyFatConnected()
-                            showBodyFatSheet = true
-                        },
-                        onOpenMeasurements = onOpenMeasurements,
-                        onBg = onBg, muted = muted, accent = accent
-                    )
-                    if (state.lifetimeVolumeSeriesLb.size >= 2) {
-                        Spacer(Modifier.height(28.dp))
-                        LifetimeVolumeGraph(state.lifetimeVolumeSeriesLb, onBg, muted, accent)
-                    }
-                }
+                ProfileHeroCard(
+                    palette = palette,
+                    totalVolumeLb = state.lifetimeVolumeSeriesLb.lastOrNull() ?: state.totalVolumeLb,
+                    series = state.lifetimeVolumeSeriesLb,
+                    totalSets = state.totalSets,
+                    sinceLabel = state.sinceLabel,
+                    onBg = onBg,
+                    muted = muted,
+                    modifier = pad.statsEntrance(1)
+                )
 
-                // ── This year's consistency (gym + cardio) — a whole-calendar-year glance, a
-                //    DIFFERENT mark from the Stats 26-week load heatmap (§4.3). Hidden until the
-                //    year has any activity, so a new user never sees a dead grid (§12).
+                // ── Two-up: the tallies whose week-over-week movement means something ──
+                Spacer(Modifier.height(10.dp))
+                ProfileTwoUp(
+                    palette = palette,
+                    totalSessions = state.totalSessions,
+                    workoutsThisWeek = state.workoutsThisWeek,
+                    workoutsLastWeek = state.workoutsLastWeek,
+                    totalPrs = state.totalPrs,
+                    prsThisWeek = state.prsThisWeek,
+                    prsLastWeek = state.prsLastWeek,
+                    onBg = onBg,
+                    muted = muted,
+                    modifier = pad.statsEntrance(2)
+                )
+
+                // ── BODY as a horizontal strip (full-bleed, peeks the next card) ──
+                Spacer(Modifier.height(28.dp))
+                // No "measurements →" link: the strip's own SIZES card already opens Measurements,
+                // and the two sat one above the other saying the same thing (Antho, 2026-08-15 —
+                // "move measurement as a tile too"). §4.3's one-home rule, and the tile is the
+                // better half of the pair because it carries a reading as well as a destination.
+                SectionAnchor("Body", muted, onBg, modifier = pad)
+                Spacer(Modifier.height(10.dp))
+                ProfileBodyStrip(
+                    palette = palette,
+                    bodyweight = bodyweight,
+                    bodyFat = bodyFat,
+                    onLogWeight = {
+                        // Fresh sheet: drop any prior result line and re-check HC permission so a
+                        // grant made in Settings since this screen opened surfaces the import option.
+                        viewModel.clearBodyweightMessage()
+                        viewModel.refreshWeightConnected()
+                        showWeightSheet = true
+                    },
+                    onLogBodyFat = {
+                        viewModel.clearBodyFatMessage()
+                        viewModel.refreshBodyFatConnected()
+                        showBodyFatSheet = true
+                    },
+                    onOpenMeasurements = onOpenMeasurements,
+                    onBg = onBg,
+                    muted = muted,
+                    modifier = Modifier.statsEntrance(3)
+                )
+
+                // ── This year's consistency — the same grid, boxed ───────────────
+                // Hidden until the year has any activity, so a new user never sees a dead grid (§12).
                 if (state.activityByDay.isNotEmpty()) {
                     Spacer(Modifier.height(28.dp))
-                    Column(pad.statsEntrance(3)) {
-                        YearConsistencySection(state.activityByDay, muted, accent)
-                    }
+                    ProfileYearCard(
+                        palette = palette,
+                        activityByDay = state.activityByDay,
+                        muted = muted,
+                        modifier = pad.statsEntrance(4)
+                    )
                 }
 
                 if (Features.SHOW_GAMIFICATION) {
                     Spacer(Modifier.height(28.dp))
-                    Column(pad.statsEntrance(3)) {
+                    SurfaceCard(palette, pad.statsEntrance(5)) {
                         StandingSection(state.standings, onBg, muted, accent, outline)
                     }
                 }
 
-                // Signature + Cardio sections removed 2026-07-03 (Antho), Goals too (they live on
-                // Home and the Goals screen); ON THIS DAY removed 2026-07-24 (Home owns that
-                // throwback — §4.3) — the profile keeps the all-time figures + bodyweight +
-                // lifetime-volume graph, the year grid and the gallery.
-
-                // ── Gallery filmstrip (index 4) — full-bleed, pads itself ────────
+                // ── Gallery filmstrip (index 6) ──────────────────────────────────
+                // The photos stay full-bleed and unboxed — they carry their own edges, and a card
+                // around a photo is a frame around a frame. What DID change (2026-08-15) is that
+                // the cells now share the cards' 18dp radius, and the empty ones take the card fill
+                // rather than being hollow outlines, so the section reads as part of the same page.
                 Spacer(Modifier.height(28.dp))
-                Column(Modifier.fillMaxWidth().statsEntrance(4)) {
-                    GalleryStrip(state.photos, viewModel::fileFor, onAdd = { addChooser = true }, onView = { viewing = it }, onViewAll = onOpenPhotoGallery, muted, outline)
+                Column(Modifier.fillMaxWidth().statsEntrance(6)) {
+                    GalleryStrip(
+                        state.photos, viewModel::fileFor,
+                        onAdd = { addChooser = true },
+                        onView = { viewing = it },
+                        onViewAll = onOpenPhotoGallery,
+                        palette, onBg, muted, outline
+                    )
                 }
 
                 if (Features.SHOW_GAMIFICATION) {
                     Spacer(Modifier.height(28.dp))
-                    Column(pad.statsEntrance(5)) {
-                        TrophyCaseSection(state.trophyGrid, state.trophyUnlocked, state.trophyTotal, state.closestTrophy, onOpenTrophies, onBg, muted, accent, outline)
+                    SurfaceCard(palette, pad.statsEntrance(7)) {
+                        TrophyCaseSection(
+                            state.trophyGrid, state.trophyUnlocked, state.trophyTotal,
+                            state.closestTrophy, onOpenTrophies, onBg, muted, accent, outline
+                        )
                     }
                 }
 
@@ -378,6 +419,11 @@ fun ProfileScreen(
             onDismiss = { showAvatarSheet = false }
         )
     }
+
+    // The bodyweight GOAL line is still plumbed but no longer drawn: the shipped WEIGHT row put the
+    // target on its sparkline as a dashed reference, and a 26dp card spark has no room for one. That
+    // is a real loss this direction causes, not an oversight — see the report.
+    @Suppress("UNUSED_EXPRESSION") bodyweightGoalLb
 }
 
 @Composable

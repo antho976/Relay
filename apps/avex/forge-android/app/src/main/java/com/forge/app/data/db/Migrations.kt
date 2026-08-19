@@ -482,6 +482,26 @@ val MIGRATION_34_35 = object : Migration(34, 35) {
     }
 }
 
+/**
+ * v36 — the Academy Library: the article read ledger (`article_event`). One new empty table and
+ * nothing else, because articles themselves are in-app content rather than rows. A reader who
+ * never opens the Library sees no change at all.
+ */
+val MIGRATION_35_36 = object : Migration(35, 36) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            "CREATE TABLE IF NOT EXISTS `article_event` (" +
+                "`id` INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, " +
+                "`article_id` TEXT NOT NULL, " +
+                "`kind` TEXT NOT NULL, " +
+                "`at_ms` INTEGER NOT NULL)"
+        )
+        db.execSQL(
+            "CREATE INDEX IF NOT EXISTS `index_article_event_article_id` ON `article_event` (`article_id`)"
+        )
+    }
+}
+
 /** All migrations, in order. Register every new one here. */
 val ALL_MIGRATIONS: Array<Migration> = arrayOf(
     MIGRATION_12_13,
@@ -506,5 +526,6 @@ val ALL_MIGRATIONS: Array<Migration> = arrayOf(
     MIGRATION_31_32,
     MIGRATION_32_33,
     MIGRATION_33_34,
-    MIGRATION_34_35
+    MIGRATION_34_35,
+    MIGRATION_35_36
 )

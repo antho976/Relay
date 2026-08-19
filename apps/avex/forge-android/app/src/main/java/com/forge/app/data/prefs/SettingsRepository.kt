@@ -123,6 +123,31 @@ class SettingsRepository @Inject constructor(
             prefs[PreferenceKeys.SYSTEM_NOTICES] = (kept + "$id|$text").toSet()
         }
 
+    /** Lessons whose feed row the user cleared without reading. Never written to the ledger. */
+    val dismissedLessonNotices: Flow<Set<String>> = context.forgePreferences.data
+        .map { prefs -> prefs[PreferenceKeys.DISMISSED_LESSON_NOTICES] ?: emptySet() }
+
+    /** Clear (or, on undo, restore) one lesson's place in the feed. */
+    suspend fun setLessonNoticeDismissed(lessonId: String, dismissed: Boolean) =
+        context.forgePreferences.edit { prefs ->
+            val current = prefs[PreferenceKeys.DISMISSED_LESSON_NOTICES] ?: emptySet()
+            prefs[PreferenceKeys.DISMISSED_LESSON_NOTICES] =
+                if (dismissed) current + lessonId else current - lessonId
+        }
+
+    /** Lessons whose arrival banner has already played. */
+    val announcedLessonNotices: Flow<Set<String>> = context.forgePreferences.data
+        .map { prefs -> prefs[PreferenceKeys.ANNOUNCED_LESSON_NOTICES] ?: emptySet() }
+
+    /** Mark banners as played. Additive and never cleared: an announcement happens once, ever. */
+    suspend fun markLessonNoticesAnnounced(lessonIds: Set<String>) {
+        if (lessonIds.isEmpty()) return
+        context.forgePreferences.edit { prefs ->
+            prefs[PreferenceKeys.ANNOUNCED_LESSON_NOTICES] =
+                (prefs[PreferenceKeys.ANNOUNCED_LESSON_NOTICES] ?: emptySet()) + lessonIds
+        }
+    }
+
     /** `NoticeKind.key`s switched off — those rows never reach the feed. */
     val disabledNoticeKinds: Flow<Set<String>> = context.forgePreferences.data
         .map { prefs -> prefs[PreferenceKeys.DISABLED_NOTICE_KINDS] ?: emptySet() }

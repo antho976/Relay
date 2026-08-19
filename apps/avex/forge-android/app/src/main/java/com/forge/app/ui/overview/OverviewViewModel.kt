@@ -39,6 +39,13 @@ import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 
+/**
+ * design/surface-experiment — how many ISO weeks the Home hero card's sparkline spans. Eight is
+ * roughly two mesocycles: long enough for a trend to have a shape, short enough that the current
+ * week still moves the line visibly.
+ */
+private const val VOLUME_WEEKS = 8
+
 @HiltViewModel
 class OverviewViewModel @Inject constructor(
     private val statsRepo: StatsRepository,
@@ -59,6 +66,50 @@ class OverviewViewModel @Inject constructor(
     private val healthConnectManager: com.forge.app.data.health.HealthConnectManager,
     private val clock: Clock
 ) : ViewModel() {
+
+    // ── design/surface-experiment (2026-08-15) ────────────────────────────────────────────────
+    // The card-led Home opens with a header row (name · bell · Profile), so it needs the name
+    // Profile already owns. Read here rather than shared, and dropped with the branch.
+    //
+    // It briefly carried the avatar too, for a photo in the header. That came out on 2026-08-15:
+    // the stored image is a COVER, a background rather than a portrait, and a 36dp circle crop of
+    // one claims a face the app has never asked for.
+
+    /** The header row's identity. */
+    data class HomeIdentity(val name: String)
+
+    private val _identity = MutableStateFlow(HomeIdentity(""))
+    val identity: StateFlow<HomeIdentity> = _identity
+
+    /** Re-read the display name. Called at open and on resume — it is edited over on Profile. */
+    fun refreshIdentity() = viewModelScope.launch {
+        _identity.value = HomeIdentity(runCatching { settingsRepo.userName.first() }.getOrDefault(""))
+    }
+
+    /**
+     * Volume per ISO week for the last [VOLUME_WEEKS] weeks including the current one, oldest →
+     * newest. Weeks with no session bucket to an honest 0.0 rather than being dropped, so the
+     * sparkline's x-axis stays even and a quiet week reads as a dip instead of disappearing.
+     */
+    private fun weeklyVolumeSeries(sessions: List<com.forge.app.data.db.entities.Session>): List<Double> {
+        val zone = java.time.ZoneId.systemDefault()
+        val thisMonday = java.time.LocalDate.now(zone).let { it.minusDays(it.dayOfWeek.value - 1L) }
+        val buckets = DoubleArray(VOLUME_WEEKS)
+        sessions.forEach { s ->
+            val at = s.finishedAt ?: return@forEach
+            val day = java.time.Instant.ofEpochMilli(at).atZone(zone).toLocalDate()
+            val monday = day.minusDays(day.dayOfWeek.value - 1L)
+            val weeksBack = java.time.temporal.ChronoUnit.WEEKS.between(monday, thisMonday).toInt()
+            if (weeksBack in 0 until VOLUME_WEEKS) {
+                buckets[VOLUME_WEEKS - 1 - weeksBack] += s.totalVolumeLb ?: 0.0
+            }
+        }
+        return buckets.toList()
+    }
+
+    private val weeklyVolumeFlow = statsRepo.observeAllFinishedSessions()
+        .map { weeklyVolumeSeries(it) }
+        .flowOn(Dispatchers.Default)
 
     /** Today's watch steps against a typical day (W6) — null hides the Home movement line entirely. */
     data class TodayMovement(val steps: Int, val typicalSteps: Int?)
@@ -230,6 +281,14 @@ class OverviewViewModel @Inject constructor(
         s.copy(topNearMiss = top?.let { nearMissLabel(it, weightUnit) })
     }.combine(goalsFlow) { s, gc ->
         s.copy(goals = gc.first, customGoals = gc.second)
+    }.combine(weeklyVolumeFlow) { s, series ->
+        // design/surface-experiment: the hero card's figure is THIS week's volume, so its delta
+        // denominator is the previous bucket of the same series — not a separately-queried number
+        // that could disagree with the curve drawn under it.
+        s.copy(
+            weeklyVolumeSeriesLb = series,
+            volumeLastWeekLb = series.getOrElse(series.lastIndex - 1) { 0.0 }
+        )
     }.flowOn(Dispatchers.Default).stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(stopTimeoutMillis = 5_000),
@@ -257,6 +316,7 @@ class OverviewViewModel @Inject constructor(
         viewModelScope.launch { reloadCoach() }
         refreshDirective()
         refreshMovement()
+        refreshIdentity()   // design/surface-experiment — the header row's greeting + avatar
         // Backfill the first-touch flag for users who already have history, so the onboarding cards
         // never reappear for a returning user (e.g. after a data wipe). finishWorkout() sets it going forward.
         viewModelScope.launch {

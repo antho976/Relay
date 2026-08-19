@@ -40,6 +40,16 @@ object PreferenceKeys {
      *  DISABLED set so every kind added later is on by default — an opt-out, not an opt-in. */
     val DISABLED_NOTICE_KINDS = stringSetPreferencesKey("disabled_notice_kinds")
 
+    /** Lesson ids whose "new lesson" row the user cleared from the feed without reading it.
+     *  Separate from the `lesson_event` ledger on purpose: that ledger is append-only and records
+     *  what HAPPENED (unlocked, opened, completed), where this records a dismissal the user can
+     *  undo. Writing a fake "opened" event to silence a row would corrupt the read history. */
+    val DISMISSED_LESSON_NOTICES = stringSetPreferencesKey("dismissed_lesson_notices")
+
+    /** Lesson ids whose arrival banner has already flown to the bell. Prevents a re-announcement
+     *  on every app open for a lesson that unlocked days ago and is still sitting unread. */
+    val ANNOUNCED_LESSON_NOTICES = stringSetPreferencesKey("announced_lesson_notices")
+
     // ─── Per-day accent color (#65) ───────────────────────────────────────────
     /** Stored as hex e.g. "#FF5733". Key per day: "day_color_upper-a". */
     fun dayColorKey(dayKey: String) = stringPreferencesKey("day_color_$dayKey")

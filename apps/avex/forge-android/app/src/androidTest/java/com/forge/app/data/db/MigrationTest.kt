@@ -328,12 +328,25 @@ class MigrationTest {
     }
 
     @Test
-    fun migrateFullChain12To35_runsEveryStepInOrder() {
+    fun migrate35To36_addsTheLibraryReadLedger() {
+        helper.createDatabase(dbName, 35).close()
+        val db = helper.runMigrationsAndValidate(dbName, 36, true, MIGRATION_35_36)
+
+        db.query("SELECT name FROM sqlite_master WHERE type='table' AND name = 'article_event'")
+            .use { assertEquals("article_event should exist after 35→36", 1, it.count) }
+        // The ledger is read by article id on every index render, so the index is load-bearing.
+        db.query(
+            "SELECT name FROM sqlite_master WHERE type='index' AND name = 'index_article_event_article_id'"
+        ).use { assertEquals("article_event index should exist after 35→36", 1, it.count) }
+    }
+
+    @Test
+    fun migrateFullChain12To36_runsEveryStepInOrder() {
         // The pairwise tests above each validate one hop. This runs the WHOLE locked chain in a
         // single pass — a real v12 install upgrading straight to today's schema — so a gap or an
         // out-of-order/incompatible step between any two versions is caught, not just each hop alone.
         helper.createDatabase(dbName, 12).close()
-        helper.runMigrationsAndValidate(dbName, 35, true, *ALL_MIGRATIONS)
+        helper.runMigrationsAndValidate(dbName, 36, true, *ALL_MIGRATIONS)
     }
 
     @Test

@@ -1,16 +1,14 @@
 package com.forge.app.ui.overview
 
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.animateIntAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -19,113 +17,92 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.semantics.Role
-import com.forge.app.Features
-import com.forge.app.ui.common.NotificationBell
-import com.forge.app.ui.nav.NavIcons
-import com.forge.app.ui.common.bounceCombinedClick
-import com.forge.app.ui.common.clickableLabeled
-import com.forge.app.ui.overview.state.OnThisDayMemory
-import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.text.font.FontStyle
-import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.forge.app.Features
+import com.forge.app.domain.units.formatVolume
+import com.forge.app.domain.units.formatVolumeCompact
 import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.domain.units.unitLabel
-import com.forge.app.ui.theme.LocalForgeSettings
 import com.forge.app.program.Program
 import com.forge.app.program.Trophies
-import com.forge.app.ui.common.InlineEmptyHint
+import com.forge.app.ui.common.NotificationBell
+import com.forge.app.ui.common.clickableLabeled
+import com.forge.app.ui.common.monthsAgoPhrase
 import com.forge.app.ui.common.statsEntrance
-import com.forge.app.ui.profile.GoalLinesSection
-import com.forge.app.ui.overview.components.OverviewStat
-import com.forge.app.ui.overview.components.RecentRow
-import com.forge.app.ui.overview.components.TrophiesTile
-import com.forge.app.ui.overview.components.WeekDayBox
+import com.forge.app.ui.experiment.CardLink
+import com.forge.app.ui.experiment.PeekCardRow
+import com.forge.app.ui.experiment.SectionAnchor
+import com.forge.app.ui.experiment.SurfaceCard
+import com.forge.app.ui.experiment.SurfaceListRow
+import com.forge.app.ui.experiment.SurfacePalette
+import com.forge.app.ui.experiment.surfacePalette
+import com.forge.app.ui.goals.customGoalTitle
+import com.forge.app.ui.goals.customGoalValueLine
+import com.forge.app.ui.nav.NavIcons
+import com.forge.app.ui.overview.components.HomeGoalCard
+import com.forge.app.ui.overview.components.HomeGoalGhost
+import com.forge.app.ui.overview.components.HomeHeroCard
+import com.forge.app.ui.overview.components.HomeNoteCard
+import com.forge.app.ui.overview.components.HomeRecentZero
+import com.forge.app.ui.overview.components.HomeTileCard
+import com.forge.app.ui.overview.components.HomeTrophiesCard
+import com.forge.app.ui.overview.components.HomeVolumeCard
+import com.forge.app.ui.overview.components.TileMeter
+import com.forge.app.ui.overview.components.TileWeekRail
+import com.forge.app.ui.overview.state.OverviewRecentItem
+import com.forge.app.ui.settings.SettingsIcons
+import com.forge.app.ui.theme.LocalForgeSettings
 import java.time.LocalDate
+import java.time.format.DateTimeFormatter
+import kotlin.math.roundToInt
 
-/** The freestyle/no-plan hero CTA — the same white-capsule idiom as Start session (§8/§9: bounce, no ripple). */
-@Composable
-private fun HeroCta(text: String, label: String, onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(50))
-            .background(Color.White)
-            .bounceCombinedClick(onClickLabel = label, onClick = onClick)
-            .padding(horizontal = 32.dp, vertical = 18.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(text, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold, color = Color.Black)
-    }
-}
+/**
+ * # Home — design/surface-experiment (2026-08-15)
+ *
+ * A card-led rebuild of the open-editorial Home, kept only to be looked at and judged. The
+ * open-editorial original is at `.design-backups/editorial-2026-08/src/overview/`; one command
+ * restores it.
+ *
+ * The rhythm follows the reference dashboard: header row → hero card → two-up tiles → a horizontal
+ * strip that peeks → a list. What it deliberately breaks is recorded on the primitives it uses
+ * (`ui/experiment/SurfaceKit.kt`) rather than repeated here.
+ *
+ * Two structural notes worth arguing with:
+ *
+ * 1. **The directive is no longer the serif hero.** A number is. See `HomeHeroCard`'s KDoc.
+ * 2. **Sections still separate by air, not by lines** (§7 survives). What changed is that a
+ *    section's CONTENT sits on a fill. The mono anchors and the 28dp breaks are untouched, which
+ *    is why the page still scans as this app rather than as a generic dashboard.
+ */
 
-/** Half the slack between a top-bar icon's 44dp touch target and its 20dp glyph. Shifting a glyph
- *  out by this puts its edge on the page's 24dp gutter while the target keeps its full size. */
+/** The page gutter (§7). Sections apply it themselves so the goals strip can break out full-bleed. */
+private val GUTTER = 24.dp
+
+/** Half the slack between a top-bar icon's 44dp target and its 20dp glyph — see the header row. */
 private val GUTTER_SLACK = 12.dp
-
-/** Top-bar icon with a ≥44dp tappable area + spoken label, while the glyph stays visually small. */
-@Composable
-private fun TopBarIconButton(
-    icon: ImageVector,
-    label: String,
-    tint: Color,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit
-) {
-    Box(
-        modifier = modifier
-            .sizeIn(minWidth = 44.dp, minHeight = 44.dp)
-            .clickableLabeled(label, onClick = onClick),
-        contentAlignment = Alignment.Center
-    ) {
-        Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(20.dp))
-    }
-}
-
-/** The shared "COACH" home-section scaffold (divider + label + a tappable headline/body). At most one
- *  of three states fills it — learning countdown, fatigue nudge, or persistent entry — so they share
- *  one treatment and can't drift apart. Emits into the calling column in order. */
-@Composable
-private fun CoachHomeBlock(headline: String, body: String, clickLabel: String, onClick: () -> Unit) {
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val onBg = MaterialTheme.colorScheme.onBackground
-    val outline = MaterialTheme.colorScheme.outline
-    // §1/§14: sections separate by air + mono header alone — no hairline strips.
-    Spacer(Modifier.height(28.dp))
-    Text("COACH", style = MaterialTheme.typography.labelMedium, color = muted)
-    Spacer(Modifier.height(10.dp))
-    Column(
-        Modifier.fillMaxWidth().clickableLabeled(clickLabel) { onClick() }.padding(vertical = 2.dp)
-    ) {
-        Text(headline, style = MaterialTheme.typography.bodyMedium, color = onBg)
-        Spacer(Modifier.height(2.dp))
-        Text(body, style = MaterialTheme.typography.bodySmall, color = muted)
-    }
-}
 
 @Composable
 fun OverviewScreen(
@@ -155,51 +132,37 @@ fun OverviewScreen(
     val selectedItem by viewModel.selectedItem.collectAsStateWithLifecycle()
     val summaryLines by viewModel.sessionExerciseLines.collectAsStateWithLifecycle()
     val movement by viewModel.movement.collectAsStateWithLifecycle()
+    val identity by viewModel.identity.collectAsStateWithLifecycle()
 
-    // Keep the movement line current across a day of glances (W6) — steps taken while away should
-    // show on return, same resume-refresh rule as the cardio hero's TODAY line (GYMAP-64).
-    val movementLifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
-    androidx.compose.runtime.DisposableEffect(movementLifecycleOwner) {
-        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
-            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+    // Keep the movement line, the directive and now the header avatar current across a day of
+    // glances (W6): steps taken while away, a directive that has gone stale past midnight, and a
+    // photo changed on Profile should all be right on return.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
                 viewModel.refreshMovement()
-                // The answer is date- and session-sensitive: a directive that still says "Push day"
-                // after you trained, or after midnight, is worse than none (B2).
                 viewModel.refreshDirective()
+                viewModel.refreshIdentity()
             }
         }
-        movementLifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { movementLifecycleOwner.lifecycle.removeObserver(observer) }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
-    // Firing a milestone persists it (so it can't recompute/re-fire) AND queues it in the
-    // notifications feed. It used to flash here as a six-second toast, which meant a milestone earned
-    // while the app was closed was gone before it was ever read; it now waits under the bell.
+    // Firing a milestone persists it AND queues it in the notifications feed behind the bell.
     LaunchedEffect(state.pendingMilestone) {
         state.pendingMilestone?.let { viewModel.onMilestoneShown(it.id) }
     }
 
-    // Rise + fade entrance, but ONLY on the first show after a cold launch — not every time you
-    // swipe back to Home (Home is a pager page that gets disposed/recomposed as you swipe away and
-    // back). The "played" flag is rememberSaveable so it survives the page leaving the viewport and
-    // returning; after the first play, Home settles in like any other swipable page.
-    var entrancePlayed by rememberSaveable { mutableStateOf(false) }
-    val entry = remember { Animatable(if (entrancePlayed) 1f else 0f) }
-    LaunchedEffect(Unit) {
-        if (!entrancePlayed) {
-            entry.animateTo(1f, animationSpec = tween(450))
-            entrancePlayed = true
-        }
-    }
+    val settings = LocalForgeSettings.current
+    val weightUnit = settings.weightUnit
+    val palette = surfacePalette()
+    val onBg = MaterialTheme.colorScheme.onBackground
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
 
     val today = LocalDate.now()
     val todayDow = today.dayOfWeek.value - 1
-
     val nextDay = Program.days.firstOrNull { it.key == state.nextUpDayKey }
-
-    val onBg = MaterialTheme.colorScheme.onBackground
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val accent = MaterialTheme.colorScheme.primary
-    val outline = MaterialTheme.colorScheme.outline
 
     if (selectedItem != null) {
         val item = selectedItem!!
@@ -224,364 +187,402 @@ fun OverviewScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(inner)
-                .graphicsLayer {
-                    alpha = entry.value
-                    translationY = (1f - entry.value) * 24.dp.toPx()
-                }
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 24.dp)
         ) {
             Spacer(Modifier.height(16.dp))
 
-            // ── Top bar ──────────────────────────────────────────────────────
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // Both glyphs are pulled OUT by half the slack between their 44dp target and their
-                // 20dp glyph, so the glyph edges land on the page's 24dp gutter — level with the
-                // serif hero and the mono headers below. Centred in the target they sat 12dp inboard
-                // of everything else, which is what read as "weirdly placed" (Antho, 2026-07-27).
-                // `offset` (not `absoluteOffset`) so the pair mirrors under RTL.
-                NotificationBell(modifier = Modifier.offset(x = (-GUTTER_SLACK)))
-                // Profile took the slot Settings held: the gear moved inside Profile, which is where
-                // you go to change things about yourself anyway.
-                TopBarIconButton(
-                    NavIcons.Profile, "Profile", muted.copy(alpha = 0.7f),
-                    modifier = Modifier.offset(x = GUTTER_SLACK)
-                ) { onOpenProfile() }
-            }
-
-            // Every banner that used to stack here — milestone, coach brief, orphan-session notice
-            // and the resume reminder — moved to the notifications page behind the bell above
-            // (2026-07-27). The nudge cards had already gone (Antho 2026-07-04), so the top of Home
-            // is now the top bar and then the answer: nothing between the two. The resume path is not
-            // lost with the strip, because the hero CTA below already reads "Resume session →"
-            // whenever a session is live.
+            // ── 1. Header row: greeting · avatar · one action ─────────────────────
+            HeaderRow(
+                name = identity.name,
+                palette = palette,
+                onBg = onBg,
+                muted = muted,
+                onOpenProfile = onOpenProfile,
+                modifier = Modifier.padding(horizontal = GUTTER).statsEntrance(0)
+            )
 
             Spacer(Modifier.height(20.dp))
 
-            if (freestyleMode || programEmpty) {
-                // No fixed plan to surface — lead with a CTA instead of a next-up day card.
-                // freestyle → log what you did; no-plan (custom) → build a plan. Custom is a plan mode,
-                // not the logger, so there's no freestyle fallback in the no-plan state.
-                Text("TODAY", style = MaterialTheme.typography.labelSmall, fontSize = 13.sp, color = muted)
-                Spacer(Modifier.height(2.dp))
-                Text(if (freestyleMode) "Open workout" else "No plan yet",
-                    style = MaterialTheme.typography.displayLarge, color = onBg)
-                Spacer(Modifier.height(10.dp))
-                Text(
-                    if (freestyleMode) "No fixed plan. Log whatever you trained, whenever you want."
-                    else "Build your own plan and Avex will guide each session.",
-                    style = MaterialTheme.typography.bodyMedium.copy(fontStyle = FontStyle.Italic), color = muted
-                )
-                Spacer(Modifier.height(20.dp))
-                if (programEmpty && !freestyleMode) {
-                    // Custom user hasn't built their plan yet — a single CTA into the builder. No
-                    // "log a workout" fallback here: this mode is "make my plan", not the logger.
-                    // Same hero-CTA idiom as Start session below: bounce, no ripple (§8/§9).
-                    HeroCta("Build a plan →", "Build your plan", onBuildPlan)
-                } else {
-                    HeroCta("Log a workout →", "Log a workout", onLogFreestyle)
+            // ── 2. Hero card ─────────────────────────────────────────────────────
+            val resumeKey = state.activeSessionDayKey
+            val noPlan = freestyleMode || programEmpty
+
+            HomeHeroCard(
+                palette = palette,
+                // The greeting moved off the header row into the eyebrow (Antho, 2026-08-15). It is
+                // context for the day's answer, not a second identity line above the one the header
+                // already carries.
+                eyebrow = greetingNow(),
+                dateLabel = today.format(DateTimeFormatter.ofPattern("EEE d MMM")),
+                headline = when {
+                    freestyleMode -> "Open workout"
+                    programEmpty -> "No plan yet"
+                    else -> state.directive?.headline
+                        ?: state.customDayName ?: nextDay?.defaultName ?: "Ready"
+                },
+                reason = when {
+                    freestyleMode -> "No fixed plan. Log whatever you trained, whenever you want."
+                    programEmpty -> "Build your own plan and Avex will guide each session."
+                    else -> state.directive?.reason
+                        ?: nextDay?.let { "${it.subtitle} · ${it.exercises.size} exercises" }
+                },
+                secondary = if (noPlan) null else state.directive?.secondary,
+                ctaText = when {
+                    programEmpty && !freestyleMode -> "Build a plan →"
+                    freestyleMode -> "Log a workout →"
+                    resumeKey != null -> "Resume session →"
+                    else -> "Start session →"
+                },
+                ctaLabel = when {
+                    programEmpty && !freestyleMode -> "Build your plan"
+                    freestyleMode -> "Log a workout"
+                    resumeKey != null -> "Resume session"
+                    else -> "Start session"
+                },
+                ctaHint = if (!noPlan && resumeKey == null) "Hold to skip warmup" else null,
+                onLongCta = if (!noPlan && resumeKey == null) {
+                    { onStartSessionSkipWarmup(state.nextUpDayKey) }
+                } else null,
+                longCtaLabel = "Start, skipping warmup",
+                onBg = onBg,
+                muted = muted,
+                modifier = Modifier.padding(horizontal = GUTTER).statsEntrance(1)
+            ) {
+                when {
+                    programEmpty && !freestyleMode -> onBuildPlan()
+                    freestyleMode -> onLogFreestyle()
+                    else -> onStartSession(resumeKey ?: state.nextUpDayKey)
                 }
-            } else {
-                // ── Today's directive (Coach v3 B2) ──────────────────────────────
-                // The coach's one answer OWNS this slot (plan M7): it replaces the bare
-                // next-workout name rather than stacking beside it, so the page never says the
-                // same thing twice. Until the first read lands, the old next-up name stands in —
-                // the hero is never blank.
-                val directive = state.directive
-                val trainedToday = todayDow in state.weekDaysTrained
-                Text(
-                    when {
-                        directive == null && trainedToday -> "TOMORROW"
-                        else -> "TODAY"
-                    },
-                    style = MaterialTheme.typography.labelSmall, fontSize = 13.sp, color = muted
-                )
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    directive?.headline ?: state.customDayName ?: nextDay?.defaultName ?: "Ready",
-                    style = MaterialTheme.typography.displayLarge,
-                    color = onBg,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = if (nextDay != null) Modifier.clickableLabeled("Edit this day's program") { onBuildPlan() } else Modifier
-                )
-                // The reason is the hero's one prose line — always present, never a menu (§4.3).
-                if (directive != null) {
+            }
+
+            // Today's targets + the cold-start lesson keep their place under the hero rather than
+            // inside it: three target lines make the hero card tall enough to push the two-up row
+            // off the fold, and §3 wants the primary action above it.
+            if (!noPlan) {
+                val targets = state.brief?.targets?.filter { it.targetWeightLb != null }?.take(3).orEmpty()
+                if (targets.isNotEmpty() || state.coldStartLesson != null) {
                     Spacer(Modifier.height(10.dp))
-                    Text(
-                        directive.reason,
-                        style = MaterialTheme.typography.bodyMedium.copy(fontStyle = FontStyle.Italic),
-                        color = muted
-                    )
-                    directive.secondary?.let { secondary ->
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            secondary,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = muted.copy(alpha = 0.7f)
-                        )
-                    }
-                    // While the coach is still learning you, the curriculum carries the day: one
-                    // lesson, tappable, never a wall of onboarding text (B3 cold-start mode).
-                    state.coldStartLesson?.let { lesson ->
-                        Spacer(Modifier.height(10.dp))
-                        Text(
-                            "Read: ${lesson.title} →",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = accent,
-                            modifier = Modifier
-                                .clickableLabeled("Open the lesson: ${lesson.title}") { onOpenAcademy() }
-                                .padding(vertical = 4.dp)
-                        )
-                    }
-                    // Today's targets, three lines of it: what the session will actually ask for.
-                    state.brief?.targets?.filter { it.targetWeightLb != null }?.take(3)?.let { targets ->
+                    SurfaceCard(
+                        palette,
+                        Modifier.padding(horizontal = GUTTER).statsEntrance(2)
+                    ) {
                         if (targets.isNotEmpty()) {
-                            Spacer(Modifier.height(10.dp))
+                            Text(
+                                "TODAY'S TARGETS",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = muted
+                            )
+                            Spacer(Modifier.height(8.dp))
                             targets.forEach { t ->
                                 Text(
-                                    "${t.name} · ${t.setsText}×${t.repsText} @ ${com.forge.app.domain.units.formatWeight(t.targetWeightLb!!, LocalForgeSettings.current.weightUnit)}",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = muted
+                                    "${t.name} · ${t.setsText}×${t.repsText} @ " +
+                                        com.forge.app.domain.units.formatWeight(t.targetWeightLb!!, weightUnit),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = palette.mutedOnCard,
+                                    modifier = Modifier.padding(vertical = 3.dp)
                                 )
                             }
                         }
+                        state.coldStartLesson?.let { lesson ->
+                            if (targets.isNotEmpty()) Spacer(Modifier.height(8.dp))
+                            CardLink(
+                                text = "Read: ${lesson.title}",
+                                label = "Open the lesson: ${lesson.title}",
+                                onBg = onBg,
+                                onClick = onOpenAcademy
+                            )
+                        }
                     }
-                } else if (nextDay != null) {
-                    Spacer(Modifier.height(10.dp))
-                    Text(
-                        "${nextDay.subtitle} · ${nextDay.exercises.size} exercises",
-                        style = MaterialTheme.typography.bodyMedium.copy(fontStyle = FontStyle.Italic),
-                        color = muted
+                }
+            }
+
+            Spacer(Modifier.height(10.dp))
+
+            // ── 3. Two-up tile row ───────────────────────────────────────────────
+            // IntrinsicSize.Min (not a fixed dp) equalises the two cards while still letting them
+            // grow with the font scale — a fixed height here would be exactly §14's clipping trap.
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = GUTTER)
+                    .height(IntrinsicSize.Min)
+                    .statsEntrance(3),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                val target = state.weeklyWorkoutTarget
+                HomeTileCard(
+                    palette = palette,
+                    icon = SettingsIcons.Session,
+                    hue = palette.hues[0],
+                    label = "Workouts",
+                    figure = "${state.workoutsThisWeek}",
+                    suffix = if (target > 0) "OF $target" else null,
+                    onBg = onBg,
+                    muted = muted,
+                    modifier = Modifier.weight(1f).fillMaxHeight(),
+                    onClick = if (!noPlan) onViewProgram else null,
+                    clickLabel = "View your program"
+                ) {
+                    TileWeekRail(
+                        trained = state.weekDaysTrained,
+                        todayIndex = todayDow,
+                        hue = palette.hues[0],
+                        muted = muted,
+                        reading = "This week, ${state.workoutsThisWeek} of 7 days trained"
                     )
                 }
 
-                Spacer(Modifier.height(20.dp))
-
-                // ── Start / resume session + skip warmup ─────────────────────────
-                val resumeKey = state.activeSessionDayKey
-                val ctaDayKey = resumeKey ?: state.nextUpDayKey
-                // The column wraps to the button's width, so the hint centres under the CTA. Tap starts
-                // the session; a long-press starts it and skips the warmup (fresh start only, not a resume).
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(50))
-                            .background(Color.White)
-                            .bounceCombinedClick(
-                                onClick = { onStartSession(ctaDayKey) },
-                                onClickLabel = if (resumeKey != null) "Resume session" else "Start session",
-                                onLongClick = if (resumeKey == null) {
-                                    { onStartSessionSkipWarmup(state.nextUpDayKey) }
-                                } else null,
-                                onLongClickLabel = "Start, skipping warmup"
-                            )
-                            .padding(horizontal = 32.dp, vertical = 18.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            if (resumeKey != null) "Resume session →" else "Start session →",
-                            style = MaterialTheme.typography.bodyLarge,
-                            fontWeight = FontWeight.SemiBold,
-                            color = Color.Black
-                        )
-                    }
-                    // Quiet hint just under the CTA — faint, no outline. Where the skip-warmup link used
-                    // to live; the hold gesture replaces it.
-                    if (resumeKey == null) {
-                        Spacer(Modifier.height(6.dp))
-                        Text(
-                            "Hold to skip warmup",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = muted.copy(alpha = 0.65f)
-                        )
-                    }
+                val cardioTarget = state.cardioWeeklyTargetMin
+                HomeTileCard(
+                    palette = palette,
+                    icon = NavIcons.Cardio,
+                    hue = palette.hues[1],
+                    label = "Cardio",
+                    figure = "${state.cardioMinutesThisWeek}",
+                    suffix = if (cardioTarget > 0) "OF $cardioTarget MIN" else "MIN",
+                    onBg = onBg,
+                    muted = muted,
+                    modifier = Modifier.weight(1f).fillMaxHeight(),
+                    onClick = onGoToCardio,
+                    clickLabel = "Open cardio"
+                ) {
+                    TileMeter(
+                        fraction = if (cardioTarget > 0) {
+                            state.cardioMinutesThisWeek.toFloat() / cardioTarget
+                        } else if (state.cardioMinutesThisWeek > 0) 1f else 0f,
+                        hue = palette.hues[1],
+                        muted = muted,
+                        reading = if (cardioTarget > 0) {
+                            "${state.cardioMinutesThisWeek} of $cardioTarget cardio minutes this week"
+                        } else "${state.cardioMinutesThisWeek} cardio minutes this week"
+                    )
                 }
             }
 
-            // §1/§14: air + the mono header separate sections — the hairlines are gone.
-            Spacer(Modifier.height(28.dp))
-
-            // ── This week ────────────────────────────────────────────────────
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically) {
-                Text("THIS WEEK", style = MaterialTheme.typography.labelMedium, color = muted)
-                // The weekly target + program link only make sense with a real plan. Hidden for
-                // freestyle and for a custom user who hasn't built their plan yet (the weekday boxes and
-                // workout/volume/cardio stats below stay — they track actual activity in every mode).
-                if (!freestyleMode && !programEmpty) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("${state.workoutsThisWeek} of ${state.weeklyWorkoutTarget} target", style = MaterialTheme.typography.labelSmall, color = muted)
-                        Text("·", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.65f))
-                        Text("view program →", style = MaterialTheme.typography.labelMedium,
-                            color = onBg,
-                            modifier = Modifier.clickableLabeled("View your program") { onViewProgram() }.padding(vertical = 2.dp))
-                    }
-                }
+            // ── Volume this week — a reading, not the headline ───────────────────
+            // Rendered only once there is volume history. At a true zero the card would be a serif
+            // "0" over a dead chart, alone on a surface: §12's honest zero belongs on a figure with
+            // siblings, which is what the WORKOUTS and CARDIO tiles above already provide.
+            val volumeNow = state.volumeThisWeekLb
+            val volumePrev = state.volumeLastWeekLb
+            val volumeSeries = state.weeklyVolumeSeriesLb.let { raw ->
+                // The curve's last point IS the figure above it, so the two can never disagree on
+                // screen even if the weekly-stats query and the session sweep ever diverge.
+                if (raw.isEmpty()) raw else raw.toMutableList().apply { this[lastIndex] = volumeNow }
             }
-            Spacer(Modifier.height(12.dp))
-
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                listOf("M", "T", "W", "T", "F", "S", "S").forEachIndexed { i, letter ->
-                    WeekDayBox(letter = letter, trained = i in state.weekDaysTrained,
-                        isToday = i == todayDow, outlineColor = outline, modifier = Modifier.weight(1f))
-                }
-            }
-            Spacer(Modifier.height(16.dp))
-
-            val weightUnit = LocalForgeSettings.current.weightUnit
-            val animWorkouts by animateIntAsState(state.workoutsThisWeek.coerceAtLeast(0), label = "workouts")
-            val animVolume by animateIntAsState(toDisplayWeight(state.volumeThisWeekLb, weightUnit).coerceAtLeast(0.0).toInt(), label = "volume")
-            val animCardio by animateIntAsState(state.cardioMinutesThisWeek.coerceAtLeast(0), label = "cardio")
-            Row(modifier = Modifier.fillMaxWidth()) {
-                OverviewStat(value = "$animWorkouts", label = "WORKOUTS", modifier = Modifier.weight(1f))
-                OverviewStat(value = "$animVolume", label = unitLabel(weightUnit).uppercase(), modifier = Modifier.weight(1f))
-                OverviewStat(
-                    value = if (state.cardioWeeklyTargetMin > 0) "$animCardio/${state.cardioWeeklyTargetMin}" else "$animCardio",
-                    label = "CARDIO MIN", modifier = Modifier.weight(1f)
+            if (volumeSeries.any { it > 0.0 }) {
+                Spacer(Modifier.height(10.dp))
+                HomeVolumeCard(
+                    palette = palette,
+                    figure = formatVolumeCompact(volumeNow, weightUnit, withUnit = false),
+                    unit = unitLabel(weightUnit).uppercase(),
+                    // No comparable week yet → no badge. A fabricated "0%" would claim a comparison
+                    // the data cannot make (§12: honest zeros, never fake readings).
+                    deltaPercent = if (volumePrev > 0.0) {
+                        (((volumeNow - volumePrev) / volumePrev) * 100).roundToInt()
+                    } else null,
+                    series = volumeSeries,
+                    seriesReading = weeklySeriesReading(volumeSeries, weightUnit),
+                    onBg = onBg,
+                    muted = muted,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = GUTTER).statsEntrance(4)
                 )
             }
 
-            // ── Movement today (W6) — the watch's step count against a typical day. Rendered only
-            // when steps are connected (GYMAP-64 rule: honest zero when connected, hidden otherwise);
-            // the bar is the mark and works at zero (§12). "Typical" = median of the last 14 days.
+            // Movement (W6) — rendered only when steps are connected: honest zero when connected,
+            // hidden when the grant was never given (§12 stale/denied).
             movement?.let { m ->
-                Spacer(Modifier.height(16.dp))
-                MovementLine(m, onBg = onBg, muted = muted, outline = outline, accent = accent)
+                Spacer(Modifier.height(10.dp))
+                val target = m.typicalSteps ?: m.steps
+                HomeTileCard(
+                    palette = palette,
+                    icon = NavIcons.Stats,
+                    hue = palette.hues[2],
+                    label = "Movement today",
+                    figure = "%,d".format(m.steps),
+                    suffix = m.typicalSteps?.let { "TYPICAL ~%,d".format(it) } ?: "STEPS",
+                    onBg = onBg,
+                    muted = muted,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = GUTTER).statsEntrance(4)
+                ) {
+                    TileMeter(
+                        fraction = if (target <= 0) 0f else m.steps.toFloat() / target,
+                        hue = palette.hues[2],
+                        muted = muted,
+                        reading = m.typicalSteps?.let {
+                            "${m.steps} steps today, typical day about $it"
+                        } ?: "${m.steps} steps today"
+                    )
+                }
             }
 
-            // ── Coach (adaptation engine: actionable advice only) ────────────
-            // Hidden in freestyle (no plan to coach against); shown for generated AND custom — custom
-            // has a real plan, so fatigue/deload/swap advice all apply once they've trained.
+            // ── 4. Horizontal section: goals, peeking the next card ──────────────
+            Spacer(Modifier.height(28.dp))
+            val goalCount = state.goals.size + state.customGoals.size
+            SectionAnchor(
+                label = "Goals",
+                muted = muted,
+                onBg = onBg,
+                action = when {
+                    goalCount == 0 -> null
+                    goalCount > 3 -> "all $goalCount"
+                    else -> "view all"
+                },
+                actionLabel = "Open goals",
+                onAction = onOpenGoals,
+                modifier = Modifier.padding(horizontal = GUTTER)
+            )
+            Spacer(Modifier.height(10.dp))
+            GoalStrip(
+                state = state,
+                palette = palette,
+                onBg = onBg,
+                muted = muted,
+                onOpenGoals = onOpenGoals,
+                modifier = Modifier.statsEntrance(5)
+            )
+
+            // ── 5. List section: recent sessions ─────────────────────────────────
+            Spacer(Modifier.height(28.dp))
+            SectionAnchor(
+                label = "Recent",
+                muted = muted,
+                onBg = onBg,
+                action = if (state.recentItems.isEmpty()) null else "view all",
+                actionLabel = "View all sessions",
+                onAction = onViewAllHistory,
+                modifier = Modifier.padding(horizontal = GUTTER)
+            )
+            Spacer(Modifier.height(10.dp))
+            SurfaceCard(
+                palette,
+                Modifier.padding(horizontal = GUTTER).statsEntrance(6),
+                padding = PaddingValues(horizontal = 14.dp, vertical = 6.dp)
+            ) {
+                if (state.recentItems.isEmpty()) {
+                    HomeRecentZero(
+                        palette = palette,
+                        todayIndex = todayDow,
+                        hint = when {
+                            freestyleMode -> "Your first logged workout lands here."
+                            programEmpty -> "Build your plan above, then your first session lands here."
+                            else -> "Your first session lands here."
+                        },
+                        muted = muted
+                    )
+                } else {
+                    state.recentItems.forEach { item ->
+                        RecentSurfaceRow(
+                            item = item,
+                            palette = palette,
+                            onBg = onBg,
+                            muted = muted,
+                            weightUnit = weightUnit,
+                            useMiles = settings.useMiles,
+                            onClick = {
+                                if (item.isGym) onOpenSession(item.id) else viewModel.selectRecentItem(item)
+                            }
+                        )
+                    }
+                }
+            }
+
+            // ON THIS DAY — a session from N months ago near today's date (#106).
+            state.onThisDayMemory?.let { memory ->
+                Spacer(Modifier.height(10.dp))
+                val vol = formatVolumeCompact(memory.totalVolumeLb, weightUnit)
+                val prs = if (memory.prCount > 0) {
+                    " · ${memory.prCount} PR${if (memory.prCount > 1) "s" else ""}"
+                } else ""
+                HomeNoteCard(
+                    palette = palette,
+                    eyebrow = "On this day · ${monthsAgoPhrase(memory.monthsAgo)}",
+                    body = "You trained ${memory.dayName} · $vol moved$prs",
+                    onBg = onBg,
+                    modifier = Modifier.padding(horizontal = GUTTER).statsEntrance(7)
+                )
+            }
+
+            // ── Coach ────────────────────────────────────────────────────────────
             if (coachEnabled && !freestyleMode && state.coach.isNotEmpty()) {
                 Spacer(Modifier.height(28.dp))
-                Text("COACH", style = MaterialTheme.typography.labelMedium, color = muted)
+                SectionAnchor("Coach", muted, onBg, modifier = Modifier.padding(horizontal = GUTTER))
                 Spacer(Modifier.height(10.dp))
-                // Each coach card cascades in (fade + settle-up), so the section reveals as a
-                // sequence rather than one block. Reduced-motion-safe via the shared motion kit.
                 state.coach.forEachIndexed { index, item ->
-                    Column(Modifier.fillMaxWidth().statsEntrance(index).padding(bottom = 14.dp)) {
+                    SurfaceCard(
+                        palette,
+                        Modifier.padding(horizontal = GUTTER).statsEntrance(8 + index)
+                    ) {
                         Text(item.title, style = MaterialTheme.typography.bodyMedium, color = onBg)
-                        Spacer(Modifier.height(2.dp))
-                        Text(item.body, style = MaterialTheme.typography.bodySmall, color = muted)
-                        Spacer(Modifier.height(6.dp))
+                        Spacer(Modifier.height(4.dp))
+                        Text(item.body, style = MaterialTheme.typography.bodySmall, color = palette.mutedOnCard)
+                        Spacer(Modifier.height(8.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-                            if (item.applyLabel != null) {
-                                Text(
-                                    "${item.applyLabel} →",
-                                    style = MaterialTheme.typography.labelSmall, color = accent,
-                                    modifier = Modifier
-                                        .clickableLabeled("Apply this suggestion") { viewModel.applyCoach(item) }
-                                        .padding(vertical = 2.dp)
-                                )
+                            item.applyLabel?.let { label ->
+                                CardLink(label, "Apply this suggestion", onBg) { viewModel.applyCoach(item) }
                             }
                             Text(
                                 "dismiss",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = muted.copy(alpha = 0.7f),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = palette.mutedOnCard,
                                 modifier = Modifier
                                     .clickableLabeled("Dismiss this suggestion") { viewModel.dismissCoach(item) }
-                                    .padding(vertical = 2.dp)
+                                    .padding(vertical = 4.dp)
                             )
                         }
                     }
+                    if (index != state.coach.lastIndex) Spacer(Modifier.height(10.dp))
                 }
             }
 
-            // ── Coach (home entry) — at most one shows: a learning countdown (CD-1), a fatigue nudge
-            // (Tier 3), or a persistent "quiet but reachable" entry (D3). All share CoachHomeBlock. ──
-            // Same gate as the actionable coach above: present for generated/custom, hidden in freestyle.
             if (coachEnabled && !freestyleMode) {
                 state.coachFatigue?.let { f ->
-                    CoachHomeBlock(
-                        "Recovery signals building.",
-                        "Fatigue ${f.score} of ${f.threshold}${f.topDriver?.let { " · $it" } ?: ""}. " +
-                            "Not a deload yet, but easing up helps. See what it's tracking →",
-                        clickLabel = "Open Coach Lab", onClick = onOpenCoachLab
+                    Spacer(Modifier.height(28.dp))
+                    SectionAnchor("Coach", muted, onBg, modifier = Modifier.padding(horizontal = GUTTER))
+                    Spacer(Modifier.height(10.dp))
+                    HomeNoteCard(
+                        palette = palette,
+                        eyebrow = "Recovery",
+                        body = "Fatigue ${f.score} of ${f.threshold}" +
+                            (f.topDriver?.let { " · $it" } ?: "") +
+                            ". Not a deload yet, but easing up helps.",
+                        onBg = onBg,
+                        modifier = Modifier.padding(horizontal = GUTTER),
+                        onClick = onOpenCoachLab,
+                        clickLabel = "Open Coach Lab"
                     )
                 }
-                // The generic "Your coach → see the brief" entry that used to sit here was removed
-                // (Antho 2026-07-03): the coach already has its own tab + a new-analysis pop-up, so the
-                // Home pointer was redundant. Goals took its spot below as the ambient motivator.
             }
 
-            // ── Goals — folded into THIS WEEK (no separator): the week's figures run straight
-            // into what you're working toward ──
-            Spacer(Modifier.height(26.dp))
-            GoalLinesSection(state.goals, state.customGoals, onOpenGoals, onBg, muted, accent, outline)
-
-            Spacer(Modifier.height(28.dp))
-
-            // ── Recent ───────────────────────────────────────────────────────
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically) {
-                Text("RECENT", style = MaterialTheme.typography.labelMedium, color = muted)
-                Text("view all →", style = MaterialTheme.typography.labelSmall,
-                    color = muted, fontSize = 10.sp,
-                    modifier = Modifier.clickableLabeled("View all sessions") { onViewAllHistory() }.padding(vertical = 2.dp))
-            }
-            Spacer(Modifier.height(10.dp))
-            if (state.recentItems.isEmpty()) {
-                // Point at whichever CTA this mode actually shows above, so the hint isn't a dead end.
-                InlineEmptyHint(
-                    when {
-                        freestyleMode -> "No workouts yet. Tap \"Log a workout\" above and your first shows up here."
-                        programEmpty -> "No workouts yet. Tap \"Build a plan\" above to set up your plan, then start training."
-                        else -> "No workouts yet. Tap \"Start session\" above and your first shows up here."
-                    },
-                    color = muted
-                )
-            } else {
-                state.recentItems.forEach { item ->
-                    RecentRow(item = item, muted = muted, onBg = onBg, outline = outline,
-                        // Gym sessions open the full detail page; cardio keeps the lightweight summary sheet.
-                        onClick = { if (item.isGym) onOpenSession(item.id) else viewModel.selectRecentItem(item) })
-                    Spacer(Modifier.height(14.dp))
-                }
-            }
-
-            // ── On this day: a session from N months ago near today's date (#106) ──
-            state.onThisDayMemory?.let { memory ->
-                Spacer(Modifier.height(16.dp))
-                OnThisDayCard(memory = memory, onBg = onBg, muted = muted, accent = accent, outline = outline)
-            }
-
-            Spacer(Modifier.height(28.dp))
-
-            // ── Trophies (gamification only) ─────────────────────────────────
-            // "Search notes" and the cardio "Moved today?" nudge have been pulled from the home
-            // page (UI only). Their handlers (onOpenNotes / onGoToCardio) stay wired and all backing
-            // state is untouched — so these surfaces can be re-added without re-plumbing.
-            // Trophies (gamification) are parked behind Features.SHOW_GAMIFICATION.
+            // ── Trophies (gamification only) ─────────────────────────────────────
             if (Features.SHOW_GAMIFICATION) {
-                TrophiesTile(unlocked = state.trophiesUnlocked, total = Trophies.all.size,
-                    onClick = onGoToTrophies, onBg = onBg, muted = muted, outline = outline,
-                    modifier = Modifier.fillMaxWidth())
-            }
-
-            // "Up next" trophy — the locked trophy closest to unlocking (a near-miss retention hook, #136).
-            if (Features.SHOW_GAMIFICATION) state.topNearMiss?.let { nudge ->
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    "▲ NEXT TROPHY · $nudge",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = accent,
-                    fontSize = 10.sp,
-                    modifier = Modifier
-                        .clickableLabeled("Trophy almost unlocked, $nudge") { onGoToTrophies() }
-                        .padding(vertical = 2.dp)
+                Spacer(Modifier.height(28.dp))
+                HomeTrophiesCard(
+                    palette = palette,
+                    icon = NavIcons.Academy,
+                    unlocked = state.trophiesUnlocked,
+                    total = Trophies.all.size,
+                    nearMiss = state.topNearMiss,
+                    onBg = onBg,
+                    muted = muted,
+                    modifier = Modifier.padding(horizontal = GUTTER).statsEntrance(11),
+                    onClick = onGoToTrophies
                 )
             }
 
-            Spacer(Modifier.height(8.dp))
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                Text("Nutrition · soon", style = MaterialTheme.typography.labelSmall,
-                    color = muted.copy(alpha = 0.7f), fontSize = 10.sp,
-                    modifier = Modifier.clickableLabeled("Open Nutrition") { onGoToNutrition() }.padding(4.dp))
+            Spacer(Modifier.height(12.dp))
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = GUTTER),
+                horizontalArrangement = Arrangement.End
+            ) {
+                Text(
+                    "Nutrition · soon",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = muted.copy(alpha = 0.65f),
+                    modifier = Modifier
+                        .clickableLabeled("Open Nutrition") { onGoToNutrition() }
+                        .padding(4.dp)
+                )
             }
 
             Spacer(Modifier.height(24.dp))
@@ -589,87 +590,200 @@ fun OverviewScreen(
     }
 }
 
+// ── Sections ──────────────────────────────────────────────────────────────────────────────────
+
 /**
- * "On this day" nostalgia card (#106) — surfaces a session from 1/3/6/12 months ago that lands near
- * today's date. Display-only; tapping through to the session is a separate roadmap item.
+ * The header row: who you are on the start, chrome on the end.
+ *
+ * §4.6 survives intact — the bell is still Home-only, the row still carries exactly one other
+ * action (Profile), and the screen still does not print its own name.
+ *
+ * The greeting moved into the hero card's eyebrow and the avatar went back to the Profile glyph
+ * (Antho, 2026-08-15). The avatar was showing the COVER photo, which is a background image rather
+ * than a portrait — the app has no concept of a face, so rendering the cover in a 36dp circle
+ * claimed one it does not have. A glyph is honest about that.
  */
 @Composable
-private fun OnThisDayCard(
-    memory: OnThisDayMemory,
+private fun HeaderRow(
+    name: String,
+    palette: SurfacePalette,
     onBg: Color,
     muted: Color,
-    accent: Color,
-    outline: Color
+    onOpenProfile: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
-    val weightUnit = LocalForgeSettings.current.weightUnit
-    val agoLabel = com.forge.app.ui.common.monthsAgoPhrase(memory.monthsAgo).uppercase()
-    val vol = com.forge.app.domain.units.formatVolumeCompact(memory.totalVolumeLb, weightUnit)
-    val prText = if (memory.prCount > 0) " · ${memory.prCount} PR${if (memory.prCount > 1) "s" else ""}" else ""
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .border(1.dp, outline.copy(alpha = 0.35f), RoundedCornerShape(12.dp))
-            .padding(horizontal = 14.dp, vertical = 12.dp)
+    Row(
+        modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Text("ON THIS DAY · $agoLabel", style = MaterialTheme.typography.labelSmall,
-            color = muted, fontSize = 10.sp)
-        Spacer(Modifier.height(2.dp))
-        Text("You trained ${memory.dayName} · $vol moved$prText",
-            style = MaterialTheme.typography.bodyMedium, color = onBg)
+        Text(
+            name.ifBlank { "Athlete" },
+            style = MaterialTheme.typography.titleLarge,
+            color = onBg,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+        Spacer(Modifier.width(12.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            NotificationBell()
+            Spacer(Modifier.width(4.dp))
+            Box(
+                Modifier
+                    .sizeIn(minWidth = 44.dp, minHeight = 44.dp)
+                    .offset(x = GUTTER_SLACK)
+                    .clickableLabeled("Profile", onClick = onOpenProfile),
+                contentAlignment = Alignment.Center
+            ) {
+                Box(
+                    Modifier.size(36.dp).clip(CircleShape).background(palette.card),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        NavIcons.Profile,
+                        contentDescription = null,
+                        tint = muted,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+        }
     }
 }
 
-/**
- * The Home movement line (W6): today's watch steps against a typical day (14-day median), the
- * quiet daily-movement read between sessions. One thin bar (fill `primary` on an outline track,
- * §5) + one mono reading — honest at zero, hidden entirely when steps aren't connected.
- */
+/** The goals strip: real cards, or the ghost strip that runs off the edge the same way (§12). */
 @Composable
-private fun MovementLine(
-    movement: OverviewViewModel.TodayMovement,
+private fun GoalStrip(
+    state: com.forge.app.ui.overview.state.OverviewUiState,
+    palette: SurfacePalette,
     onBg: Color,
     muted: Color,
-    outline: Color,
-    accent: Color
+    onOpenGoals: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
-    val reading = buildString {
-        append("%,d".format(movement.steps))
-        append(" STEPS")
-        movement.typicalSteps?.let { append(" · TYPICAL ~%,d".format(it)) }
+    val settings = LocalForgeSettings.current
+    // In-progress goals lead (closest first), then reached ones — a full slate of achieved goals
+    // must not bury the target actually being worked toward.
+    val lift = state.goals.map { g ->
+        GoalCardData(
+            title = g.name,
+            valueLine = "${com.forge.app.domain.units.weightInputValue(g.currentBestLb, settings.weightUnit)} / " +
+                "${com.forge.app.domain.units.weightInputValue(g.targetLb, settings.weightUnit)} " +
+                unitLabel(settings.weightUnit),
+            fraction = g.fraction,
+            achieved = g.achieved
+        )
     }
-    Column(Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text("MOVEMENT", style = MaterialTheme.typography.labelMedium, color = muted)
-            Text(
-                reading,
-                style = MaterialTheme.typography.labelSmall,
-                color = muted, fontSize = 9.sp, letterSpacing = 0.5.sp
-            )
-        }
-        Spacer(Modifier.height(8.dp))
-        // Today against the typical-day mark; with no baseline yet the bar shows today against
-        // itself (full when any steps, empty at zero) — a real reading either way, never fake.
-        val target = movement.typicalSteps ?: movement.steps
-        val fraction = if (target <= 0) 0f else (movement.steps.toFloat() / target).coerceIn(0f, 1f)
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .height(4.dp)
-                .background(outline.copy(alpha = 0.3f), RoundedCornerShape(2.dp))
-        ) {
-            if (fraction > 0f) {
-                Box(
-                    Modifier
-                        .fillMaxWidth(fraction)
-                        .height(4.dp)
-                        .background(accent, RoundedCornerShape(2.dp))
+    val custom = state.customGoals.map { g ->
+        GoalCardData(
+            title = customGoalTitle(g),
+            valueLine = customGoalValueLine(g, settings.weightUnit, settings.useMiles),
+            fraction = g.fraction,
+            achieved = g.achieved
+        )
+    }
+    val preview = (lift + custom)
+        .sortedWith(compareBy<GoalCardData> { it.achieved }.thenByDescending { it.fraction })
+        .take(6)
+
+    PeekCardRow(modifier, gutter = GUTTER) {
+        if (preview.isEmpty()) {
+            items(3) { i -> HomeGoalGhost(palette, i, muted, onBg, onOpenGoals) }
+        } else {
+            itemsIndexed(preview) { i, goal ->
+                HomeGoalCard(
+                    palette = palette,
+                    title = goal.title,
+                    valueLine = goal.valueLine,
+                    fraction = goal.fraction,
+                    achieved = goal.achieved,
+                    hue = palette.hues[i % palette.hues.size],
+                    onBg = onBg,
+                    muted = muted,
+                    onClick = onOpenGoals
                 )
             }
         }
     }
+}
+
+private data class GoalCardData(
+    val title: String,
+    val valueLine: String,
+    val fraction: Float,
+    val achieved: Boolean
+)
+
+/** One RECENT row: leading glyph · title + date · volume + trend. */
+@Composable
+private fun RecentSurfaceRow(
+    item: OverviewRecentItem,
+    palette: SurfacePalette,
+    onBg: Color,
+    muted: Color,
+    weightUnit: com.forge.app.domain.units.WeightUnit,
+    useMiles: Boolean,
+    onClick: () -> Unit
+) {
+    val figure = when {
+        item.isGym && (item.volumeLb ?: 0.0) > 0.0 -> formatVolume(item.volumeLb!!, weightUnit)
+        !item.isGym && (item.distanceKm ?: 0.0) > 0.0 ->
+            com.forge.app.domain.units.formatDistance(item.distanceKm!!, useMiles)
+        else -> null
+    }
+    // Colour as data: a session above its day-type average reads positive, below reads negative.
+    // The word carries it too ("BEST", "+8% avg"), so the tint is never the only channel.
+    val delta = when {
+        item.isBest -> "BEST"
+        item.vsAvgPct != null -> "${if (item.vsAvgPct >= 0) "+" else ""}${item.vsAvgPct}% avg"
+        item.prCount > 0 -> "${item.prCount} PR"
+        else -> null
+    }
+    val deltaColor = when {
+        item.isBest -> palette.positive
+        item.vsAvgPct != null && item.vsAvgPct > 0 -> palette.positive
+        item.vsAvgPct != null && item.vsAvgPct < 0 -> palette.negative
+        else -> palette.mutedOnCard
+    }
+    val sub = listOfNotNull(
+        item.dayLabel.takeIf { it.isNotBlank() },
+        item.statusPill.takeIf { it.isNotBlank() },
+        item.topLift
+    ).joinToString(" · ")
+
+    SurfaceListRow(
+        icon = if (item.isGym) SettingsIcons.Session else NavIcons.Cardio,
+        hue = if (item.isGym) palette.hues[0] else palette.hues[1],
+        label = item.title,
+        sub = sub,
+        figure = figure,
+        delta = delta,
+        deltaColor = deltaColor,
+        onBg = onBg,
+        muted = palette.mutedOnCard,
+        onClick = onClick,
+        clickLabel = "Open ${item.title}"
+    )
+}
+
+// ── Small helpers ─────────────────────────────────────────────────────────────────────────────
+
+/** Time-of-day greeting. Dry and factual — it names the part of the day, nothing more (§11). */
+private fun greetingNow(): String = when (java.time.LocalTime.now().hour) {
+    in 0..4 -> "Late night"
+    in 5..11 -> "Good morning"
+    in 12..17 -> "Good afternoon"
+    else -> "Good evening"
+}
+
+/** What TalkBack speaks for the hero curve — the reading, not the shape (§14). */
+private fun weeklySeriesReading(
+    series: List<Double>,
+    unit: com.forge.app.domain.units.WeightUnit
+): String {
+    if (series.isEmpty()) return "No weekly volume yet"
+    val now = toDisplayWeight(series.last(), unit).roundToInt()
+    val peak = toDisplayWeight(series.max(), unit).roundToInt()
+    return "Weekly volume over ${series.size} weeks, now $now ${unitLabel(unit)}, best $peak"
 }
