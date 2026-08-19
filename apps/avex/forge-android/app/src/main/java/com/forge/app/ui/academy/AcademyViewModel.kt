@@ -14,11 +14,9 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
- * The Academy (Coach v3 B3): what you've unlocked, what's still ahead, and the lesson you're
- * reading.
+ * The Academy (Coach v3 B3): everything the coach knows, and the lesson you're reading.
  *
- * Upcoming lessons are shown locked-but-visible on purpose — the same rule as a COMING_SOON signal
- * slot. A user should be able to see the shape of what the coach knows before they've earned it.
+ * Every lesson is open. See [UiState] for why that changed and what it cost (nothing).
  */
 @HiltViewModel
 class AcademyViewModel @Inject constructor(
@@ -27,55 +25,47 @@ class AcademyViewModel @Inject constructor(
 ) : ViewModel() {
 
     /**
-     * One track's standing. Counts only — no score, no percentage, no streak: the plan bans XP here
-     * outright ("learning is not gamified engagement bait"), so this is an inventory of what exists
-     * and what has opened, which is the same thing a locked lesson row has always said.
+     * ## The gate is gone (2026-08-16)
+     *
+     * `unlocked` used to decide VISIBILITY: 27 of the 31 lessons were hidden behind coach moments, so
+     * a screen calling itself a hub of knowledge was 87% locked list. Antho's read was that it felt
+     * like an achievement tree rather than somewhere to learn, and he was right — that is what a
+     * mostly-locked inventory is.
+     *
+     * Nothing in the domain changed to fix it. `unlocked` already meant "a coach moment fired for
+     * this reader", which is a statement about RELEVANCE, not entitlement. The UI simply stopped
+     * treating it as permission: every lesson is readable from install, and a fired moment now only
+     * flags a lesson as relevant right now — the little poke, in Antho's words. The ledger, the
+     * notifications feed, `ArrivalController` and the tab badge are all untouched and keep working,
+     * because `isNew` (fired and unread) is still exactly what they count.
+     *
+     * [LessonUnlock]'s label/detail are consequently no longer rendered anywhere. They stay on the
+     * model: they are the authoring record of WHY each lesson exists, and `orphanLessons()` still
+     * audits against them.
      */
-    data class TrackProgress(
-        val track: LessonTrack,
-        val total: Int,
-        val unlocked: Int,
-        val read: Int,
-        val unread: Int
-    )
-
     data class UiState(
-        val unlocked: List<AcademyRegistry.LessonState> = emptyList(),
-        val upcoming: List<AcademyRegistry.LessonState> = emptyList(),
+        /** Every lesson, ledger state attached. Nothing is filtered out of this list. */
+        val all: List<AcademyRegistry.LessonState> = emptyList(),
         val openLessonId: String? = null,
         /** Live values for the reader's own numbers inside a lesson. */
         val examples: Map<String, String> = emptyMap()
     ) {
-        val newCount: Int get() = unlocked.count { it.isNew }
-
-        private val all: List<AcademyRegistry.LessonState> get() = unlocked + upcoming
-
-        /** Every track, in reading order, whether or not anything in it has opened yet. */
-        val tracks: List<TrackProgress>
-            get() = LessonTrack.entries.map { track ->
-                val mine = all.filter { it.lesson.track == track }
-                TrackProgress(
-                    track = track,
-                    total = mine.size,
-                    unlocked = mine.count { it.unlocked },
-                    read = mine.count { it.opened },
-                    unread = mine.count { it.isNew }
-                )
-            }.filter { it.total > 0 }
+        val newCount: Int get() = all.count { it.isNew }
 
         /**
-         * The one lesson to offer next: something already unlocked and unread. Deliberately NOT the
-         * next item of a syllabus — the Academy is just-in-time, so the only lesson it can honestly
-         * push is one whose moment has already fired (`docs/ACADEMY_LESSONS.md`).
+         * What the coach has flagged as relevant and the reader has not opened, newest first.
+         *
+         * This is the poke made visible on the page, beside the same count the bell and the tab
+         * badge already carry. Capped by the caller — a "for you" shelf holding nine things is a
+         * backlog, and a backlog is the achievement feeling coming back in through the side door.
          */
-        val continueLesson: AcademyRegistry.LessonState?
-            get() = unlocked.lastOrNull { it.isNew }
+        val forYou: List<AcademyRegistry.LessonState>
+            get() = all.filter { it.isNew }.sortedByDescending { it.unlockedAtMs ?: 0L }
 
         fun lessonsIn(track: LessonTrack): List<AcademyRegistry.LessonState> =
+            // Registry order, which for Fundamentals IS its reading order. No sort by state: putting
+            // "yours" first would re-impose the ranking this rework removed.
             all.filter { it.lesson.track == track }
-                // Unlocked first, then locked; registry order is preserved inside each, which for
-                // Fundamentals IS its reading order.
-                .sortedBy { if (it.unlocked) 0 else 1 }
     }
 
     private val _state = MutableStateFlow(UiState())
@@ -89,8 +79,7 @@ class AcademyViewModel @Inject constructor(
         runCatching { academyRepo.syncCoachMoments() }
         val states = runCatching { academyRepo.states() }.getOrDefault(emptyList())
         _state.value = _state.value.copy(
-            unlocked = states.filter { it.unlocked }.sortedByDescending { it.unlockedAtMs ?: 0L },
-            upcoming = states.filter { !it.unlocked },
+            all = states,
             examples = runCatching { examples() }.getOrDefault(emptyMap())
         )
     }

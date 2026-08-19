@@ -324,7 +324,6 @@ fun ForgeNavHost(initialDayKey: String? = null) {
         ) { entry ->
             com.forge.app.ui.academy.AcademyScreen(
                 onBack = { nav.popBackStack() },
-                onOpenTrack = { nav.navigate(Routes.academyTrack(it.code)) },
                 onOpenArticle = { nav.navigate(Routes.article(it)) },
                 // A feed row lands straight on its lesson rather than on the hub, so tapping
                 // "new lesson" reads the lesson instead of asking the user to find it.
@@ -338,16 +337,6 @@ fun ForgeNavHost(initialDayKey: String? = null) {
             // A retired id resolves to null and the screen says so inline (§12) rather than popping
             // the back stack: a link from an old coach reason should explain itself, not vanish.
             com.forge.app.ui.academy.ArticleScreen(onBack = { nav.popBackStack() })
-        }
-        composable(
-            route = Routes.ACADEMY_TRACK,
-            arguments = listOf(navArgument(Routes.ARG_TRACK_CODE) { type = NavType.StringType })
-        ) { entry ->
-            val code = entry.arguments?.getString(Routes.ARG_TRACK_CODE)
-            val track = com.forge.app.domain.academy.LessonTrack.entries.firstOrNull { it.code == code }
-            // An unknown code can only come from a stale deep link; fall back rather than crash.
-            if (track == null) nav.popBackStack()
-            else com.forge.app.ui.academy.AcademyTrackScreen(track = track, onBack = { nav.popBackStack() })
         }
         composable(Routes.COACH_LAB) {
             CoachScreen(

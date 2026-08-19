@@ -58,6 +58,16 @@ object PreferenceKeys {
     /** Comma-separated tile IDs in display order. Default = "gym,cardio,trophies". */
     val OVERVIEW_TILE_ORDER = stringPreferencesKey("overview_tile_order")
 
+    /**
+     * The goals the user pinned to Home, in pin order, comma-joined (2026-08-16).
+     *
+     * A preference rather than a DB column: a pin is a view choice about ONE screen, it spans two
+     * unrelated goal tables (lift targets and custom goals) that would each need their own migration,
+     * and it must survive a goal being deleted — which it does here for free, since a key that no
+     * longer resolves is simply skipped when Home reads it.
+     */
+    val PINNED_GOALS = stringPreferencesKey("pinned_goals")
+
     // ─── Custom warmup (#120) — per-day key, e.g. "warmup_upper-a" ───────────
     fun warmupKey(dayKey: String) = stringPreferencesKey("warmup_$dayKey")
 

@@ -33,7 +33,7 @@ fun WristCapsule(
         modifier = modifier
             .defaultMinSize(minHeight = 44.dp)
             .clip(RoundedCornerShape(50))
-            .background(if (filled) colors.onBg else Color(0xFF15161B))
+            .background(if (filled) colors.onBg else Color(0xFF1A1613))
             .clickable(onClick = onClick)
             .padding(horizontal = 20.dp, vertical = 12.dp),
         contentAlignment = Alignment.Center
@@ -65,7 +65,7 @@ fun WristStepper(
             Modifier
                 .size(34.dp)
                 .clip(CircleShape)
-                .background(Color(0xFF15161B)),
+                .background(Color(0xFF1A1613)),
             contentAlignment = Alignment.Center
         ) {
             Text(glyph, style = WearType.control, color = colors.onBg)

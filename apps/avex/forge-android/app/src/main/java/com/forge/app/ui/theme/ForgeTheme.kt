@@ -27,7 +27,7 @@ fun ForgeTheme(
         if (!accentEnabled) PearlOnBg
         else accentColorHex.takeIf { it.isNotEmpty() }
             ?.let { runCatching { Color(android.graphics.Color.parseColor(it)) }.getOrNull() }
-            ?: AccentNavy
+            ?: AccentEmber
     }
 
     val scheme = pearlColorScheme(accent, amoledMode)
@@ -84,9 +84,14 @@ private fun pearlColorScheme(accent: Color, amoled: Boolean): ColorScheme {
     val bg         = if (amoled) Color.Black         else PearlBackground
     val surface    = if (amoled) Color(0xFF080808)   else PearlSurface
     val surfaceVar = if (amoled) Color(0xFF111111)   else PearlSurfaceVar
-    // Content ON an accent fill: dark for a light accent (near-white neutral, or a pale custom hex),
-    // else the near-white default — so a filled-primary control never renders same-on-same.
-    val onAccent   = if (accent.luminance() > 0.55f) bg else PearlOnBg
+    // Content ON an accent fill: dark for a light accent, else the near-white default — so a
+    // filled-primary control never renders same-on-same.
+    //
+    // The threshold is 0.18, not 0.55 (2026-08-16). Ember sits at luminance 0.271: near-white on it
+    // measures 3.44:1 and FAILS AA, while dark-on-ember measures 5.84:1 and passes. 0.55 only ever
+    // caught a near-white accent; anything genuinely mid-tone — which the warm presets are — needs
+    // dark content. The dim presets (Navy 0.077, Gold 0.135) are unaffected and keep near-white.
+    val onAccent   = if (accent.luminance() > 0.18f) bg else PearlOnBg
     return darkColorScheme(
         background         = bg,
         onBackground       = PearlOnBg,

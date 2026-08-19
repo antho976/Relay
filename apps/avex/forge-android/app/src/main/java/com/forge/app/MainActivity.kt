@@ -324,6 +324,8 @@ class MainActivity : FragmentActivity() {
                     s.copy(keepScreenOn = v)
                 }.combine(settingsRepo.overviewTileOrder) { s, order ->
                     s.copy(overviewTileOrder = order)
+                }.combine(settingsRepo.pinnedGoals) { s, keys ->
+                    s.copy(pinnedGoalKeys = keys)
                 }.combine(settingsRepo.accentColorHex) { s, v ->
                     s.copy(accentColorHex = v)
                 }.combine(settingsRepo.accentEnabled) { s, v ->

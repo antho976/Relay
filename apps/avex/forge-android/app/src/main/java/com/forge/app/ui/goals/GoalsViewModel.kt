@@ -18,11 +18,22 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
+
+/** How many goals Home shows. The pin list is capped here so a fourth pin drops the oldest. */
+const val HOME_PIN_SLOTS = 3
+
+/** Pin key for a lift target. Namespaced so it cannot collide with a custom goal's row id. */
+fun liftPinKey(exerciseId: String): String = "lift:$exerciseId"
+
+/** Pin key for a custom goal. Keyed on the row ID, never the label — a rename must not drop the pin. */
+fun customPinKey(id: Long): String = "custom:$id"
 
 /**
  * The aggregated Goals screen. Two kinds of goal live here:
@@ -120,6 +131,26 @@ class GoalsViewModel @Inject constructor(
 
     fun clearLiftGoal(exerciseId: String) = viewModelScope.launch {
         withContext(NonCancellable) { goalRepo.clearGoal(exerciseId) }
+    }
+
+    // ─── Home pins (2026-08-16) ────────────────────────────────────────────────
+
+    /**
+     * The goals pinned to Home, in pin order. Home renders the first three.
+     *
+     * The keys are namespaced (`lift:<exerciseId>` / `custom:<id>`) because the two goal kinds live
+     * in unrelated tables and their ids would otherwise collide. A key whose goal has since been
+     * deleted stays in the list harmlessly — Home resolves keys against live goals and skips the
+     * ones that no longer match, so an orphan pin is invisible rather than an error.
+     */
+    val pinnedGoals: StateFlow<List<String>> = settingsRepo.pinnedGoals
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    fun toggleLiftPin(exerciseId: String) = togglePin(liftPinKey(exerciseId))
+    fun toggleCustomPin(id: Long) = togglePin(customPinKey(id))
+
+    private fun togglePin(key: String) = viewModelScope.launch {
+        withContext(NonCancellable) { settingsRepo.toggleGoalPin(key, max = HOME_PIN_SLOTS) }
     }
 
     // ─── Custom goals (extended_goal) ──────────────────────────────────────────

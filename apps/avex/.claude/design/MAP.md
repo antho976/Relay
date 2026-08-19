@@ -94,45 +94,77 @@ rather than a notice.
 
 ### Academy — `ui/academy`
 
-The knowledge half of the coach, and a hub tab since 2026-07-27. Built to the structure
-`COACH_V3_PLAN.md` already specified and the first version ignored: **five tracks**
-(Fundamentals · How the coach works · Programming · Signals · Conditioning), not one flat list of
-31 rows. Hub = hero count, a `START HERE` entry (one already-unlocked, unread lesson) and a track
-row each with its blurb, count and a **`LessonDotRail`** — filled/hollow dots, §2②, deliberately NOT
-a progress bar: the plan bans XP here ("learning is not gamified engagement bait") and a bar that
-fills reads as a score to chase, where a rail reads as inventory. Tracks drill into
-`AcademyTrackScreen` (`Routes.academyTrack`), which splits `OPEN` from `NOT YET`.
+The knowledge half of the coach, and a hub tab since 2026-07-27. **Rebuilt as one open gallery
+2026-08-16** (`AcademyScreen` + `AcademyGallery`), replacing the gated hub → track-screen → lesson
+structure. Antho: *"too crowded and behind 50 sub menus, and the worst thing is it feels like
+achievement, not a hub to knowledge. You should be able to see everything."*
 
-**What it is not** is a course index. `docs/ACADEMY_LESSONS.md` is explicit — "just-in-time, not
-curriculum-first" — so only Fundamentals is sequential, there is no next-up ladder, and nothing is
-ever gated on reading. The locked rows carry the reworked `LessonUnlock`: the lesson's own title,
-what opens it, and one line of how, with an **accent dot only on the ones the reader can trigger
-today** (§8 — a dot earns its colour by flagging the exception). "Log a set" versus "When the coach
-first suggests a weight" tells you whose move it is without a word of chrome.
+**Three causes, all removed.** (1) It was **87% locked** — 27 of 31 lessons gated on coach moments,
+and a mostly-locked inventory can only read as an achievement tree. (2) It reported progress **twice
+per track**, a `LessonDotRail` *and* an "n OF m", making score the loudest thing on a reading page.
+(3) **Three levels** to reach a lesson.
 
-**Two lenses since 2026-08-15** (§4.4 `SegmentPill` row, `AcademyLens`), because the tab now holds
-two different promises and a reader has to be able to tell which one they are in:
+**Tiles carry their own weight, without cover art.** The first cut was eighteen equally-weighted
+rectangles and Antho read it as "just feels like blocks" — which is what a grid of equal tiles is. A
+gallery needs focal points and rhythm; images are only the cheapest way to buy them. Three devices
+buy them instead: **scale rhythm** (each section opens on a full-width lead tile, the rest fall to a
+two-up grid), **a ghosted serif numeral** per tile (an editorial index at 0.15/0.25 onBg, which also
+carries reading order where a track has one), and **title-as-art** (serif `headlineMedium` on a lead
+tile, `headlineSmall` on a grid tile; the deck rides the lead ONLY, so size correlates with how much
+a tile says). The lead tile is where a real cover drops in later without anything else moving.
 
-| Lens | Contract | Archetype |
-|---|---|---|
-| **Lessons** | earned — each attaches to a coach moment and opens when it first fires | the overview above |
-| **Library** | open — every article readable from install, no gate, no order, no score | list (`libraryPane`) → detail (`ArticleScreen`) |
+**Covers land on lead tiles only** (`GallerySection.cover`, `drawable-nodpi/cover_*.webp`), which is
+why the art budget is ~8 images rather than 35. A cover is drawn full-bleed behind the tile, forced
+to greyscale at render time (`ColorFilter.colorMatrix` — so a colour asset can never break the
+one-accent rule) under a **horizontal** scrim: card @1.0 → 0.7 @62% → 0.25 at the end edge. Horizontal
+rather than the usual bottom-up one because the text column runs the tile's full height on the start
+edge. **Cover art is therefore shot with its subject on the END side and shadow on the start side**,
+so the photograph reads through exactly where nothing is written over it. A null cover renders the
+purely typographic lead unchanged, so the art can arrive one section at a time.
 
-The **serif hero stays "Academy" across both** so the tab keeps one identity (§6); only the eyebrow
-and the italic aside switch, since those are the genuinely lens-specific parts. Lessons is the
-default lens on entry: it is the half that can have something new in it.
+Two consequences worth knowing. **Titles now have a length budget** — roughly 24 characters fits two
+lines on a grid tile, past ~32 it runs to three. And the meta line dropped the word `LESSON`: 31 of
+35 pieces are lessons, so it appeared on nearly every tile and stopped being information. `ARTICLE`
+labels the minority instead — flag the exception, never the default.
 
-**Library** — `domain/academy/Article.kt` + `ArticleRegistry`, rendered by `libraryPane` and
-`ArticleScreen`, ledgered in `article_event` (v36) via `LibraryRepository`. A deliberate sibling of
+The FOR YOU shelf is **skipped when its lesson is already a track's lead tile**, since both render
+full width and large and would land a screen apart looking like one card printed twice (the common
+case at cold start, where the first moments to fire are Fundamentals ones). The lead tile keeps its
+FOR YOU mark, so the poke is still on the page.
+
+Now: hero → optional **FOR YOU** (one featured full-width tile) → the five lesson tracks as section
+headers → the Library's articles grouped by `ArticleTopic`. Two tiles per row, vertical throughout
+("between B and C" of the three sketches offered). `AcademyTrackScreen`, `Routes.academyTrack`,
+`academyLessonsPane`, `libraryPane`, `LessonDotRail` and `LessonRow` are all **deleted**.
+
+**The gate became a poke, with zero domain change.** `LessonState.unlocked` already meant "a coach
+moment fired for this reader" — a statement about RELEVANCE, not entitlement. The UI stopped
+treating it as permission: every lesson is readable from install, and a fired moment now only marks
+a tile FOR YOU. The ledger, `ArrivalController`, the notifications feed and the tab badge are
+untouched and still count `isNew`. `LessonUnlock.label/detail` are no longer rendered anywhere; they
+stay on the model as the authoring record `orphanLessons()` audits against.
+
+**One page, labelled differently** (Antho's words) — the `AcademyLens` `SegmentPill` row is gone.
+Lessons and articles share the gallery and are told apart by a word in each tile's meta line
+(`LESSON · 1 MIN` / `ARTICLE · 6 MIN`), with reading time for both derived by the same
+`List<LessonBlock>.readMinutes()` (lifted out of `Article` so two neighbouring tiles cannot state
+their length by two different rules). The Library's search field and topic pills went with the
+merge; tracks and topics are the browsing structure now.
+
+**Still true:** no XP, no streaks, no percentage, no course index. `docs/ACADEMY_LESSONS.md`'s
+"just-in-time, not curriculum-first" now holds more literally than before, since nothing is
+sequenced at all — only Fundamentals is authored in a reading order, and the gallery preserves it.
+
+**Library** — `domain/academy/Article.kt` + `ArticleRegistry`, listed in the gallery above and read
+in `ArticleScreen`, ledgered in `article_event` (v36) via `LibraryRepository`. A deliberate sibling of
 `Lesson`, not an extension: folding articles in would force `Lesson.unlock` to be a lie on every
 row. They share the block renderer (`BlockBody`), so both halves read in one voice.
 
-- **Filter is topic, never difficulty.** "What is this about" is answerable before opening
-  something; "how hard is it" is not, so difficulty rides as a row label beside read time
-  (`HYPERTROPHY · APPLIED · 3 MIN`) rather than hiding articles behind a judgement the reader has
-  not made yet. Topic pills scroll horizontally and **only topics that hold an article appear**
-  (§12 — design at the emptiest realistic state; eight shelves against four articles would open the
-  Library as a promise nothing keeps).
+- **Topic groups, never difficulty.** "What is this about" is answerable before opening something;
+  "how hard is it" is not, so difficulty never sorted or gated anything. Since the 2026-08-16 merge
+  the topic pills are gone too — each topic is a gallery section, and **only topics holding an
+  article appear** (§12: eight empty shelves against four articles would open the Library as a
+  promise nothing keeps).
 - **Read time is derived from word count**, never authored, so it cannot drift when a paragraph is
   edited. Ceiling ~30 minutes: past that it is a book, not a lesson.
 - **Every article is sourced**, and `ArticleRegistryTest` fails the build on an empty source list —

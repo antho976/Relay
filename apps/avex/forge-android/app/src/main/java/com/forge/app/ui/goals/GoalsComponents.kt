@@ -16,17 +16,25 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.forge.app.data.repo.ExtendedGoalRepository
 import com.forge.app.data.repo.GoalRepository
 import com.forge.app.domain.goal.GoalMetric
 import com.forge.app.domain.goal.GoalPeriod
+import com.forge.app.program.ExerciseLibrary
 import com.forge.app.domain.units.distanceInputValue
 import com.forge.app.domain.units.distanceUnitLabel
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.domain.units.weightInputValue
+import com.forge.app.ui.common.ExerciseIcons
 import com.forge.app.ui.common.bounceClick
+import com.forge.app.ui.experiment.CardMark
+import com.forge.app.ui.nav.NavIcons
+import com.forge.app.ui.settings.SettingsIcons
 import com.forge.app.ui.theme.LocalForgeSettings
 
 // ─── Metric metadata / formatting (shared by rows and the editor flow) ──────
@@ -79,11 +87,23 @@ internal fun customGoalValueLine(g: ExtendedGoalRepository.Progress, weightUnit:
 // ─── The shared goal line ───────────────────────────────────────────────────
 
 /**
- * One goal as an open progress line — title and figure on one baseline, a static bar underneath
- * (the List archetype bans draw-in theatrics, §3; overview hosts animate at the section level).
- * The SAME component renders Home's GOALS teaser and the Goals screen's rows, so the preview and
- * the full list read as one surface. Achieved goals tint title + figure with the accent — the
- * tint alone flags the state (§8: state is never rendered twice).
+ * One goal as an open progress line — title and figure on one baseline, a static bar underneath.
+ * The SAME component renders Home's GOALS section and the Goals screen's rows, so the two read as
+ * one surface.
+ *
+ * ## The bar is neutral now (2026-08-16)
+ *
+ * It used to fill in the accent for EVERY goal. On Home that meant three warm bars stacked under a
+ * warm CTA, and the accent stopped flagging anything — which is the failure mode Antho named on the
+ * old design ("goals are so bad looking, the blue dot on the first one doesn't look good"). An
+ * in-progress goal now fills in `onBg`; only a REACHED one takes the accent, so colour marks the
+ * exception rather than the majority.
+ *
+ * The reading also swaps to the word "REACHED" when achieved: the tint used to be the only channel
+ * saying so, which fails for a monochrome or colour-blind reader.
+ *
+ * The title no longer clamps to one line. A goal name is user content, and a long lift name was
+ * being truncated rather than wrapped.
  */
 @Composable
 internal fun GoalProgressLine(
@@ -93,38 +113,82 @@ internal fun GoalProgressLine(
     achieved: Boolean,
     @Suppress("UNUSED_PARAMETER") index: Int, // kept for call-site stability; the stagger it drove is gone
     onBg: Color, muted: Color, accent: Color, outline: Color,
+    modifier: Modifier = Modifier,
+    /**
+     * The leading mark. Non-null on Home, where RECENT's rows carry one and a goals section without
+     * one made the page read as two unrelated halves (Antho, 2026-08-16: "the overall feel of the
+     * page feels disconnected from the recent section, it's the only one with icons"). Null on the
+     * Goals screen itself, where every row is a goal and a column of identical glyphs says nothing.
+     */
+    icon: ImageVector? = null,
     onClick: () -> Unit
 ) {
     val frac = fraction.coerceIn(0f, 1f)
-    Column(Modifier.fillMaxWidth().bounceClick { onClick() }) {
-        Row(Modifier.fillMaxWidth()) {
-            Text(
-                title, style = MaterialTheme.typography.bodyMedium,
-                color = if (achieved) accent else onBg,
-                maxLines = 1, overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f).alignByBaseline()
-            )
+    val percent = (frac * 100).toInt()
+    Row(
+        modifier
+            .fillMaxWidth()
+            .bounceClick { onClick() }
+            .semantics(mergeDescendants = true) {
+                contentDescription = "$title, $percent percent of target"
+            }
+    ) {
+        if (icon != null) {
+            CardMark(icon, onBg)
             Spacer(Modifier.width(12.dp))
-            Text(
-                valueLine,
-                style = MaterialTheme.typography.labelMedium,
-                color = if (achieved) accent else muted,
-                maxLines = 1, overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.alignByBaseline()
-            )
         }
-        Spacer(Modifier.height(9.dp))
-        Box(
-            Modifier.fillMaxWidth().height(5.dp)
-                .clip(RoundedCornerShape(50)).background(outline.copy(alpha = 0.35f))
-        ) {
+        // The bar starts at the TEXT column, not at the mark: that shared left rail is what makes a
+        // goal row and a RECENT row read as the same kind of object.
+        Column(Modifier.weight(1f)) {
+            Row(Modifier.fillMaxWidth()) {
+                Text(
+                    title, style = MaterialTheme.typography.bodyMedium, color = onBg,
+                    modifier = Modifier.weight(1f).alignByBaseline()
+                )
+                Spacer(Modifier.width(12.dp))
+                Text(
+                    if (achieved) "REACHED" else valueLine,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (achieved) accent else muted,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.alignByBaseline()
+                )
+            }
+            Spacer(Modifier.height(9.dp))
             Box(
-                Modifier.fillMaxWidth(frac).fillMaxHeight()
-                    .clip(RoundedCornerShape(50)).background(accent)
-            )
+                Modifier.fillMaxWidth().height(5.dp)
+                    .clip(RoundedCornerShape(50)).background(outline.copy(alpha = 0.35f))
+            ) {
+                Box(
+                    Modifier.fillMaxWidth(frac).fillMaxHeight()
+                        .clip(RoundedCornerShape(50))
+                        .background(if (achieved) accent else onBg)
+                )
+            }
         }
     }
 }
+
+/** A custom goal's glyph: its domain, since it has no implement. */
+internal fun goalGlyph(metric: GoalMetric): ImageVector = when (metric) {
+    GoalMetric.SESSIONS -> SettingsIcons.Session
+    GoalMetric.VOLUME -> NavIcons.Stats
+    GoalMetric.CARDIO_DISTANCE, GoalMetric.CARDIO_MINUTES -> NavIcons.Cardio
+    GoalMetric.BODYWEIGHT -> ExerciseIcons.Bodyweight
+}
+
+/**
+ * A lift target's glyph: the exercise's own equipment class, resolved through the library.
+ *
+ * Not a single shared barbell. Three pinned lifts would then stack three identical glyphs, which is
+ * the "grey dot column" failure — a mark that is the same on every row carries no information and
+ * becomes noise. Bench, squat and pull-ups now lead with a bench, a barbell and a bar. An exercise
+ * the library does not know (a user's custom move) falls through to the pencil.
+ */
+internal fun liftGoalGlyph(exerciseId: String): ImageVector =
+    ExerciseLibrary.byId(exerciseId)
+        ?.let { ExerciseIcons.forEquipment(it.equipment) }
+        ?: ExerciseIcons.Custom
 
 // ─── Rows (Goals screen) ────────────────────────────────────────────────────
 

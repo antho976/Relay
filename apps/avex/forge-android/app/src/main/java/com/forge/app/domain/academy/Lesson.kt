@@ -81,6 +81,34 @@ sealed interface LessonBlock {
     data class Example(val key: String, val label: String, val fallback: String) : LessonBlock
 }
 
+/**
+ * Reading time for a run of blocks, derived from the prose rather than authored.
+ *
+ * Authored minutes drift the moment anyone edits a paragraph and nobody remembers to update the
+ * number. 200 words per minute is the usual estimate for adult non-fiction; it rounds to the nearest
+ * minute with a floor of one, so the shortest piece reads "1 MIN" rather than "0 MIN".
+ *
+ * Lifted out of `Article` (2026-08-16) when the gallery started showing lessons and articles side by
+ * side: two pieces of content next to each other cannot state their length by two different rules.
+ * `Article.readMinutes` delegates here, so its output is unchanged.
+ */
+fun List<LessonBlock>.readMinutes(): Int {
+    fun String.words(): Int = split(' ', '\n').count { it.isNotBlank() }
+    val words = sumOf { block ->
+        when (block) {
+            is LessonBlock.Heading -> block.text.words()
+            is LessonBlock.Paragraph -> block.text.words()
+            is LessonBlock.Bullets -> block.items.sumOf { it.words() }
+            is LessonBlock.Callout -> block.text.words()
+            // An Example renders a number and its label, not prose worth timing.
+            is LessonBlock.Example -> 0
+        }
+    }
+    return ((words + WORDS_PER_MINUTE / 2) / WORDS_PER_MINUTE).coerceAtLeast(1)
+}
+
+private const val WORDS_PER_MINUTE = 200
+
 /** What a [com.forge.app.data.db.entities.LessonEvent] records. */
 enum class LessonEventKind(val code: String) {
     /** The lesson's coach/app moment fired for the first time — it now exists for this user. */

@@ -34,7 +34,7 @@ import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.components.SingletonComponent
 import kotlinx.coroutines.flow.first
 import androidx.compose.ui.graphics.toArgb
-import com.forge.app.ui.theme.AccentNavy
+import com.forge.app.ui.theme.AccentEmber
 import com.forge.app.ui.theme.PearlBackground
 import com.forge.app.ui.theme.PearlMuted
 import com.forge.app.ui.theme.PearlOnBg
@@ -125,7 +125,7 @@ class ForgeWidget : GlanceAppWidget() {
         val accentArgb = if (!settings.accentEnabled.first()) PearlOnBg.toArgb()
             else settings.accentColorHex.first().takeIf { it.isNotBlank() }
                 ?.let { runCatching { android.graphics.Color.parseColor(it) }.getOrNull() }
-                ?: AccentNavy.toArgb()
+                ?: AccentEmber.toArgb()
         val bgArgb = if (amoled) android.graphics.Color.BLACK else PearlBackground.toArgb()
         val onBgArgb = PearlOnBg.toArgb()
         val mutedArgb = PearlMuted.toArgb()

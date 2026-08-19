@@ -105,9 +105,10 @@ Each archetype has a compiling recipe under `ui/recipes/` — start there, not f
 
 ## 5. Color (`Color.kt`; via `MaterialTheme.colorScheme`, never raw vals)
 
-Pearl (dark default): bg `#0E0E11` · gradient `#131318→#090909` (behind every screen) · surface
-`#15161B` (sheets) · surfaceVariant `#1C1D24` (interactive tile fill) · outline `#2E2E38` · onBg
-`#EEEEF2` · muted `#B4B4C2`. AMOLED: bg black, surface `#080808`, surfaceVar `#111111`, gradient
+Pearl (dark default) is a **warm** near-black (2026-08-16; it was blue-leaning, and neutral-cool is a
+temperature, not a style): bg `#110F0C` · gradient `#17120E→#0A0806` (behind every screen) · surface
+`#1A1613` (sheets) · surfaceVariant `#221C16` (interactive tile fill) · outline `#38302A` · onBg
+`#F2EFEA` · muted `#BFB6AA`. AMOLED: bg black, surface `#080808`, surfaceVar `#111111`, gradient
 `#000000→#050507`.
 
 **M3's container tones are NOT themed — pass them explicitly on every M3 component that fills.**
@@ -116,11 +117,12 @@ reaching for one falls through to Material's stock dark palette, a lighter purpl
 to no theme here. **A modal is `containerColor = surface`**, its dividers the outline 0.25 rung, its
 confirm/dismiss `onBackground`/muted (2026-07-25; `design/AUDIT.md` carries the call sites still owing).
 
-Accent = user-picked (Navy `#3D4F73` default · Red `#8B3535` · Olive `#4D6040` · Gold `#7A6435`);
-`primary`=accent, `primaryContainer`=@0.15, `secondary`=@0.6. Design against muted navy — needing a
-vivid accent means too much accent. Accent can be **disabled** (Appearance → monochrome): `primary`
-falls back to a near-white neutral (onBg) so highlights stay legible without colour, and `onPrimary`
-flips to bg for any light/neutral accent (so a filled-primary control never goes same-on-same).
+Accent = user-picked (Ember `#D4761F` **default** · Red `#8B3535` · Olive `#4D6040` · Gold `#7A6435` ·
+Navy `#3D4F73`); `primary`=accent, `primaryContainer`=@0.15, `secondary`=@0.6. Spend it in FEW places
+at LARGE size, never many at postage-stamp size — scattered tiny accent reads as a dead pixel, not as
+energy. Accent can be **disabled** (Appearance → monochrome): `primary` falls back to a near-white
+neutral (onBg) so highlights stay legible without colour, and `onPrimary` flips to bg above luminance
+0.18 (so a filled-primary control never goes same-on-same, and mid-tone warm accents get dark text).
 
 **Intensity ladder — the only allowed alphas** (snap strays when editing; enforced by §14's gate):
 
@@ -343,22 +345,21 @@ These are measured, not felt. The mechanical half is enforced by `DesignDoctrine
   golden images at both scales (plus AMOLED and monochrome); CI diffs them. A changed golden is a
   question, not a chore — look at the diff before re-recording.
 
-**Contrast — measured on Pearl `#0E0E11`.** Text ≥4.5:1. Data marks that carry meaning ≥3:1.
+**Contrast — measured on Pearl `#110F0C`.** Text ≥4.5:1. Data marks that carry meaning ≥3:1.
 
 | Element | Ratio | |
 |---|---|---|
-| onBg `#EEEEF2` | 16.66:1 | ✓ |
-| muted 1.0 | 9.41:1 | ✓ |
-| muted @0.7 | 5.07:1 | ✓ |
-| **muted @0.65** | **4.54:1** | ✓ the floor — 0.6 gives 4.05:1 and **fails** |
-| PR gold · △ green · success · warning | 7.1–9.9:1 | ✓ |
-| **accent as text** — Navy 2.35 · Red 2.44 · Olive 2.81 · Gold 3.40 | **2.35–3.40:1** | ✗ **fails AA** |
-| **error `#BF4040` as text** | **3.69:1** | ✗ **fails AA** |
+| onBg `#F2EFEA` | 16.68:1 | ✓ |
+| muted 1.0 | 9.56:1 | ✓ |
+| muted @0.7 | 5.18:1 | ✓ |
+| **muted @0.65** | **4.63:1** | ✓ the floor — 0.6 gives 4.08:1 and **fails** |
+| PR gold · △ green · success · warning | 7.0–9.8:1 | ✓ |
+| **accent as text** — default Ember `#D4761F` | **5.84:1** ✓ | alternates ✗: Red 2.42 · Olive 2.79 · Gold 3.37 · Navy 2.34 |
+| **error `#BF4040` as text** | **3.67:1** | ✗ **fails AA** |
 
-The last two are live defects this doctrine currently *mandates* (`action →` in accent; §12's inline
-error line), recorded in `SETTLED.md` as open decisions. **Do not add new accent-coloured or
-error-coloured body text until they are resolved** — use onBg text with an accent glyph or mark
-instead. Structural hairlines and tonal washes (`outline` rungs, `primaryContainer`) are **exempt**:
+Accent-as-text was a blanket failure until the warm repalette; Ember passes, the alternates do not.
+The rule stands: **no new accent- or error-coloured body text** — use onBg text with an accent glyph
+or mark, the only treatment correct under every accent choice. Open decisions in `SETTLED.md`. Structural hairlines and tonal washes (`outline` rungs, `primaryContainer`) are **exempt**:
 they are decorative boundaries, not content or state, and raising them to 3:1 would destroy §1.
 
 **Touch**: ≥48dp from padding, not visual size. ONE tap target per row — never nested (§2③).
