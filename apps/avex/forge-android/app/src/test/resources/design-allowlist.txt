@@ -189,7 +189,6 @@
 1 bang service/WeeklyRecapWorker.kt ! in string
 1 bang ui/gym/freestyle/ExerciseBrowserScreen.kt ! in string
 1 bang ui/gym/train/DayScreen.kt ! in string
-1 bang ui/overview/OverviewScreen.kt ! in string
 1 bang ui/profile/MirrorTestComponents.kt ! in string
 3 divider ui/cardio/components/CardioLogComponents.kt Divider(
 1 divider ui/cardio/components/CardioWeekStatsPage.kt Divider(
@@ -297,7 +296,7 @@
 3 font-size ui/gym/train/components/WarmupGate.kt fontSize=
 1 font-size ui/nav/ForgeBottomBar.kt fontSize=
 1 font-size ui/overview/HistoryComponents.kt fontSize=
-7 font-size ui/overview/OverviewScreen.kt fontSize=
+2 font-size ui/overview/OverviewScreen.kt fontSize=
 4 font-size ui/overview/SummarySheet.kt fontSize=
 5 font-size ui/overview/components/DayEditComponents.kt fontSize=
 1 font-size ui/overview/components/NavTile.kt fontSize=
