@@ -18,9 +18,9 @@ data class WearColors(
     val accent: Color,
     val accentDim: Color,
     val accentWash: Color,
-    val onBg: Color = Color(0xFFEEEEF2),
-    val muted: Color = Color(0xFFB4B4C2),
-    val outline: Color = Color(0xFF2E2E38),
+    val onBg: Color = Color(0xFFF2EFEA),
+    val muted: Color = Color(0xFFBFB6AA),
+    val outline: Color = Color(0xFF38302A),
     /** Reserved PR gold — the flash only, exactly like the phone. */
     val prGold: Color = Color(0xFFE3B341)
 )
@@ -28,8 +28,8 @@ data class WearColors(
 val LocalWearColors = staticCompositionLocalOf { wearColors(ConfigDto()) }
 
 fun wearColors(config: ConfigDto): WearColors {
-    val accent = if (!config.accentEnabled) Color(0xFFEEEEF2)
-    else parseHex(config.accentHex) ?: Color(0xFF3D4F73) // Navy default, like the phone.
+    val accent = if (!config.accentEnabled) Color(0xFFF2EFEA)
+    else parseHex(config.accentHex) ?: Color(0xFFD4761F) // Ember default, like the phone.
     return WearColors(
         accent = accent,
         accentDim = accent.copy(alpha = 0.6f),

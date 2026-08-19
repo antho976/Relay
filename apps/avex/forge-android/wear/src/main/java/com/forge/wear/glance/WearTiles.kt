@@ -78,14 +78,14 @@ abstract class AvexTileService : TileService() {
 
     protected companion object {
         const val RESOURCES_VERSION = "1"
-        const val ON_BG = 0xFFEEEEF2.toInt()
-        const val MUTED = 0xFFB4B4C2.toInt()
+        const val ON_BG = 0xFFF2EFEA.toInt()
+        const val MUTED = 0xFFBFB6AA.toInt()
 
         fun accentArgb(hex: String, enabled: Boolean): Int {
             if (!enabled) return ON_BG
             val h = hex.removePrefix("#")
             return h.takeIf { it.length == 6 }?.toLongOrNull(16)?.let { (0xFF000000L or it).toInt() }
-                ?: 0xFF3D4F73.toInt()
+                ?: 0xFFD4761F.toInt()
         }
 
         fun age(computedAtMs: Long): String {

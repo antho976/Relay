@@ -45,26 +45,10 @@ data class Article(
      * it rounds to the nearest minute with a floor of one, so the shortest article still reads
      * "1 MIN" rather than "0 MIN".
      */
-    val readMinutes: Int
-        get() {
-            val words = blocks.sumOf { block ->
-                when (block) {
-                    is LessonBlock.Heading -> block.text.wordCount()
-                    is LessonBlock.Paragraph -> block.text.wordCount()
-                    is LessonBlock.Bullets -> block.items.sumOf { it.wordCount() }
-                    is LessonBlock.Callout -> block.text.wordCount()
-                    // An Example renders a number and its label, not prose worth timing.
-                    is LessonBlock.Example -> 0
-                }
-            }
-            return ((words + WORDS_PER_MINUTE / 2) / WORDS_PER_MINUTE).coerceAtLeast(1)
-        }
-
-    private companion object {
-        const val WORDS_PER_MINUTE = 200
-
-        fun String.wordCount(): Int = split(' ', '\n').count { it.isNotBlank() }
-    }
+    // The rule itself lives on `List<LessonBlock>.readMinutes()` in Lesson.kt (2026-08-16): the
+    // gallery shows lessons and articles side by side, and two neighbouring cards cannot state their
+    // length by two different rules. Output is identical to the version that lived here.
+    val readMinutes: Int get() = blocks.readMinutes()
 }
 
 /**

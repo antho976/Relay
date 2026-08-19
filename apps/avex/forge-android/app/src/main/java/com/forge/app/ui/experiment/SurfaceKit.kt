@@ -16,9 +16,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -28,6 +30,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -41,6 +44,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
@@ -117,14 +121,18 @@ fun surfacePalette(): SurfacePalette {
     // carries it and the three "hues" separate by tone. Meaning is never gated on colour (§14).
     val mono = !settings.accentEnabled
     return SurfacePalette(
-        // On AMOLED the ground is pure black, so the card steps DOWN rather than up — a #17171A
-        // slab on black reads as a lit panel, the opposite of one quiet elevation.
-        card = if (settings.amoledMode) Color(0xFF101012) else Color(0xFF17171A),
-        hairline = Color.White.copy(alpha = 0.06f),
-        positive = if (mono) onBg else Color(0xFF6FAF8B),
+        // On AMOLED the ground is pure black, so the card steps DOWN rather than up — a lit slab on
+        // black reads as a panel, the opposite of one quiet elevation.
+        card = if (settings.amoledMode) Color(0xFF120F0C) else Color(0xFF1A1512),
+        // Warm white, not neutral white: a 6% pure-white edge on a brown-black page reads blue.
+        hairline = Color(0xFFFFF3E8).copy(alpha = 0.055f),
+        positive = if (mono) onBg else Color(0xFF7FB08C),
         negative = if (mono) muted else Color(0xFFC4756B),
-        hues = if (mono) listOf(onBg, muted, muted.copy(alpha = 0.7f))
-        else listOf(Color(0xFF7E93C4), Color(0xFF6FA5A8), Color(0xFF9B8FC7)),
+        // The three metric hues were cool (blue / teal / violet) and now fight the warm ground.
+        // They are neutral warm tones instead: a leading glyph is wayfinding, not a data channel, so
+        // it costs the page nothing to stop spending colour on it. Ember is reserved (2026-08-16)
+        // for the four places that carry a decision — see `OverviewScreen`'s colour budget.
+        hues = listOf(onBg, muted, muted.copy(alpha = 0.7f)),
         mutedOnCard = muted.copy(alpha = MUTED_ON_CARD_ALPHA),
     )
 }
@@ -432,6 +440,110 @@ fun WeekRail(
     }
 }
 
+/**
+ * The week as seven day cells with real mass — the mark that replaced Home's WORKOUTS tile.
+ *
+ * ## Why this exists
+ *
+ * Home already carried this exact data as [WeekRail]: seven 6dp dashes under a "1 OF 7" figure.
+ * Antho picked the same element out of a reference app as one of the two things he liked on it, and
+ * could not see it in his own — because at 6dp it is debris, not a mark. Same information, given a
+ * day letter and a 26dp cell, becomes the most legible thing on the page, and it answers "how is the
+ * week going" without a figure, a label or a sentence.
+ *
+ * ## Where the colour goes
+ *
+ * A trained day is filled in `onBg` and carries a check; only TODAY is accent. That is deliberate and
+ * it is the whole colour budget of this mark: four trained days in ember would be four competing
+ * warm blobs under a warm CTA, and the accent would stop meaning anything (§5). One lit dot in a row
+ * of seven says "you are here" at a glance and spends one unit of colour to do it.
+ *
+ * Works at zero — an untrained week is seven hollow rings with one lit today, which is a real
+ * reading, not an empty state (§12).
+ */
+@Composable
+fun WeekStrip(
+    /** 0=Mon..6=Sun indices that carry a finished session. */
+    trained: Set<Int>,
+    todayIndex: Int,
+    /** Mon-first day initials, supplied by the caller so the locale/first-day setting stays its call. */
+    dayLabels: List<String>,
+    reading: String,
+    modifier: Modifier = Modifier
+) {
+    val accent = MaterialTheme.colorScheme.primary
+    val onBg = MaterialTheme.colorScheme.onBackground
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    val bg = MaterialTheme.colorScheme.background
+    Row(
+        modifier.semantics(mergeDescendants = true) { contentDescription = reading },
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        repeat(7) { i ->
+            val done = i in trained
+            val isToday = i == todayIndex
+            // Past-but-untrained and still-ahead are both hollow, but the future recedes: a missed
+            // day should read as a gap, an unreached one as simply not yet. Both were dimmer in the
+            // first cut and the whole strip read as "too quiet" (Antho, 2026-08-16).
+            val ringAlpha = if (i < todayIndex) 0.55f else 0.30f
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(
+                    dayLabels.getOrElse(i) { "" },
+                    style = MaterialTheme.typography.labelMedium,
+                    // Full muted, not a dimmed rung. The letters are the only thing naming the days,
+                    // so they are content, not chrome.
+                    color = if (isToday) onBg else muted,
+                    maxLines = 1
+                )
+                Spacer(Modifier.height(8.dp))
+                Box(
+                    Modifier
+                        // No .size(): a cell holds a glyph that scales, so it is sized by a min
+                        // constraint and grows at 200% (§14). 34dp, up from 26 — see above.
+                        .sizeIn(minWidth = 34.dp, minHeight = 34.dp)
+                        .clip(CellShape)
+                        .then(
+                            when {
+                                done -> Modifier.background(onBg)
+                                isToday -> Modifier.background(accent)
+                                else -> Modifier.border(1.5.dp, muted.copy(alpha = ringAlpha), CellShape)
+                            }
+                        )
+                        // A trained TODAY is filled like any other trained day, so the accent ring
+                        // around it is what still says "you are here".
+                        .then(
+                            if (done && isToday) Modifier.border(2.dp, accent, CellShape) else Modifier
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (done) {
+                        Text("✓", style = MaterialTheme.typography.titleSmall, color = bg, maxLines = 1)
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * The week cell's shape: a rounded square, not a circle (2026-08-16).
+ *
+ * Circles read soft and bubbly, which is a health-tracker register rather than a training one, and
+ * seven of them in a row read as a progress-dot rail — the thing this element exists to stop being.
+ * A squared cell has more visual mass at the same footprint and lines up with the rounded squares the
+ * RECENT rows' leading marks already use, so the page shares one geometry.
+ */
+val CellShape = RoundedCornerShape(12.dp)
+
+// The goal line Home renders is NOT here: it is `ui/goals/GoalsComponents.GoalProgressLine`, the
+// same composable the Goals screen uses. Home's old horizontal card carousel was the fork, and
+// forking it again as a kit primitive would have put the same element in two places with two
+// treatments. "At a glance" and "swipe to see the second one" are contradictions anyway — the strip
+// could only ever show one and a half cards (Antho, 2026-08-16).
+
 // ── Rows ──────────────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -623,37 +735,69 @@ fun GhostTrack(muted: Color, depth: Float = 1f, modifier: Modifier = Modifier) {
 // ── Controls ──────────────────────────────────────────────────────────────────────────────────
 
 /**
- * The hero CTA, behaviourally unchanged from the shipped one: filled light capsule, bounce press,
- * no ripple (§8/§9). Full-width here because it lives INSIDE the hero card rather than floating on
- * the page. `heightIn(min=)` + padding, never a fixed height (§14).
+ * The hero CTA: a full-width filled capsule, bounce press, no ripple (§8/§9). `heightIn(min=)` +
+ * padding, never a fixed height (§14).
+ *
+ * **It is the accent now, not white** (2026-08-16). White is temperature-neutral, and this is the
+ * single largest piece of colour on Home — the one place the app is allowed to be loud. Taking the
+ * fill from `primary` means the whole page's heat follows the accent picker instead of being
+ * hardcoded, and the ember default measures 4.94:1 against `onPrimary`, better than the 3.9:1 a
+ * near-white content colour would have given.
  */
 @Composable
 fun SurfaceCta(
     text: String,
     label: String,
     modifier: Modifier = Modifier,
+    /**
+     * False renders the same capsule OUTLINED instead of filled.
+     *
+     * Home uses it when the day's answer is *not* to train: on a rest day the action still exists
+     * (you may train anyway) but it is not the recommendation, and a filled ember capsule is this
+     * app's one "do this now" signal. Shouting "Start session" under a headline reading "Done for
+     * today" was the page contradicting itself (Antho, 2026-08-16).
+     */
+    filled: Boolean = true,
     onLongClick: (() -> Unit)? = null,
     longClickLabel: String? = null,
     onClick: () -> Unit
 ) {
+    val accent = MaterialTheme.colorScheme.primary
     Box(
         modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(50))
-            .background(Color.White)
+            .then(
+                if (filled) Modifier.background(accent)
+                else Modifier.border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(50))
+            )
             .bounceCombinedClick(
                 onClickLabel = label,
                 onLongClickLabel = longClickLabel,
                 onLongClick = onLongClick,
                 onClick = onClick
             )
-            .heightIn(min = 52.dp)
-            .padding(horizontal = 24.dp, vertical = 15.dp),
+            .heightIn(min = 56.dp)
+            .padding(horizontal = 24.dp, vertical = 16.dp),
         contentAlignment = Alignment.Center
     ) {
-        Text(text, style = MaterialTheme.typography.bodyLarge, color = Color.Black)
+        Text(
+            text,
+            style = MaterialTheme.typography.bodyLarge,
+            // Outlined takes onBackground, not the accent: accent-as-text clears AA on the Ember
+            // default but not on the four alternate presets (§14), and this label must stay legible
+            // whichever accent is picked.
+            color = if (filled) MaterialTheme.colorScheme.onPrimary
+            else MaterialTheme.colorScheme.onBackground,
+            textAlign = TextAlign.Center
+        )
     }
 }
+
+// The accent bloom behind Home's hero was REMOVED (Antho, 2026-08-16). It was an attempt to buy
+// atmosphere without a photograph, and it worked — but a tinted wash across the top of the page is
+// exactly the kind of decorative colour §5 spends the accent budget on for nothing. The warm base
+// carries the temperature on its own; the CTA carries the heat. Do not re-add a background glow.
 
 /**
  * A section anchor: the mono 15sp rung + an optional navigation link.

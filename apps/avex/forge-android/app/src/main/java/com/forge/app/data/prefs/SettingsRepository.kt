@@ -187,6 +187,26 @@ class SettingsRepository @Inject constructor(
     suspend fun setOverviewTileOrder(order: List<String>) =
         context.forgePreferences.edit { it[PreferenceKeys.OVERVIEW_TILE_ORDER] = order.joinToString(",") }
 
+    // ─── Pinned goals (Home, 2026-08-16) ─────────────────────────────────────
+
+    /** Keys of the goals pinned to Home, in pin order. Home renders at most the first three. */
+    val pinnedGoals: Flow<List<String>> = context.forgePreferences.data
+        .map { prefs ->
+            prefs[PreferenceKeys.PINNED_GOALS]
+                ?.split(",")
+                ?.filter { it.isNotBlank() }
+                .orEmpty()
+        }
+
+    /** Adds or removes [key], preserving pin order. Capped so Home's three slots stay meaningful. */
+    suspend fun toggleGoalPin(key: String, max: Int = 3) =
+        context.forgePreferences.edit { prefs ->
+            val current = prefs[PreferenceKeys.PINNED_GOALS]
+                ?.split(",")?.filter { it.isNotBlank() }.orEmpty()
+            val next = if (key in current) current - key else (current + key).takeLast(max)
+            prefs[PreferenceKeys.PINNED_GOALS] = next.joinToString(",")
+        }
+
     // ─── Custom warmup (#120) ────────────────────────────────────────────────
 
     /** Returns the custom warmup list for [dayKey], or null if the user hasn't overridden it. */

@@ -44,6 +44,39 @@ left because re-flowing the polished screen needs Antho's eyes) · any screen st
 hairlines → migrate to air rhythm (§7). (Home's accent eyebrows + the Home/Stats section hairlines
 were fixed 2026-07-08, GYMAP-4.)
 
+## Home, cut down to two questions (2026-08-16)
+
+Antho's brief, verbatim: *"What do I do now, really small summary of important info that changed, and
+that's it"* — plus keep RECENT, and keep GOALS but make them readable at a glance.
+
+**Removed from Home, and where each lives now**: the WORKOUTS tile (its data is the week strip, which
+says the same thing legibly — the old 6dp dash rail was the same information drawn as debris) ·
+the CARDIO tile (Cardio tab) · VOLUME THIS WEEK (Stats; it also duplicated the figure the RECENT row
+already showed) · TODAY'S TARGETS (folded into the hero's whisper line) · the Academy read strip
+(Academy tab) · MOVEMENT / steps (Stats) · ON THIS DAY, the coach cards and the fatigue nudge (Coach
+tab; their signal survives compressed into the single changed-line) · TROPHIES · the
+"Nutrition · soon" footer.
+
+**The test each survivor had to pass: is something at stake?** A count of finished workouts reports
+something already settled, so there is nothing to feel about it — which is why the page could be read
+as "bland" with nothing identifiably wrong in it. Do not re-add a past-tense tally to Home.
+
+**The hero's button follows the COACH, not the plan mode.** It used to branch on freestyle / no-program
+/ otherwise and never read the directive, so a day the coach had already called rendered "Done for
+today" over a filled "Start session →" — the page contradicting itself in its two largest elements.
+`TodayDirective.Kind` decides now (resume and no-program outrank it, being facts rather than opinions).
+On REST the action survives but goes **outlined**: you may train on a rest day, but a filled ember
+capsule is the app's one "do this now" signal and a rest day has none. "Train anyway" is the wording,
+because it hands over the agency without the app pretending it recommended this.
+
+**Also gone**: the accent glow behind the hero (tried and cut the same day it shipped — it bought
+atmosphere without an asset, but a tinted wash across a page is decorative colour, and this design
+spends accent on decisions only; **do not re-add a background glow**) · the goals card carousel (a horizontal strip that shows one and a half cards cannot
+answer "at a glance"; three stacked lines fit in less height than one card) · its ghost cells (an
+absent goal is an absent row, never an empty rectangle — three of those read as content that failed
+to load) · RECENT's grey-box zero state with its ghost bar rail (a loading skeleton on a screen where
+the local DB is instant can only read as broken).
+
 ## Two rules narrowed — the Academy arrival receipt (2026-08-15)
 
 Phase 2 of the Academy rework needed two things §4.6 had ruled out. Both are **narrowings with a
@@ -82,29 +115,32 @@ waiting things are different decisions about whether to look now. `CountBadge` d
 `onPrimary` **on** the accent fill rather than as accent-coloured text, because accent as text
 fails AA at all four accents (§14) — the open contrast defect below is not to be widened.
 
-## Open decisions — accessibility contrast (2026-07-24)
+## Open decisions — accessibility contrast (2026-07-24, **partly resolved 2026-08-16**)
 
-Measured against Pearl bg `#0E0E11` (WCAG 2.1; AA normal text = 4.5:1). Two of these are failures the
-doctrine itself currently *mandates*, so they need a product call, not a silent fix. Until they are
+Measured against Pearl bg, now the warm `#110F0C` (WCAG 2.1; AA normal text = 4.5:1). Until these are
 resolved, **§14 forbids adding new accent-coloured or error-coloured body text** — new work uses onBg
 text with an accent glyph or mark.
 
-**1 — `action →` links are accent-coloured text at 2.35–3.40:1.**
+**1 — `action →` links are accent-coloured text. RESOLVED FOR THE DEFAULT ONLY.**
 
-| Accent | vs Pearl | vs AMOLED | AA normal (4.5) | AA large (3.0) |
-|---|---|---|---|---|
-| Navy `#3D4F73` (default) | 2.35:1 | 2.56:1 | fail | fail |
-| Red `#8B3535` | 2.44:1 | 2.66:1 | fail | fail |
-| Olive `#4D6040` | 2.81:1 | 3.06:1 | fail | fail |
-| Gold `#7A6435` | 3.40:1 | 3.70:1 | fail | pass |
+| Accent | vs Pearl | AA normal (4.5) | AA large (3.0) |
+|---|---|---|---|
+| **Ember `#D4761F` (default, 2026-08-16)** | **5.84:1** | **pass** | pass |
+| Red `#8B3535` | 2.42:1 | fail | fail |
+| Olive `#4D6040` | 2.79:1 | fail | fail |
+| Gold `#7A6435` | 3.37:1 | fail | pass |
+| Navy `#3D4F73` (former default) | 2.34:1 | fail | fail |
 
-This is load-bearing: `action →` is level ③ of the button system (§8) and the accent-as-navigation
-signal runs through the whole app. It is also in direct tension with §5's "design against muted navy —
-needing a vivid accent means too much accent", which is a deliberate aesthetic choice. Options, none
-taken yet: (a) accept and document as a known limitation; (b) render `action →` in onBg with the `→`
-glyph alone in accent — keeps the colour signal, moves the text above 4.5:1; (c) lighten every accent
-until it clears 4.5:1, which changes the app's look; (d) lift accent text to AA-large sizes only.
-Monochrome mode (§5) already resolves this incidentally, since `primary` falls back to onBg.
+Option (c) — lighten the accent until it clears 4.5:1 — was taken for the DEFAULT, as a side effect of
+the warm repalette rather than as an accessibility fix. Ember was chosen for heat (Antho: Home felt
+"bland and lifeless"; navy-on-near-black is the deadest available pairing) and clearing AA came free.
+§5's old "design against muted navy" line went with it: the rule is now **spend accent in few places
+at large size**, which is the same restraint expressed as placement rather than as dimness.
+
+Still open for the four alternates, so the ban stands as written. A user who picks Red still reads
+`action →` at 2.42:1. The remaining options are unchanged: (a) accept and document; (b) render the
+words in onBg with the `→` glyph alone in accent; (d) lift accent text to AA-large sizes only.
+Monochrome mode (§5) resolves it incidentally, since `primary` falls back to onBg.
 
 **2 — the inline error line is `#BF4040` at 3.69:1.** §12 mandates "quiet inline line in error color"
 for every error, and error text is the text a user most needs to read. Lightening `error` toward

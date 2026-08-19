@@ -15,6 +15,8 @@ data class ForgeUiSettings(
     /** Cardio distance/pace unit — true = miles, false = km. Derives from the weight unit when unset. */
     val useMiles: Boolean = false,
     val hiddenOverviewTiles: Set<String> = emptySet(),
+    /** Goals pinned to Home, in pin order. Empty = Home falls back to closest-first. */
+    val pinnedGoalKeys: List<String> = emptyList(),
     val compactSetLogging: Boolean = false,
     val overviewTileOrder: List<String> = listOf("gym", "cardio", "trophies"),
     val dateFormat: String = "MMM d, yyyy",

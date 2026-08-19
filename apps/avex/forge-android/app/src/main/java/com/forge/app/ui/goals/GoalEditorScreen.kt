@@ -55,6 +55,7 @@ import com.forge.app.domain.units.unitLabel
 import com.forge.app.domain.units.weightInputValue
 import com.forge.app.ui.common.ExerciseIcons
 import com.forge.app.ui.common.ForgePrimaryCapsule
+import com.forge.app.ui.common.ForgeSwitch
 import com.forge.app.ui.common.SegmentPill
 import com.forge.app.ui.common.clickableLabeled
 import com.forge.app.ui.common.filterLibrary
@@ -114,6 +115,7 @@ fun GoalEditorScreen(
     viewModel: GoalsViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val pinned by viewModel.pinnedGoals.collectAsStateWithLifecycle()
     val adding = exerciseId == null && customId == null
     // null while the edit target is still loading; the add flow resolves immediately.
     var step by rememberSaveable(stateSaver = EditorStepSaver) {
@@ -186,6 +188,8 @@ fun GoalEditorScreen(
                 )
                 is EditorStep.LiftWeight -> LiftWeightStep(
                     step = s,
+                    pinned = liftPinKey(s.exerciseId) in pinned,
+                    onTogglePin = { viewModel.toggleLiftPin(s.exerciseId) },
                     onSet = { lb -> viewModel.setLiftGoal(s.exerciseId, lb); onDone() },
                     onClear = { viewModel.clearLiftGoal(s.exerciseId); onDone() }
                 )
@@ -198,6 +202,8 @@ fun GoalEditorScreen(
                 )
                 is EditorStep.CustomEdit -> CustomEditStep(
                     goal = s.goal,
+                    pinned = customPinKey(s.goal.id) in pinned,
+                    onTogglePin = { viewModel.toggleCustomPin(s.goal.id) },
                     onSave = { target -> viewModel.updateCustomGoalTarget(s.goal.id, target); onDone() },
                     onDelete = { viewModel.deleteCustomGoal(s.goal.id); onDone() },
                     onUnchanged = onDone
@@ -289,9 +295,51 @@ private fun ColumnScope.LiftPickerStep(exclude: Set<String>, muted: Color, onPic
     }
 }
 
+/**
+ * The pin control, on both edit forms.
+ *
+ * Home shows three goals and Antho's call was that the user picks which three. This is where that
+ * choice is made — not on the Goals list, where the row is already a single tap target for editing
+ * and a second control inside it would be a nested tap in a 48dp row. You are on this screen because
+ * you care about this goal, which is exactly when "should it be on Home" is worth asking.
+ */
+@Composable
+private fun HomePinRow(pinned: Boolean, onToggle: () -> Unit) {
+    val muted = MaterialTheme.colorScheme.onSurfaceVariant
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickableLabeled(if (pinned) "Remove from Home" else "Show on Home", onClick = onToggle)
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                "Show on Home",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onBackground
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                "Home shows three goals at a glance.",
+                style = MaterialTheme.typography.bodySmall,
+                color = muted
+            )
+        }
+        Spacer(Modifier.width(16.dp))
+        ForgeSwitch(checked = pinned, onCheckedChange = { onToggle() })
+    }
+}
+
 /** The weight-target form for a lift goal (add or edit). */
 @Composable
-private fun LiftWeightStep(step: EditorStep.LiftWeight, onSet: (Double) -> Unit, onClear: () -> Unit) {
+private fun LiftWeightStep(
+    step: EditorStep.LiftWeight,
+    pinned: Boolean,
+    onTogglePin: () -> Unit,
+    onSet: (Double) -> Unit,
+    onClear: () -> Unit
+) {
     val weightUnit = LocalForgeSettings.current.weightUnit
     // Keyed on weightUnit (like BodyweightLogSheet) so a unit flip re-seeds in the new unit instead of
     // parsing the old unit's digits as the new unit; saveable so a typed target survives rotation.
@@ -308,6 +356,11 @@ private fun LiftWeightStep(step: EditorStep.LiftWeight, onSet: (Double) -> Unit,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
             modifier = Modifier.fillMaxWidth()
         )
+        // Only for a goal that already exists: pinning something not yet created has nothing to pin.
+        if (step.currentTargetLb != null) {
+            Spacer(Modifier.height(16.dp))
+            HomePinRow(pinned = pinned, onToggle = onTogglePin)
+        }
         Spacer(Modifier.height(24.dp))
         ForgePrimaryCapsule(
             "Set goal",
@@ -392,6 +445,8 @@ private fun CustomNewStep(
 @Composable
 private fun CustomEditStep(
     goal: ExtendedGoalRepository.Progress,
+    pinned: Boolean,
+    onTogglePin: () -> Unit,
     onSave: (targetCanonical: Double) -> Unit,
     onDelete: () -> Unit,
     onUnchanged: () -> Unit
@@ -410,6 +465,8 @@ private fun CustomEditStep(
     val changed = valueText.trim() != initial.trim()
     Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
         CustomTargetField(goal.metric, valueText) { valueText = it }
+        Spacer(Modifier.height(16.dp))
+        HomePinRow(pinned = pinned, onToggle = onTogglePin)
         Spacer(Modifier.height(24.dp))
         ForgePrimaryCapsule(
             "Save",

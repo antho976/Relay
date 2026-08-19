@@ -27,11 +27,8 @@ object Routes {
 
     fun academy(lessonId: String? = null) = "academy?lesson=${lessonId.orEmpty()}"
 
-    /** One Academy track's lessons. [trackCode] is a [com.forge.app.domain.academy.LessonTrack.code]. */
-    const val ACADEMY_TRACK = "academy/track/{trackCode}"
-    const val ARG_TRACK_CODE = "trackCode"
-
-    fun academyTrack(trackCode: String) = "academy/track/$trackCode"
+    // The per-track Academy route was removed 2026-08-16. Tracks are section headers in the one
+    // gallery now, so there is no track screen to route to and one level of nesting is gone.
 
     /**
      * One Library article. [articleId] is a `library.*` id: lowercase, dots and underscores only,

@@ -35,6 +35,25 @@ class DoctrineParityTest {
         return file.readText()
     }
 
+    /**
+     * One palette token's hex, read from `Color.kt`.
+     *
+     * The contrast tests below used to hardcode the background and muted hexes, which is the exact thing
+     * this file's own header warns against: a test carrying its own copy of a value lets the code
+     * and the doc drift while the test stays green. Warming the palette (2026-08-16) proved the
+     * point — every ratio moved and these tests could not have noticed. They read the real palette
+     * now, so a future palette change fails LOUDLY against the doc instead of silently agreeing
+     * with a stale constant.
+     */
+    private fun paletteHex(token: String): String =
+        Regex("""val\s+$token\s*=\s*Color\(0xFF([0-9A-Fa-f]{6})\)""")
+            .find(read(DesignDoctrine.appSource("ui/theme/Color.kt")))
+            ?.groupValues?.get(1)?.uppercase()
+            ?: error("Color.kt no longer defines $token")
+
+    private val pageBg: String get() = paletteHex("PearlBackground")
+    private val mutedTone: String get() = paletteHex("PearlMuted")
+
     // ── §5 Colour ──────────────────────────────────────────────────────────────────────────────
 
     @Test
@@ -287,7 +306,7 @@ class DoctrineParityTest {
 
     @Test
     fun mutedFloorStillClearsAA() {
-        val bg = "0E0E11"; val muted = "B4B4C2"
+        val bg = pageBg; val muted = mutedTone
         val atFloor = ratio(blend(muted, bg, 0.65), bg)
         val below = ratio(blend(muted, bg, 0.60), bg)
         assertTrue(
@@ -310,7 +329,7 @@ class DoctrineParityTest {
      */
     @Test
     fun contrastTableMatchesTheRealPalette() {
-        val bg = "0E0E11"
+        val bg = pageBg
         val s14 = section(14)
         val drift = mutableListOf<String>()
         fun compare(label: String, actual: Double, stated: Double) {
@@ -336,7 +355,7 @@ class DoctrineParityTest {
             mutedRows++
             compare(
                 "muted @$alpha",
-                ratio(if (alpha >= 1.0) "B4B4C2" else blend("B4B4C2", bg, alpha), bg),
+                ratio(if (alpha >= 1.0) mutedTone else blend(mutedTone, bg, alpha), bg),
                 m.groupValues[2].toDouble()
             )
         }
@@ -345,7 +364,7 @@ class DoctrineParityTest {
             mutedRows++
             compare(
                 "muted @${m.groupValues[1]} (floor justification)",
-                ratio(blend("B4B4C2", bg, m.groupValues[1].toDouble()), bg),
+                ratio(blend(mutedTone, bg, m.groupValues[1].toDouble()), bg),
                 m.groupValues[2].toDouble()
             )
         }
@@ -378,7 +397,7 @@ class DoctrineParityTest {
 
     @Test
     fun reservedColoursStillPassAsText() {
-        val bg = "0E0E11"
+        val bg = pageBg
         // §5 reserves these for true states, and §14 records them as clearing AA. If a future
         // palette tweak drops one below 4.5:1, the doctrine's claim silently becomes false.
         val reserved = mapOf(
