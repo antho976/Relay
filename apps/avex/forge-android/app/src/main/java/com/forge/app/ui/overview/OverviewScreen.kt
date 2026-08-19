@@ -19,12 +19,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -55,15 +51,22 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.forge.app.domain.units.formatDistance
 import com.forge.app.domain.units.formatVolume
-import com.forge.app.domain.units.unitLabel
-import com.forge.app.domain.units.weightInputValue
 import com.forge.app.ui.theme.LocalForgeSettings
 import com.forge.app.program.Program
-import com.forge.app.ui.common.InlineEmptyHint
+import com.forge.app.ui.experiment.SectionAnchor
+import com.forge.app.ui.experiment.SurfaceListRow
+import com.forge.app.ui.experiment.SurfacePalette
+import com.forge.app.ui.experiment.WeekStrip
+import com.forge.app.ui.experiment.surfacePalette
+import com.forge.app.ui.goals.GoalProgressLine
 import com.forge.app.ui.goals.customGoalTitle
 import com.forge.app.ui.goals.customGoalValueLine
+import com.forge.app.ui.goals.customPinKey
+import com.forge.app.ui.goals.goalGlyph
+import com.forge.app.ui.goals.liftGoalGlyph
+import com.forge.app.ui.goals.liftPinKey
+import com.forge.app.ui.settings.SettingsIcons
 import java.time.LocalDate
 
 @Composable
@@ -117,214 +120,127 @@ private fun HomePlanAction(text: String, onClick: () -> Unit) {
     }
 }
 
+/** Home shows at most three goals and three recent sessions, matching the second backup. */
+private const val HOME_LIST_CAP = 3
+
+private val WEEK_INITIALS = listOf("M", "T", "W", "T", "F", "S", "S")
+
 @Composable
-private fun HomeSectionHeader(title: String, action: String? = null, onAction: (() -> Unit)? = null) {
+private fun PromptLine(text: String, label: String, onClick: () -> Unit) {
     Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
+        Modifier
+            .fillMaxWidth()
+            .clickableLabeled(label, onClick = onClick)
+            .padding(vertical = 14.dp)
     ) {
         Text(
-            title,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.onBackground
+            "+",
+            style = MaterialTheme.typography.labelLarge,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.alignByBaseline()
         )
-        if (action != null && onAction != null) {
-            Box(
-                modifier = Modifier
-                    .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
-                    .clickableLabeled(action, onClick = onAction)
-                    .padding(horizontal = 8.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    action,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun HomeWeekStrip(trainedDays: Set<Int>, todayIndex: Int) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        listOf("M", "T", "W", "T", "F", "S", "S").forEachIndexed { index, day ->
-            val trained = index in trainedDays
-            val today = index == todayIndex
-            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text(
-                    day,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = if (today) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Box(
-                    modifier = Modifier
-                        .size(34.dp)
-                        .clip(CircleShape)
-                        .then(
-                            when {
-                                trained -> Modifier.background(MaterialTheme.colorScheme.primary)
-                                today -> Modifier.border(1.5.dp, MaterialTheme.colorScheme.primary, CircleShape)
-                                else -> Modifier.border(1.dp, MaterialTheme.colorScheme.outline, CircleShape)
-                            }
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    if (trained) {
-                        Icon(
-                            Icons.Default.Check,
-                            contentDescription = "$day trained",
-                            tint = MaterialTheme.colorScheme.onPrimary,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    } else if (today) {
-                        Box(Modifier.size(5.dp).background(MaterialTheme.colorScheme.primary, CircleShape))
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun CompactRecentRow(item: OverviewRecentItem, onClick: () -> Unit) {
-    val settings = LocalForgeSettings.current
-    val metric = when {
-        item.isGym && item.volumeLb != null && item.volumeLb > 0 -> formatVolume(item.volumeLb, settings.weightUnit)
-        !item.isGym && item.distanceKm != null && item.distanceKm > 0 -> formatDistance(item.distanceKm, settings.useMiles)
-        item.durationMin != null && item.durationMin > 0 -> "${item.durationMin} min"
-        else -> ""
-    }
-    val detail = listOfNotNull(item.dayLabel.takeIf { it.isNotBlank() }, item.topLift ?: item.subtitle.takeIf { it.isNotBlank() })
-        .joinToString(" · ")
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = 54.dp)
-            .bounceCombinedClick(onClickLabel = "Open ${item.title}", onClick = onClick)
-            .padding(vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(
-                item.title,
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.onBackground,
-                overflow = TextOverflow.Ellipsis
-            )
-            if (detail.isNotBlank()) {
-                Text(
-                    detail,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-        }
-        if (metric.isNotBlank()) {
-            Spacer(Modifier.width(12.dp))
-            Text(
-                metric,
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-        Spacer(Modifier.width(8.dp))
-        Icon(
-            Icons.Default.ChevronRight,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.size(20.dp)
+        Spacer(Modifier.width(10.dp))
+        Text(
+            text,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onBackground,
+            modifier = Modifier.alignByBaseline()
         )
     }
 }
 
 @Composable
-private fun HomeGoalPreview(
-    title: String?,
-    valueLine: String?,
-    fraction: Float,
+private fun RecentRow(
+    item: OverviewRecentItem,
+    palette: SurfacePalette,
+    onBg: Color,
+    weightUnit: com.forge.app.domain.units.WeightUnit,
+    useMiles: Boolean,
     onClick: () -> Unit
 ) {
-    HomeSectionHeader(
-        title = "Goals",
-        action = if (title != null) "View all" else null,
-        onAction = if (title != null) onClick else null
-    )
-    Spacer(Modifier.height(4.dp))
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(min = 48.dp)
-            .bounceCombinedClick(onClickLabel = "Open goals", onClick = onClick)
-            .padding(vertical = 8.dp),
-        verticalArrangement = Arrangement.Center
-    ) {
-        if (title == null) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    "Set targets, track your lifts",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onBackground
-                )
-                Text(
-                    "→",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.primary
-                )
-            }
-            return@Column
-        }
+    val figure = when {
+        item.isGym && (item.volumeLb ?: 0.0) > 0.0 -> formatVolume(item.volumeLb!!, weightUnit)
+        !item.isGym && (item.distanceKm ?: 0.0) > 0.0 ->
+            com.forge.app.domain.units.formatDistance(item.distanceKm!!, useMiles)
+        else -> null
+    }
+    val delta = when {
+        item.isBest -> "BEST"
+        item.vsAvgPct != null -> "${if (item.vsAvgPct >= 0) "+" else ""}${item.vsAvgPct}% avg"
+        item.prCount > 0 -> "${item.prCount} PR"
+        else -> null
+    }
+    val deltaColor = when {
+        item.isBest -> palette.positive
+        item.vsAvgPct != null && item.vsAvgPct > 0 -> palette.positive
+        item.vsAvgPct != null && item.vsAvgPct < 0 -> palette.negative
+        else -> palette.mutedOnCard
+    }
+    val sub = listOfNotNull(
+        item.dayLabel.takeIf { it.isNotBlank() },
+        item.statusPill.takeIf { it.isNotBlank() },
+        item.topLift
+    ).joinToString(" · ")
 
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                title,
-                style = MaterialTheme.typography.bodyMedium,
-                fontWeight = FontWeight.Medium,
-                color = MaterialTheme.colorScheme.onBackground,
-                modifier = Modifier.weight(1f)
-            )
-            valueLine?.let {
-                Text(
-                    it,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-        }
-        Spacer(Modifier.height(8.dp))
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .height(4.dp)
-                .clip(RoundedCornerShape(2.dp))
-                .background(MaterialTheme.colorScheme.outline)
-        ) {
-            Box(
-                Modifier
-                    .fillMaxWidth(fraction.coerceIn(0f, 1f))
-                    .height(4.dp)
-                    .clip(RoundedCornerShape(2.dp))
-                    .background(MaterialTheme.colorScheme.primary)
-            )
-        }
+    SurfaceListRow(
+        icon = if (item.isGym) SettingsIcons.Session else NavIcons.Cardio,
+        hue = palette.hues[0],
+        label = item.title,
+        sub = sub,
+        figure = figure,
+        delta = delta,
+        deltaColor = deltaColor,
+        onBg = onBg,
+        muted = palette.mutedOnCard,
+        onClick = onClick,
+        clickLabel = "Open ${item.title}"
+    )
+}
+
+private data class GoalLineData(
+    val key: String,
+    val title: String,
+    val valueLine: String,
+    val fraction: Float,
+    val achieved: Boolean,
+    val icon: ImageVector
+)
+
+@Composable
+private fun pinnedGoals(
+    state: com.forge.app.ui.overview.state.OverviewUiState,
+    pinnedKeys: List<String>
+): List<GoalLineData> {
+    val settings = LocalForgeSettings.current
+    val lift = state.goals.map { goal ->
+        GoalLineData(
+            key = liftPinKey(goal.exerciseId),
+            title = goal.name,
+            valueLine = "${com.forge.app.domain.units.weightInputValue(goal.currentBestLb, settings.weightUnit)} / " +
+                "${com.forge.app.domain.units.weightInputValue(goal.targetLb, settings.weightUnit)} " +
+                com.forge.app.domain.units.unitLabel(settings.weightUnit),
+            fraction = goal.fraction,
+            achieved = goal.achieved,
+            icon = liftGoalGlyph(goal.exerciseId)
+        )
+    }
+    val custom = state.customGoals.map { goal ->
+        GoalLineData(
+            key = customPinKey(goal.id),
+            title = customGoalTitle(goal),
+            valueLine = customGoalValueLine(goal, settings.weightUnit, settings.useMiles),
+            fraction = goal.fraction,
+            achieved = goal.achieved,
+            icon = goalGlyph(goal.metric)
+        )
+    }
+    val all = lift + custom
+    val pinned = pinnedKeys.mapNotNull { key -> all.firstOrNull { it.key == key } }
+    return if (pinned.isNotEmpty()) {
+        pinned.take(HOME_LIST_CAP)
+    } else {
+        all.sortedWith(compareBy<GoalLineData> { it.achieved }.thenByDescending { it.fraction })
+            .take(HOME_LIST_CAP)
     }
 }
 
@@ -420,6 +336,8 @@ fun OverviewScreen(
     val nextDay = Program.days.firstOrNull { it.key == state.nextUpDayKey }
 
     val baseColors = MaterialTheme.colorScheme
+    val settings = LocalForgeSettings.current
+    val palette = surfacePalette()
     val onBg = baseColors.onBackground
     val muted = baseColors.onSurfaceVariant
     val accent = baseColors.primary
@@ -641,7 +559,13 @@ fun OverviewScreen(
                     )
                 }
                 Spacer(Modifier.height(12.dp))
-                HomeWeekStrip(state.weekDaysTrained, todayDow)
+                WeekStrip(
+                    trained = state.weekDaysTrained,
+                    todayIndex = todayDow,
+                    dayLabels = WEEK_INITIALS,
+                    reading = "This week, ${state.weekDaysTrained.size} of 7 days trained",
+                    modifier = Modifier.fillMaxWidth()
+                )
                 Spacer(Modifier.height(10.dp))
 
                 val weeklyFacts = buildList {
@@ -662,54 +586,68 @@ fun OverviewScreen(
                     MovementLine(currentMovement, onBg = onBg, muted = muted, outline = outline, accent = accent)
                 }
 
-                Spacer(Modifier.height(24.dp))
-                val liftGoal = state.goals.firstOrNull()
-                val customGoal = if (liftGoal == null) state.customGoals.firstOrNull() else null
-                val goalTitle = liftGoal?.name ?: customGoal?.let(::customGoalTitle)
-                val goalValue = when {
-                    liftGoal != null -> {
-                        val unit = LocalForgeSettings.current.weightUnit
-                        "${weightInputValue(liftGoal.currentBestLb, unit)} / " +
-                            "${weightInputValue(liftGoal.targetLb, unit)} ${unitLabel(unit)}"
-                    }
-                    customGoal != null -> customGoalValueLine(
-                        customGoal,
-                        LocalForgeSettings.current.weightUnit,
-                        LocalForgeSettings.current.useMiles
-                    )
-                    else -> null
-                }
-                HomeGoalPreview(
-                    title = goalTitle,
-                    valueLine = goalValue,
-                    fraction = liftGoal?.fraction ?: customGoal?.fraction ?: 0f,
-                    onClick = onOpenGoals
+                Spacer(Modifier.height(32.dp))
+                val goals = pinnedGoals(state, settings.pinnedGoalKeys)
+                SectionAnchor(
+                    label = "Goals",
+                    muted = muted,
+                    onBg = onBg,
+                    action = if (goals.isEmpty()) null else "view all",
+                    actionLabel = "Open goals",
+                    onAction = onOpenGoals
                 )
+                Spacer(Modifier.height(14.dp))
+                if (goals.isEmpty()) {
+                    PromptLine("Pin a goal", "Pin a goal", onOpenGoals)
+                } else {
+                    goals.forEachIndexed { index, goal ->
+                        GoalProgressLine(
+                            title = goal.title,
+                            valueLine = goal.valueLine,
+                            fraction = goal.fraction,
+                            achieved = goal.achieved,
+                            index = index,
+                            onBg = onBg,
+                            muted = muted,
+                            accent = accent,
+                            outline = outline,
+                            icon = goal.icon,
+                            onClick = onOpenGoals
+                        )
+                        if (index != goals.lastIndex) Spacer(Modifier.height(18.dp))
+                    }
+                }
 
-                Spacer(Modifier.height(24.dp))
-                HomeSectionHeader("Recent workouts", "View all", onViewAllHistory)
-                Spacer(Modifier.height(4.dp))
+                Spacer(Modifier.height(32.dp))
+                SectionAnchor(
+                    label = "Recent",
+                    muted = muted,
+                    onBg = onBg,
+                    action = if (state.recentItems.isEmpty()) null else "view all",
+                    actionLabel = "View all sessions",
+                    onAction = onViewAllHistory
+                )
+                Spacer(Modifier.height(8.dp))
                 if (state.recentItems.isEmpty()) {
-                    InlineEmptyHint(
+                    Text(
                         when {
-                            freestyleMode -> "No workouts yet. Log one above and it will show here."
-                            programEmpty -> "No workouts yet. Build your plan, then start training."
-                            else -> "No workouts yet. Start a session and it will show here."
+                            freestyleMode -> "Your first logged workout lands here."
+                            programEmpty -> "Build a plan above, then your first session lands here."
+                            else -> "Your first session lands here."
                         },
-                        color = muted
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = muted.copy(alpha = 0.65f)
                     )
                 } else {
-                    state.recentItems.forEachIndexed { index, item ->
-                        CompactRecentRow(item) {
+                    state.recentItems.take(HOME_LIST_CAP).forEach { item ->
+                        RecentRow(
+                            item = item,
+                            palette = palette,
+                            onBg = onBg,
+                            weightUnit = settings.weightUnit,
+                            useMiles = settings.useMiles
+                        ) {
                             if (item.isGym) onOpenSession(item.id) else viewModel.selectRecentItem(item)
-                        }
-                        if (index < state.recentItems.lastIndex) {
-                            Box(
-                                Modifier
-                                    .fillMaxWidth()
-                                    .height(1.dp)
-                                    .background(MaterialTheme.colorScheme.outline)
-                            )
                         }
                     }
                 }
