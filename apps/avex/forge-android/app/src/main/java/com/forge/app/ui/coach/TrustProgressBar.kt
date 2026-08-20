@@ -18,6 +18,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
@@ -34,7 +35,10 @@ fun TrustProgressBar(
     streak: Int,
     required: Int,
     earned: Boolean,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** The unfilled rung. Defaults to the old outline tint; the coach page passes its own, which
+     *  is bright enough to actually see on a phone (see [com.forge.app.ui.coach.CoachColors]). */
+    track: Color? = null
 ) {
     val fraction = if (required <= 0) 0f else streak.coerceIn(0, required).toFloat() / required
     val animated by animateFloatAsState(
@@ -47,7 +51,8 @@ fun TrustProgressBar(
         androidx.compose.material3.MaterialTheme.colorScheme.primary
     else
         androidx.compose.material3.MaterialTheme.colorScheme.secondary
-    val track = androidx.compose.material3.MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)
+    val trackColor = track
+        ?: androidx.compose.material3.MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)
     val segmentGap = androidx.compose.material3.MaterialTheme.colorScheme.background
 
     // Milestone pop: the bar gives a one-shot vertical pulse the moment a type's trust is earned
@@ -70,7 +75,7 @@ fun TrustProgressBar(
             .height(8.dp)
             .graphicsLayer { scaleY = pulse.value }
             .clip(RoundedCornerShape(4.dp))
-            .background(track)
+            .background(trackColor)
     ) {
         // Continuous, animated fill behind the segment dividers.
         Box(

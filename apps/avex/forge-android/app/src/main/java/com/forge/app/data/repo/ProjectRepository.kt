@@ -45,6 +45,23 @@ class ProjectRepository @Inject constructor(
         return ProjectScanner.top(snapshot, profile, excludeKinds = abandoned)
     }
 
+    /**
+     * Every project the coach would consider right now, best first — not just the top one.
+     *
+     * The scanner has always ranked a list; only its head was ever surfaced, which made the coach
+     * look like it had one idea and no reasoning. Picking from the list is the user's call: the
+     * ranking says which is most useful, not which they want to spend four weeks on.
+     */
+    suspend fun proposals(): List<ProjectScanner.Candidate> {
+        if (active() != null) return emptyList()
+        val snapshot = runCatching { adaptationRepository.snapshotCached() }.getOrNull() ?: return emptyList()
+        val profile = PersonalProfile.build(snapshot)
+        val abandoned = projectDao.all().filter { it.abandonedAt != null }
+            .mapNotNull { p -> ProjectScanner.Kind.entries.firstOrNull { it.code == p.kind } }
+            .toSet()
+        return ProjectScanner.scan(snapshot, profile).filterNot { it.kind in abandoned }
+    }
+
     /** Accept a proposal. Its lesson unlocks here, because the concept is now live for this user. */
     suspend fun accept(candidate: ProjectScanner.Candidate): CoachProject {
         active()?.let { return it }

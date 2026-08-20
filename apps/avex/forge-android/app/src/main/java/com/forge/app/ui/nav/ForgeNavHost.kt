@@ -42,7 +42,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
-import com.forge.app.ui.coach.CoachLens
+import com.forge.app.ui.coach.CoachEntryPoint
 import com.forge.app.ui.coach.CoachScreen
 import com.forge.app.ui.gym.freestyle.FreestyleLogScreen
 import com.forge.app.ui.programbuilder.ProgramBuilderScreen
@@ -314,8 +314,8 @@ fun ForgeNavHost(initialDayKey: String? = null) {
                 onConnectHealth = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) }
             )
         }
-        // The lab and timeline are now lenses of the one Coach page; the routes stay so every
-        // existing "what it's watching" and "learning timeline" link lands on the right lens.
+        // The lab and timeline used to be lenses of the Coach page. The page is one column now,
+        // so the routes stay and resolve to a scroll position rather than a tab.
         composable(
             route = Routes.ACADEMY,
             arguments = listOf(
@@ -341,14 +341,14 @@ fun ForgeNavHost(initialDayKey: String? = null) {
         composable(Routes.COACH_LAB) {
             CoachScreen(
                 onBack = { nav.popBackStack() },
-                initialLens = CoachLens.SIGNALS,
+                entryPoint = CoachEntryPoint.WHERE_YOU_STAND,
                 onConnectHealth = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) }
             )
         }
         composable(Routes.COACH_TIMELINE) {
             CoachScreen(
                 onBack = { nav.popBackStack() },
-                initialLens = CoachLens.JOURNEY,
+                entryPoint = CoachEntryPoint.ACCOUNT,
                 onConnectHealth = { nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name)) }
             )
         }

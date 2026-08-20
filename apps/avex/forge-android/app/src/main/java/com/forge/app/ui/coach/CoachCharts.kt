@@ -148,7 +148,7 @@ internal fun CoachFatigueMeter(score: Int, threshold: Int, c: CoachColors) {
                     Modifier
                         .weight(1f)
                         .fillMaxHeight()
-                        .background(if (filled) fillColor else c.outline.copy(alpha = 0.25f))
+                        .background(if (filled) fillColor else c.track)
                 )
             }
         }
@@ -203,16 +203,21 @@ internal fun CoachGhostSpark(
     }
 }
 
-/** A thin countdown bar: full-strength fill on the outline track rung (§5). */
+/** A thin countdown bar: full-strength fill on the outline track rung. */
 @Composable
-internal fun CoachWatchBar(fraction: Float, color: Color, c: CoachColors) {
+internal fun CoachWatchBar(
+    fraction: Float,
+    color: Color,
+    c: CoachColors,
+    modifier: Modifier = Modifier
+) {
     val progress = rememberCoachDraw("watch-$fraction")
     Box(
-        Modifier
+        modifier
             .fillMaxWidth()
             .height(5.dp)
             .clip(RoundedCornerShape(50))
-            .background(c.outline.copy(alpha = 0.25f))
+            .background(c.track)
     ) {
         Box(
             Modifier
@@ -256,6 +261,7 @@ internal fun CoachProgressRow(
             segments != null -> TrustProgressBar(
                 streak = segments.first, required = segments.second,
                 earned = segments.first >= segments.second,
+                track = c.track,
                 modifier = Modifier.fillMaxWidth()
             )
             fraction != null -> CoachWatchBar(fraction, barColor, c)
