@@ -20,6 +20,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.forge.app.data.db.entities.CoachDecision
 import com.forge.app.data.repo.CoachRepository
+import com.forge.app.ui.common.ForgePrimaryCapsule
 import kotlin.math.ceil
 
 /**
@@ -42,15 +43,29 @@ internal fun LazyListScope.coachNowLens(
     // ── The call — only when the week actually produced decisions ────────────
     if (brief != null && brief.decisions.isNotEmpty()) {
         item("coach-call") {
+            val open = brief.decisions.count { it.status == CoachRepository.STATUS_PROPOSED }
             CoachSection(c, title = "The call", index = 2) {
                 brief.decisions.forEach { d ->
-                    DecisionRow(d, state, c, onApply, onSkip, onUndo)
+                    // With exactly one open proposal the section's own capsule IS its Apply, so
+                    // the row drops its link rather than offering the same action twice (§8).
+                    DecisionRow(d, state, c, onApply, onSkip, onUndo, inlineApply = open != 1)
                 }
-                val open = brief.decisions.count { it.status == CoachRepository.STATUS_PROPOSED }
-                if (open > 1) {
-                    CoachAction("Apply all $open →", c.accent, "Apply every open change") {
-                        onApplyAll(brief.pass.weekId)
+                // §3's "primary action above fold" + §8 ① — the ONE filled capsule on this page,
+                // and the screen's single large-format element. The accent used to be spent only
+                // on postage-stamp dots and links, which §5 calls a dead pixel, not energy.
+                if (open > 0) {
+                    Spacer(Modifier.height(4.dp))
+                    val single = brief.decisions.firstOrNull {
+                        it.status == CoachRepository.STATUS_PROPOSED
                     }
+                    ForgePrimaryCapsule(
+                        label = if (open == 1) "Apply this change" else "Apply all $open",
+                        onClick = {
+                            if (open == 1 && single != null) onApply(single.id)
+                            else onApplyAll(brief.pass.weekId)
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
                 }
             }
         }
@@ -69,10 +84,6 @@ internal fun LazyListScope.coachNowLens(
         }
     }
 
-    // ── Coming up: the road ahead as ONE section of labeled bars ──────────────
-    // The milestone ladder folds in here as a segmented rail + the next step (§4.12), sharing
-    // the countdowns' bar language — a 9-row checklist above a stack of bars didn't fit together.
-    coachComingUpSection(state, c)
 }
 
 /**
@@ -86,7 +97,8 @@ private fun DecisionRow(
     c: CoachColors,
     onApply: (Long) -> Unit,
     onSkip: (Long) -> Unit,
-    onUndo: (Long) -> Unit
+    onUndo: (Long) -> Unit,
+    inlineApply: Boolean
 ) {
     val now = remember { System.currentTimeMillis() }
     val status = coachDecisionStatusWord(d, now)
@@ -136,7 +148,9 @@ private fun DecisionRow(
             d.status == CoachRepository.STATUS_PROPOSED -> {
                 Spacer(Modifier.height(4.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-                    CoachAction("Apply →", c.accent, "Apply this change") { onApply(d.id) }
+                    if (inlineApply) {
+                        CoachAction("Apply →", c.accent, "Apply this change") { onApply(d.id) }
+                    }
                     CoachAction("Skip", c.muted, "Skip this change") { onSkip(d.id) }
                 }
             }
@@ -191,9 +205,13 @@ private fun watchStatusLine(d: CoachDecision, now: Long): String {
  * The road ahead as small graphs: every countdown the coach knows about drawn as a progress
  * bar — the next brief, pending verdicts, the change type closest to autopilot, milestones.
  */
-private fun LazyListScope.coachComingUpSection(state: CoachViewModel.UiState, c: CoachColors) {
+internal fun LazyListScope.coachComingUpSection(
+    state: CoachViewModel.UiState,
+    c: CoachColors,
+    index: Int
+) {
     item("coach-coming") {
-        CoachSection(c, title = "Coming up", index = 4) {
+        CoachSection(c, title = "Coming up", index = index) {
             val brief = state.brief
             val now = remember { System.currentTimeMillis() }
 
@@ -226,22 +244,9 @@ private fun LazyListScope.coachComingUpSection(state: CoachViewModel.UiState, c:
                     )
                 }
 
-            // The change type closest to earning autopilot.
-            state.timeline?.trust?.takeIf { it.isNotEmpty() }?.let { trust ->
-                val next = trust.filter { !it.earned }
-                    .maxByOrNull { it.streak.toFloat() / it.required }
-                if (next != null) {
-                    CoachProgressRow(
-                        label = "Autopilot",
-                        value = "${next.streak} of ${next.required}",
-                        c = c,
-                        segments = next.streak to next.required,
-                        sub = next.label
-                    )
-                } else {
-                    CoachProgressRow(label = "Autopilot", value = "earned", c = c, segments = 1 to 1)
-                }
-            }
+            // The Autopilot countdown that sat here is gone (2026-08-20): Journey's "Earned
+            // autopilot" section already owns that fact with a bar per change type, and §4.3
+            // gives a fact ONE home — never repeated across lenses.
 
             // Milestones: the achievement ladder as ONE segmented rail (§4.12), sharing the
             // countdowns' bar language, with only the NEXT step named beneath it — the reached

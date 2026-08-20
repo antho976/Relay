@@ -76,17 +76,25 @@ fun CoachScreen(
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                // §4.6: the top bar never names the screen — just the bell and,
-                // on a routed entry, the back arrow. The hero verdict is the screen's identity.
-                title = {},
-                navigationIcon = {
-                    if (onBack != null) IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = c.muted)
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
-            )
+            // §4.6: the top bar never names the screen — just, on a routed entry, the back arrow.
+            // Hosted as a hub pager page there is no back arrow and no action, so the bar has NO
+            // content: it was still reserving a full app-bar of empty height above every lens,
+            // which is what left the screen opening on a void (2026-08-20). No content, no bar.
+            if (onBack != null) {
+                TopAppBar(
+                    title = {},
+                    navigationIcon = {
+                        IconButton(onClick = onBack) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Back",
+                                tint = c.muted
+                            )
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
+                )
+            }
         },
         containerColor = Color.Transparent
     ) { inner ->
@@ -133,33 +141,10 @@ fun CoachScreen(
 
                 when (lens) {
                     CoachLens.NOW -> {
-                        // A2: what you're chasing sits above the week's mechanics — "toward what?"
-                        // outranks "what changed" (§4.8, lead with the live).
-                        coachGoalsSection(
-                            state = state,
-                            c = c,
-                            index = 2,
-                            onAddGoal = { showGoalPicker = true },
-                            onArchiveGoal = viewModel::archiveGoal,
-                            onOpenAcademy = { onOpenAcademy?.invoke() }
-                        )
-                        // C: what the next few weeks are for, above the week's own mechanics.
-                        coachBlockSection(
-                            block = state.block,
-                            c = c,
-                            index = 3,
-                            onStart = viewModel::startBlock,
-                            onEnd = viewModel::endBlock
-                        )
-                        // D: the one lever the coach is hunting, plus what it has measured about you.
-                        coachProjectSection(
-                            state = state,
-                            c = c,
-                            index = 4,
-                            onAccept = viewModel::acceptProject,
-                            onComplete = viewModel::completeProject,
-                            onAbandon = viewModel::abandonProject
-                        )
+                        // §4.8, lead with the live: the week's decisions — the only thing here
+                        // with an action — sit directly under the pills. They used to open
+                        // fourth, below Goals/Block/Project, so the hero announced "2 proposals"
+                        // and then made you scroll three sections to reach them (2026-08-20).
                         coachNowLens(
                             state = state,
                             c = c,
@@ -168,6 +153,21 @@ fun CoachScreen(
                             onUndo = viewModel::undo,
                             onApplyAll = viewModel::applyAll
                         )
+                        // "Toward what?" — Goals, Block and Project folded into ONE section.
+                        coachPlanSection(
+                            state = state,
+                            c = c,
+                            index = 4,
+                            onAddGoal = { showGoalPicker = true },
+                            onArchiveGoal = viewModel::archiveGoal,
+                            onStartBlock = viewModel::startBlock,
+                            onEndBlock = viewModel::endBlock,
+                            onAcceptProject = viewModel::acceptProject,
+                            onCompleteProject = viewModel::completeProject,
+                            onAbandonProject = viewModel::abandonProject
+                        )
+                        // §4.8: pure countdown/unlock meters last.
+                        coachComingUpSection(state, c, index = 5)
                     }
                     CoachLens.SIGNALS -> coachSignalsLens(state, weightUnit, c, onConnectHealth)
                     CoachLens.JOURNEY -> coachJourneyLens(state, c)

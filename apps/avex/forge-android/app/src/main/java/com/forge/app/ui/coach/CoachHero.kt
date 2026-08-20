@@ -10,8 +10,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.data.repo.CoachRepository
@@ -66,14 +69,18 @@ internal fun CoachHero(state: CoachViewModel.UiState, weightUnit: WeightUnit, c:
         // Serif verdict — a headline, so no terminal period (§11). It renders ONLY when it
         // carries a decision or result; status/anticipation ("Ready to coach") is never a
         // verdict (§3) — those states run eyebrow + aside and let the figures be the hero.
+        // Kept SHORT so it can carry the serif display rung (§6's 52sp "one big thing") without
+        // wrapping to three lines on a 360dp screen — the size IS the hierarchy here (2026-08-20).
+        // No fact is lost: the week lives in the eyebrow, the detail in the aside below.
         val verdict = when {
             // §11: a verdict states what it means for the user, not internal state ("pass").
-            brief.pass.status == CoachRepository.STATUS_ERROR -> "No call this week"
+            // "this week" dropped — the eyebrow already carries the week (§4.3, one home).
+            brief.pass.status == CoachRepository.STATUS_ERROR -> "No call"
             staleLearning -> null
             hasOpenDeload -> "Deload week"
-            open == 1 -> "One proposal"
+            open == 1 -> "1 proposal"
             open > 1 -> "$open proposals"
-            applied > 0 -> "$applied change${if (applied == 1) "" else "s"} applied"
+            applied > 0 -> "$applied applied"
             else -> "No changes"
         }
         if (verdict != null) {
@@ -95,42 +102,37 @@ internal fun CoachHero(state: CoachViewModel.UiState, weightUnit: WeightUnit, c:
         }
         if (sub != null) SubLine(sub, c)
 
-        // The week in figures. Equal columns so long values can never collide.
+        // The week in THREE figures. It carried a fourth — the fatigue score, else cardio minutes
+        // — "so the hero isn't bare at three", and that fourth column is what broke the row: at
+        // 200% it truncated Sessions to "4 …", wrapped SESSIONS to "SESSION/S" and collided the
+        // volume delta with the PRs value (§14 requires 200% to survive). Fatigue is also
+        // Signals' own fact — its Recovery load meter owns it — so a copy here was §4.3's
+        // repeated-across-lenses ban anyway. Three columns fix the fit and the duplication at once.
         brief.review?.let { r ->
             Spacer(Modifier.height(20.dp))
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                EditorialFigure(
-                    value = "${r.sessionsLastWeek} of ${r.sessionsTarget}",
-                    label = "Sessions",
-                    onBg = c.onBg, muted = c.muted, accent = c.accent,
-                    modifier = Modifier.weight(1f)
-                )
-                EditorialFigure(
-                    value = formatVolumeCompact(r.volumeLastWeekLb, weightUnit),
-                    label = "Volume",
-                    onBg = c.onBg, muted = c.muted, accent = c.accent,
-                    delta = r.volumeDeltaPct,
-                    modifier = Modifier.weight(1f)
-                )
-                EditorialFigure(
-                    value = "${r.prsLastWeek}",
-                    label = "PRs",
-                    onBg = c.onBg, muted = c.muted, accent = c.accent,
-                    modifier = Modifier.weight(1f)
-                )
-                // A 4th figure when there's one to show: the recovery score once it reads, else the
-                // week's cardio load (real data the coach also weighs) so the hero isn't bare at three.
-                val fatigue = r.fatigueScore
-                when {
-                    fatigue != null -> EditorialFigure(
-                        value = "$fatigue",
-                        label = "Fatigue",
+            // A dense numeric row clamps its scaling rather than truncating, the same idiom
+            // Home's surface cards use: a readable "4 of 4" at 130% beats an unreadable "4 …".
+            val d = LocalDensity.current
+            CompositionLocalProvider(
+                LocalDensity provides Density(d.density, d.fontScale.coerceAtMost(1.3f))
+            ) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    EditorialFigure(
+                        value = "${r.sessionsLastWeek} of ${r.sessionsTarget}",
+                        label = "Sessions",
                         onBg = c.onBg, muted = c.muted, accent = c.accent,
                         modifier = Modifier.weight(1f)
                     )
-                    r.cardioMinutesLastWeek > 0 -> EditorialFigure(
-                        value = "${r.cardioMinutesLastWeek}",
-                        label = "Cardio min",
+                    EditorialFigure(
+                        value = formatVolumeCompact(r.volumeLastWeekLb, weightUnit),
+                        label = "Volume",
+                        onBg = c.onBg, muted = c.muted, accent = c.accent,
+                        delta = r.volumeDeltaPct,
+                        modifier = Modifier.weight(1f)
+                    )
+                    EditorialFigure(
+                        value = "${r.prsLastWeek}",
+                        label = "PRs",
                         onBg = c.onBg, muted = c.muted, accent = c.accent,
                         modifier = Modifier.weight(1f)
                     )
@@ -144,13 +146,21 @@ internal fun CoachHero(state: CoachViewModel.UiState, weightUnit: WeightUnit, c:
 /** Home's TODAY lockup: a mono eyebrow sitting tight over the serif line. */
 @Composable
 private fun Eyebrow(text: String, c: CoachColors) {
-    Text(text, style = MaterialTheme.typography.labelSmall, fontSize = 13.sp, color = c.muted)
+    // §6: take the rung from the scale, never `fontSize` at the call site — labelLarge IS the
+    // 13sp row/metric-label rung this was hand-dialing.
+    Text(text, style = MaterialTheme.typography.labelLarge, color = c.muted)
     Spacer(Modifier.height(2.dp))
 }
 
+/**
+ * The screen's ONE big thing (§6): the serif DISPLAY rung, 52sp. It sat at headlineLarge (36)
+ * next to 28sp figures — barely a step, so nothing on the page led and the whole screen read
+ * flat. §5 forbids buying that emphasis with colour (serif text is the onBg rung, accent is for
+ * marks and actions), so it is bought with SIZE, which is what the ladder is for.
+ */
 @Composable
 private fun Verdict(text: String, color: androidx.compose.ui.graphics.Color) {
-    Text(text, style = MaterialTheme.typography.headlineLarge, color = color)
+    Text(text, style = MaterialTheme.typography.displayLarge, color = color)
     Spacer(Modifier.height(8.dp))
 }
 
@@ -175,17 +185,30 @@ private fun LearningHero(
     val needed = (watch?.minSessions ?: brief?.minSessions ?: 0).coerceAtLeast(1)
     val toGo = (needed - logged).coerceAtLeast(0)
 
-    // Learning is a status, not a verdict (§3/§14): no serif headline, no anticipation aside. The
-    // baseline meter IS the hero — ONE labeled bar in the shared "Coming up" language (§4.10) with
-    // its own count as the caption. The effort + Health Connect inputs this used to spell out as a
-    // floating dot checklist live in the Signals lens (§4.3), never restated here (GYMAP-24).
+    // Learning is a status, not a verdict (§3/§14): no serif headline, no anticipation aside — so
+    // §3's other clause governs, "figures/mark become the hero". It did not: this was a 15sp mono
+    // label over a 5dp bar, which is the ONLY content a brand-new account has above the pills, and
+    // the screen opened on near-nothing. §12: "a mark needs visual mass at the data's REAL size."
+    // The count is now a serif figure and the meter carries the 8dp segmented rung, so the state
+    // that every first-run user sees has a hero (2026-08-20).
     Spacer(Modifier.height(14.dp))
-    CoachProgressRow(
-        label = "Baseline",
+    EditorialFigure(
         value = "$logged of $needed",
-        c = c,
-        segments = logged.coerceAtMost(needed) to needed,
-        sub = if (toGo > 0) "$toGo more session${if (toGo == 1) "" else "s"} to your first call"
-        else "Your first call lands with the next brief."
+        label = "Baseline sessions",
+        onBg = c.onBg, muted = c.muted, accent = c.accent
+    )
+    Spacer(Modifier.height(12.dp))
+    TrustProgressBar(
+        streak = logged.coerceAtMost(needed),
+        required = needed,
+        earned = toGo == 0,
+        modifier = Modifier.fillMaxWidth()
+    )
+    Spacer(Modifier.height(8.dp))
+    Text(
+        if (toGo > 0) "$toGo more session${if (toGo == 1) "" else "s"} to your first call"
+        else "Your first call lands with the next brief.",
+        style = MaterialTheme.typography.bodySmall,
+        color = c.muted
     )
 }

@@ -95,13 +95,17 @@ internal fun LazyListScope.coachJourneyLens(
                 )
             }
             Spacer(Modifier.height(2.dp))
-            // ONE caption saying what the state MEANS for the user (§11), not the mechanics of a bar.
-            Text(
-                if (on) "A change applies on its own once its type's bar fills."
-                else "Autopilot is off; earned changes still wait for your tap.",
-                style = MaterialTheme.typography.bodySmall,
-                color = c.muted
-            )
+            // ONE caption saying what the state MEANS for the user (§11), not the mechanics of a
+            // bar — and §12: a hint REPLACES the caption, never both. With no type started, the
+            // hint below says everything this line did, so at zero the caption stands down.
+            if (anyProgress) {
+                Text(
+                    if (on) "A change applies on its own once its type's bar fills."
+                    else "Autopilot is off; earned changes still wait for your tap.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = c.muted
+                )
+            }
             Spacer(Modifier.height(12.dp))
             if (anyProgress) {
                 // Each type carries a distinct reading, so the bars earn their list (§4.10).
