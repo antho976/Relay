@@ -8,6 +8,50 @@ an entry whenever a rule is added, changed or retired.
 
 ---
 
+## 2026-08-20 — §1/§3: Coach becomes an account, and the ledger spine is a sanctioned data line
+
+Antho, opening the task: "I hate everything in the coach app." The page was not out of compliance —
+it was one of the most doctrine-annotated files in the repo, nearly every block carrying a comment
+justifying itself against a clause. That is the finding, not a defence. **A screen can satisfy every
+rule in this document and still have nothing to say**, because the doctrine governs how ink is
+spent, never what the screen is about. Nobody had decided what Coach was about, so it defaulted to
+rendering the engine: eight sections across three lenses, the largest thing on it a count of pending
+admin ("2 proposals", 52sp), and its most valuable content — a proposed change with its reasoning —
+set as 14sp body text beside a 110dp thumbnail.
+
+**The rule that changed.** §3's Overview archetype gains an **account variant**, and §1's
+lines-are-data clause gains the ledger spine by name.
+
+**Why an account rather than a better dashboard.** The two real usage scenes (confirmed with Antho)
+are the Monday ritual and idle browsing, and the three lenses served neither: the Monday decision
+and its evidence were one tap apart, and "did that change work" was a third tap away in Journey.
+Ordering by TIME instead of by topic collapses all three into one column, and it removes the
+duplication policing the lenses required — §4.3's "one home" was being enforced by hand across
+three views of the same facts, which is why so much content had been cut for merely echoing
+something on another lens.
+
+**Why one filled tile is not a §1 violation.** §1 earns surfaces by interactivity, and the open call
+is the only interactive entry on the page. Spending the page's single fill there makes rank
+*visible* rather than typographic: the one thing asking for a decision is the one thing with a body,
+and it loses that body when it resolves. This is the clause working as intended, not an exception
+to it.
+
+**Why the spine is data.** §1 bans hairlines because a line is a claim about data. The spine makes
+that claim truthfully: it is the time axis every entry hangs from, which is what lets an open
+proposal and a five-week-old outcome be the same object, differing only by node and stamp. It is
+drawn inside the gutter at x=10dp so all four regions keep the one 24dp content column.
+
+**What the gate said.** The change paid down four allowlist entries (two files' worth of `fontSize=`
+and `maxLines=1` debt) and introduced none: the phase label wraps instead of truncating now that it
+takes `labelSmall` from the scale, and `humanizeMachineProse` gives the em-dash/paren-plural
+translation exactly one home. 944 tests green, screenshot goldens included.
+
+**Not promoted to a seventh archetype.** A ledger with a spine, nodes and stamps is one screen's
+pattern until it is three. Minting an archetype would owe `LedgerRecipe.kt` and a new golden set for
+a vocabulary nothing else uses yet. If a second surface wants it, promote it then (§2⑥).
+
+---
+
 ## 2026-07-27 — §4.6: the chrome slot goes to a notifications bell, and banners stop being a pattern
 
 Home opened with up to four stacked strips (milestone, coach brief, orphan notice, resume reminder)

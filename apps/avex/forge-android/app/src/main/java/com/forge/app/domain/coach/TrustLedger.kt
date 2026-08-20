@@ -11,13 +11,21 @@ data class TypeTrust(
     val required: Int,
     val earned: Boolean
 ) {
+    /**
+     * The type in the user's vocabulary. A machine identifier must never reach the screen, so the
+     * fallback humanizes the raw key ("weight_nudge" → "Weight nudge") rather than printing it —
+     * Coach renders this list, and an unmapped historical type used to surface there verbatim.
+     */
     val label: String
         get() = when (type) {
             "swap" -> "Exercise rotations"
             "rep_shift" -> "Rep-range shifts"
             "volume_up" -> "Added sets"
             "volume_down" -> "Removed sets"
-            else -> type
+            "weight_nudge" -> "Weight nudges"
+            "deload" -> "Deload weeks"
+            "revert" -> "Undone changes"
+            else -> type.replace('_', ' ').replaceFirstChar { it.uppercaseChar() }
         }
 }
 

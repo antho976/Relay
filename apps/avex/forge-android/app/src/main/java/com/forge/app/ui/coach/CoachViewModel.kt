@@ -12,7 +12,6 @@ import com.forge.app.domain.adapt.AdaptThresholds
 import com.forge.app.domain.adapt.AdaptationSnapshot
 import com.forge.app.domain.adapt.bestE1rm
 import com.forge.app.domain.coach.GoalPortfolio
-import com.forge.app.domain.coach.SignalRegistry
 import com.forge.app.ui.common.ProgramChangeGuard
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -73,8 +72,6 @@ class CoachViewModel @Inject constructor(
         val goals: List<GoalPortfolio.GoalState> = emptyList(),
         /** Goals that fight, with the coach's sequencing proposal. */
         val goalConflicts: List<GoalPortfolio.GoalConflict> = emptyList(),
-        /** A2: every declared signal slot with its live status — the Signals lens's slot rail. */
-        val signals: List<Pair<SignalRegistry.Slot, SignalRegistry.Availability>> = emptyList(),
         /** Unlocked-but-unread Academy lessons. */
         val newLessons: Int = 0,
         /** The live training block (C), or null when the coach is running reactively. */
@@ -82,6 +79,8 @@ class CoachViewModel @Inject constructor(
         /** D: the running project, and the next one the coach would propose. */
         val project: com.forge.app.data.db.entities.CoachProject? = null,
         val projectProposal: com.forge.app.domain.coach.ProjectScanner.Candidate? = null,
+        /** Every project the coach would consider, best first — the user picks, not the ranking. */
+        val projectOptions: List<com.forge.app.domain.coach.ProjectScanner.Candidate> = emptyList(),
         /** D: what the coach has measured about this athlete specifically. */
         val profile: com.forge.app.domain.coach.PersonalProfile.Profile =
             com.forge.app.domain.coach.PersonalProfile.Profile.DEFAULTS
@@ -121,11 +120,11 @@ class CoachViewModel @Inject constructor(
             goals = runCatching { goalRepo.states() }.getOrDefault(emptyList()),
             goalConflicts = runCatching { goalRepo.conflicts() }.getOrDefault(emptyList())
                 .also { if (it.isNotEmpty()) runCatching { academyRepo.onGoalConflict() } },
-            signals = snap?.let { SignalRegistry.statuses(it) }.orEmpty(),
             newLessons = runCatching { academyRepo.newCount() }.getOrDefault(0),
             block = runCatching { blockRepo.active() }.getOrNull(),
             project = runCatching { projectRepo.active() }.getOrNull(),
             projectProposal = runCatching { projectRepo.proposal() }.getOrNull(),
+            projectOptions = runCatching { projectRepo.proposals() }.getOrDefault(emptyList()),
             profile = snap?.let { com.forge.app.domain.coach.PersonalProfile.build(it) }
                 ?: com.forge.app.domain.coach.PersonalProfile.Profile.DEFAULTS
         )
@@ -176,11 +175,6 @@ class CoachViewModel @Inject constructor(
             refreshGoals()
         }
 
-    fun archiveGoal(id: Long) = viewModelScope.launch {
-        runCatching { goalRepo.archive(id) }
-        refreshGoals()
-    }
-
     private suspend fun refreshGoals() {
         val s = _state.value
         _state.value = s.copy(
@@ -213,6 +207,13 @@ class CoachViewModel @Inject constructor(
         refreshProjects()
     }
 
+    /** Start a specific project the user chose from [UiState.projectOptions]. */
+    fun startProject(candidate: com.forge.app.domain.coach.ProjectScanner.Candidate) =
+        viewModelScope.launch {
+            runCatching { projectRepo.accept(candidate) }
+            refreshProjects()
+        }
+
     fun completeProject() = viewModelScope.launch {
         _state.value.project?.let { runCatching { projectRepo.complete(it.id) } }
         refreshProjects()
@@ -227,6 +228,7 @@ class CoachViewModel @Inject constructor(
         _state.value = _state.value.copy(
             project = runCatching { projectRepo.active() }.getOrNull(),
             projectProposal = runCatching { projectRepo.proposal() }.getOrNull(),
+            projectOptions = runCatching { projectRepo.proposals() }.getOrDefault(emptyList()),
             newLessons = runCatching { academyRepo.newCount() }.getOrDefault(_state.value.newLessons)
         )
     }
