@@ -24,10 +24,11 @@ import androidx.compose.ui.unit.sp
 import com.forge.app.data.repo.RecoverySignal
 import com.forge.app.data.repo.TrackedLift
 import com.forge.app.domain.adapt.DeloadAdvisor
+import com.forge.app.domain.coach.PersonalProfile
 import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.formatWeight
-import com.forge.app.ui.common.clickableLabeled
 import com.forge.app.ui.common.InlineEmptyHint
+import com.forge.app.ui.common.clickableLabeled
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -162,21 +163,11 @@ internal fun LazyListScope.coachSignalsLens(
         }
     }
 
-    // ── Every slot the coach declares (A2) ────────────────────────────────────
-    // The registry beside the live inputs: what it reads on your data, what is wired and waiting,
-    // and what is declared but not built. The dot IS the state (§12) — no status words.
-    item("signals-slots") {
-        CoachSection(
-            c,
-            title = "What it can read",
-            caption = "Filled reads you now, hollow is waiting on your data, dim is on the way.",
-            index = 5
-        ) {
-            SignalSlotRail(state.signals, c)
-        }
-    }
-
-    // ── The inputs it reads ───────────────────────────────────────────────────
+    // ── What it reads: the live inputs, then the full registry ────────────────
+    // These were two sections — "What it can read" (the registry rail) and "What it reads" (the
+    // live inputs) — which is ONE fact, enumerated twice under two 15sp anchors (§4.3). They are
+    // one section now: the inputs carrying real data lead (§4.8), and the registry closes it as
+    // a rail under its own 9sp eyebrow. The dot IS the state (§12) — no status words.
     // One row per input in plain language — its name and the repo's own count ("12 in the last
     // two weeks"). Inputs with data draw their chart directly under their row; an unconnected
     // Health Connect input carries the action that connects it (§11).
@@ -214,6 +205,25 @@ internal fun LazyListScope.coachSignalsLens(
                     }
                 }
             }
+            // The rail closes the section with what is NOT already listed above. Merging the old
+            // "What it can read" section into this one put the registry two rows under the input
+            // rows, so Sleep and Resting heart rate rendered twice within a thumb's width — the
+            // §4.3 collision the merge was supposed to remove (2026-08-20). Naming a signal once
+            // is the whole point, so the rail drops every slot the rows above already named.
+            val named = watch.recoverySignals.map { it.label.lowercase() }.toSet()
+            val rest = state.signals.filterNot { (slot, _) -> slot.label.lowercase() in named }
+            if (rest.isNotEmpty()) {
+                Spacer(Modifier.height(18.dp))
+                CoachChartLabel("Also on the roadmap", c)
+                Spacer(Modifier.height(8.dp))
+                SignalSlotRail(rest, c)
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Hollow is waiting on your data, dim is on the way.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = c.muted
+                )
+            }
         }
     }
 
@@ -239,6 +249,38 @@ internal fun LazyListScope.coachSignalsLens(
                     }
                 }
             }
+            // The numbers the coach measured about YOU, moved off the Now lens's Project group
+            // (2026-08-20): these are learned readings, so they belong with the rest of the
+            // learning rather than inside a section about the current lever (§4.3, one home).
+            if (state.profile.hasPersonalData) {
+                Spacer(Modifier.height(18.dp))
+                CoachChartLabel("Your numbers", c)
+                Spacer(Modifier.height(8.dp))
+                ProfileReadout(state.profile, c)
+            }
+        }
+    }
+}
+
+/** What the coach has measured about this athlete — the numbers that replaced the defaults. */
+@Composable
+private fun ProfileReadout(profile: PersonalProfile.Profile, c: CoachColors) {
+    Column(Modifier.fillMaxWidth()) {
+        profile.recoveryDays?.let { days ->
+            Text(
+                "Best spacing: $days ${if (days == 1) "day" else "days"} between sessions",
+                style = MaterialTheme.typography.bodySmall,
+                color = c.onBg,
+                modifier = Modifier.padding(vertical = 2.dp)
+            )
+        }
+        profile.volumeCaps.entries.take(3).forEach { (muscle, cap) ->
+            Text(
+                "${muscle.displayName}: up to $cap sets a week",
+                style = MaterialTheme.typography.bodySmall,
+                color = c.onBg,
+                modifier = Modifier.padding(vertical = 2.dp)
+            )
         }
     }
 }
