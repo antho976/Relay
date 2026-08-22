@@ -67,17 +67,42 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * # Profile — design/surface-experiment (2026-08-15)
+ * # Profile — the open page (2026-08-22)
  *
- * The "You" hub in the card-led language, built to sit UNDER the blending cover rather than beside
- * it. The cover ([ProfileHeaderCard]) is byte-for-byte the shipped one: it is the piece of the
- * current design that already has the warmth this branch is chasing, so nothing here competes with
- * it — no second photo, no gradient, no second elevation, and a full 28dp of air before the first
- * card so the dissolve lands on bare page.
+ * The "You" hub, in this order and no other: **the cover, all time, this month's activity, body,
+ * gallery** (Antho, 2026-08-22). Read down the page it answers four questions in the order a lifter
+ * actually asks them — who am I, what have I done, am I showing up *now*, what is my body doing —
+ * and then shows the photographic record of it.
+ *
+ * ## Three changes, one direction
+ *
+ * **The cover is untouched, again.** [ProfileHeaderCard] is byte-for-byte the shipped one and every
+ * redesign of this page has left it alone, which by now is evidence rather than caution: it is the
+ * one element here that was already right. Nothing below competes with it — no second photo, no
+ * gradient, and a full 28dp of air so its dissolve lands on bare page.
+ *
+ * **The cards are gone.** The 2026-08-15 experiment boxed every section in a `SurfaceCard`; this
+ * pass takes the fills away and keeps the icons. Structure is now anchors, hairlines and space —
+ * the app's own editorial language (`ui/common/Editorial.kt`), which Home and the live session
+ * already speak, so the Profile stopped being the one screen with its own dialect. What that cost
+ * and what it bought is written up on [ProfileAllTime].
+ *
+ * **THIS YEAR became ACTIVITY.** The 12-row year grid is replaced by [ProfileActivityMonth], a
+ * GitHub-style contribution grid over the current month. The year is still in the package
+ * ([YearConsistencySection]) and no longer called.
+ *
+ * Sections that stayed: the gallery filmstrip, untouched on instruction. It was already unboxed and
+ * full-bleed, so there was nothing to take from it. The "seeded pictures" turned out not to be code
+ * at all — fifteen `pp_seed*.jpg` fixtures were sitting in the debug app's storage from an earlier
+ * session, and they were cleared off the device.
  *
  * The open-editorial original is at `.design-backups/editorial-2026-08/src/profile/`; one command
  * restores it. Every shipped section (`AllTimeSection`, `BodyMetricsSection`, `LifetimeVolumeGraph`,
  * `SectionHeader`, `ChartCaption`) is still in the package, untouched and simply no longer called.
+ *
+ * The rank / standing / trophy sections are still boxed. They are behind `Features
+ * .SHOW_GAMIFICATION`, which is `false`, so nothing renders — unboxing UI no one can see would be
+ * an unverifiable change, and they get the same pass when the flag does.
  *
  * All local — no account. See [ProfileViewModel] / `data/repo/ProfileRepository` / `domain/rank`.
  */
@@ -234,24 +259,16 @@ fun ProfileScreen(
                     }
                 }
 
-                // ── Hero card: lifetime volume over its curve (index 1) ──────────
-                // 28dp so the cover's dissolve lands on bare page before the first fill starts.
+                // ── ALL TIME (index 1) ──────────────────────────────────────────
+                // 28dp so the cover's dissolve lands on bare page before the first mark starts.
                 Spacer(Modifier.height(28.dp))
-                ProfileHeroCard(
+                SectionAnchor("All time", muted, onBg, modifier = pad)
+                Spacer(Modifier.height(12.dp))
+                ProfileAllTime(
                     palette = palette,
                     totalVolumeLb = state.lifetimeVolumeSeriesLb.lastOrNull() ?: state.totalVolumeLb,
                     series = state.lifetimeVolumeSeriesLb,
                     totalSets = state.totalSets,
-                    sinceLabel = state.sinceLabel,
-                    onBg = onBg,
-                    muted = muted,
-                    modifier = pad.statsEntrance(1)
-                )
-
-                // ── Two-up: the tallies whose week-over-week movement means something ──
-                Spacer(Modifier.height(10.dp))
-                ProfileTwoUp(
-                    palette = palette,
                     totalSessions = state.totalSessions,
                     workoutsThisWeek = state.workoutsThisWeek,
                     workoutsLastWeek = state.workoutsLastWeek,
@@ -260,18 +277,38 @@ fun ProfileScreen(
                     prsLastWeek = state.prsLastWeek,
                     onBg = onBg,
                     muted = muted,
+                    outline = outline,
+                    modifier = pad.statsEntrance(1)
+                )
+
+                // ── ACTIVITY — this month as a contribution grid (index 2) ───────
+                // Drawn even at zero, unlike the year grid it replaced. That grid hid itself until
+                // the year had activity, because twelve rows of dead dots is a lot of nothing; a
+                // month is one small block, and an empty one is a legible "nothing yet this month"
+                // that also teaches what fills in (§12: empty is drawn). It is also the section a
+                // brand-new profile most needs to see, since it is the one that changes tomorrow.
+                Spacer(Modifier.height(34.dp))
+                ProfileActivityMonth(
+                    activityByDay = state.activityByDay,
+                    onBg = onBg,
+                    muted = muted,
+                    // hues[0], not the accent. A green grid would be more literally GitHub, and
+                    // ember is budgeted (2026-08-16) for the four places that carry a decision —
+                    // this one carries a fact. Taking the palette hue also keeps the grid honest
+                    // in monochrome mode, where colour-as-data is switched off entirely.
+                    hue = palette.hues[0],
                     modifier = pad.statsEntrance(2)
                 )
 
-                // ── BODY as a horizontal strip (full-bleed, peeks the next card) ──
-                Spacer(Modifier.height(28.dp))
-                // No "measurements →" link: the strip's own SIZES card already opens Measurements,
-                // and the two sat one above the other saying the same thing (Antho, 2026-08-15 —
-                // "move measurement as a tile too"). §4.3's one-home rule, and the tile is the
-                // better half of the pair because it carries a reading as well as a destination.
+                // ── BODY as open rows (index 3) ─────────────────────────────────
+                // No "measurements →" link: the SIZES row already opens Measurements, and the two
+                // sat one above the other saying the same thing (Antho, 2026-08-15 — "move
+                // measurement as a tile too"). §4.3's one-home rule, and the row is the better half
+                // of the pair because it carries a reading as well as a destination.
+                Spacer(Modifier.height(34.dp))
                 SectionAnchor("Body", muted, onBg, modifier = pad)
-                Spacer(Modifier.height(10.dp))
-                ProfileBodyStrip(
+                Spacer(Modifier.height(12.dp))
+                ProfileBodyRows(
                     palette = palette,
                     bodyweight = bodyweight,
                     bodyFat = bodyFat,
@@ -290,35 +327,29 @@ fun ProfileScreen(
                     onOpenMeasurements = onOpenMeasurements,
                     onBg = onBg,
                     muted = muted,
-                    modifier = Modifier.statsEntrance(3)
+                    outline = outline,
+                    modifier = pad.statsEntrance(3)
                 )
 
-                // ── This year's consistency — the same grid, boxed ───────────────
-                // Hidden until the year has any activity, so a new user never sees a dead grid (§12).
-                if (state.activityByDay.isNotEmpty()) {
-                    Spacer(Modifier.height(28.dp))
-                    ProfileYearCard(
-                        palette = palette,
-                        activityByDay = state.activityByDay,
-                        muted = muted,
-                        modifier = pad.statsEntrance(4)
-                    )
-                }
-
                 if (Features.SHOW_GAMIFICATION) {
-                    Spacer(Modifier.height(28.dp))
-                    SurfaceCard(palette, pad.statsEntrance(5)) {
+                    Spacer(Modifier.height(34.dp))
+                    SurfaceCard(palette, pad.statsEntrance(4)) {
                         StandingSection(state.standings, onBg, muted, accent, outline)
                     }
                 }
 
-                // ── Gallery filmstrip (index 6) ──────────────────────────────────
-                // The photos stay full-bleed and unboxed — they carry their own edges, and a card
-                // around a photo is a frame around a frame. What DID change (2026-08-15) is that
-                // the cells now share the cards' 18dp radius, and the empty ones take the card fill
-                // rather than being hollow outlines, so the section reads as part of the same page.
-                Spacer(Modifier.height(28.dp))
-                Column(Modifier.fillMaxWidth().statsEntrance(6)) {
+                // ── Gallery filmstrip (index 4) ──────────────────────────────────
+                // UNCHANGED, on instruction (Antho, 2026-08-22). It was already the page's one
+                // unboxed section — the photos are full-bleed and carry their own edges, and a card
+                // around a photo is a frame around a frame — so the de-boxing pass had nothing to
+                // take from it. Its empty state keeps the three-cell ghost strip, which is the only
+                // card fill left on this page; that is a deliberate exception, not an oversight.
+                //
+                // The "seeded pictures" were not in this code at all: fifteen `pp_seed*.jpg`
+                // fixtures were sitting in the debug app's own storage from an earlier session, and
+                // they were removed from the device, not from here.
+                Spacer(Modifier.height(34.dp))
+                Column(Modifier.fillMaxWidth().statsEntrance(4)) {
                     GalleryStrip(
                         state.photos, viewModel::fileFor,
                         onAdd = { addChooser = true },
@@ -330,7 +361,7 @@ fun ProfileScreen(
 
                 if (Features.SHOW_GAMIFICATION) {
                     Spacer(Modifier.height(28.dp))
-                    SurfaceCard(palette, pad.statsEntrance(7)) {
+                    SurfaceCard(palette, pad.statsEntrance(5)) {
                         TrophyCaseSection(
                             state.trophyGrid, state.trophyUnlocked, state.trophyTotal,
                             state.closestTrophy, onOpenTrophies, onBg, muted, accent, outline
