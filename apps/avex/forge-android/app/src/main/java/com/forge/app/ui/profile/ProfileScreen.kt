@@ -259,13 +259,18 @@ fun ProfileScreen(
                     modifier = pad.statsEntrance(1)
                 )
 
-                // ── ACTIVITY — the year as a contribution band (index 2) ─────────
-                // Drawn even at zero. The 12-row dot grid this replaced hid itself until the year
-                // had activity, because twelve rows of dead dots is a lot of nothing; this band is
-                // ~40dp tall, and an empty one is a legible "nothing yet" that also teaches what
-                // fills in (§12: empty is drawn).
+                // ── ACTIVITY — this month as a contribution grid (index 2) ───────
+                // Swap this call for [ProfileActivityYear] to get the two-band year instead; both
+                // take the same arguments and both live in this package, on purpose. The year read
+                // as a texture and the month reads as a calendar, and which one belongs here is a
+                // question about how you use the page, not one the code can settle — so the switch
+                // stays a one-line change rather than being resolved by deleting the loser.
+                //
+                // Drawn even at zero. The 12-row dot grid these replaced hid itself until the year
+                // had activity, because twelve rows of dead dots is a lot of nothing; an empty
+                // month is a legible "nothing yet" that also teaches what fills in (§12).
                 Spacer(Modifier.height(34.dp))
-                ProfileActivityYear(
+                ProfileActivityMonth(
                     activityByDay = state.activityByDay,
                     onBg = onBg,
                     muted = muted,
