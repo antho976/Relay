@@ -48,6 +48,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.forge.app.data.repo.ProgressPhoto
 import com.forge.app.domain.photo.PhotoPose
+import com.forge.app.domain.photo.musclesFromCodes
 import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.domain.units.formatWeightDelta
@@ -163,7 +164,9 @@ internal fun CompareSheet(
                             } else null
                             val bp = PhotoPose.fromKey(before.pose)
                             val ap = PhotoPose.fromKey(after.pose)
+                            val shared = musclesFromCodes(before.muscles.filter { it in after.muscles })
                             val poseLine = when {
+                                shared.isNotEmpty() -> shared.joinToString(" · ") { it.displayName }.uppercase()
                                 bp != null && bp == ap -> bp.label.uppercase()
                                 bp != null && ap != null -> "${bp.label} → ${ap.label}".uppercase()
                                 else -> null
@@ -284,6 +287,12 @@ private fun CompareReadout(
         bp != null && ap != null -> "${bp.label} → ${ap.label}"
         else -> null
     }
+    // The muscles both shots agree on — what this comparison is actually evidence about. Only the
+    // shared ones: a muscle tagged on one end alone says nothing about a change between them.
+    val sharedMuscles = musclesFromCodes(before.muscles.filter { it in after.muscles })
+        .takeIf { it.isNotEmpty() }?.joinToString(" · ") { it.displayName }
+    val tagLine = listOfNotNull(poseLine, sharedMuscles)
+        .takeIf { it.isNotEmpty() }?.joinToString(" · ")
 
     Column(
         Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 16.dp),
@@ -294,9 +303,11 @@ private fun CompareReadout(
             Spacer(Modifier.height(4.dp))
             Text(weightLine, style = MaterialTheme.typography.labelMedium, color = muted)
         }
-        if (poseLine != null) {
-            Spacer(Modifier.height(2.dp))
-            Text(poseLine.uppercase(), style = MaterialTheme.typography.labelSmall, color = accent)
+        if (tagLine != null) {
+            Spacer(Modifier.height(4.dp))
+            // §14: the accent carries marks, not meaning-bearing text — four of the five accent
+            // choices fail AA as body text, so this line rides onBackground like its siblings.
+            Text(tagLine.uppercase(), style = MaterialTheme.typography.labelSmall, color = onBg)
         }
     }
 }

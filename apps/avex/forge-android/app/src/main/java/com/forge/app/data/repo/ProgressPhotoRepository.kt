@@ -41,7 +41,18 @@ data class ProgressPhoto(
      * behind it. Optional and blank by default — added 2026-07-25 so the gallery search can match a
      * name you chose rather than only what the app recorded.
      */
-    val title: String = ""
+    val title: String = "",
+    /**
+     * The muscle groups this shot documents, as [com.forge.app.program.MuscleGroup] codes. A
+     * SEPARATE axis from [pose]: the pose is where the camera stood, these are what the shot is
+     * evidence of, and one back shot honestly covers both Back and Rear Delts. Empty = untagged.
+     */
+    val muscles: List<String> = emptyList(),
+    /**
+     * Free tags the user invented ("fasted", "week-12", "cut"), normalized by
+     * [com.forge.app.domain.photo.PhotoTag]. Empty = untagged.
+     */
+    val tags: List<String> = emptyList()
 )
 
 /**
@@ -95,6 +106,7 @@ class ProgressPhotoRepository @Inject constructor(
         note: String = "",
         album: String = "",
         pose: String = "",
+        muscles: List<String> = emptyList(),
         takenAtMsOverride: Long? = null
     ): ProgressPhoto? = withContext(Dispatchers.IO) {
         val fileName = "pp_${UUID.randomUUID().toString().take(12)}.jpg"
@@ -106,7 +118,7 @@ class ProgressPhotoRepository @Inject constructor(
         }.getOrDefault(false)
         if (!ok || dest.length() == 0L) { dest.delete(); return@withContext null }
         val takenAt = exifTakenAtMs(dest) ?: takenAtMsOverride ?: System.currentTimeMillis()
-        index(fileName, takenAt, note, album, pose)
+        index(fileName, takenAt, note, album, pose, muscles)
     }
 
     /**
@@ -121,13 +133,23 @@ class ProgressPhotoRepository @Inject constructor(
             val ok = runCatching { temp.copyTo(dest, overwrite = true); true }.getOrDefault(false)
             temp.delete()
             if (!ok || dest.length() == 0L) { dest.delete(); return@withContext null }
-            index(fileName, System.currentTimeMillis(), "", album, pose)
+            index(fileName, System.currentTimeMillis(), "", album, pose, emptyList())
         }
 
     /** Append a copied-in file to the index, snapshotting the nearest bodyweight for its date. */
-    private suspend fun index(fileName: String, takenAtMs: Long, note: String, album: String, pose: String): ProgressPhoto {
+    private suspend fun index(
+        fileName: String,
+        takenAtMs: Long,
+        note: String,
+        album: String,
+        pose: String,
+        muscles: List<String>
+    ): ProgressPhoto {
         // Snapshot outside the lock (canonicalAlbum + the bodyweight read don't touch the index).
-        val photo = ProgressPhoto(fileName, takenAtMs, note, canonicalAlbum(album), pose, nearestBodyweightLb(takenAtMs))
+        val photo = ProgressPhoto(
+            fileName, takenAtMs, note, canonicalAlbum(album), pose, nearestBodyweightLb(takenAtMs),
+            muscles = muscles
+        )
         writeMutex.withLock {
             writeIndex(readIndex() + photo)
             bump()
@@ -146,6 +168,12 @@ class ProgressPhotoRepository @Inject constructor(
     suspend fun setNote(photo: ProgressPhoto, note: String) = updatePhoto(photo) { it.copy(note = note) }
     suspend fun setTitle(photo: ProgressPhoto, title: String) = updatePhoto(photo) { it.copy(title = title.trim()) }
     suspend fun setPose(photo: ProgressPhoto, pose: String) = updatePhoto(photo) { it.copy(pose = pose) }
+    /** Replace a photo's muscle tags wholesale (the viewer toggles chips and hands back the new set). */
+    suspend fun setMuscles(photo: ProgressPhoto, muscles: List<String>) =
+        updatePhoto(photo) { it.copy(muscles = muscles.distinct()) }
+    /** Replace a photo's free tags wholesale; values are expected already normalized by `PhotoTag`. */
+    suspend fun setTags(photo: ProgressPhoto, tags: List<String>) =
+        updatePhoto(photo) { it.copy(tags = tags.distinct()) }
     suspend fun setWeight(photo: ProgressPhoto, weightLb: Double?) = updatePhoto(photo) { it.copy(weightLb = weightLb) }
     /** Re-date a photo (its EXIF date was wrong/absent); re-snapshots the bodyweight for the new date. */
     suspend fun setTakenAt(photo: ProgressPhoto, takenAtMs: Long) {
@@ -274,7 +302,9 @@ class ProgressPhotoRepository @Inject constructor(
                     o.optString("album"),
                     o.optString("pose"),
                     if (o.has("weightLb") && !o.isNull("weightLb")) o.optDouble("weightLb") else null,
-                    o.optString("title")
+                    o.optString("title"),
+                    stringList(o.optJSONArray("muscles")),
+                    stringList(o.optJSONArray("tags"))
                 )
             }
         }.getOrDefault(emptyList())
@@ -291,9 +321,19 @@ class ProgressPhotoRepository @Inject constructor(
                 put("pose", p.pose)
                 if (p.title.isNotBlank()) put("title", p.title)
                 if (p.weightLb != null) put("weightLb", p.weightLb)
+                // Omitted entirely when empty, so an untagged library's index stays byte-identical
+                // to what the pre-tag build wrote and a downgrade reads it back cleanly.
+                if (p.muscles.isNotEmpty()) put("muscles", JSONArray(p.muscles))
+                if (p.tags.isNotEmpty()) put("tags", JSONArray(p.tags))
             })
         }
         indexFile.writeText(arr.toString())
+    }
+
+    /** Read a JSON string array as a clean list, dropping blanks. Absent array reads as empty. */
+    private fun stringList(arr: JSONArray?): List<String> {
+        if (arr == null) return emptyList()
+        return (0 until arr.length()).mapNotNull { i -> arr.optString(i).trim().ifBlank { null } }
     }
 
     private fun readAlbums(): List<String> {
