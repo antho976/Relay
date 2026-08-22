@@ -83,6 +83,40 @@ left because re-flowing the polished screen needs Antho's eyes) · any screen st
 hairlines → migrate to air rhythm (§7). (Home's accent eyebrows + the Home/Stats section hairlines
 were fixed 2026-07-08, GYMAP-4.)
 
+## Onboarding, cut from fifteen steps to eight (2026-08-22)
+
+The rebuild (`design/DECISIONS.md`, same date) removed five whole screens and two readouts. None of
+it is missing — every item is still asked or still reachable, just not in front of the plan.
+
+**Moved out of the path, into one optional closing step** ("Anything else?", after the week exists):
+your name · weight and distance units · bodyweight and sex · watch brand · app lock · plate weight ·
+auto-refresh cadence. (Sore spots went the other way — see below.) Every one also lives in Settings, and every one has a working
+default, so walking past the whole page is a complete answer. Do not push any of them back in front
+of the plan: they are settings, and a setting asked before the product has shown anything is a toll.
+
+**Cut outright:**
+
+- **The gym step's "in this setup" gear dump** — a mono list of every selected piece, under the
+  preset grid. The week meter below it now answers what the preset DID, and the fine-tune page next
+  lists every piece with its own on/off state. Two readouts of one answer, §4.3.
+- **The day step's split readout** ("PUSH · PULL · LEGS") — the meter's bars are labelled with the
+  same day names, so the line restated the mark directly beneath it.
+- **The wearable step's per-brand version caveat** ("Older models send fewer") — kept in Settings →
+  Recovery, where the user can act on it. On the closing step the brand pick answers with one line
+  naming what that companion app feeds through, which is the fact that helps at that moment.
+- **The mono chapter eyebrow on every step** ("ABOUT YOU", "YOUR GYM") — the step rail already says
+  where you are. This is onboarding-only; every other §3 archetype keeps its eyebrow.
+- **The coach `AlertDialog`** — a boolean with a sane default is a row, not an interruption (§12).
+  It is now offered on all three plan modes rather than only the two that got the dialog.
+
+**Promoted, not cut:** sore / injured spots. It started the rebuild as a chip row on the closing
+step and ended it as its own page, before the week — it shapes exercise selection, so asking after
+the preview shaped a plan the user had already approved. Do not fold it back into a settings list.
+
+**Do not re-add:** a welcome screen. The cold-launch `AvexIntro` plays the wordmark moments earlier,
+§3 bans a wordmark pre-app, and the plan-mode fork is a better opening beat than a greeting — it is
+the most consequential question in the flow and the only one with motion in it.
+
 ## Home, cut down to two questions (2026-08-16)
 
 Antho's brief, verbatim: *"What do I do now, really small summary of important info that changed, and

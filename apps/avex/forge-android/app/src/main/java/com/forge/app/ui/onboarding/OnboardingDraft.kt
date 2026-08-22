@@ -4,13 +4,15 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * A mid-onboarding snapshot — every answer plus the current page — persisted as one JSON blob so a
+ * A mid-onboarding snapshot — every answer plus the current step — persisted as one JSON blob so a
  * fully killed app resumes setup where it left off (cleared atomically on completion). Nullable
  * fields keep their tri-state through the round-trip: [sex] null = not asked yet ("" = explicitly
- * "prefer not to say"), [frozenIds] null = no curated preset locked.
+ * "prefer not to say"), [frozenIds] null = no curated preset locked, [coachChoice] null = the coach
+ * toggle was never touched, so the plan mode's own default still stands.
  */
 internal data class OnboardingDraft(
-    val page: Int,
+    /** Cursor into the plan mode's path, not a page id — see `pathFor` in OnboardingScreen.kt. */
+    val step: Int,
     val planMode: String,
     val name: String,
     val useKg: Boolean,
@@ -20,7 +22,7 @@ internal data class OnboardingDraft(
     val experience: String,
     val bodyweightInput: String,
     val sex: String?,
-    /** WearableBrand key ("" = not picked yet) — absent in pre-wearable-step drafts, parsed as "". */
+    /** WearableBrand key ("" = not picked yet). */
     val wearable: String,
     val daysPerWeek: Int,
     val equipment: Set<String>,
@@ -30,12 +32,14 @@ internal data class OnboardingDraft(
     val cadence: String,
     val everyN: Int,
     val previewSeed: Long,
-    /** App-lock opt-in (GYMAP-69) — absent in older drafts, parsed as false. */
-    val appLock: Boolean
+    /** App-lock opt-in (GYMAP-69). */
+    val appLock: Boolean,
+    /** Explicit coach opt-in / opt-out; null = untouched, so the mode's default applies. */
+    val coachChoice: Boolean?
 ) {
     fun toJson(): String = JSONObject().apply {
         put("schema", SCHEMA)
-        put("page", page)
+        put("step", step)
         put("planMode", planMode)
         put("name", name)
         put("useKg", useKg)
@@ -55,20 +59,22 @@ internal data class OnboardingDraft(
         put("everyN", everyN)
         put("previewSeed", previewSeed)
         put("appLock", appLock)
+        coachChoice?.let { put("coachChoice", it) }       // absent = never touched
     }.toString()
 
     companion object {
-        /** Bump whenever the page layout (indices) changes so a draft written by an older build — whose
-         *  `page` cursor now points at a different step — is discarded rather than resumed mid-flow onto
-         *  the wrong screen. The answer fields are name-keyed and would survive, but the cursor wouldn't. */
-        private const val SCHEMA = 3
+        /** Bump whenever the flow's shape changes so a draft written by an older build — whose
+         *  cursor now points at a different step — is discarded rather than resumed mid-flow onto
+         *  the wrong screen. The answer fields are name-keyed and would survive, but the cursor
+         *  wouldn't. 4 = the 2026-08-22 rebuild, which also renamed `page` to `step`. */
+        private const val SCHEMA = 4
 
         /** Null on any parse failure or a stale schema — the draft just restarts onboarding cleanly. */
         fun fromJson(json: String): OnboardingDraft? = runCatching {
             val o = JSONObject(json)
             if (o.optInt("schema", 1) != SCHEMA) return null
             OnboardingDraft(
-                page = o.getInt("page"),
+                step = o.getInt("step"),
                 planMode = o.getString("planMode"),
                 name = o.getString("name"),
                 useKg = o.getBoolean("useKg"),
@@ -87,7 +93,8 @@ internal data class OnboardingDraft(
                 cadence = o.getString("cadence"),
                 everyN = o.getInt("everyN"),
                 previewSeed = o.getLong("previewSeed"),
-                appLock = o.optBoolean("appLock", false)
+                appLock = o.optBoolean("appLock", false),
+                coachChoice = if (o.has("coachChoice")) o.getBoolean("coachChoice") else null
             )
         }.getOrNull()
 

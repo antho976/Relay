@@ -521,6 +521,40 @@ Check this map + `ui/common/` before inventing; update it when screens change.
 Verbatim from the pre-split `DESIGN.md`. These are *inventory* — how a shipped feature works — rather
 than rules, so they moved here to keep the always-loaded core small. Nothing was reworded.
 
+### Onboarding — the flow (rebuilt 2026-08-22)
+
+`ui/onboarding/` — `OnboardingScreen.kt` holds the state and the page order;
+`OnboardingScaffold.kt` the shell every step shares (chrome, question slot, ledger slot, one action); `OnboardingPrimitives.kt` the
+shared tile / chip / rail / toggle-row formulas; `OnboardingSteps.kt` the fork and the goal /
+experience / day-count questions; `OnboardingGymSteps.kt` the two gym steps plus the week page;
+`OnboardingSoreSpots.kt` the sore / injured spots page; `OnboardingExtras.kt` the optional closing
+step; `OnboardingWeekMeter.kt` the `PlanLedger` mark;
+`OnboardingDraft.kt` the resume snapshot (schema 4, cursor = an index into the path, not a page id).
+
+Path: **generated** = mode → goal → experience → days → gym → gear → sore spots → week → extras
+(9 steps);
+**custom / freestyle** = mode → goal → experience → extras (4) — they still answer goal and
+experience because those steer the coach and Stats. `pathFor(planMode)` owns this; the rail counts
+its cells from the list, so the short path visibly drops four.
+
+`PlanLedger` is the persistent mark: one bar per training day carrying that day's SETS, scaled to
+the heaviest day, sitting below the question and outside the page slider. Before any gear exists it
+draws `ProgramGenerator.plannedSetsPerDay` (the split's own volume allocation, computable from a
+day-count alone); once a gym is picked it draws the generated week, so a sparse setup visibly costs
+sets. Its track is 148dp on the day-count step, where the week IS the answer, and animates down to
+72dp on the gym / gear steps, which need their grids. Bar columns share the width evenly until a day
+name stops fitting under one, past which the mono label clamps at two lines (§14) — an earlier build
+scrolled the row instead and clipped the seventh day on any phone narrower than the dev device. The
+week page leads with the same mark at 88dp, then the real day sections.
+
+The sore-spot page counts, per joint, how many movements in the pool THIS gym supports load it
+(`ExerciseLibrary.contraindicationsOf` over `availablePool`) — the reason to flag one, and stable
+against a re-roll. The closing step reads down a label-left spine (`ValueRow`) wherever a control
+fits beside its name; `OnboardingIcons` draws every line at `LIMB` = 1.8, the same weight as
+`NavIcons` and `SettingsIcons` (fills are masses and may be thicker); half the family had been
+rendering as solid silhouettes and half as wireframe, and a first correction to 2.2 fixed the
+internal consistency by breaking the match with the rest of the app.
+
 ### Onboarding — plan-mode vignettes, wearable pick, signal probes, equipment steps
 
 all three plan-mode cards carry short pre-rendered vignette videos (alpha WebP authored in
@@ -530,10 +564,10 @@ structure IS the message) that play ~twice then FREEZE on the built plan / caugh
 `PlanModeSync` starts the videos together so they replay/freeze in lockstep; the live Canvas
 vignette (`PlanModeVignettes`, its own final frame, one draw per mode) is the decode / pre-28 /
 reduce-motion fallback; equipment/preset/goal tiles use the `OnboardingIcons` matched glyph family.
-About-you closes with the wearable pick (Galaxy · Pixel · no watch, keys + labels + source app from
-`domain/health/WearableBrand`): cards carry the one honest per-brand difference as right-meta
-("Routes sync"/"Routes vary"), the pick answers with a mono what-syncs readout + a version caveat
-caption (feature sets differ by watch generation and companion-app version), and the same enum
+The wearable pick (Galaxy · Pixel · no watch, keys + labels + source app from
+`domain/health/WearableBrand`) sits on the optional closing step as of 2026-08-22, as a chip row whose
+pick answers with one line naming what that companion app feeds through; the per-brand right-meta
+cards and the version caveat were cut with the step (`design/SETTLED.md`). The same enum
 drives Settings → Recovery's WEARABLE `PillChip` row + brand-aware source-app/routes explainers —
 the two surfaces may not drift, and the brand is advisory only (HC reads stay vendor-neutral). Each
 granted Recovery read-signal row carries a post-connect reading (§9, `probeSignalFlow`): `RECEIVING`
@@ -541,8 +575,8 @@ granted Recovery read-signal row carries a post-connect reading (§9, `probeSign
 absence is ambiguous) when granted-but-silent, plain `ON` while probing or for the write-only
 calorie row. HC exposes data PRESENCE, never capability — so the UI never says "unsupported", and
 grey-out-by-brand is banned (both watches can do every signal on recent versions). Gym setup = TWO
-steps (GYMAP-20): preset grid (big-app lineup, `equipmentPresets`) + a live "in this setup" gear
-readout, then a fine-tune page grouped by the shared `equipmentGroups` (Settings → Program →
+steps (GYMAP-20): preset grid (big-app lineup, `equipmentPresets`), then a fine-tune page grouped by
+the shared `equipmentGroups` (Settings → Program →
 Equipment groups its chips the same way — the two selectors may not drift.
 
 ### Launch intro — per-family mechanics
