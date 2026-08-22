@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.ui.common.ForgeSwitch
 import com.forge.app.ui.common.clickableLabeled
+import com.forge.app.ui.common.toggleableLabeled
 
 /**
  * Building blocks for the Recovery page ([RecoveryPage]). The page leads with a connection rail —
@@ -44,7 +45,7 @@ import com.forge.app.ui.common.clickableLabeled
 internal fun RecoveryConnectionRail(states: List<Boolean>) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     Row(
-        modifier = Modifier.padding(horizontal = 24.dp),
+        modifier = Modifier.padding(horizontal = SETTINGS_GUTTER),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
@@ -89,13 +90,15 @@ internal fun RecoveryRow(
                 if (!connected && connectable) Modifier.clickableLabeled("Connect $title", onClick = onConnect)
                 else Modifier
             )
-            .padding(horizontal = 24.dp, vertical = 14.dp),
+            .padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD),
         horizontalArrangement = Arrangement.spacedBy(16.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(title, style = MaterialTheme.typography.titleSmall, color = onBg)
-            Text(explainer, style = MaterialTheme.typography.bodySmall, color = muted)
+        // bodyMedium + SettingsExplainer, not titleSmall + bodySmall: every other settings row in
+        // the app uses that pair, and Recovery reading a size louder made it a different page (§6).
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(title, style = MaterialTheme.typography.bodyMedium, color = onBg)
+            SettingsExplainer(explainer)
         }
         when {
             connected -> Row(
@@ -117,14 +120,19 @@ internal fun RecoveryRow(
     }
 }
 
-/** Compact label + switch row for a connected integration's write-back toggle (no subtitle line). */
+/** Compact label + switch row for a connected integration's write-back toggle (no subtitle line).
+ *  Same contract as [ToggleRow]: the WHOLE ROW is the ≥48dp tap target and the switch is drawn, so
+ *  the write-backs aren't 24dp targets and never nest a tap inside the row (§14, §2③). */
 @Composable
 internal fun RecoveryToggleRow(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
     val onBg = MaterialTheme.colorScheme.onBackground
     val bg = MaterialTheme.colorScheme.background
     val outline = MaterialTheme.colorScheme.outline
     Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .toggleableLabeled(label, checked) { onCheckedChange(!checked) }
+            .padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(16.dp)
     ) {
@@ -136,7 +144,7 @@ internal fun RecoveryToggleRow(label: String, checked: Boolean, onCheckedChange:
         )
         ForgeSwitch(
             checked = checked,
-            onCheckedChange = onCheckedChange,
+            onCheckedChange = null,     // drawn — the row is the target
             checkedTrackColor = onBg,
             checkedThumbColor = bg,
             checkedBorderColor = Color.Transparent,

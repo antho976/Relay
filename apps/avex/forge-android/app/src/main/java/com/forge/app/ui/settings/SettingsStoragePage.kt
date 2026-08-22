@@ -53,7 +53,7 @@ internal fun StoragePage(vm: SettingsViewModel, modifier: Modifier = Modifier) {
             "${formatBytes(total)} used",
             style = MaterialTheme.typography.bodyLarge,
             color = onBg,
-            modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 2.dp)
+            modifier = Modifier.padding(start = SETTINGS_GUTTER, end = SETTINGS_GUTTER, top = 2.dp)
         )
         Spacer(Modifier.height(12.dp))
 
@@ -68,12 +68,12 @@ internal fun StoragePage(vm: SettingsViewModel, modifier: Modifier = Modifier) {
         Spacer(Modifier.height(24.dp))
         Text(
             "Cache holds temporary files the app rebuilds. Your workouts and photos stay.",
-            style = MaterialTheme.typography.labelSmall,
-            color = muted.copy(alpha = 0.7f),
-            modifier = Modifier.padding(horizontal = 24.dp)
+            style = MaterialTheme.typography.bodySmall,
+            color = muted,
+            modifier = Modifier.padding(horizontal = SETTINGS_GUTTER)
         )
         Spacer(Modifier.height(10.dp))
-        Row(Modifier.padding(horizontal = 24.dp)) {
+        SettingsActionRow {
             SettingsPrimaryAction(
                 label = if (cache > 0) "Clear cache · ${formatBytes(cache)}" else "Clear cache",
                 enabled = cache > 0,
@@ -93,7 +93,7 @@ private fun StorageRow(label: String, sizeLabel: String, fraction: Float) {
     Column(
         Modifier
             .fillMaxWidth()
-            .padding(horizontal = 24.dp, vertical = 8.dp)
+            .padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD)
     ) {
         Row(
             Modifier.fillMaxWidth(),
@@ -109,7 +109,7 @@ private fun StorageRow(label: String, sizeLabel: String, fraction: Float) {
                 .fillMaxWidth()
                 .height(3.dp)
                 .clip(RoundedCornerShape(50))
-                .background(outline.copy(alpha = 0.3f))
+                .background(outline.copy(alpha = 0.25f))
         ) {
             // A tiny floor so a non-zero-but-tiny category still reads as a sliver, not an empty track.
             Box(

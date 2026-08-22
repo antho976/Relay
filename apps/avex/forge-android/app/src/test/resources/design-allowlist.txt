@@ -167,15 +167,8 @@
 1 alpha ui/programbuilder/ProgramBuilderScreen.kt 0.5
 1 alpha ui/settings/AccentColorPicker.kt 0.22
 1 alpha ui/settings/AccentColorPicker.kt 0.4
-2 alpha ui/settings/SettingsAboutPage.kt 0.85
-1 alpha ui/settings/SettingsMainList.kt 0.55
-2 alpha ui/settings/SettingsPrimitives.kt 0.2
-1 alpha ui/settings/SettingsPrimitives.kt 0.4
-1 alpha ui/settings/SettingsPrimitives.kt 0.5
 1 alpha ui/settings/SettingsPrimitives.kt 0.55
-1 alpha ui/settings/SettingsStoragePage.kt 0.3
-4 alpha ui/settings/SettingsSubPages.kt 0.5
-1 alpha ui/settings/SettingsSubPages.kt 0.8
+1 alpha ui/settings/SettingsSubPages.kt 0.5
 1 alpha ui/trophies/TrophiesComponents.kt 0.18
 1 alpha ui/trophies/TrophiesComponents.kt 0.2
 1 alpha ui/trophies/TrophiesScreen.kt 0.18
@@ -209,7 +202,6 @@
 1 divider ui/gym/train/components/WarmupGate.kt Divider(
 1 divider ui/nav/ForgeBottomBar.kt Divider(
 1 divider ui/overview/SummarySheet.kt Divider(
-1 divider ui/settings/SettingsDialogs.kt Divider(
 1 divider ui/trophies/TrophiesComponents.kt Divider(
 1 divider ui/trophies/TrophiesScreen.kt Divider(
 1 em-dash data/importer/ImportModels.kt em dash in string
@@ -242,7 +234,6 @@
 1 em-dash ui/gym/train/components/SwapPickerSheet.kt em dash in string
 1 em-dash ui/gym/train/components/WarmupGate.kt em dash in string
 1 em-dash ui/profile/MirrorTestViewer.kt em dash in string
-1 em-dash ui/settings/SettingsBackupPage.kt em dash in string
 1 em-dash ui/theme/ColorExt.kt em dash in string
 2 em-dash ui/trophies/TrophiesComponents.kt em dash in string
 4 em-dash wear/glance/WearComplications.kt em dash in string
@@ -309,18 +300,9 @@
 2 font-size ui/profile/ProfileYearHeatmap.kt fontSize=
 8 font-size ui/profile/RankSection.kt fontSize=
 5 font-size ui/profile/TrophyCaseSection.kt fontSize=
-2 font-size ui/settings/AccentColorPicker.kt fontSize=
-2 font-size ui/settings/AppIconPicker.kt fontSize=
-8 font-size ui/settings/ImportDialog.kt fontSize=
-5 font-size ui/settings/SettingsAboutPage.kt fontSize=
-1 font-size ui/settings/SettingsBackupPage.kt fontSize=
-8 font-size ui/settings/SettingsDialogs.kt fontSize=
-1 font-size ui/settings/SettingsMainList.kt fontSize=
-2 font-size ui/settings/SettingsPrimitives.kt fontSize=
-1 font-size ui/settings/SettingsQuietHours.kt fontSize=
-1 font-size ui/settings/SettingsSecurityPage.kt fontSize=
-2 font-size ui/settings/SettingsSubPages.kt fontSize=
-1 font-size ui/settings/SettingsWhatsNewPage.kt fontSize=
+1 font-size ui/settings/AccentColorPicker.kt fontSize=
+1 font-size ui/settings/AppIconPicker.kt fontSize=
+1 font-size ui/settings/ImportDialog.kt fontSize=
 6 font-size ui/trophies/TrophiesComponents.kt fontSize=
 1 hype domain/coach/SessionOpinion.kt "moves the needle"
 2 hype program/ExerciseLibrary.kt "insane"
@@ -350,10 +332,6 @@
 1 max-lines ui/profile/ProfileYearHeatmap.kt maxLines=1
 2 max-lines ui/programbuilder/ProgramBuilderDayDetail.kt maxLines=1
 2 max-lines ui/programbuilder/ProgramBuilderScreen.kt maxLines=1
-1 max-lines ui/settings/AppIconPicker.kt maxLines=1
-1 max-lines ui/settings/ImportDialog.kt maxLines=1
-3 max-lines ui/settings/SettingsSubPages.kt maxLines=1
-1 max-lines ui/settings/SettingsWhatsNewPage.kt maxLines=1
 4 paren-plural data/repo/CoachRepository.kt (s)
 2 paren-plural domain/trophy/TrophyEvaluator.kt (s)
 1 paren-plural ui/coach/CoachUi.kt (s)
@@ -376,7 +354,7 @@
 2 screen-name-title ui/programbuilder/ProgramBuilderScreen.kt title={Text(
 2 screen-name-title ui/settings/SettingsAboutPage.kt title={Text(
 2 screen-name-title ui/settings/SettingsDialogs.kt title={Text(
-3 screen-name-title ui/settings/SettingsScreen.kt title={Text(
+1 screen-name-title ui/settings/SettingsScreen.kt title={Text(
 1 screen-name-title ui/settings/SettingsSecurityPage.kt title={Text(
 1 screen-name-title ui/settings/SettingsSubPages.kt title={Text(
 1 screen-name-title ui/settings/SettingsVacationPage.kt title={Text(
@@ -399,12 +377,4 @@
 4 unlabelled-clickable ui/gym/train/components/WarmupGate.kt .clickable(
 3 unlabelled-clickable ui/overview/components/OverviewTiles.kt .clickable(
 1 unlabelled-clickable ui/security/AppLockScreen.kt .clickable(
-2 unlabelled-clickable ui/settings/AccentColorPicker.kt .clickable(
-2 unlabelled-clickable ui/settings/ImportDialog.kt .clickable(
-1 unlabelled-clickable ui/settings/SettingsBackupPage.kt .clickable(
-2 unlabelled-clickable ui/settings/SettingsDialogs.kt .clickable(
-2 unlabelled-clickable ui/settings/SettingsPrimitives.kt .clickable(
-1 unlabelled-clickable ui/settings/SettingsQuietHours.kt .clickable(
-1 unlabelled-clickable ui/settings/SettingsSecurityPage.kt .clickable(
-3 unlabelled-clickable ui/settings/SettingsSubPages.kt .clickable(
-1 unlabelled-clickable ui/settings/SettingsVacationPage.kt .clickable(
+1 unlabelled-clickable ui/settings/AccentColorPicker.kt .clickable(

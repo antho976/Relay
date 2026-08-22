@@ -53,13 +53,20 @@ object DesignDoctrine {
      * to this branch. They were frozen rather than rewritten, because a merge resolution is the
      * wrong place to edit another branch's UI.
      *
+     * 933 -> 866 (2026-08-20) when settings was rebuilt against §3's archetype: 31 redundant
+     * `fontSize`, 13 unlabelled clickables, 10 off-ladder alphas, 4 clamped user strings, 2
+     * top-bar titles (they were dialog titles, not screen names), the last settings divider and
+     * its last em dash. `ui/settings/` now carries zero debt on six of the nine rules; what is left
+     * there is the §8-specified StatusDot ring, three sanctioned 9sp captions, the accent wheel's
+     * canvas alphas, and `screen-name-title` hits that are all DIALOG titles, not screen names.
+     *
      * Three rules — `m3-card`, `spinner`, `rtl` — carry ZERO debt. They cost nothing today and exist
      * so the doctrine's most load-bearing bans can never quietly regress.
      *
      * Lower this as debt is paid down; raising it is a reviewable decision, not a convenience.
      * `design/AUDIT.md` has the per-rule breakdown and the recommended order of paydown.
      */
-    const val ALLOWLIST_BASELINE = 933
+    const val ALLOWLIST_BASELINE = 866
 
     data class Violation(val rule: String, val path: String, val token: String, val line: Int) {
         /**

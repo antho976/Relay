@@ -2,6 +2,8 @@ package com.forge.app.ui.settings
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -38,7 +40,9 @@ internal fun ImportDialog(
     Dialog(onDismissRequest = onDismiss) {
         val onBg = MaterialTheme.colorScheme.onBackground
         val muted = MaterialTheme.colorScheme.onSurfaceVariant
-        val bg = MaterialTheme.colorScheme.background
+        // §1/§5: a modal keeps its SURFACE — painting it `background` dissolved the sheet into
+        // the page it floats over.
+        val surface = MaterialTheme.colorScheme.surface
 
         val granted by viewModel.importFolderGranted.collectAsState()
         val scanning by viewModel.scanningImports.collectAsState()
@@ -48,41 +52,44 @@ internal fun ImportDialog(
         LaunchedEffect(granted) { if (granted) viewModel.scanImportFolder() }
 
         Column(
-            modifier = Modifier.fillMaxWidth().background(bg, RoundedCornerShape(8.dp)).padding(horizontal = 24.dp, vertical = 20.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(surface, RoundedCornerShape(16.dp))
+                .verticalScroll(rememberScrollState())   // §14 — survives 200% and a long found-file list
+                .padding(vertical = 20.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Text("IMPORT", style = MaterialTheme.typography.labelSmall, color = muted, letterSpacing = 1.5.sp)
-            Text(
+            SettingsSectionHeader("Import", top = 0.dp)
+            SettingsExplainer(
                 "Add history from Strong, Hevy, FitNotes, or any CSV export. Added to your log, not replacing it.",
-                style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp
+                Modifier.padding(horizontal = SETTINGS_GUTTER)
             )
 
             // ── Found files — the headline path ──────────────────────────────────
             if (!granted) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    SettingsOutlineAction("Find my exports") { onGrantFolder() }
-                    Text(
+                    SettingsActionRow {
+                        SettingsOutlineAction("Find my exports") { onGrantFolder() }
+                    }
+                    SettingsExplainer(
                         "Point Avex at your Downloads folder once; it lists the exports it finds there.",
-                        style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.7f), fontSize = 10.sp
+                        Modifier.padding(horizontal = SETTINGS_GUTTER)
                     )
                 }
             } else {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     when {
-                        scanning -> Text("Scanning…", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp)
-                        found.isEmpty() -> Text(
+                        scanning -> SettingsExplainer("Scanning…", Modifier.padding(horizontal = SETTINGS_GUTTER))
+                        found.isEmpty() -> SettingsExplainer(
                             "No exports found in that folder.",
-                            style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp
+                            Modifier.padding(horizontal = SETTINGS_GUTTER)
                         )
                         else -> found.forEach { file ->
                             FoundFileRow(file, onBg, muted) { onImportFound(file.uri); onDismiss() }
                         }
                     }
-                    Text(
-                        "Choose a different folder",
-                        style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, fontSize = 10.sp,
-                        modifier = Modifier.clickableLabeled("Choose a different folder") { onGrantFolder() }.padding(vertical = 2.dp)
-                    )
+                    // §8 ③ is the mono accent `action →`, not an accent-coloured sentence (§14).
+                    SettingsActionLink("Choose a different folder →") { onGrantFolder() }
                 }
             }
 
@@ -90,16 +97,18 @@ internal fun ImportDialog(
             Text(
                 "Choose a file",
                 style = MaterialTheme.typography.bodyMedium, color = onBg,
-                modifier = Modifier.fillMaxWidth().clickable { onManualPick(); onDismiss() }.padding(vertical = 2.dp)
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickableLabeled("Choose a file") { onManualPick(); onDismiss() }
+                    .padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD)
             )
-            Text(
+            SettingsExplainer(
                 "Or in the other app: Export, then Share to Avex.",
-                style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp
+                Modifier.padding(horizontal = SETTINGS_GUTTER)
             )
 
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp, Alignment.End)) {
-                Text("close", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.65f),
-                    modifier = Modifier.clickableLabeled("Close", onClick = onDismiss).padding(4.dp))
+            SettingsActionRow {
+                SettingsOutlineAction("Close", onClick = onDismiss)
             }
         }
     }
@@ -114,17 +123,21 @@ private fun FoundFileRow(
     onClick: () -> Unit
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth().clickable { onClick() }.padding(vertical = 8.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickableLabeled("Import ${file.name}", onClick = onClick)
+            .padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(1.dp), modifier = Modifier.padding(end = 12.dp)) {
-            Text(file.name, style = MaterialTheme.typography.bodyMedium, color = onBg, maxLines = 1)
+            // No maxLines: a file NAME is user content and wraps rather than truncating (§14).
+            Text(file.name, style = MaterialTheme.typography.bodyMedium, color = onBg)
             Text(
                 "${file.source.displayName} · ${file.sessionCount} ${if (file.sessionCount == 1) "workout" else "workouts"} · ${formatShortDate(file.lastModified)}",
-                style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.7f), fontSize = 9.sp
+                style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp
             )
         }
-        Text("import", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp, letterSpacing = 1.sp)
+        Text("IMPORT", style = MaterialTheme.typography.labelSmall, color = muted, letterSpacing = 1.sp)
     }
 }

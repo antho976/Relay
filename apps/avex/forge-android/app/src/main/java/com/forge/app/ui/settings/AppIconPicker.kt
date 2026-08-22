@@ -64,7 +64,7 @@ internal fun AppIconRow(currentKey: String, onOpen: () -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .bounceClick(onClick = onOpen)
-            .padding(horizontal = 24.dp, vertical = 12.dp),
+            .padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD),
         horizontalArrangement = Arrangement.spacedBy(16.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -74,7 +74,6 @@ internal fun AppIconRow(currentKey: String, onOpen: () -> Unit) {
                 "Tap to change your home-screen icon",
                 style = MaterialTheme.typography.labelSmall,
                 color = muted,
-                fontSize = 10.sp,
             )
         }
         // The icon you have now — the tap target that opens the picker (whole row is tappable).
@@ -100,7 +99,13 @@ internal fun AppIconPickerSheet(
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val byFamily = AppIcon.entries.groupBy { it.family }
 
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+    // §5: a modal is `containerColor = surface`. Left unset it took M3's stock surfaceContainerLow,
+    // a purple-leaning grey belonging to no theme here (`design/AUDIT.md`, 2026-07-25).
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface
+    ) {
         val gridState = rememberLazyGridState()
         LazyVerticalGrid(
             state = gridState,
@@ -122,7 +127,7 @@ internal fun AppIconPickerSheet(
                         blendMode = BlendMode.DstIn,
                     )
                 },
-            contentPadding = PaddingValues(start = 24.dp, end = 24.dp, top = 4.dp, bottom = 32.dp),
+            contentPadding = PaddingValues(start = SETTINGS_GUTTER, end = SETTINGS_GUTTER, top = 4.dp, bottom = 32.dp),
             horizontalArrangement = Arrangement.spacedBy(16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
@@ -157,7 +162,7 @@ internal fun AppIconPickerSheet(
                             style = MaterialTheme.typography.labelSmall,
                             color = if (icon == current) onBg else muted.copy(alpha = 0.7f),
                             fontSize = 9.sp,
-                            maxLines = 1,
+
                             overflow = TextOverflow.Ellipsis,
                             textAlign = TextAlign.Center,
                         )

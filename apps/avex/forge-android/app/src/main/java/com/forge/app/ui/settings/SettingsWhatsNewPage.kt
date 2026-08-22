@@ -8,7 +8,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
@@ -49,18 +49,19 @@ private fun ChangeRow(note: ChangeNote) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 24.dp, vertical = 6.dp),
+            .padding(horizontal = SETTINGS_GUTTER, vertical = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        // widthIn(min), not width(): a fixed 72dp box with maxLines = 1 clipped "IMPROVED" to
+        // "IMPROV…" at 200% font scale (§14 — a container holding text sizes to its content).
+        // The min keeps the descriptions aligned at normal scale, and the tag may wrap past it.
         Text(
             note.kind.tag.uppercase(),
             style = MaterialTheme.typography.labelSmall,
             color = muted,
-            fontSize = 10.sp,
             letterSpacing = 0.5.sp,
-            maxLines = 1,
             modifier = Modifier
-                .width(72.dp)
+                .widthIn(min = 72.dp)
                 .padding(top = 2.dp)
         )
         Text(

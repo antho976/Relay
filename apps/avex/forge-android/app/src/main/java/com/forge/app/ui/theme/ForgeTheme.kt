@@ -84,6 +84,21 @@ private fun pearlColorScheme(accent: Color, amoled: Boolean): ColorScheme {
     val bg         = if (amoled) Color.Black         else PearlBackground
     val surface    = if (amoled) Color(0xFF080808)   else PearlSurface
     val surfaceVar = if (amoled) Color(0xFF111111)   else PearlSurfaceVar
+    // M3's container family, themed (2026-08-20). Left unset, every component that fills itself —
+    // ModalBottomSheet (surfaceContainerLow), DatePickerDialog + AlertDialog (surfaceContainerHigh),
+    // DropdownMenu (surfaceContainer), and their dividers (outlineVariant) — fell through to
+    // Material's STOCK dark palette: a lighter, purple-leaning grey belonging to no theme here.
+    // Found on device as a pale slab on near-black (`design/AUDIT.md`, 2026-07-25); until now every
+    // call site paid for it one containerColor at a time, and eleven of them in settings never did.
+    // The ladder walks the same warm Pearl line the rest of §5 does, bg → surface → surfaceVariant.
+    val cLowest    = if (amoled) Color.Black         else Color(0xFF0C0A08)
+    val cLow       = if (amoled) Color(0xFF060606)   else Color(0xFF16120F)
+    val cBase      = if (amoled) Color(0xFF0A0A0A)   else Color(0xFF1A1613)
+    val cHigh      = if (amoled) Color(0xFF111111)   else Color(0xFF221C16)
+    val cHighest   = if (amoled) Color(0xFF1A1A1A)   else Color(0xFF2A231C)
+    // The quiet rung under `outline` — M3 uses it for the rules inside its own components (the
+    // date-picker header, menu separators). Data lines still come from EditorialHairline (§1).
+    val outlineVar = if (amoled) Color(0xFF1E1E1E)   else Color(0xFF2A241F)
     // Content ON an accent fill: dark for a light accent, else the near-white default — so a
     // filled-primary control never renders same-on-same.
     //
@@ -100,6 +115,17 @@ private fun pearlColorScheme(accent: Color, amoled: Boolean): ColorScheme {
         surfaceVariant     = surfaceVar,
         onSurfaceVariant   = PearlMuted,
         outline            = PearlOutline,
+        outlineVariant     = outlineVar,
+        surfaceContainerLowest  = cLowest,
+        surfaceContainerLow     = cLow,
+        surfaceContainer        = cBase,
+        surfaceContainerHigh    = cHigh,
+        surfaceContainerHighest = cHighest,
+        // Tonal elevation is the surface ladder above, not an accent wash: M3 blends `surfaceTint`
+        // into a raised surface, so leaving it at the default tinted every sheet and menu with the
+        // user's accent. Pointing it at `surface` makes that blend a no-op and keeps §5's rule that
+        // colour is scarce and always means something.
+        surfaceTint        = surface,
         primary            = accent,                          // user-editable brand/accent
         onPrimary          = onAccent,
         primaryContainer   = accent.copy(alpha = 0.15f),
