@@ -9,7 +9,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -18,8 +17,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -29,51 +26,24 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.forge.app.domain.units.fromDisplayWeight
+import com.forge.app.program.DayArchetype
 import com.forge.app.program.Equipment
 import com.forge.app.program.EquipmentPreset
 import com.forge.app.program.ExerciseLibrary
 import com.forge.app.program.GeneratedDay
-import com.forge.app.program.ProblemArea
 import com.forge.app.program.equipmentGroups
 import com.forge.app.program.equipmentPresets
 import com.forge.app.ui.common.parseAccentHex
 import com.forge.app.ui.theme.ForgeMotion
 
-/** Steps 6–11 of the generated path: training days, gym gear, plates, tuning, and the week preview. */
+/**
+ * The gym half of the generated path — the two steps where the [PlanLedger] under the question stops
+ * being an empty shape and starts filling. Picking a preset deals the week; toggling one piece of
+ * gear moves the meters while you watch. Then the week page, where the same mark leads the real
+ * thing.
+ */
 
-/** What split each day-count builds (SplitTemplates.forDays) — read out live under the day chips. */
-private val SPLIT_NAMES = mapOf(
-    1 to "Full body",
-    2 to "Full body A · B",
-    3 to "Push · Pull · Legs",
-    4 to "Upper · Lower, twice",
-    5 to "Push · Pull · Legs + Upper · Lower",
-    6 to "Push · Pull · Legs, twice",
-    7 to "Push · Pull · Legs, twice + arms day"
-)
-
-@Composable
-internal fun StepDays(days: Int, onChange: (Int) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        StepEyebrow("Your gym")
-        StepTitle("How many days a week?")
-        StepCaption("Your split adapts, and it becomes your weekly target on Home.")
-        Spacer(Modifier.height(2.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            (1..7).forEach { n -> DayChip(n, days == n) { onChange(n) } }
-        }
-        // Live split readout — the choice answers with what it builds.
-        Text(
-            if (days in 1..7) SPLIT_NAMES.getValue(days).uppercase() else "PICK YOUR DAYS",
-            style = MaterialTheme.typography.labelMedium,
-            color = if (days in 1..7) MaterialTheme.colorScheme.primary
-            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-        )
-    }
-}
-
-/** GYMAP-20 step 1 of 2: pick the closest gym preset; the selection answers with what's in it. */
+/** GYMAP-20 step 1 of 2: pick the closest gym preset. */
 @Composable
 internal fun StepGymPresets(
     selected: Set<String>,
@@ -81,7 +51,6 @@ internal fun StepGymPresets(
     onSelectPreset: (EquipmentPreset) -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        StepEyebrow("Your gym")
         StepTitle("What's in your gym?")
         StepCaption("Pick the closest setup. You fine-tune every piece next.")
         Spacer(Modifier.height(2.dp))
@@ -100,19 +69,9 @@ internal fun StepGymPresets(
                 if (rowPresets.size == 1) Spacer(Modifier.weight(1f))
             }
         }
-        // "What's in it" — the live gear readout of the current selection (preset or hand-tuned).
-        if (selected.isNotEmpty()) {
-            Spacer(Modifier.height(4.dp))
-            StepSectionLabel("In this setup", meta = "${selected.size} on")
-            Text(
-                gearReadout(selected),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                lineHeight = 16.sp,
-                maxLines = 4,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
+        // The "in this setup" mono gear dump that used to close this page is gone (2026-08-22): the
+        // ledger below now answers what the preset DID to the week, and the fine-tune page next lists
+        // every piece with its own on/off state. Two readouts of one answer broke §4.3's one home.
     }
 }
 
@@ -120,9 +79,8 @@ internal fun StepGymPresets(
 @Composable
 internal fun StepFineTune(selected: Set<String>, onToggle: (String) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        StepEyebrow("Your gym")
         StepTitle("Fine-tune your gear")
-        StepCaption("Toggle anything the preset got wrong. Plans only use what's on.")
+        StepCaption("Toggle anything the preset got wrong. Plans use only what's on.")
         Spacer(Modifier.height(2.dp))
         equipmentGroups.forEach { (group, items) ->
             StepSectionLabel(group, meta = "${items.count { it.name in selected }} on")
@@ -152,91 +110,38 @@ private fun presetMeta(preset: EquipmentPreset): String = when {
     else -> "${preset.equipment.size} pieces"
 }
 
-/** The selection's gear, in enum order — or one line when it's simply everything. */
-private fun gearReadout(selected: Set<String>): String =
-    if (selected.size == Equipment.entries.size) "EVERY PIECE ON THE FINE-TUNE LIST"
-    else Equipment.entries.filter { it.name in selected }
-        .joinToString(" · ") { it.display }.uppercase()
-
+/**
+ * Last step of the generated path: the week that has been building under every question since the
+ * day-count, now at full size. The same [PlanLedger] leads it — the mark the user has been reading
+ * for three screens, so arriving here is a zoom, not a reveal of something new. Under it, the days
+ * open out into their real exercise lists.
+ *
+ * The exact week shown is the week that gets saved (the re-roll sits beside the CTA in the bottom
+ * bar; edits live in the Program Editor).
+ */
 @Composable
-internal fun StepPlateWeight(plateWeightLb: Double, useKg: Boolean, onSet: (Double) -> Unit) {
-    // Plate denominations in the user's OWN unit — a kg lifter shouldn't translate lb plates in
-    // their head. Stored in lb (onSet); kg chips convert on the way in via the shared converter.
-    val plates = if (useKg) listOf(1.25, 2.5, 5.0, 10.0, 15.0, 20.0, 25.0) else listOf(5.0, 10.0, 15.0, 20.0, 25.0, 45.0)
-    val unit = if (useKg) "kg" else "lb"
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        StepEyebrow("Your gym")
-        StepTitle("Weight per plate")
-        StepCaption("For machines loaded by counting plates. Not sure? Keep the default.")
-        Spacer(Modifier.height(2.dp))
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            plates.forEach { value ->
-                val lb = fromDisplayWeight(value, useKg)
-                val label = if (value % 1.0 == 0.0) "${value.toInt()} $unit" else "$value $unit"
-                ChoiceChip(label, kotlin.math.abs(plateWeightLb - lb) < 0.05, { onSet(lb) })
-            }
-        }
-    }
-}
-
-@Composable
-internal fun StepProblemAreas(selected: Set<String>, onToggle: (String) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        StepEyebrow("Fine-tuning")
-        StepTitle("Any problem areas?")
-        StepCaption("Flag a sore joint or old injury and your plan eases off it. Optional.")
-        Spacer(Modifier.height(2.dp))
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            ProblemArea.entries.forEach { a ->
-                ChoiceChip(a.displayName, a.code in selected, { onToggle(a.code) })
-            }
-        }
-    }
-}
-
-@Composable
-internal fun StepCadence(cadence: String, everyN: Int, onSet: (String, Int) -> Unit) {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        StepEyebrow("Fine-tuning")
-        StepTitle("Auto-refresh your plan?")
-        StepCaption("Re-rolls your exercises after this many workouts. Same split, fresh moves.")
-        Spacer(Modifier.height(2.dp))
-        OptionCard(
-            label = "Never",
-            description = "Your plan stays exactly as generated.",
-            selected = cadence == "never",
-            onClick = { onSet("never", everyN) }
-        )
-        listOf(4, 8, 12).forEach { n ->
-            OptionCard(
-                label = "Every $n workouts",
-                selected = cadence == "every_n" && everyN == n,
-                onClick = { onSet("every_n", n) }
-            )
-        }
-    }
-}
-
-/** Final step of the generated path: the live generated week. The exact week shown is what gets
- *  saved (the re-roll sits beside "Let's go" in the bottom bar; edits live in the Program Editor). */
-@Composable
-internal fun StepPreview(days: List<GeneratedDay>) {
+internal fun StepWeek(
+    archetypes: List<DayArchetype>,
+    plannedSets: List<Int>,
+    days: List<GeneratedDay>
+) {
     Column(
-        modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+        modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        StepEyebrow("Your week")
         StepTitle("Here's your week")
-        StepCaption("Built from your answers. Fine-tune it anytime in the editor.")
-        Spacer(Modifier.height(2.dp))
+        StepCaption("Built from your answers. Change any of it in the editor.")
+        Spacer(Modifier.height(6.dp))
+        PlanLedger(archetypes = archetypes, plannedSets = plannedSets, days = days, trackHeight = 88.dp)
+        Spacer(Modifier.height(12.dp))
         // Re-rolls crossfade the whole list so a new week reads as a fresh deal, not a flicker.
         AnimatedContent(
             targetState = days,
             transitionSpec = { fadeIn(ForgeMotion.enterTween()) togetherWith fadeOut(ForgeMotion.exitTween()) },
-            label = "preview_reroll"
+            label = "week_reroll"
         ) { shownDays ->
             Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
-                shownDays.forEach { day -> PreviewDay(day) }
+                shownDays.forEach { day -> WeekDay(day) }
             }
         }
     }
@@ -246,7 +151,7 @@ internal fun StepPreview(days: List<GeneratedDay>) {
  *  colour-dot + mono anchor with its set count as right meta, then hang-indented exercise rows with
  *  the sets × reps at the quiet caption rung, so the movement names carry the row. */
 @Composable
-private fun PreviewDay(day: GeneratedDay) {
+private fun WeekDay(day: GeneratedDay) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     Column {
         Row(
@@ -261,7 +166,7 @@ private fun PreviewDay(day: GeneratedDay) {
                     style = MaterialTheme.typography.labelLarge,
                     color = muted,
                     letterSpacing = 1.sp,
-                    maxLines = 1,
+                    maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
             }
@@ -273,8 +178,14 @@ private fun PreviewDay(day: GeneratedDay) {
         }
         Spacer(Modifier.height(10.dp))
         if (day.exercises.isEmpty()) {
-            Text("Cardio", style = MaterialTheme.typography.bodyMedium, color = muted,
-                modifier = Modifier.padding(start = 16.dp))
+            // Effectively unreachable (the generator keeps a last-resort fill), but a blank day must
+            // still say what it means rather than mislabel itself.
+            Text(
+                "Nothing your gear covers yet",
+                style = MaterialTheme.typography.bodyMedium,
+                color = muted,
+                modifier = Modifier.padding(start = 16.dp)
+            )
         }
         day.exercises.forEach { ex ->
             Row(
@@ -286,8 +197,6 @@ private fun PreviewDay(day: GeneratedDay) {
                     ExerciseLibrary.byId(ex.libId)?.name ?: ex.libId,
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onBackground,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false)
                 )
                 Spacer(Modifier.width(12.dp))
