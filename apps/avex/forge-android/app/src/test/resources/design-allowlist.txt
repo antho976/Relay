@@ -271,7 +271,6 @@
 3 font-size ui/gym/train/components/WarmupGate.kt fontSize=
 1 font-size ui/nav/ForgeBottomBar.kt fontSize=
 1 font-size ui/overview/HistoryComponents.kt fontSize=
-2 font-size ui/overview/OverviewScreen.kt fontSize=
 4 font-size ui/overview/SummarySheet.kt fontSize=
 5 font-size ui/overview/components/DayEditComponents.kt fontSize=
 1 font-size ui/overview/components/NavTile.kt fontSize=
@@ -298,7 +297,6 @@
 1 literal-duration ui/common/ForgeShimmer.kt literal duration
 1 literal-duration ui/common/LaunchScenes.kt literal duration
 2 literal-duration ui/gym/train/components/RestTimerBubble.kt literal duration
-1 literal-duration ui/overview/OverviewScreen.kt literal duration
 16 literal-duration ui/profile/TrophyIconMotion.kt literal duration
 1 max-lines ui/common/Editorial.kt maxLines=1
 1 max-lines ui/goals/GoalsComponents.kt maxLines=1
