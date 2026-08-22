@@ -174,7 +174,7 @@ so it doesn't inflate that row above its neighbours.
 
 **Sanctioned off-grid values** — deliberate, do not "fix": interactive tile inner padding **14×12**;
 `SegmentPill` **12×5**. Shapes (`Shape.kt`): 4/8/12/16/24, pills `RoundedCornerShape(50)`, tiles 12,
-sheet top 16 — no custom radii. Photos: rounded 16 clips, captions on bottom scrims, full-bleed strips
+sheet top 16 — no custom radii. Photos: rounded 16 clips, caption UNDER the plate or on a bottom scrim, full-bleed strips
 (Profile cover/filmstrip = reference).
 
 ## 8. Components & controls (`ui/common/` — reuse, never re-implement)

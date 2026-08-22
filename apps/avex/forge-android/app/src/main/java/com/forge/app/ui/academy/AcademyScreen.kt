@@ -20,7 +20,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -31,62 +30,86 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.domain.academy.ArticleTopic
 import com.forge.app.domain.academy.LessonTrack
-import com.forge.app.ui.common.EditorialHeader
 import com.forge.app.ui.common.statsEntrance
-import com.forge.app.ui.experiment.surfacePalette
 
 /**
  * The Academy — one page holding everything the coach knows, browsable end to end.
  *
- * ## What changed, 2026-08-16
+ * ## What changed, 2026-08-20
  *
- * It was a hub of five gated tracks, each a sub-screen, each reporting its own progress twice. Antho:
- * *"too crowded and behind 50 sub menus, and the worst thing is it feels like achievement, not a hub
- * to knowledge. You should be able to see everything."*
+ * The 2026-08-16 rebuild fixed the gate (everything is readable from install) and the nesting
+ * (tracks are chapters, not sub-screens). What it did not fix, in Antho's words: it still *reads as
+ * blocks*, there is *no sense of where to start*, and *the reading itself is plain*.
  *
- * So: **no gate** (every lesson readable from install — a fired coach moment now only marks a lesson
- * FOR YOU rather than granting access), **no track screen** (tracks are section headers), **no lens
- * pills** (lessons and articles share one gallery, told apart by a word on each tile, which is what
- * Antho asked for), **no search** and **no progress rails**.
+ * Three answers, one per complaint:
  *
- * The poke survives untouched, because it was never the problem: the notifications feed, the bell
- * count, the tab badge and `ArrivalBannerHost` all still fire on the same ledger events. The only
- * change is that the thing they point at was already readable.
+ * 1. **The blocks were the cards.** Every piece was a filled, hairlined tile from the Home
+ *    experiment's kit, which §1 bans around passive content for exactly this reason. Pieces are
+ *    plates on the page now — see `AcademyGallery`.
+ * 2. **The page opens by pointing.** A masthead, then ONE piece named as the thing to read next
+ *    ([startHere]): the coach's poke if one fired, otherwise the next unread Fundamentals lesson,
+ *    which is the only track authored in a reading order. Each chapter then prints the blurb it was
+ *    authored with, and Fundamentals numbers its pieces, so "where do I start" is answered three
+ *    times on the way down the page without a single progress bar.
+ * 3. **The reading moved out of a sheet.** A lesson is a screen now (`LessonScreen`), the same one
+ *    an article gets, so the two halves of the Academy finally read alike. `LessonSheet` is gone.
  *
- * ## Section order
+ * ## Chapter order
  *
- * FOR YOU first when the coach has flagged anything, then the five lesson tracks in reading order,
- * then the Library's articles grouped by topic. Lesson tracks lead because they are the coach's own
- * curriculum; the Library is the wider reading beside it, and neither is hidden from the other.
+ * The five lesson tracks in reading order, then the Library's articles grouped by topic. Lesson
+ * tracks lead because they are the coach's own curriculum; the Library is the wider reading beside
+ * it, and neither is hidden from the other. There is no separate FOR YOU shelf: the poke is the
+ * page's opening pointer, and the piece it names keeps its accent dot down in its own chapter.
  */
 @Composable
 fun AcademyScreen(
     onBack: (() -> Unit)? = null,
+    onOpenLesson: (String) -> Unit = {},
     onOpenArticle: (String) -> Unit = {},
-    /** Opens straight onto one lesson's sheet — how a notifications-feed row lands here. */
-    initialLessonId: String? = null,
     viewModel: AcademyViewModel = hiltViewModel(),
     libraryViewModel: LibraryViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val libraryState by libraryViewModel.state.collectAsStateWithLifecycle()
+    AcademyContent(
+        state = state,
+        library = libraryState,
+        onBack = onBack,
+        onOpenLesson = onOpenLesson,
+        onOpenArticle = onOpenArticle
+    )
+}
+
+/**
+ * The page itself, with its state passed in.
+ *
+ * Split out from [AcademyScreen] so the gallery can be rendered without Hilt — by a screenshot
+ * test, by a preview, and by anything that wants to see the chapters at a state the database is not
+ * currently in (an empty shelf, everything read, a poke that fired).
+ */
+@Composable
+fun AcademyContent(
+    state: AcademyViewModel.UiState,
+    library: LibraryViewModel.UiState,
+    onBack: (() -> Unit)? = null,
+    onOpenLesson: (String) -> Unit = {},
+    onOpenArticle: (String) -> Unit = {}
+) {
+    val libraryState = library
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val accent = MaterialTheme.colorScheme.primary
-    val palette = surfacePalette()
 
-    // Keyed on the id so a second arrival for a different lesson still opens, while a rotation on
-    // the same one does not re-open a sheet the reader just dismissed.
-    LaunchedEffect(initialLessonId) {
-        initialLessonId?.let { viewModel.open(it) }
+    val pointer = remember(state.all, libraryState.articles) { startHere(state, libraryState) }
+    val sections = remember(state.all, libraryState.articles, pointer) {
+        buildSections(state, libraryState, promoted = pointer?.item?.id)
     }
-
-    LessonSheet(state, viewModel, onBg)
-
-    val sections = remember(state.all, libraryState.articles) {
-        buildSections(state, libraryState)
+    val open: (GalleryItem) -> Unit = { item ->
+        when (item) {
+            is GalleryItem.LessonTile -> onOpenLesson(item.id)
+            is GalleryItem.ArticleTile -> onOpenArticle(item.id)
+        }
     }
-    val total = state.all.size + libraryState.articles.size
 
     Scaffold(
         topBar = {
@@ -106,128 +129,230 @@ fun AcademyScreen(
             modifier = Modifier.fillMaxSize().padding(inner),
             contentPadding = PaddingValues(horizontal = 24.dp, vertical = 4.dp)
         ) {
-            item("hero") {
-                Column(Modifier.fillMaxWidth().statsEntrance(0).padding(vertical = 8.dp)) {
-                    // A plain count of what is here. It used to read "4 OF 31 UNLOCKED", which is a
-                    // score, and a score is the exact thing this page should not open with.
-                    Text(
-                        "$total PIECES",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = muted
-                    )
-                    Spacer(Modifier.height(2.dp))
-                    Text("Academy", style = MaterialTheme.typography.headlineLarge, color = onBg)
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        "Everything the coach knows, open from the start.",
-                        style = MaterialTheme.typography.bodyMedium.copy(fontStyle = FontStyle.Italic),
-                        color = muted
-                    )
+            item("masthead") {
+                // Counted from the shelf, not from the rendered chapters: the page's opening
+                // pointer is lifted out of its chapter, and the Academy does not shrink by one
+                // piece because one of them is being pointed at.
+                val pieces = state.all.map { GalleryItem.LessonTile(it) } +
+                    libraryState.articles.map { GalleryItem.ArticleTile(it) }
+                Masthead(
+                    pieces = pieces.size,
+                    minutes = pieces.sumOf { it.minutes },
+                    onBg = onBg,
+                    muted = muted
+                )
+            }
+
+            if (pointer != null) {
+                item("start") {
+                    Spacer(Modifier.height(28.dp))
+                    StartHereBlock(
+                        kicker = pointer.kicker,
+                        item = pointer.item,
+                        chapter = pointer.chapter,
+                        numeral = pointer.numeral,
+                        onBg = onBg,
+                        muted = muted,
+                        accent = accent,
+                        modifier = Modifier.statsEntrance(1)
+                    ) { open(pointer.item) }
                 }
             }
 
             sections.forEachIndexed { sectionIndex, section ->
                 item("h-${section.label}") {
-                    Spacer(Modifier.height(28.dp))
-                    EditorialHeader(label = section.label, muted = muted, accent = accent)
-                    Spacer(Modifier.height(12.dp))
+                    Spacer(Modifier.height(36.dp))
+                    ChapterHeader(
+                        label = section.label,
+                        blurb = section.blurb,
+                        muted = muted,
+                        accent = accent,
+                        modifier = Modifier.statsEntrance(sectionIndex + 2)
+                    )
+                    Spacer(Modifier.height(16.dp))
                 }
-                val open: (GalleryItem) -> Unit = { item ->
-                    when (item) {
-                        is GalleryItem.LessonTile -> viewModel.open(item.id)
-                        is GalleryItem.ArticleTile -> onOpenArticle(item.id)
-                    }
-                }
-                // Walk the section in the mosaic rhythm: a wide tile, then a row of two posters,
-                // repeating. Grouping here rather than in the tile keeps the shape decision in one
-                // place — `isWideSlot` is the only thing that knows the pattern.
+
+                // Walk the chapter in the plate rhythm: a lead, then two-up posters until the next
+                // lead. Grouping here rather than inside the entry keeps the shape decision in one
+                // place — `isLeadSlot` is the only thing that knows the beat.
                 var i = 0
-                var block = 0
                 while (i < section.items.size) {
-                    val entrance = sectionIndex + block + 1
-                    if (section.featured || isWideSlot(i)) {
-                        val item = section.items[i]
-                        item("w-${section.label}-$i") {
-                            if (i > 0) Spacer(Modifier.height(10.dp))
-                            GalleryTile(
-                                item = item,
-                                palette = palette,
+                    // A two-piece chapter renders as one poster row rather than a lead plus a
+                    // widow: a lead with a single half-width piece under it reads as a mistake.
+                    val leadSlot = isLeadSlot(i) && section.items.size != 2
+                    if (leadSlot) {
+                        val piece = section.items[i]
+                        val index = i
+                        item("l-${section.label}-$i") {
+                            if (index > 0) Spacer(Modifier.height(32.dp))
+                            PieceEntry(
+                                item = piece,
+                                shape = PlateShape.LEAD,
                                 onBg = onBg,
                                 muted = muted,
                                 accent = accent,
-                                modifier = Modifier.fillMaxWidth().statsEntrance(entrance),
-                                wide = true,
-                                // The header above it already says FOR YOU; repeating the mark
-                                // inside the tile is the same fact twice in four inches.
-                                showForYouMark = !section.featured
-                            ) { open(item) }
+                                modifier = Modifier.fillMaxWidth(),
+                                numeral = section.numerals.getOrNull(index)
+                            ) { open(piece) }
                         }
                         i += 1
                     } else {
-                        val pair = section.items.subList(i, minOf(i + 2, section.items.size))
+                        val at = i
+                        val pair = section.items.subList(at, minOf(at + 2, section.items.size))
                         item("p-${section.label}-$i") {
-                            Spacer(Modifier.height(10.dp))
-                            GalleryRow(
+                            Spacer(Modifier.height(if (at > 0) 28.dp else 0.dp))
+                            PosterRow(
                                 pair = pair,
-                                palette = palette,
                                 onBg = onBg,
                                 muted = muted,
                                 accent = accent,
-                                modifier = Modifier.statsEntrance(entrance),
+                                numerals = pair.indices.map { section.numerals.getOrNull(at + it) },
                                 onOpen = open
                             )
                         }
                         i += pair.size
                     }
-                    block += 1
                 }
             }
 
-            item("tail") { Spacer(Modifier.height(56.dp)) }
+            item("tail") { Spacer(Modifier.height(72.dp)) }
         }
     }
 }
 
 /**
- * Assemble the gallery.
+ * The page's own name and what is behind it.
  *
- * FOR YOU deliberately REPEATS tiles that also appear in their track below. That breaks "a fact has
- * one home on a screen", and it is the right call here: the shelf is the poke, the track section is
- * the shelf's permanent address, and a reader who wants to browse should not have to know which one
- * a flagged lesson fell into. It is capped at [FOR_YOU_CAP] so it stays a nudge rather than becoming
- * a backlog — a nine-item "for you" queue would be the achievement feeling returning by the side
- * door.
+ * The count used to read "4 OF 31 UNLOCKED", which is a score, and a score is the exact thing this
+ * page must not open with. It states the size of the shelf and how long it would take to read, both
+ * of which are facts about the content rather than about the reader.
+ */
+@Composable
+private fun Masthead(pieces: Int, minutes: Int, onBg: Color, muted: Color) {
+    Column(Modifier.fillMaxWidth().statsEntrance(0).padding(vertical = 8.dp)) {
+        Text(
+            "$pieces pieces · ${readingSpan(minutes)}".uppercase(),
+            style = MaterialTheme.typography.labelMedium,
+            color = muted
+        )
+        Spacer(Modifier.height(4.dp))
+        Text("Academy", style = MaterialTheme.typography.headlineLarge, color = onBg)
+        Spacer(Modifier.height(8.dp))
+        Text(
+            "Everything the coach knows, open from the start.",
+            style = MaterialTheme.typography.bodyMedium.copy(fontStyle = FontStyle.Italic),
+            color = muted
+        )
+    }
+}
+
+/** "40 min" under the hour, "3 hr" over it. Never "0 hr", and never a decimal hour. */
+private fun readingSpan(minutes: Int): String = when {
+    minutes < 60 -> "$minutes min"
+    else -> "${(minutes + 30) / 60} hr"
+}
+
+/** Where the page points first, and the word above it. */
+data class Pointer(
+    val kicker: String,
+    val item: GalleryItem,
+    val chapter: String,
+    val numeral: String?
+)
+
+/**
+ * Pick the one piece the page opens by naming.
+ *
+ * The order of preference is the order of how much the app actually knows about the reader:
+ *
+ * 1. **A coach moment fired** and its lesson is unread. That is the poke, and it is the only
+ *    pointer grounded in something that just happened to this reader.
+ * 2. **The next unread Fundamentals lesson.** Fundamentals is the one track authored in a reading
+ *    order, so it is the only place a "next" exists without inventing a ranking.
+ * 3. **Anything else unread**, lessons before articles, in registry order.
+ * 4. **Nothing left** — the shelf is read end to end, so the pointer says so and offers the top of
+ *    the curriculum again. §12: the finished state is drawn, not hidden.
+ */
+fun startHere(
+    state: AcademyViewModel.UiState,
+    library: LibraryViewModel.UiState
+): Pointer? {
+    val fundamentals = state.lessonsIn(LessonTrack.FUNDAMENTALS)
+
+    fun lessonPointer(kicker: String, lesson: com.forge.app.domain.academy.AcademyRegistry.LessonState): Pointer {
+        val at = fundamentals.indexOfFirst { it.lesson.id == lesson.lesson.id }
+        return Pointer(
+            kicker = kicker,
+            item = GalleryItem.LessonTile(lesson),
+            chapter = lesson.lesson.track.displayName,
+            numeral = if (at >= 0) numeralOf(at) else null
+        )
+    }
+
+    state.forYou.firstOrNull()?.let { return lessonPointer("For you", it) }
+
+    fundamentals.firstOrNull { !it.opened }?.let {
+        val started = fundamentals.any { f -> f.opened }
+        return lessonPointer(if (started) "Continue" else "Start here", it)
+    }
+
+    state.all.firstOrNull { !it.opened }?.let { return lessonPointer("Next", it) }
+
+    library.articles.firstOrNull { !it.finished }?.let {
+        return Pointer("Next", GalleryItem.ArticleTile(it), it.article.topic.displayName, null)
+    }
+
+    return fundamentals.firstOrNull()?.let { lessonPointer("Read again", it) }
+}
+
+/** "01", "02" — the position of a piece inside an ordered chapter, never a total. */
+private fun numeralOf(index: Int): String = (index + 1).toString().padStart(2, '0')
+
+/**
+ * Assemble the chapters.
+ *
+ * [promoted] is the piece the page already names at the top, and it is lifted OUT of its chapter
+ * here. Leaving it in printed the same serif title and the same deck twice within a screen and a
+ * half, which is the "one card rendered twice" bug the previous pass hit from the other direction.
+ * Nothing is lost: the pointer states which chapter the piece belongs to and, in Fundamentals, its
+ * position — and the numerals are computed BEFORE the lift, so the chapter opens at 02 rather than
+ * silently renumbering itself and claiming a piece is the first when it is not.
+ *
+ * Articles group by their own topic rather than being forced into a lesson track: the two
+ * taxonomies are genuinely different, and mapping one onto the other would file articles under
+ * headings they were not written for. Only topics holding an article appear (§12) — eight empty
+ * shelves against four articles would open the Library as a promise nothing keeps.
  */
 private fun buildSections(
     state: AcademyViewModel.UiState,
-    library: LibraryViewModel.UiState
+    library: LibraryViewModel.UiState,
+    promoted: String?
 ): List<GallerySection> = buildList {
-    val flagged = state.forYou.take(FOR_YOU_CAP)
-
-    // Skip the poke's own section when that lesson is already the LEAD tile of a track below. Both
-    // render full width and large, so the two land within a screen of each other as what looks like
-    // the same card printed twice — and at cold start this is the common case, since the first
-    // moments to fire are Fundamentals ones. The lead tile keeps its FOR YOU mark, so nothing is
-    // lost: the poke is still on the page, just not duplicated.
-    val leadsATrack = flagged.any { s ->
-        state.lessonsIn(s.lesson.track).firstOrNull()?.lesson?.id == s.lesson.id
-    }
-    if (flagged.isNotEmpty() && !leadsATrack) {
-        add(GallerySection("For you", flagged.map { GalleryItem.LessonTile(it) }, featured = true))
-    }
-
     LessonTrack.entries.forEach { track ->
-        val items = state.lessonsIn(track).map { GalleryItem.LessonTile(it) }
-        if (items.isNotEmpty()) add(GallerySection(track.displayName, items))
+        val all = state.lessonsIn(track).map { GalleryItem.LessonTile(it) }
+        // Fundamentals is the only track authored in a reading order, so it is the only one whose
+        // pieces carry a position.
+        val numerals = all.indices.map {
+            if (track == LessonTrack.FUNDAMENTALS) numeralOf(it) else null
+        }
+        val kept = all.indices.filter { all[it].id != promoted }
+        if (kept.isNotEmpty()) {
+            add(
+                GallerySection(
+                    label = track.displayName,
+                    items = kept.map { all[it] },
+                    numerals = kept.map { numerals[it] },
+                    blurb = track.blurb
+                )
+            )
+        }
     }
 
-    // Articles group by their own topic rather than being forced into a lesson track: the two
-    // taxonomies are genuinely different, and mapping one onto the other would file articles under
-    // headings they were not written for.
     ArticleTopic.entries.forEach { topic ->
         val items = library.articles
             .filter { it.article.topic == topic }
             .map { GalleryItem.ArticleTile(it) }
-        if (items.isNotEmpty()) add(GallerySection(topic.displayName, items))
+            .filter { it.id != promoted }
+        if (items.isNotEmpty()) add(GallerySection(label = topic.displayName, items = items))
     }
 }

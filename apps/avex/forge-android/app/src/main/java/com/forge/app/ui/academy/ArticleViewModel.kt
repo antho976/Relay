@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.forge.app.data.repo.LibraryRepository
 import com.forge.app.domain.academy.Article
+import com.forge.app.domain.academy.ArticleRegistry
 import com.forge.app.ui.nav.Routes
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -30,7 +31,9 @@ class ArticleViewModel @Inject constructor(
 
     data class UiState(
         val article: Article? = null,
-        val finished: Boolean = false
+        val finished: Boolean = false,
+        /** The next piece on the same shelf, or null when this one closes it. */
+        val next: NextPiece? = null
     )
 
     private val _state = MutableStateFlow(UiState())
@@ -38,7 +41,7 @@ class ArticleViewModel @Inject constructor(
 
     init {
         val article = libraryRepo.article(articleId)
-        _state.value = UiState(article = article)
+        _state.value = UiState(article = article, next = article?.let(::nextAfter))
         if (article != null) {
             viewModelScope.launch {
                 runCatching { libraryRepo.markOpened(article.id) }
@@ -48,6 +51,25 @@ class ArticleViewModel @Inject constructor(
                 )
             }
         }
+    }
+
+    /**
+     * Where a reader goes from the end of an article.
+     *
+     * The next one on the same shelf, in the registry's own order, and nothing when this is the
+     * last. Deliberately "more in Recovery" rather than "next": the Library has topics and no
+     * curriculum, and a reader who finished one article is owed a neighbour, not an instruction.
+     */
+    private fun nextAfter(article: Article): NextPiece? {
+        val shelf = ArticleRegistry.byTopic(article.topic)
+        val at = shelf.indexOfFirst { it.id == article.id }
+        val next = shelf.getOrNull(at + 1) ?: return null
+        return NextPiece(
+            id = next.id,
+            title = next.title,
+            lead = "More in ${article.topic.displayName}",
+            minutes = next.readMinutes
+        )
     }
 
     /** The last block scrolled into view. Recorded once, and only ever from a real scroll. */
