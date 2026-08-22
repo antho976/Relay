@@ -8,6 +8,54 @@ an entry whenever a rule is added, changed or retired.
 
 ---
 
+## 2026-08-20 — Settings rebuilt against §3: one row rhythm, gutterless capsules, themed containers
+
+An audit of `ui/settings/` against the doctrine found the archetype was being followed in spirit and
+missed in almost every mechanical particular. Four things changed about the RULES; the rest was the
+code being brought to rules that already existed.
+
+**§5 — the container family is themed now, not paid for per call site.** `ForgeTheme` never set
+`surfaceContainer*`, `outlineVariant` or `surfaceTint`, so every `AlertDialog`, `DropdownMenu`,
+`ModalBottomSheet` and `DatePickerDialog` fell through to Material's stock dark palette — a lighter,
+purple-leaning grey belonging to no theme here. §5 stated this as a fact of life and told every call
+site to pass `containerColor` itself. Eleven settings call sites never did, which is the predictable
+outcome of a rule that needs remembering at N sites instead of being true once. `pearlColorScheme`
+now carries the whole ladder (bg → surface → surfaceVariant, warm) and points `surfaceTint` at
+`surface` so M3's tonal elevation cannot accent-wash a sheet. The call-site rule stays, because
+saying `containerColor = surface` on a modal still documents intent — it just is no longer load-bearing.
+
+**§8 — the settings capsules are gutterless, and `SettingsActionRow` owns the gutter.**
+`SettingsPrimaryAction` / `SettingsOutlineAction` baked `fillMaxWidth().padding(horizontal = 24)`
+into themselves. That made them correct in exactly one position — bare at page level, which only the
+recipe used — and wrong in all nine shipped call sites: four double-guttered them to 48dp inside
+another padded Row, two put them in a `ChipFlow` where each `fillMaxWidth` capsule claimed a whole
+line and rendered the Generate cluster as the stacked button wall `FAILURES.md` names, and one sat
+two of them in a plain Row where the first took the full width and the second got the remainder.
+A primitive that every caller uses wrongly is a primitive with the wrong shape. The capsules now size
+to their label and the gutter, spacing and large-scale WRAPPING live in one `SettingsActionRow`.
+
+**§6 — a sentence is never mono.** Every control explainer in Settings was `labelSmall`: 10sp MONO,
+the app's smallest size, in the voice §6 reserves for UPPERCASE micro-labels and explicitly bars from
+sentences. Rendered at 200% they were also the first thing to wrap to three lines. They are
+`bodySmall` via `SettingsExplainer` now. The recipe golden shows the payoff plainly — the same
+sentence that wrapped to two lines in mono fits one in sans.
+
+**§7 — settings rows share `SETTINGS_ROW_PAD`.** §7 already demanded one vertical padding per lens;
+settings used ten (2/4/5/6/8/9/10/11/12/14), so Recovery's signal rows sat 6dp taller than the
+write-back toggles directly under them. Named constant, like coach's `COACH_ROW_PAD`.
+
+**The one that was purely a bug.** `ForgeSwitch` draws a 40×24dp track and `ToggleRow` applied no
+click of its own, so every toggle in Settings — about twenty — was a 24dp-tall target against §14's
+48dp minimum. The row is the target now and the switch is drawn (`onCheckedChange = null`), which
+satisfies §2③'s no-nested-taps rule in the same move. `GoalEditorScreen` still calls `ForgeSwitch`
+as its own target and was left alone: it is outside this pass, and the same fix applies.
+
+**What the gate said.** 62 violations paid down across seven rules, none added; baseline 933 → 871.
+`ui/settings/` now carries zero debt on `divider`, `em-dash`, `font-size`, `max-lines`,
+`screen-name-title` and `unlabelled-clickable`. Both settings recipe goldens were re-recorded after
+looking at the diffs (§14: a changed golden is a question) — the 200% one confirms the action row
+wraps rather than overflowing, which is what the baked-in gutter had been trying and failing to fix.
+
 ## 2026-07-27 — §4.6: the chrome slot goes to a notifications bell, and banners stop being a pattern
 
 Home opened with up to four stacked strips (milestone, coach brief, orphan notice, resume reminder)

@@ -95,7 +95,7 @@ internal fun CoachSettingsPage(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontStyle = FontStyle.Italic,
-                        modifier = Modifier.padding(horizontal = 24.dp)
+                        modifier = Modifier.padding(horizontal = SETTINGS_GUTTER)
                     )
                 }
             }
@@ -123,7 +123,7 @@ private fun CoachFeedRow(label: String, active: Boolean, onConnect: (() -> Unit)
                 if (tappable) Modifier.clickableLabeled("Connect $label in Recovery", onClick = { onConnect?.invoke() })
                 else Modifier
             )
-            .padding(horizontal = 24.dp, vertical = 10.dp),
+            .padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD),
         verticalAlignment = Alignment.CenterVertically
     ) {
         StatusDot(active)

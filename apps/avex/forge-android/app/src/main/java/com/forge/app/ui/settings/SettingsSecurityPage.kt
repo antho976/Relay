@@ -77,11 +77,12 @@ internal fun SecurityPage(state: SettingsUiState, vm: SettingsViewModel, modifie
         ) { toggle(it, vm::setGalleryLockEnabled) }
 
         if (noCredentialNote) {
+            // §12's quiet inline error line, wording the consequence.
             Text(
                 "Set a screen lock in your phone's settings first.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp)
+                modifier = Modifier.padding(horizontal = SETTINGS_GUTTER, vertical = 4.dp)
             )
         }
 
@@ -94,6 +95,7 @@ internal fun SecurityPage(state: SettingsUiState, vm: SettingsViewModel, modifie
 
     if (showTimeoutDialog) {
         AlertDialog(
+            containerColor = MaterialTheme.colorScheme.surface,
             onDismissRequest = { showTimeoutDialog = false },
             title = { Text("Auto-lock") },
             text = {
@@ -107,17 +109,20 @@ internal fun SecurityPage(state: SettingsUiState, vm: SettingsViewModel, modifie
                                     vm.setAppLockTimeoutSec(sec)
                                     showTimeoutDialog = false
                                 }
-                                .padding(vertical = 12.dp),
+                                .padding(vertical = SETTINGS_ROW_PAD),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
+                            // The shared §12 dot, not a "●"/"○" text pair: one drawing for
+                            // present-vs-absent across the whole app, and a real mark rather
+                            // than two unicode characters standing in for an icon system.
+                            StatusDot(active = selected)
                             Text(
-                                if (selected) "●" else "○",
+                                label,
                                 style = MaterialTheme.typography.bodyMedium,
-                                color = if (selected) MaterialTheme.colorScheme.primary
+                                color = if (selected) MaterialTheme.colorScheme.onBackground
                                 else MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                            Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground)
                         }
                     }
                 }
@@ -135,14 +140,14 @@ private fun AutoLockRow(currentSec: Int, onClick: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 24.dp, vertical = 12.dp),
+            .clickableLabeled("Auto-lock", onClick = onClick)
+            .padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text("Auto-lock", style = MaterialTheme.typography.bodyMedium, color = onBg)
-            Text("When Avex re-locks after you leave", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp)
+            SettingsExplainer("When Avex re-locks after you leave")
         }
         Text(autoLockLabel(currentSec), style = MaterialTheme.typography.bodyMedium, color = onBg)
     }

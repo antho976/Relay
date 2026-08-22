@@ -121,6 +121,27 @@ another branch's UI. Worth a pass when Coach v3 is next touched.
 The four copy ones (`em-dash` ×2, `bang`) are one-line fixes with no visual risk and would be the
 cheapest thing to clear.
 
+## CLEARED 2026-08-20 — settings pass
+
+`ui/settings/` was rebuilt against §3 (`design/DECISIONS.md`, 2026-08-20). **62 violations paid down,
+none added; baseline 933 → 871.** Settings now carries zero debt on six of the nine rules: `divider`,
+`em-dash`, `font-size`, `max-lines`, `screen-name-title` and `unlabelled-clickable`. What remains
+there is 1 alpha (the §8-specified `StatusDot` 0.55 ring), 2 `max-lines` on chrome, 3 `font-size` at
+the sanctioned 9sp, and 2 `unlabelled-clickable` in the accent colour wheel.
+
+Two items below are fully resolved by that pass and are struck rather than deleted, so the trail holds:
+
+- **Unthemed M3 container tones** — fixed at the ROOT. `pearlColorScheme` now sets the whole
+  `surfaceContainer*` ladder, `outlineVariant` and `surfaceTint`, so the per-call-site debt below no
+  longer exists for anyone. The settings sheets/pickers named in it are done; the remaining call
+  sites (`AvatarPickerSheet`, `BodyMeasurementLogSheet`, `RankSection`, `MirrorTestScreen`,
+  `ProgramBuilderDayDetail`, `CardioLogSheetSections`, `MirrorTestViewer`) inherit the fix and only
+  owe the explicit `containerColor = surface` that §5 asks for as documentation.
+- **§3's redundant `fontSize`** — 31 of the ~123 were in settings and are gone.
+
+Still open and untouched by this pass: `ForgeBottomBar`'s 200% label clipping (§1 below), the
+`literal-duration` and `alpha` backlogs outside settings, and the deferred first-run goldens.
+
 ## Unthemed M3 container tones (2026-07-25)
 
 `ForgeTheme` sets `background`/`surface`/`surfaceVariant`/`outline`/`primary`, but never the
@@ -134,11 +155,12 @@ theme here. `ModalBottomSheet` defaults to `surfaceContainerLow`, `DatePickerDia
 
 | Kind | Where |
 |---|---|
-| sheets | `AvatarPickerSheet` · `BodyMeasurementLogSheet` · `RankSection` · `MirrorTestScreen` · `ProgramBuilderDayDetail` · `AppIconPicker` |
-| pickers | `CardioLogSheetSections` · `MirrorTestViewer` · `SettingsVacationPage` |
+| sheets | `AvatarPickerSheet` · `BodyMeasurementLogSheet` · `RankSection` · `MirrorTestScreen` · `ProgramBuilderDayDetail` · ~~`AppIconPicker`~~ |
+| pickers | `CardioLogSheetSections` · `MirrorTestViewer` · ~~`SettingsVacationPage`~~ |
 
-The one-line root fix is to give `pearlColorScheme` real Pearl container tones; until then every call
-site pays.
+**The one-line root fix — give `pearlColorScheme` real Pearl container tones — landed 2026-08-20.**
+No call site falls through to Material stock any more; the ones above owe only the explicit
+`containerColor = surface` §5 asks for as a statement of intent.
 
 ## Suggested order
 

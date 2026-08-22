@@ -83,19 +83,21 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
             .verticalScroll(rememberScrollState())
             .padding(bottom = 40.dp)
     ) {
-        // The mark first (§12): the page's whole state in one glance, honest at zero.
-        Spacer(Modifier.height(18.dp))
+        // The top bar never names the screen (§4.6), so the page names itself with its own mono
+        // anchor before anything else — Recovery used to open on a bare dot rail with no title.
+        SettingsSectionHeader("Recovery", top = 12.dp)
+        // Then the mark (§12): the page's whole state in one glance, honest at zero.
         RecoveryConnectionRail(railStates)
         Spacer(Modifier.height(8.dp))
         Text(
             "Opt-in and on-device. Avex has no Internet permission.",
             style = MaterialTheme.typography.bodySmall, color = muted,
-            modifier = Modifier.padding(horizontal = 24.dp)
+            modifier = Modifier.padding(horizontal = SETTINGS_GUTTER)
         )
 
         // The brand pick tailors the pointers below (which companion app feeds Health Connect, and
         // which signals vary by its version). Advisory only — every read works for any wearable.
-        SettingsSectionHeader("WEARABLE")
+        SettingsSectionHeader("Wearable")
         Spacer(Modifier.height(4.dp))
         ChipFlow {
             WearableBrand.entries.forEach { brand ->
@@ -113,11 +115,11 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
                 null -> "Pick what you wear. Avex tailors the setup pointers to it."
             },
             style = MaterialTheme.typography.bodySmall, color = muted,
-            modifier = Modifier.padding(horizontal = 24.dp)
+            modifier = Modifier.padding(horizontal = SETTINGS_GUTTER)
         )
 
         // One list, one rhythm — each explainer names what its signal feeds, so no per-feature headers.
-        SettingsSectionHeader("SIGNALS")
+        SettingsSectionHeader("Signals")
         Spacer(Modifier.height(4.dp))
         RecoveryRow(
             title = "Sleep & heart rate",
@@ -147,7 +149,7 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
             state.importMessage?.let {
                 Text(
                     it, style = MaterialTheme.typography.bodySmall, color = muted,
-                    modifier = Modifier.padding(horizontal = 24.dp)
+                    modifier = Modifier.padding(horizontal = SETTINGS_GUTTER)
                 )
             }
         }
@@ -168,7 +170,7 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
             state.bodyFatImportMessage?.let {
                 Text(
                     it, style = MaterialTheme.typography.bodySmall, color = muted,
-                    modifier = Modifier.padding(horizontal = 24.dp)
+                    modifier = Modifier.padding(horizontal = SETTINGS_GUTTER)
                 )
             }
         }
@@ -184,7 +186,7 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
             state.leanMassImportMessage?.let {
                 Text(
                     it, style = MaterialTheme.typography.bodySmall, color = muted,
-                    modifier = Modifier.padding(horizontal = 24.dp)
+                    modifier = Modifier.padding(horizontal = SETTINGS_GUTTER)
                 )
             }
         }
@@ -251,7 +253,7 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
         Spacer(Modifier.height(20.dp))
         when {
             state.loading -> Unit
-            state.available -> Row(Modifier.padding(horizontal = 24.dp)) {
+            state.available -> SettingsActionRow {
                 SettingsOutlineAction("Manage in Health Connect") { openHealthConnectSettings(context) }
             }
             else -> {
@@ -259,10 +261,10 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
                     if (state.needsUpdate) "Your Health Connect app needs an update first."
                     else "Connecting needs the free Health Connect app.",
                     style = MaterialTheme.typography.bodySmall, color = muted,
-                    modifier = Modifier.padding(horizontal = 24.dp)
+                    modifier = Modifier.padding(horizontal = SETTINGS_GUTTER)
                 )
                 Spacer(Modifier.height(10.dp))
-                Row(Modifier.padding(horizontal = 24.dp)) {
+                SettingsActionRow {
                     SettingsPrimaryAction(
                         if (state.needsUpdate) "Update Health Connect" else "Get Health Connect"
                     ) { openHealthConnectInStore(context) }

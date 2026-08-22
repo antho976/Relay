@@ -182,7 +182,7 @@ private fun ScheduleBlock(vm: SettingsViewModel) {
         val weekdays = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
         ProgramBlock("Weekly plan", "Assign a workout to each day, or Rest.") {
             Column(
-                Modifier.padding(horizontal = 24.dp),
+                Modifier.padding(horizontal = SETTINGS_GUTTER),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 weekdays.forEachIndexed { wd, label ->
@@ -280,7 +280,7 @@ private fun EquipmentSection(state: SettingsUiState, vm: SettingsViewModel) {
             Text(
                 "Curated preset: its exercise list is locked. Tap any equipment to switch to a custom set.",
                 style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic,
-                modifier = Modifier.padding(horizontal = 24.dp)
+                modifier = Modifier.padding(horizontal = SETTINGS_GUTTER)
             )
         }
         // Gear grouped the same way onboarding's fine-tune page groups it (shared equipmentGroups).
@@ -291,7 +291,7 @@ private fun EquipmentSection(state: SettingsUiState, vm: SettingsViewModel) {
                 style = MaterialTheme.typography.labelSmall,
                 color = muted,
                 letterSpacing = 1.sp,
-                modifier = Modifier.padding(horizontal = 24.dp)
+                modifier = Modifier.padding(horizontal = SETTINGS_GUTTER)
             )
             Spacer(Modifier.height(6.dp))
             ChipFlow {
@@ -332,10 +332,10 @@ private fun EquipmentSection(state: SettingsUiState, vm: SettingsViewModel) {
         style = MaterialTheme.typography.bodySmall,
         color = muted,
         fontStyle = FontStyle.Italic,
-        modifier = Modifier.padding(horizontal = 24.dp)
+        modifier = Modifier.padding(horizontal = SETTINGS_GUTTER)
     )
     Spacer(Modifier.height(10.dp))
-    ChipFlow {
+    SettingsActionRow {
         SettingsPrimaryAction("Regenerate for this equipment") {
             vm.generateProgram(state.daysPerWeek); equipmentEdited = false
         }
@@ -347,7 +347,10 @@ private fun EquipmentSection(state: SettingsUiState, vm: SettingsViewModel) {
 @Composable
 private fun GenerateBlock(state: SettingsUiState, vm: SettingsViewModel) {
     ProgramBlock("Generate", "Builds a fresh plan from these settings, replacing the current one.") {
-        ChipFlow {
+        // SettingsActionRow, not ChipFlow: the capsules used to carry their own fillMaxWidth gutter,
+        // so inside a ChipFlow each one claimed a whole line and the cluster rendered as the stacked
+        // button wall FAILURES.md names. They now size to their label and sit in one wrapping row.
+        SettingsActionRow {
             SettingsPrimaryAction("Generate ${state.daysPerWeek}-day plan") { vm.generateProgram(state.daysPerWeek) }
             // Lighter refreshes as sidekicks: re-roll swaps the exercises, deload halves the week.
             SettingsOutlineAction("Re-roll exercises") { vm.rerollProgram() }
@@ -387,13 +390,10 @@ private fun ProgramSectionScaffold(modifier: Modifier, content: @Composable () -
 @Composable
 internal fun ProgramBlock(title: String, desc: String, content: @Composable () -> Unit) {
     SettingsSectionHeader(title, top = 22.dp)
-    Text(
-        desc,
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        fontStyle = FontStyle.Italic,
-        modifier = Modifier.padding(horizontal = 24.dp)
-    )
+    // Upright, not italic: §11 gives italic to the ASIDE voice (wordmark, coach one-liners), and
+    // this is a control explainer — the same thing ToggleRow puts under its label. One voice for
+    // one job, so a page doesn't explain itself two different ways.
+    SettingsExplainer(desc, Modifier.padding(horizontal = SETTINGS_GUTTER))
     Spacer(Modifier.height(10.dp))
     content()
 }
@@ -401,7 +401,7 @@ internal fun ProgramBlock(title: String, desc: String, content: @Composable () -
 @Composable
 internal fun ChipFlow(content: @Composable FlowRowScope.() -> Unit) {
     FlowRow(
-        modifier = Modifier.padding(horizontal = 24.dp),
+        modifier = Modifier.padding(horizontal = SETTINGS_GUTTER),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
         content = content

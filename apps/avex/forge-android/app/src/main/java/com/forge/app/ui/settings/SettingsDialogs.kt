@@ -6,6 +6,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -42,13 +44,21 @@ internal fun DataExportDialog(
     Dialog(onDismissRequest = onDismiss) {
         val onBg = MaterialTheme.colorScheme.onBackground
         val muted = MaterialTheme.colorScheme.onSurfaceVariant
-        val bg = MaterialTheme.colorScheme.background
+        // §1/§5: a modal KEEPS its surface. Painting it `background` made the sheet vanish into the
+        // page it floats over, which is the one place the open-editorial rule does not apply.
+        val surface = MaterialTheme.colorScheme.surface
 
         Column(
-            modifier = Modifier.fillMaxWidth().background(bg, RoundedCornerShape(8.dp)).padding(horizontal = 24.dp, vertical = 20.dp),
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(surface, RoundedCornerShape(16.dp))
+                // §14: the dialog must survive the biggest font. Eight export rows plus the backup
+                // block do not fit a 200% viewport, and it had no scroll at all.
+                .verticalScroll(rememberScrollState())
+                .padding(vertical = 20.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Text("DATA", style = MaterialTheme.typography.labelSmall, color = muted, letterSpacing = 1.5.sp)
+            SettingsSectionHeader("Data", top = 0.dp)
 
             // ── Backup & restore — the real safety net ───────────────────────────
             // Refresh the auto-backup slot and progress-photo stats on open (both may have changed since).
@@ -63,20 +73,33 @@ internal fun DataExportDialog(
             val photoLastTakenMs by viewModel.photoLastTakenMs.collectAsState()
             val dbSize by viewModel.dbSizeLabel.collectAsState()
             var confirmAutoRestore by remember { mutableStateOf(false) }
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.padding(horizontal = SETTINGS_GUTTER)) {
                 Text("Backup & restore (.zip)", style = MaterialTheme.typography.bodyMedium, color = onBg)
-                Text(
-                    "Your whole database in one file. Save it somewhere safe; restore replaces all current data and restarts the app.",
-                    style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp
-                )
+                SettingsExplainer("Your whole database in one file. Save it somewhere safe; restore replaces all current data and restarts the app.")
                 // No backup yet, but there's data worth protecting — nudge toward "Back up" (#5 P1).
+                // §14 bans accent-coloured body text: only Ember clears AA, the other four presets
+                // measure 2.34–3.37:1. The accent moves to a DOT and the sentence stays onBg — the
+                // one treatment that is correct under every accent choice, monochrome included.
                 if (noBackupWarning) {
-                    Text(
-                        "You haven't backed up yet. Your training lives only on this phone, so back up now to be safe.",
-                        style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, fontSize = 10.sp
-                    )
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        StatusDot(active = true, size = 7.dp)
+                        Text(
+                            "You haven't backed up yet. Your training lives only on this phone.",
+                            style = MaterialTheme.typography.bodySmall, color = onBg
+                        )
+                    }
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // Two fillMaxWidth capsules used to sit in a plain Row here, so "Back up" took the
+                // whole line and "Restore" got the remainder. Gutterless capsules in a FlowRow wrap
+                // instead of overflowing at large font scales. (Not SettingsActionRow — the parent
+                // Column already owns the gutter inside a dialog.)
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     SettingsPrimaryAction("Back up") { onBackup(); onDismiss() }
                     SettingsOutlineAction("Restore") { onRestore(); onDismiss() }
                 }
@@ -84,20 +107,24 @@ internal fun DataExportDialog(
                 autoBackupSavedAt?.let { savedAt ->
                     Text(
                         "Restore last auto-backup · saved $savedAt",
-                        style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp,
-                        modifier = Modifier.clickableLabeled("Restore last auto-backup") { confirmAutoRestore = true }.padding(vertical = 2.dp)
+                        style = MaterialTheme.typography.bodySmall, color = muted,
+                        modifier = Modifier
+                            .clickableLabeled("Restore last auto-backup") { confirmAutoRestore = true }
+                            .padding(vertical = 10.dp)
                     )
                 }
                 // The weekly worker gave up (e.g. storage full) — say so instead of silently losing backups.
+                // §12's inline error line — the one sanctioned use of error-as-text, kept quiet.
                 if (autoBackupFailed) {
                     Text(
                         "Last auto-backup failed. Free up storage, then back up manually above.",
-                        style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error, fontSize = 10.sp
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error
                     )
                 }
             }
             if (confirmAutoRestore) {
                 AlertDialog(
+                    containerColor = MaterialTheme.colorScheme.surface,
                     onDismissRequest = { confirmAutoRestore = false },
                     title = { Text("Restore last auto-backup?") },
                     text = { Text("Replaces all current data with the weekly auto-backup (saved ${autoBackupSavedAt ?: ""}) and restarts the app.") },
@@ -117,22 +144,28 @@ internal fun DataExportDialog(
                     photoLastTakenMs?.let { append(" · last ${formatShortDate(it)}") }
                 }
             }
-            Text(stakeLine, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp)
+            SettingsExplainer(stakeLine, Modifier.padding(horizontal = SETTINGS_GUTTER))
 
             // ── Quick export — one tap, format baked into each row ───────────────
-            Text("Quick export", style = MaterialTheme.typography.bodyMedium, color = onBg)
-            ExportRow("All my data", "JSON", "every session, set & setting", onBg, muted) { viewModel.exportFullBackup(); onDismiss() }
-            ExportRow("This week", "JSON", "summary for AI analysis", onBg, muted) { viewModel.exportWeeklyJson(); onDismiss() }
-            ExportRow("All sessions", "CSV", "spreadsheet of every session", onBg, muted) { viewModel.exportSessionsCsv(); onDismiss() }
-            ExportRow("All PRs", "CSV", "your best lift per exercise", onBg, muted) { viewModel.exportPrsCsv(); onDismiss() }
-            ExportRow("Bodyweight", "CSV", "every weigh-in", onBg, muted) { viewModel.exportBodyweightCsv(); onDismiss() }
-            ExportRow("Cardio", "CSV", "every cardio session", onBg, muted) { viewModel.exportCardioCsv(); onDismiss() }
-            ExportRow("Last session", "PDF", "printable session sheet", onBg, muted) { viewModel.exportLastSessionPdf(); onDismiss() }
-            ExportRow("Crash logs", "ZIP", "diagnostics if something broke", onBg, muted) { onExportCrashLogs(); onDismiss() }
+            // Their own Column: the dialog's spacedBy(16) is section rhythm, and applying it
+            // BETWEEN eight sibling rows on top of each row's own padding pulls the group apart.
+            // Each row carries a distinct format and action, which is what earns a list (§4.10).
+            Column {
+                SettingsSectionHeader("Quick export", top = 0.dp)
+                ExportRow("All my data", "JSON", "every session, set & setting", onBg, muted) { viewModel.exportFullBackup(); onDismiss() }
+                ExportRow("This week", "JSON", "summary for AI analysis", onBg, muted) { viewModel.exportWeeklyJson(); onDismiss() }
+                ExportRow("All sessions", "CSV", "spreadsheet of every session", onBg, muted) { viewModel.exportSessionsCsv(); onDismiss() }
+                ExportRow("All PRs", "CSV", "your best lift per exercise", onBg, muted) { viewModel.exportPrsCsv(); onDismiss() }
+                ExportRow("Bodyweight", "CSV", "every weigh-in", onBg, muted) { viewModel.exportBodyweightCsv(); onDismiss() }
+                ExportRow("Cardio", "CSV", "every cardio session", onBg, muted) { viewModel.exportCardioCsv(); onDismiss() }
+                ExportRow("Last session", "PDF", "printable session sheet", onBg, muted) { viewModel.exportLastSessionPdf(); onDismiss() }
+                ExportRow("Crash logs", "ZIP", "diagnostics if something broke", onBg, muted) { onExportCrashLogs(); onDismiss() }
+            }
 
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(20.dp, Alignment.End)) {
-                Text("close", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.6f),
-                    modifier = Modifier.clickableLabeled("Close", onClick = onDismiss).padding(4.dp))
+            // §5: a modal's dismiss is muted at FULL strength. It was `muted@0.6` (4.08:1) and
+            // lower-case, i.e. the least legible text in the app on the least reversible screen.
+            SettingsActionRow {
+                SettingsOutlineAction("Close", onClick = onDismiss)
             }
         }
     }
@@ -148,15 +181,18 @@ private fun ExportRow(
     onClick: () -> Unit
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth().clickable { onClick() }.padding(vertical = 8.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickableLabeled("Export $label as $format", onClick = onClick)
+            .padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
         Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
             Text(label, style = MaterialTheme.typography.bodyMedium, color = onBg)
-            Text(hint, style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.6f), fontSize = 9.sp)
+            SettingsExplainer(hint)
         }
-        Text(format, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp, letterSpacing = 1.sp)
+        Text(format, style = MaterialTheme.typography.labelSmall, color = muted, letterSpacing = 1.sp)
     }
 }
 
@@ -175,6 +211,7 @@ internal fun ResetConfirmDialog(
     var typed by remember { mutableStateOf("") }
     val canConfirm = !needsTyped || typed.trim().equals(confirmWord, ignoreCase = true)
     AlertDialog(
+        containerColor = MaterialTheme.colorScheme.surface,
         onDismissRequest = onDismiss,
         title = { Text(target.label) },
         text = {
@@ -199,10 +236,17 @@ internal fun ResetConfirmDialog(
         },
         confirmButton = {
             TextButton(onClick = onConfirm, enabled = canConfirm) {
-                Text("Confirm", color = MaterialTheme.colorScheme.error.copy(alpha = if (canConfirm) 1f else 0.35f))
+                Text(
+                    "Confirm",
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = if (canConfirm) 1f else 0.35f)
+                )
             }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
     )
 }
 
@@ -218,27 +262,33 @@ internal fun ResetMenuDialog(
 ) {
     Dialog(onDismissRequest = onDismiss) {
         val onBg = MaterialTheme.colorScheme.onBackground
-        val muted = MaterialTheme.colorScheme.onSurfaceVariant
-        val outline = MaterialTheme.colorScheme.outline
-        val bg = MaterialTheme.colorScheme.background
+        val surface = MaterialTheme.colorScheme.surface
         Column(
-            modifier = Modifier.fillMaxWidth().background(bg, RoundedCornerShape(8.dp)).padding(horizontal = 24.dp, vertical = 20.dp)
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(surface, RoundedCornerShape(16.dp))
+                .verticalScroll(rememberScrollState())   // §14 — four reset rows + explainers at 200%
+                .padding(vertical = 20.dp)
         ) {
-            Text("RESET", style = MaterialTheme.typography.labelSmall, color = muted, letterSpacing = 1.5.sp)
-            Spacer(Modifier.height(8.dp))
-            val targets = ResetTarget.entries.filter { it != ResetTarget.FACTORY }
-            targets.forEachIndexed { i, target ->
+            SettingsSectionHeader("Reset", top = 0.dp)
+            // Air separates these rows, not a rule (§1: a line exists only as data). The hairline
+            // that used to sit between them is the "hairline habit" named in FAILURES.md.
+            ResetTarget.entries.filter { it != ResetTarget.FACTORY }.forEach { target ->
                 Column(
-                    modifier = Modifier.fillMaxWidth().clickable { onPick(target) }.padding(vertical = 12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickableLabeled(target.label) { onPick(target) }
+                        .padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD),
                     verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
                     Text(target.label, style = MaterialTheme.typography.bodyMedium, color = onBg)
-                    Text(target.message, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp)
+                    SettingsExplainer(target.message)
                 }
-                if (i < targets.lastIndex) HorizontalDivider(color = outline.copy(alpha = 0.25f))
             }
-            Spacer(Modifier.height(8.dp))
-            TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) { Text("Cancel", color = muted) }
+            Spacer(Modifier.height(12.dp))
+            SettingsActionRow {
+                SettingsOutlineAction("Cancel", onClick = onDismiss)
+            }
         }
     }
 }

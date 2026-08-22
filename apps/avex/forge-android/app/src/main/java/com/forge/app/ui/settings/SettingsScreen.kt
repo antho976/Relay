@@ -189,7 +189,6 @@ fun SettingsScreen(
 
     // Complete DB backup & restore via the system file picker (survives uninstall).
     val context = LocalContext.current
-    val statusMessage by viewModel.statusMessage.collectAsStateWithLifecycle()
     val restoreSucceeded by viewModel.restoreSucceeded.collectAsStateWithLifecycle()
     val restoreImpact by viewModel.restoreImpact.collectAsStateWithLifecycle()
     var pendingRestoreUri by remember { mutableStateOf<Uri?>(null) }
@@ -206,7 +205,6 @@ fun SettingsScreen(
         ActivityResultContracts.CreateDocument("application/zip")
     ) { uri -> uri?.let { viewModel.exportCrashLogs(it) } }
     // Import from another gym app (#GYMAP-17) — same SAF pattern as restore, but merges instead of replaces.
-    val importResult by viewModel.importResult.collectAsStateWithLifecycle()
     // Manual file pick — opens the picker already pointed at Downloads (where exports land) and
     // filtered to CSV/JSON, so the right file is usually one tap away.
     val importLauncher = rememberLauncherForActivityResult(
@@ -304,7 +302,10 @@ fun SettingsScreen(
                 SettingsPage.Backup -> BackupPage(viewModel, Modifier.padding(inner))
                 SettingsPage.Storage -> StoragePage(viewModel, Modifier.padding(inner))
                 SettingsPage.WhatsNew -> WhatsNewPage(Modifier.padding(inner))
-                SettingsPage.About -> AboutPage(Modifier.padding(inner), viewModel)
+                SettingsPage.About -> AboutPage(
+                    Modifier.padding(inner), viewModel,
+                    onOpenExport = { showDataDialog = true }
+                )
             }
         }
     }
@@ -336,26 +337,12 @@ fun SettingsScreen(
         )
     }
 
-    importResult?.let { msg ->
-        AlertDialog(
-            onDismissRequest = viewModel::clearImportResult,
-            title = { Text("Import") },
-            text = { Text(msg) },
-            confirmButton = { TextButton(onClick = viewModel::clearImportResult) { Text("OK") } }
-        )
-    }
-
-    statusMessage?.let { msg ->
-        AlertDialog(
-            onDismissRequest = viewModel::clearStatusMessage,
-            title = { Text("Backup & restore") },
-            text = { Text(msg) },
-            confirmButton = { TextButton(onClick = viewModel::clearStatusMessage) { Text("OK") } }
-        )
-    }
+    // Import / backup / restore outcomes are transient lines on the app's ONE snackbar now (§12) —
+    // they used to be two AlertDialogs that had to be dismissed to confirm something already done.
 
     pendingRestoreUri?.let { uri ->
         AlertDialog(
+            containerColor = MaterialTheme.colorScheme.surface,
             onDismissRequest = { pendingRestoreUri = null },
             title = { Text("Restore from backup?") },
             text = {

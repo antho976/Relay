@@ -111,11 +111,10 @@ temperature, not a style): bg `#110F0C` · gradient `#17120E→#0A0806` (behind 
 `#F2EFEA` · muted `#BFB6AA`. AMOLED: bg black, surface `#080808`, surfaceVar `#111111`, gradient
 `#000000→#050507`.
 
-**M3's container tones are NOT themed — pass them explicitly on every M3 component that fills.**
-`ForgeTheme` never sets the `surfaceContainer*` family, `outlineVariant` or `surfaceTint`, so anything
-reaching for one falls through to Material's stock dark palette, a lighter purple-leaning grey belonging
-to no theme here. **A modal is `containerColor = surface`**, its dividers the outline 0.25 rung, its
-confirm/dismiss `onBackground`/muted (2026-07-25; `design/AUDIT.md` carries the call sites still owing).
+**M3's container tones ARE themed** (2026-08-20): `ForgeTheme` sets the `surfaceContainer*` ladder,
+`outlineVariant` and `surfaceTint` = surface, so sheets/menus/pickers land on Pearl rather than
+Material's stock purple-grey. **A modal still says `containerColor = surface`**, its dividers the
+outline 0.25 rung, its confirm/dismiss `onBackground`/muted.
 
 Accent = user-picked (Ember `#D4761F` **default** · Red `#8B3535` · Olive `#4D6040` · Gold `#7A6435` ·
 Navy `#3D4F73`); `primary`=accent, `primaryContainer`=@0.15, `secondary`=@0.6. Spend it in FEW places
@@ -155,8 +154,8 @@ container 0.15). **Reserved**: PR gold `#E3B341` (PR star + gold set row only) �
 - **Always take a style from `MaterialTheme.typography`** — never `fontSize =` at a call site. The
   three voices ARE the meaning system; an inline size opts out of it. Only sanctioned off-scale use:
   8–9sp figure captions.
-- **Rank two mono labels by SIZE, never by tracking or colour alone** — hence the anchor rung above
-  the 13sp row label (`design/DECISIONS.md`, 2026-07-25).
+- **A sentence is never mono** — explainers take `bodySmall` (`SettingsExplainer`).
+- **Rank two mono labels by SIZE, never tracking or colour** (`design/DECISIONS.md`, 2026-07-25).
 - Mono labels `.uppercase()` in code. *Italic* = the aside voice (wordmark, coach one-liners,
   taglines): bodyM/S italic, muted.
 - One serif hero per screen, everything else steps down; animating numbers use tnum styles.
@@ -168,7 +167,7 @@ container 0.15). **Reserved**: PR gold `#E3B341` (PR star + gold set row only) �
 `header → 2 → caption → 10 → content`; **no two text lines of different roles butt flush** — ≥8dp
 between a header/caption/aside/row (put a Spacer(≥8) before the first row; don't lean on the row's
 own bottom padding). Figure rows: gap 20, label 2 under number. List/data rows: **ONE vertical
-padding for ALL of a lens's rows** (coach shares `COACH_ROW_PAD` = 6, i.e. 12 total) — sibling
+padding for ALL of a lens's rows** (coach shares `COACH_ROW_PAD` = 6; settings shares `SETTINGS_ROW_PAD` = 12) — sibling
 sections never mix 4/5/6, the page reads as one rhythm; a text-link inside a row stays at vertical 2
 so it doesn't inflate that row above its neighbours.
 
@@ -204,7 +203,8 @@ its sidekick (a destructive one-shot = level ② tinted `error` via `ForgeOutlin
 paired with an Undo snackbar, never a filled red button); ③ mono accent `action →` = navigation. No M3
 default/floating-text/icon buttons in content. Settings reuse `SettingsPrimaryAction` (do-it-now) /
 `SettingsOutlineAction` (sidekick) / `SettingsActionLink` (`action →` nav) from `SettingsPrimitives.kt`;
-group page-level action buttons at the END of the page, never mid-scroll.
+both capsules are GUTTERLESS and go only inside `SettingsActionRow`, which owns the gutter and wraps
+them at large scale (your own padded Row double-gutters them); group them at the page END, never mid-scroll.
 
 **Per-row action = compact OUTLINED pill, never filled.** A do-it-now action scoped to a single list
 row/integration (Recovery's Connect, the Profile BODY rows' Log/Sync/Open) renders as a right-aligned

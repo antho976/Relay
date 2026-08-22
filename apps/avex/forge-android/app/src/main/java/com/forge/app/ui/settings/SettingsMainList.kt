@@ -59,7 +59,14 @@ internal fun MainList(
     LazyColumn(state = listState, modifier = modifier, contentPadding = PaddingValues(bottom = 56.dp)) {
         // Persistent search field at the top of the list (modern-phone-settings pattern) — replaces
         // the old top-bar magnifier toggle. Always visible, in both the grouped and results states.
-        item("search") { SettingsSearchField(searchQuery, onSearchChange) }
+        item("search") {
+            SettingsSearchField(
+                query = searchQuery,
+                placeholder = "Search settings",
+                onQueryChange = onSearchChange,
+                modifier = Modifier.padding(start = SETTINGS_GUTTER, end = SETTINGS_GUTTER, top = 12.dp, bottom = 4.dp)
+            )
+        }
         if (searchQuery.isBlank()) {
             // Grouped under quiet mono anchors, separated by air alone — no per-row hairlines
             // (DESIGN §1/§7: lines mean data; sections separate by whitespace + their header). Each
@@ -162,71 +169,18 @@ internal fun MainList(
     }
 }
 
-/**
- * The settings search bar — a filled, rounded field with a leading magnifier and a trailing clear,
- * the shape most phone settings use. Interactive, so a surface fill + rounded corners are earned
- * (DESIGN §1/§13). Sits at the top of the list, always visible, in place of the old top-bar toggle.
- */
-@Composable
-private fun SettingsSearchField(query: String, onQueryChange: (String) -> Unit) {
-    val onBg = MaterialTheme.colorScheme.onBackground
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(start = 24.dp, end = 24.dp, top = 12.dp, bottom = 4.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
-            .padding(horizontal = 14.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        Icon(Icons.Filled.Search, contentDescription = null, tint = muted, modifier = Modifier.size(20.dp))
-        BasicTextField(
-            value = query,
-            onValueChange = onQueryChange,
-            textStyle = MaterialTheme.typography.bodyMedium.copy(color = onBg),
-            cursorBrush = SolidColor(onBg),
-            singleLine = true,
-            modifier = Modifier.weight(1f),
-            decorationBox = { inner ->
-                Box {
-                    if (query.isEmpty()) {
-                        Text(
-                            "Search settings",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = muted.copy(alpha = 0.6f)
-                        )
-                    }
-                    inner()
-                }
-            }
-        )
-        if (query.isNotEmpty()) {
-            Icon(
-                Icons.Filled.Close,
-                contentDescription = "Clear search",
-                tint = muted,
-                modifier = Modifier
-                    .size(18.dp)
-                    .clickableLabeled("Clear search") { onQueryChange("") }
-            )
-        }
-    }
-}
-
 /** A quiet, centered footer link to the About page — sits at the very bottom of the settings list. */
 @Composable
 private fun AboutLink(onClick: () -> Unit) {
     Text(
         "About Avex",
         style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
         textAlign = TextAlign.Center,
         modifier = Modifier
             .fillMaxWidth()
             .clickableLabeled("About Avex", onClick = onClick)
-            .padding(vertical = 12.dp)
+            .padding(vertical = SETTINGS_ROW_PAD)
     )
 }
 
@@ -306,7 +260,7 @@ private fun SearchResultRow(result: SearchResult, query: String) {
         modifier = Modifier
             .fillMaxWidth()
             .clickableLabeled(result.name, onClick = result.onClick)
-            .padding(horizontal = 24.dp, vertical = 12.dp),
+            .padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(16.dp)
     ) {
@@ -318,7 +272,7 @@ private fun SearchResultRow(result: SearchResult, query: String) {
         }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(highlightMatch(result.name, query), style = MaterialTheme.typography.bodyMedium, color = onBg)
-            Text(result.where, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp)
+            SettingsExplainer(result.where)
         }
         Text(result.trailing, style = MaterialTheme.typography.bodyMedium, color = muted)
     }
@@ -332,7 +286,7 @@ private fun SearchCount(n: Int) {
         style = MaterialTheme.typography.labelSmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         letterSpacing = 1.sp,
-        modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 16.dp, bottom = 4.dp)
+        modifier = Modifier.padding(start = SETTINGS_GUTTER, end = SETTINGS_GUTTER, top = 16.dp, bottom = 4.dp)
     )
 }
 
@@ -341,9 +295,8 @@ private fun NoSearchResults(query: String) {
     Text(
         "No settings match “$query”",
         style = MaterialTheme.typography.bodyMedium,
-        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
-        fontStyle = FontStyle.Italic,
-        modifier = Modifier.padding(horizontal = 24.dp, vertical = 28.dp)
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        modifier = Modifier.padding(horizontal = SETTINGS_GUTTER, vertical = 28.dp)
     )
 }
 

@@ -27,6 +27,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.domain.cardio.CardioGlyphs
 import com.forge.app.domain.cardio.CustomCardioType
 import com.forge.app.ui.cardio.components.CustomActivityDialog
+import com.forge.app.ui.common.GlyphButton
 import com.forge.app.ui.common.InlineEmptyHint
 import com.forge.app.ui.common.clickableLabeled
 
@@ -66,8 +67,8 @@ internal fun CardioActivitiesPage(vm: SettingsViewModel, modifier: Modifier = Mo
         item("intro") {
             Text(
                 "Log a sport the built-in list misses. It shows up in the cardio picker beside the standard types.",
-                style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic,
-                modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp)
+                style = MaterialTheme.typography.bodySmall, color = muted,
+                modifier = Modifier.padding(horizontal = SETTINGS_GUTTER, vertical = 8.dp)
             )
         }
         item("add") {
@@ -77,7 +78,7 @@ internal fun CardioActivitiesPage(vm: SettingsViewModel, modifier: Modifier = Mo
                 style = MaterialTheme.typography.labelLarge, color = accent, letterSpacing = 0.3.sp,
                 modifier = Modifier.fillMaxWidth()
                     .clickableLabeled("Add custom activity") { showCreate = true }
-                    .padding(horizontal = 24.dp, vertical = 14.dp)
+                    .padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD)
             )
         }
         if (types.isEmpty()) {
@@ -85,7 +86,7 @@ internal fun CardioActivitiesPage(vm: SettingsViewModel, modifier: Modifier = Mo
                 InlineEmptyHint(
                     "No custom activities yet.",
                     color = muted,
-                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp)
+                    modifier = Modifier.padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD)
                 )
             }
         } else {
@@ -93,7 +94,7 @@ internal fun CardioActivitiesPage(vm: SettingsViewModel, modifier: Modifier = Mo
                 Row(
                     modifier = Modifier.fillMaxWidth()
                         .clickableLabeled("Edit ${t.name}") { editing = t }
-                        .padding(horizontal = 24.dp, vertical = 12.dp),
+                        .padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -104,13 +105,11 @@ internal fun CardioActivitiesPage(vm: SettingsViewModel, modifier: Modifier = Mo
                         modifier = Modifier.size(20.dp)
                     )
                     Text(t.name, style = MaterialTheme.typography.bodyMedium, color = onBg, modifier = Modifier.weight(1f))
-                    Text(
-                        "✕",
-                        style = MaterialTheme.typography.bodyLarge, color = muted,
-                        modifier = Modifier
-                            .clickableLabeled("Delete ${t.name}") { vm.deleteCustomCardioType(t.code) }
-                            .padding(start = 16.dp)
-                    )
+                    // §2③/§14: the row taps to EDIT, so the delete cannot be a second target
+                    // nested inside it. GlyphButton carries its own ≥48dp target and TalkBack
+                    // label; Compose routes the tap to the innermost handler, so the two no
+                    // longer overlap the way a padded Text inside a clickable Row did.
+                    GlyphButton("✕", "Delete ${t.name}", muted, { vm.deleteCustomCardioType(t.code) })
                 }
             }
         }

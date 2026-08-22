@@ -58,6 +58,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.forge.app.ui.common.GlyphButton
 import com.forge.app.ui.common.clickableLabeled
 
 private val TIMEZONE_OPTIONS = listOf(
@@ -210,7 +211,7 @@ private fun CardFootnote(text: String) {
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         fontStyle = FontStyle.Italic,
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 10.dp)
+        modifier = Modifier.fillMaxWidth().padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD)
     )
 }
 
@@ -223,7 +224,7 @@ private fun InlineChipRow(
     onSelect: (String) -> Unit
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
@@ -257,18 +258,19 @@ private fun TimezoneRow(timezone: String, onClick: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 24.dp, vertical = 8.dp),
+            .clickableLabeled("Timezone", onClick = onClick)
+            .padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text("Timezone", style = MaterialTheme.typography.bodyMedium, color = onBg)
         Spacer(Modifier.weight(1f))
+        // Wraps rather than ellipsising: the zone label is the row's live VALUE, and truncating
+        // "Los Angeles (PST −8)" to "Los Angeles (PST…" at 200% hides the part that disambiguates.
         Text(
             label,
             style = MaterialTheme.typography.bodyMedium,
             color = muted,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.End,
             modifier = Modifier.widthIn(max = 200.dp)
         )
         Text(" ▾", style = MaterialTheme.typography.bodyMedium, color = muted)
@@ -336,51 +338,17 @@ private fun TimezonePickerDialog(
     }
 
     AlertDialog(
+        containerColor = MaterialTheme.colorScheme.surface,
         onDismissRequest = onDismiss,
         title = { Text("Timezone") },
         text = {
             Column {
-                // ── Search box ──
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(MaterialTheme.colorScheme.surfaceVariant)
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    BasicTextField(
-                        value = query,
-                        onValueChange = { query = it },
-                        textStyle = MaterialTheme.typography.bodyMedium.copy(color = onBg),
-                        cursorBrush = SolidColor(onBg),
-                        singleLine = true,
-                        decorationBox = { inner ->
-                            Box {
-                                if (query.isEmpty()) {
-                                    Text(
-                                        "Search a city or region…",
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = muted.copy(alpha = 0.5f),
-                                        fontStyle = FontStyle.Italic
-                                    )
-                                }
-                                inner()
-                            }
-                        },
-                        modifier = Modifier.weight(1f)
-                    )
-                    if (query.isNotEmpty()) {
-                        Text(
-                            "×",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = muted,
-                            modifier = Modifier
-                                .clickableLabeled("Clear search") { query = "" }
-                                .padding(start = 8.dp)
-                        )
-                    }
-                }
+                // ── Search box ── the one shared settings field (§13, §2⑥).
+                SettingsSearchField(
+                    query = query,
+                    placeholder = "Search a city or region",
+                    onQueryChange = { query = it }
+                )
                 Spacer(Modifier.height(8.dp))
 
                 LazyColumn(modifier = Modifier.heightIn(max = 360.dp)) {
@@ -449,16 +417,10 @@ private fun TimezonePickerDialog(
     )
 }
 
+/** Uses the shared anchor so the picker's groups rank BY SIZE against their rows (§6), rather than
+ *  sitting at the same 10sp as the timezone labels beneath them. */
 @Composable
-private fun TzSectionLabel(text: String) {
-    Text(
-        text.uppercase(),
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        letterSpacing = 1.sp,
-        modifier = Modifier.padding(top = 10.dp, bottom = 4.dp)
-    )
-}
+private fun TzSectionLabel(text: String) = SettingsSectionHeader(text, top = 14.dp)
 
 @Composable
 private fun TimezoneOption(
@@ -473,26 +435,28 @@ private fun TimezoneOption(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(vertical = 10.dp),
+            .clickableLabeled(label, onClick = onClick)
+            .padding(vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
+        // No maxLines: a zone label is content and must wrap at 200% rather than truncate (§14).
         Text(
             label,
             style = MaterialTheme.typography.bodyMedium,
             color = if (selected) onBg else muted,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f)
         )
-        if (selected) Text("●", style = MaterialTheme.typography.labelSmall, color = onBg, modifier = Modifier.padding(start = 8.dp))
-        Text(
+        if (selected) {
+            Box(Modifier.padding(start = 8.dp)) { StatusDot(active = true, size = 7.dp) }
+        }
+        // GlyphButton: the star was a bodyLarge Text with 2dp of vertical padding — a ~24dp target
+        // sitting inside a full-width clickable row (§14, §2③).
+        GlyphButton(
             if (isFavorite) "★" else "☆",
-            style = MaterialTheme.typography.bodyLarge,
-            color = if (isFavorite) onBg else muted.copy(alpha = 0.5f),
-            modifier = Modifier
-                .clickableLabeled(if (isFavorite) "Remove favorite" else "Add favorite", onClick = onToggleFavorite)
-                .padding(start = 12.dp, top = 2.dp, bottom = 2.dp)
+            if (isFavorite) "Remove favorite" else "Add favorite",
+            if (isFavorite) onBg else muted,
+            onToggleFavorite,
+            style = MaterialTheme.typography.bodyMedium
         )
     }
 }
@@ -559,16 +523,11 @@ private fun ChipField(
     selected: String,
     onSelect: (String) -> Unit
 ) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 10.dp)) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD)) {
         Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground)
         if (explainer != null) {
             Spacer(Modifier.height(2.dp))
-            Text(
-                explainer,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 10.sp
-            )
+            SettingsExplainer(explainer)
         }
         Spacer(Modifier.height(10.dp))
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -597,13 +556,8 @@ private fun NoteTemplatesEditor(
     val sorted = remember(templates) {
         templates.filter { it.isNotBlank() }.sortedBy { it.trim().lowercase() }
     }
-    Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 10.dp)) {
-        Text(
-            "One-tap starters under the note field when you log a set.",
-            style = MaterialTheme.typography.labelSmall,
-            color = muted,
-            fontSize = 10.sp
-        )
+    Column(Modifier.fillMaxWidth().padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD)) {
+        SettingsExplainer("One-tap starters under the note field when you log a set.")
         Spacer(Modifier.height(10.dp))
         if (sorted.isEmpty()) {
             Text(
@@ -623,10 +577,8 @@ private fun NoteTemplatesEditor(
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         Text(t.trim(), style = MaterialTheme.typography.bodySmall, color = onBg)
-                        Text(
-                            "✕", style = MaterialTheme.typography.labelSmall, color = muted,
-                            modifier = Modifier.clickableLabeled("Remove ${t.trim()}") { onRemove(t) }.padding(2.dp)
-                        )
+                        GlyphButton("✕", "Remove ${t.trim()}", muted, { onRemove(t) },
+                            style = MaterialTheme.typography.labelSmall)
                     }
                 }
             }
@@ -659,13 +611,12 @@ private fun NoteTemplatesEditor(
  *  preferences (no data loss), so a user can clean-slate one area without a global/factory reset. */
 @Composable
 internal fun SectionResetRow(section: com.forge.app.data.prefs.SettingsSection, vm: SettingsViewModel) {
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    Text(
-        "Reset this page to defaults",
-        style = MaterialTheme.typography.labelSmall,
-        color = muted.copy(alpha = 0.8f),
-        modifier = Modifier.fillMaxWidth().clickableLabeled("Reset to defaults") { vm.resetSection(section) }.padding(horizontal = 24.dp, vertical = 16.dp)
-    )
+    // §8 ②: a one-shot that changes state is a capsule at the END of the page, not a text link at
+    // `muted@0.8`, which made the only destructive control on the page the faintest thing on it.
+    Spacer(Modifier.height(20.dp))
+    SettingsActionRow {
+        SettingsOutlineAction("Reset this page to defaults") { vm.resetSection(section) }
+    }
 }
 
 /**
@@ -701,7 +652,7 @@ private fun NotificationsBlockedBanner() {
                         .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
                 )
             }
-            .padding(horizontal = 24.dp, vertical = 14.dp)
+            .padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD)
     ) {
         Text("Notifications are turned off", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground)
         Spacer(Modifier.height(2.dp))
@@ -820,7 +771,7 @@ internal fun ExercisePrefsPage(state: SettingsUiState, vm: SettingsViewModel, mo
         // one tap deep and always fully visible.
         val muscles = remember(byMuscle) { byMuscle.keys.toList() }
         Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 4.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = SETTINGS_GUTTER, vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             PrefSelector(
@@ -870,12 +821,18 @@ internal fun ExercisePrefsPage(state: SettingsUiState, vm: SettingsViewModel, mo
                 }
             }
         }
-        Text(
+        SettingsExplainer(
             "Preferred movements appear more often in generated programs · Hidden ones are never picked.",
-            style = MaterialTheme.typography.labelSmall,
-            color = muted,
-            fontStyle = FontStyle.Italic,
-            modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 4.dp, bottom = 12.dp)
+            Modifier.padding(start = SETTINGS_GUTTER, end = SETTINGS_GUTTER, top = 4.dp, bottom = 4.dp)
+        )
+        // A page-level preference, so it sits WITH the page's other controls. It used to be the
+        // last item of a LazyColumn that can hold several hundred exercise rows, i.e. reachable
+        // only by scrolling past every movement in the library.
+        ToggleRow(
+            label = "Ask to dislike after swapping",
+            subtitle = "After a \"Make default\" swap, offer to hide the old exercise.",
+            checked = state.swapDislikePromptEnabled,
+            onCheckedChange = { vm.setSwapDislikePromptEnabled(it) }
         )
 
         LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 32.dp)) {
@@ -932,19 +889,9 @@ internal fun ExercisePrefsPage(state: SettingsUiState, vm: SettingsViewModel, mo
                         style = MaterialTheme.typography.bodyMedium,
                         color = muted,
                         textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 48.dp)
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = SETTINGS_GUTTER, vertical = 48.dp)
                     )
                 }
-            }
-            // The post-swap dislike prompt toggle lives here too — it's about likes/dislikes.
-            item("swap-toggle") {
-                Spacer(Modifier.height(24.dp))
-                ToggleRow(
-                    label = "Ask to dislike after swapping",
-                    subtitle = "After a \"Make default\" swap, offer to hide the old exercise.",
-                    checked = state.swapDislikePromptEnabled,
-                    onCheckedChange = { vm.setSwapDislikePromptEnabled(it) }
-                )
             }
         }
     }
@@ -1048,50 +995,13 @@ private fun libSubtitle(def: com.forge.app.program.ExerciseDef): String {
 }
 
 @Composable
-private fun PrefSearchField(query: String, onQuery: (String) -> Unit) {
-    val onBg = MaterialTheme.colorScheme.onBackground
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val outline = MaterialTheme.colorScheme.outline
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 24.dp, vertical = 12.dp)
-            .border(1.dp, outline.copy(alpha = 0.35f), RoundedCornerShape(8.dp))
-            .padding(horizontal = 14.dp, vertical = 11.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
-        Text("⌕", style = MaterialTheme.typography.bodyLarge, color = muted)
-        BasicTextField(
-            value = query,
-            onValueChange = onQuery,
-            singleLine = true,
-            textStyle = MaterialTheme.typography.bodyMedium.copy(color = onBg),
-            cursorBrush = SolidColor(onBg),
-            modifier = Modifier.weight(1f),
-            decorationBox = { inner ->
-                Box {
-                    if (query.isEmpty()) {
-                        Text(
-                            "Search exercises…",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = muted.copy(alpha = 0.5f)
-                        )
-                    }
-                    inner()
-                }
-            }
-        )
-        if (query.isNotEmpty()) {
-            Text(
-                "×",
-                style = MaterialTheme.typography.bodyLarge,
-                color = muted,
-                modifier = Modifier.clickable { onQuery("") }
-            )
-        }
-    }
-}
+private fun PrefSearchField(query: String, onQuery: (String) -> Unit) =
+    SettingsSearchField(
+        query = query,
+        placeholder = "Search exercises",
+        onQueryChange = onQuery,
+        modifier = Modifier.padding(horizontal = SETTINGS_GUTTER, vertical = 12.dp)
+    )
 
 /**
  * One filter dimension as a compact dropdown — a bordered field (same rounded-8 language as the
@@ -1127,8 +1037,6 @@ private fun PrefSelector(
                 value,
                 style = MaterialTheme.typography.bodySmall,
                 color = if (isDefault) muted else onBg,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f)
             )
             Text("▾", style = MaterialTheme.typography.labelMedium, color = muted.copy(alpha = 0.65f))
@@ -1143,7 +1051,7 @@ private fun PrefSelector(
                         ) {
                             // A leading dot marks the active pick; a blank keeps the labels aligned.
                             Box(Modifier.width(8.dp)) {
-                                if (i == selectedIndex) Text("•", color = onBg)
+                                if (i == selectedIndex) StatusDot(active = true, size = 7.dp)
                             }
                             Text(
                                 label,
@@ -1160,19 +1068,22 @@ private fun PrefSelector(
 }
 
 // Air + the mono header ARE the separator (DESIGN §1/§7) — no hairline under the anchor.
+/** The muscle group anchor + its tally. Uses [EditorialHeader] like every other settings section,
+ *  so the group ranks a size ABOVE its rows (§6) instead of matching their 10sp exactly. */
 @Composable
 private fun PrefSectionHeader(title: String, summary: String) {
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val onBg = MaterialTheme.colorScheme.onBackground
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(start = 24.dp, end = 24.dp, top = 22.dp, bottom = 4.dp),
+        modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
+        verticalAlignment = Alignment.Bottom
     ) {
-        Text(title, style = MaterialTheme.typography.labelSmall, color = onBg)
-        Text(summary, style = MaterialTheme.typography.labelSmall, color = muted)
+        Box(Modifier.weight(1f)) { SettingsSectionHeader(title, top = 22.dp) }
+        Text(
+            summary,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(end = SETTINGS_GUTTER, bottom = 8.dp)
+        )
     }
 }
 
@@ -1192,34 +1103,31 @@ private fun ExercisePrefRow(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickableLabeled("Set preference") { menuOpen = true }
-                .padding(horizontal = 24.dp, vertical = 12.dp),
+                .clickableLabeled("$name, ${pref.label.lowercase()}. Change preference") { menuOpen = true }
+                .padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             // Equipment glyph — quiet wayfinding (DESIGN §8), same muted tint as the subtitle.
             Icon(icon, contentDescription = null, tint = muted, modifier = Modifier.size(20.dp))
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(name, style = MaterialTheme.typography.bodyMedium, color = onBg)
-                Text(subtitle, style = MaterialTheme.typography.labelSmall, color = muted)
+                SettingsExplainer(subtitle)
             }
-            // Editorial status: the current preference as a quiet word + a caret hinting it's tappable.
-            // Neutral renders its honest word, dimmest of the three so the set states stand out.
+            // §8: "a row's right meta is a count or reading only, never a state word" — and §8's
+            // dot rule: paint the mark only for the EXCEPTION, never for the neutral majority (a
+            // column of identical grey words is the same noise as a grey dot column). Preferred and
+            // Hidden get the dot; the ~600 neutral rows reserve the gutter and stay quiet.
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                Text(
-                    pref.label,
-                    style = MaterialTheme.typography.labelMedium,
-                    color = when (pref) {
-                        Pref.PREFERRED -> onBg
-                        Pref.HIDDEN -> muted
-                        Pref.NEUTRAL -> muted.copy(alpha = 0.65f)
-                    },
-                    letterSpacing = 0.3.sp
-                )
-                Text("▾", style = MaterialTheme.typography.labelMedium, color = muted.copy(alpha = 0.65f))
+                when (pref) {
+                    Pref.PREFERRED -> StatusDot(active = true, size = 7.dp)
+                    Pref.HIDDEN -> StatusDot(active = false, size = 7.dp)
+                    Pref.NEUTRAL -> Spacer(Modifier.size(7.dp))
+                }
+                Text("▾", style = MaterialTheme.typography.labelMedium, color = muted)
             }
         }
         DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
@@ -1232,7 +1140,7 @@ private fun ExercisePrefRow(
                         ) {
                             // A leading dot marks the active state; a blank keeps the labels aligned.
                             Box(Modifier.width(8.dp)) {
-                                if (option == pref) Text("•", color = onBg)
+                                if (option == pref) StatusDot(active = true, size = 7.dp)
                             }
                             Text(
                                 option.label,
