@@ -252,12 +252,7 @@
 5 font-size ui/cardio/components/CardioWeekStatsPage.kt fontSize=
 2 font-size ui/cardio/components/CustomActivityDialog.kt fontSize=
 2 font-size ui/checkin/CheckinSheet.kt fontSize=
-1 font-size ui/coach/CoachBlockSection.kt fontSize=
 7 font-size ui/coach/CoachCharts.kt fontSize=
-1 font-size ui/coach/CoachHero.kt fontSize=
-1 font-size ui/coach/CoachProjectSection.kt fontSize=
-1 font-size ui/coach/CoachSignalsSection.kt fontSize=
-1 font-size ui/coach/CoachUi.kt fontSize=
 1 font-size ui/coach/GoalPickerDialog.kt fontSize=
 3 font-size ui/common/Editorial.kt fontSize=
 1 font-size ui/common/SegmentPill.kt fontSize=
@@ -319,10 +314,6 @@
 2 literal-duration ui/gym/train/components/RestTimerBubble.kt literal duration
 1 literal-duration ui/overview/OverviewScreen.kt literal duration
 16 literal-duration ui/profile/TrophyIconMotion.kt literal duration
-1 max-lines ui/coach/CoachGoalsSection.kt maxLines=1
-1 max-lines ui/coach/CoachSignalsSection.kt maxLines=1
-1 max-lines ui/coach/CoachUi.kt maxLines=1
-1 max-lines ui/coach/CoachWeekSection.kt maxLines=1
 1 max-lines ui/common/Editorial.kt maxLines=1
 1 max-lines ui/goals/GoalsComponents.kt maxLines=1
 1 max-lines ui/gym/freestyle/FreestyleTemplatePicker.kt maxLines=1
