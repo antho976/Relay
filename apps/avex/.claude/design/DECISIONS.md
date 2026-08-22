@@ -8,6 +8,97 @@ an entry whenever a rule is added, changed or retired.
 
 ---
 
+## 2026-08-20 — Settings rebuilt against §3: one row rhythm, gutterless capsules, themed containers
+
+An audit of `ui/settings/` against the doctrine found the archetype was being followed in spirit and
+missed in almost every mechanical particular. Four things changed about the RULES; the rest was the
+code being brought to rules that already existed.
+
+**§5 — the container family is themed now, not paid for per call site.** `ForgeTheme` never set
+`surfaceContainer*`, `outlineVariant` or `surfaceTint`, so every `AlertDialog`, `DropdownMenu`,
+`ModalBottomSheet` and `DatePickerDialog` fell through to Material's stock dark palette — a lighter,
+purple-leaning grey belonging to no theme here. §5 stated this as a fact of life and told every call
+site to pass `containerColor` itself. Eleven settings call sites never did, which is the predictable
+outcome of a rule that needs remembering at N sites instead of being true once. `pearlColorScheme`
+now carries the whole ladder (bg → surface → surfaceVariant, warm) and points `surfaceTint` at
+`surface` so M3's tonal elevation cannot accent-wash a sheet. The call-site rule stays, because
+saying `containerColor = surface` on a modal still documents intent — it just is no longer load-bearing.
+
+**§8 — the settings capsules are gutterless, and `SettingsActionRow` owns the gutter.**
+`SettingsPrimaryAction` / `SettingsOutlineAction` baked `fillMaxWidth().padding(horizontal = 24)`
+into themselves. That made them correct in exactly one position — bare at page level, which only the
+recipe used — and wrong in all nine shipped call sites: four double-guttered them to 48dp inside
+another padded Row, two put them in a `ChipFlow` where each `fillMaxWidth` capsule claimed a whole
+line and rendered the Generate cluster as the stacked button wall `FAILURES.md` names, and one sat
+two of them in a plain Row where the first took the full width and the second got the remainder.
+A primitive that every caller uses wrongly is a primitive with the wrong shape. The capsules now size
+to their label and the gutter, spacing and large-scale WRAPPING live in one `SettingsActionRow`.
+
+**§6 — a sentence is never mono.** Every control explainer in Settings was `labelSmall`: 10sp MONO,
+the app's smallest size, in the voice §6 reserves for UPPERCASE micro-labels and explicitly bars from
+sentences. Rendered at 200% they were also the first thing to wrap to three lines. They are
+`bodySmall` via `SettingsExplainer` now. The recipe golden shows the payoff plainly — the same
+sentence that wrapped to two lines in mono fits one in sans.
+
+**§7 — settings rows share `SETTINGS_ROW_PAD`.** §7 already demanded one vertical padding per lens;
+settings used ten (2/4/5/6/8/9/10/11/12/14), so Recovery's signal rows sat 6dp taller than the
+write-back toggles directly under them. Named constant, like coach's `COACH_ROW_PAD`.
+
+**The one that was purely a bug.** `ForgeSwitch` draws a 40×24dp track and `ToggleRow` applied no
+click of its own, so every toggle in Settings — about twenty — was a 24dp-tall target against §14's
+48dp minimum. The row is the target now and the switch is drawn (`onCheckedChange = null`), which
+satisfies §2③'s no-nested-taps rule in the same move. `GoalEditorScreen` still calls `ForgeSwitch`
+as its own target and was left alone: it is outside this pass, and the same fix applies.
+
+**What the gate said.** 62 violations paid down across seven rules, none added; baseline 933 → 871.
+`ui/settings/` now carries zero debt on `divider`, `em-dash`, `font-size`, `max-lines`,
+`screen-name-title` and `unlabelled-clickable`. Both settings recipe goldens were re-recorded after
+looking at the diffs (§14: a changed golden is a question) — the 200% one confirms the action row
+wraps rather than overflowing, which is what the baked-in gutter had been trying and failing to fix.
+## 2026-08-20 — §1/§3: Coach becomes an account, and the ledger spine is a sanctioned data line
+
+Antho, opening the task: "I hate everything in the coach app." The page was not out of compliance —
+it was one of the most doctrine-annotated files in the repo, nearly every block carrying a comment
+justifying itself against a clause. That is the finding, not a defence. **A screen can satisfy every
+rule in this document and still have nothing to say**, because the doctrine governs how ink is
+spent, never what the screen is about. Nobody had decided what Coach was about, so it defaulted to
+rendering the engine: eight sections across three lenses, the largest thing on it a count of pending
+admin ("2 proposals", 52sp), and its most valuable content — a proposed change with its reasoning —
+set as 14sp body text beside a 110dp thumbnail.
+
+**The rule that changed.** §3's Overview archetype gains an **account variant**, and §1's
+lines-are-data clause gains the ledger spine by name.
+
+**Why an account rather than a better dashboard.** The two real usage scenes (confirmed with Antho)
+are the Monday ritual and idle browsing, and the three lenses served neither: the Monday decision
+and its evidence were one tap apart, and "did that change work" was a third tap away in Journey.
+Ordering by TIME instead of by topic collapses all three into one column, and it removes the
+duplication policing the lenses required — §4.3's "one home" was being enforced by hand across
+three views of the same facts, which is why so much content had been cut for merely echoing
+something on another lens.
+
+**Why one filled tile is not a §1 violation.** §1 earns surfaces by interactivity, and the open call
+is the only interactive entry on the page. Spending the page's single fill there makes rank
+*visible* rather than typographic: the one thing asking for a decision is the one thing with a body,
+and it loses that body when it resolves. This is the clause working as intended, not an exception
+to it.
+
+**Why the spine is data.** §1 bans hairlines because a line is a claim about data. The spine makes
+that claim truthfully: it is the time axis every entry hangs from, which is what lets an open
+proposal and a five-week-old outcome be the same object, differing only by node and stamp. It is
+drawn inside the gutter at x=10dp so all four regions keep the one 24dp content column.
+
+**What the gate said.** The change paid down four allowlist entries (two files' worth of `fontSize=`
+and `maxLines=1` debt) and introduced none: the phase label wraps instead of truncating now that it
+takes `labelSmall` from the scale, and `humanizeMachineProse` gives the em-dash/paren-plural
+translation exactly one home. 944 tests green, screenshot goldens included.
+
+**Not promoted to a seventh archetype.** A ledger with a spine, nodes and stamps is one screen's
+pattern until it is three. Minting an archetype would owe `LedgerRecipe.kt` and a new golden set for
+a vocabulary nothing else uses yet. If a second surface wants it, promote it then (§2⑥).
+
+---
+
 ## 2026-07-27 — §4.6: the chrome slot goes to a notifications bell, and banners stop being a pattern
 
 Home opened with up to four stacked strips (milestone, coach brief, orphan notice, resume reminder)

@@ -121,7 +121,25 @@ class SettingsViewModel @Inject constructor(
     private val coachRepo: com.forge.app.data.repo.CoachRepository,
     private val reminderScheduler: com.forge.app.service.ReminderScheduler,
     private val programChangeGuard: com.forge.app.ui.common.ProgramChangeGuard,
+    // §12: "dialogs only for destructive/irreversible acts", and "no success toasts for what the UI
+    // already shows". Backup / restore / import / generate outcomes used to each open an AlertDialog
+    // the user had to dismiss. They now go to the app's ONE snackbar (§8), already rendered at the
+    // root by SnackbarControllerHost — the same channel every other feature's Undo uses.
+    private val snackbar: com.forge.app.ui.common.SnackbarController,
 ) : ViewModel() {
+
+    /**
+     * Write-only sink that forwards an outcome line to [snackbar].
+     *
+     * The dozen `_statusMessage.value = "…"` sites read exactly as they did when this was a
+     * `MutableStateFlow<String?>` feeding a dialog, so swapping the DELIVERY did not mean editing
+     * every producer — and no site can accidentally leave a stale message sitting in state.
+     */
+    private inner class OutcomeSink {
+        var value: String?
+            get() = null
+            set(v) { if (!v.isNullOrBlank()) snackbar.show(v) }
+    }
 
     // ─── Coach (auto-coach Phase 4) ───────────────────────────────────────────
 
@@ -169,8 +187,15 @@ class SettingsViewModel @Inject constructor(
     fun addVacation(startDate: String, endDate: String, label: String) =
         viewModelScope.launch { vacationRepo.add(startDate, endDate, label) }
 
+    /** §12 undo-over-confirm: delete now, re-insert the captured row if the user takes it back.
+     *  A reversible delete never gets a confirm dialog — it gets the app's ONE Undo snackbar. */
     fun deleteVacation(period: com.forge.app.data.db.entities.VacationPeriod) =
-        viewModelScope.launch { vacationRepo.delete(period) }
+        viewModelScope.launch {
+            vacationRepo.delete(period)
+            snackbar.showUndo("Holiday removed") {
+                vacationRepo.add(period.startDate, period.endDate, period.label)
+            }
+        }
 
     // ─── Custom cardio activity types (GYMAP-37) ──────────────────────────────
     // A standalone StateFlow (not the big combine) — list data managed like vacations above.
@@ -184,8 +209,15 @@ class SettingsViewModel @Inject constructor(
     fun updateCustomCardioType(type: com.forge.app.domain.cardio.CustomCardioType) =
         viewModelScope.launch { settingsRepo.updateCustomCardioType(type) }
 
+    /** §12 undo-over-confirm — the removed activity comes back intact on Undo. */
     fun deleteCustomCardioType(code: String) =
-        viewModelScope.launch { settingsRepo.deleteCustomCardioType(code) }
+        viewModelScope.launch {
+            val removed = customCardioTypes.value.firstOrNull { it.code == code }
+            settingsRepo.deleteCustomCardioType(code)
+            snackbar.showUndo("Activity removed") {
+                removed?.let { settingsRepo.addCustomCardioType(it) }
+            }
+        }
 
     val state: StateFlow<SettingsUiState> = combine(
         settingsRepo.amoledMode,
@@ -542,9 +574,7 @@ class SettingsViewModel @Inject constructor(
 
     // ── Import from another gym app (#GYMAP-17) ────────────────────────────────
     /** A short message shown after an import finishes (success summary or a reason it didn't). */
-    private val _importResult = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
-    val importResult: StateFlow<String?> = _importResult.asStateFlow()
-    fun clearImportResult() { _importResult.value = null }
+    private val _importResult = OutcomeSink()
 
     fun importData(uri: android.net.Uri) = viewModelScope.launch {
         val result = runCatching { importRepo.import(uri) }
@@ -588,9 +618,7 @@ class SettingsViewModel @Inject constructor(
     }
 
     // ── Complete DB backup & restore (the real safety net) ─────────────────────
-    private val _statusMessage = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
-    val statusMessage: StateFlow<String?> = _statusMessage.asStateFlow()
-    fun clearStatusMessage() { _statusMessage.value = null }
+    private val _statusMessage = OutcomeSink()
 
     /** Set true once a restore lands; the UI shows "restarting" and relaunches the app. */
     private val _restoreSucceeded = kotlinx.coroutines.flow.MutableStateFlow(false)

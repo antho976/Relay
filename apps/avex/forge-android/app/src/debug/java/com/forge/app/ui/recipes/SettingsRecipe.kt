@@ -32,9 +32,13 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.forge.app.ui.settings.ConnectPill
 import com.forge.app.ui.settings.SettingsActionLink
+import com.forge.app.ui.settings.SettingsActionRow
+import com.forge.app.ui.settings.SettingsExplainer
 import com.forge.app.ui.settings.SettingsOutlineAction
 import com.forge.app.ui.settings.SettingsPrimaryAction
 import com.forge.app.ui.settings.SettingsSectionHeader
+import com.forge.app.ui.settings.SETTINGS_GUTTER
+import com.forge.app.ui.settings.SETTINGS_ROW_PAD
 import com.forge.app.ui.settings.SettingsNavRow
 import com.forge.app.ui.settings.StatusDot
 import com.forge.app.ui.settings.ToggleRow
@@ -50,11 +54,16 @@ import com.forge.app.ui.theme.ForgeTheme
  *   ├─ SettingsSectionHeader  mono anchor + air, never a divider          §3, §7
  *   ├─ rows                   each control gets a ≤1-line explainer       §3
  *   │                         nav rows show their LIVE value              §3
+ *   │                         WHOLE ROW is the ≥48dp tap target           §14, §2③
  *   ├─ per-row action         whole-row tap + drawn OUTLINED pill         §2③, §8
- *   └─ page actions           filled ① + outlined ② GROUPED AT THE END    §8
+ *   └─ SettingsActionRow      filled ① + outlined ② GROUPED AT THE END    §8
  *
- * Note the gutter: `SettingsPrimitives` rows apply their own 24dp horizontal padding, so the page
- * Column must NOT add it again.
+ * Two gutter rules, and they are the thing this recipe most exists to pin down:
+ *  - `SettingsPrimitives` ROWS apply their own `SETTINGS_GUTTER` padding, so the page Column must
+ *    NOT add it again.
+ *  - page ACTIONS are gutterless capsules that only ever go inside [SettingsActionRow], which owns
+ *    the gutter and wraps them at large font scales. Wrapping them in your own padded Row or a
+ *    ChipFlow double-gutters them to 48dp — every shipped call site had that bug once.
  */
 @Composable
 fun SettingsRecipe(
@@ -131,8 +140,10 @@ fun SettingsRecipe(
             // destructive one-shot stays level ② tinted `error`, paired with an Undo snackbar —
             // never a filled red button.
             Spacer(Modifier.height(28.dp))
-            SettingsPrimaryAction("Update Health Connect") { }
-            SettingsOutlineAction("Re-sync from watch") { }
+            SettingsActionRow {
+                SettingsPrimaryAction("Update Health Connect") { }
+                SettingsOutlineAction("Re-sync from watch") { }
+            }
             Spacer(Modifier.height(32.dp))
         }
     }
@@ -152,7 +163,7 @@ private fun ConnectableRow(name: String, connected: Boolean) {
             .fillMaxWidth()
             // The WHOLE row is the tap target. The pill below is drawn, not separately clickable —
             // a nested tap is banned (§2③).
-            .padding(horizontal = 24.dp, vertical = 12.dp),
+            .padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
@@ -164,11 +175,7 @@ private fun ConnectableRow(name: String, connected: Boolean) {
             if (connected) {
                 // §4.9: show the reading, not just the conclusion. §12: a stale signal reports its
                 // AGE rather than an error banner.
-                Text(
-                    "Last read 2h ago",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = muted.copy(alpha = 0.65f)
-                )
+                SettingsExplainer("Last read 2h ago")
             }
         }
         if (!connected) ConnectPill()

@@ -33,6 +33,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.data.db.entities.VacationPeriod
+import com.forge.app.ui.common.GlyphButton
 import com.forge.app.ui.common.InlineEmptyHint
 import com.forge.app.ui.common.clickableLabeled
 import java.time.Instant
@@ -63,8 +64,8 @@ internal fun VacationPage(vm: SettingsViewModel, modifier: Modifier = Modifier) 
         item("intro") {
             Text(
                 "Mark a holiday and those days won't break your training streak or count as missed.",
-                style = MaterialTheme.typography.bodySmall, color = muted, fontStyle = FontStyle.Italic,
-                modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp)
+                style = MaterialTheme.typography.bodySmall, color = muted,
+                modifier = Modifier.padding(horizontal = SETTINGS_GUTTER, vertical = 8.dp)
             )
         }
         item("add") {
@@ -72,7 +73,7 @@ internal fun VacationPage(vm: SettingsViewModel, modifier: Modifier = Modifier) 
             Text(
                 "+ add holiday",
                 style = MaterialTheme.typography.labelLarge, color = accent, letterSpacing = 0.3.sp,
-                modifier = Modifier.fillMaxWidth().clickableLabeled("Add holiday") { showAdd = true }.padding(horizontal = 24.dp, vertical = 14.dp)
+                modifier = Modifier.fillMaxWidth().clickableLabeled("Add holiday") { showAdd = true }.padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD)
             )
         }
         if (vacations.isEmpty()) {
@@ -80,13 +81,13 @@ internal fun VacationPage(vm: SettingsViewModel, modifier: Modifier = Modifier) 
                 InlineEmptyHint(
                     "No holidays yet.",
                     color = muted,
-                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp)
+                    modifier = Modifier.padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD)
                 )
             }
         } else {
             items(vacations, key = { it.id }) { v ->
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 12.dp),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
@@ -94,11 +95,10 @@ internal fun VacationPage(vm: SettingsViewModel, modifier: Modifier = Modifier) 
                         Text(v.label.ifBlank { "Holiday" }, style = MaterialTheme.typography.bodyMedium, color = onBg)
                         Text(formatRange(v.startDate, v.endDate), style = MaterialTheme.typography.labelSmall, color = muted)
                     }
-                    Text(
-                        "✕",
-                        style = MaterialTheme.typography.bodyLarge, color = muted,
-                        modifier = Modifier.clickableLabeled("Delete holiday") { vm.deleteVacation(v) }.padding(start = 16.dp)
-                    )
+                    // GlyphButton, not a padded Text: it guarantees the ≥48dp target (§14) the
+                    // bare glyph never had. The row itself is passive, so this is the row's ONE
+                    // tap target rather than a second one nested inside it (§2③).
+                    GlyphButton("✕", "Delete holiday", muted, { vm.deleteVacation(v) })
                 }
             }
         }
@@ -129,6 +129,7 @@ private fun AddVacationDialog(onSave: (String, String, String) -> Unit, onDismis
     }
 
     AlertDialog(
+        containerColor = MaterialTheme.colorScheme.surface,
         onDismissRequest = onDismiss,
         title = { Text("Add holiday") },
         text = {
@@ -157,16 +158,20 @@ private fun AddVacationDialog(onSave: (String, String, String) -> Unit, onDismis
 @Composable
 private fun DateRow(label: String, ms: Long?, onClick: () -> Unit) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val accent = MaterialTheme.colorScheme.primary
     Row(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 6.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickableLabeled("Pick $label date", onClick = onClick)
+            .padding(vertical = SETTINGS_ROW_PAD),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(label, style = MaterialTheme.typography.bodyMedium, color = muted)
+        // onBg, not accent: §14 bans accent-coloured text (four of five presets fail AA). The row
+        // is already clickable, so the value does not need colour to read as editable.
         Text(
             ms?.let { LocalDate.ofInstant(Instant.ofEpochMilli(it), ZoneOffset.UTC).format(DISPLAY_FMT) } ?: "Pick a date",
-            style = MaterialTheme.typography.bodyMedium, color = accent
+            style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground
         )
     }
 }

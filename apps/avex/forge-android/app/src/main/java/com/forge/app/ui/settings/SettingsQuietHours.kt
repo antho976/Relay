@@ -1,7 +1,7 @@
 package com.forge.app.ui.settings
 
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.foundation.clickable
+import com.forge.app.ui.common.clickableLabeled
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -61,8 +61,8 @@ private fun QuietDayRow(label: String, window: QuietWindow, expanded: Boolean, o
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onToggle)
-            .padding(horizontal = 24.dp, vertical = 12.dp),
+            .clickableLabeled("$label quiet hours", onClick = onToggle)
+            .padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -76,7 +76,7 @@ private fun QuietDayRow(label: String, window: QuietWindow, expanded: Boolean, o
                 // An "off" day (a zero-length window) reads dim — it's the inactive state.
                 color = if (window.isOff) muted else onBg
             )
-            Text(if (expanded) "⌃" else "⌄", style = MaterialTheme.typography.bodyMedium, color = muted, fontSize = 12.sp)
+            Text(if (expanded) "⌃" else "⌄", style = MaterialTheme.typography.bodyMedium, color = muted)
         }
     }
 }

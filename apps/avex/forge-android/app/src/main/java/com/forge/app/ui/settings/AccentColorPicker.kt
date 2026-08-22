@@ -6,6 +6,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import com.forge.app.ui.common.clickableLabeled
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.drag
@@ -94,7 +95,7 @@ internal fun AccentColorRow(currentHex: String, onSelect: (String) -> Unit) {
     }
 
     Column(
-        modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp),
+        modifier = Modifier.padding(horizontal = SETTINGS_GUTTER, vertical = 4.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Text("Accent color", style = MaterialTheme.typography.bodyMedium, color = onBg)
@@ -109,7 +110,7 @@ internal fun AccentColorRow(currentHex: String, onSelect: (String) -> Unit) {
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                     // Tapping a preset writes its hex into the custom field too (currentHex drives it).
-                    modifier = Modifier.clickable { onSelect(hex) }
+                    modifier = Modifier.clickableLabeled("Use this accent") { onSelect(hex) }
                 ) {
                     Box(
                         modifier = Modifier
@@ -140,8 +141,7 @@ internal fun AccentColorRow(currentHex: String, onSelect: (String) -> Unit) {
         Text(
             "Enter a 6-digit #RRGGBB hex code, or tap the swatch for a color wheel.",
             style = MaterialTheme.typography.labelSmall,
-            color = muted.copy(alpha = 0.65f),
-            fontSize = 10.sp
+            color = muted.copy(alpha = 0.65f)
         )
         AnimatedVisibility(visible = wheelVisible) {
             Column(

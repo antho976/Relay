@@ -20,7 +20,7 @@ changed during a task is written here the same turn (§16).
 **"Open editorial"**: content sits directly on the near-black page — no grey boxes around passive
 content. Hierarchy = three type voices (big serif figures, quiet sans prose, tiny mono small-caps
 labels) + whitespace, never container backgrounds and **never hairline strips** (a line exists only
-as data: chart threshold/floor/baseline, table rule). Sections separate by air + their mono header
+as data: chart/table rule, Coach's ledger spine). Sections separate by air + their mono header
 alone. Color is scarce — one user-chosen accent at fixed intensities, so its presence means
 something. Surfaces/borders are **earned by interactivity**: can't tap it, no box. Modals keep surfaces.
 
@@ -81,7 +81,7 @@ Global rules (§4–§14) apply everywhere; beyond them a screen draws ONLY from
 
 | Archetype | Screens | Toolkit | Not here |
 |---|---|---|---|
-| **Overview / dashboard** | Home, Stats, Coach, Cardio, Profile | Serif hero = mono eyebrow (identity + human date) over ONE serif line ONLY when it carries a decision/result (Coach "Deload week"), else the bare name; status/anticipation is never a verdict (drop the serif line, figures/mark become the hero); never a name over a verdict, never a filler headline. Aside line only for the screen's unique read. 2–4 `EditorialFigure`s + exceptions as quiet lines + primary action above fold; lens pills; open charts; **≥1 mark that works at zero**; `statsEntrance` cascade; scroll ≤2–3 viewports | an all-text screen — every section leads with a mark (§12) |
+| **Overview / dashboard** | Home, Stats, Coach, Cardio, Profile | Serif hero = mono eyebrow (identity + human date) over ONE serif line ONLY when it carries a decision/result (Coach "Deload week"), else the bare name; status/anticipation is never a verdict (drop the serif line, figures/mark become the hero); never a name over a verdict, never a filler headline. Aside line only for the screen's unique read. 2–4 `EditorialFigure`s + exceptions as quiet lines + primary action above fold; lens pills; open charts; **≥1 mark that works at zero**; `statsEntrance` cascade; scroll ≤2–3 viewports. **Account variant** (Coach, 2026-08-20): no pills, no serif hero — one time-ordered column of entries on a spine, the ONE surface fill spent on the single entry still asking for something, evidence attached to the decision it supports (`design/MAP.md`) | an all-text screen — every section leads with a mark (§12) |
 | **Detail page** | session/cardio detail, lift drill-down | Serif title + context, metric `SegmentPill`s, charts w/ draw-in, set tables; scoped to ONE item | dashboard figure walls, lens pills for unrelated views |
 | **List / browser** | History, Goals, Trophies, pickers | Search-first, trim rows, light stagger; tiny hero (title + ≤1–2 figures) | charts, big hero, draw-in theatrics |
 | **Settings / form / editor** | settings, goal/program editors, onboarding | Mono `SettingsSectionHeader` anchors + air, **no dividers**; each control gets a ≤1-line explainer; navigation = `action →` links, one-shot actions = capsule buttons (filled · outlined sidekick) **grouped at the END of the page, never mid-scroll**; never toggle-chips; 44dp capsules. Keep each drill-in light — split a dense multi-block area into focused sub-pages, each menu row showing its live value. **Onboarding**: one decision per step; each page = mono chapter eyebrow → serif `headlineSmall` question (page-title voice, not a hero) → ≤1 caption → content; chrome = `←` + 4dp accent progress rail + mono `skip →` (no wordmark pre-app); full-width filled capsule CTA; every selectable shares ONE tile formula (outline@0.35 border → accent border + accent@0.15 wash) | serif heroes, figures, lens pills, chart motion/stagger; section dividers; action buttons mid-page; actions as pill toggles; one long multi-block scroll |
@@ -111,11 +111,10 @@ temperature, not a style): bg `#110F0C` · gradient `#17120E→#0A0806` (behind 
 `#F2EFEA` · muted `#BFB6AA`. AMOLED: bg black, surface `#080808`, surfaceVar `#111111`, gradient
 `#000000→#050507`.
 
-**M3's container tones are NOT themed — pass them explicitly on every M3 component that fills.**
-`ForgeTheme` never sets the `surfaceContainer*` family, `outlineVariant` or `surfaceTint`, so anything
-reaching for one falls through to Material's stock dark palette, a lighter purple-leaning grey belonging
-to no theme here. **A modal is `containerColor = surface`**, its dividers the outline 0.25 rung, its
-confirm/dismiss `onBackground`/muted (2026-07-25; `design/AUDIT.md` carries the call sites still owing).
+**M3's container tones ARE themed** (2026-08-20): `ForgeTheme` sets the `surfaceContainer*` ladder,
+`outlineVariant` and `surfaceTint` = surface, so sheets/menus/pickers land on Pearl rather than
+Material's stock purple-grey. **A modal still says `containerColor = surface`**, its dividers the
+outline 0.25 rung, its confirm/dismiss `onBackground`/muted.
 
 Accent = user-picked (Ember `#D4761F` **default** · Red `#8B3535` · Olive `#4D6040` · Gold `#7A6435` ·
 Navy `#3D4F73`); `primary`=accent, `primaryContainer`=@0.15, `secondary`=@0.6. Spend it in FEW places
@@ -155,8 +154,8 @@ container 0.15). **Reserved**: PR gold `#E3B341` (PR star + gold set row only) �
 - **Always take a style from `MaterialTheme.typography`** — never `fontSize =` at a call site. The
   three voices ARE the meaning system; an inline size opts out of it. Only sanctioned off-scale use:
   8–9sp figure captions.
-- **Rank two mono labels by SIZE, never by tracking or colour alone** — hence the anchor rung above
-  the 13sp row label (`design/DECISIONS.md`, 2026-07-25).
+- **A sentence is never mono** — explainers take `bodySmall` (`SettingsExplainer`).
+- **Rank two mono labels by SIZE, never tracking or colour** (`design/DECISIONS.md`, 2026-07-25).
 - Mono labels `.uppercase()` in code. *Italic* = the aside voice (wordmark, coach one-liners,
   taglines): bodyM/S italic, muted.
 - One serif hero per screen, everything else steps down; animating numbers use tnum styles.
@@ -168,7 +167,7 @@ container 0.15). **Reserved**: PR gold `#E3B341` (PR star + gold set row only) �
 `header → 2 → caption → 10 → content`; **no two text lines of different roles butt flush** — ≥8dp
 between a header/caption/aside/row (put a Spacer(≥8) before the first row; don't lean on the row's
 own bottom padding). Figure rows: gap 20, label 2 under number. List/data rows: **ONE vertical
-padding for ALL of a lens's rows** (coach shares `COACH_ROW_PAD` = 6, i.e. 12 total) — sibling
+padding for ALL of a lens's rows** (coach shares `COACH_ROW_PAD` = 6; settings shares `SETTINGS_ROW_PAD` = 12) — sibling
 sections never mix 4/5/6, the page reads as one rhythm; a text-link inside a row stays at vertical 2
 so it doesn't inflate that row above its neighbours.
 
@@ -204,7 +203,8 @@ its sidekick (a destructive one-shot = level ② tinted `error` via `ForgeOutlin
 paired with an Undo snackbar, never a filled red button); ③ mono accent `action →` = navigation. No M3
 default/floating-text/icon buttons in content. Settings reuse `SettingsPrimaryAction` (do-it-now) /
 `SettingsOutlineAction` (sidekick) / `SettingsActionLink` (`action →` nav) from `SettingsPrimitives.kt`;
-group page-level action buttons at the END of the page, never mid-scroll.
+both capsules are GUTTERLESS and go only inside `SettingsActionRow`, which owns the gutter and wraps
+them at large scale (your own padded Row double-gutters them); group them at the page END, never mid-scroll.
 
 **Per-row action = compact OUTLINED pill, never filled.** A do-it-now action scoped to a single list
 row/integration (Recovery's Connect, the Profile BODY rows' Log/Sync/Open) renders as a right-aligned

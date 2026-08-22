@@ -275,13 +275,42 @@ words column in the cardio CSV; descriptive only, never touches a total/pace. A 
 its activity to the **last-logged** one (GYMAP-40: `last_cardio_type` in DataStore, written only on
 a new non-rest save), not always Run.
 
-### Coach — `ui/coach`
+### Coach — `ui/coach` — **THE LEDGER** (2026-08-20 redesign)
 
-lens pills Now/Signals/Journey (Now = call + watch + one road-ahead section: milestone rail +
-brief/verdict/autopilot bars; Signals = lifts + recovery + inputs + learned; Journey = record +
-trust; old Brief/Lab/Timeline routes = lens deep-links). Coach content renders ONLY here —
-Settings→Coach is config alone (on/off switch + mode chips + a feeds on/off glance whose silent HC
-rows tap to Recovery), never a second brief/trust/history home.
+**One running account, no lenses.** The Now/Signals/Journey pills are gone (`SETTLED.md`). The page
+is one column read in this order, and every region is a file:
+
+1. **The account** (`CoachAccount.kt`) — `THIS WEEK` with the open calls, then every week before it,
+   newest first, capped at 6 with an "and N more weeks" line. Each decision is one **entry**: a node
+   on the spine, a title (`subject · change`), a **stamp** (open / applied / skipped / undone /
+   absorbed / its outcome word), a watch bar while its 14-day window runs, and Undo when it carries
+   `undoData`. Closes on the week's three figures. A pre-baseline account gets `BaselineEntry`
+   instead of a quiet line: the serif count, the meter, and what fills it.
+2. **`WHERE YOU STAND`** (`CoachStand.kt`) — recovery load + only the checks that FIRED, lifts on
+   watch with real trends, and the inputs with their charts and Connect pills.
+3. **`AHEAD`** (`CoachAhead.kt`) — block phase rail, goals, the one project, the milestone rail.
+4. **`WHAT IT HAS LEARNED`** (`CoachLearned.kt`) — the standing balance: autopilot trust per type,
+   the biases, your numbers.
+
+**The spine** (`Modifier.ledgerSpine`, `CoachUi.kt`) is the one line on the page and it is DATA: the
+time axis, drawn at x=10dp inside the gutter so all four regions keep the one 24dp content column.
+`EntryNode` carries the lifecycle (open = the larger accent node), the stamp carries the outcome —
+never both saying the same thing.
+
+**The one body on the page** is `CoachCallTile` (`CoachCall.kt`): an open call, and nothing else,
+gets `surfaceVariant` at radius 16. Surface here is rank made visible. Inside it, `callCopy`
+decomposes the stored imperative summary into subject + change so the CHANGE ("3 → 4 sets") can take
+the serif rung (28sp under 18 chars, else 22) instead of arriving as one more line of body text; the
+evidence draws at FULL width (88dp sparkline, or the fatigue meter + fired checks for a deload),
+because the evidence for a call belongs to that call.
+
+`humanizeMachineProse` (`CoachUi.kt`) is the ONE place em dashes and paren plurals are translated
+out of stored planner prose — the allowlist counts that file's literals, so nothing else re-rolls
+them. Deep links: `CoachEntryPoint`, with `accountItemCount` scrolling past the account (it mirrors
+`coachAccount`'s emission — change one, change the other).
+
+Coach content renders ONLY here — Settings→Coach is config alone (on/off switch + mode chips + a
+feeds on/off glance whose silent HC rows tap to Recovery), never a second brief/trust/history home.
 
 ### Profile — `ui/profile`
 

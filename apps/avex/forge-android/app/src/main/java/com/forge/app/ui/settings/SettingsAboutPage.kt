@@ -1,5 +1,9 @@
 package com.forge.app.ui.settings
 
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Row
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -32,7 +36,11 @@ import com.forge.app.ui.common.clickableLabeled
  * permission, so every claim below is verifiable from the manifest.
  */
 @Composable
-internal fun AboutPage(modifier: Modifier = Modifier, viewModel: SettingsViewModel? = null) {
+internal fun AboutPage(
+    modifier: Modifier = Modifier,
+    viewModel: SettingsViewModel? = null,
+    onOpenExport: () -> Unit = {}
+) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val context = LocalContext.current
     val version = remember {
@@ -67,30 +75,27 @@ internal fun AboutPage(modifier: Modifier = Modifier, viewModel: SettingsViewMod
         SettingsSectionHeader("App", top = 12.dp)
         Text(
             if (version.isBlank()) "Offline strength tracker" else "Version $version · Offline strength tracker",
-            style = MaterialTheme.typography.labelSmall,
+            style = MaterialTheme.typography.bodyMedium,
             color = muted,
-            fontSize = 11.sp,
-            modifier = Modifier.padding(horizontal = 24.dp)
+            modifier = Modifier.padding(horizontal = SETTINGS_GUTTER)
         )
 
+        // §4.3: "a sentences-only section is redesigned to data or cut". The privacy stance was
+        // three 40-word paragraphs restating one another; it is four CLAIMS, each verifiable from
+        // the manifest, so it renders as four claim rows with the §12 dot carrying present/absent —
+        // the same vocabulary Recovery's connection rail uses. The prose said no more than these do.
         SettingsSectionHeader("Your data stays on this device")
-        AboutParagraph(
-            "Everything you log lives in a private database on this phone. There's no account and no " +
-                "sign-in. Avex doesn't even request the Internet permission, so it physically can't " +
-                "upload your data anywhere."
-        )
-        AboutParagraph(
-            "No servers, no analytics, no tracking. Your data only moves when you choose to move it, " +
-                "exporting or sharing a file or saving a backup, and it goes exactly where you point it " +
-                "through Android's own share / file picker."
-        )
-        AboutParagraph(
-            "Keep your own backups from Settings → Export data → full backup; restoring on a new phone " +
-                "brings everything back. Turn on Privacy to block screenshots and hide the app preview in " +
-                "recent apps."
-        )
+        PrivacyClaim("No Internet permission", "Avex physically cannot upload anything.")
+        PrivacyClaim("No account, no sign-in", "Everything lives in a private database on this phone.")
+        PrivacyClaim("No servers, analytics or tracking", "Nothing is collected, because nothing is sent.")
+        PrivacyClaim("Your data moves only when you move it", "Exports and backups go where you point them, through Android's own picker.")
+        SettingsActionLink("Export or back up your data →", onOpenExport)
+
         SettingsSectionHeader("Gestures & shortcuts")
-        AboutCaption("Hidden gestures built into the training screen and workout logging.")
+        SettingsExplainer(
+            "Hidden gestures built into the training screen and workout logging.",
+            Modifier.padding(start = SETTINGS_GUTTER, end = SETTINGS_GUTTER, bottom = 4.dp)
+        )
         GestureRow(
             gesture = "Long-press an exercise card",
             action = "Quick actions: skip exercise, open swap picker, set rest timer"
@@ -112,83 +117,62 @@ internal fun AboutPage(modifier: Modifier = Modifier, viewModel: SettingsViewMod
             action = "Change day color · re-roll exercises · edit program for this day"
         )
         SettingsSectionHeader("About")
-        AboutParagraph(
+        SettingsExplainer(
             "A personal gym companion: auto-generated programs, an adaptive coach, progress stats, " +
-                "trophies and a rank ladder. Built for lifting, not for the cloud."
-        )
-        if (viewModel != null) {
-            Text(
-                "View crash logs",
-                style = MaterialTheme.typography.bodySmall,
-                color = muted,
-                modifier = Modifier
-                    .clickableLabeled("View crash logs") { showCrashLogs = true }
-                    .padding(horizontal = 24.dp, vertical = 10.dp)
-            )
-        }
-        SettingsSectionHeader("Open-source licenses")
-        AboutParagraph(
-            "Avex is built on open-source software. The anatomical muscle figures are adapted from " +
-                "react-native-body-highlighter (MIT License). The core libraries it's built on (Jetpack " +
-                "Compose, Room, Hilt and Health Connect) are under the Apache License 2.0."
-        )
-        Text(
-            "View licenses",
-            style = MaterialTheme.typography.bodySmall,
-            color = muted,
-            modifier = Modifier
-                .clickableLabeled("View open-source licenses") { showLicenses = true }
-                .padding(horizontal = 24.dp, vertical = 10.dp)
+                "trophies and a rank ladder. Built for lifting, not for the cloud.",
+            Modifier.padding(horizontal = SETTINGS_GUTTER)
         )
         Text(
             "Avex · a solo-built, offline-first project.",
-            style = MaterialTheme.typography.labelSmall,
-            color = muted.copy(alpha = 0.65f),
-            modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
+            style = MaterialTheme.typography.bodySmall,
+            color = muted,
+            fontStyle = FontStyle.Italic,
+            modifier = Modifier.padding(horizontal = SETTINGS_GUTTER, vertical = 8.dp)
         )
+
+        // §8 ③: these open something, so they are `action →` links, not muted body sentences.
+        SettingsSectionHeader("Diagnostics & licenses")
+        SettingsExplainer(
+            "Built on Jetpack Compose, Room, Hilt and Health Connect (Apache 2.0), with the " +
+                "anatomical figures adapted from react-native-body-highlighter (MIT).",
+            Modifier.padding(horizontal = SETTINGS_GUTTER)
+        )
+        if (viewModel != null) {
+            SettingsActionLink("View crash logs →") { showCrashLogs = true }
+        }
+        SettingsActionLink("View licenses →") { showLicenses = true }
         Spacer(Modifier.height(8.dp))
     }
 }
 
+/** One verifiable privacy claim: the §12 dot carries "true of this build", the words say what of. */
 @Composable
-private fun AboutParagraph(text: String) {
-    Text(
-        text,
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp)
-    )
+private fun PrivacyClaim(claim: String, detail: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD),
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Box(Modifier.padding(top = 5.dp)) { StatusDot(active = true, size = 7.dp) }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(claim, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground)
+            SettingsExplainer(detail)
+        }
+    }
 }
 
-@Composable
-private fun AboutCaption(text: String) {
-    Text(
-        text,
-        style = MaterialTheme.typography.labelSmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-        modifier = Modifier.padding(start = 24.dp, end = 24.dp, bottom = 4.dp)
-    )
-}
-
+/** A gesture and what it does. Each row carries a distinct action, which is what earns a list over
+ *  one mark (§4.10) — the pair reads as a reference table, so it keeps the label/explainer shape. */
 @Composable
 private fun GestureRow(gesture: String, action: String) {
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 24.dp, vertical = 6.dp)
+            .padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD)
     ) {
-        Text(
-            gesture,
-            style = MaterialTheme.typography.bodySmall,
-            color = muted
-        )
-        Text(
-            action,
-            style = MaterialTheme.typography.labelSmall,
-            color = muted.copy(alpha = 0.65f),
-            fontSize = 10.sp
-        )
+        Text(gesture, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground)
+        SettingsExplainer(action)
     }
 }
 
@@ -199,6 +183,7 @@ private fun CrashLogViewerDialog(
 ) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     AlertDialog(
+        containerColor = MaterialTheme.colorScheme.surface,
         onDismissRequest = onDismiss,
         title = { Text("Crash logs") },
         text = {
@@ -230,10 +215,9 @@ private fun CrashLogViewerDialog(
                         Text(
                             text,
                             style = MaterialTheme.typography.bodySmall.copy(
-                                fontFamily = FontFamily.Monospace,
-                                fontSize = 10.sp
+                                fontFamily = FontFamily.Monospace
                             ),
-                            color = muted.copy(alpha = 0.85f)
+                            color = muted.copy(alpha = 0.7f)
                         )
                     }
                 }
@@ -250,6 +234,7 @@ private fun LicensesDialog(onDismiss: () -> Unit) {
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     AlertDialog(
+        containerColor = MaterialTheme.colorScheme.surface,
         onDismissRequest = onDismiss,
         title = { Text("Open-source licenses") },
         text = {
@@ -263,17 +248,15 @@ private fun LicensesDialog(onDismiss: () -> Unit) {
                 Text(
                     "Anatomical front/back muscle figures.",
                     style = MaterialTheme.typography.labelSmall,
-                    color = muted.copy(alpha = 0.7f),
-                    fontSize = 10.sp
+                    color = muted.copy(alpha = 0.7f)
                 )
                 Spacer(Modifier.height(8.dp))
                 Text(
                     MIT_LICENSE_BODY_HIGHLIGHTER,
                     style = MaterialTheme.typography.bodySmall.copy(
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 10.sp
+                        fontFamily = FontFamily.Monospace
                     ),
-                    color = muted.copy(alpha = 0.85f)
+                    color = muted.copy(alpha = 0.7f)
                 )
                 Spacer(Modifier.height(16.dp))
                 Text(

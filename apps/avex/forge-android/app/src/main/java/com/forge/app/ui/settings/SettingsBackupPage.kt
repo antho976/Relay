@@ -71,44 +71,34 @@ internal fun BackupPage(vm: SettingsViewModel, modifier: Modifier = Modifier) {
         SettingsSectionHeader("Backup folder")
         Text(
             "A folder keeps your backup even if you uninstall Avex. Internal copies don't survive it.",
-            style = MaterialTheme.typography.labelSmall,
-            color = muted.copy(alpha = 0.7f),
-            modifier = Modifier.padding(start = 24.dp, end = 24.dp, top = 2.dp, bottom = 6.dp)
+            style = MaterialTheme.typography.bodySmall,
+            color = muted,
+            modifier = Modifier.padding(start = SETTINGS_GUTTER, end = SETTINGS_GUTTER, top = 2.dp, bottom = 6.dp)
         )
         // Whole row taps to (re)pick the folder; the outlined pill is drawn, not separately clickable (§8).
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable { folderPicker.launch(null) }
-                .padding(horizontal = 24.dp, vertical = 14.dp),
+                .clickableLabeled("Choose backup folder") { folderPicker.launch(null) }
+                .padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD),
             horizontalArrangement = Arrangement.spacedBy(16.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text("Backup folder", style = MaterialTheme.typography.bodyMedium, color = onBg)
-                Text(
-                    folderUri?.let(::folderLabel) ?: "None — backups stay on this phone",
-                    style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 10.sp
-                )
+                SettingsExplainer(folderUri?.let(::folderLabel) ?: "None, backups stay on this phone")
             }
             ConnectPill(if (folderUri == null) "Choose" else "Change")
         }
-        if (folderUri != null) {
-            Text(
-                "Remove folder",
-                style = MaterialTheme.typography.labelMedium,
-                color = muted,
-                modifier = Modifier
-                    .clickableLabeled("Remove backup folder", onClick = vm::clearBackupFolder)
-                    .padding(horizontal = 24.dp, vertical = 6.dp)
-            )
-        }
-
-        // The one do-it-now action, grouped at the END (§8). Always available — a manual backup works
-        // even with auto-backup switched off.
+        // Page actions, grouped at the END (§8) — "Back up now" is always available (a manual backup
+        // works with auto-backup off), and dropping the folder joins them as the outlined sidekick
+        // rather than sitting mid-scroll as a bare text link, which is where it used to live.
         Spacer(Modifier.height(24.dp))
-        Row(Modifier.padding(horizontal = 24.dp)) {
+        SettingsActionRow {
             SettingsPrimaryAction(label = "Back up now", onClick = vm::backupNow)
+            if (folderUri != null) {
+                SettingsOutlineAction("Remove folder", onClick = vm::clearBackupFolder)
+            }
         }
     }
 }
@@ -125,7 +115,7 @@ private fun BackupStatusRow(savedAt: String?, failed: Boolean, noBackup: Boolean
         else -> "No backup yet"
     }
     Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 8.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {

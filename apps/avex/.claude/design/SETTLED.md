@@ -40,6 +40,38 @@ lesson, not the tab) · the Profile's ON THIS DAY (Home's `OnThisDayCard` owns t
 = eyebrow + figures) · Coach pre-baseline signal dot-checklist in the hero (→ one labeled Baseline
 bar in the "Coming up" idiom; the effort/HC inputs it spelled out live in Signals only, §4.3,
 GYMAP-24) · hairline section separators (§1) · the 9-row milestone ladder (→ rail + next, §4.10).
+
+**Removed by the Coach ledger redesign (2026-08-20, Antho: "I hate everything in the coach app").**
+The page was doctrine-compliant and still unusable: eight sections across three lenses, all of them
+rendering engine state, none of them leading. Do not re-add any of these:
+
+- **The Now / Signals / Journey lens pills.** Splitting "what changed", "why", and "did it work"
+  across three taps meant no view answered how training is going, and it forced the same facts to be
+  policed for duplication across lenses instead of simply sitting together. One column now, ordered
+  by time. `CoachLens` and `initialLens` are gone; `CoachEntryPoint` replaces them and the old
+  `COACH_LAB` / `COACH_TIMELINE` routes resolve to a scroll position, not a tab.
+- **The serif verdict hero.** "2 proposals" at the 52sp display rung is an inbox badge blown up to
+  poster size — the biggest thing on the screen was a count of pending admin. The change itself
+  carries the serif rung now, inside the call it belongs to. (This extends the earlier "no status
+  serif verdicts" removal above to the *count* verdicts too.)
+- **The signal registry rail** (`SignalSlotRail`, "Also on the roadmap", "hollow is waiting on your
+  data, dim is on the way"). A roadmap of unbuilt features is not a reading. `SignalRegistry` still
+  exists in the domain layer; nothing renders it.
+- **The dormant half of the fatigue instrument panel.** Every check the advisor tracks, listed with
+  its quiet reading, was the machine showing its work. Only checks that FIRED render, and the full
+  panel appears as evidence *inside* a deload call, where it is the argument for something.
+- **The "Coming up" countdown section.** Its contents dispersed to where they are about: the next
+  brief is the `THIS WEEK` anchor's right meta, a pending verdict is the watch bar on its own entry,
+  the milestone rail is in `AHEAD`.
+- **"Under watch" as its own section.** A change under watch is the same entry it always was; it
+  just carries its window. Nothing moves between sections when it resolves — it is stamped in place.
+- **Per-goal archive from Coach.** The wiring existed and no affordance ever reached it; archiving
+  belongs to the Goals screen.
+
+What the redesign deliberately KEPT, all four confirmed by Antho as non-negotiable: apply / skip /
+undo on every change; the evidence behind a call, visible before approving; the week-by-week record;
+and goals + block + project.
+
 **Facts**: dark-only (Indigo light scheme in `Color.kt` unshipped — never build light variants);
 portrait phone only (no adaptive/tablet/landscape).
 **Untouchable**: live-session screen · Profile blending cover (the compositing approach only — its
