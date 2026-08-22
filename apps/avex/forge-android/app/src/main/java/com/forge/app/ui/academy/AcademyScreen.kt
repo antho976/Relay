@@ -161,7 +161,7 @@ fun AcademyContent(
 
             sections.forEachIndexed { sectionIndex, section ->
                 item("h-${section.label}") {
-                    Spacer(Modifier.height(36.dp))
+                    Spacer(Modifier.height(CHAPTER_GAP))
                     ChapterHeader(
                         label = section.label,
                         blurb = section.blurb,
@@ -169,7 +169,7 @@ fun AcademyContent(
                         accent = accent,
                         modifier = Modifier.statsEntrance(sectionIndex + 2)
                     )
-                    Spacer(Modifier.height(16.dp))
+                    Spacer(Modifier.height(18.dp))
                 }
 
                 // Walk the chapter in the plate rhythm: a lead, then two-up posters until the next
@@ -184,7 +184,7 @@ fun AcademyContent(
                         val piece = section.items[i]
                         val index = i
                         item("l-${section.label}-$i") {
-                            if (index > 0) Spacer(Modifier.height(32.dp))
+                            if (index > 0) Spacer(Modifier.height(ENTRY_GAP))
                             PieceEntry(
                                 item = piece,
                                 shape = PlateShape.LEAD,
@@ -200,7 +200,7 @@ fun AcademyContent(
                         val at = i
                         val pair = section.items.subList(at, minOf(at + 2, section.items.size))
                         item("p-${section.label}-$i") {
-                            Spacer(Modifier.height(if (at > 0) 28.dp else 0.dp))
+                            Spacer(Modifier.height(if (at > 0) ENTRY_GAP else 0.dp))
                             PosterRow(
                                 pair = pair,
                                 onBg = onBg,
@@ -251,6 +251,17 @@ private fun readingSpan(minutes: Int): String = when {
     minutes < 60 -> "$minutes min"
     else -> "${(minutes + 30) / 60} hr"
 }
+
+/**
+ * The air between one piece and the next, and between one chapter and the next.
+ *
+ * These two numbers and `CAPTION_GAP` (8dp) are the only thing binding a caption to its picture:
+ * there is no box and no rule to do it, so the gaps have to say it. 8dp up, 44dp down — a caption
+ * is more than five times closer to its own plate than to the next piece, which is past the point
+ * where the eye can read it either way.
+ */
+private val ENTRY_GAP = 44.dp
+private val CHAPTER_GAP = 52.dp
 
 /** Where the page points first, and the word above it. */
 data class Pointer(

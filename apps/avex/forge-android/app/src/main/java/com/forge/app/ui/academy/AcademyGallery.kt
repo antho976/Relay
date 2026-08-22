@@ -182,6 +182,20 @@ private val POSTER_ASPECT = 3f / 4f
 private val PlateCorner = RoundedCornerShape(16.dp)
 
 /**
+ * How far a caption sits from the picture it belongs to.
+ *
+ * 8dp, against the 44dp that separates one piece from the next (`ENTRY_GAP` in `AcademyScreen`).
+ * The ratio is the whole point and it was wrong at first: with 12 above and 28 below, a serif title
+ * under a photograph read as a HEADING for the photograph beneath it, because a heading normally
+ * introduces what follows it. Antho: *"nothing makes me think that text here is for that one"*.
+ * Nothing bound them because the gaps were close enough to be ambiguous, and the type said the
+ * opposite of what the layout meant. Proximity is the only device available here — a box would be a
+ * card, a rule would be a hairline (§1) — so it has to be unmistakable: caption tight to its plate,
+ * generous air before the next piece.
+ */
+private val CAPTION_GAP = 8.dp
+
+/**
  * A cover, greyscaled at render time.
  *
  * Forced to greyscale rather than trusted to be monochrome, so a colour asset can never quietly
@@ -262,14 +276,14 @@ fun PieceEntry(
     Column(modifier.bounceClick { onClick() }) {
         if (cover != null) {
             Plate(cover, if (lead) LEAD_ASPECT else POSTER_ASPECT)
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(CAPTION_GAP))
         } else if (reservePlate) {
             Box(Modifier.fillMaxWidth().aspectRatio(POSTER_ASPECT))
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(CAPTION_GAP))
         }
 
         PieceMeta(item, numeral, chapter, muted, accent)
-        Spacer(Modifier.height(8.dp))
+        Spacer(Modifier.height(6.dp))
 
         // No maxLines: a title is the whole pitch on a poster, so truncating one would leave the
         // piece saying nothing at all (§14).
@@ -288,7 +302,7 @@ fun PieceEntry(
         // takes the space the picture would have had. Next to a plated neighbour it does not, since
         // the reserved space is already keeping the two captions on the same line.
         if (lead || (cover == null && !reservePlate)) {
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(6.dp))
             Text(
                 item.deck,
                 style = MaterialTheme.typography.bodyMedium,
