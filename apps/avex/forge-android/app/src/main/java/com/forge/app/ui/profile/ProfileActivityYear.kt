@@ -35,10 +35,21 @@ import java.util.Locale
 /**
  * # ACTIVITY — the whole year, as a contribution graph
  *
- * GitHub's graph, at GitHub's proportions: **weekday down, week across**, seven rows of small
- * rounded squares running left to right from January to December, each lit by how many times you
- * trained that day. Month labels ride above the columns their month starts in; the key sits at the
- * bottom right.
+ * GitHub's graph, at GitHub's proportions: **weekday down, week across**, seven rows of rounded
+ * squares each lit by how many times you trained that day. Month labels ride above the columns
+ * their month starts in; the key sits at the bottom right.
+ *
+ * ## The year is wrapped onto two bands
+ *
+ * GitHub draws all 53 weeks on one line because it has a desktop's width to spend. On a phone that
+ * line puts a day at ~4.5dp — an honest texture, and too small to be the page's activity section.
+ * Antho, on seeing it: *"make activity bigger."*
+ *
+ * There is no way to make a 53-column single row bigger; the width is the width. So the year wraps:
+ * January–June on the first band, July–December on the second, ~27 columns each, which doubles the
+ * cell to ~9dp and quadruples the section's presence. Both bands are laid out over the SAME number
+ * of slots — the shorter half pads with empty ones at its tail — so a day is exactly the same size
+ * on both, which is the whole reason the wrap does not read as two unrelated charts.
  *
  * ## Month → year (2026-08-22, second pass)
  *
@@ -47,11 +58,9 @@ import java.util.Locale
  * small square with a lot of nothing beside it, and a month of training is too short a window to
  * show a shape. Antho, on seeing it: *"make it yearly, that looked better honestly."*
  *
- * The year has to earn its density instead. Fifty-three columns across the page put a day at about
- * 4.5dp, which is roughly what GitHub itself shows on a phone — small enough that no single day is
- * the point, and that is exactly the point. A year of training read at arm's length is a texture:
- * where the streaks are, where the gaps are, whether the back half of the year is denser than the
- * front. The two figures underneath answer the questions the texture cannot be counted for.
+ * A year read at arm's length is a texture rather than a table: where the streaks are, where the
+ * gaps are, whether the back half of the year is denser than the front. No single day is the point.
+ * The two figures underneath answer the questions the texture cannot be counted for.
  *
  * ## Why the ramp is fixed, not normalized
  *
@@ -67,20 +76,24 @@ import java.util.Locale
  */
 
 /**
- * The gap between day cells. The cell itself is not a fixed size: 53 columns have to fit the page
- * exactly, so each column takes an equal share of what is left and the cell squares itself off that.
+ * The gap between day cells. The cell itself is not a fixed size: a half-year of columns has to fit
+ * the page exactly, so each column takes an equal share of what is left and the cell squares itself
+ * off that. At ~9dp a 2.5dp gap is the ratio GitHub uses at its own cell size.
  */
-private val CELL_GAP = 1.5.dp
+private val CELL_GAP = 2.5.dp
 
 /** GitHub's square, not the old grid's dot — the shape is half of why the mark reads as this one. */
-private val CELL_SHAPE = RoundedCornerShape(1.5.dp)
+private val CELL_SHAPE = RoundedCornerShape(2.5.dp)
+
+/** The air between the two half-year bands — wider than a cell gap, so they read as two lines. */
+private val BAND_GAP = 16.dp
 
 /**
  * The key's swatch, and its own radius.
  *
- * It cannot reuse [CELL_SHAPE] or the cell's size: a day cell is ~4.5dp, and four of those in a row
- * would be a key too small to read the ramp off. The swatch is drawn at a legible size with a radius
- * in the same proportion, so it still reads as the same square.
+ * It cannot reuse the cell's size: a day is ~9dp and shrinks with the page, so four of those in a
+ * row would be a key that changes size on a narrower phone. The swatch is drawn at a fixed legible
+ * size, sharing [CELL_SHAPE]'s radius so it still reads as the same square.
  */
 private val SWATCH = 11.dp
 private val SWATCH_SHAPE = RoundedCornerShape(2.5.dp)
@@ -130,19 +143,33 @@ internal fun ProfileActivityYear(
         ((gridEnd.toEpochDay() - gridStart.toEpochDay() + 1) / 7).toInt()
     }
 
-    // How many week-columns each month occupies, so its label can sit over its own stretch of the
-    // band rather than over an even twelfth of it. February is four columns; a 31-day month that
-    // straddles six weeks is six.
-    val monthSpans = remember(year, gridStart, weeks) {
-        val counts = IntArray(12)
+    // Which half-year each week-column belongs to, and how many columns each month occupies inside
+    // its half — so a label sits over its own stretch of the band rather than over an even sixth of
+    // it. February is four columns; a 31-day month that straddles six weeks is six.
+    val halves = remember(year, gridStart, weeks) {
+        val firstSpans = IntArray(6)
+        val secondSpans = IntArray(6)
+        var firstCols = 0
+        var secondCols = 0
         for (w in 0 until weeks) {
             // Attribute a column to the month its Thursday falls in — the ISO tiebreak, and the one
             // that stops a month label drifting a column early when the 1st lands on a Saturday.
+            // A padding week whose Thursday escapes the year is attributed to the half it abuts.
             val thursday = gridStart.plusDays((w * 7 + 3).toLong())
-            if (thursday.year == year) counts[thursday.monthValue - 1]++
+            val month = when {
+                thursday.year < year -> 1
+                thursday.year > year -> 12
+                else -> thursday.monthValue
+            }
+            if (month <= 6) { firstSpans[month - 1]++; firstCols++ }
+            else { secondSpans[month - 7]++; secondCols++ }
         }
-        counts.toList()
+        listOf(
+            HalfYear(startWeek = 0, spans = firstSpans.toList(), firstMonth = 1),
+            HalfYear(startWeek = firstCols, spans = secondSpans.toList(), firstMonth = 7)
+        ) to maxOf(firstCols, secondCols)
     }
+    val (bands, slots) = halves
 
     // Both readings come off the same map the old grid used — no new state on the ViewModel.
     val yearCounts = remember(activityByDay, year) {
@@ -167,22 +194,27 @@ internal fun ProfileActivityYear(
             Text("ACTIVITY", style = MonoSectionAnchor, color = muted)
             Text("$year", style = MaterialTheme.typography.labelSmall, color = muted, maxLines = 1)
         }
-        Spacer(Modifier.height(12.dp))
-        MonthLabels(monthSpans, muted)
-        Spacer(Modifier.height(5.dp))
-        YearBand(
-            gridStart = gridStart,
-            weeks = weeks,
-            year = year,
-            today = today,
-            activityByDay = activityByDay,
-            activeDays = activeDays,
-            sessions = sessions,
-            empty = empty,
-            future = future,
-            hue = hue
-        )
-        Spacer(Modifier.height(16.dp))
+        Spacer(Modifier.height(14.dp))
+        bands.forEachIndexed { i, band ->
+            if (i > 0) Spacer(Modifier.height(BAND_GAP))
+            MonthLabels(band, slots, muted)
+            Spacer(Modifier.height(6.dp))
+            YearBand(
+                band = band,
+                slots = slots,
+                gridStart = gridStart,
+                year = year,
+                today = today,
+                activityByDay = activityByDay,
+                // One reading on the first band names the whole year; the second is decorative to a
+                // screen reader, because announcing the same summary twice is worse than silence.
+                reading = if (i == 0) yearReading(year, activeDays, sessions) else null,
+                empty = empty,
+                future = future,
+                hue = hue
+            )
+        }
+        Spacer(Modifier.height(18.dp))
         // The two figures the band cannot be counted for, and the key to its ramp — one line, the
         // reading on the left where reading starts, the key at the right edge as GitHub places it.
         Row(
@@ -200,58 +232,73 @@ internal fun ProfileActivityYear(
     }
 }
 
-/** JAN … DEC, each label weighted to the number of week-columns its month actually spans. */
+/** One half-year of week-columns: where it starts, and how many columns each of its months owns. */
+private data class HalfYear(val startWeek: Int, val spans: List<Int>, val firstMonth: Int) {
+    val columns: Int get() = spans.sum()
+}
+
+/** The year's reading, spoken once for both bands. */
+private fun yearReading(year: Int, activeDays: Int, sessions: Int): String =
+    if (activeDays == 0) "$year: no sessions logged yet"
+    else "$year: trained on $activeDays days, $sessions sessions"
+
+/**
+ * JAN … JUN (or JUL … DEC), each label weighted to the number of week-columns its month spans, over
+ * a row of [slots] so both bands' labels sit above the same column pitch.
+ */
 @Composable
-private fun MonthLabels(monthSpans: List<Int>, muted: Color) {
+private fun MonthLabels(band: HalfYear, slots: Int, muted: Color) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(CELL_GAP)) {
-        monthSpans.forEachIndexed { i, span ->
+        band.spans.forEachIndexed { i, span ->
             if (span <= 0) return@forEachIndexed
             Text(
-                YearMonth.of(2000, i + 1).month
+                YearMonth.of(2000, band.firstMonth + i).month
                     .getDisplayName(TextStyle.SHORT, Locale.getDefault()).uppercase(),
                 style = MaterialTheme.typography.labelSmall,
                 color = muted,
-                fontSize = 8.sp,
+                fontSize = 9.sp,
                 letterSpacing = 0.sp,
                 maxLines = 1,
                 modifier = Modifier.weight(span.toFloat())
             )
         }
+        // Pad the shorter half so its labels keep the other's pitch instead of stretching to fill.
+        val pad = slots - band.columns
+        if (pad > 0) Spacer(Modifier.weight(pad.toFloat()))
     }
 }
 
-/** The band itself: one weighted column per week, seven square cells down each. */
+/** One band: a weighted column per week of this half, seven square cells down each. */
 @Composable
 private fun YearBand(
+    band: HalfYear,
+    slots: Int,
     gridStart: LocalDate,
-    weeks: Int,
     year: Int,
     today: LocalDate,
     activityByDay: Map<Long, Int>,
-    activeDays: Int,
-    sessions: Int,
+    reading: String?,
     empty: Color,
     future: Color,
     hue: Color
 ) {
-    val reading = if (activeDays == 0) {
-        "$year: no sessions logged yet"
-    } else {
-        "$year: trained on $activeDays days, $sessions sessions"
-    }
     Row(
         Modifier
             .fillMaxWidth()
-            .semantics(mergeDescendants = true) { contentDescription = reading },
+            .then(
+                if (reading != null) {
+                    Modifier.semantics(mergeDescendants = true) { contentDescription = reading }
+                } else Modifier
+            ),
         horizontalArrangement = Arrangement.spacedBy(CELL_GAP)
     ) {
-        for (week in 0 until weeks) {
+        for (col in 0 until band.columns) {
             Column(
                 Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(CELL_GAP)
             ) {
                 for (row in 0..6) {
-                    val date = gridStart.plusDays((week * 7 + row).toLong())
+                    val date = gridStart.plusDays(((band.startWeek + col) * 7 + row).toLong())
                     // `aspectRatio` off the weighted width is what squares the cell — the band's
                     // height is therefore a consequence of the page width, never a hardcoded number.
                     val cell = Modifier.fillMaxWidth().aspectRatio(1f)
@@ -269,6 +316,9 @@ private fun YearBand(
                 }
             }
         }
+        // Same pad as the labels: the shorter half ends early rather than drawing wider days.
+        val pad = slots - band.columns
+        if (pad > 0) Spacer(Modifier.weight(pad.toFloat()))
     }
 }
 
