@@ -104,49 +104,67 @@ and a mostly-locked inventory can only read as an achievement tree. (2) It repor
 per track**, a `LessonDotRail` *and* an "n OF m", making score the loudest thing on a reading page.
 (3) **Three levels** to reach a lesson.
 
-**Tiles carry their own weight, without cover art.** The first cut was eighteen equally-weighted
-rectangles and Antho read it as "just feels like blocks" — which is what a grid of equal tiles is. A
-gallery needs focal points and rhythm; images are only the cheapest way to buy them. Three devices
-buy them instead: **scale rhythm** (each section opens on a full-width lead tile, the rest fall to a
-two-up grid), **a ghosted serif numeral** per tile (an editorial index at 0.15/0.25 onBg, which also
-carries reading order where a track has one), and **title-as-art** (serif `headlineMedium` on a lead
-tile, `headlineSmall` on a grid tile; the deck rides the lead ONLY, so size correlates with how much
-a tile says). The lead tile is where a real cover drops in later without anything else moving.
+**Rebuilt again 2026-08-20 — plates and chapters, and one reader.** The 08-16 gallery put every
+piece in a filled, hairlined card from the Home experiment's `SurfaceKit`, with the title printed
+over the picture under a scrim. Antho's three complaints: it still *"reads as blocks"*, there is
+*"no sense of where to start"*, and *"the reading itself is plain"*.
 
-**Covers land on lead tiles only** (`GallerySection.cover`, `drawable-nodpi/cover_*.webp`), which is
-why the art budget is ~8 images rather than 35. A cover is drawn full-bleed behind the tile, forced
-to greyscale at render time (`ColorFilter.colorMatrix` — so a colour asset can never break the
-one-accent rule) under a **horizontal** scrim: card @1.0 → 0.7 @62% → 0.25 at the end edge. Horizontal
-rather than the usual bottom-up one because the text column runs the tile's full height on the start
-edge. **Cover art is therefore shot with its subject on the END side and shadow on the start side**,
-so the photograph reads through exactly where nothing is written over it. A null cover renders the
-purely typographic lead unchanged, so the art can arrive one section at a time.
+**The blocks were the cards.** Thirty-five identical filled rectangles with a hairline round each is
+a wall whatever is printed inside them — §1's central ban, arrived at from the other direction. A
+piece is now a **plate and its caption, straight on the page**: the cover clipped to 16dp (§7),
+greyscaled at render time so a colour asset cannot break the one-accent rule, and the words UNDER it
+in the page's own type. Nothing is printed over a photograph, which fixes contrast by construction,
+frees the art from being composed for its slot (one 3:4 master crops to every shape — see
+`docs/ACADEMY_ART.md`), and turns a piece with no cover yet into an index line rather than a hole.
+**Rhythm is a five-beat**: a full-width 3:2 lead, then two-up 3:4 posters until the next lead
+(`isLeadSlot`). In a row where one piece has art and its neighbour does not, the unplated one holds
+the plate's space open (empty air, never a filled placeholder) so both captions sit on one line and
+the pair still reads left to right — without it, Fundamentals read 04 before 03.
 
-Two consequences worth knowing. **Titles now have a length budget** — roughly 24 characters fits two
-lines on a grid tile, past ~32 it runs to three. And the meta line dropped the word `LESSON`: 31 of
-35 pieces are lessons, so it appeared on nearly every tile and stopped being information. `ARTICLE`
-labels the minority instead — flag the exception, never the default.
+**Where to start is answered three times.** (1) The page opens on ONE named piece (`startHere`): the
+coach's poke if a moment fired, else the next unread Fundamentals lesson ("Start here" / "Continue"),
+else anything unread, else "Read again". It is typographic — kicker, serif title, deck, `read →` —
+and carries NO plate, because the piece it names also appears in its chapter with its own picture.
+(2) It is then **lifted out of that chapter**, with the chapter's numerals computed BEFORE the lift,
+so Fundamentals opens at 02 rather than renumbering itself. (3) Each chapter prints the blurb its
+track was authored with (`LessonTrack.blurb`, written since B3 and never rendered until now), and
+Fundamentals numbers its pieces 01-10 — the only track with an authored order, so the only one that
+earns a numeral.
 
-The FOR YOU shelf is **skipped when its lesson is already a track's lead tile**, since both render
-full width and large and would land a screen apart looking like one card printed twice (the common
-case at cold start, where the first moments to fire are Fundamentals ones). The lead tile keeps its
-FOR YOU mark, so the poke is still on the page.
+**Read is a tone, not a word.** An opened piece prints its title in `muted` instead of `onBg`, the
+visited-link convention; the meta line dropped the word "read" with it (§4.3, one home).
 
-Now: hero → optional **FOR YOU** (one featured full-width tile) → the five lesson tracks as section
-headers → the Library's articles grouped by `ArticleTopic`. Two tiles per row, vertical throughout
-("between B and C" of the three sketches offered). `AcademyTrackScreen`, `Routes.academyTrack`,
-`academyLessonsPane`, `libraryPane`, `LessonDotRail` and `LessonRow` are all **deleted**.
+**One reader** (`ReaderScreen`, shared by `LessonScreen` and `ArticleScreen`). The lesson
+`ModalBottomSheet` is deleted: it capped a lesson at a sheet's height, could not carry a cover, and
+recorded completion from a DISMISSAL, so a bounce counted as a read and corrupted the only signal
+the ledger keeps. Both halves now record opened-on-resolve and completed-on-reaching-the-end, and
+both open from `Routes.LESSON` / `Routes.ARTICLE`. The reader's cover bleeds full width under the
+transparent top bar and **dissolves into the page** by masking its own alpha (`Plate(dissolve =
+true)`), so it fades into whatever ground is actually behind it, AMOLED included. Prose is
+`bodyLarge`; a `Heading` block is a real `EditorialHeader` (and therefore a TalkBack heading); a
+`Callout` is a serif pull-quote instead of a `primaryContainer`-washed box (which was §1's ban
+sitting in the middle of the reading page); an `Example`'s value is a serif figure (§2①). Every
+piece ends with a named next piece where one honestly exists — "Next in Fundamentals" in the ordered
+track, "More in Conditioning"/"More in Recovery" on a shelf, "Next chapter" at a track's end — and
+reading on REPLACES the current piece on the back stack, so Back returns to the gallery rather than
+walking the chain in reverse.
+
+Now: masthead (`35 PIECES · 40 MIN` + serif name + aside) → the opening pointer → the five lesson
+tracks as chapters → the Library's articles grouped by `ArticleTopic`. `AcademyTrackScreen`,
+`Routes.academyTrack`, `academyLessonsPane`, `libraryPane`, `LessonDotRail`, `LessonRow`,
+`LessonSheet`, `AcademyComponents.kt`, the separate FOR YOU shelf and the `academy?lesson=`
+argument are all **deleted**.
 
 **The gate became a poke, with zero domain change.** `LessonState.unlocked` already meant "a coach
 moment fired for this reader" — a statement about RELEVANCE, not entitlement. The UI stopped
 treating it as permission: every lesson is readable from install, and a fired moment now only marks
-a tile FOR YOU. The ledger, `ArrivalController`, the notifications feed and the tab badge are
+a piece FOR YOU (an accent dot, and first claim on the page's opening pointer). The ledger, `ArrivalController`, the notifications feed and the tab badge are
 untouched and still count `isNew`. `LessonUnlock.label/detail` are no longer rendered anywhere; they
 stay on the model as the authoring record `orphanLessons()` audits against.
 
 **One page, labelled differently** (Antho's words) — the `AcademyLens` `SegmentPill` row is gone.
-Lessons and articles share the gallery and are told apart by a word in each tile's meta line
-(`LESSON · 1 MIN` / `ARTICLE · 6 MIN`), with reading time for both derived by the same
+Lessons and articles share the gallery and are told apart by a word in each piece's meta line
+(`ARTICLE · 6 MIN` on the minority; lessons say only their length), with reading time for both derived by the same
 `List<LessonBlock>.readMinutes()` (lifted out of `Article` so two neighbouring tiles cannot state
 their length by two different rules). The Library's search field and topic pills went with the
 merge; tracks and topics are the browsing structure now.

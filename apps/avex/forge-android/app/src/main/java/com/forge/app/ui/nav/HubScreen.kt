@@ -168,6 +168,7 @@ fun HubScreen(
                 )
                 // A pager page, so no back arrow — swiping off it IS the back gesture.
                 BottomTab.ACADEMY -> AcademyScreen(
+                    onOpenLesson = { nav.navigate(Routes.lesson(it)) },
                     onOpenArticle = { nav.navigate(Routes.article(it)) }
                 )
             }

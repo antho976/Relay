@@ -304,7 +304,7 @@ fun ForgeNavHost(initialDayKey: String? = null) {
                 // user actually was rather than to a feed row that has since cleared itself.
                 onOpenLesson = { lessonId ->
                     nav.popBackStack()
-                    nav.navigate(Routes.academy(lessonId))
+                    nav.navigate(Routes.lesson(lessonId))
                 }
             )
         }
@@ -316,18 +316,25 @@ fun ForgeNavHost(initialDayKey: String? = null) {
         }
         // The lab and timeline used to be lenses of the Coach page. The page is one column now,
         // so the routes stay and resolve to a scroll position rather than a tab.
-        composable(
-            route = Routes.ACADEMY,
-            arguments = listOf(
-                navArgument(Routes.ARG_LESSON_ID) { type = NavType.StringType; defaultValue = "" }
-            )
-        ) { entry ->
+        composable(Routes.ACADEMY) {
             com.forge.app.ui.academy.AcademyScreen(
                 onBack = { nav.popBackStack() },
-                onOpenArticle = { nav.navigate(Routes.article(it)) },
-                // A feed row lands straight on its lesson rather than on the hub, so tapping
-                // "new lesson" reads the lesson instead of asking the user to find it.
-                initialLessonId = entry.arguments?.getString(Routes.ARG_LESSON_ID)?.takeIf { it.isNotBlank() }
+                onOpenLesson = { nav.navigate(Routes.lesson(it)) },
+                onOpenArticle = { nav.navigate(Routes.article(it)) }
+            )
+        }
+        composable(
+            route = Routes.LESSON,
+            arguments = listOf(navArgument(Routes.ARG_LESSON_ID) { type = NavType.StringType })
+        ) {
+            // A retired id resolves to null and the screen says so inline (§12) rather than popping
+            // the back stack: a link from an old coach reason should explain itself, not vanish.
+            com.forge.app.ui.academy.LessonScreen(
+                onBack = { nav.popBackStack() },
+                // Reading on from the end of a lesson REPLACES it on the stack, so Back from the
+                // fourth lesson in a row returns to the gallery rather than walking the chain in
+                // reverse. The chain is a way forward, not a history.
+                onOpenLesson = { nav.navigate(Routes.lesson(it)) { popUpTo(Routes.LESSON) { inclusive = true } } }
             )
         }
         composable(
@@ -336,7 +343,10 @@ fun ForgeNavHost(initialDayKey: String? = null) {
         ) {
             // A retired id resolves to null and the screen says so inline (§12) rather than popping
             // the back stack: a link from an old coach reason should explain itself, not vanish.
-            com.forge.app.ui.academy.ArticleScreen(onBack = { nav.popBackStack() })
+            com.forge.app.ui.academy.ArticleScreen(
+                onBack = { nav.popBackStack() },
+                onOpenArticle = { nav.navigate(Routes.article(it)) { popUpTo(Routes.ARTICLE) { inclusive = true } } }
+            )
         }
         composable(Routes.COACH_LAB) {
             CoachScreen(

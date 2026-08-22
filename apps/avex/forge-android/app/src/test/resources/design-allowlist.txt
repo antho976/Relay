@@ -240,7 +240,6 @@
 2 em-dash wear/ui/SessionScreen.kt em dash in string
 1 em-dash wear/ui/WearRoot.kt em dash in string
 2 em-dash widget/ForgeWidget.kt em dash in string
-1 font-size ui/academy/LessonBlocks.kt fontSize=
 8 font-size ui/cardio/CardioComponents.kt fontSize=
 2 font-size ui/cardio/components/CardioEntryRow.kt fontSize=
 3 font-size ui/cardio/components/CardioLogComponents.kt fontSize=

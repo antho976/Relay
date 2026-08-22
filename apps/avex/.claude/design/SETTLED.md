@@ -12,7 +12,14 @@ Also lists what may not be touched, and the known defects to fix opportunistical
 
 ## Settled — do not reintroduce / do not touch
 
-**Removed on purpose**: boxed cards for passive content · full-screen PR takeover (PR = confetti +
+**Removed on purpose**: boxed cards for passive content · **the Academy's card tiles, its lesson
+sheet and its FOR YOU shelf** (2026-08-20: filled hairlined cards around 35 pieces of passive
+content read as a wall whatever is inside them, which is the same finding as the first entry in this
+list arrived at from the gallery end — pieces are plates with their captions under them now; the
+`ModalBottomSheet` reader capped a lesson's height, could not carry a cover and counted a dismissal
+as a completed read; the FOR YOU shelf became the page's one opening pointer, which is lifted out of
+its own chapter so nothing is printed twice. Do not re-add a card, a scrim-over-photo caption, or a
+second reader) · full-screen PR takeover (PR = confetti +
 gold row) · accent-tinted "important" prose · session-summary extras (share card/tags/ghost/vs-last/
 what's-next — the SESSION-summary card specifically; the Profile before/after share card `BeforeAfterCardRenderer` (GYMAP-55) is a separate, deliberate shareable artifact and stays) · cardio big-number hero · cardio kcal estimates (return only with real watch burn data) · new gamification surfaces (wait-listed) · Profile
 identity-first restructure · mood/subjective coach drivers · Coach hero week-dot calendar, "Pulse",

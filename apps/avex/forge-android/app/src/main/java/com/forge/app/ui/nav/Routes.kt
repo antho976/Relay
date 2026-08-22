@@ -20,12 +20,21 @@ object Routes {
     const val COACH_BRIEF = "coach-brief"
     const val COACH_LAB = "coach-lab"
 
-    /** The Academy (Coach v3 B3) — the knowledge layer, reachable from any lesson link.
-     *  [lessonId] opens straight onto that lesson's sheet, which is how a feed row lands. */
-    const val ACADEMY = "academy?lesson={lessonId}"
+    /** The Academy (Coach v3 B3) — the knowledge layer, and the gallery every piece is reached from. */
+    const val ACADEMY = "academy"
+
+    /**
+     * One lesson, read on its own screen (2026-08-20). It used to be a `?lesson=` argument on the
+     * Academy route that opened a sheet over the gallery; a lesson is a page now, the same one an
+     * article gets, so it is a route of its own and a feed row lands directly on it.
+     *
+     * [lessonId] is a registry id: lowercase, dots and underscores only, which is why it can sit in
+     * the path un-encoded. `AcademyRegistryTest` pins that id grammar.
+     */
+    const val LESSON = "academy/lesson/{lessonId}"
     const val ARG_LESSON_ID = "lessonId"
 
-    fun academy(lessonId: String? = null) = "academy?lesson=${lessonId.orEmpty()}"
+    fun lesson(lessonId: String) = "academy/lesson/$lessonId"
 
     // The per-track Academy route was removed 2026-08-16. Tracks are section headers in the one
     // gallery now, so there is no track screen to route to and one level of nesting is gone.
