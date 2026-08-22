@@ -89,8 +89,8 @@ import com.forge.app.ui.common.bounceClick
  * piece without a cover renders its caption alone. So the page never looks half-finished mid-way
  * through an art pass, and the domain never has to know that a UI layer has pictures.
  *
- * Adding art is one line here plus the file. `docs/ACADEMY_ART.md` holds the outstanding 29, with
- * the subject and the frame each one is shot for.
+ * Adding art is one line here plus the file. `docs/ACADEMY_ART.md` records the complete 29-cover
+ * generation set, with the subject and the frame each one is shot for.
  */
 object AcademyCovers {
     private val byId = mapOf(
@@ -100,6 +100,35 @@ object AcademyCovers {
         "fundamentals.rest_and_recovery" to R.drawable.cover_rest_and_recovery,
         "fundamentals.how_the_coach_works" to R.drawable.cover_how_the_coach_works,
         "fundamentals.what_readiness_means" to R.drawable.cover_what_readiness_means,
+        "fundamentals.progressive_overload" to R.drawable.cover_progressive_overload,
+        "fundamentals.soreness_vs_injury" to R.drawable.cover_soreness_vs_injury,
+        "fundamentals.warmups" to R.drawable.cover_warmups,
+        "fundamentals.log_honestly" to R.drawable.cover_log_honestly,
+        "coach.readiness_built_from" to R.drawable.cover_readiness_built_from,
+        "coach.why_goals_fight" to R.drawable.cover_why_goals_fight,
+        "coach.strength_on_a_cut" to R.drawable.cover_strength_on_a_cut,
+        "coach.what_a_project_is" to R.drawable.cover_what_a_project_is,
+        "coach.trust_tiers" to R.drawable.cover_trust_tiers,
+        "coach.taking_decisions_back" to R.drawable.cover_taking_decisions_back,
+        "programming.what_a_block_is" to R.drawable.cover_what_a_block_is,
+        "programming.four_phases" to R.drawable.cover_four_phases,
+        "programming.deloads_are_earned" to R.drawable.cover_deloads_are_earned,
+        "programming.reading_your_block_card" to R.drawable.cover_reading_your_block_card,
+        "programming.your_volume_landmarks" to R.drawable.cover_your_volume_landmarks,
+        "programming.your_recovery_curve" to R.drawable.cover_your_recovery_curve,
+        "programming.sweet_spot_reps" to R.drawable.cover_sweet_spot_reps,
+        "programming.imbalances" to R.drawable.cover_imbalances,
+        "signals.stress_hrv" to R.drawable.cover_stress_hrv,
+        "engine.why_aerobic_base" to R.drawable.cover_why_aerobic_base,
+        "engine.what_zone2_is" to R.drawable.cover_what_zone2_is,
+        "engine.interference" to R.drawable.cover_interference,
+        "engine.reading_hr" to R.drawable.cover_reading_hr,
+        "engine.intervals" to R.drawable.cover_intervals,
+        "engine.base_without_a_lab" to R.drawable.cover_base_without_a_lab,
+        "library.protein_intake" to R.drawable.cover_protein_intake,
+        "library.proximity_to_failure" to R.drawable.cover_proximity_to_failure,
+        "library.how_much_volume" to R.drawable.cover_how_much_volume,
+        "library.sleep_and_training" to R.drawable.cover_sleep_and_training,
     )
 
     @DrawableRes

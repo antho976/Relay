@@ -1,13 +1,11 @@
-# Academy cover art — what's missing
+# Academy cover art manifest
 
-The Academy ships **35 pieces** (31 lessons + 4 articles). **6 have cover art**, all of them
-Fundamentals. The other **29 render as index entries** — a title and its deck, with no plate above
-them. The gallery is built so that degrades gracefully (a chapter with no art reads as a contents
-page rather than as a wall of empty frames), but the rhythm the page is designed around — a
-full-width lead plate, then two-up posters — only exists where there are pictures.
+The Academy ships **35 pieces** (31 lessons + 4 articles). All 35 now have cover art: the original
+six Fundamentals covers plus the 29 generated from this manifest. The gallery keeps its graceful
+missing-art fallback, but every shipped piece now participates in the intended rhythm of a
+full-width lead plate followed by two-up posters.
 
-This file is the manifest for that gap. One image per piece, plus the house rules the six
-existing covers already follow.
+This file records the 29-cover generation set and the house rules shared with the six originals.
 
 ---
 
@@ -56,7 +54,7 @@ Prepend to every subject line below:
 
 ---
 
-## Fundamentals — 4 missing
+## Fundamentals: 4 covers
 
 | id | Title | Subject |
 |---|---|---|
@@ -65,7 +63,7 @@ Prepend to every subject line below:
 | `fundamentals.warmups` | Why warm-ups are in your session | an empty barbell resting on a rack's low pins, chalk dust hanging in the light beam |
 | `fundamentals.log_honestly` | Log honestly | close crop on a fountain-pen nib over a ruled logbook line, one entry crossed out |
 
-## How the coach works — 6 missing
+## How the coach works: 6 covers
 
 | id | Title | Subject |
 |---|---|---|
@@ -76,7 +74,7 @@ Prepend to every subject line below:
 | `coach.trust_tiers` | What each trust tier means | five iron keys of increasing size hanging in a row on hooks |
 | `coach.taking_decisions_back` | How to take any decision back | a heavy industrial breaker lever caught mid-throw |
 
-## Programming — 8 missing
+## Programming: 8 covers
 
 | id | Title | Subject |
 |---|---|---|
@@ -89,13 +87,13 @@ Prepend to every subject line below:
 | `programming.sweet_spot_reps` | Your sweet-spot rep ranges | a dial caliper closed on a small round bar, dial face catching light |
 | `programming.imbalances` | Imbalances | a two-pan balance tipped hard to one side, close crop on the tilt |
 
-## Signals — 1 missing
+## Signals: 1 cover
 
 | id | Title | Subject |
 |---|---|---|
 | `signals.stress_hrv` | What HRV tells you | a paper trace curling off a seismograph drum, inked peaks legible |
 
-## Conditioning — 6 missing
+## Conditioning: 6 covers
 
 | id | Title | Subject |
 |---|---|---|
@@ -106,7 +104,7 @@ Prepend to every subject line below:
 | `engine.intervals` | Intervals | a ring-side round bell and striker, dark rope out of focus behind |
 | `engine.base_without_a_lab` | How your base is measured | a brass sextant on a chart table, arc catching the light |
 
-## Library articles — 4 missing
+## Library articles: 4 covers
 
 | id | Title | Subject |
 |---|---|---|
@@ -117,5 +115,4 @@ Prepend to every subject line below:
 
 ---
 
-**Total: 29 images.** Fundamentals' four first if you want to see the effect before committing to
-the rest — that section is already half-illustrated, so it shows the finished rhythm soonest.
+**Total: 29 generated images, plus the six originals.** All 35 are wired through `AcademyCovers`.
