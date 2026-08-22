@@ -255,7 +255,6 @@ fun ProfileScreen(
                     prsLastWeek = state.prsLastWeek,
                     onBg = onBg,
                     muted = muted,
-                    outline = outline,
                     modifier = pad.statsEntrance(1)
                 )
 
@@ -309,7 +308,6 @@ fun ProfileScreen(
                     onOpenMeasurements = onOpenMeasurements,
                     onBg = onBg,
                     muted = muted,
-                    outline = outline,
                     modifier = pad.statsEntrance(3)
                 )
 

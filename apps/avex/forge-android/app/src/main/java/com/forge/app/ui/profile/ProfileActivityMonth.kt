@@ -34,7 +34,7 @@ import java.time.format.TextStyle
 import java.util.Locale
 
 /**
- * # ACTIVITY — this month, at full width
+ * # ACTIVITY — this month, as a calendar of contribution squares
  *
  * The same contribution-grid vocabulary as [ProfileActivityYear] — rounded squares, one fixed ramp,
  * a LESS/MORE key — scoped to the current calendar month and turned ninety degrees.
@@ -47,10 +47,20 @@ import java.util.Locale
  * with room for twenty-six, which is exactly what the first attempt did and why it read as a small
  * square with nothing beside it.
  *
- * Turned, a month IS a calendar: seven weekday columns, five or six week rows, filling the page
- * edge to edge. Same squares, same ramp, same key — the mark is unchanged, only its axes swap to
- * suit the window. A day lands at roughly 38dp, which is the largest any version of this section
- * has drawn one.
+ * Turned, a month IS a calendar: seven weekday columns, five or six week rows. Same squares, same
+ * ramp, same key — the mark is unchanged, only its axes swap to suit the window.
+ *
+ * ## Three quarters of the measure, not all of it
+ *
+ * Drawn edge to edge the calendar was right and too loud: seven full-width columns put a day near
+ * 38dp and the section at ~266dp, taller than the hero above it. Antho: *"make it 25% smaller and
+ * it's perfect."*
+ *
+ * Because the cells are square and sized off the width, width IS the only size control — 0.75 of
+ * the measure takes the day to ~28dp and the section to ~200dp, a quarter off both dimensions at
+ * once. The grid stays LEFT-aligned rather than centred: it hangs off the same margin as the
+ * section anchor above it and the readings line below, so the short right edge reads as an
+ * editorial column ending, not as a grid that failed to fill its container.
  *
  * ## Why the ramp is fixed, not normalized
  *
@@ -68,14 +78,20 @@ import java.util.Locale
  */
 
 /**
- * The gap between day cells. The cell itself is not a fixed size: seven columns have to fit the page
- * exactly, so each takes an equal share of what is left and the cell squares itself off that. The
- * gap is wider than the year's because the cells it separates are four times the size.
+ * How much of the page's measure the calendar spends. The cells are square and sized off the width,
+ * so this fraction is the section's only size control — it scales height and cell alike.
  */
-private val MONTH_CELL_GAP = 8.dp
+private const val MONTH_GRID_FRACTION = 0.75f
 
-/** Larger cells want a proportionally larger radius, or a 38dp square reads as a hard-edged tile. */
-private val MONTH_CELL_SHAPE = RoundedCornerShape(8.dp)
+/**
+ * The gap between day cells. The cell itself is not a fixed size: seven columns have to fit
+ * [MONTH_GRID_FRACTION] of the page exactly, so each takes an equal share of what is left and the
+ * cell squares itself off that. The gap is wider than the year's because the cells are larger.
+ */
+private val MONTH_CELL_GAP = 6.dp
+
+/** Larger cells want a proportionally larger radius, or a 28dp square reads as a hard-edged tile. */
+private val MONTH_CELL_SHAPE = RoundedCornerShape(6.dp)
 
 /** The key's swatch. Fixed, unlike the cells, so the key does not resize with the phone. */
 private val MONTH_SWATCH = 11.dp
@@ -160,34 +176,38 @@ internal fun ProfileActivityMonth(
             )
         }
         Spacer(Modifier.height(14.dp))
-        WeekdayHeader(muted)
-        Spacer(Modifier.height(8.dp))
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .semantics(mergeDescendants = true) { contentDescription = reading },
-            verticalArrangement = Arrangement.spacedBy(MONTH_CELL_GAP)
-        ) {
-            for (week in 0 until weeks) {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(MONTH_CELL_GAP)
-                ) {
-                    for (day in 0..6) {
-                        val date = gridStart.plusDays((week * 7 + day).toLong())
-                        // `aspectRatio` off the weighted width is what squares the cell — the grid's
-                        // height is a consequence of the page width, never a hardcoded number.
-                        val cell = Modifier.weight(1f).aspectRatio(1f)
-                        if (YearMonth.from(date) != month) {
-                            Box(cell) // outside the month — nothing drawn, so the grid keeps its shape
-                        } else {
-                            val level = monthLevelOf(activityByDay[date.toEpochDay()] ?: 0)
-                            val color = when {
-                                date.isAfter(today) -> future
-                                level == 0 -> empty
-                                else -> lerp(empty, hue, MONTH_LIT_RUNGS[level - 1])
+        // Header and grid share one width so the weekday labels stay centred over their columns.
+        Column(Modifier.fillMaxWidth(MONTH_GRID_FRACTION)) {
+            WeekdayHeader(muted)
+            Spacer(Modifier.height(8.dp))
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .semantics(mergeDescendants = true) { contentDescription = reading },
+                verticalArrangement = Arrangement.spacedBy(MONTH_CELL_GAP)
+            ) {
+                for (week in 0 until weeks) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(MONTH_CELL_GAP)
+                    ) {
+                        for (day in 0..6) {
+                            val date = gridStart.plusDays((week * 7 + day).toLong())
+                            // `aspectRatio` off the weighted width is what squares the cell — the
+                            // grid's height is a consequence of its width, never a hardcoded number.
+                            val cell = Modifier.weight(1f).aspectRatio(1f)
+                            if (YearMonth.from(date) != month) {
+                                // Outside the month — nothing drawn, so the grid keeps its shape.
+                                Box(cell)
+                            } else {
+                                val level = monthLevelOf(activityByDay[date.toEpochDay()] ?: 0)
+                                val color = when {
+                                    date.isAfter(today) -> future
+                                    level == 0 -> empty
+                                    else -> lerp(empty, hue, MONTH_LIT_RUNGS[level - 1])
+                                }
+                                Box(cell.clip(MONTH_CELL_SHAPE).background(color))
                             }
-                            Box(cell.clip(MONTH_CELL_SHAPE).background(color))
                         }
                     }
                 }
@@ -215,8 +235,8 @@ internal fun ProfileActivityMonth(
  * M T W T F S S, each centred over its column.
  *
  * The year band labels only Mon/Wed/Fri down its left edge, because seven labels beside a 9dp row
- * would not fit. Turned, every column is 38dp wide and there is room for all seven — and a calendar
- * missing four of its weekday headers reads as broken rather than as restrained.
+ * would not fit. Turned, every column is ~28dp wide and there is room for all seven — and a
+ * calendar missing four of its weekday headers reads as broken rather than as restrained.
  */
 @Composable
 private fun WeekdayHeader(muted: Color) {

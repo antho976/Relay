@@ -45,7 +45,6 @@ import com.forge.app.domain.units.lengthUnitLabel
 import com.forge.app.domain.units.toDisplayLength
 import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.domain.units.unitLabel
-import com.forge.app.ui.common.EditorialHairline
 import com.forge.app.ui.common.bounceCombinedClick
 import com.forge.app.ui.experiment.HeroFigure
 import com.forge.app.ui.experiment.SurfacePalette
@@ -71,8 +70,10 @@ import kotlin.math.roundToInt
  *
  * - **Grouping** is now the section anchor plus the space around it — more air above a heading than
  *   below it, so a gap reads as a break rather than as a mistake.
- * - **Separating** is [EditorialHairline] between rows inside a section. A rule is drawn only where
- *   two readings genuinely need dividing, never as decoration.
+ * - **Separating** is space, and only space. The first pass reached for hairlines between rows and
+ *   between blocks; Antho cut every one of them. They were the reflex answer — replace a fill with
+ *   a rule — and four hairlines down an otherwise unruled page read as a table. Nothing on this
+ *   page needs dividing that a gap cannot divide.
  * - **Raising** is not replaced, and does not need to be: nothing on this page was ever above
  *   anything else. The elevation was inherited from a dashboard reference, not earned here.
  *
@@ -131,7 +132,6 @@ internal fun ProfileAllTime(
     prsLastWeek: Int,
     onBg: Color,
     muted: Color,
-    outline: Color,
     modifier: Modifier = Modifier
 ) {
     val weightUnit = LocalForgeSettings.current.weightUnit
@@ -167,9 +167,11 @@ internal fun ProfileAllTime(
             )
         }
 
-        Spacer(Modifier.height(24.dp))
-        EditorialHairline(outline)
-        Spacer(Modifier.height(20.dp))
+        // No rule between the volume and the tallies, and none under them (Antho, 2026-08-22:
+        // "at all time I don't want anything to indicate a new section"). They are not a new
+        // section — they are the rest of ALL TIME, and a hairline across the page said otherwise.
+        // Space does the separating now, which is what the anchor above already implied.
+        Spacer(Modifier.height(34.dp))
         Row(
             Modifier.fillMaxWidth().height(IntrinsicSize.Min),
             horizontalArrangement = Arrangement.spacedBy(20.dp)
@@ -350,7 +352,6 @@ internal fun ProfileBodyRows(
     onOpenMeasurements: () -> Unit,
     onBg: Color,
     muted: Color,
-    outline: Color,
     modifier: Modifier = Modifier,
     measurementsVm: BodyMeasurementsViewModel = hiltViewModel(),
     leanMassVm: LeanMassViewModel = hiltViewModel()
@@ -371,9 +372,13 @@ internal fun ProfileBodyRows(
         add(sizesMetric(measurements, onOpenMeasurements))
     }
 
+    // No rules between the rows (Antho, 2026-08-22). They were there to do the separating a card
+    // fill used to do, and they overcorrected: four hairlines down a page with none anywhere else
+    // read as a table, and a table is a heavier promise than three tappable readings. The rows
+    // carry their own 48dp minimum and 14dp of padding, which is separation enough once nothing
+    // else on the page is boxed either.
     Column(modifier.fillMaxWidth()) {
         metrics.forEachIndexed { i, metric ->
-            EditorialHairline(outline)
             BodyMetricRow(
                 metric = metric,
                 hue = palette.hues[i % palette.hues.size],
@@ -381,7 +386,6 @@ internal fun ProfileBodyRows(
                 muted = muted
             )
         }
-        EditorialHairline(outline)
     }
 }
 
@@ -392,7 +396,7 @@ private fun BodyMetricRow(metric: BodyMetric, hue: Color, onBg: Color, muted: Co
             .fillMaxWidth()
             .heightIn(min = ROW_MIN_HEIGHT)
             .bounceCombinedClick(onClickLabel = "${metric.action} ${metric.label.lowercase()}") { metric.onOpen() }
-            .padding(vertical = 12.dp),
+            .padding(vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Icon(metric.icon, contentDescription = null, tint = muted, modifier = Modifier.size(ROW_ICON))
