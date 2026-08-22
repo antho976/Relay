@@ -25,6 +25,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.sp
 import com.forge.app.data.repo.ExtendedGoalRepository
 import com.forge.app.data.repo.GoalRepository
@@ -34,12 +36,12 @@ import com.forge.app.domain.units.unitLabel
 import com.forge.app.domain.units.weightInputValue
 import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.experiment.CardShape
-import com.forge.app.ui.experiment.SectionAnchor
 import com.forge.app.ui.experiment.SurfacePalette
 import com.forge.app.ui.goals.GoalProgressLine
 import com.forge.app.ui.goals.customGoalTitle
 import com.forge.app.ui.goals.customGoalValueLine
 import com.forge.app.ui.theme.LocalForgeSettings
+import com.forge.app.ui.theme.MonoSectionAnchor
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -149,51 +151,54 @@ private fun GoalLine(
 /**
  * GALLERY — a full-bleed horizontal filmstrip of the latest photos, echoing the cover photo's
  * edge-to-edge treatment instead of boxing thumbnails in a card. Dates sit on the photos over a
- * bottom scrim; the section header carries the "view all →" link into the full Gallery — the strip
- * is the preview beside it (§4.2), so there's one view-all home, not a second tail cell. Adding a
- * photo lives inside the Gallery (or the empty-state "first photo" cell here). The section must be
- * composed OUTSIDE the page's side margins — it applies its own padding to the header and lets the
- * photos run to the screen edge.
+ * bottom scrim. The section must be composed OUTSIDE the page's side margins — it applies its own
+ * padding to the header and lets the photos run to the screen edge.
+ *
+ * ## The pictures ARE the link (2026-08-22)
+ *
+ * The header used to carry a "view all →" / "gallery →" action, and every cell in the strip had a
+ * different job depending on what you had: a photo opened a viewer dialog, the lead empty cell
+ * opened the add-photo chooser, the other empty cells did nothing at all. Antho: *"remove the
+ * gallery text, you should enter it by clicking the gallery pictures, and nothing in gallery should
+ * be gated behind having a picture or not."*
+ *
+ * So every cell now does the one thing, photos or not: it opens the Gallery. That kills three
+ * problems at once. The link is redundant when the thing beside it is already the link. The strip
+ * stops being a control panel where adjacent identical-looking cells behave differently (§2③). And
+ * the empty state stops being a lesser version of the section — the zero-shape is now the same
+ * affordance as the filled one, which is what "not gated" means in layout terms.
+ *
+ * Viewing a single photo, adding one, albums and the guided camera all live in the Gallery, which
+ * is where you now land. One home for each (§4.3).
  */
 @Composable
 internal fun GalleryStrip(
     photos: List<ProgressPhoto>,
     fileFor: (ProgressPhoto) -> File,
-    onAdd: () -> Unit,
-    onView: (ProgressPhoto) -> Unit,
-    onViewAll: () -> Unit,
+    onOpenGallery: () -> Unit,
     palette: SurfacePalette,
-    onBg: Color,
-    muted: Color,
-    outline: Color
+    muted: Color
 ) {
     Box(Modifier.padding(horizontal = 24.dp)) {
-        // Mirrors GOALS (§4.2): the header link opens the full Gallery, folding in the count once
-        // the strip stops showing them all.
-        //
-        // The link stays at zero. It used to disappear when there were no photos — "nothing to
-        // preview, no link" (§4.2) — but the Gallery is where importing, the guided camera and the
-        // albums live, so with no photos the screen became unreachable entirely. §4.2's rule is
-        // about not linking to an empty destination; here the destination is where you GO to make it
-        // non-empty, and the ghost strip below is a real preview of it.
-        // design/surface-experiment: `SectionAnchor`, not `SectionHeader`. The two render the same
-        // label but different actions — accent vs onBg — and side by side on one page that reads as
-        // a mistake, which is what Antho saw ("gallery looks bad? it's not the same as the others").
-        SectionAnchor(
-            "Gallery", muted, onBg,
-            action = when {
-                photos.isEmpty() -> "gallery"
-                photos.size > 10 -> "all ${photos.size}"
-                else -> "view all"
-            },
-            actionLabel = "Open the gallery",
-            onAction = onViewAll
+        // Label only. `SectionAnchor` with no action renders exactly the same mono anchor the other
+        // sections use, so GALLERY finally sits on the page's own rung instead of being the one
+        // header with a trailing accent word.
+        Text(
+            "GALLERY",
+            style = MonoSectionAnchor,
+            color = muted,
+            modifier = Modifier.semantics { heading() }
         )
     }
+    Spacer(Modifier.height(12.dp))
     if (photos.isEmpty()) {
         // Empty is drawn (§12), and the zero-shape is the STRIP — a run of ghost cells that runs off
         // the edge exactly as the real filmstrip does, not a single boxed frame. One frame alone read
         // as a lone empty container rather than as this section with nothing in it yet.
+        //
+        // All three are tappable now, and all three open the Gallery. Previously only the lead cell
+        // did anything and it opened a different destination, so the strip taught you that two of
+        // its cells were dead — the exact gating Antho called out.
         Row(
             Modifier.padding(start = 24.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -228,7 +233,7 @@ internal fun GalleryStrip(
                             if (i == 0) muted.copy(alpha = 0.25f) else palette.hairline.copy(alpha = depth),
                             CardShape
                         )
-                        .then(if (i == 0) Modifier.bounceClick { onAdd() } else Modifier)
+                        .bounceClick { onOpenGallery() }
                         .padding(14.dp)
                 ) {
                     if (i == 0) {
@@ -266,18 +271,20 @@ internal fun GalleryStrip(
         horizontalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         items(photos.take(10), key = { it.fileName }) { photo ->
-            StripPhotoCell(photo, fileFor(photo), onView)
+            StripPhotoCell(photo, fileFor(photo), onOpenGallery)
         }
     }
 }
 
 /** One filmstrip photo — portrait crop, date overlaid on a soft bottom scrim. */
 @Composable
-private fun StripPhotoCell(photo: ProgressPhoto, file: File, onView: (ProgressPhoto) -> Unit) {
+private fun StripPhotoCell(photo: ProgressPhoto, file: File, onOpenGallery: () -> Unit) {
     Box(
         Modifier.width(StripCellWidth).height(StripCellHeight)
             .clip(CardShape)
-            .bounceClick { onView(photo) }
+            // Opens the Gallery, not an in-place viewer. The strip is a preview of a destination,
+            // and a preview whose cells lead somewhere other than the thing they preview is a trap.
+            .bounceClick { onOpenGallery() }
     ) {
         ProgressPhotoImage(file, Modifier.fillMaxSize(), reqPx = 480)
         Box(
