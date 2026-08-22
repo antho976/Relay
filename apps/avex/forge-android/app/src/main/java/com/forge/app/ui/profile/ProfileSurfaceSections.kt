@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -96,6 +97,9 @@ import kotlin.math.roundToInt
 private val ROW_ICON = 18.dp
 private val ROW_ICON_GAP = 12.dp
 
+/** The all-time tallies' glyph, one rung down: it labels a caption there, not a row. */
+private val TALLY_ICON = 13.dp
+
 /** A row's minimum height — the 48dp touch target the tappable BODY rows owe Material. */
 private val ROW_MIN_HEIGHT = 48.dp
 
@@ -163,29 +167,48 @@ internal fun ProfileAllTime(
             )
         }
 
-        Spacer(Modifier.height(22.dp))
+        Spacer(Modifier.height(24.dp))
         EditorialHairline(outline)
-        AllTimeRow(
-            SettingsIcons.Session, "WORKOUTS", "$totalSessions",
-            workoutsThisWeek, workoutsLastWeek, "workouts", palette.hues[0], onBg, muted
-        )
-        EditorialHairline(outline)
-        AllTimeRow(
-            NavIcons.Stats, "PRS", "$totalPrs",
-            prsThisWeek, prsLastWeek, "PRs", palette.hues[1], onBg, muted
-        )
+        Spacer(Modifier.height(20.dp))
+        Row(
+            Modifier.fillMaxWidth().height(IntrinsicSize.Min),
+            horizontalArrangement = Arrangement.spacedBy(20.dp)
+        ) {
+            AllTimeTally(
+                SettingsIcons.Session, "WORKOUTS", "$totalSessions",
+                workoutsThisWeek, workoutsLastWeek, "workouts",
+                palette.hues[0], onBg, muted, Modifier.weight(1f)
+            )
+            AllTimeTally(
+                NavIcons.Stats, "PRS", "$totalPrs",
+                prsThisWeek, prsLastWeek, "PRs",
+                palette.hues[1], onBg, muted, Modifier.weight(1f)
+            )
+        }
     }
 }
 
 /**
- * One tally: the glyph and its name on the left, the lifetime figure right-aligned, and — only when
- * there is a week worth comparing — the two-bar comparison indented under the name.
+ * One tally: the figure first, its glyph and name beneath, and — only when there is a week worth
+ * comparing — the two-bar comparison under that.
  *
- * The bars carry their own counts as text on the right, so the comparison never depends on reading
- * a bar length, or on colour (§14).
+ * ## Why this is a column and not a row
+ *
+ * It was a full-width row: glyph and name left, figure right-aligned, hairline above and below.
+ * At zero that is a label, a lot of empty middle, and a lone `0` — the shape of an unfinished list,
+ * which is what Antho pointed at. The row spent the page's whole width to carry two words and one
+ * digit, and the hairlines around it made the emptiness look structural.
+ *
+ * Paired columns spend that width on both tallies at once. The figure leads at headline size, which
+ * is what a lifetime total is for, and the label sits under it where a caption belongs — the same
+ * figure-over-label pairing the lifetime volume above uses, so ALL TIME now speaks in one voice
+ * instead of two. `IntrinsicSize.Min` on the parent keeps both columns level when only one has bars.
+ *
+ * The bars carry their own counts as text, so the comparison never depends on reading a bar length,
+ * or on colour (§14).
  */
 @Composable
-private fun AllTimeRow(
+private fun AllTimeTally(
     icon: ImageVector,
     label: String,
     figure: String,
@@ -194,38 +217,38 @@ private fun AllTimeRow(
     noun: String,
     hue: Color,
     onBg: Color,
-    muted: Color
+    muted: Color,
+    modifier: Modifier = Modifier
 ) {
-    Column(Modifier.fillMaxWidth().padding(vertical = 14.dp)) {
+    Column(modifier) {
+        Text(figure, style = MaterialTheme.typography.headlineLarge, color = onBg, maxLines = 1)
+        Spacer(Modifier.height(6.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             // Decorative (§14): the label beside it already says the word.
-            Icon(icon, contentDescription = null, tint = muted, modifier = Modifier.size(ROW_ICON))
-            Spacer(Modifier.width(ROW_ICON_GAP))
+            Icon(icon, contentDescription = null, tint = muted, modifier = Modifier.size(TALLY_ICON))
+            Spacer(Modifier.width(7.dp))
             Text(
                 label,
-                style = MaterialTheme.typography.labelLarge,
+                style = MaterialTheme.typography.labelSmall,
                 color = muted,
+                fontSize = 9.sp,
                 maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f)
+                overflow = TextOverflow.Ellipsis
             )
-            Spacer(Modifier.width(12.dp))
-            Text(figure, style = MaterialTheme.typography.headlineSmall, color = onBg, maxLines = 1)
         }
         // Nothing either week → draw NOTHING. Two empty tracks over "0 THIS WK · 0 LAST" was the
         // first thing Antho flagged (2026-08-15): §12 says an all-ghost group drops its mark,
-        // because a pair of flat lines reads as broken rather than as empty. The row still answers
+        // because a pair of flat lines reads as broken rather than as empty. The tally still answers
         // honestly above — a real 0 — and gains its bars the moment there is a week to compare.
         if (thisWeek == 0 && lastWeek == 0) return@Column
-        Spacer(Modifier.height(12.dp))
+        Spacer(Modifier.height(14.dp))
         Column(
             Modifier
                 .fillMaxWidth()
-                .padding(start = ROW_ICON + ROW_ICON_GAP)
                 .semantics(mergeDescendants = true) {
                     contentDescription = "$thisWeek $noun this week, $lastWeek last week"
                 },
-            verticalArrangement = Arrangement.spacedBy(7.dp)
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             val peak = maxOf(thisWeek, lastWeek, 1)
             ComparisonBar("THIS WK", thisWeek, thisWeek.toFloat() / peak, hue, onBg, muted)
@@ -251,7 +274,7 @@ private fun ComparisonBar(
             color = muted,
             fontSize = 9.sp,
             maxLines = 1,
-            modifier = Modifier.width(56.dp)
+            modifier = Modifier.width(50.dp)
         )
         Box(
             Modifier

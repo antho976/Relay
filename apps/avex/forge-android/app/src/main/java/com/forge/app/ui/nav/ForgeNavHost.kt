@@ -251,7 +251,6 @@ fun ForgeNavHost(initialDayKey: String? = null) {
                 onOpenSettings = { nav.navigate(Routes.settings()) },
                 onOpenTrophies = { nav.navigate(Routes.TROPHIES) },
                 onOpenPhotoGallery = { nav.navigate(Routes.MIRROR_TEST) },
-                onOpenCamera = { nav.navigate(Routes.PROGRESS_CAMERA) },
                 onOpenMeasurements = { nav.navigate(Routes.BODY_MEASUREMENTS) }
             )
         }
