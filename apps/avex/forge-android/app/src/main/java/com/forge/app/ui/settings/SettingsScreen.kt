@@ -46,7 +46,7 @@ enum class SettingsPage(val title: String) {
     Security("Security"),
     Program("Program & equipment"),
     Coach("Coach"),
-    Recovery("Recovery"),
+    Recovery("Wearable"),
     ExercisePrefs("Exercise likes"),
     CardioActivities("Cardio activities"),
     Vacation("Holiday / Vacation"),
@@ -444,4 +444,3 @@ private fun restartApp(context: android.content.Context) {
     if (intent != null) context.startActivity(intent)
     Runtime.getRuntime().exit(0)
 }
-

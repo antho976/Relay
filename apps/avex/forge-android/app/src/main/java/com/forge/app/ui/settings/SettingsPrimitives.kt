@@ -157,7 +157,13 @@ internal fun ToggleRow(
 }
 
 @Composable
-internal fun PillChip(label: String, selected: Boolean, enabled: Boolean = true, onClick: () -> Unit) {
+internal fun PillChip(
+    label: String,
+    selected: Boolean,
+    enabled: Boolean = true,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
     val onBg = MaterialTheme.colorScheme.onBackground
     val accent = MaterialTheme.colorScheme.primary
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
@@ -166,7 +172,7 @@ internal fun PillChip(label: String, selected: Boolean, enabled: Boolean = true,
     // §5 ladder: selected = accent border + accent@0.15 wash (one tile formula with
     // onboarding's selectables) — never a white fill, which read as the do-it-now capsule.
     Box(
-        modifier = Modifier
+        modifier = modifier
             .border(1.dp, (if (selected) accent else outline.copy(alpha = 0.35f)).copy(alpha = alpha), RoundedCornerShape(4.dp))
             .background((if (selected) accent.copy(alpha = 0.15f) else Color.Transparent).copy(alpha = alpha), RoundedCornerShape(4.dp))
             .then(if (enabled) Modifier.bounceClick(onClick = onClick) else Modifier)

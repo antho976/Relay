@@ -89,11 +89,11 @@ internal fun MainList(
                 SettingsSectionHeader("Coach")
                 // Coach CONFIGURATION only (on/off + mode) — the brief, trust and history live on
                 // the Coach tab. Hidden for freestyle users — no plan to coach against (matches the
-                // hub tab); Recovery + Holiday stay, they aren't coach-only.
+                // hub tab); Wearable + Holiday stay, they aren't coach-only.
                 if (!state.freestyleMode) {
                     SettingsNavRow("Your coach", rowSubtitle(SettingsPage.Coach, state), NavIcons.Coach) { onOpenPage(SettingsPage.Coach) }
                 }
-                SettingsNavRow("Recovery", rowSubtitle(SettingsPage.Recovery, state), SettingsIcons.Recovery) { onOpenPage(SettingsPage.Recovery) }
+                SettingsNavRow("Wearable", rowSubtitle(SettingsPage.Recovery, state), SettingsIcons.Wearable) { onOpenPage(SettingsPage.Recovery) }
                 SettingsNavRow("Holiday / Vacation", "Pause your streak during a holiday", SettingsIcons.Holiday) { onOpenPage(SettingsPage.Vacation) }
             }
             item("data") {
@@ -222,7 +222,7 @@ private fun pageGlyph(page: SettingsPage): ImageVector? = when (page) {
     SettingsPage.Security -> SettingsIcons.Security
     SettingsPage.Program -> SettingsIcons.Program
     SettingsPage.Coach -> NavIcons.Coach
-    SettingsPage.Recovery -> SettingsIcons.Recovery
+    SettingsPage.Recovery -> SettingsIcons.Wearable
     SettingsPage.ExercisePrefs -> SettingsIcons.Likes
     SettingsPage.CardioActivities -> NavIcons.Cardio
     SettingsPage.Vacation -> SettingsIcons.Holiday

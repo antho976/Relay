@@ -34,7 +34,7 @@ import com.forge.app.ui.common.clickableLabeled
  * the week-by-week record with undo) lives on the Coach tab (Now/Journey lenses); mirroring it
  * here made a second coach page. What configures the coach: the master switch, the
  * suggest-vs-auto mode, and an at-a-glance of the input feeds it needs (a silent Health Connect
- * feed taps through to Recovery, where it's switched on).
+ * feed taps through to Wearable, where it's switched on).
  */
 @Composable
 internal fun CoachSettingsPage(
@@ -61,11 +61,11 @@ internal fun CoachSettingsPage(
         // The feeds and mode only mean something while the coach is on. Feeds lead (the live
         // on/off truth); mode — a preference, not a state — sits last.
         if (state.coachEnabled) {
-            // The feeds glance (§12 filled-disc/muted-ring idiom, same drawing as Recovery's rail):
+            // The feeds glance (§12 filled-disc/muted-ring idiom, same drawing as Wearable's rail):
             // which of the coach's inputs are coming in. States and labels come verbatim from
             // CoachRepository.coachLab() — the same feed list the Coach tab's Signals lens reads;
             // there it carries readings and charts, here only the on/off config truth. The Health
-            // Connect feeds are the fixable ones, so a silent one taps through to Recovery.
+            // Connect feeds are the fixable ones, so a silent one taps through to Wearable.
             if (signals.isNotEmpty()) {
                 ProgramBlock("What it reads", "Filled feeds sharpen the weekly call; check-ins and flags come from your logging.") {
                     signals.forEach { sig ->
@@ -104,13 +104,13 @@ internal fun CoachSettingsPage(
     }
 }
 
-/** The coach feeds whose switch lives on the Recovery page (one Health Connect grant). */
+/** The coach feeds whose switch lives on the Wearable page (one Health Connect grant). */
 private val HC_FEEDS = setOf("Sleep", "Resting heart rate")
 
 /**
  * One coach feed: the §12 dot (solid accent = feeding, muted ring = silent) + its name. A silent
  * Health Connect feed carries a compact outlined Connect pill (§8 — drawn, not independently
- * clickable) and the whole row taps through to Recovery; live and logging-born feeds are passive.
+ * clickable) and the whole row taps through to Wearable; live and logging-born feeds are passive.
  */
 @Composable
 private fun CoachFeedRow(label: String, active: Boolean, onConnect: (() -> Unit)?) {
@@ -120,7 +120,7 @@ private fun CoachFeedRow(label: String, active: Boolean, onConnect: (() -> Unit)
         modifier = Modifier
             .fillMaxWidth()
             .then(
-                if (tappable) Modifier.clickableLabeled("Connect $label in Recovery", onClick = { onConnect?.invoke() })
+                if (tappable) Modifier.clickableLabeled("Connect $label in Wearable", onClick = { onConnect?.invoke() })
                 else Modifier
             )
             .padding(horizontal = SETTINGS_GUTTER, vertical = SETTINGS_ROW_PAD),

@@ -36,6 +36,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -569,16 +570,22 @@ private fun NoteTemplatesEditor(
         } else {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 sorted.forEach { t ->
-                    Row(
+                    Box(
                         Modifier
-                            .border(1.dp, outline.copy(alpha = 0.35f), RoundedCornerShape(50))
-                            .padding(start = 12.dp, end = 8.dp, top = 6.dp, bottom = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            .minimumInteractiveComponentSize()
+                            .clickableLabeled("Remove ${t.trim()}") { onRemove(t) },
+                        contentAlignment = Alignment.Center
                     ) {
-                        Text(t.trim(), style = MaterialTheme.typography.bodySmall, color = onBg)
-                        GlyphButton("✕", "Remove ${t.trim()}", muted, { onRemove(t) },
-                            style = MaterialTheme.typography.labelSmall)
+                        Row(
+                            Modifier
+                                .border(1.dp, outline.copy(alpha = 0.35f), RoundedCornerShape(50))
+                                .padding(start = 12.dp, end = 10.dp, top = 6.dp, bottom = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(t.trim(), style = MaterialTheme.typography.bodySmall, color = onBg)
+                            Text("✕", style = MaterialTheme.typography.bodySmall, color = muted)
+                        }
                     }
                 }
             }
@@ -728,18 +735,16 @@ internal fun NotificationsPage(state: SettingsUiState, vm: SettingsViewModel, mo
 @Composable
 internal fun ExercisePrefsPage(state: SettingsUiState, vm: SettingsViewModel, modifier: Modifier = Modifier) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    // Only show exercises the user can actually do — the available pool (curated freeze when a
-    // preset like the Developer's is active, otherwise equipment-filtered). Muscle groups with no
-    // available movement drop out entirely. An empty equipment set means "all" (no filter yet).
     val available = remember(state.availableEquipment) {
         state.availableEquipment.mapNotNull {
             runCatching { com.forge.app.program.Equipment.valueOf(it) }.getOrNull()
         }.toSet()
     }
-    val byMuscle = remember(available, state.frozenExerciseIds) {
-        com.forge.app.program.ExerciseLibrary
-            .availablePool(available, state.frozenExerciseIds)
-            .groupBy { it.muscle }
+    // Default to the full public library. The previous source was always availablePool(), so gear
+    // the user had not selected silently erased exercises instead of acting as an optional lens.
+    val allByMuscle = remember { exercisePreferencePool(false, emptySet(), null).groupBy { it.muscle } }
+    val gearByMuscle = remember(available, state.frozenExerciseIds) {
+        exercisePreferencePool(true, available, state.frozenExerciseIds).groupBy { it.muscle }
     }
 
     // Search-first flat list: a search box + two independent filter dimensions — WHERE (a muscle,
@@ -750,9 +755,9 @@ internal fun ExercisePrefsPage(state: SettingsUiState, vm: SettingsViewModel, mo
     var status by remember { mutableStateOf<Pref?>(null) }
     val q = query.trim()
 
-    val visibleByMuscle = remember(byMuscle, q, scope, status, state.liked, state.disliked) {
+    val visibleByMuscle = remember(allByMuscle, gearByMuscle, q, scope, status, state.liked, state.disliked) {
         if (scope == PrefScope.Custom) emptyMap()
-        else byMuscle
+        else (if (scope == PrefScope.Gear) gearByMuscle else allByMuscle)
             .filterKeys { m -> (scope as? PrefScope.Muscle)?.let { it.m == m } ?: true }
             .mapValues { (_, defs) -> defs.filter { libVisible(it, q, status, state.liked, state.disliked) } }
             .filterValues { it.isNotEmpty() }
@@ -769,33 +774,37 @@ internal fun ExercisePrefsPage(state: SettingsUiState, vm: SettingsViewModel, mo
         // Two compact selectors — WHERE (muscle / custom) and STATUS (preferred / hidden). A chip
         // per muscle turned into a wall that scrolled off screen; dropdowns keep both dimensions
         // one tap deep and always fully visible.
-        val muscles = remember(byMuscle) { byMuscle.keys.toList() }
+        val muscles = remember(allByMuscle) { allByMuscle.keys.toList() }
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = SETTINGS_GUTTER, vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             PrefSelector(
                 value = when (val s = scope) {
-                    PrefScope.All -> "Any muscle"
+                    PrefScope.All -> "All exercises"
+                    PrefScope.Gear -> "Your gear"
                     is PrefScope.Muscle -> s.m.displayName
                     PrefScope.Custom -> "Custom"
                 },
                 isDefault = scope == PrefScope.All,
                 options = buildList {
-                    add("Any muscle")
+                    add("All exercises")
+                    add("Your gear")
                     addAll(muscles.map { it.displayName })
                     if (state.customExercises.isNotEmpty()) add("Custom")
                 },
                 selectedIndex = when (val s = scope) {
                     PrefScope.All -> 0
-                    is PrefScope.Muscle -> muscles.indexOf(s.m) + 1
-                    PrefScope.Custom -> muscles.size + 1
+                    PrefScope.Gear -> 1
+                    is PrefScope.Muscle -> muscles.indexOf(s.m) + 2
+                    PrefScope.Custom -> muscles.size + 2
                 },
                 modifier = Modifier.weight(1f)
             ) { i ->
                 scope = when {
                     i == 0 -> PrefScope.All
-                    i <= muscles.size -> PrefScope.Muscle(muscles[i - 1])
+                    i == 1 -> PrefScope.Gear
+                    i <= muscles.size + 1 -> PrefScope.Muscle(muscles[i - 2])
                     else -> PrefScope.Custom
                 }
             }
@@ -897,12 +906,22 @@ internal fun ExercisePrefsPage(state: SettingsUiState, vm: SettingsViewModel, mo
     }
 }
 
-/** WHERE the Exercise likes list looks: the whole pool, one muscle, or the user's custom moves. */
+/** WHERE the Exercise likes list looks: the whole pool, owned gear, one muscle, or custom moves. */
 private sealed interface PrefScope {
     data object All : PrefScope
+    data object Gear : PrefScope
     data class Muscle(val m: com.forge.app.program.MuscleGroup) : PrefScope
     data object Custom : PrefScope
 }
+
+/** The full public catalog by default; equipment is an explicit filter, never an eligibility gate. */
+internal fun exercisePreferencePool(
+    gearOnly: Boolean,
+    available: Set<com.forge.app.program.Equipment>,
+    frozenIds: Set<String>?
+): List<com.forge.app.program.ExerciseDef> =
+    if (gearOnly) com.forge.app.program.ExerciseLibrary.availablePool(available, frozenIds)
+    else com.forge.app.program.ExerciseLibrary.all.filterNot { it.curatedOnly }
 
 /** The mutually-exclusive preference an exercise can carry (mirrors the liked/disliked data model). */
 private enum class Pref(val label: String) {
@@ -968,6 +987,7 @@ private fun customVisible(
     // your custom chest move next to the library's, not hide it behind the Custom chip.
     val inScope = when (scope) {
         PrefScope.All, PrefScope.Custom -> true
+        PrefScope.Gear -> false // Custom exercises do not store equipment metadata.
         is PrefScope.Muscle -> ref.muscle == scope.m
     }
     if (!inScope) return false
