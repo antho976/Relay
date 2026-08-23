@@ -1,21 +1,23 @@
 package com.forge.app.ui.onboarding
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -39,34 +41,57 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.forge.app.domain.units.fromDisplayWeight
 import com.forge.app.domain.units.parseToLb
 import com.forge.app.program.Equipment
-import com.forge.app.ui.common.clickableLabeled
+import com.forge.app.program.ProgramGenerator
+import com.forge.app.program.SplitTemplates
 import com.forge.app.ui.theme.ForgeMotion
 import kotlin.random.Random
 
-// Page indices — one light decision per screen (MacroFactor pacing). The app-lock opt-in (4) sits in
-// the shared "about you" block so every path sees it. After the plan-mode step (5): "generated"
-// continues through the plan-building pages (6-13); "custom"/"freestyle" stop at Experience (7),
-// having picked a goal + experience (which steer the coach), then finish.
-private const val PAGE_WELCOME = 0
-private const val PAGE_UNITS = 1
-private const val PAGE_BODY = 2
-private const val PAGE_WEARABLE = 3
-private const val PAGE_APP_LOCK = 4
-private const val PAGE_PLAN_MODE = 5
-private const val PAGE_GOAL = 6
-private const val PAGE_EXPERIENCE = 7
-private const val PAGE_DAYS = 8
-private const val PAGE_EQUIPMENT = 9
-private const val PAGE_FINE_TUNE = 10
-private const val PAGE_PLATE = 11
-private const val PAGE_AREAS = 12
-private const val PAGE_CADENCE = 13
-private const val PAGE_PREVIEW = 14
+/**
+ * First run, rebuilt 2026-08-22 around one idea: **the plan is visible while you answer for it.**
+ *
+ * The old flow asked fifteen questions and showed the result on the last one — five of those
+ * questions (name, units, body, watch, app lock) were settings asked before the product had proved
+ * anything, and the progress bar had to guess its own denominator because the path length wasn't
+ * known until question six. What replaced it:
+ *
+ * - **The fork leads.** Plan mode is the first screen, because it decides how much of the rest runs.
+ * - **Only plan-shaping questions are in the path** — goal, experience, days, gym, gear. Every
+ *   setting moved to one optional closing step ([StepExtras]) that lands *after* the week exists.
+ * - **The week builds under the question** ([PlanLedger]), from the day-count on. It sits outside
+ *   the page slider, so questions come and go while the plan stays put and animates its own values.
+ * - **The rail is segmented** ([StepRail]) — one cell per step of the path actually taken, so the
+ *   short custom / freestyle path visibly drops the four cells it will never run.
+ *
+ * Generated: mode → goal → experience → days → gym → gear → sore spots → week → extras (9). Sore
+ * spots sits before the week on purpose: it shapes exercise selection, so asking after the week was
+ * approved would have shaped a plan the user had already signed off.
+ * Custom / freestyle: mode → goal → experience → extras (4) — they still pick a goal and an
+ * experience because those steer the coach and Stats, and they have no plan to build here.
+ */
+private const val PAGE_MODE = 0
+private const val PAGE_GOAL = 1
+private const val PAGE_EXPERIENCE = 2
+private const val PAGE_DAYS = 3
+private const val PAGE_GYM = 4
+private const val PAGE_GEAR = 5
+private const val PAGE_SPOTS = 6
+private const val PAGE_WEEK = 7
+private const val PAGE_EXTRAS = 8
+
+private val GENERATED_PATH = listOf(
+    PAGE_MODE, PAGE_GOAL, PAGE_EXPERIENCE, PAGE_DAYS, PAGE_GYM, PAGE_GEAR, PAGE_SPOTS, PAGE_WEEK, PAGE_EXTRAS
+)
+private val SHORT_PATH = listOf(PAGE_MODE, PAGE_GOAL, PAGE_EXPERIENCE, PAGE_EXTRAS)
+
+/** The pages this plan mode actually walks. Before a mode is picked the flow can't leave
+ *  [PAGE_MODE], so the generated (longest) path stands in and the rail only ever shortens. */
+private fun pathFor(planMode: String): List<Int> =
+    if (planMode == PLAN_CUSTOM || planMode == PLAN_FREESTYLE) SHORT_PATH else GENERATED_PATH
 
 /** Most of the world lifts in kg; the US (and Liberia / Myanmar) use lb. Seed the onboarding unit
- *  from the device locale so a non-US user isn't forced to flip a toggle on the very first screen.
- *  An empty country (locale carries only a language, common on emulators / minimal setups) is
- *  uninformative — fall back to the app's historical lb default rather than guessing kg. */
+ *  from the device locale so a non-US user isn't forced to flip a toggle. An empty country (locale
+ *  carries only a language, common on emulators / minimal setups) is uninformative — fall back to
+ *  the app's historical lb default rather than guessing kg. */
 private fun localeDefaultUseKg(): Boolean {
     val country = java.util.Locale.getDefault().country.uppercase(java.util.Locale.ROOT)
     if (country.isBlank()) return false
@@ -105,7 +130,9 @@ fun OnboardingScreen(
     if (load !is DraftLoad.Ready) return
     val draft = load.draft
 
-    var page by remember { mutableIntStateOf(draft?.page?.coerceIn(0, PAGE_PREVIEW) ?: 0) }
+    // A draft written by this same schema always points inside its own path, but coerce anyway so a
+    // corrupt cursor restarts the flow instead of indexing off the end.
+    var step by remember { mutableIntStateOf(draft?.let { it.step.coerceIn(0, pathFor(it.planMode).lastIndex) } ?: 0) }
     // Plan source: generated / custom (self-built) / freestyle (no plan, log freely).
     var planMode by remember { mutableStateOf(draft?.planMode ?: "") }
     var name by remember { mutableStateOf(draft?.name ?: "") }
@@ -123,14 +150,17 @@ fun OnboardingScreen(
     var sex by remember { mutableStateOf(draft?.sex) }
     // Wearable brand (WearableBrand key) — advisory; tailors Settings → Recovery's sync pointers.
     var wearable by remember { mutableStateOf(draft?.wearable ?: "") }
-    // App-lock opt-in (GYMAP-69) — advisory; never blocks Continue. "" of the boolean world = off.
+    // App-lock opt-in (GYMAP-69) — advisory; never blocks the CTA.
     var appLock by remember { mutableStateOf(draft?.appLock ?: false) }
+    // null until the user touches the coach toggle, so the default can follow the plan mode: a
+    // generated plan is what the coach adapts, freestyle has nothing to adapt.
+    var coachChoice by remember { mutableStateOf(draft?.coachChoice) }
     var daysPerWeek by remember { mutableIntStateOf(draft?.daysPerWeek ?: 0) }
     var equipment by remember { mutableStateOf(draft?.equipment ?: emptySet()) }
     // Non-null when a curated preset (e.g. Developer's) is picked — locks the exercise pool.
     var frozenIds by remember { mutableStateOf(draft?.frozenIds) }
     // Locale-aware default: a kg lifter's "not sure" default is a round kg plate (10 kg), an lb
-    // lifter's stays 15 lb. Stored in lb; the plate step shows it in the user's unit.
+    // lifter's stays 15 lb. Stored in lb; the extras step shows it in the user's unit.
     var plateWeightLb by remember {
         mutableStateOf(draft?.plateWeightLb ?: if (localeDefaultUseKg()) fromDisplayWeight(10.0, true) else 15.0)
     }
@@ -139,39 +169,43 @@ fun OnboardingScreen(
     var everyN by remember { mutableIntStateOf(draft?.everyN ?: 4) }
     var previewSeed by remember { mutableLongStateOf(draft?.previewSeed ?: Random.nextLong()) }
     var showSkipConfirm by remember { mutableStateOf(false) }
-    // Coach opt-in is asked only on the no-plan / make-your-own paths (the generated path keeps it on).
-    var showCoachAsk by remember { mutableStateOf(false) }
+
+    val path = pathFor(planMode)
+    // Changing plan mode is only reachable from step 0, so the cursor can never outrun its path —
+    // getOrElse keeps a hypothetical mismatch on the first page rather than crashing.
+    val page = path.getOrElse(step) { PAGE_MODE }
+    val isLast = step >= path.lastIndex
+    val isGenerated = planMode == PLAN_GENERATED
+    val coachEnabled = coachChoice ?: isGenerated
 
     // Persist a resume draft on every answer change (conflated in the ViewModel); completion
     // removes it atomically, so a finished user never resumes into a stale setup.
     val snapshot = OnboardingDraft(
-        page, planMode, name, useKg, useMilesChoice, distanceTouched, goal, experience,
+        step, planMode, name, useKg, useMilesChoice, distanceTouched, goal, experience,
         bodyweightInput, sex, wearable, daysPerWeek, equipment, frozenIds, plateWeightLb,
-        problemAreas, cadence, everyN, previewSeed, appLock
+        problemAreas, cadence, everyN, previewSeed, appLock, coachChoice
     )
     LaunchedEffect(snapshot) { viewModel.saveDraft(snapshot) }
 
-    // The generated path walks all plan-building pages through the preview. Custom & freestyle don't
-    // build a plan here, but they still pick a goal + experience (they steer the coach/Stats) — so
-    // they finish after the Experience step. Before a mode is picked, the flow can't pass plan-mode.
-    val isGenerated = planMode == PLAN_GENERATED
-    val lastPage = when {
-        isGenerated -> PAGE_PREVIEW
-        planMode.isNotEmpty() -> PAGE_EXPERIENCE
-        else -> PAGE_PLAN_MODE
+    // The split the day-count implies — known without any gear, which is what lets the ledger draw
+    // its empty tracks a step before the exercises exist.
+    val archetypes = remember(daysPerWeek) {
+        if (daysPerWeek in 1..7) SplitTemplates.forDays(daysPerWeek) else emptyList()
     }
-    // Progress denominator: until a mode is picked we don't know the path length, so assume the
-    // LONGEST (generated). Committing to the short custom/freestyle path then only ever nudges the
-    // rail FORWARD (the fraction grows), never backward. Once a short mode is committed, use its
-    // real length so the rail still reaches 100% on finish.
-    val progressTotal = if (planMode.isEmpty() || isGenerated) PAGE_PREVIEW + 1 else PAGE_EXPERIENCE + 1
-
-    // Pure preview — recomputed whenever an input or the re-roll seed changes (shown on the last page).
+    // The volume that split plans to carry, before any gear filter — what lets the ledger draw a
+    // real week one step before the exercises exist.
+    val plannedSets = remember(daysPerWeek, experience) {
+        if (daysPerWeek in 1..7) ProgramGenerator.plannedSetsPerDay(daysPerWeek, experience.ifBlank { "intermediate" })
+        else emptyList()
+    }
+    // Pure preview — recomputed whenever an input or the re-roll seed changes. Null until there is
+    // gear to build from: the ledger draws empty tracks rather than inventing a week (§12).
     val previewDays = remember(previewSeed, daysPerWeek, equipment, frozenIds, goal, experience, problemAreas) {
-        viewModel.buildPreview(daysPerWeek, equipment, goal, experience, problemAreas, frozenIds, previewSeed)
+        if (equipment.isEmpty() || daysPerWeek !in 1..7) null
+        else viewModel.buildPreview(daysPerWeek, equipment, goal, experience, problemAreas, frozenIds, previewSeed)
     }
 
-    fun finish(coachEnabled: Boolean = true) {
+    fun finish() {
         val bwLb = parseSaneBodyweightLb(bodyweightInput, useKg)
         viewModel.complete(
             planMode = planMode, name = name.trim(), useKg = useKg,
@@ -186,140 +220,72 @@ fun OnboardingScreen(
         onFinished(planMode)
     }
 
-    // No solid background — the theme's page gradient shows through, like every other screen.
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = 24.dp, vertical = 28.dp)
-    ) {
-        Column(modifier = Modifier.fillMaxSize()) {
-            // Top chrome: ← back, the step rail, skip →. The rail is the only progress readout.
-            val ctaFinishes = page == lastPage && planMode.isNotEmpty()
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+    // System Back walks the flow, matching the ← in the chrome (Android: Back always works, and
+    // there is exactly one back affordance per page). At the first step it falls through and leaves.
+    BackHandler(enabled = step > 0) { step-- }
+
+    // Gate the CTA on the answers the generator can't work without.
+    val bodyweightOk = bodyweightInput.isBlank() || parseSaneBodyweightLb(bodyweightInput, useKg) != null
+    val canAdvance = when (page) {
+        PAGE_MODE -> planMode.isNotEmpty()
+        PAGE_GOAL -> goal.isNotEmpty()
+        PAGE_EXPERIENCE -> experience.isNotEmpty()
+        PAGE_DAYS -> daysPerWeek in 1..7
+        PAGE_GYM, PAGE_GEAR -> equipment.isNotEmpty()
+        PAGE_EXTRAS -> bodyweightOk
+        else -> true
+    }
+    // Say why the CTA is held rather than leaving a silently greyed button.
+    val gateHint = when {
+        page == PAGE_GYM && equipment.isEmpty() ->
+            "Pick a setup. Avex can't build your plan without knowing your gear."
+        page == PAGE_GEAR && equipment.isEmpty() ->
+            "Keep at least one piece on. Avex can't build your plan with nothing to train on."
+        else -> null
+    }
+    val ctaLabel = when {
+        !isLast -> "Continue"
+        planMode == PLAN_CUSTOM -> "Build my plan"
+        planMode == PLAN_FREESTYLE -> "Start logging"
+        else -> "Start training"
+    }
+    val onCta: () -> Unit = { if (isLast) finish() else step++ }
+
+    OnboardingScaffold(
+        step = step,
+        total = path.size,
+        onBack = if (step > 0) ({ step-- }) else null,
+        onSkip = if (!isLast) ({ showSkipConfirm = true }) else null,
+        gateHint = gateHint,
+        // The plan under construction — outside the page slider, so it holds still while the
+        // questions move past it. The week page shows the same mark at full size instead.
+        ledger = {
+            AnimatedVisibility(
+                visible = page == PAGE_DAYS || page == PAGE_GYM || page == PAGE_GEAR || page == PAGE_SPOTS,
+                enter = fadeIn(ForgeMotion.enterTween()) + expandVertically(ForgeMotion.enterTween()),
+                exit = fadeOut(ForgeMotion.exitTween()) + shrinkVertically(ForgeMotion.exitTween())
             ) {
-                if (page > 0) {
-                    Box(
-                        modifier = Modifier
-                            .size(48.dp)
-                            .clickableLabeled("Back") { page-- },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text("←", style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onBackground)
-                    }
-                } else {
-                    Spacer(Modifier.width(48.dp))
-                }
-                ProgressRail(
-                    fraction = (page + 1).toFloat() / progressTotal,
-                    modifier = Modifier.weight(1f)
-                )
-                if (!ctaFinishes) SkipLink { showSkipConfirm = true } else Spacer(Modifier.width(36.dp))
-            }
-            Spacer(Modifier.height(24.dp))
-
-            AnimatedContent(
-                targetState = page,
-                modifier = Modifier.weight(1f),
-                transitionSpec = {
-                    val dir = if (targetState > initialState) 1 else -1
-                    (slideInHorizontally(ForgeMotion.enterTween()) { it * dir } + fadeIn(ForgeMotion.enterTween())) togetherWith
-                        (slideOutHorizontally(ForgeMotion.exitTween()) { -it * dir } + fadeOut(ForgeMotion.exitTween()))
-                },
-                label = "onboarding_page"
-            ) { p ->
-                // The preview page scrolls itself — render it directly. Wrapping it in another
-                // verticalScroll would nest two same-axis scrollables and crash Compose. Every other
-                // page needs the scroll wrapper.
-                if (p == PAGE_PREVIEW) {
-                    StepPreview(days = previewDays)
-                } else {
-                    Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
-                        when (p) {
-                            PAGE_WELCOME -> StepWelcome(name = name, onNameChange = { name = it })
-                            PAGE_UNITS -> StepUnits(
-                                useKg = useKg, onWeightToggle = { useKg = it },
-                                useMiles = if (distanceTouched) useMilesChoice else !useKg,
-                                onDistanceToggle = { useMilesChoice = it; distanceTouched = true }
-                            )
-                            PAGE_BODY -> StepBody(
-                                bodyweightInput = bodyweightInput, useKg = useKg,
-                                onInputChange = { bodyweightInput = it },
-                                sex = sex, onSexSelect = { sex = it }
-                            )
-                            PAGE_WEARABLE -> StepWearable(selected = wearable, onSelect = { wearable = it })
-                            PAGE_APP_LOCK -> StepAppLock(enabled = appLock, onToggle = { appLock = it })
-                            PAGE_PLAN_MODE -> StepPlanMode(selected = planMode, onSelect = { planMode = it })
-                            PAGE_GOAL -> StepGoal(selected = goal, onSelect = { goal = it })
-                            PAGE_EXPERIENCE -> StepExperience(selected = experience, onSelect = { experience = it })
-                            PAGE_DAYS -> StepDays(days = daysPerWeek, onChange = { daysPerWeek = it })
-                            PAGE_EQUIPMENT -> StepGymPresets(
-                                selected = equipment,
-                                frozenIds = frozenIds,
-                                onSelectPreset = { preset ->
-                                    equipment = preset.equipment
-                                    frozenIds = preset.frozenIds
-                                }
-                            )
-                            PAGE_FINE_TUNE -> StepFineTune(
-                                selected = equipment,
-                                onToggle = { code ->
-                                    equipment = if (code in equipment) equipment - code else equipment + code
-                                    // Hand-editing equipment leaves any curated preset.
-                                    frozenIds = null
-                                }
-                            )
-                            PAGE_PLATE -> StepPlateWeight(plateWeightLb = plateWeightLb, useKg = useKg, onSet = { plateWeightLb = it })
-                            PAGE_AREAS -> StepProblemAreas(
-                                selected = problemAreas,
-                                onToggle = { code -> problemAreas = if (code in problemAreas) problemAreas - code else problemAreas + code }
-                            )
-                            PAGE_CADENCE -> StepCadence(cadence = cadence, everyN = everyN, onSet = { c, n -> cadence = c; everyN = n })
-                        }
-                    }
+                Column {
+                    Spacer(Modifier.height(20.dp))
+                    // The week takes the room the question doesn't need. On the day-count step it IS
+                    // the answer, so it stands tall; the gym and gear steps need their grids, so it
+                    // compacts to make way. Animated, because the same bars are being resized.
+                    val trackHeight by animateDpAsState(
+                        if (page == PAGE_DAYS) 148.dp else 72.dp,
+                        ForgeMotion.standardTween(),
+                        label = "ledger_height"
+                    )
+                    PlanLedger(
+                        archetypes = archetypes,
+                        plannedSets = plannedSets,
+                        days = previewDays,
+                        trackHeight = trackHeight
+                    )
                 }
             }
-            Spacer(Modifier.height(16.dp))
-
-            // Gate "Continue" on the pages whose choices the generator needs.
-            val canAdvance = when (page) {
-                PAGE_BODY -> bodyweightInput.isBlank() || parseSaneBodyweightLb(bodyweightInput, useKg) != null
-                // Wearable is advisory-only (like sex) — never block Continue; "" just leaves it unset.
-                PAGE_PLAN_MODE -> planMode.isNotEmpty()
-                PAGE_GOAL -> goal.isNotEmpty()
-                PAGE_EXPERIENCE -> experience.isNotEmpty()
-                PAGE_DAYS -> daysPerWeek in 1..7
-                PAGE_EQUIPMENT, PAGE_FINE_TUNE -> equipment.isNotEmpty()
-                else -> true
-            }
-            // Explain why "Continue" is held on the gym pages — the generator can't build a plan with
-            // no equipment selected, so this guards the gate instead of a silently greyed button.
-            if ((page == PAGE_EQUIPMENT || page == PAGE_FINE_TUNE) && equipment.isEmpty()) {
-                Text(
-                    if (page == PAGE_EQUIPMENT) "Pick a setup. Avex can't build your plan without knowing your gear."
-                    else "Keep at least one piece on. Avex can't build your plan with nothing to train on.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                )
-                Spacer(Modifier.height(10.dp))
-            }
-            val ctaLabel = when {
-                !ctaFinishes -> "Continue"
-                planMode == PLAN_CUSTOM -> "Build my plan"
-                planMode == PLAN_FREESTYLE -> "Start logging"
-                else -> "Let's go"
-            }
-            val onCta: () -> Unit = {
-                when {
-                    page < lastPage -> page++
-                    // No-plan / make-your-own: ask about the coach before finishing.
-                    planMode == PLAN_CUSTOM || planMode == PLAN_FREESTYLE -> showCoachAsk = true
-                    else -> finish()
-                }
-            }
-            if (page == PAGE_PREVIEW) {
+        },
+        bottomBar = {
+            if (page == PAGE_WEEK) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     OutlineCapsule("Re-roll", onClick = { previewSeed = Random.nextLong() })
                     PrimaryCapsule(ctaLabel, onClick = onCta, modifier = Modifier.weight(1f))
@@ -328,75 +294,108 @@ fun OnboardingScreen(
                 PrimaryCapsule(ctaLabel, onClick = onCta, enabled = canAdvance, modifier = Modifier.fillMaxWidth())
             }
         }
-
-        if (showSkipConfirm) {
-            AlertDialog(
-                onDismissRequest = { showSkipConfirm = false },
-                title = { Text("Skip setup?") },
-                text = {
-                    Text(
-                        when (planMode) {
-                            PLAN_CUSTOM -> "You'll skip the rest of setup and start with no plan yet. Build " +
-                                "your own from the home screen, or generate one anytime in Settings → Program."
-                            PLAN_FREESTYLE -> "You'll skip the rest of setup and start with no fixed plan, just " +
-                                "logging your workouts. You can switch to a plan anytime in Settings → Program."
-                            else -> "You'll start with a basic bodyweight program and default settings, with no " +
-                                "plan tailored to your gym or goals. You can set your equipment and goal, and " +
-                                "generate a personalized program, any time in Settings → Program."
-                        }
-                    )
+    ) {
+            AnimatedContent(
+                targetState = step,
+                modifier = Modifier.weight(1f),
+                transitionSpec = {
+                    val dir = if (targetState > initialState) 1 else -1
+                    (slideInHorizontally(ForgeMotion.enterTween()) { it * dir } + fadeIn(ForgeMotion.enterTween())) togetherWith
+                        (slideOutHorizontally(ForgeMotion.exitTween()) { -it * dir } + fadeOut(ForgeMotion.exitTween()))
                 },
-                confirmButton = {
-                    TextButton(onClick = {
-                        showSkipConfirm = false
-                        val bwLb = parseSaneBodyweightLb(bodyweightInput, useKg)
-                        // Honor a mode the user already picked (forward → Back → Skip); default to
-                        // generated for the usual early skip where nothing was chosen yet.
-                        val effectiveMode = planMode.ifEmpty { PLAN_GENERATED }
-                        viewModel.complete(
-                            planMode = effectiveMode, name = name.trim(), useKg = useKg, sex = sex ?: "",
-                            useMiles = if (distanceTouched) useMilesChoice else null,
-                            // Honor a wearable picked before skipping, like the mode above.
-                            wearable = wearable,
-                            bodyweightLb = bwLb, goal = "build_muscle", daysPerWeek = 4,
-                            equipment = setOf(Equipment.BODYWEIGHT_ONLY.name), experience = "intermediate",
-                            // Skipping bypasses the coach-ask dialog — keep coach ON only for the generated
-                            // default; custom/freestyle (where the dialog would have asked) default to OFF.
-                            coachEnabled = effectiveMode == PLAN_GENERATED,
-                            // Honor an app-lock opt-in made before skipping (the step precedes plan-mode).
-                            appLock = appLock
+                label = "onboarding_page"
+            ) { s ->
+                Column(modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+                    when (path.getOrElse(s) { PAGE_MODE }) {
+                        PAGE_MODE -> StepPlanMode(selected = planMode, onSelect = { planMode = it })
+                        PAGE_GOAL -> StepGoal(selected = goal, onSelect = { goal = it })
+                        PAGE_EXPERIENCE -> StepExperience(selected = experience, onSelect = { experience = it })
+                        PAGE_DAYS -> StepDays(days = daysPerWeek, onChange = { daysPerWeek = it })
+                        PAGE_GYM -> StepGymPresets(
+                            selected = equipment,
+                            frozenIds = frozenIds,
+                            onSelectPreset = { preset ->
+                                equipment = preset.equipment
+                                frozenIds = preset.frozenIds
+                            }
                         )
-                        onFinished(effectiveMode)
-                    }) { Text("Skip anyway") }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showSkipConfirm = false }) { Text("Keep setting up") }
+                        PAGE_GEAR -> StepFineTune(
+                            selected = equipment,
+                            onToggle = { code ->
+                                equipment = if (code in equipment) equipment - code else equipment + code
+                                // Hand-editing equipment leaves any curated preset.
+                                frozenIds = null
+                            }
+                        )
+                        PAGE_SPOTS -> StepSoreSpots(
+                            selected = problemAreas,
+                            equipment = equipment,
+                            frozenIds = frozenIds,
+                            onToggle = { code ->
+                                problemAreas = if (code in problemAreas) problemAreas - code else problemAreas + code
+                            }
+                        )
+                        PAGE_WEEK -> StepWeek(archetypes = archetypes, plannedSets = plannedSets, days = previewDays.orEmpty())
+                        else -> StepExtras(
+                            generated = isGenerated,
+                            useKg = useKg, onWeightUnit = { useKg = it },
+                            useMiles = if (distanceTouched) useMilesChoice else !useKg,
+                            onDistanceUnit = { useMilesChoice = it; distanceTouched = true },
+                            name = name, onNameChange = { name = it },
+                            bodyweightInput = bodyweightInput, onBodyweightChange = { bodyweightInput = it },
+                            sex = sex, onSexSelect = { sex = it },
+                            coachEnabled = coachEnabled, onCoachToggle = { coachChoice = it },
+                            wearable = wearable, onWearableSelect = { wearable = it },
+                            appLock = appLock, onAppLockToggle = { appLock = it },
+                            plateWeightLb = plateWeightLb, onPlateWeight = { plateWeightLb = it },
+                            cadence = cadence, everyN = everyN,
+                            onCadence = { c, n -> cadence = c; everyN = n }
+                        )
+                    }
                 }
-            )
-        }
+            }
+    }
 
-        if (showCoachAsk) {
-            AlertDialog(
-                onDismissRequest = { showCoachAsk = false },
-                title = { Text("Want a coach?") },
-                text = {
-                    Text(
-                        "The coach quietly watches your training and suggests small tweaks each week. " +
-                            "It's optional. If you'd rather just train and log, leave it off. You can turn " +
-                            "it on or off anytime in Settings → Program."
+    if (showSkipConfirm) {
+        AlertDialog(
+            onDismissRequest = { showSkipConfirm = false },
+            title = { Text("Skip setup?") },
+            text = {
+                Text(
+                    when (planMode) {
+                        PLAN_CUSTOM -> "You'll start with no plan yet. Build your own from the home " +
+                            "screen, or generate one anytime in Settings → Program."
+                        PLAN_FREESTYLE -> "You'll start with no fixed plan, just logging your workouts. " +
+                            "Switch to a plan anytime in Settings → Program."
+                        else -> "You'll start with a basic bodyweight program and default settings, with " +
+                            "no plan tailored to your gym or goals. Set your equipment and goal, and " +
+                            "generate a personalized program, anytime in Settings → Program."
+                    }
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showSkipConfirm = false
+                    val bwLb = parseSaneBodyweightLb(bodyweightInput, useKg)
+                    // Honor a mode the user already picked; default to generated for the usual
+                    // early skip where nothing was chosen yet.
+                    val effectiveMode = planMode.ifEmpty { PLAN_GENERATED }
+                    viewModel.complete(
+                        planMode = effectiveMode, name = name.trim(), useKg = useKg, sex = sex ?: "",
+                        useMiles = if (distanceTouched) useMilesChoice else null,
+                        wearable = wearable,
+                        bodyweightLb = bwLb, goal = "build_muscle", daysPerWeek = 4,
+                        equipment = setOf(Equipment.BODYWEIGHT_ONLY.name), experience = "intermediate",
+                        // Skipping never reaches the coach row, so the mode's own default stands.
+                        coachEnabled = coachChoice ?: (effectiveMode == PLAN_GENERATED),
+                        appLock = appLock
                     )
-                },
-                confirmButton = {
-                    TextButton(onClick = { showCoachAsk = false; finish(coachEnabled = true) }) {
-                        Text("Yes, use the coach")
-                    }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showCoachAsk = false; finish(coachEnabled = false) }) {
-                        Text("No coach")
-                    }
-                }
-            )
-        }
+                    onFinished(effectiveMode)
+                }) { Text("Skip anyway") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showSkipConfirm = false }) { Text("Keep setting up") }
+            }
+        )
     }
 }

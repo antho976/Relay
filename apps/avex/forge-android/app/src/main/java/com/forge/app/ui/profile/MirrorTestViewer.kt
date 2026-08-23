@@ -17,13 +17,17 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
@@ -55,17 +59,21 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.forge.app.data.repo.ProgressPhoto
 import com.forge.app.domain.photo.PhotoPose
+import com.forge.app.domain.photo.PhotoTag
 import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.parseToLb
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.domain.units.weightInputValue
+import com.forge.app.program.MuscleGroup
 import com.forge.app.ui.common.bounceClick
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -78,21 +86,26 @@ import java.util.Locale
 
 /**
  * Full-screen, swipeable photo viewer + metadata editor. Opens on the tapped photo and pages through
- * the exact list the grid showed. Each page shows the whole photo (Fit) over a dark scrim; the bottom
- * sheet edits its date, title, pose, bodyweight, note and album, and deletes. Title + note + weight commit on
- * swipe / dismiss; pose, album and date reflect at once.
+ * the exact list the grid showed. Each page shows the whole photo (Fit) over a dark scrim; the editor
+ * beneath it owns every field the gallery filters on — date, title, pose, muscles, tags, bodyweight,
+ * note and album — and deletes. Title, note, weight and a typed tag commit on swipe or dismiss;
+ * chip taps (pose, muscles, tags, album) and the date reflect at once, because a chip that needs a
+ * separate save step is a chip you cannot trust.
  */
 @Composable
 internal fun GalleryViewerPager(
     photos: List<ProgressPhoto>,
     startIndex: Int,
     albumNames: List<String>,
+    knownTags: List<String>,
     weightUnit: WeightUnit,
     fileFor: (ProgressPhoto) -> File,
     onSaveNote: (ProgressPhoto, String) -> Unit,
     onSaveTitle: (ProgressPhoto, String) -> Unit,
     onMove: (ProgressPhoto, String) -> Unit,
     onSetPose: (ProgressPhoto, String) -> Unit,
+    onSetMuscles: (ProgressPhoto, List<String>) -> Unit,
+    onSetTags: (ProgressPhoto, List<String>) -> Unit,
     onSetWeight: (ProgressPhoto, Double?) -> Unit,
     onSetDate: (ProgressPhoto, Long) -> Unit,
     onDelete: (ProgressPhoto) -> Unit,
@@ -110,6 +123,8 @@ internal fun GalleryViewerPager(
     val titleOverride = remember { mutableStateMapOf<String, String>() }
     val albumOverride = remember { mutableStateMapOf<String, String>() }
     val poseOverride = remember { mutableStateMapOf<String, String>() }
+    val muscleOverride = remember { mutableStateMapOf<String, List<String>>() }
+    val tagOverride = remember { mutableStateMapOf<String, List<String>>() }
     val weightOverride = remember { mutableStateMapOf<String, Double?>() }
     val dateOverride = remember { mutableStateMapOf<String, Long>() }
     var noteInput by remember { mutableStateOf(noteOverride[current.fileName] ?: current.note) }
@@ -118,13 +133,28 @@ internal fun GalleryViewerPager(
         mutableStateOf(current.weightLb?.let { weightInputValue(it, weightUnit) } ?: "")
     }
     var showDatePicker by remember { mutableStateOf(false) }
+    var tagInput by remember { mutableStateOf("") }
+    var editorOpen by remember { mutableStateOf(false) }
 
     val currentAlbum = albumOverride[current.fileName] ?: current.album
     val currentPose = poseOverride[current.fileName] ?: current.pose
+    val currentMuscles = muscleOverride[current.fileName] ?: current.muscles
+    val currentTags = tagOverride[current.fileName] ?: current.tags
     val currentDate = dateOverride[current.fileName] ?: current.takenAtMs
 
     fun commit() {
         val original = photos.firstOrNull { it.fileName == editingFile } ?: return
+        // A tag typed but never submitted is still a tag the user meant. Flush it rather than
+        // silently dropping it when they swipe to the next shot.
+        if (tagInput.isNotBlank()) {
+            val existing = tagOverride[editingFile] ?: original.tags
+            val next = PhotoTag.added(existing, tagInput)
+            tagInput = ""
+            if (next != existing) {
+                tagOverride[editingFile] = next
+                onSetTags(original, next)
+            }
+        }
         val trimmed = noteInput.trim()
         noteOverride[editingFile] = trimmed
         if (trimmed != original.note) onSaveNote(original, trimmed)
@@ -174,11 +204,16 @@ internal fun GalleryViewerPager(
                 GalleryFullImage(fileFor(photos[page]), Modifier.fillMaxSize().padding(horizontal = 8.dp))
             }
 
-            // Metadata editor.
+            // Metadata editor. Collapsed it is one reading of the shot (date, what it is of, its
+            // tags); expanded it is every field, in its own scroll so a full muscle rail at 200%
+            // font scale cannot push the photo off the screen. The photo stays the largest thing
+            // on a photo viewer, which is the whole reason the fields fold.
             Column(
                 Modifier.fillMaxWidth()
                     .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
                     .background(MaterialTheme.colorScheme.surface)
+                    .heightIn(max = if (editorOpen) 420.dp else Dp.Unspecified)
+                    .verticalScroll(rememberScrollState())
                     .padding(16.dp)
             ) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
@@ -230,11 +265,29 @@ internal fun GalleryViewerPager(
                     modifier = Modifier.fillMaxWidth()
                 )
 
-                // Pose.
-                Spacer(Modifier.height(14.dp))
-                Text("POSE", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
-                Spacer(Modifier.height(6.dp))
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                // The reading, and the way into the fields that produce it.
+                Spacer(Modifier.height(12.dp))
+                Row(
+                    Modifier.fillMaxWidth().bounceClick { editorOpen = !editorOpen }.padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        photoTagSummary(currentPose, currentMuscles, currentTags),
+                        style = MaterialTheme.typography.labelMedium, color = muted,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Text(
+                        if (editorOpen) "done" else "edit →",
+                        style = MaterialTheme.typography.labelSmall, color = accent
+                    )
+                }
+
+                if (!editorOpen) return@Column
+
+                // POSE — where the camera stood. One per photo.
+                EditorField("Pose", muted) {
                     PhotoPose.entries.forEach { p ->
                         GalleryChip(p.label, selected = currentPose == p.name) {
                             val next = if (currentPose == p.name) "" else p.name
@@ -244,10 +297,71 @@ internal fun GalleryViewerPager(
                     }
                 }
 
+                // MUSCLES — what the shot is evidence of. Several per photo, from the program's own
+                // vocabulary, so a photo and a training week can be read against each other.
+                EditorField("Muscles", muted) {
+                    MuscleGroup.entries.forEach { m ->
+                        GalleryChip(m.displayName, selected = m.code in currentMuscles) {
+                            val next = if (m.code in currentMuscles) currentMuscles - m.code else currentMuscles + m.code
+                            muscleOverride[current.fileName] = next
+                            onSetMuscles(current, next)
+                        }
+                    }
+                }
+
+                // TAGS — whatever the user invents. Tapping one removes it; the rail underneath
+                // offers the tags already in the library, so the vocabulary converges instead of
+                // sprouting a new spelling of "cut" every time.
+                EditorField("Tags", muted) {
+                    currentTags.forEach { t ->
+                        GalleryChip(PhotoTag.display(t), selected = true, trailing = "✕") {
+                            val next = currentTags - t
+                            tagOverride[current.fileName] = next
+                            onSetTags(current, next)
+                        }
+                    }
+                    knownTags.filter { it !in currentTags }.take(6).forEach { t ->
+                        GalleryChip(PhotoTag.display(t), selected = false) {
+                            val next = PhotoTag.added(currentTags, t)
+                            tagOverride[current.fileName] = next
+                            onSetTags(current, next)
+                        }
+                    }
+                }
+                if (currentTags.size < PhotoTag.MAX_PER_PHOTO) {
+                    Spacer(Modifier.height(8.dp))
+                    BasicTextField(
+                        value = tagInput,
+                        onValueChange = { tagInput = it.take(PhotoTag.MAX_LENGTH + 1) },
+                        singleLine = true,
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(color = onSurface),
+                        cursorBrush = SolidColor(accent),
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = {
+                            val next = PhotoTag.added(currentTags, tagInput)
+                            tagInput = ""
+                            if (next != currentTags) {
+                                tagOverride[current.fileName] = next
+                                onSetTags(current, next)
+                            }
+                        }),
+                        decorationBox = { inner ->
+                            Box {
+                                if (tagInput.isEmpty()) Text(
+                                    "Add a tag…", style = MaterialTheme.typography.bodyMedium,
+                                    color = muted.copy(alpha = 0.6f), fontStyle = FontStyle.Italic
+                                )
+                                inner()
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
                 // Bodyweight.
                 Spacer(Modifier.height(14.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("WEIGHT", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
+                    Text("WEIGHT", style = MaterialTheme.typography.labelSmall, color = muted)
                     Spacer(Modifier.width(10.dp))
                     BasicTextField(
                         value = weightInput,
@@ -258,21 +372,19 @@ internal fun GalleryViewerPager(
                         decorationBox = { inner ->
                             Box {
                                 if (weightInput.isEmpty()) Text(
-                                    "—", style = MaterialTheme.typography.bodyMedium, color = muted.copy(alpha = 0.6f)
+                                    "Not set", style = MaterialTheme.typography.bodyMedium,
+                                    color = muted.copy(alpha = 0.6f)
                                 )
                                 inner()
                             }
                         },
-                        modifier = Modifier.width(70.dp)
+                        modifier = Modifier.width(88.dp)
                     )
                     Text(unitLabel(weightUnit), style = MaterialTheme.typography.labelMedium, color = muted)
                 }
 
                 // Album.
-                Spacer(Modifier.height(14.dp))
-                Text("ALBUM", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
-                Spacer(Modifier.height(6.dp))
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                EditorField("Album", muted) {
                     GalleryChip("Unsorted", selected = currentAlbum.isBlank()) {
                         albumOverride[current.fileName] = ""; onMove(current, "")
                     }
@@ -318,6 +430,34 @@ internal fun GalleryViewerPager(
                 ) { Text("Cancel") }
             }
         ) { DatePicker(state = dpState, colors = pickerColors) }
+    }
+}
+
+/**
+ * What the shot is, in one line: its pose, the muscles it documents, and its tags. This is the
+ * collapsed editor's whole content, so a photo always states its own metadata without being opened
+ * for editing. Untagged says so plainly rather than rendering an empty row of nothing.
+ */
+private fun photoTagSummary(pose: String, muscles: List<String>, tags: List<String>): String {
+    val parts = buildList {
+        PhotoPose.fromKey(pose)?.let { add(it.label.uppercase()) }
+        MuscleGroup.entries.filter { it.code in muscles }.forEach { add(it.displayName.uppercase()) }
+        tags.forEach { add(PhotoTag.display(it)) }
+    }
+    return if (parts.isEmpty()) "No pose, muscles or tags yet" else parts.joinToString(" · ")
+}
+
+/**
+ * One labeled field of the metadata editor: a mono label over a wrapping chip rail. Every chip axis
+ * shares this shell, so pose, muscles, tags and album read as one form rather than four.
+ */
+@Composable
+private fun EditorField(label: String, muted: Color, chips: @Composable () -> Unit) {
+    Spacer(Modifier.height(14.dp))
+    Text(label.uppercase(), style = MaterialTheme.typography.labelSmall, color = muted)
+    Spacer(Modifier.height(8.dp))
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        chips()
     }
 }
 

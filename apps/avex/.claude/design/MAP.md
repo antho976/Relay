@@ -404,62 +404,82 @@ any activity, `buildYearActivity` in `ProfileRepository`), filmstrip.
   rows → SetsReps sheet (set stepper + rep-preset pills + in-place swap), duplicate/remove day at page
   end; removes undo via snackbar, never confirm)
 - `FREESTYLE_LOG`
-- `MIRROR_TEST` (the photo **Gallery**, revamped GYMAP-gallery; visual pass 2026-07-13:
-  `statsEntrance` cascade + sparkline draw-in, real `EditorialHeader` anchors (BODYWEIGHT · SAME
-  WEIGHT, DIFFERENT BODY · TIMELINE w/ `Albums →` as the header action), stock-Material content
-  icons and per-cell pose chips removed: overview-first — serif "Gallery" hero + mono count/span
-  eyebrow, a first↔latest **progress band** (corner-16 frames; center = serif span figure +
-  direction-only weight-Δ + `compare →`; prefers a same-pose pair, tap → slider compare) as the §12
-  mark at zero (ghost frames + add prompt), a bodyweight-through-time sparkline (only ≥2 weigh-ins),
-  an auto-paired **same weight, different body** strip (GYMAP-60: same-pose shots within ~2lb of
-  each other ≥30d apart, longest hold first, tap → compare; hidden when none, excludes the band pair
-  so it never echoes it), pose lens pills (Front/Back/Side/Legs/Arms, only those present) +
-  search/filters/compare **text pills** (one `GalleryChip` vocabulary with the range/sort/density
-  chips) over the month-grouped grid (cells corner-12, date-only — the pose lens carries grouping);
-  compare = select-2 → `CompareSheet` with a draggable **Slider** ⇄ **Split** toggle +
-  time/weight/pose readout (a top-bar **Share** renders a 4:5 before/after card via
-  `BeforeAfterCardRenderer` — GYMAP-55: the two shots + span + pose + **delta-only** weight (never
-  the absolute bodyweight) to `ACTION_SEND`, a sibling of `RankCardRenderer` in the same
-  Pearl-gradient/serif-hero/tinted-wordmark card language; band/same-weight/manual-compare all
-  funnel through this sheet so every before/after path shares for free; adding it retired the
-  Gallery's "never leave your phone" reassurance copy); the full-screen pager viewer doubles as a
-  **metadata editor** (tap-date → DatePicker · pose chips · bodyweight · note · album · delete);
-  albums behind "Albums →"; add via a chooser sheet → import OR the guided camera; photos carry EXIF
-  capture date + a bodyweight snapshot nearest that date and are stored app-private off the DB —
-  `ProgressPhotoRepository` with a reactive `revision` so teaser/gallery/camera stay in sync. **A
-  photo LIBRARY first, a compare tool second (2026-07-25, Antho: "it was supposed to be a gallery of
-  photos like phones, with metadata, classed per day, in order, with filters and a search bar").**
-  The grid groups by **DAY**, not month — you shoot a set of angles in one sitting, so the day is
-  the unit, and a month header hid the very thing that makes the library useful. Each day header
-  names itself the way you'd say it (`TODAY` · `YESTERDAY` · `THU 16 JUL`, plus the year outside
-  this one) over a meta line carrying the day's own reading: the shot count once there's more than
-  one, then the titles those shots carry or their poses when untitled. **Photos carry a `title`**
-  (short label, ≤60 chars, edited in the viewer above the note, stored in the photo index JSON —
-  photos are deliberately off the schema, so no migration). **Search matches what the photo IS**:
-  title · note · **pose** · album · date in several spellings. Pose and title were both missing
-  until this pass, so the two most natural queries in a physique gallery — "arms", or whatever you
-  named the shot — returned nothing. Pose matches on the enum LABEL, not the stored key. The field
-  stands **always open**, never behind a chip: a gallery that makes you find its search doesn't read
-  as a gallery, and its placeholder names the dimensions it matches so they need no caption.
-  **Import is MULTI-select** (`PickMultipleVisualMedia`) — several photos per day was always allowed
-  by storage (UUID filenames, no dedup anywhere) and was blocked purely by the picker asking for
-  one. **The screen is whole at every count** — `OverviewLevel` used to `return` right after the
-  band when there were no photos, so a new user got eyebrow + hero + two ghost frames + one italic
-  line and then a BLANK page, with `Albums →` unreachable because it hangs off the TIMELINE header
-  inside the returned-early region. The zero page now runs: honest `0 PHOTOS` eyebrow → serif hero →
-  ghost frames **keeping their FIRST/NOW tags** (the mark states its own structure, it doesn't lean
-  on the prose beneath it) → one hint → one filled `Add a photo` capsule → and BODYWEIGHT with its
-  real figure and spark, which is no longer photo-gated (it is the live sibling the ghosts read
-  against, §12). At ONE photo the shot takes **FIRST**, not NOW — a lone shot in NOW beside a ghost
-  FIRST reads as a missing past rather than a start. **Browse controls are count-gated, never
-  rendered over nothing**: compare ≥2 · search/filters ≥4 · pose pills only once ≥2 poses exist;
-  dropping below a threshold CLEARS the state that control set, so a filter can't outlive its
-  control, and a filtered-to-empty grid carries its own `Clear search`/`Clear filters` chip rather
-  than being a dead end. The grid widens to 2-across at ≤2 photos (3-across put a single shot on
-  screen as a ~100dp speck, §12 debris). **Loading is its own state**: `index.json` is read off disk
-  async, so before this every entry — including a 200-photo library — rendered the zero state for
-  the first frames and flashed "add your first shot" before snapping to content; the band now
-  shimmers while `loading` and everything below it waits.)
+- `MIRROR_TEST` (the photo **Gallery**, `ui/profile/MirrorTest*` + `Gallery*`). **Rebuilt
+  gallery-first 2026-08-22** (Antho: "a full revamp, it should be like a real gallery, with date,
+  tags, compare, muscle tag"). The library leads; the instruments scroll away above it.
+  - **One lazy list.** The whole screen is a single `LazyColumn`; `GalleryLibrary.kt`'s
+    `LazyListScope.galleryLibrary()` emits masthead -> browse bar -> grid -> roll-end, and
+    `galleryGrid()` emits one item per grid ROW under a `stickyHeader` per day. The old screen was a
+    `Column(verticalScroll)` that composed and decoded every photo in the library on entry: fine at
+    twenty shots, a felt stall at three hundred. The gallery is the app's one unbounded screen, so it
+    is the one screen that pages. Day headers pin while their rows pass under them (a page-ground
+    `Brush.verticalGradient` that fades at its foot, not a box, §1/§5).
+  - **Four tag axes.** A photo carries its **date**, its **pose** (where the camera stood, one per
+    photo, unchanged), its **muscle tags** (what the shot documents, MULTI, drawn from the program's
+    own `MuscleGroup` codes, so a photo and a training week share one vocabulary) and its free
+    **tags** (`domain/photo/PhotoTag.kt` normalizes "Week 12" / "#week 12" / "week-12" to one
+    spelling, <=24 chars, <=8 per photo). Both new axes are `List<String>` on `ProgressPhoto`,
+    written to the index JSON **only when non-empty**, so an untagged library's file is
+    byte-identical to what the pre-revamp build wrote. Still off the DB, still no migration.
+  - **Faceted, not modal.** `GalleryFilter` ANDs across axes and ORs within them; search composes
+    with the facets instead of replacing them (it used to silently discard the window and lens you
+    had set). `GalleryFilterBar` draws an always-open search field, the pose lens, then `Filters` +
+    `Compare`; WHEN / MUSCLE / TAGS / VIEW rails live behind Filters, which carries the active-facet
+    COUNT. With the panel shut, every active value stands above the grid as its own removable chip
+    plus `Clear all`, so a filter set three scrolls ago can never quietly eat the library. Sort and
+    density moved INTO the panel: four chips on the top row ran past the screen edge and made two
+    presentation switches look as load-bearing as the filters beside them.
+  - **One muscle is a LENS, not a filter.** With exactly one muscle chip active the progress band
+    re-pairs inside that muscle and names it, so the mark at the top answers "how has my back
+    changed", not only "how have I changed". Its cell badges suppress themselves at the same time,
+    because a word repeated on every visible thumbnail is noise (§8).
+  - **Metadata has one home per level.** The DAY header carries count, titles-or-poses, tags; the
+    CELL carries muscle over date on the scrim it already draws. Muscles were briefly in both and
+    produced headers reading "BACK, BACK" over a row of thumbnails already saying BACK (§4.3).
+    **The per-cell muscle badge is a deliberate exception to the 2026-07-13 removal of per-cell POSE
+    chips**: pose was on nearly every photo so the chip said the same word every time, whereas a
+    muscle tag is optional, varies shot to shot, and is the thing you filter by. It wears no plate of
+    its own (a second dark shape per thumbnail read as a sticker applied to the photo).
+  - **Density follows the busiest DAY on screen**, not the library total: filter to one muscle and
+    every day may hold a single shot, which three across is one speck beside two thirds of nothing
+    (§12 debris). Never below two, because one across is a list.
+  - **Compare** keeps its select-2 -> `CompareSheet` (Slider / Split + share card), and gains
+    **long-press a cell to start a selection with that shot in it**, the phone-gallery idiom. The
+    readout and the shared card now name the muscles the two shots AGREE on; a muscle tagged on one
+    end alone says nothing about a change between them.
+  - **The viewer edits every field the gallery filters on**: date, title, note, pose, muscles, tags,
+    bodyweight, album. Collapsed it is one line stating what the shot is; `edit ->` opens the full
+    form in its own scroll, so five chip rails at 200% font scale cannot push the photo off a photo
+    viewer. Tag entry offers the library's existing tags first so the vocabulary converges instead of
+    sprouting a third spelling of "cut"; a typed-but-unsubmitted tag flushes on swipe.
+  - **Imports inherit the lens you are browsing under** (active pose + narrowed muscles), because
+    that is what you were looking at when you decided to add more of it. Multi-select, as before.
+  - **BODYWEIGHT and SAME WEIGHT close the roll** rather than sitting between you and the photos
+    (§4.8, placement is rank). Bodyweight stays NOT photo-gated: at zero it is still the one live
+    mark beside the band's ghost frames (§12), which the first gallery-first draft regressed.
+  - Zero and one are unchanged and still whole: honest `0 PHOTOS` eyebrow, serif hero, ghost frames
+    keeping their FIRST/NOW tags, one hint, one filled `Add a photo` capsule, the live bodyweight
+    spark. `Albums ->` moved onto the eyebrow line as the library's index action; it was a stranded
+    row under the band, and before that it hung off a TIMELINE header that no longer exists.
+  - **Browse controls are NOT count-gated** (reversed same day, on device, Antho: "then it sucks, I
+    want you to remove the have-photos-in-it limit"). They were: search at >=4 photos, the pose lens
+    at >=2 distinct poses, the muscle and tag rails only once something carried them, on the §4.5
+    reasoning that a control which can only return the same grid does nothing. On a photo library
+    that produced a first-run screen with no search, no lens and no filters, which does not read as a
+    restrained gallery, it reads as an unfinished one. A gallery states its own shape before it holds
+    anything, the same way the band draws ghost frames rather than waiting for a photo to justify
+    itself. **Pose and muscle rails now show their FULL fixed vocabularies**, not just values in use,
+    so the rail doubles as the answer to "what can I even tag a shot with" — the question a new
+    library actually raises. TAGS is the one user-invented vocabulary, so at zero it names where tags
+    come from instead of drawing an empty row. `GALLERY_TOOLS_MIN` and `GalleryFacets` are gone.
+    Only free tags can still go stale (untag the last `#cut` shot), so that is the one filter value
+    the screen drops when its chip leaves the rail. An empty LIBRARY draws no "no results" line (the
+    ghost frames and the capsule already say it); only a grid narrowed to nothing carries its own
+    `Clear filters` chip. `Albums ->` rides the hero line at every count, so there is one door in one
+    place rather than a conditional link inside the zero block.
+  - The pass also PAID DOWN 13 frozen doctrine violations across these files (five off-ladder alphas,
+    eleven inline `fontSize`s, an em dash and an exclamation mark in rendered copy); the one
+    remaining allowlist entry is the search placeholder's `maxLines = 1`, which is chrome.
 - `PROGRESS_CAMERA` (`ui/profile`, CameraX guided capture — live preview + a ~0.3-alpha ghost of
   your last same-pose shot for alignment, pose chips, rule-of-thirds grid, 3s self-timer, front/rear
   flip; writes straight to app-private storage; CAMERA permission is optional — deny falls back to
@@ -521,6 +541,40 @@ Check this map + `ui/common/` before inventing; update it when screens change.
 Verbatim from the pre-split `DESIGN.md`. These are *inventory* — how a shipped feature works — rather
 than rules, so they moved here to keep the always-loaded core small. Nothing was reworded.
 
+### Onboarding — the flow (rebuilt 2026-08-22)
+
+`ui/onboarding/` — `OnboardingScreen.kt` holds the state and the page order;
+`OnboardingScaffold.kt` the shell every step shares (chrome, question slot, ledger slot, one action); `OnboardingPrimitives.kt` the
+shared tile / chip / rail / toggle-row formulas; `OnboardingSteps.kt` the fork and the goal /
+experience / day-count questions; `OnboardingGymSteps.kt` the two gym steps plus the week page;
+`OnboardingSoreSpots.kt` the sore / injured spots page; `OnboardingExtras.kt` the optional closing
+step; `OnboardingWeekMeter.kt` the `PlanLedger` mark;
+`OnboardingDraft.kt` the resume snapshot (schema 4, cursor = an index into the path, not a page id).
+
+Path: **generated** = mode → goal → experience → days → gym → gear → sore spots → week → extras
+(9 steps);
+**custom / freestyle** = mode → goal → experience → extras (4) — they still answer goal and
+experience because those steer the coach and Stats. `pathFor(planMode)` owns this; the rail counts
+its cells from the list, so the short path visibly drops four.
+
+`PlanLedger` is the persistent mark: one bar per training day carrying that day's SETS, scaled to
+the heaviest day, sitting below the question and outside the page slider. Before any gear exists it
+draws `ProgramGenerator.plannedSetsPerDay` (the split's own volume allocation, computable from a
+day-count alone); once a gym is picked it draws the generated week, so a sparse setup visibly costs
+sets. Its track is 148dp on the day-count step, where the week IS the answer, and animates down to
+72dp on the gym / gear steps, which need their grids. Bar columns share the width evenly until a day
+name stops fitting under one, past which the mono label clamps at two lines (§14) — an earlier build
+scrolled the row instead and clipped the seventh day on any phone narrower than the dev device. The
+week page leads with the same mark at 88dp, then the real day sections.
+
+The sore-spot page counts, per joint, how many movements in the pool THIS gym supports load it
+(`ExerciseLibrary.contraindicationsOf` over `availablePool`) — the reason to flag one, and stable
+against a re-roll. The closing step reads down a label-left spine (`ValueRow`) wherever a control
+fits beside its name; `OnboardingIcons` draws every line at `LIMB` = 1.8, the same weight as
+`NavIcons` and `SettingsIcons` (fills are masses and may be thicker); half the family had been
+rendering as solid silhouettes and half as wireframe, and a first correction to 2.2 fixed the
+internal consistency by breaking the match with the rest of the app.
+
 ### Onboarding — plan-mode vignettes, wearable pick, signal probes, equipment steps
 
 all three plan-mode cards carry short pre-rendered vignette videos (alpha WebP authored in
@@ -530,10 +584,10 @@ structure IS the message) that play ~twice then FREEZE on the built plan / caugh
 `PlanModeSync` starts the videos together so they replay/freeze in lockstep; the live Canvas
 vignette (`PlanModeVignettes`, its own final frame, one draw per mode) is the decode / pre-28 /
 reduce-motion fallback; equipment/preset/goal tiles use the `OnboardingIcons` matched glyph family.
-About-you closes with the wearable pick (Galaxy · Pixel · no watch, keys + labels + source app from
-`domain/health/WearableBrand`): cards carry the one honest per-brand difference as right-meta
-("Routes sync"/"Routes vary"), the pick answers with a mono what-syncs readout + a version caveat
-caption (feature sets differ by watch generation and companion-app version), and the same enum
+The wearable pick (Galaxy · Pixel · no watch, keys + labels + source app from
+`domain/health/WearableBrand`) sits on the optional closing step as of 2026-08-22, as a chip row whose
+pick answers with one line naming what that companion app feeds through; the per-brand right-meta
+cards and the version caveat were cut with the step (`design/SETTLED.md`). The same enum
 drives Settings → Recovery's WEARABLE `PillChip` row + brand-aware source-app/routes explainers —
 the two surfaces may not drift, and the brand is advisory only (HC reads stay vendor-neutral). Each
 granted Recovery read-signal row carries a post-connect reading (§9, `probeSignalFlow`): `RECEIVING`
@@ -541,8 +595,8 @@ granted Recovery read-signal row carries a post-connect reading (§9, `probeSign
 absence is ambiguous) when granted-but-silent, plain `ON` while probing or for the write-only
 calorie row. HC exposes data PRESENCE, never capability — so the UI never says "unsupported", and
 grey-out-by-brand is banned (both watches can do every signal on recent versions). Gym setup = TWO
-steps (GYMAP-20): preset grid (big-app lineup, `equipmentPresets`) + a live "in this setup" gear
-readout, then a fine-tune page grouped by the shared `equipmentGroups` (Settings → Program →
+steps (GYMAP-20): preset grid (big-app lineup, `equipmentPresets`), then a fine-tune page grouped by
+the shared `equipmentGroups` (Settings → Program →
 Equipment groups its chips the same way — the two selectors may not drift.
 
 ### Launch intro — per-family mechanics
