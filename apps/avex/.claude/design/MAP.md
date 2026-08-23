@@ -246,23 +246,30 @@ gone (`SETTLED.md`); week browsing is a ledger, and the page is:
      asking for a decision) → BY ACTIVITY (`RankedBarRow`s of this week's minutes by type, top 4 with
      a collapsed tail) → SESSIONS (this week's rows; at zero, one line naming your last session and
      opening it) → `view all N →` (History) → STEPS (the hourly `StepsByHourSection` mark for today).
-   - **PROGRESS**: **LOAD** (`CardioLoadSection`, new) → PACE (`CardioPaceTrendSection`, moved off the
-     old overlay since it was always cross-week data) → RECORDS → GOALS. All four absent → one line
-     naming the unlock, not four empty shells.
+   - **PROGRESS**: PACE (`CardioPaceTrendSection`, moved off the old overlay since it was always
+     cross-week data) → RECORDS → GOALS. All three absent → one line naming the unlock, not three
+     empty shells. Deliberately NO weekly-load chart: that is the weeks page's mark, and a visual
+     that only repeats another screen's answer is cut, not copied (§4.3).
 
-**LOAD** is the reading cardio could not give before: `cardioWeekSeries` (`domain/cardio/`) rolls the
-last `CardioViewModel.LOAD_WEEKS` = 10 Mon–Sun weeks oldest→newest **with gaps kept at zero** (a load
-chart that drops untrained weeks reads as an unbroken run). One bar per week, the week in progress
-drawn as a dashed slot, the target/WHO line laid across them as a dashed rule (a line as data), a
-month initial only where the month turns over, and `cardioLoadDeltaPct` (this week vs the median of
-the completed weeks, null under three of them) as the header's reading.
+**THE WEEKS** (`CardioWeeksScreen` + `CardioWeeksViewModel`, route `Routes.CARDIO_WEEKS`) — the page
+`weeks →` opens, and the one home for comparing weeks. **One bar per week, taller the more you did**
+(`CardioWeekBars`): `WEEKS_PER_PAGE` = 8 on screen, `←` / `→` paging a window back through history to
+the first logged week (capped at 104), and **each bar is a tap target opening that week**. The whole
+column is the target, not the drawn bar, so a quiet week is still reachable. The week in progress is a
+dashed slot (a Monday must not read as a collapse), an untrained week keeps a ghost stub, and the
+target/WHO reference is drawn across each track as a dashed rule — per column rather than as an
+overlay, so nothing has to stay in sync with the rows above it. Bar labels are the day of the month
+(eight "18 Aug"s do not fit the gutter); the nav row above carries the full range, and TalkBack gets
+the full date. The tiny hero's two figures read the VISIBLE WINDOW, so paging says something.
 
-**THE WEEKS** (`CardioWeeksScreen` + `CardioWeeksViewModel`, route `Routes.CARDIO_WEEKS`) — the List
-archetype page `weeks →` opens. Tiny hero (avg min/week · weeks cleared the target) over one row per
-week, newest first, each a `RankedBarRow` against your biggest week. Reads back to the first logged
-week, capped at 104. A row opens **`CardioWeekDetail`** (Detail archetype): serif week name, per-day
-bars, figures, the meter (every week, not just the current one), BY ACTIVITY, and that week's
-sessions as `SessionTimelineRow`s — no dividers between them.
+The series is `cardioWeekSeries` (`domain/cardio/`): Mon–Sun weeks oldest→newest **with gaps kept at
+zero**, because a chart that drops untrained weeks reads as an unbroken run. `cardioWeeksOnTarget`
+and `cardioLoadDeltaPct` (a week against the median of the completed weeks, null under three of them)
+ride alongside it.
+
+A bar opens **`CardioWeekDetail`** (Detail archetype): serif week name, per-day bars, figures, the
+meter (every week, not just the current one), BY ACTIVITY, and that week's sessions as
+`SessionTimelineRow`s — no dividers between them.
 
 **Session detail** (`CardioSessionDetailSheet`) — was ten `label — value` rows behind hairlines, which
 drew no mark at all: with no watch connected the page was pure text. Now: eyebrow + serif activity
@@ -298,9 +305,9 @@ tag line and as a words column in the cardio CSV; descriptive only, never touchi
 **new** entry seeds its activity to the **last-logged** one (GYMAP-40: `last_cardio_type` in
 DataStore, written only on a new non-rest save), not always Run.
 
-Cardio-local shared marks live in `components/CardioBars.kt`: `VerticalBarRow`/`BarGeom` (the bar
-geometry behind every cardio chart), `MeterBar` (value vs target + mono caption) and `RankedBarRow`
-(name · thin bar · reading). Kept in the feature package rather than promoted, matching how
+Cardio-local shared marks live in `components/CardioBars.kt`: `VerticalBarRow`/`BarGeom`/`BarGeomBox`
+(the bar geometry behind every cardio chart), `MeterBar` (value vs target + mono caption) and
+`RankedBarRow` (name · thin bar · reading). Kept in the feature package rather than promoted, matching how
 `VerticalBarRow` was already shared across four cardio surfaces.
 
 ### Coach — `ui/coach` — **THE LEDGER** (2026-08-20 redesign)

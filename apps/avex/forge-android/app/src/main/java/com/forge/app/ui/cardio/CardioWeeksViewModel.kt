@@ -22,10 +22,11 @@ import java.time.ZoneId
 import java.time.temporal.ChronoUnit
 import javax.inject.Inject
 
-/** State for the weeks ledger — every trained week as a row, newest first. */
+/** State for the weeks chart — one bar per week, oldest first. */
 data class CardioWeeksState(
     val loaded: Boolean = false,
-    /** Newest week first — the ledger's reading order. Empty weeks between trained ones are kept. */
+    /** Oldest→newest, the chart's drawing order. Untrained weeks are kept at zero, so a fallow
+     *  stretch reads as fallow instead of closing up. */
     val weeks: List<CardioWeekPoint> = emptyList(),
     /** Every entry, so an opened week can list its own sessions with no second query. */
     val entries: List<CardioEntry> = emptyList(),
@@ -36,12 +37,12 @@ data class CardioWeeksState(
 )
 
 /**
- * Backs the weeks ledger — the screen that replaced the swipe-through-weeks overlay (2026-08-23).
- * The overlay redrew the cardio hero's own marks one page away and could only be walked one week at
- * a time; a ledger shows the whole run at once, which is the read the weeks were being browsed for.
+ * Backs the weeks chart — the screen that replaced the swipe-through-weeks overlay (2026-08-23).
+ * The overlay redrew the cardio hero's own marks one page away and could only be walked one week per
+ * swipe; a bar per week compares the whole run at a glance, which is the read weeks were browsed for.
  *
- * The series runs from the first logged week to this one with no gaps, so a fallow stretch is visible
- * as fallow rather than closing up.
+ * The series runs from the first logged week to this one with no gaps, and the screen pages a window
+ * of it with the arrows.
  */
 @HiltViewModel
 class CardioWeeksViewModel @Inject constructor(
@@ -61,7 +62,7 @@ class CardioWeeksViewModel @Inject constructor(
         val zone = ZoneId.systemDefault()
         CardioWeeksState(
             loaded = true,
-            weeks = cardioWeekSeries(entries, clock.nowMs(), weeksToCover(entries, zone), zone).reversed(),
+            weeks = cardioWeekSeries(entries, clock.nowMs(), weeksToCover(entries, zone), zone),
             entries = entries,
             weekTargetMin = target,
             useMiles = useMiles,
@@ -78,22 +79,25 @@ class CardioWeeksViewModel @Inject constructor(
     fun closeWeek() = openWeek.update { null }
 
     /**
-     * How many weeks back the ledger reaches: the first logged week, capped so a years-old history
-     * doesn't build a list nobody scrolls. Always at least the window the overview's LOAD chart shows,
-     * so arriving from `weeks →` never lands on a shorter run than the chart that sent you.
+     * How many weeks back the chart reaches: the first logged week, capped so a years-old history
+     * doesn't page forever. Always at least one full window, so the arrows have somewhere to go and
+     * a fresh install still draws a chart at zero rather than a stub.
      */
     private fun weeksToCover(entries: List<CardioEntry>, zone: ZoneId): Int {
-        val oldest = entries.minByOrNull { it.date } ?: return CardioViewModel.LOAD_WEEKS
+        val oldest = entries.minByOrNull { it.date } ?: return WEEKS_PER_PAGE
         val oldestMonday = Instant.ofEpochMilli(oldest.date).atZone(zone).toLocalDate()
             .with(java.time.DayOfWeek.MONDAY)
         val currentMonday = Instant.ofEpochMilli(clock.nowMs()).atZone(zone).toLocalDate()
             .with(java.time.DayOfWeek.MONDAY)
         val span = ChronoUnit.WEEKS.between(oldestMonday, currentMonday).toInt() + 1
-        return span.coerceIn(CardioViewModel.LOAD_WEEKS, MAX_WEEKS)
+        return span.coerceIn(WEEKS_PER_PAGE, MAX_WEEKS)
     }
 
-    private companion object {
-        /** Two years of weeks — past this the ledger is an archive, not a read. */
-        const val MAX_WEEKS = 104
+    companion object {
+        /** Weeks drawn per page. Eight bars still read across the 24dp page gutter on a small phone. */
+        const val WEEKS_PER_PAGE = 8
+
+        /** Two years of weeks — past this the chart is an archive, not a read. */
+        private const val MAX_WEEKS = 104
     }
 }

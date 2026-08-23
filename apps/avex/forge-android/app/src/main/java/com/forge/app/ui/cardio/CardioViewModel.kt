@@ -14,10 +14,8 @@ import com.forge.app.domain.cardio.CardioActivity
 import com.forge.app.domain.cardio.CardioCondition
 import com.forge.app.domain.cardio.cardioActivityRecords
 import com.forge.app.domain.cardio.CardioWeekAggregate
-import com.forge.app.domain.cardio.CardioWeekPoint
 import com.forge.app.domain.cardio.cardioPaceSeries
 import com.forge.app.domain.cardio.cardioWeekAggregate
-import com.forge.app.domain.cardio.cardioWeekSeries
 import com.forge.app.domain.cardio.CardioEffort
 import com.forge.app.domain.cardio.CardioField
 import com.forge.app.domain.cardio.CardioRestReason
@@ -146,9 +144,6 @@ class CardioViewModel @Inject constructor(
             records = cardioActivityRecords(all),
             // Per-activity pace series (GYMAP-35) for the PROGRESS lens's trend chart.
             paceSeries = cardioPaceSeries(all),
-            // The LOAD bars and the weeks ledger read this one series — computed on the same pass so
-            // browsing weeks costs no extra DB work.
-            weekSeries = cardioWeekSeries(all, clock.nowMs(), LOAD_WEEKS, zone),
             weekAggregate = cardioWeekAggregate(all, weekStartMs, zone)
         )
     }.flowOn(Dispatchers.Default)
@@ -180,7 +175,6 @@ class CardioViewModel @Inject constructor(
             weekDistanceKm = d.weekDistanceKm,
             cardioRecords = d.records,
             cardioPaceSeries = d.paceSeries,
-            weekSeries = d.weekSeries,
             weekAggregate = d.weekAggregate,
             cardioGoals = cardioGoals,
             lens = tr.lens,
@@ -442,7 +436,6 @@ class CardioViewModel @Inject constructor(
         val weekDistanceKm: Double,
         val records: List<com.forge.app.domain.cardio.CardioActivityRecord>,
         val paceSeries: List<com.forge.app.domain.cardio.CardioPaceSeries>,
-        val weekSeries: List<CardioWeekPoint>,
         val weekAggregate: CardioWeekAggregate
     )
 
@@ -468,12 +461,6 @@ class CardioViewModel @Inject constructor(
                 }
             }
         }
-
-        /**
-         * How many Mon–Sun weeks the LOAD chart and the weeks ledger carry. Ten fits the page gutter
-         * at a bar width that still reads, and reaches back far enough for a training block to show.
-         */
-        const val LOAD_WEEKS = 10
 
         /** How far back the watch-workout import suggestions look (W5). */
         private const val IMPORT_LOOKBACK_MS = 14L * 24 * 60 * 60 * 1000

@@ -5,7 +5,6 @@ import com.forge.app.data.repo.ExtendedGoalRepository
 import com.forge.app.domain.cardio.CardioActivityRecord
 import com.forge.app.domain.cardio.CardioPaceSeries
 import com.forge.app.domain.cardio.CardioWeekAggregate
-import com.forge.app.domain.cardio.CardioWeekPoint
 import com.forge.app.domain.cardio.CardioWearableDay
 import com.forge.app.domain.cardio.RoutePoint
 
@@ -40,9 +39,6 @@ data class CardioUiState(
     /** Per-activity pace series (GYMAP-35) — the PROGRESS lens's pace-trend chart. A type appears once
      *  it has two paced sessions; empty until then. */
     val cardioPaceSeries: List<CardioPaceSeries> = emptyList(),
-    /** The recent Mon–Sun weeks, oldest→newest, gaps included at zero — the LOAD bars and the weeks
-     *  ledger read the same series. Always full length once loaded, even on a fresh install. */
-    val weekSeries: List<CardioWeekPoint> = emptyList(),
     /** This week's Mon–Sun minutes and totals — the hero's own week, split by activity for BY ACTIVITY. */
     val weekAggregate: CardioWeekAggregate? = null,
     /** Which lens the overview is showing. Transient, so it resets when the tab is left and re-entered. */

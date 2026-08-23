@@ -124,9 +124,12 @@ the most consequential question in the flow and the only one with motion in it.
 depend on a gesture nothing announced, and it redrew the hero's OWN marks (Mon–Sun bars, goal meter,
 days/minutes/distance figures) one screen away, which is §4.3 twice over. It also could only be
 walked one week per swipe, so "how do my weeks compare" — the question it existed for — was the one
-thing it could not answer. Week browsing is `CardioWeeksScreen`, a ledger of week ROWS. Do not put a
-week pager back on the cardio tab: the hub is itself a `HorizontalPager`, so a nested week-swipe
-would eat the tab gesture · the **hero as one page-wide tap target** (it is passive; `weeks →` is a
+thing it could not answer. Week browsing is `CardioWeeksScreen`: **one bar per week, taller the more you
+did, tap a bar to open it, arrows to page further back** (Antho, 2026-08-23 — a first pass drew the
+weeks as a list of rows and it read as a table, not as a comparison). Do not put a week pager back on
+the cardio tab: the hub is itself a `HorizontalPager`, so a nested week-swipe would eat the tab
+gesture · the **LOAD chart on the overview's PROGRESS lens** (it was the weeks page's own mark drawn
+a second time; `weeks →` is the way to it) · the **hero as one page-wide tap target** (it is passive; `weeks →` is a
 named action) · the **white `+` disc** on the sessions header (the primary action is a filled
 `Log cardio` capsule above the fold) · the hero's **`TODAY · N STEPS` text line** (a data section
 leads with its mark — the hourly `StepsByHourSection` carries today's steps, and the line was a

@@ -36,6 +36,36 @@ internal data class BarGeom(
 )
 
 /**
+ * One bar, painted: a fill, or a dashed outline for a placeholder / still-running slot. Shared by
+ * [VerticalBarRow] and the weeks chart so a bar looks the same wherever cardio draws one.
+ */
+@Composable
+internal fun BarGeomBox(geom: BarGeom, corner: Dp = 4.dp) {
+    Box(
+        Modifier
+            .fillMaxWidth()
+            .height(geom.height)
+            .clip(RoundedCornerShape(corner))
+            .then(
+                if (geom.dashedOutline != null) {
+                    Modifier.drawBehind {
+                        drawRoundRect(
+                            color = geom.dashedOutline,
+                            style = Stroke(
+                                width = 1.5.dp.toPx(),
+                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(5f, 4f), 0f)
+                            ),
+                            cornerRadius = CornerRadius(corner.toPx())
+                        )
+                    }
+                } else {
+                    Modifier.background(geom.fill)
+                }
+            )
+    )
+}
+
+/**
  * A row of equal-width vertical bars, each in a fixed-height bottom-aligned track, with optional
  * caller-drawn labels above/below via the [top]/[bottom] slots. The shared geometry behind the cardio
  * week row, the per-day stats bars, the empty-week scaffold and the hourly-steps graph — each keeps
@@ -67,28 +97,7 @@ internal fun VerticalBarRow(
             ) {
                 top?.invoke(i)
                 Box(Modifier.fillMaxWidth().height(trackHeight), contentAlignment = Alignment.BottomCenter) {
-                    Box(
-                        Modifier
-                            .fillMaxWidth()
-                            .height(g.height)
-                            .clip(RoundedCornerShape(corner))
-                            .then(
-                                if (g.dashedOutline != null) {
-                                    Modifier.drawBehind {
-                                        drawRoundRect(
-                                            color = g.dashedOutline,
-                                            style = Stroke(
-                                                width = 1.5.dp.toPx(),
-                                                pathEffect = PathEffect.dashPathEffect(floatArrayOf(5f, 4f), 0f)
-                                            ),
-                                            cornerRadius = CornerRadius(corner.toPx())
-                                        )
-                                    }
-                                } else {
-                                    Modifier.background(g.fill)
-                                }
-                            )
-                    )
+                    BarGeomBox(g, corner)
                 }
                 bottom?.invoke(i)
             }

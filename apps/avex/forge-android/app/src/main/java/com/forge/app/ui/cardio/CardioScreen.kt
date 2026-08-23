@@ -35,7 +35,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.domain.cardio.CardioType
 import com.forge.app.ui.cardio.components.CardioEntryRow
-import com.forge.app.ui.cardio.components.CardioLoadSection
 import com.forge.app.ui.cardio.components.CardioPaceTrendSection
 import com.forge.app.ui.cardio.components.CardioSessionDetailSheet
 import com.forge.app.ui.cardio.components.StepsByHourSection
@@ -282,7 +281,6 @@ private fun CardioListContent(
                 )
                 CardioLens.PROGRESS -> progressLens(
                     state = state,
-                    zone = zone,
                     onOpenSession = onOpenSession,
                     onOpenGoals = onOpenGoals,
                     onBg = onBg, muted = muted, outline = outline, accent = accent
@@ -422,12 +420,15 @@ private fun LazyListScope.weekLens(
 }
 
 /**
- * PROGRESS — where it is going. LOAD leads because it is the only section that answers "is this
- * going up"; pace and records qualify it; goals (a target ladder) sit last per §4.8.
+ * PROGRESS — where it is going. Pace leads (the live reading), records qualify it, goals (a target
+ * ladder) sit last per §4.8.
+ *
+ * There is deliberately NO weekly-load chart here: it is the same mark the weeks page draws, and a
+ * visual that only repeats another screen's answer is cut, not copied (§4.3). The hero's `weeks →`
+ * is the way to it.
  */
 private fun LazyListScope.progressLens(
     state: CardioUiState,
-    zone: ZoneId,
     onOpenSession: (Long) -> Unit,
     onOpenGoals: () -> Unit,
     onBg: Color,
@@ -435,21 +436,6 @@ private fun LazyListScope.progressLens(
     outline: Color,
     accent: Color
 ) {
-    // A load chart of ten empty bars is an all-ghost group, which §12 says drops its mark rather
-    // than drawing a flat line that reads as broken. It appears with the first logged week.
-    val hasLoad = state.weekSeries.any { !it.isEmpty }
-    if (hasLoad) {
-        item("load") {
-            Spacer(Modifier.height(SECTION_GAP))
-            CardioLoadSection(
-                series = state.weekSeries,
-                weekTargetMin = state.weekTargetMin,
-                zone = zone,
-                onBg = onBg, muted = muted, outline = outline, accent = accent
-            )
-        }
-    }
-
     // PACE — a per-activity pace-over-time chart. It used to ride the week overlay's current page
     // alone; it is cross-week data, so a lens about progress is where it belonged all along.
     if (state.cardioPaceSeries.isNotEmpty()) {
@@ -490,7 +476,7 @@ private fun LazyListScope.progressLens(
 
     // Every mark in this lens needs history to exist. Below that, ONE line naming the concrete unlock
     // rather than four empty shells (§12 — collapse repetition).
-    if (!hasLoad && state.cardioPaceSeries.isEmpty() &&
+    if (state.cardioPaceSeries.isEmpty() &&
         state.cardioRecords.isEmpty() && state.cardioGoals.isEmpty()
     ) {
         item("progress-empty") {
