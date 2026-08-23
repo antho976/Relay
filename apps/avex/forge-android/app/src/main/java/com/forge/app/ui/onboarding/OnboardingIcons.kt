@@ -121,23 +121,51 @@ object OnboardingIcons {
         }
     }
 
-    /** Cable machine — a top pulley wheel, the cable, and a straight handle. */
+    /**
+     * Cable machine — the classic crossover frame head-on: two uprights under a top beam, the weight
+     * stack on the floor between them, and a handle hanging on a short cable from each top corner.
+     * The handles sit well above the stack on purpose: at tile size the interior only reads if the
+     * parts have air between them. Same frame idiom as [SquatRack] and [Smith], but full and solid
+     * inside where theirs are open.
+     */
     val Cable: ImageVector by lazy {
         icon("OnbCable") {
-            strokePath(1.7f) { circle(12f, 5.6f, 2.3f) }
-            fillPath { circle(12f, 5.6f, 0.9f) }
-            strokePath(1.7f) { moveTo(12f, 7.9f); lineTo(12f, 15.0f) }
-            fillPath { roundRect(8.2f, 15.0f, 15.8f, 16.9f, 0.9f) }
+            fillPath {
+                roundRect(2.4f, 3.2f, 4.8f, 20.8f, 1.0f)     // left upright
+                roundRect(19.2f, 3.2f, 21.6f, 20.8f, 1.0f)   // right upright
+                roundRect(2.4f, 3.2f, 21.6f, 5.5f, 1.0f)     // top beam
+                roundRect(9.0f, 14.6f, 15.0f, 17.2f, 0.8f)   // weight stack
+                roundRect(9.0f, 18.2f, 15.0f, 20.8f, 0.8f)
+                roundRect(5.3f, 9.8f, 8.5f, 11.8f, 1.0f)     // left handle
+                roundRect(15.5f, 9.8f, 18.7f, 11.8f, 1.0f)   // right handle
+            }
+            strokePath(1.8f) {
+                moveTo(6.9f, 5.5f); lineTo(6.9f, 9.8f)       // left cable
+                moveTo(17.1f, 5.5f); lineTo(17.1f, 9.8f)     // right cable
+            }
         }
     }
 
-    /** Pull-up bar — a doorway: two tall uprights with the bar spanning the top third. */
+    /**
+     * Pull-up bar — the bar with someone hanging off it. Drawn as the hang and not as the hardware
+     * on purpose: a beam on two uprights is [SquatRack] and [Smith] already, and uprights flaring
+     * into grips is [DipStation], so the object alone has no silhouette left of its own. It shares
+     * the figure idiom with [Bodyweight] but reads apart from it — arms up into a bar, not splayed.
+     */
     val PullUpBar: ImageVector by lazy {
         icon("OnbPullUp") {
             fillPath {
-                roundRect(3.8f, 3.8f, 5.8f, 20.2f, 1.0f)
-                roundRect(18.2f, 3.8f, 20.2f, 20.2f, 1.0f)
-                roundRect(5.8f, 7.2f, 18.2f, 9.0f, 0.9f)
+                roundRect(2.0f, 3.2f, 22.0f, 5.5f, 1.15f)    // the bar
+                circle(6.2f, 5.9f, 1.45f)                    // left hand
+                circle(17.8f, 5.9f, 1.45f)                   // right hand
+                circle(12f, 8.8f, 1.85f)                     // head
+            }
+            strokePath(2.0f) {
+                moveTo(6.2f, 5.9f); lineTo(10.4f, 12.8f)     // left arm
+                moveTo(17.8f, 5.9f); lineTo(13.6f, 12.8f)    // right arm
+                moveTo(12f, 10.5f); lineTo(12f, 15.8f)       // torso
+                moveTo(12f, 15.8f); lineTo(9.5f, 20.4f)      // left leg
+                moveTo(12f, 15.8f); lineTo(14.5f, 20.4f)     // right leg
             }
         }
     }
