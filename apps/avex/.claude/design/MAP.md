@@ -398,9 +398,10 @@ any activity, `buildYearActivity` in `ProfileRepository`), filmstrip.
 - `RECAP`
 - `NOTES_SEARCH`
 - `PROGRAM_BUILDER?blank&view` (ONE program screen, GYMAP-28: colour-dot + mono `labelLarge` day
-  anchor + "N SETS" meta, hang-indented name / sets×reps rows (meta at muted@0.7) — the onboarding
-  week preview renders this SAME section formula (GYMAP-21), accent hexes via the shared
-  `parseAccentHex`; `view` = same layout read-only, the top-bar pencil unlocks editing; editor adds
+  anchor + "N SETS" meta, hang-indented name / sets×reps rows (meta at muted@0.7) — accent hexes via
+  the shared `parseAccentHex`. Onboarding's week page shared this formula until 2026-08-23 and no
+  longer does: it shows ONE day at a time under a selectable mark, so it has no need of a per-day
+  colour dot and its rows lead with the `ExerciseIcons` equipment glyph instead; `view` = same layout read-only, the top-bar pencil unlocks editing; editor adds
   tap-into-day + long-press reorder + Save/Add at page end; day detail = rename/type/colour + exercise
   rows → SetsReps sheet (set stepper + rep-preset pills + in-place swap), duplicate/remove day at page
   end; removes undo via snackbar, never confirm)
@@ -573,7 +574,21 @@ sets. Its track is 148dp on the day-count step, where the week IS the answer, an
 72dp on the gym / gear steps, which need their grids. Bar columns share the width evenly until a day
 name stops fitting under one, past which the mono label clamps at two lines (§14) — an earlier build
 scrolled the row instead and clipped the seventh day on any phone narrower than the dev device. The
-week page leads with the same mark at 88dp, then the real day sections.
+week page shows the same mark at 104dp, where it also NAVIGATES (2026-08-23): pass `selectedIndex` /
+`onSelect` and each bar becomes its own day's tap target, accent for the day being read and
+muted@0.7 for the rest, with that one day's movements listed underneath. Without those two arguments
+nothing is tappable and the mark draws exactly as it does under the questions — one implementation,
+so the two cannot drift into reading as two different weeks. Bar tracks align at their TOPS, not
+their bottoms, so a day name wrapping to two lines cannot float its own bar above its neighbours.
+
+**The week page** (`StepWeek`, rebuilt 2026-08-23) is that selectable mark plus the open day: mono
+day anchor with `N MOVES · N SETS` as right meta, then one row per movement — equipment-class glyph,
+name, `sets × reps`. Both moves it can make crossfade: switching day, and a re-roll dealing fresh
+movements into the day already open (the pick survives a re-roll, since the split is unchanged). It
+replaced a page that redrew the same bars it had shown for three screens and then listed every
+exercise of every day beneath them — ~25 uniform rows over three viewports, which §3 bans for this
+archetype, restating each day's volume three times over. A one-day week gets no tap affordance, no
+line telling the user to use one, and drops the day's set count (at one day it is the week total).
 
 The sore-spot page counts, per joint, how many movements in the pool THIS gym supports load it
 (`ExerciseLibrary.contraindicationsOf` over `availablePool`) — the reason to flag one, and stable
@@ -583,7 +598,7 @@ fits beside its name; `OnboardingIcons` draws every line at `LIMB` = 1.8, the sa
 rendering as solid silhouettes and half as wireframe, and a first correction to 2.2 fixed the
 internal consistency by breaking the match with the rest of the app.
 
-### Onboarding — plan-mode vignettes, wearable pick, signal probes, equipment steps
+### Onboarding — plan-mode vignettes, signal probes, equipment steps
 
 all three plan-mode cards carry short pre-rendered vignette videos (alpha WebP authored in
 `remotion-vignettes/`, rendered to res/raw: generated builds a full week, custom hand-builds a day
@@ -593,9 +608,7 @@ structure IS the message) that play ~twice then FREEZE on the built plan / caugh
 vignette (`PlanModeVignettes`, its own final frame, one draw per mode) is the decode / pre-28 /
 reduce-motion fallback; equipment/preset/goal tiles use the `OnboardingIcons` matched glyph family.
 The wearable pick (Galaxy · Pixel · no watch, keys + labels + source app from
-`domain/health/WearableBrand`) sits on the optional closing step as of 2026-08-22, as a chip row whose
-pick answers with one line naming what that companion app feeds through; the per-brand right-meta
-cards and the version caveat were cut with the step (`design/SETTLED.md`). The same enum
+`domain/health/WearableBrand`) left onboarding entirely on 2026-08-23 (`design/SETTLED.md`); the enum
 drives Settings → **Wearable**'s equal-width device row + brand-aware source-app/routes explainers;
 Galaxy, Pixel, and no watch/other stay on one line, with no watch directly beside Pixel. The two
 surfaces may not drift, and the brand is advisory only (HC reads stay vendor-neutral). Each granted

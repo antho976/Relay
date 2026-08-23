@@ -67,6 +67,9 @@ import kotlin.random.Random
  * approved would have shaped a plan the user had already signed off.
  * Custom / freestyle: mode → goal → experience → extras (4) — they still pick a goal and an
  * experience because those steer the coach and Stats, and they have no plan to build here.
+ *
+ * The watch question left the flow entirely on 2026-08-23: its answer changed nothing the user
+ * could see, and Settings → Wearable owns that setup because it needs the Health Connect grants.
  */
 private const val PAGE_MODE = 0
 private const val PAGE_GOAL = 1
@@ -148,8 +151,6 @@ fun OnboardingScreen(
     // Sex is optional and drives only the Stats strength standards — null until the user picks
     // (an explicit "Prefer not to say" stores "").
     var sex by remember { mutableStateOf(draft?.sex) }
-    // Wearable brand (WearableBrand key) — advisory; tailors Settings → Recovery's sync pointers.
-    var wearable by remember { mutableStateOf(draft?.wearable ?: "") }
     // App-lock opt-in (GYMAP-69) — advisory; never blocks the CTA.
     var appLock by remember { mutableStateOf(draft?.appLock ?: false) }
     // null until the user touches the coach toggle, so the default can follow the plan mode: a
@@ -182,7 +183,7 @@ fun OnboardingScreen(
     // removes it atomically, so a finished user never resumes into a stale setup.
     val snapshot = OnboardingDraft(
         step, planMode, name, useKg, useMilesChoice, distanceTouched, goal, experience,
-        bodyweightInput, sex, wearable, daysPerWeek, equipment, frozenIds, plateWeightLb,
+        bodyweightInput, sex, daysPerWeek, equipment, frozenIds, plateWeightLb,
         problemAreas, cadence, everyN, previewSeed, appLock, coachChoice
     )
     LaunchedEffect(snapshot) { viewModel.saveDraft(snapshot) }
@@ -210,7 +211,7 @@ fun OnboardingScreen(
         viewModel.complete(
             planMode = planMode, name = name.trim(), useKg = useKg,
             useMiles = if (distanceTouched) useMilesChoice else null,
-            sex = sex ?: "", wearable = wearable, bodyweightLb = bwLb,
+            sex = sex ?: "", bodyweightLb = bwLb,
             goal = goal, daysPerWeek = daysPerWeek, equipment = equipment,
             cadence = cadence.ifEmpty { "never" }, everyN = everyN, experience = experience,
             problemAreas = problemAreas, seed = previewSeed,
@@ -345,7 +346,6 @@ fun OnboardingScreen(
                             bodyweightInput = bodyweightInput, onBodyweightChange = { bodyweightInput = it },
                             sex = sex, onSexSelect = { sex = it },
                             coachEnabled = coachEnabled, onCoachToggle = { coachChoice = it },
-                            wearable = wearable, onWearableSelect = { wearable = it },
                             appLock = appLock, onAppLockToggle = { appLock = it },
                             plateWeightLb = plateWeightLb, onPlateWeight = { plateWeightLb = it },
                             cadence = cadence, everyN = everyN,
@@ -383,7 +383,6 @@ fun OnboardingScreen(
                     viewModel.complete(
                         planMode = effectiveMode, name = name.trim(), useKg = useKg, sex = sex ?: "",
                         useMiles = if (distanceTouched) useMilesChoice else null,
-                        wearable = wearable,
                         bodyweightLb = bwLb, goal = "build_muscle", daysPerWeek = 4,
                         equipment = setOf(Equipment.BODYWEIGHT_ONLY.name), experience = "intermediate",
                         // Skipping never reaches the coach row, so the mode's own default stands.

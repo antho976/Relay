@@ -22,8 +22,6 @@ internal data class OnboardingDraft(
     val experience: String,
     val bodyweightInput: String,
     val sex: String?,
-    /** WearableBrand key ("" = not picked yet). */
-    val wearable: String,
     val daysPerWeek: Int,
     val equipment: Set<String>,
     val frozenIds: Set<String>?,
@@ -49,7 +47,6 @@ internal data class OnboardingDraft(
         put("experience", experience)
         put("bodyweightInput", bodyweightInput)
         sex?.let { put("sex", it) }                       // absent = never picked
-        put("wearable", wearable)
         put("daysPerWeek", daysPerWeek)
         put("equipment", JSONArray(equipment.toList()))
         frozenIds?.let { put("frozenIds", JSONArray(it.toList())) }
@@ -84,7 +81,6 @@ internal data class OnboardingDraft(
                 experience = o.getString("experience"),
                 bodyweightInput = o.getString("bodyweightInput"),
                 sex = if (o.has("sex")) o.getString("sex") else null,
-                wearable = o.optString("wearable", ""),
                 daysPerWeek = o.getInt("daysPerWeek"),
                 equipment = o.getJSONArray("equipment").toStringSet(),
                 frozenIds = if (o.has("frozenIds")) o.getJSONArray("frozenIds").toStringSet() else null,
