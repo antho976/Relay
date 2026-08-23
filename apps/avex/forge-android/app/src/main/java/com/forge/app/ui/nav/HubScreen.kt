@@ -118,7 +118,8 @@ fun HubScreen(
             when (tabs.getOrElse(page) { BottomTab.HOME }) {
                 BottomTab.CARDIO -> CardioScreen(
                     onOpenHistory = { nav.navigate(Routes.SESSION_HISTORY) },
-                    onOpenGoals = { nav.navigate(Routes.GOALS) }
+                    onOpenGoals = { nav.navigate(Routes.GOALS) },
+                    onOpenWeeks = { nav.navigate(Routes.CARDIO_WEEKS) }
                 )
                 BottomTab.STATS -> DayListScreen(
                     onOpenDay = { dayKey -> nav.navigate(Routes.gymDay(dayKey)) },

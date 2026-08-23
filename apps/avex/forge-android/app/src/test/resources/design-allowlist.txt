@@ -175,7 +175,6 @@
 1 bang ui/gym/freestyle/ExerciseBrowserScreen.kt ! in string
 1 bang ui/gym/train/DayScreen.kt ! in string
 3 divider ui/cardio/components/CardioLogComponents.kt Divider(
-1 divider ui/cardio/components/CardioWeekStatsPage.kt Divider(
 1 divider ui/common/Editorial.kt Divider(
 1 divider ui/gym/freestyle/FreestyleLogScreen.kt Divider(
 1 divider ui/gym/stats/StatsOverview.kt Divider(
@@ -230,15 +229,11 @@
 2 em-dash wear/ui/SessionScreen.kt em dash in string
 1 em-dash wear/ui/WearRoot.kt em dash in string
 2 em-dash widget/ForgeWidget.kt em dash in string
-8 font-size ui/cardio/CardioComponents.kt fontSize=
 2 font-size ui/cardio/components/CardioEntryRow.kt fontSize=
 3 font-size ui/cardio/components/CardioLogComponents.kt fontSize=
 1 font-size ui/cardio/components/CardioLogSheet.kt fontSize=
 1 font-size ui/cardio/components/CardioPaceTrendSection.kt fontSize=
-3 font-size ui/cardio/components/CardioSessionDetailSheet.kt fontSize=
 6 font-size ui/cardio/components/CardioWeekDetailComponents.kt fontSize=
-1 font-size ui/cardio/components/CardioWeekDetailSheet.kt fontSize=
-5 font-size ui/cardio/components/CardioWeekStatsPage.kt fontSize=
 2 font-size ui/cardio/components/CustomActivityDialog.kt fontSize=
 2 font-size ui/checkin/CheckinSheet.kt fontSize=
 7 font-size ui/coach/CoachCharts.kt fontSize=

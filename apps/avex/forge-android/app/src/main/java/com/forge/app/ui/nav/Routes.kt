@@ -88,4 +88,7 @@ object Routes {
     fun sessionDetail(sessionId: Long) = "gym/session-detail/$sessionId"
 
     fun cardioSession(cardioId: Long) = "cardio/session/$cardioId"
+
+    /** The weeks ledger — every week of cardio as a row (the hero's `weeks →`). */
+    const val CARDIO_WEEKS = "cardio/weeks"
 }
