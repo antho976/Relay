@@ -12,17 +12,18 @@ not need it to know *how* to build — that is the core doctrine.
 
 Hub = swipeable 5-tab pager + `ForgeBottomBar`: **Cardio · Stats · Home · Coach · Academy**
 (Academy took Profile's slot 2026-07-27 — it had been a link buried inside Coach, and it is half
-the coach, not a footnote to it. **Profile** moved to the Home top bar, in the slot Settings held;
-**Settings** moved inside Profile as its one action, which is where you go to change things about
-yourself anyway. Profile is a pushed route now and brings its own back arrow). Top bar
-everywhere = `←` (sub-screens) + ≤1 action, **never the screen's own name** (no `TopAppBar` title);
+the coach, not a footnote to it. **Profile** moved to the Home top bar and remains a pushed route
+with its own back arrow. **Settings** returned beside it on Home on 2026-08-22, replacing the extra
+hop through Profile). Top bar everywhere = `←` (sub-screens) + ≤1 action, **never the screen's own
+name** (no `TopAppBar` title); Home alone carries the bell + Profile + Settings;
 **one back affordance per page — the top-bar `←` alone, never a second in-page back arrow**. The
 notifications bell is **Home only** (2026-07-27): it sat in all ~20 top bars, which made an unread
 badge follow you into every screen you had already navigated away from it to reach. A screen names
 itself with a serif content hero (Stats "Stats", Profile "Athlete") or not at all (Home "Pull B").
-On **Home** the two chrome glyphs are pulled out by `GUTTER_SLACK` (12dp, half the gap between a
+On **Home** the outer bell and Settings glyph are pulled out by `GUTTER_SLACK` (12dp, half the gap between a
 44dp target and its 20dp glyph) so their edges land on the 24dp page gutter, level with the serif
-hero below; centred in their targets they sat 12dp inboard of everything else. This is Home's own
+hero below; centred in their targets they sat 12dp inboard of everything else. Profile sits directly
+beside Settings inside the right action group. This is Home's own
 Row, not a `TopAppBar`, so no Material inset fights it — and with the bell now Home-only there is no
 longer a second alignment to disagree with.
 The bell replaced the `• Avex` wordmark on 2026-07-27; "Avex" now appears only in the cold-launch
@@ -310,7 +311,7 @@ them. Deep links: `CoachEntryPoint`, with `accountItemCount` scrolling past the 
 `coachAccount`'s emission — change one, change the other).
 
 Coach content renders ONLY here — Settings→Coach is config alone (on/off switch + mode chips + a
-feeds on/off glance whose silent HC rows tap to Recovery), never a second brief/trust/history home.
+feeds on/off glance whose silent HC rows tap to Wearable), never a second brief/trust/history home.
 
 ### Profile — `ui/profile`
 
@@ -371,7 +372,7 @@ page. Any rule worded "only draw X when Y" needs a defined answer for "no Y", an
 not be "nothing" for every mark in a section simultaneously.) Storage/sync unchanged and separate:
 `bodyweight_entry`, the `body_fat` table (v29, sibling of bodyweight — NOT the cm-bounded
 `body_measurement`, since a % is unitless — fed from a smart scale via Health Connect **or** manual
-entry, mirrored both ways via a Recovery `Body fat sync` row, `BodyFatSync` mirrors
+entry, mirrored both ways via a Wearable `Body fat sync` row, `BodyFatSync` mirrors
 `BodyweightSync`), and `body_measurement` (v24, local-only, canonical cm); measurements keeps its
 own `BodyMeasurementsViewModel`, read at the section level so ProfileViewModel is untouched. THIS
 YEAR consistency grid (GYMAP-58 — whole calendar year, one ROW per month · day-of-month columns ·
@@ -501,6 +502,13 @@ hides recents/screenshots). The unlock screen is the modal archetype: opaque the
 the credential entry). Offered as one onboarding opt-in step (shared "about you" block). Settings →
 Appearance keeps the separate **Privacy mode** FLAG_SECURE toggle.
 
+### Exercise likes — `ui/settings/SettingsSubPages.kt`
+
+The preference list opens on **All exercises**: every public library movement plus the user's custom
+moves, regardless of configured equipment. Its first scope selector adds **Your gear**, which alone
+uses `ExerciseLibrary.availablePool` (including a frozen preset); muscle and Custom scopes remain
+available beside it. Custom moves stay out of Your gear because they store no equipment metadata.
+
 ### Sheets
 
 - SessionSummarySheet (minimal)
@@ -534,9 +542,10 @@ About-you closes with the wearable pick (Galaxy · Pixel · no watch, keys + lab
 `domain/health/WearableBrand`): cards carry the one honest per-brand difference as right-meta
 ("Routes sync"/"Routes vary"), the pick answers with a mono what-syncs readout + a version caveat
 caption (feature sets differ by watch generation and companion-app version), and the same enum
-drives Settings → Recovery's WEARABLE `PillChip` row + brand-aware source-app/routes explainers —
-the two surfaces may not drift, and the brand is advisory only (HC reads stay vendor-neutral). Each
-granted Recovery read-signal row carries a post-connect reading (§9, `probeSignalFlow`): `RECEIVING`
+drives Settings → **Wearable**'s equal-width device row (Galaxy · Pixel · no watch/other) +
+brand-aware source-app/routes explainers — all three choices stay on one line, with no watch directly
+beside Pixel, and the two surfaces may not drift. The brand is advisory only (HC reads stay vendor-neutral). Each
+granted Wearable read-signal row carries a post-connect reading (§9, `probeSignalFlow`): `RECEIVING`
 (onBg) when a record arrived in the last 30d, `NOTHING YET` (muted — quiet nudge, never alarm, since
 absence is ambiguous) when granted-but-silent, plain `ON` while probing or for the write-only
 calorie row. HC exposes data PRESENCE, never capability — so the UI never says "unsupported", and

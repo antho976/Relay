@@ -150,8 +150,8 @@ fun HubScreen(
                     onGoToTrophies = { nav.navigate(Routes.TROPHIES) },
                     onOpenNotes = { nav.navigate(Routes.NOTES_SEARCH) },
                     onGoToNutrition = { nav.navigate(Routes.NUTRITION) },
-                    // Settings moved inside Profile; Home's top-right opens Profile itself.
                     onOpenProfile = { nav.navigate(Routes.PROFILE) },
+                    onOpenSettings = { nav.navigate(Routes.settings()) },
                     // Coach is its own hub page when enabled — swipe to it rather than pushing the modal brief.
                     onOpenCoachBrief = { goToTab(BottomTab.COACH) },
                     onOpenCoachLab = { nav.navigate(Routes.COACH_LAB) },

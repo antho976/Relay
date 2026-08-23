@@ -1,5 +1,5 @@
 <!--
-    Notification status-bar icon. A silhouette "F" mark on a transparent background, sized to fill
+    Notification status-bar icon. The Avex mark on a transparent background, sized to fill
     a 24dp canvas: status-bar small icons are rendered alpha-only (the system tints them), so this
     MUST be a white-on-transparent silhouette — not the colored adaptive-icon foreground (which has
     a 33% safe-zone and would render as a tiny padded blob).
@@ -10,6 +10,10 @@
     android:viewportWidth="24"
     android:viewportHeight="24">
     <path
-        android:pathData="M5,3 L19,3 L19,7 L9,7 L9,10 L16,10 L16,14 L9,14 L9,21 L5,21 Z"
-        android:fillColor="#FFFFFFFF" />
+        android:pathData="M12,3.8 L22,20.2 L2,10.4 L22,10.4 L2,20.2 Z"
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2"
+        android:strokeLineCap="square"
+        android:strokeLineJoin="miter" />
 </vector>

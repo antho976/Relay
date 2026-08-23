@@ -1063,10 +1063,11 @@ object ExerciseLibrary {
         available.isEmpty() || def.equipment.all { it == Equipment.BODYWEIGHT_ONLY || it in available }
 
     /**
-     * The exercise universe available to the user — the SINGLE source the generator, swap picker and
-     * the like/dislike screen all draw from. When [frozenIds] is non-null (a curated preset such as
-     * the Developer's preset) the pool is exactly those ids — locked, and immune to any movement
-     * added to the library later. Otherwise it's everything [available] equipment can perform.
+     * The exercise universe available to the user's current setup — the SINGLE source the generator
+     * and swap picker draw from, plus the Exercise likes page's optional Your gear filter. When
+     * [frozenIds] is non-null (a curated preset such as the Developer's preset) the pool is exactly
+     * those ids — locked, and immune to any movement added to the library later. Otherwise it's
+     * everything [available] equipment can perform.
      */
     fun availablePool(available: Set<Equipment>, frozenIds: Set<String>?): List<ExerciseDef> =
         if (frozenIds != null) all.filter { it.id in frozenIds }

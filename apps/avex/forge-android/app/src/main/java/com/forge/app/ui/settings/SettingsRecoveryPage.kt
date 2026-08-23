@@ -1,10 +1,12 @@
 package com.forge.app.ui.settings
 
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -13,6 +15,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -22,7 +25,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.domain.health.WearableBrand
 
 /**
- * Settings → Recovery. Connects Health Connect so the coach and cardio screen can read what your
+ * Settings → Wearable. Connects Health Connect so the coach and cardio screen can read what your
  * watch and scale already track. Leads with the connection rail (one dot per integration, §12),
  * then a WEARABLE brand pick (Galaxy · Pixel · other) that tailors the setup pointers — each
  * brand's watch feeds Health Connect through its own companion app (Samsung Health / Fitbit), and
@@ -84,8 +87,8 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
             .padding(bottom = 40.dp)
     ) {
         // The top bar never names the screen (§4.6), so the page names itself with its own mono
-        // anchor before anything else — Recovery used to open on a bare dot rail with no title.
-        SettingsSectionHeader("Recovery", top = 12.dp)
+        // anchor before anything else — this page used to open on a bare dot rail with no title.
+        SettingsSectionHeader("Wearable", top = 12.dp)
         // Then the mark (§12): the page's whole state in one glance, honest at zero.
         RecoveryConnectionRail(railStates)
         Spacer(Modifier.height(8.dp))
@@ -97,11 +100,19 @@ internal fun RecoveryPage(modifier: Modifier = Modifier, viewModel: HealthConnec
 
         // The brand pick tailors the pointers below (which companion app feeds Health Connect, and
         // which signals vary by its version). Advisory only — every read works for any wearable.
-        SettingsSectionHeader("Wearable")
+        SettingsSectionHeader("Your device")
         Spacer(Modifier.height(4.dp))
-        ChipFlow {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = SETTINGS_GUTTER),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             WearableBrand.entries.forEach { brand ->
-                PillChip(brand.label, state.wearableBrand == brand.key) {
+                PillChip(
+                    brand.label,
+                    state.wearableBrand == brand.key,
+                    modifier = Modifier.weight(1f)
+                ) {
                     viewModel.setWearableBrand(brand.key)
                 }
             }

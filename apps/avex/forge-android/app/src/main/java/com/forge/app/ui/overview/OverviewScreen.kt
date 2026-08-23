@@ -21,6 +21,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -281,6 +283,7 @@ fun OverviewScreen(
     onOpenCoachLab: () -> Unit = {},
     onOpenGoals: () -> Unit = {},
     onOpenProfile: () -> Unit = {},
+    onOpenSettings: () -> Unit = {},
     onOpenSession: (Long) -> Unit = {},
     onViewAllHistory: () -> Unit = {},
     onLogFreestyle: () -> Unit = {},
@@ -391,13 +394,21 @@ fun OverviewScreen(
                             .offset(x = (-GUTTER_SLACK))
                             .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
                     )
-                    TopBarIconButton(
-                        NavIcons.Profile,
-                        "Profile",
-                        MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.offset(x = GUTTER_SLACK),
-                        onClick = onOpenProfile
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        TopBarIconButton(
+                            NavIcons.Profile,
+                            "Profile",
+                            MaterialTheme.colorScheme.onSurfaceVariant,
+                            onClick = onOpenProfile
+                        )
+                        TopBarIconButton(
+                            Icons.Default.Settings,
+                            "Settings",
+                            MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.offset(x = GUTTER_SLACK),
+                            onClick = onOpenSettings
+                        )
+                    }
                 }
 
                 val directive = state.directive

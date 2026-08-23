@@ -244,11 +244,10 @@ fun ForgeNavHost(initialDayKey: String? = null) {
             DayScreen(dayKey = dayKey, onBack = { nav.popBackStack() })
         }
         // Profile left the bottom bar for the Home top bar (2026-07-27), so it is a pushed route
-        // now and brings its own back arrow. Settings is reached from inside it.
+        // now and brings its own back arrow.
         composable(Routes.PROFILE) {
             com.forge.app.ui.profile.ProfileScreen(
                 onBack = { nav.popBackStack() },
-                onOpenSettings = { nav.navigate(Routes.settings()) },
                 onOpenTrophies = { nav.navigate(Routes.TROPHIES) },
                 onOpenPhotoGallery = { nav.navigate(Routes.MIRROR_TEST) },
                 onOpenMeasurements = { nav.navigate(Routes.BODY_MEASUREMENTS) }

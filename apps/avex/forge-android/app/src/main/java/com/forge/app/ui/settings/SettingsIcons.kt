@@ -124,14 +124,21 @@ object SettingsIcons {
         }
     }
 
-    /** Recovery — a crescent moon (sleep / rest): a disc with an offset disc CONTAINED inside it,
-     *  so even-odd truly subtracts (an offset that pokes out would XOR into a lumpy blob). */
-    val Recovery: ImageVector by lazy {
-        icon("SetRecovery") {
-            fillPath(PathFillType.EvenOdd) {
-                circle(12f, 12f, 8.3f)
-                circle(13.2f, 10.8f, 6.3f)
+    /** Wearable — a watch case, straps and crown in the matched settings stroke weight. */
+    val Wearable: ImageVector by lazy {
+        icon("SetWearable") {
+            strokePath(1.8f) {
+                roundRect(6.4f, 7.2f, 17.6f, 16.8f, 2.4f)
+                moveTo(9.2f, 7.2f)
+                lineTo(9.6f, 3.4f)
+                lineTo(14.4f, 3.4f)
+                lineTo(14.8f, 7.2f)
+                moveTo(9.2f, 16.8f)
+                lineTo(9.6f, 20.6f)
+                lineTo(14.4f, 20.6f)
+                lineTo(14.8f, 16.8f)
             }
+            fillPath { roundRect(17.6f, 10.4f, 19.4f, 13.6f, 0.9f) }
         }
     }
 

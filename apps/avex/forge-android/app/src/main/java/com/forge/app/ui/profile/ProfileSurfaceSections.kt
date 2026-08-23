@@ -524,7 +524,7 @@ private fun leanMassMetric(
         series = display,
         action = "Sync",
         zeroLabel = "Sync from your watch",
-        icon = SettingsIcons.Recovery,
+        icon = SettingsIcons.Wearable,
         onOpen = onSync
     )
 }

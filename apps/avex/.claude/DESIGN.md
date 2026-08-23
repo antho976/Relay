@@ -97,7 +97,7 @@ Each archetype has a compiling recipe under `ui/recipes/` — start there, not f
 3. **Prose budget + one home.** A section's primary content is data-shaped (figure/bar/chart/tag/row); a sentences-only section is redesigned to data or cut. Max ONE muted caption (~12 words) per section beyond the hero's context line; mechanics narration is cut not trimmed (the state changing IS the explanation; explainers only beside a non-obvious control, §13). **One home**: a fact appears once per screen (a caption on its element, never a floating footer or repeated across lenses); likewise a MARK — a visual that only repeats another screen's/lens's answer is cut, not copied.
 4. **Sub-paging = lens pills** (`SegmentPill` row, labels ONE short word). Routed sub-screen = real sub-feature w/ own hero; sheet = transient detail of one tapped item.
 5. **Data is explorable**: aggregate visuals (heatmap cell, chart point, row) answer a tap with detail; every interaction passes "you'd miss it" or "wow"; nothing looks tappable while doing nothing.
-6. **Chrome earns its tap**: top bar = `←` + ≤1 action, **never the screen's own name** (no `TopAppBar` title). The bell (`NotificationBell`, tap→the feed, hold→Home) is **HOME ONLY** and carries a `CountBadge`, not a dot; a *tab* may badge its own count (Academy) but no page repeats the bell's. A screen names itself with a serif content hero or not at all. **One back affordance per page** — the top-bar `←` alone, never a second in-page back arrow. **A notice belongs in the feed, not on the page**: anything dismissible, celebratory or "waiting on you" goes behind the bell — a page never opens with a resident strip above its own answer. The ONE thing that may cross a page is a **transient arrival receipt** (`ArrivalBannerHost`): an overlay that displaces nothing, is never dismissible, and flies into the bell on its own (`design/SETTLED.md`, 2026-07-27 / 2026-08-15).
+6. **Chrome earns its tap**: top bar = `←` + ≤1 action, **never the screen's own name** (no `TopAppBar` title). Home alone carries its three destinations together: the bell on the left, then Profile + Settings on the right. The bell (`NotificationBell`, tap→the feed, hold→Home) is **HOME ONLY** and carries a `CountBadge`, not a dot; a *tab* may badge its own count (Academy) but no page repeats the bell's. A screen names itself with a serif content hero or not at all. **One back affordance per page** — the top-bar `←` alone, never a second in-page back arrow. **A notice belongs in the feed, not on the page**: anything dismissible, celebratory or "waiting on you" goes behind the bell — a page never opens with a resident strip above its own answer. The ONE thing that may cross a page is a **transient arrival receipt** (`ArrivalBannerHost`): an overlay that displaces nothing, is never dismissible, and flies into the bell on its own (`design/SETTLED.md`, 2026-07-27 / 2026-08-15).
 7. **Build flow = two-shot**: overview first → Antho device-checks → then subs/lenses.
 8. **Lead with the live — placement is rank.** Within a screen/lens: real data/decisions sit under the pills, mixed reached/ahead ladders next, pure countdown/unlock meters last; a section of all-zero marks never opens a lens with a live sibling; a ladder and its countdowns sit adjacent.
 9. **Show the reading, not just the conclusion.** Surface the engine's underlying readings, not only its verdict — both beside a conclusion (the deciding reading as row meta: "38% hard · +2", "7.2h avg") and BEFORE one exists (per-item readings render as soon as they're computable, not when a score unlocks). Below a gate the reading is progress toward it ("3 of 12 rated sets"), never "n/a". A panel of named checks each with its own reading is data, not §12 repetition; each lens stands on its OWN data. "Not enough data yet" is a last resort; when a reading panel arrives, any row elsewhere that only restated it goes. A dense panel may CLOSE with one muted line naming what the readings feed.
@@ -207,17 +207,17 @@ both capsules are GUTTERLESS and go only inside `SettingsActionRow`, which owns 
 them at large scale (your own padded Row double-gutters them); group them at the page END, never mid-scroll.
 
 **Per-row action = compact OUTLINED pill, never filled.** A do-it-now action scoped to a single list
-row/integration (Recovery's Connect, the Profile BODY rows' Log/Sync/Open) renders as a right-aligned
+row/integration (Wearable's Connect, the Profile BODY rows' Log/Sync/Open) renders as a right-aligned
 compact OUTLINED pill — the shared **`ForgeRowPill`** (`ui/common/Capsules.kt`; promoted out of
 settings on its third screen 2026-07-24, `ConnectPill` now delegates to it) — border only, onBg text,
 sentence case, with the WHOLE row as its tap
 target (the pill is drawn, not independently clickable — no nested tap). NEVER a filled capsule per
-row: five of those stack into a *button wall* (`FAILURES.md`; Recovery failed exactly this way). The
+row: five of those stack into a *button wall* (`FAILURES.md`; Wearable failed exactly this way). The
 ONE filled capsule stays page-level, grouped at the END. A bare mono accent `connect →` link is too dim
 against a muted accent — prefer the pill. A connected row shows a passive `• ON` (accent disc + mono)
 on the right, and a list of connectables leads with its filled-disc/muted-ring dot rail (§12; ring at
 1.5dp muted@0.55 so the empty state reads on near-black). Rows without a usable action render passive —
-no affordance that can't run. Coach + Recovery draw this dot and pill through the shared `StatusDot` /
+no affordance that can't run. Coach + Wearable draw this dot and pill through the shared `StatusDot` /
 `ConnectPill` (`SettingsPrimitives.kt`) — reuse them, don't redraw.
 
 **Sizing — trim, never chunky** (48dp touch from padding, not visual size — and these are *minimums*
@@ -380,7 +380,7 @@ RTL-correct (`start`/`end`, never `left`/`right`).
 - [ ] All seven states drawn (§12) — especially zero, overflow, and stale/denied.
 - [ ] One serif hero; mono headers + air rhythm; **no section hairlines** (lines = data only); alphas only from the §5 ladder; colors via `colorScheme`; ≥8dp between text lines of different roles.
 - [ ] Prose budget + one home (§4.3): data-led sections, ≤1 caption, no mechanics narration, no fact/mark repeated across lenses.
-- [ ] Top bar = the bell + `←` + ≤1 action, never the screen name, one back arrow; no page-level notice strips. Serif titles/verdicts no terminal period.
+- [ ] Top bar = `←` + ≤1 action; Home = bell + Profile + Settings. Never the screen name, one back arrow; no page-level notice strips. Serif titles/verdicts no terminal period.
 - [ ] Passive content bare; only interactive elements + modals get fills/borders. Nothing fake-tappable; no nested taps.
 - [ ] Controls trim (§8); bounce press, no ripple; motion per archetype via shared modifiers only (§9).
 - [ ] Generated text dry + earned, imperative + "you", no exclamations/em-dashes/hype (§11).

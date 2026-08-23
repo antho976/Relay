@@ -15,7 +15,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -101,8 +100,6 @@ private val GUTTER = 24.dp
 fun ProfileScreen(
     // Null when shown as a hub pager page (no redundant back arrow); a real callback as a deep route.
     onBack: (() -> Unit)? = null,
-    /** Settings moved here from the Home top bar (2026-07-27) — this page's one action (§4.6). */
-    onOpenSettings: () -> Unit = {},
     onOpenTrophies: () -> Unit,
     onOpenPhotoGallery: () -> Unit = {},
     onOpenMeasurements: () -> Unit = {},
@@ -163,9 +160,6 @@ fun ProfileScreen(
                         if (onBack != null) IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
                     },
                     actions = {
-                        IconButton(onClick = onOpenSettings) {
-                            Icon(Icons.Filled.Settings, contentDescription = "Settings", tint = muted)
-                        }
                         if (Features.SHOW_GAMIFICATION) state.rank?.let { r ->
                             IconButton(onClick = {
                                 scope.launch {

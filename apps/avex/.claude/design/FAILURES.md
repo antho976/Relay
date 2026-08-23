@@ -18,7 +18,7 @@ The page reads as a control panel; nothing looks primary because everything does
 **Fix** ONE filled capsule per page, grouped at the END (§8). A row-scoped action becomes a
 whole-row tap target with a *drawn* compact outlined pill on the right — the pill is not separately
 clickable, so there is no nested tap.
-**Seen in** Settings → Recovery, where five filled Connect capsules stacked. Now `ConnectPill`.
+**Seen in** Settings → Wearable, where five filled Connect capsules stacked. Now `ConnectPill`.
 
 ## Grey dot column
 

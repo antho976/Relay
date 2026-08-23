@@ -2,8 +2,8 @@ package com.forge.app.domain.health
 
 /**
  * Which watch the user wears, chosen on the onboarding wearable step and changeable in
- * Settings → Recovery. Single source of truth for the canonical stored keys, the display
- * labels, and each brand's Health Connect source app, so onboarding and Recovery can't
+ * Settings → Wearable. Single source of truth for the canonical stored keys, the display
+ * labels, and each brand's Health Connect source app, so onboarding and Wearable can't
  * drift on bare string literals.
  *
  * PURELY advisory — every Health Connect read is vendor-neutral and works the same
