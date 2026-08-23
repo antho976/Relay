@@ -95,8 +95,6 @@ class OnboardingViewModel @Inject constructor(
         bodyweightLb: Double?,
         /** Explicit cardio distance choice; null = leave tied to the weight unit (lb→miles, kg→km). */
         useMiles: Boolean? = null,
-        /** WearableBrand key from the wearable step; "" (skipped early) leaves the pref unset. */
-        wearable: String = "",
         // [goal] + [experience] are collected on EVERY path (they steer the coach's rep-range/volume
         // suggestions). The rest of these are generated-only; custom/freestyle default them.
         goal: String = "build_muscle",
@@ -121,8 +119,6 @@ class OnboardingViewModel @Inject constructor(
             settingsRepo.setUserSex(sex)
             settingsRepo.setFreestyleMode(planMode == PLAN_FREESTYLE)
             settingsRepo.setCoachEnabled(coachEnabled)
-            // Advisory only (tailors Recovery's sync pointers); blank = the step was skipped, keep unset.
-            if (wearable.isNotEmpty()) settingsRepo.setWearableBrand(wearable)
             // App-lock opt-in (GYMAP-69); leave off unless the user turned it on.
             if (appLock) settingsRepo.setAppLockEnabled(true)
 

@@ -5,9 +5,7 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -15,17 +13,17 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.forge.app.program.DayArchetype
 import com.forge.app.program.Equipment
 import com.forge.app.program.EquipmentPreset
@@ -33,14 +31,14 @@ import com.forge.app.program.ExerciseLibrary
 import com.forge.app.program.GeneratedDay
 import com.forge.app.program.equipmentGroups
 import com.forge.app.program.equipmentPresets
-import com.forge.app.ui.common.parseAccentHex
+import com.forge.app.ui.common.ExerciseIcons
 import com.forge.app.ui.theme.ForgeMotion
 
 /**
  * The gym half of the generated path — the two steps where the [PlanLedger] under the question stops
  * being an empty shape and starts filling. Picking a preset deals the week; toggling one piece of
- * gear moves the meters while you watch. Then the week page, where the same mark leads the real
- * thing.
+ * gear moves the meters while you watch. Then the week page, where that same mark stops being a
+ * readout and becomes the way you read the week.
  */
 
 /** GYMAP-20 step 1 of 2: pick the closest gym preset. */
@@ -111,10 +109,27 @@ private fun presetMeta(preset: EquipmentPreset): String = when {
 }
 
 /**
- * Last step of the generated path: the week that has been building under every question since the
- * day-count, now at full size. The same [PlanLedger] leads it — the mark the user has been reading
- * for three screens, so arriving here is a zoom, not a reveal of something new. Under it, the days
- * open out into their real exercise lists.
+ * Last step of the generated path — the week, rebuilt 2026-08-23.
+ *
+ * What it replaced: the same bar mark the user had been reading for three screens, drawn again at
+ * full size, and then every exercise of every day dumped underneath it in one column. A four-day
+ * week ran to roughly twenty-five uniform rows and three viewports, which §3 bans outright for this
+ * archetype (only the optional closing step is exempt from the long scroll), and the volume of each
+ * day was stated three separate times — once by a bar, once by a day header, once by its rows.
+ *
+ * What it is now: **the mark IS the week, and it navigates.** One bar per training day carrying that
+ * day's sets, accent on the day you are reading and muted on the rest, and under it that one day in
+ * full — its movements, each with its equipment glyph and its sets by reps. Tapping a bar swaps the
+ * detail. That is §4.5's "aggregate visuals answer a tap with detail", it gives the mark a job
+ * instead of repeating one it already did (§4.3), and it puts the whole page — every day reachable,
+ * the CTA and the re-roll — inside one viewport.
+ *
+ * Approving what you cannot see was the thing to get right, and the rail is what answers it: every
+ * day of the week is on screen with its real volume from the moment the page opens, one tap from
+ * being read in full. Nothing is hidden, only stacked.
+ *
+ * The per-day colour dot each row used to carry went with the rewrite: seven hues at 8dp is exactly
+ * the "scattered tiny accent" §5 forbids, and day identity already rides the mono name.
  *
  * The exact week shown is the week that gets saved (the re-roll sits beside the CTA in the bottom
  * bar; edits live in the Program Editor).
@@ -125,85 +140,104 @@ internal fun StepWeek(
     plannedSets: List<Int>,
     days: List<GeneratedDay>
 ) {
+    // Which day is open. Survives a re-roll on purpose — the split is unchanged, so the user stays
+    // on the day they were reading and watches its movements change under them. Coerced rather than
+    // reset, so it can never index off a shorter week.
+    var picked by rememberSaveable { mutableIntStateOf(0) }
+    val index = picked.coerceIn(0, (archetypes.size - 1).coerceAtLeast(0))
+    val day = days.getOrNull(index)
+    // A one-day week has nothing to move between, so it gets no tap affordance and no line telling
+    // the user to use one. Its single bar IS the week, which is also why the day below drops its set
+    // count: at one day that number and the week total are the same fact (§4.3).
+    val many = archetypes.size > 1
+
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         StepTitle("Here's your week")
-        StepCaption("Built from your answers. Change any of it in the editor.")
+        StepCaption(
+            if (many) "Tap a day to read it. Change any of it in the editor."
+            else "Built from your answers. Change any of it in the editor."
+        )
         Spacer(Modifier.height(6.dp))
-        PlanLedger(archetypes = archetypes, plannedSets = plannedSets, days = days, trackHeight = 88.dp)
-        Spacer(Modifier.height(12.dp))
-        // Re-rolls crossfade the whole list so a new week reads as a fresh deal, not a flicker.
+        // The anchor says days and sets because the page title already said "your week" (§4.3).
+        PlanLedger(
+            archetypes = archetypes,
+            plannedSets = plannedSets,
+            days = days,
+            trackHeight = 104.dp,
+            label = if (many) "${archetypes.size} days" else "1 day",
+            selectedIndex = index,
+            onSelect = if (many) ({ picked = it }) else null
+        )
+        Spacer(Modifier.height(8.dp))
+        // Crossfades on both moves the list can make: switching day, and a re-roll dealing fresh
+        // movements into the day already open.
         AnimatedContent(
-            targetState = days,
+            targetState = day,
             transitionSpec = { fadeIn(ForgeMotion.enterTween()) togetherWith fadeOut(ForgeMotion.exitTween()) },
-            label = "week_reroll"
-        ) { shownDays ->
-            Column(verticalArrangement = Arrangement.spacedBy(24.dp)) {
-                shownDays.forEach { day -> WeekDay(day) }
-            }
+            label = "week_day"
+        ) { shown ->
+            WeekDay(
+                shown,
+                fallbackName = archetypes.getOrNull(index)?.name.orEmpty(),
+                showSets = many
+            )
         }
     }
 }
 
-/** One day in the program screen's section formula (GYMAP-21/28 — the two render identically):
- *  colour-dot + mono anchor with its set count as right meta, then hang-indented exercise rows with
- *  the sets × reps at the quiet caption rung, so the movement names carry the row. */
+/**
+ * The open day: mono anchor with its own reading as right meta, then one row per movement — the
+ * equipment-class glyph (§8, same family the pickers lead with), the name, and the sets by reps at
+ * the quiet mono rung so the movement names carry the row.
+ */
 @Composable
-private fun WeekDay(day: GeneratedDay) {
+private fun WeekDay(day: GeneratedDay?, fallbackName: String, showSets: Boolean) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    Column {
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Box(Modifier.size(8.dp).clip(CircleShape).background(parseAccentHex(day.accentHex)))
-                Text(
-                    day.name.uppercase(),
-                    style = MaterialTheme.typography.labelLarge,
-                    color = muted,
-                    letterSpacing = 1.sp,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
+    val exercises = day?.exercises.orEmpty()
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        StepSectionLabel(
+            day?.name ?: fallbackName,
+            meta = when {
+                exercises.isEmpty() -> null
+                showSets -> "${exercises.size} moves · ${exercises.sumOf { it.sets }} sets"
+                else -> "${exercises.size} moves"
             }
-            Text(
-                "${day.exercises.sumOf { it.sets }} SETS",
-                style = MaterialTheme.typography.labelSmall,
-                color = muted
-            )
-        }
-        Spacer(Modifier.height(10.dp))
-        if (day.exercises.isEmpty()) {
-            // Effectively unreachable (the generator keeps a last-resort fill), but a blank day must
-            // still say what it means rather than mislabel itself.
+        )
+        if (exercises.isEmpty()) {
+            // Effectively unreachable (the generator keeps a last-resort bodyweight fill), but a
+            // blank day must still say what it means rather than mislabel itself.
             Text(
                 "Nothing your gear covers yet",
                 style = MaterialTheme.typography.bodyMedium,
-                color = muted,
-                modifier = Modifier.padding(start = 16.dp)
+                color = muted
             )
         }
-        day.exercises.forEach { ex ->
+        exercises.forEach { ex ->
+            val def = ExerciseLibrary.byId(ex.libId)
             Row(
-                Modifier.fillMaxWidth().padding(start = 16.dp, top = 5.dp, bottom = 5.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
+                Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    ExerciseLibrary.byId(ex.libId)?.name ?: ex.libId,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onBackground,
-                    modifier = Modifier.weight(1f, fill = false)
+                Icon(
+                    ExerciseIcons.forEquipment(def?.equipment.orEmpty()),
+                    contentDescription = null,
+                    tint = muted,
+                    modifier = Modifier.size(20.dp)
                 )
-                Spacer(Modifier.width(12.dp))
+                Text(
+                    def?.name ?: ex.libId,
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    modifier = Modifier.weight(1f)
+                )
                 Text(
                     "${ex.sets} × ${ex.reps}",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = muted.copy(alpha = 0.7f)
+                    style = MaterialTheme.typography.labelMedium,
+                    color = muted
                 )
             }
         }

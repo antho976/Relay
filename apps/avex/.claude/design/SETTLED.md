@@ -89,8 +89,8 @@ The rebuild (`design/DECISIONS.md`, same date) removed five whole screens and tw
 it is missing — every item is still asked or still reachable, just not in front of the plan.
 
 **Moved out of the path, into one optional closing step** ("Anything else?", after the week exists):
-your name · weight and distance units · bodyweight and sex · watch brand · app lock · plate weight ·
-auto-refresh cadence. (Sore spots went the other way — see below.) Every one also lives in Settings, and every one has a working
+your name · weight and distance units · bodyweight and sex · watch brand (removed outright a day
+later, see below) · app lock · plate weight · auto-refresh cadence. (Sore spots went the other way — see below.) Every one also lives in Settings, and every one has a working
 default, so walking past the whole page is a complete answer. Do not push any of them back in front
 of the plan: they are settings, and a setting asked before the product has shown anything is a toll.
 
@@ -112,6 +112,30 @@ of the plan: they are settings, and a setting asked before the product has shown
 **Promoted, not cut:** sore / injured spots. It started the rebuild as a chip row on the closing
 step and ended it as its own page, before the week — it shapes exercise selection, so asking after
 the preview shaped a plan the user had already approved. Do not fold it back into a settings list.
+
+## Onboarding, the watch question and the week page (2026-08-23)
+
+**The watch pick left onboarding entirely.** It survived the 2026-08-22 rebuild by moving to the
+closing step; a day later it went. Picking Galaxy / Pixel / none changed nothing the user could ever
+see — it only tailored the WORDING of Settings → Wearable's sync pointers — so it was a question
+whose answer had no consequence, asked while the user was still in the flow. Wearable setup needs
+the Health Connect grants anyway, which is a Settings job, and Settings → Wearable already asks the
+same question with the same enum. Do not put a device question back into first run: nothing in the
+flow can act on the answer. (`OnboardingDraft` dropped its `wearable` field with it; the schema
+stayed at 4, because the path length and therefore the resume cursor did not change.)
+
+**The week page's exercise dump.** "Here's your week" used to redraw the `PlanLedger` bars it had
+already shown for three screens, then list every exercise of every day underneath — roughly 25
+uniform rows across three viewports for a four-day week, with each day's volume stated three times
+over (once by a bar, once by a day header, once by its rows). §3 bans a long multi-block scroll for
+this archetype and exempts only the closing step. It is now ONE mark that navigates — the same bars,
+accent on the day you are reading — over that one day's movements. Do not re-add a linear all-days
+list: every day is on screen with its real volume from the moment the page opens, one tap from being
+read in full, so nothing is hidden by it.
+
+**Cut with that rewrite:** the per-day colour dot on each exercise section. Seven hues at 8dp is the
+scattered-tiny-accent §5 forbids, and the mono day name already carries day identity. The Program
+Editor keeps its dot — it lists every day at once, where the colour is doing work.
 
 **Do not re-add:** a welcome screen. The cold-launch `AvexIntro` plays the wordmark moments earlier,
 §3 bans a wordmark pre-app, and the plan-mode fork is a better opening beat than a greeting — it is

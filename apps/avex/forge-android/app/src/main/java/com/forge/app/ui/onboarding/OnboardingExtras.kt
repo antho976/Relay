@@ -22,7 +22,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import com.forge.app.domain.health.WearableBrand
 import com.forge.app.domain.units.fromDisplayWeight
 import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.security.BiometricAuthenticator
@@ -38,15 +37,20 @@ import kotlin.math.roundToInt
  * together, after the week exists, every one optional and every one repeated in Settings. Leaving
  * the page untouched and pressing the CTA is a complete answer.
  *
+ * The watch question left this page entirely (2026-08-23). Picking a brand here changed nothing the
+ * user could see — it only tailored the wording of Settings → Wearable's sync pointers — so it was a
+ * question whose answer had no consequence, asked while the user was still in the flow. Wearable
+ * setup is a Settings job that needs the Health Connect grants anyway, and that is where it lives.
+ *
  * **Its register is a settings sheet, not eight more questions.** This page reads down a single
  * label-left spine wherever a control is small enough to sit beside its name — which is what a units
- * row is — and spends the full width only on what needs it: two text fields, three chip groups, two
+ * row is — and spends the full width only on what needs it: two text fields, two chip groups, two
  * switches. The first draft gave every one of them a full-width block of identical capsules and read
  * as a wall with no rank in it. The sore-spot question left for [StepSoreSpots] in the same pass.
  *
  * Order is by subject and closes on the two switches, so the page ends on a pair rather than
- * trailing off: who you are, how you measure, what you wear, what you load, how often it re-rolls,
- * then the two things you turn on. The coach question came off an `AlertDialog` here too: a dialog
+ * trailing off: who you are, how you measure, what you load, how often it re-rolls, then the two
+ * things you turn on. The coach question came off an `AlertDialog` here too: a dialog
  * is for a decision that must interrupt (§12); an opt-in with a sane default is a row.
  */
 @Composable
@@ -64,8 +68,6 @@ internal fun StepExtras(
     onSexSelect: (String) -> Unit,
     coachEnabled: Boolean,
     onCoachToggle: (Boolean) -> Unit,
-    wearable: String,
-    onWearableSelect: (String) -> Unit,
     appLock: Boolean,
     onAppLockToggle: (Boolean) -> Unit,
     plateWeightLb: Double,
@@ -98,8 +100,6 @@ internal fun StepExtras(
                 UnitChip("km", !useMiles) { onDistanceUnit(false) }
             }
         }
-
-        WatchSection(selected = wearable, onSelect = onWearableSelect)
 
         PlateWeightSection(plateWeightLb = plateWeightLb, useKg = useKg, onSet = onPlateWeight)
 
@@ -218,33 +218,6 @@ private fun AboutYouSection(
             ChoiceChip("Male", sex == "male", onClick = { onSexSelect("male") })
             ChoiceChip("Female", sex == "female", onClick = { onSexSelect("female") })
             ChoiceChip("Prefer not to say", sex == "", onClick = { onSexSelect("") })
-        }
-    }
-}
-
-/**
- * The watch pick, advisory only: it tailors Settings → Recovery's sync pointers and nothing else.
- * Every Health Connect read is vendor-neutral, so the caption states what that brand's companion
- * app feeds through and stops there. The per-brand version caveat that used to run under this on
- * its own page now lives only where it can be acted on, in Settings → Recovery (2026-08-22).
- */
-@Composable
-private fun WatchSection(selected: String, onSelect: (String) -> Unit) {
-    val caption = when (WearableBrand.fromKey(selected)) {
-        WearableBrand.GALAXY -> "Sleep, steps, heart rate, workouts and GPS routes, through Samsung Health."
-        WearableBrand.PIXEL -> "Sleep, steps, heart rate and workouts, through the Fitbit app."
-        WearableBrand.NONE -> "Any tracker that feeds Health Connect works the same way."
-        null -> "Nothing connects yet. You grant each signal later in Settings."
-    }
-    ExtrasSection("Your watch") {
-        StepCaption(caption)
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            WearableBrand.entries.forEach { brand ->
-                ChoiceChip(brand.label, selected == brand.key, onClick = { onSelect(brand.key) })
-            }
         }
     }
 }
