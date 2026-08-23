@@ -75,8 +75,8 @@ internal fun SessionTimelineRow(
                 Text(detail, style = MaterialTheme.typography.labelSmall, color = muted, fontStyle = FontStyle.Italic, fontSize = 10.sp)
             }
         }
-        // §8 level ③ — navigation reads as the mono accent `action →` idiom.
-        Text("stats →", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary, fontSize = 10.sp)
+        // No trailing `stats →`: the WHOLE row already opens the session, so the link was a second
+        // affordance for the same tap (§2③ — never nested taps, never two ways to say one thing).
     }
 }
 

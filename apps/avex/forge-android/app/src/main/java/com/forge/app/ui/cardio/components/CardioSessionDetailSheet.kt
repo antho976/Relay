@@ -163,12 +163,20 @@ fun CardioSessionDetailSheet(
                             onBg = onBg, muted = muted, accent = accent,
                             modifier = Modifier.weight(1f)
                         )
-                        EditorialFigure(
-                            value = entry.distanceKm?.let { formatDistance(it, useMiles).removeSuffix(" $unit") } ?: "0",
-                            label = unit,
-                            onBg = onBg, muted = muted, accent = accent,
-                            modifier = Modifier.weight(1f)
-                        )
+                        // A session with no distance RECORDED is not a session of zero distance —
+                        // printing "0 km" would be ghost data, which §12 bans as firmly as it
+                        // requires honest zeros for things that really are zero.
+                        val distance = entry.distanceKm
+                        if (distance != null) {
+                            EditorialFigure(
+                                value = formatDistance(distance, useMiles).removeSuffix(" $unit"),
+                                label = unit,
+                                onBg = onBg, muted = muted, accent = accent,
+                                modifier = Modifier.weight(1f)
+                            )
+                        } else {
+                            Spacer(Modifier.weight(1f))
+                        }
                         // No distance means there is no pace to show — a placeholder dash would be
                         // both an em dash (§11) and a figure standing in for data it does not have (§12).
                         if (pace != null) {
