@@ -270,6 +270,11 @@
 11 font-size ui/gym/train/components/SetRow.kt fontSize=
 3 font-size ui/gym/train/components/WarmupGate.kt fontSize=
 1 font-size ui/nav/ForgeBottomBar.kt fontSize=
+# PlanModeVignettes draws a PICTURE of an interface, not an interface: its mono label size is
+# derived from the canvas width so the drawing keeps the vignette videos' proportions at any
+# card width, and so a 72dp strip does not overflow at 200% font scale. Taking the size from
+# the type scale would break both. The card's own label/description below still scale.
+1 font-size ui/onboarding/PlanModeVignettes.kt fontSize=
 1 font-size ui/overview/HistoryComponents.kt fontSize=
 4 font-size ui/overview/SummarySheet.kt fontSize=
 5 font-size ui/overview/components/DayEditComponents.kt fontSize=

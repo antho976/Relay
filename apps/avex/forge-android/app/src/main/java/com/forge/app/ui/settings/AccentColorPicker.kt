@@ -53,7 +53,7 @@ import kotlin.math.hypot
 import kotlin.math.min
 import kotlin.math.sin
 
-private const val DEFAULT_ACCENT = "#D4761F"
+private const val DEFAULT_ACCENT = "#E23D3D"
 
 /** Precompiled once — a valid `#RRGGBB` accent. Avoids allocating a Regex on every keystroke/recompose. */
 private val HEX_REGEX = Regex("#[0-9A-F]{6}")
@@ -68,10 +68,12 @@ private val HEX_REGEX = Regex("#[0-9A-F]{6}")
  */
 private const val MIN_ACCENT_LUMINANCE = 0.11
 
-// Ember leads: it is the default, and the warm end of the list now sits first so the picker opens on
-// the temperature the app is designed at rather than on the cool presets (2026-08-16).
+// Red leads: it is the default (2026-08-23), and the warm end of the list sits first so the picker
+// opens on the temperature the app is designed at rather than on the cool presets (2026-08-16).
+// This Red replaced a deeper `#8B3535`, which measured 2.42:1 as text and could not be a default;
+// anyone still holding that hex keeps it, the swatch simply no longer highlights.
 private val ACCENT_PRESETS = listOf(
-    "#D4761F" to "Ember", "#8B3535" to "Red", "#8B5A35" to "Copper", "#7A6435" to "Gold",
+    "#E23D3D" to "Red", "#D4761F" to "Ember", "#8B5A35" to "Copper", "#7A6435" to "Gold",
     "#6B4535" to "Rust", "#8B3556" to "Rose", "#556B35" to "Moss", "#4D6040" to "Olive",
     "#3E5E3E" to "Forest", "#356B6B" to "Teal", "#3D4F73" to "Navy", "#445A6B" to "Steel"
 )

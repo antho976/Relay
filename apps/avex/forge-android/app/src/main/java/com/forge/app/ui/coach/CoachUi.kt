@@ -255,7 +255,7 @@ internal fun CoachStamp(word: String, c: CoachColors) {
  * A text action ("Start →"), padded to fatten the touch target.
  *
  * Sans, not mono: button text belongs to the prose voice, and mono is reserved for uppercase
- * micro-labels. Never accent-coloured either — accent-as-text is 5.84:1 on the default Ember but
+ * micro-labels. Never accent-coloured either — accent-as-text is 4.53:1 on the default Red but
  * 2.42:1 on Red and 2.34:1 on Navy, so on four of the five accents this control was unreadable on
  * the device. The arrow marks it as an action; the colour never had to.
  */

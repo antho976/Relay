@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -49,12 +50,16 @@ private val PLAN_MODE_DETAILS = listOf(
  * everything after it: "build me a plan" walks the gym steps to a finished week, the other two
  * answer goal and experience (which steer the coach) and go straight to the closing step.
  *
- * The three vignette videos are unchanged — see `PlanModeMedia.kt`.
+ * Each card carries a vignette video of its mode — see `PlanModeMedia.kt`.
  */
 @Composable
 internal fun StepPlanMode(selected: String, onSelect: (String) -> Unit) {
-    // One coordinator for the card videos so they start — and therefore replay and freeze — together.
+    // One coordinator for the card videos so they start — and therefore loop and freeze — together.
     val videoSync = remember { PlanModeSync(PLAN_MODE_DETAILS.count { planModeHasVideo(it.first) }) }
+    // Tapping a card plays its vignette again. The illustration IS the answer to the question, so
+    // choosing an option should show you the answer rather than leave you on a frozen last frame.
+    // Per-card, because picking one must not restart the two you didn't pick.
+    val replays = remember { mutableStateMapOf<String, Int>() }
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         StepTitle("How do you want to train?")
         StepCaption("Nothing here is permanent. Change it later in Settings.")
@@ -71,8 +76,11 @@ internal fun StepPlanMode(selected: String, onSelect: (String) -> Unit) {
                     PLAN_CUSTOM -> null
                     else -> "Beta"
                 },
-                onClick = { onSelect(key) },
-                topContent = { PlanModeMedia(key, videoSync) }
+                onClick = {
+                    replays[key] = (replays[key] ?: 0) + 1
+                    onSelect(key)
+                },
+                topContent = { PlanModeMedia(key, videoSync, replays[key] ?: 0) }
             )
         }
     }

@@ -29,7 +29,7 @@ val LocalWearColors = staticCompositionLocalOf { wearColors(ConfigDto()) }
 
 fun wearColors(config: ConfigDto): WearColors {
     val accent = if (!config.accentEnabled) Color(0xFFF2EFEA)
-    else parseHex(config.accentHex) ?: Color(0xFFD4761F) // Ember default, like the phone.
+    else parseHex(config.accentHex) ?: Color(0xFFE23D3D) // Red default, like the phone (app's AccentRed).
     return WearColors(
         accent = accent,
         accentDim = accent.copy(alpha = 0.6f),

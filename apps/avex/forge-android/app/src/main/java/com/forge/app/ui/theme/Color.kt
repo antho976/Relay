@@ -31,24 +31,31 @@ val IndigoGradBottom = Color(0xFFEBEBF2)
 
 // ── Accent presets (map to secondary token) ───────────────────────────────────
 /**
- * The default accent, 2026-08-16. Two reasons it replaced Navy.
+ * The default accent, 2026-08-23. It was Ember from 2026-08-16, and Navy before that; the reasoning
+ * that moved it off Navy still governs, so it is kept here.
  *
  * **Heat.** Navy on a near-black page is the deadest pairing available: it never reads as energy, so
- * every place the accent appeared was a colour the eye skipped. Ember is warm at the same restraint —
- * burnt, not neon — and it is spent in FEW places at LARGE size rather than many places at postage-
- * stamp size, which was the old failure.
+ * every place the accent appeared was a colour the eye skipped. A warm accent, spent in FEW places at
+ * LARGE size rather than many at postage-stamp size, was the fix.
  *
- * **Hue.** It is deliberately yellower and more saturated than a terracotta or clay orange (Antho,
- * 2026-08-16: a softer #C9662E "feels a bit too Claude like"). Molten metal, not pottery — which suits
- * an app called Forge better anyway. Do not drift it back toward the desaturated red-orange range.
+ * **Contrast is the constraint, not a nicety.** Accent-as-text — `action →` links, accent glyphs —
+ * is a real pattern in this app, so the DEFAULT has to clear AA on the page or every new install
+ * ships failing text. Navy measured 2.34:1 and the old deep red `#8B3535` 2.42:1; both failed. This
+ * red measures **4.53:1** on Pearl, and at luminance 0.198 it sits above [pearlColorScheme]'s 0.18
+ * onPrimary threshold, so dark-on-accent fills clear AA too (4.53:1). That threshold and this value
+ * move together — lower this colour and filled-primary controls go same-on-same.
  *
- * **Contrast.** Accent-as-text was a documented AA failure — Navy measures 2.34:1 on the page. Ember
- * measures **5.84:1** either way round, so `action →` links, accent glyphs AND dark-on-accent fills
- * all clear AA. That last one is why [pearlColorScheme]'s onPrimary threshold moved.
+ * The alternates below do NOT clear AA as text and are not expected to; §14 and `SETTLED.md` scope
+ * that guarantee to the default only.
  */
-val AccentEmber = Color(0xFFD4761F)   // default dark
+val AccentRed   = Color(0xFFE23D3D)   // default dark
+/**
+ * The former default (2026-08-16 → 2026-08-23). Deliberately yellower and more saturated than a
+ * terracotta or clay orange (Antho, 2026-08-16: a softer #C9662E "feels a bit too Claude like") —
+ * molten metal, not pottery. Do not drift it back toward the desaturated red-orange range.
+ */
+val AccentEmber = Color(0xFFD4761F)
 val AccentNavy  = Color(0xFF3D4F73)
-val AccentRed   = Color(0xFF8B3535)
 val AccentOlive = Color(0xFF4D6040)
 val AccentGold  = Color(0xFF7A6435)
 
