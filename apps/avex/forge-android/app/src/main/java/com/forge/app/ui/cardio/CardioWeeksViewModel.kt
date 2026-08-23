@@ -1,5 +1,6 @@
 package com.forge.app.ui.cardio
 
+import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.forge.app.core.time.Clock
@@ -8,6 +9,7 @@ import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.data.repo.CardioRepository
 import com.forge.app.domain.cardio.CardioWeekPoint
 import com.forge.app.domain.cardio.cardioWeekSeries
+import com.forge.app.ui.nav.Routes
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -48,10 +50,23 @@ data class CardioWeeksState(
 class CardioWeeksViewModel @Inject constructor(
     cardioRepo: CardioRepository,
     settingsRepo: SettingsRepository,
+    savedState: SavedStateHandle,
     private val clock: Clock
 ) : ViewModel() {
 
-    private val openWeek = MutableStateFlow<Long?>(null)
+    // Arriving with a week argument (the cardio hero's Mon–Sun strip) opens straight into that week;
+    // arriving without one (`weeks →`) lands on the chart. Backing out of the week shows the chart
+    // either way, so the strip is a shortcut into the same place rather than a separate screen.
+    private val openWeek = MutableStateFlow(
+        savedState.get<Long>(Routes.ARG_WEEK_START)?.takeIf { it > 0L }
+    )
+
+    /**
+     * True when the screen was ENTERED on a week (the hero's strip) rather than on the chart. Backing
+     * out of that week leaves the route entirely — landing on a chart you never asked for would be a
+     * surprise, and the strip is meant to be a shortcut, not a detour.
+     */
+    val arrivedOnWeek: Boolean = openWeek.value != null
 
     val state: StateFlow<CardioWeeksState> = combine(
         cardioRepo.observeAll(),

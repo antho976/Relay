@@ -67,8 +67,10 @@ fun CardioScreen(
     onOpenHistory: (() -> Unit)? = null,
     // Opens the full Goals screen — from the GOALS trim's header action / lines.
     onOpenGoals: () -> Unit = {},
-    // Opens the weeks ledger — the hero's `weeks →`. Replaced the swipe-pager overlay (2026-08-23).
+    // Opens the weeks chart — the hero's `weeks →`. Replaced the swipe-pager overlay (2026-08-23).
     onOpenWeeks: () -> Unit = {},
+    // Opens one week's own page — the hero's Mon–Sun strip, with this week's Monday.
+    onOpenWeek: (Long) -> Unit = {},
     viewModel: CardioViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -144,6 +146,7 @@ fun CardioScreen(
             onBack = onBack,
             onOpenLog = viewModel::openSheet,
             onOpenWeeks = onOpenWeeks,
+            onOpenThisWeek = { onOpenWeek(isoWeekStartMs) },
             onOpenSession = viewModel::openSessionDetail,
             onRequestDelete = viewModel::deleteEntry,
             onSetLens = viewModel::setLens,
@@ -178,6 +181,7 @@ private fun CardioListContent(
     onBack: (() -> Unit)?,
     onOpenLog: () -> Unit,
     onOpenWeeks: () -> Unit,
+    onOpenThisWeek: () -> Unit,
     onOpenSession: (Long) -> Unit,
     onRequestDelete: (Long) -> Unit,
     onSetLens: (CardioLens) -> Unit,
@@ -226,7 +230,8 @@ private fun CardioListContent(
                         days = state.weekDays,
                         todayDow = todayDow,
                         onBg = onBg, muted = muted, outline = outline, accent = accent,
-                        onOpenWeeks = onOpenWeeks
+                        onOpenWeeks = onOpenWeeks,
+                        onOpenThisWeek = onOpenThisWeek
                     )
                 }
             }

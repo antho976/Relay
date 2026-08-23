@@ -50,9 +50,11 @@ import java.util.Locale
  * minutes meter. All honest zeros on a fresh week or a fresh install, so the empty screen is this
  * same screen at zero (§12).
  *
- * The hero is PASSIVE (2026-08-23): it used to be one page-wide tap target opening a full-screen
- * week pager, which put the page's richest content behind a gesture nothing announced and drew the
- * same week twice. Week browsing is a named action now, and the pager is a ledger.
+ * The hero itself is passive (2026-08-23): it used to be ONE page-wide tap target opening a
+ * full-screen week pager, which put the page's richest content behind a gesture nothing announced.
+ * Two named ways in replaced it — `weeks →` to the weeks chart, and the Mon–Sun strip, which opens
+ * THIS week in full (Antho, 2026-08-23). The strip is a single tap target: seven day-wide ones would
+ * each be under the 48dp minimum and would all lead to the same place anyway (§2③).
  */
 @Composable
 internal fun CardioHero(
@@ -69,7 +71,9 @@ internal fun CardioHero(
     muted: Color,
     outline: Color,
     accent: Color,
-    onOpenWeeks: () -> Unit
+    onOpenWeeks: () -> Unit,
+    /** Tapping the Mon–Sun strip opens this week's own page. */
+    onOpenThisWeek: () -> Unit
 ) {
     Column(
         modifier = Modifier
@@ -134,7 +138,12 @@ internal fun CardioHero(
             }
         }
         Spacer(Modifier.height(18.dp))
-        WeekBoxRow(days = days, todayDow = todayDow, onBg = onBg, muted = muted, outline = outline, accent = accent)
+        WeekBoxRow(
+            days = days,
+            todayDow = todayDow,
+            onBg = onBg, muted = muted, outline = outline, accent = accent,
+            onClick = onOpenThisWeek
+        )
         Spacer(Modifier.height(16.dp))
         // A personal minutes target fills its goal meter; without one, the WHO 150-min/week reference
         // takes its place (GYMAP-42) so the week always reads against a baseline, never empty space.
@@ -304,8 +313,11 @@ internal fun CardioRecordsSection(
     }
 }
 
-/** The Mon–Sun bar row — accent bars scale with each day's minutes; a rest day reads as a low
- *  muted stub, today-so-far as a dashed slot, untouched days as ghost track marks. */
+/**
+ * The Mon–Sun bar row — accent bars scale with each day's minutes; a rest day reads as a low muted
+ * stub, today-so-far as a dashed slot, untouched days as ghost track marks. The whole strip is one
+ * tap target ([onClick]) opening this week's page; passing null leaves it passive.
+ */
 @Composable
 internal fun WeekBoxRow(
     days: List<CardioDayCell>,
@@ -313,7 +325,8 @@ internal fun WeekBoxRow(
     onBg: Color,
     muted: Color,
     outline: Color,
-    accent: Color
+    accent: Color,
+    onClick: (() -> Unit)? = null
 ) {
     val dayLetters = listOf("M", "T", "W", "T", "F", "S", "S")
     val maxMin = (days.maxOfOrNull { it.minutes } ?: 0).coerceAtLeast(1)
@@ -334,7 +347,15 @@ internal fun WeekBoxRow(
         trackHeight = 48.dp,
         modifier = Modifier
             .fillMaxWidth()
-            .semantics(mergeDescendants = true) { contentDescription = reading },
+            .then(
+                if (onClick != null) Modifier.clickableLabeled("Open this week", onClick = onClick)
+                else Modifier
+            )
+            // The strip's own value, so TalkBack reads the week rather than "button" (§14).
+            .semantics(mergeDescendants = true) { contentDescription = reading }
+            // Padding, not bar height, carries the ≥48dp touch target (§14) — the bars are 48dp of
+            // track but a ghost week draws only 4dp of it.
+            .padding(vertical = 4.dp),
         bar = { i ->
             val (mins, hasActivity, isRest) = cellAt(i)
             val frac = (mins.toFloat() / maxMin).coerceIn(0f, 1f)

@@ -238,7 +238,11 @@ gone (`SETTLED.md`); week browsing is a ledger, and the page is:
 1. **Hero** (`CardioComponents.CardioHero`) — `THIS WEEK · MMM D – MMM D` eyebrow with a `weeks →`
    action, the week's figures (days · minutes · distance, streak once ≥2), the Mon–Sun accent bars,
    and the minutes `MeterBar` (a personal target, else the **WHO 150-min/week** reference —
-   GYMAP-42/`WHO_WEEKLY_ACTIVITY_MIN`). PASSIVE: it is not a tap target any more.
+   GYMAP-42/`WHO_WEEKLY_ACTIVITY_MIN`). The hero is no longer ONE page-wide tap target; it carries
+   two named ways out instead — `weeks →` to the weeks chart, and **the Mon–Sun strip, which opens
+   THIS week's page** (`Routes.cardioWeeks(weekStartMs)`; Antho, 2026-08-23). The strip is a single
+   tap target: seven day-wide ones would each fall under the 48dp minimum and all lead to the same
+   place anyway (§2③). Everything else in the hero stays passive.
 2. **`Log cardio`** — the one filled capsule, above the fold. Replaced a small white `+` disc that
    rode the sessions header and was none of §2③'s three levels.
 3. **Lens pills** (`CardioLens`) — `Week` · `Progress`.
@@ -252,7 +256,10 @@ gone (`SETTLED.md`); week browsing is a ledger, and the page is:
      that only repeats another screen's answer is cut, not copied (§4.3).
 
 **THE WEEKS** (`CardioWeeksScreen` + `CardioWeeksViewModel`, route `Routes.CARDIO_WEEKS`) — the page
-`weeks →` opens, and the one home for comparing weeks. **One bar per week, taller the more you did**
+`weeks →` opens, and the one home for comparing weeks. Its route takes an optional `week` argument:
+the cardio strip passes this week's Monday to land straight on that week, and backing out of a week
+arrived at that way leaves the route entirely rather than stranding you on a chart you never asked
+for (`CardioWeeksViewModel.arrivedOnWeek`). **One bar per week, taller the more you did**
 (`CardioWeekBars`): `WEEKS_PER_PAGE` = 8 on screen, `←` / `→` paging a window back through history to
 the first logged week (capped at 104), and **each bar is a tap target opening that week**. The whole
 column is the target, not the drawn bar, so a quiet week is still reachable. The week in progress is a

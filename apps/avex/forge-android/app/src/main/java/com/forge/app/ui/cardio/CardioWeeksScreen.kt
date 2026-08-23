@@ -84,7 +84,8 @@ fun CardioWeeksScreen(
             weekTargetMin = state.weekTargetMin,
             zone = zone,
             onOpenSession = onOpenSession,
-            onBack = viewModel::closeWeek
+            // Entered ON this week → back leaves; entered on the chart → back returns to it.
+            onBack = if (viewModel.arrivedOnWeek) onBack else viewModel::closeWeek
         )
         return
     }

@@ -227,7 +227,12 @@ fun ForgeNavHost(initialDayKey: String? = null) {
         ) {
             com.forge.app.ui.cardio.CardioSessionDetailScreen(onBack = { nav.popBackStack() })
         }
-        composable(Routes.CARDIO_WEEKS) {
+        composable(
+            route = Routes.CARDIO_WEEKS,
+            arguments = listOf(
+                navArgument(Routes.ARG_WEEK_START) { type = NavType.LongType; defaultValue = -1L }
+            )
+        ) {
             com.forge.app.ui.cardio.CardioWeeksScreen(
                 onBack = { nav.popBackStack() },
                 onOpenSession = { cardioId -> nav.navigate(Routes.cardioSession(cardioId)) }

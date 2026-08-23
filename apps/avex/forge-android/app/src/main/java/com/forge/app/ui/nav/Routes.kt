@@ -89,6 +89,11 @@ object Routes {
 
     fun cardioSession(cardioId: Long) = "cardio/session/$cardioId"
 
-    /** The weeks ledger — every week of cardio as a row (the hero's `weeks →`). */
-    const val CARDIO_WEEKS = "cardio/weeks"
+    /** The weeks chart — one bar per week (the hero's `weeks →`). An optional `week` argument
+     *  (a Monday's epoch ms) opens straight into that week, which is what tapping the hero's
+     *  Mon–Sun strip does. -1 = no week, land on the chart. */
+    const val CARDIO_WEEKS = "cardio/weeks?week={week}"
+    const val ARG_WEEK_START = "week"
+
+    fun cardioWeeks(weekStartMs: Long = -1L) = "cardio/weeks?week=$weekStartMs"
 }
