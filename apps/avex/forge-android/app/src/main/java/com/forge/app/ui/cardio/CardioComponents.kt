@@ -164,48 +164,6 @@ internal fun CardioHero(
 }
 
 /**
- * BY ACTIVITY — this week's minutes split by activity, ranked (§2②: ranked comparison = thin bars).
- * The mark carries the split; the type names are its labels, not its content. Hidden at zero, where
- * the hero's own all-zero bars already say the week is empty (§12 — no second empty shell).
- */
-@Composable
-internal fun CardioByActivitySection(
-    minutesByType: List<Pair<CardioType, Int>>,
-    onBg: Color,
-    muted: Color,
-    outline: Color,
-    accent: Color
-) {
-    if (minutesByType.isEmpty()) return
-    val leader = minutesByType.first().second.coerceAtLeast(1)
-    Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
-        EditorialHeader(label = "By activity", muted = muted, accent = accent)
-        Spacer(Modifier.height(12.dp))
-        // >4 uniform rows is the checklist look (§4.10) — the tail collapses into one honest line.
-        val shown = minutesByType.take(4)
-        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            shown.forEach { (type, min) ->
-                RankedBarRow(
-                    label = type.displayName,
-                    value = "$min min",
-                    fraction = min.toFloat() / leader,
-                    onBg = onBg, muted = muted, outline = outline, accent = accent
-                )
-            }
-        }
-        val restMinutes = minutesByType.drop(4).sumOf { it.second }
-        if (restMinutes > 0) {
-            Spacer(Modifier.height(10.dp))
-            Text(
-                "${minutesByType.size - 4} more · $restMinutes min".uppercase(),
-                style = MaterialTheme.typography.labelSmall,
-                color = muted, letterSpacing = 1.sp
-            )
-        }
-    }
-}
-
-/**
  * GOALS — the cardio-metric custom goals (distance / minutes) as the same open progress lines Home
  * draws ([GoalProgressLine] is the shared component), in-progress-closest first, capped at three.
  * The header action and every line open the full Goals screen.

@@ -243,13 +243,16 @@ gone (`SETTLED.md`); week browsing is a ledger, and the page is:
    THIS week's page** (`Routes.cardioWeeks(weekStartMs)`; Antho, 2026-08-23). The strip is a single
    tap target: seven day-wide ones would each fall under the 48dp minimum and all lead to the same
    place anyway (§2③). Everything else in the hero stays passive.
-2. **`Log cardio`** — the one filled capsule, above the fold. Replaced a small white `+` disc that
-   rode the sessions header and was none of §2③'s three levels.
+2. **`Log cardio`** — `ForgeHeroAction`, the same accent-filled button Home's Start session is
+   (2026-08-23: a hub tab's primary action reads the same on every tab; Cardio's was the one white
+   capsule in an accent app). Above the fold. Replaced a small white `+` disc that rode the sessions
+   header and was none of §2③'s three levels.
 3. **Lens pills** (`CardioLens`) — `Week` · `Progress`.
    - **WEEK**: FROM YOUR WATCH (W5 import suggestions, leads because it is the only section still
-     asking for a decision) → BY ACTIVITY (`RankedBarRow`s of this week's minutes by type, top 4 with
-     a collapsed tail) → SESSIONS (this week's rows; at zero, one line naming your last session and
-     opening it) → `view all N →` (History) → STEPS (the hourly `StepsByHourSection` mark for today).
+     asking for a decision) → SESSIONS (this week's rows; at zero, one line naming your last session
+     and opening it) → `view all N →` (History) → STEPS (the hourly `StepsByHourSection` mark for
+     today). No BY ACTIVITY split (Antho, 2026-08-23) — at the counts a real week has it was one
+     full-width bar restating the minutes figure and the session row beside it.
    - **PROGRESS**: PACE (`CardioPaceTrendSection`, moved off the old overlay since it was always
      cross-week data) → RECORDS → GOALS. All three absent → one line naming the unlock, not three
      empty shells. Deliberately NO weekly-load chart: that is the weeks page's mark, and a visual

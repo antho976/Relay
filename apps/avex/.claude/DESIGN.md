@@ -181,10 +181,10 @@ sheet top 16 — no custom radii. Photos: rounded 16 clips, caption UNDER the pl
 **The kit** — check here before writing any component. `EditorialHeader` · `EditorialHairline` ·
 `EditorialFigure` · `EditorialLegend` · `SegmentPill` · `ForgeSwitch` · `InlineEmptyHint` ·
 `NotificationBell` / `CountBadge` · `ArrivalBannerHost` · `AvexWordmark` · `AvexIntro` · `IconLaunchScene` · `bounceClick` /
-`bounceCombinedClick` · `clickableLabeled` · `GlyphButton` · `ForgePrimaryCapsule` /
-`ForgeOutlineCapsule` · `ForgeRowPill` · `ForgeShimmer` · `ConfettiOverlay` · `statsEntrance` · `EntranceItem` ·
-`rememberDrawProgress` · `CountUpText` · `ExerciseLibraryPicker` · `ProvideTouchExploration` ·
-`SnackbarController`. **A pattern used on a 3rd
+`bounceCombinedClick` · `clickableLabeled` · `GlyphButton` · `ForgeHeroAction` · `ForgePrimaryCapsule` /
+`ForgeOutlineCapsule` · `ForgeRowPill` · `ForgeShimmer` · `ConfettiOverlay` · `statsEntrance` ·
+`EntranceItem` · `rememberDrawProgress` · `CountUpText` · `ExerciseLibraryPicker` ·
+`ProvideTouchExploration` · `SnackbarController`. **A pattern used on a 3rd
 screen gets promoted here the same turn (§2⑥)** — `DoctrineParityTest` checks this list against the
 package both ways, so it cannot drift.
 
@@ -221,8 +221,8 @@ no affordance that can't run. Coach + Wearable draw this dot and pill through th
 `ConnectPill` (`SettingsPrimitives.kt`) — reuse them, don't redraw.
 
 **Sizing — trim, never chunky** (48dp touch from padding, not visual size — and these are *minimums*
-that grow with font scale, §14): hero CTA ~60dp (Home Start session only); standard capsules **44dp**
-(14sp); `ForgeSwitch` **40×24** track (thumb 14→17, press ~20); `SegmentPill` 12×5, 10sp.
+that grow with font scale, §14): hero CTA `ForgeHeroAction`, accent-filled ≥56dp, a HUB TAB's ONE
+primary action and never a section's (Home · Cardio, 2026-08-23); standard capsules **44dp** (14sp); `ForgeSwitch` **40×24** track (thumb 14→17, press ~20); `SegmentPill` 12×5, 10sp.
 
 **Icons**: chrome (nav/gear/back/share) + a muted leading glyph on settings/list nav rows for
 wayfinding. Row/content glyphs come from the matched custom families (`SettingsIcons`/`NavIcons`/

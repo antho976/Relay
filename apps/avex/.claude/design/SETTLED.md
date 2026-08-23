@@ -129,7 +129,10 @@ did, tap a bar to open it, arrows to page further back** (Antho, 2026-08-23 — 
 weeks as a list of rows and it read as a table, not as a comparison). Do not put a week pager back on
 the cardio tab: the hub is itself a `HorizontalPager`, so a nested week-swipe would eat the tab
 gesture · the **LOAD chart on the overview's PROGRESS lens** (it was the weeks page's own mark drawn
-a second time; `weeks →` is the way to it) · the **hero as one page-wide tap target** (it is passive; `weeks →` is a
+a second time; `weeks →` is the way to it) · **BY ACTIVITY**, on both the WEEK lens and the week page
+(Antho, 2026-08-23: at the counts a real week has, one or two types, it was a full-width bar
+restating the minutes figure and the session row beside it) · the **`stats →`** link on a week's
+session rows (the whole row already opens the session, so it was a second affordance for one tap) · the **hero as one page-wide tap target** (it is passive; `weeks →` is a
 named action) · the **white `+` disc** on the sessions header (the primary action is a filled
 `Log cardio` capsule above the fold) · the hero's **`TODAY · N STEPS` text line** (a data section
 leads with its mark — the hourly `StepsByHourSection` carries today's steps, and the line was a

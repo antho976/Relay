@@ -43,7 +43,7 @@ import com.forge.app.ui.cardio.components.CardioLogSheet
 import com.forge.app.ui.cardio.state.CardioLens
 import com.forge.app.ui.cardio.state.CardioUiState
 import com.forge.app.ui.common.EditorialHeader
-import com.forge.app.ui.common.ForgePrimaryCapsule
+import com.forge.app.ui.common.ForgeHeroAction
 import com.forge.app.ui.common.InlineEmptyHint
 import com.forge.app.ui.common.SegmentPill
 import com.forge.app.ui.common.clickableLabeled
@@ -240,8 +240,10 @@ private fun CardioListContent(
             // riding a section header, which is not one of §2③'s three levels and named nothing.
             item("log") {
                 Spacer(Modifier.height(24.dp))
-                ForgePrimaryCapsule(
-                    label = "Log cardio",
+                // The same hero button Home draws (Antho, 2026-08-23) — a hub tab's primary action
+                // reads the same on every tab, and it was the one white capsule in an accent app.
+                ForgeHeroAction(
+                    text = "Log cardio",
                     onClick = onOpenLog,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -326,17 +328,6 @@ private fun LazyListScope.weekLens(
                 onImport = onImportWatch,
                 onDismiss = onDismissImports,
                 onBg = onBg, muted = muted, accent = accent
-            )
-        }
-    }
-
-    val byType = state.weekAggregate?.minutesByType.orEmpty()
-    if (byType.isNotEmpty()) {
-        item("by-activity") {
-            Spacer(Modifier.height(SECTION_GAP))
-            CardioByActivitySection(
-                minutesByType = byType,
-                onBg = onBg, muted = muted, outline = outline, accent = accent
             )
         }
     }

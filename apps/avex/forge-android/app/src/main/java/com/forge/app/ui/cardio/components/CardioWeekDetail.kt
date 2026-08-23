@@ -166,27 +166,6 @@ internal fun CardioWeekDetail(
                 }
             }
 
-            if (agg.minutesByType.isNotEmpty()) {
-                item("by-activity") {
-                    Spacer(Modifier.height(28.dp))
-                    Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
-                        EditorialHeader(label = "By activity", muted = muted, accent = accent)
-                        Spacer(Modifier.height(12.dp))
-                        val leader = agg.minutesByType.first().second.coerceAtLeast(1)
-                        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
-                            agg.minutesByType.take(4).forEach { (type, min) ->
-                                RankedBarRow(
-                                    label = type.displayName,
-                                    value = "$min min",
-                                    fraction = min.toFloat() / leader,
-                                    onBg = onBg, muted = muted, outline = outline, accent = accent
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
             item("sessions-header") {
                 Spacer(Modifier.height(28.dp))
                 EditorialHeader(

@@ -3,6 +3,7 @@ package com.forge.app.ui.common
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -14,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
@@ -127,3 +129,51 @@ fun GlyphButton(
         Text(glyph, style = style, color = if (enabled) tint else tint.copy(alpha = 0.35f))
     }
 }
+
+/**
+ * The HERO action — a page's one do-it-now button at full weight: accent-filled, 56dp minimum, bold
+ * mono label on `onPrimary` (which flips to the background tone above luminance 0.18, so a mid-tone
+ * warm accent still gets dark text and a monochrome accent still reads).
+ *
+ * Promoted out of `OverviewScreen.HomePrimaryAction` on its second screen (Home · Cardio,
+ * 2026-08-23) rather than copied: Antho's note was that Cardio's white [ForgePrimaryCapsule] beside
+ * Home's orange one "doesn't make sense", and two lookalikes drawn from two definitions drift apart
+ * the moment one is touched. A hub tab's primary action is this; a section's is still level ①.
+ *
+ * [onLongClick] carries the optional hold gesture (Home's start-skipping-warmup).
+ */
+@Composable
+fun ForgeHeroAction(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    label: String = text,
+    onLongClick: (() -> Unit)? = null,
+    onLongClickLabel: String? = null
+) {
+    Box(
+        modifier = modifier
+            // Height from a minimum, never a fixed one — the label has to survive 200% (§14).
+            .heightIn(min = 56.dp)
+            .clip(HeroActionShape)
+            .background(MaterialTheme.colorScheme.primary)
+            .bounceCombinedClick(
+                onClickLabel = label,
+                onLongClickLabel = onLongClickLabel,
+                onLongClick = onLongClick,
+                onClick = onClick
+            )
+            .padding(horizontal = 20.dp, vertical = 14.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            text,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onPrimary
+        )
+    }
+}
+
+/** The hero action's corner — the 12dp tile rung (§7), not the capsule's pill. */
+private val HeroActionShape = RoundedCornerShape(12.dp)
