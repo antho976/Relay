@@ -150,40 +150,51 @@ object OnboardingIcons {
         }
     }
 
-    /** Cable machine — a column, an overhead arm, and a bar on the end of the cable that drops from
-     *  it. Centred it is an I-beam however much the parts weigh, and the small stroked pulley that
-     *  said "cable" at 84dp was a dot at the 26dp a tile renders; the off-centre drop carries it
-     *  instead, and needs no detail to do it. */
+    /**
+     * Cable machine — the classic crossover frame head-on: two uprights under a top beam, the weight
+     * stack on the floor between them, and a handle hanging on a short cable from each top corner.
+     * The handles sit well above the stack on purpose: at tile size the interior only reads if the
+     * parts have air between them. Same frame idiom as [SquatRack] and [Smith], but full and solid
+     * inside where theirs are open.
+     */
     val Cable: ImageVector by lazy {
         icon("OnbCable") {
             fillPath {
-                roundRect(2.8f, 3.6f, 5.8f, 20.4f, 1.2f)              // column
-                roundRect(2.8f, 3.6f, 18.8f, 6.6f, 1.2f)              // overhead arm
-                roundRect(16.2f, 6.6f, 18.4f, 13.2f, 0.9f)            // cable
-                roundRect(11.4f, 13.2f, 21.8f, 16.0f, 1.3f)           // the bar on the end
+                roundRect(2.4f, 3.2f, 4.8f, 20.8f, 1.0f)     // left upright
+                roundRect(19.2f, 3.2f, 21.6f, 20.8f, 1.0f)   // right upright
+                roundRect(2.4f, 3.2f, 21.6f, 5.5f, 1.0f)     // top beam
+                roundRect(9.0f, 14.6f, 15.0f, 17.2f, 0.8f)   // weight stack
+                roundRect(9.0f, 18.2f, 15.0f, 20.8f, 0.8f)
+                roundRect(5.3f, 9.8f, 8.5f, 11.8f, 1.0f)     // left handle
+                roundRect(15.5f, 9.8f, 18.7f, 11.8f, 1.0f)   // right handle
+            }
+            strokePath(1.8f) {
+                moveTo(6.9f, 5.5f); lineTo(6.9f, 9.8f)       // left cable
+                moveTo(17.1f, 5.5f); lineTo(17.1f, 9.8f)     // right cable
             }
         }
     }
 
     /**
-     * Pull-up bar — a wide, shallow **U**: the bar with its grip ends turned up.
-     *
-     * This grid already holds four posts-and-a-crossbar objects (rack, Smith, dip station, bench),
-     * so every attempt to draw this one as a bar with something under or over it landed on one of
-     * them or on furniture — posts under a bar is a table, hooks over one are humps, hands on one
-     * are a small barbell. A figure hanging from it read at 84dp and collapsed to a bare T at the
-     * 26dp a tile actually renders.
-     *
-     * A U is the one silhouette in the set nothing else can be mistaken for, it is what an angled
-     * multi-grip bar looks like, and it survives at any size because it is three masses and a lot of
-     * space.
+     * Pull-up bar — the bar with someone hanging off it. Drawn as the hang and not as the hardware
+     * on purpose: a beam on two uprights is [SquatRack] and [Smith] already, and uprights flaring
+     * into grips is [DipStation], so the object alone has no silhouette left of its own. It shares
+     * the figure idiom with [Bodyweight] but reads apart from it — arms up into a bar, not splayed.
      */
     val PullUpBar: ImageVector by lazy {
         icon("OnbPullUp") {
             fillPath {
-                roundRect(1.8f, 12.0f, 22.2f, 14.8f, 1.3f)   // the bar, full width
-                roundRect(1.8f, 6.4f, 4.6f, 14.8f, 1.3f)     // left grip, turned up
-                roundRect(19.4f, 6.4f, 22.2f, 14.8f, 1.3f)   // right grip
+                roundRect(2.0f, 3.2f, 22.0f, 5.5f, 1.15f)    // the bar
+                circle(6.2f, 5.9f, 1.45f)                    // left hand
+                circle(17.8f, 5.9f, 1.45f)                   // right hand
+                circle(12f, 8.8f, 1.85f)                     // head
+            }
+            strokePath(2.0f) {
+                moveTo(6.2f, 5.9f); lineTo(10.4f, 12.8f)     // left arm
+                moveTo(17.8f, 5.9f); lineTo(13.6f, 12.8f)    // right arm
+                moveTo(12f, 10.5f); lineTo(12f, 15.8f)       // torso
+                moveTo(12f, 15.8f); lineTo(9.5f, 20.4f)      // left leg
+                moveTo(12f, 15.8f); lineTo(14.5f, 20.4f)     // right leg
             }
         }
     }
