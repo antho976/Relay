@@ -586,12 +586,28 @@ internal consistency by breaking the match with the rest of the app.
 ### Onboarding — plan-mode vignettes, wearable pick, signal probes, equipment steps
 
 all three plan-mode cards carry short pre-rendered vignette videos (alpha WebP authored in
-`remotion-vignettes/`, rendered to res/raw: generated builds a full week, custom hand-builds a day
-one exercise at a time, freestyle re-logs a scattered no-frame log in no order — its missing
-structure IS the message) that play ~twice then FREEZE on the built plan / caught log — a shared
-`PlanModeSync` starts the videos together so they replay/freeze in lockstep; the live Canvas
-vignette (`PlanModeVignettes`, its own final frame, one draw per mode) is the decode / pre-28 /
-reduce-motion fallback; equipment/preset/goal tiles use the `OnboardingIcons` matched glyph family.
+`remotion-vignettes/`, rendered to res/raw) that play twice then FREEZE on the built plan / caught
+log, and REPLAY when you tap that card — the illustration is the answer to the question, so choosing
+an option plays the answer back instead of leaving a frozen frame (`replays` counter, per card, so
+picking one doesn't restart the two you didn't pick). All three are written in one vocabulary — a mono
+UPPERCASE label, then that row's accent blocks, on the warm page — and differ only in what the TEXT
+says, how the rows are ARRANGED and the RHYTHM they land in, which is the step's whole argument:
+generated is `MON PUSH ▪▪▪▪▪` × 3, aligned into a table (a dated week, handed over) that snaps in
+almost at once and then tallies its exercises straight across the week without pausing at row breaks;
+custom is `BENCH ▪▪▪` — the exercises themselves, the level you work at when you build your own —
+landed one per second by a `+ ADD` that is still blinking on the next open line when it freezes,
+because a plan that is yours isn't done until you say so; freestyle drops alignment entirely and
+lands day-stamped rows wherever, out of order and at uneven intervals, so no two share a row or a
+left edge. Redesigned 2026-08-23: the set before it was a dense grid of unlabelled blocks (unreadable
+at 72dp) and before that a wall of 8dp exercise names still keyed to the pre-2026-08-16 cool palette
+and the Navy accent, which made every accent mark on the step a dead pixel. A shared `PlanModeSync` starts
+the videos together so they loop and freeze in lockstep; the live Canvas vignette
+(`PlanModeVignettes`) is the decode / pre-28 / reduce-motion fallback — reduce-motion being the one
+that matters, since those users never see the video at all — and is a deliberate number-for-number
+transcription of the compositions, text included, honouring the same two-loops-then-freeze and replay
+contract; it sizes its type off the canvas width rather than the type scale so the drawing keeps the
+videos' proportions and cannot overflow 72dp at 200% font scale (sanctioned in
+`design-allowlist.txt`). Change one side and you must change the other; equipment/preset/goal tiles use the `OnboardingIcons` matched glyph family.
 The wearable pick (Galaxy · Pixel · no watch, keys + labels + source app from
 `domain/health/WearableBrand`) sits on the optional closing step as of 2026-08-22, as a chip row whose
 pick answers with one line naming what that companion app feeds through; the per-brand right-meta

@@ -116,7 +116,7 @@ temperature, not a style): bg `#110F0C` · gradient `#17120E→#0A0806` (behind 
 Material's stock purple-grey. **A modal still says `containerColor = surface`**, its dividers the
 outline 0.25 rung, its confirm/dismiss `onBackground`/muted.
 
-Accent = user-picked (Ember `#D4761F` **default** · Red `#8B3535` · Olive `#4D6040` · Gold `#7A6435` ·
+Accent = user-picked (Red `#E23D3D` **default** · Ember `#D4761F` · Olive `#4D6040` · Gold `#7A6435` ·
 Navy `#3D4F73`); `primary`=accent, `primaryContainer`=@0.15, `secondary`=@0.6. Spend it in FEW places
 at LARGE size, never many at postage-stamp size — scattered tiny accent reads as a dead pixel, not as
 energy. Accent can be **disabled** (Appearance → monochrome): `primary` falls back to a near-white
@@ -354,10 +354,10 @@ These are measured, not felt. The mechanical half is enforced by `DesignDoctrine
 | muted @0.7 | 5.18:1 | ✓ |
 | **muted @0.65** | **4.63:1** | ✓ the floor — 0.6 gives 4.08:1 and **fails** |
 | PR gold · △ green · success · warning | 7.0–9.8:1 | ✓ |
-| **accent as text** — default Ember `#D4761F` | **5.84:1** ✓ | alternates ✗: Red 2.42 · Olive 2.79 · Gold 3.37 · Navy 2.34 |
+| **accent as text** — default `#E23D3D` | **4.53:1** ✓ | pass: Red 4.53 · Ember 5.84 — fail: Olive 2.79 · Gold 3.37 · Navy 2.34 |
 | **error `#BF4040` as text** | **3.67:1** | ✗ **fails AA** |
 
-Accent-as-text was a blanket failure until the warm repalette; Ember passes, the alternates do not.
+Accent-as-text failed for every accent until the warm repalette. **A default MUST clear 4.5:1** (margin today: 0.03); alternates need not.
 The rule stands: **no new accent- or error-coloured body text** — use onBg text with an accent glyph
 or mark, the only treatment correct under every accent choice. Open decisions in `SETTLED.md`. Structural hairlines and tonal washes (`outline` rungs, `primaryContainer`) are **exempt**:
 they are decorative boundaries, not content or state, and raising them to 3:1 would destroy §1.

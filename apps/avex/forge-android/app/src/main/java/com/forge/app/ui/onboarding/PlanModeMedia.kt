@@ -38,6 +38,9 @@ import kotlinx.coroutines.withContext
  * a hand-built day · a caught freestyle log), so the loop restart is seamless (no jump) AND the freeze
  * lands on that plan instead of endlessly rebuilding. A shared [PlanModeSync] gates the videos so they
  * all start (and therefore loop and freeze) on the same frame.
+ *
+ * Frozen is not final: tapping a card bumps its `replays` counter and the video plays its two loops
+ * again from the top. Only the tapped card replays — see [StepPlanMode].
  */
 
 /** 1128×288 — the Remotion canvas (282×72dp at 4x). One aspect for video AND Canvas fallback. */
@@ -48,7 +51,7 @@ private const val VIGNETTE_ASPECT = 1128f / 288f
  * on [AnimatedImageDrawable] counts repeats AFTER the first play (0 = play once), so we pass
  * [PLAN_LOOPS] - 1.
  */
-private const val PLAN_LOOPS = 2
+internal const val PLAN_LOOPS = 2
 
 @RawRes
 private fun rawFor(mode: String): Int? = when (mode) {
@@ -73,22 +76,31 @@ internal class PlanModeSync(private val expected: Int) {
     fun markReady() { readyCount++ }
 }
 
+/**
+ * [replays] is a tap counter: every increment plays the video again from frame 0. It is ignored under
+ * reduce-motion, where there is no video to replay and the Canvas twin is already a settled still.
+ */
 @Composable
-internal fun PlanModeMedia(mode: String, sync: PlanModeSync) {
+internal fun PlanModeMedia(mode: String, sync: PlanModeSync, replays: Int = 0) {
     val raw = rawFor(mode)
     val canPlay = raw != null && Build.VERSION.SDK_INT >= 28 && ForgeMotion.durationScale > 0f
     Box(Modifier.fillMaxWidth().aspectRatio(VIGNETTE_ASPECT)) {
         if (canPlay && raw != null) {
-            AnimatedWebp(raw, sync, fallback = { PlanModeVignette(mode, Modifier.fillMaxSize()) })
+            AnimatedWebp(raw, sync, replays, fallback = { PlanModeVignette(mode, Modifier.fillMaxSize(), replays) })
         } else {
-            PlanModeVignette(mode, Modifier.fillMaxSize())
+            PlanModeVignette(mode, Modifier.fillMaxSize(), replays)
         }
     }
 }
 
 @RequiresApi(28)
 @Composable
-private fun AnimatedWebp(@RawRes resId: Int, sync: PlanModeSync, fallback: @Composable () -> Unit) {
+private fun AnimatedWebp(
+    @RawRes resId: Int,
+    sync: PlanModeSync,
+    replays: Int,
+    fallback: @Composable () -> Unit
+) {
     val context = LocalContext.current
     // Decode off the main thread. A null drawable inside a resolved [Decoded] means decode failed —
     // distinct from "still decoding" (result == null), so a failed twin doesn't hang the other card.
@@ -110,6 +122,12 @@ private fun AnimatedWebp(@RawRes resId: Int, sync: PlanModeSync, fallback: @Comp
     if (!sync.started || drawable == null) {
         fallback()
         return
+    }
+    // Replay on tap. Once the drawable has run out its repeats it is stopped, and start() on a stopped
+    // AnimatedImageDrawable rewinds to frame 0 — so this restarts a frozen card and re-starts one that
+    // is still mid-play. Skipped at 0 so the first composition doesn't fight the initial start() below.
+    LaunchedEffect(drawable, replays) {
+        if (replays > 0) (drawable as? AnimatedImageDrawable)?.run { stop(); start() }
     }
     AndroidView(
         modifier = Modifier.fillMaxSize(),

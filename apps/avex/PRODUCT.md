@@ -101,7 +101,7 @@ plus optional Health Connect data.
   support. Generated lines vary with the numbers instead of repeating one generic cue.
 - Machine identifiers never render: week ids become human dates, status enums become words, slot
   keys become exercise names.
-- User-chosen accent color (Ember default, four alternates) with a monochrome option, plus dark
+- User-chosen accent color (Red default, alternates including Ember) with a monochrome option, plus dark
   and AMOLED themes. Any surface must read correctly under every one of those choices.
 
 ## Evidence on Hand

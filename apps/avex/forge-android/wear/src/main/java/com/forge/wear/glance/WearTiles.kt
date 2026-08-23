@@ -85,7 +85,7 @@ abstract class AvexTileService : TileService() {
             if (!enabled) return ON_BG
             val h = hex.removePrefix("#")
             return h.takeIf { it.length == 6 }?.toLongOrNull(16)?.let { (0xFF000000L or it).toInt() }
-                ?: 0xFFD4761F.toInt()
+                ?: 0xFFE23D3D.toInt()   // AccentRed — the phone's default
         }
 
         fun age(computedAtMs: Long): String {

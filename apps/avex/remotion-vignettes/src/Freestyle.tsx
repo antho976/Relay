@@ -1,78 +1,72 @@
 import React from 'react';
-import {AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig} from 'remotion';
-import {ACCENT, MUTED, ON_BG} from './theme';
+import {AbsoluteFill, spring, useCurrentFrame, useVideoConfig} from 'remotion';
+import {LABEL_SIZE, MonoLabel, SetRow} from './Marks';
+import {heldOut, smoothstep} from './theme';
 
 /**
- * "Go with the flow" — no plan, no frame. The loop is SEAMLESS: frame 0 and the final frame are BOTH
- * the same finished log, held still, so the restart never jumps. In between the entries clear and you
- * re-log them one at a time — scattered across the strip, in no order, at an irregular "whenever"
- * rhythm — each dropping in with the accent tick (the "logged it" mark). Where the generated video
- * fills a week and the custom one hand-builds a day, this one just catches what you actually did: a
- * mixed bag (a run in among the lifts), with nothing boxing it in. Plays twice then FREEZES on the log.
+ * "Go with the flow" — no plan to fill in, just what you actually did.
  *
- * Shares Generated/Custom's length + held-first / held-last shape so all three cards start, loop, and
- * freeze together. No day frame — the missing structure IS the point (mirrors the Canvas twin's scatter
- * in PlanModeVignettes.drawFreestyle).
+ * The other two cards are columns; this one has no column, no rail and no order. The same set blocks
+ * land wherever there is room, at uneven intervals, each stamped with the day it happened on — and
+ * those days run WED · TUE · SAT · MON · FRI · THU, deliberately out of sequence. The missing structure is
+ * the message: the absence of a grid is doing the same job the grid does on the cards above. The
+ * intervals between landings are uneven for the same reason — a plan has a tempo, this doesn't.
+ *
+ * Shares Generated/Custom's length and its held-first / held-last shape so all three cards start,
+ * loop and freeze together, and the freeze lands on a full log — proof the mode keeps a record.
  */
 
-// name · sets · a loose (left, center-y) fraction of the strip · the frame it re-logs on. Deliberately
-// NOT a grid, and a run mixed in with the lifts (freestyle = whatever you did). Positions echo the
-// Canvas twin so the decode/reduce-motion fallback and the video read as the same illustration.
-type Log = {name: string; sets: string; x: number; y: number; in: number};
+/**
+ * Laid out by hand (px on the 1128×288 canvas). No two entries share a row or a left edge and the
+ * vertical gaps are all different, so nothing lines up into an accidental grid — the moment two of
+ * these agree on an axis the card starts arguing for the option above it instead of its own.
+ */
+type Log = {day: string; sets: number; x: number; y: number; in: number};
 const LOGS: Log[] = [
-  {name: 'Curls', sets: '3×12', x: 0.34, y: 0.52, in: 60},
-  {name: 'Bench', sets: '4×8', x: 0.05, y: 0.2, in: 78},
-  {name: 'Squat', sets: '5×5', x: 0.08, y: 0.84, in: 104},
-  {name: 'Run', sets: '2 km', x: 0.58, y: 0.16, in: 132},
-  {name: 'Pull-ups', sets: '3×10', x: 0.66, y: 0.64, in: 170},
+  {day: 'WED', sets: 4, x: 30, y: 18, in: 42},
+  {day: 'TUE', sets: 4, x: 700, y: 150, in: 52},
+  {day: 'SAT', sets: 3, x: 44, y: 200, in: 74},
+  {day: 'MON', sets: 5, x: 560, y: 46, in: 86},
+  {day: 'FRI', sets: 4, x: 420, y: 226, in: 104},
+  {day: 'THU', sets: 3, x: 132, y: 104, in: 116},
 ];
 
-// Phase timeline (frames @ 30fps). Opens HELD on the log, clears it, then re-logs at irregular gaps
-// (the "whenever" rhythm — no even stagger like the planned modes), and closes HELD on the same log.
-const CLEAR_START = 34;
-const CLEAR_END = 50;
-
-const ROW_H = 44;
-
-/** 1 while the opening log is held, 1→0 as it clears, 0 thereafter. */
-const heldOut = (frame: number): number =>
-  interpolate(frame, [CLEAR_START, CLEAR_END], [1, 0], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'});
+const STAMP_GAP = 18; // day stamp → its sets
 
 export const Freestyle: React.FC = () => {
   const frame = useCurrentFrame();
-  const {fps, width, height} = useVideoConfig();
+  const {fps} = useVideoConfig();
   const held = heldOut(frame);
 
   return (
     <AbsoluteFill>
       {LOGS.map((log) => {
-        // appear: 1 held, 0 cleared, springs back to 1 on re-log, 1 held again — frame 0 and the last
-        // frame both land on 1, so the loop seam and the freeze are the same finished log.
-        const relog = spring({frame: frame - log.in, fps, config: {damping: 12, stiffness: 150}});
+        // 1 held, 0 cleared, springs back to 1 when it is logged, 1 held again — frame 0 and the last
+        // frame are the same log, so the seam and the freeze land on it.
+        const relog = spring({frame: frame - log.in, fps, config: {damping: 12, stiffness: 160}});
         const appear = Math.min(1, held + relog);
         if (appear <= 0) return null;
-        // Pop-then-settle overshoot on the fresh re-log (not during either hold), matching the Canvas twin.
-        const pop = held > 0 ? 1 : 1 + 0.1 * Math.sin(Math.min(1, relog) * Math.PI);
+        // A pop that settles, on the fresh landing only — never during either hold.
+        const pop = held > 0 ? 1 : 1 + 0.11 * Math.sin(Math.min(1, relog) * Math.PI);
+        const glow = held > 0 ? 0 : 1 - smoothstep(frame, log.in, log.in + 20);
         return (
           <div
-            key={log.name}
+            key={log.day}
             style={{
               position: 'absolute',
-              left: width * log.x,
-              top: height * log.y - ROW_H / 2,
-              height: ROW_H,
+              left: log.x,
+              top: log.y,
+              height: LABEL_SIZE,
               display: 'flex',
               alignItems: 'center',
+              gap: STAMP_GAP,
               opacity: appear,
-              transform: `translateY(${(1 - appear) * 12}px) scale(${pop})`,
+              transform: `scale(${pop})`,
+              transformOrigin: 'left center',
             }}
           >
-            {/* accent tick = the work you did (shared with the custom video's "the work" mark) */}
-            <div style={{width: 14, height: 14, borderRadius: 4, background: ACCENT, marginRight: 16, flexShrink: 0}} />
-            <span style={{fontFamily: 'sans-serif', fontSize: 33, color: ON_BG, whiteSpace: 'nowrap'}}>{log.name}</span>
-            <span style={{fontFamily: 'monospace', fontSize: 27, color: MUTED, marginLeft: 12, flexShrink: 0}}>
-              {log.sets}
-            </span>
+            <MonoLabel opacity={1}>{log.day}</MonoLabel>
+            <SetRow sets={log.sets} alphaAt={() => 1} glow={glow} />
           </div>
         );
       })}

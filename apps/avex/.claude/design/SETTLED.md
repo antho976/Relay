@@ -264,8 +264,9 @@ text with an accent glyph or mark.
 
 | Accent | vs Pearl | AA normal (4.5) | AA large (3.0) |
 |---|---|---|---|
-| **Ember `#D4761F` (default, 2026-08-16)** | **5.84:1** | **pass** | pass |
-| Red `#8B3535` | 2.42:1 | fail | fail |
+| **Red `#E23D3D` (default, 2026-08-23)** | **4.53:1** | **pass** | pass |
+| Ember `#D4761F` (former default, 2026-08-16) | 5.84:1 | pass | pass |
+| Red `#8B3535` (dropped 2026-08-23 — could not be the default) | 2.42:1 | fail | fail |
 | Olive `#4D6040` | 2.79:1 | fail | fail |
 | Gold `#7A6435` | 3.37:1 | fail | pass |
 | Navy `#3D4F73` (former default) | 2.34:1 | fail | fail |
@@ -273,6 +274,12 @@ text with an accent glyph or mark.
 Option (c) — lighten the accent until it clears 4.5:1 — was taken for the DEFAULT, as a side effect of
 the warm repalette rather than as an accessibility fix. Ember was chosen for heat (Antho: Home felt
 "bland and lifeless"; navy-on-near-black is the deadest available pairing) and clearing AA came free.
+
+**2026-08-23 — the default is Red.** Asked for a red default, and the palette's own Red `#8B3535`
+measured 2.42:1, i.e. the same failure band as the Navy it would have replaced. Rather than reopen
+this issue, the default is a lighter `#E23D3D` at 4.53:1 and `#8B3535` was dropped from the presets.
+Clearing 4.5:1 is now a stated requirement of any default accent, not a happy accident — and the
+current value has only 0.03 of margin, so it cannot be darkened without re-measuring.
 §5's old "design against muted navy" line went with it: the rule is now **spend accent in few places
 at large size**, which is the same restraint expressed as placement rather than as dimness.
 
