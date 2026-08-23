@@ -91,6 +91,18 @@ object ProgramGenerator {
     /** Multiplier for a movement the coach tried and the watcher failed (soft, like dislikes aren't). */
     private const val AVOID_PENALTY = 0.2
 
+    /**
+     * The sets each day of a [daysPerWeek] split is planned to carry, before any equipment filter —
+     * the same [VolumeModel] allocation [generate] runs, so onboarding can draw the week's shape
+     * from a day-count alone without duplicating the volume math (or drifting from it). Emphasis,
+     * bias and personal caps are onboarding's no-op defaults.
+     */
+    fun plannedSetsPerDay(daysPerWeek: Int, experience: String): List<Int> =
+        VolumeModel.allocate(
+            SplitTemplates.forDays(daysPerWeek),
+            volumeFactor = GoalProfiles.volumeFactor(experience)
+        ).map { it.sum() }
+
     fun generate(
         params: GenerationParams,
         available: Set<Equipment>,

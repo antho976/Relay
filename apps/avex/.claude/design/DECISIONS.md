@@ -8,6 +8,111 @@ an entry whenever a rule is added, changed or retired.
 
 ---
 
+## 2026-08-22 — Onboarding rebuilt: the plan is visible while you answer for it
+
+First run was fifteen screens that showed the user nothing the app had made until the fifteenth. §3
+already said "one decision per step", and the flow obeyed it exactly, which is how it ended up with
+five screens of *settings* (name, units, body, watch, app lock) standing in front of the plan, and a
+progress rail whose denominator had to guess the path length because the plan-mode fork sat at
+question six. Three rules changed.
+
+**§3 — an onboarding path asks only what the thing being set up needs.** The name, the units, the
+body numbers, the watch brand, the app lock, the plate weight, the sore spots and the refresh cadence
+are all settings: each has a real home in Settings, each has a defensible default, and none of them
+shapes the plan. They moved to one optional closing step that lands AFTER the week exists, where the
+honest answer to all of it is to walk past. What stayed in the path is what the generator cannot
+work without: mode, goal, experience, days, gym, gear. Fifteen steps became eight, and four on the
+custom / freestyle paths.
+
+**§3 — the thing being built is drawn under the question, outside the page slider.** Onboarding used
+to hold its result to the end, so every answer landed in the dark and the preview was a reveal. The
+week now sits below every plan-shaping question as a bar per training day, and because it is outside
+the `AnimatedContent` it holds still and animates its own values while the questions slide past it.
+This is Product Principle 2 ("show the reading, not just the verdict") applied to setup: picking four
+days draws the split, picking a sparse gym visibly costs you sets.
+
+The constraint that makes it honest, and the reason it is a *rule* and not just a nice screen: the
+mark must be real at every stage it is shown, or absent. It draws from the day-count on because the
+split's planned volume is computable from a day-count alone (`ProgramGenerator.plannedSetsPerDay`),
+and it does not exist on the three steps before that, because on those steps nothing about the week
+is known yet. A row of grey placeholders standing in for a plan would be the ghost-data ban (§12)
+with extra steps.
+
+**Measured, then changed: the mark's variable.** The first build metered "exercises your gear
+supports, out of the slots the split wants". Rendered, it barely moved — the generator keeps a
+last-resort bodyweight fill, so even a bodyweight-only setup lands 24 of 25, and four full bars said
+nothing. Sets per day varies with the split, the experience level AND the equipment, so that is what
+the bars carry. A meter whose needle never moves is decoration; this is why §0 step 4 is "look at
+it", not "reason about it".
+
+**Second pass, same day — three things the first build got wrong, all of them found by looking at
+the render rather than by reasoning about it.**
+
+*The closing step read as a wall.* Eight full-width blocks of identical capsules, no rank in any of
+them, and the two unit segments stacked into what looked like one 2x2 grid of four options with two
+lit. It reads down a label-left spine now wherever a control fits beside its name, and spends the
+full width only on the things that need it. **The rule that came out of it: a settings-shaped page
+inside a question-shaped flow has to change register**, or it reads as more questions crammed
+together.
+
+*The sore-spot question was a chip cloud at the bottom of that wall.* It decides whether an injured
+lifter is handed the movement that hurts, and it was four words below the plate-weight picker. It is
+its own page now, head-to-toe in two groups, each spot carrying how many of the movements THAT gym
+supports load that joint — and it sits BEFORE the week, so the week the user approves is already the
+one their flags produced. Asking after the preview shaped a plan they had already signed off on.
+
+*The week meter ran off the gutter at seven days.* The first build gave each bar a minimum column
+width and scrolled the row when they no longer fit, which on any phone narrower than the dev device
+clipped the seventh day at 100% font scale. Bars share the width evenly now and the day name clamps
+at two lines, which §14 already allows a mono label to do. **A mark that scrolls sideways inside a
+page reads as broken, not as scrollable.**
+
+**Third pass — the icon family's weight was the regression, not its shapes.** `OnboardingIcons`
+opens by saying it is "the SAME matched family and single visual weight as `NavIcons` and
+`SettingsIcons`". Those two draw every line at 1.7–1.8; the rebuild set onboarding's to 2.2 and made
+every tile in the flow visibly heavier than the same glyph weight everywhere else in the app. That
+is the whole reason the redrawn grid read worse than the mismatched one it replaced — it was more
+internally consistent and less consistent with the app.
+
+The rule that survives: **one weight for lines, and it is the app's weight, not this file's.** Fills
+stay free to be masses (a plate, a pad, a weight stack, a flexed arm) — what is banned is a line
+drawn at one weight here and another there. Checking the constant against the two families it claims
+to match takes one grep, and would have caught this before any of the shapes were redrawn.
+
+Six glyphs also came out unreadable and were redrawn against a magnified sheet rather than reasoned
+about. Two of them needed a fourth pass, and the reason is the useful part: they were judged on a
+magnified sheet and **only checked at 26dp after the fact**, which is the size a tile actually
+renders. A figure hanging from a pull-up bar and a stroked pulley on a cable both read at 84dp and
+collapsed to a bare T and a bracket-with-a-dot at tile size. **Review a glyph at the size it ships
+at; the magnified sheet is for diagnosing a shape, not for approving one.**
+
+The other pattern worth keeping: **every attempt to draw a piece of gear as the bare object came
+out as furniture.** A bar on posts is a table; hooks over a bar are humps; straps
+meeting at a point are the letter A; a circle on a stick is a map pin. The ones that finally read
+either show the thing in use (bodyweight is a figure mid-movement), give the object a second element
+no piece of furniture has (the rack's feet and racked bar against the Smith's closed frame), or —
+where this grid already held four posts-and-a-crossbar objects — take a silhouette nothing else in
+the set can be mistaken for (the pull-up bar is a wide shallow U; the cable machine hangs its bar
+off ONE end of the arm, because centred it is an I-beam whatever the parts weigh). A flexed arm, likewise, only read once the bicep
+rose clear of the arm instead of sitting on it.
+
+**§3 — the progress rail is segmented, one cell per step of the path actually taken.** A continuous
+bar has to know its denominator, and before the fork this flow does not: the old code assumed the
+longest path so the fraction would only ever jump forward. Cells sidestep the problem by counting
+instead of proportioning, and committing to the short custom / freestyle path visibly drops the four
+cells that will never run.
+
+**The chapter eyebrow is gone.** "ABOUT YOU" over "About your body" was the rail's job said twice in
+a quieter voice. Every other §3 archetype keeps its eyebrow; onboarding is the one place where a
+second position-marker sits three lines above the first.
+
+**A dialog is for a decision that must interrupt.** The coach opt-in was an `AlertDialog` fired at
+the end of the custom / freestyle paths. It is a boolean with a sane default, so it is a row on the
+closing step now, offered on every path instead of two — §12 already said dialogs are for
+destructive or irreversible acts, and this was neither.
+
+---
+
 ## 2026-08-20 — Settings rebuilt against §3: one row rhythm, gutterless capsules, themed containers
 
 An audit of `ui/settings/` against the doctrine found the archetype was being followed in spirit and

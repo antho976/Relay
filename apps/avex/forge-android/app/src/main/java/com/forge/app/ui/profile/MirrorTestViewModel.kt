@@ -20,7 +20,7 @@ import javax.inject.Inject
 
 /**
  * The full photo Gallery (reached from the Profile teaser's "view all"). Photos carry a date, an
- * optional pose tag, the bodyweight nearest that date, a note and an album — the metadata that makes
+ * optional pose tag, muscle tags, free tags, the bodyweight nearest that date, a note and an album — the metadata that makes
  * two shots comparable over time. Reloads reactively off [ProgressPhotoRepository.revision], so a
  * capture from the in-app camera (a different screen) refreshes the grid. Pure local, app-private
  * files; see [ProgressPhotoRepository].
@@ -45,6 +45,10 @@ class MirrorTestViewModel @Inject constructor(
         val photos: List<ProgressPhoto> = emptyList(),
         /** Explicit, user-created album names (excludes Unsorted), in creation order. */
         val albumNames: List<String> = emptyList(),
+        /** Every free tag in use across the library, most-used first — the viewer's suggestion
+         *  rail and the filter rail read the same list, so neither can offer a tag the other
+         *  doesn't know about. Precomputed at load, not derived per recomposition. */
+        val knownTags: List<String> = emptyList(),
         /** Top-level folders, precomputed at load — not a per-read getter, so the grid doesn't
          *  re-run the groupBy on every recomposition. */
         val folders: List<AlbumFolder> = emptyList()
@@ -69,8 +73,22 @@ class MirrorTestViewModel @Inject constructor(
     private suspend fun reload() {
         val photos = photoRepo.photos()
         val albumNames = photoRepo.albums()
-        _state.value = UiState(loading = false, photos = photos, albumNames = albumNames, folders = foldersOf(photos, albumNames))
+        _state.value = UiState(
+            loading = false,
+            photos = photos,
+            albumNames = albumNames,
+            knownTags = tagsByUse(photos),
+            folders = foldersOf(photos, albumNames)
+        )
     }
+
+    /** Every free tag in use, ranked by how many photos carry it, then alphabetically so ties are
+     *  stable across reloads rather than following index order. */
+    private fun tagsByUse(photos: List<ProgressPhoto>): List<String> =
+        photos.flatMap { it.tags }
+            .groupingBy { it }.eachCount()
+            .entries.sortedWith(compareByDescending<Map.Entry<String, Int>> { it.value }.thenBy { it.key })
+            .map { it.key }
 
     /** Folders shown at the gallery's top level: every named album, then Unsorted if non-empty. The
      *  named list is (explicit album list ∪ any album referenced by a photo) so no photo can hide in
@@ -101,14 +119,21 @@ class MirrorTestViewModel @Inject constructor(
      * only contend for that lock. One `revision` bump per photo keeps the grid filling in as they
      * land rather than appearing all at once at the end.
      */
-    fun addPhotos(uris: List<Uri>, album: String, pose: String = "") = viewModelScope.launch {
-        uris.forEach { photoRepo.add(it, album = album, pose = pose) }
+    fun addPhotos(
+        uris: List<Uri>,
+        album: String,
+        pose: String = "",
+        muscles: List<String> = emptyList()
+    ) = viewModelScope.launch {
+        uris.forEach { photoRepo.add(it, album = album, pose = pose, muscles = muscles) }
     }
 
     fun setAlbum(photo: ProgressPhoto, album: String) = viewModelScope.launch { photoRepo.setAlbum(photo, album) }
     fun setNote(photo: ProgressPhoto, note: String) = viewModelScope.launch { photoRepo.setNote(photo, note) }
     fun setTitle(photo: ProgressPhoto, title: String) = viewModelScope.launch { photoRepo.setTitle(photo, title) }
     fun setPose(photo: ProgressPhoto, pose: String) = viewModelScope.launch { photoRepo.setPose(photo, pose) }
+    fun setMuscles(photo: ProgressPhoto, muscles: List<String>) = viewModelScope.launch { photoRepo.setMuscles(photo, muscles) }
+    fun setTags(photo: ProgressPhoto, tags: List<String>) = viewModelScope.launch { photoRepo.setTags(photo, tags) }
     fun setWeight(photo: ProgressPhoto, weightLb: Double?) = viewModelScope.launch { photoRepo.setWeight(photo, weightLb) }
     fun setTakenAt(photo: ProgressPhoto, takenAtMs: Long) = viewModelScope.launch { photoRepo.setTakenAt(photo, takenAtMs) }
     fun deletePhoto(photo: ProgressPhoto) = viewModelScope.launch { photoRepo.delete(photo) }

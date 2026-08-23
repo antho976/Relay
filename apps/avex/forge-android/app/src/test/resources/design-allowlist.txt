@@ -123,18 +123,10 @@
 1 alpha ui/overview/components/OverviewTiles.kt 0.82
 1 alpha ui/profile/BodyMeasurementsScreen.kt 0.30
 1 alpha ui/profile/BodyMeasurementsScreen.kt 0.55
-1 alpha ui/profile/GalleryOverview.kt 0.4
-1 alpha ui/profile/GalleryOverview.kt 0.5
-1 alpha ui/profile/GalleryOverview.kt 0.55
-1 alpha ui/profile/GalleryOverview.kt 0.75
-1 alpha ui/profile/GalleryOverview.kt 0.92
 1 alpha ui/profile/GallerySameWeight.kt 0.92
 1 alpha ui/profile/MirrorTestCompare.kt 0.55
 2 alpha ui/profile/MirrorTestCompare.kt 0.85
 1 alpha ui/profile/MirrorTestCompare.kt 0.95
-1 alpha ui/profile/MirrorTestComponents.kt 0.28
-1 alpha ui/profile/MirrorTestComponents.kt 0.85
-1 alpha ui/profile/MirrorTestComponents.kt 0.92
 1 alpha ui/profile/MirrorTestViewer.kt 0.85
 1 alpha ui/profile/MirrorTestViewer.kt 0.94
 1 alpha ui/profile/ProfileExtras.kt 0.4
@@ -182,7 +174,6 @@
 1 bang service/WeeklyRecapWorker.kt ! in string
 1 bang ui/gym/freestyle/ExerciseBrowserScreen.kt ! in string
 1 bang ui/gym/train/DayScreen.kt ! in string
-1 bang ui/profile/MirrorTestComponents.kt ! in string
 3 divider ui/cardio/components/CardioLogComponents.kt Divider(
 1 divider ui/cardio/components/CardioWeekStatsPage.kt Divider(
 1 divider ui/common/Editorial.kt Divider(
@@ -233,7 +224,6 @@
 1 em-dash ui/gym/train/components/SetRow.kt em dash in string
 1 em-dash ui/gym/train/components/SwapPickerSheet.kt em dash in string
 1 em-dash ui/gym/train/components/WarmupGate.kt em dash in string
-1 em-dash ui/profile/MirrorTestViewer.kt em dash in string
 1 em-dash ui/theme/ColorExt.kt em dash in string
 2 em-dash ui/trophies/TrophiesComponents.kt em dash in string
 4 em-dash wear/glance/WearComplications.kt em dash in string
@@ -281,17 +271,13 @@
 3 font-size ui/gym/train/components/WarmupGate.kt fontSize=
 1 font-size ui/nav/ForgeBottomBar.kt fontSize=
 1 font-size ui/overview/HistoryComponents.kt fontSize=
-2 font-size ui/overview/OverviewScreen.kt fontSize=
 4 font-size ui/overview/SummarySheet.kt fontSize=
 5 font-size ui/overview/components/DayEditComponents.kt fontSize=
 1 font-size ui/overview/components/NavTile.kt fontSize=
 12 font-size ui/overview/components/OverviewComponents.kt fontSize=
 10 font-size ui/overview/components/OverviewTiles.kt fontSize=
 2 font-size ui/profile/BodyMeasurementsScreen.kt fontSize=
-5 font-size ui/profile/GalleryOverview.kt fontSize=
 2 font-size ui/profile/GallerySameWeight.kt fontSize=
-3 font-size ui/profile/MirrorTestComponents.kt fontSize=
-3 font-size ui/profile/MirrorTestViewer.kt fontSize=
 2 font-size ui/profile/ProfileBody.kt fontSize=
 2 font-size ui/profile/ProfileExtras.kt fontSize=
 4 font-size ui/profile/ProfileHeader.kt fontSize=
@@ -306,12 +292,10 @@
 1 hype domain/coach/SessionOpinion.kt "moves the needle"
 2 hype program/ExerciseLibrary.kt "insane"
 1 hype program/Trophies.kt "Beast"
-1 hype ui/onboarding/OnboardingScreen.kt "Let's go"
 1 literal-duration ui/common/AvexWordmark.kt literal duration
 1 literal-duration ui/common/ForgeShimmer.kt literal duration
 1 literal-duration ui/common/LaunchScenes.kt literal duration
 2 literal-duration ui/gym/train/components/RestTimerBubble.kt literal duration
-1 literal-duration ui/overview/OverviewScreen.kt literal duration
 16 literal-duration ui/profile/TrophyIconMotion.kt literal duration
 1 max-lines ui/common/Editorial.kt maxLines=1
 1 max-lines ui/goals/GoalsComponents.kt maxLines=1
@@ -322,10 +306,11 @@
 3 max-lines ui/gym/train/DaySessionContent.kt maxLines=1
 1 max-lines ui/gym/train/components/DifficultyRater.kt maxLines=1
 1 max-lines ui/gym/train/components/SetRow.kt maxLines=1
-2 max-lines ui/onboarding/OnboardingGymSteps.kt maxLines=1
 2 max-lines ui/overview/components/OverviewComponents.kt maxLines=1
-1 max-lines ui/profile/MirrorTestComponents.kt maxLines=1
-1 max-lines ui/profile/MirrorTestControls.kt maxLines=1
+# The gallery search placeholder. It names the axes the query matches (title, muscle,
+# tag, pose, date), and at that length it wrapped to two lines on device, doubling the
+# field's height. A placeholder is chrome, not user content, and §14 lets chrome clamp.
+1 max-lines ui/profile/GalleryFilterBar.kt maxLines=1
 1 max-lines ui/profile/ProfileBody.kt maxLines=1
 3 max-lines ui/profile/ProfileHeader.kt maxLines=1
 1 max-lines ui/profile/ProfileYearHeatmap.kt maxLines=1
@@ -347,7 +332,7 @@
 1 screen-name-title ui/gym/train/DaySessionContent.kt title={Text(
 1 screen-name-title ui/gym/train/components/DislikeSwapPromptDialog.kt title={Text(
 2 screen-name-title ui/gym/train/components/TrainingHelpers.kt title={Text(
-2 screen-name-title ui/onboarding/OnboardingScreen.kt title={Text(
+1 screen-name-title ui/onboarding/OnboardingScreen.kt title={Text(
 1 screen-name-title ui/profile/MirrorTestComponents.kt title={Text(
 1 screen-name-title ui/programbuilder/ProgramBuilderDayDetail.kt title={Text(
 2 screen-name-title ui/programbuilder/ProgramBuilderScreen.kt title={Text(

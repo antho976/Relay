@@ -817,6 +817,14 @@ fun SectionAnchor(
     modifier: Modifier = Modifier,
     action: String? = null,
     actionLabel: String = "",
+    /**
+     * A passive right-hand reading, for a section whose meta is a number rather than a link
+     * ("3 / 4 target"). It exists so such a section still gets THIS anchor: Home used to hand-roll
+     * a sans `titleMedium` header purely because it needed a figure on the right, and the page
+     * ended up with two section-header treatments a few hundred dp apart. Ignored when [action] is
+     * set — a section head carries one thing on its right, not two.
+     */
+    meta: String? = null,
     onAction: (() -> Unit)? = null
 ) {
     Row(
@@ -830,7 +838,14 @@ fun SectionAnchor(
             color = muted,
             modifier = Modifier.semantics { heading() }
         )
-        if (action != null && onAction != null) CardLink(action, actionLabel, onBg, onAction)
+        when {
+            action != null && onAction != null -> CardLink(action, actionLabel, onBg, onAction)
+            meta != null -> Text(
+                meta,
+                style = MaterialTheme.typography.labelMedium,
+                color = muted
+            )
+        }
     }
 }
 
@@ -841,13 +856,20 @@ fun SectionAnchor(
  */
 @Composable
 fun CardLink(text: String, label: String, onBg: Color, onClick: () -> Unit) {
-    Text(
-        "$text →",
-        style = MaterialTheme.typography.labelMedium,
-        color = onBg,
-        maxLines = 1,
-        modifier = Modifier
+    Box(
+        // §14: touch comes from padding, not from the glyph. "view all" is the most-tapped control
+        // on Home and it was ~24dp tall.
+        Modifier
             .clickableLabeled(label, onClick = onClick)
-            .padding(vertical = 4.dp)
-    )
+            .heightIn(min = 48.dp)
+            .padding(vertical = 4.dp),
+        contentAlignment = Alignment.CenterEnd
+    ) {
+        Text(
+            "$text →",
+            style = MaterialTheme.typography.labelMedium,
+            color = onBg,
+            maxLines = 1
+        )
+    }
 }
