@@ -56,17 +56,23 @@ private fun recommendedRepsOf(reps: String): Int? {
 }
 
 /** One italic "Suggested next → …" cue line, with an optional parenthesised reason. Shared by the
- *  weighted suggestion and the bodyweight rep-progression cue so the two can't drift in styling (CO5). */
+ *  weighted suggestion and the bodyweight rep-progression cue so the two can't drift in styling (CO5).
+ *  Accent, not muted: it is the screen's only piece of coaching and the only line asking you to
+ *  change what you were going to do, so it has to out-rank the target line above it. */
 @Composable
 private fun SuggestionLine(label: String, reason: String?, muted: Color) {
     Spacer(Modifier.height(2.dp))
     val line = buildAnnotatedString {
         withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
+            // The recommendation carries the accent; its justification stays muted behind it, so the
+            // eye lands on the number to lift rather than on a full sentence of accent (§5).
             append(label)
-            if (!reason.isNullOrBlank()) append(" ($reason)")
+            if (!reason.isNullOrBlank()) {
+                withStyle(SpanStyle(color = muted)) { append(" ($reason)") }
+            }
         }
     }
-    Text(line, style = MaterialTheme.typography.bodySmall, color = muted.copy(alpha = 0.75f))
+    Text(line, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -76,6 +82,9 @@ fun ExerciseCard(
     state: ExerciseUiState,
     isNow: Boolean = false,
     totalExercises: Int = 0,
+    /** One flag per exercise in the day, true once it's done or skipped — drives [SessionRail].
+     *  Empty hides the rail. */
+    sessionDone: List<Boolean> = emptyList(),
     restTimerState: RestTimerState? = null,
     sessionStartedAtMs: Long? = null,
     onToggle: () -> Unit,
@@ -165,6 +174,13 @@ fun ExerciseCard(
                         color = muted,
                         fontSize = 9.sp
                     )
+                    if (sessionDone.isNotEmpty()) {
+                        // 6 above, 12 below: the rail belongs to the counter (one unit, tight), and
+                        // §7 wants real air before a role change — here a 52sp serif hero.
+                        Spacer(Modifier.height(6.dp))
+                        SessionRail(done = sessionDone, currentIndex = exerciseIndex)
+                        Spacer(Modifier.height(8.dp))
+                    }
                     Spacer(Modifier.height(4.dp))
                 }
 
@@ -266,19 +282,36 @@ fun ExerciseCard(
                 }
 
                 // ── Set table ─────────────────────────────────────────────────
-                // Table header (5 cols: SET | WEIGHT | REPS | RPE | Δ LAST)
+                val stacked = SetTable.stacked()
+                // Table header (5 cols: SET | WEIGHT | REPS | RPE | Δ LAST). Above the stacking
+                // threshold the rows below are two lines carrying their own inline labels, so the
+                // trailing three headers would label nothing — only SET and the weight column
+                // still head a column (§14, see SetTable).
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("SET", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, modifier = Modifier.width(36.dp))
+                    // The gutter is 36dp because a two-digit set number fits it at any scale, but
+                    // the word "SET" does not once it is 18sp — so when stacked the header cell
+                    // grows to its text and pushes the weight label along instead of printing
+                    // "SETPLATES".
+                    Text(
+                        "SET",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = muted,
+                        fontSize = 9.sp,
+                        modifier = if (stacked) Modifier.padding(end = 10.dp)
+                        else Modifier.width(SetTable.SET_COL_W)
+                    )
                     Text(
                         when { isBodyweight -> "BODYWEIGHT"; isPlates -> "PLATES"; else -> "WEIGHT · LB" },
                         style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, modifier = Modifier.weight(1f)
                     )
-                    Text(if (isTimed) "HOLD" else "REPS", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, modifier = Modifier.width(48.dp))
-                    Text("RPE", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, modifier = Modifier.width(44.dp), textAlign = TextAlign.Center)
-                    Text("LAST", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, modifier = Modifier.width(72.dp), textAlign = TextAlign.End)
+                    if (!stacked) {
+                        Text(if (isTimed) "HOLD" else "REPS", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, modifier = Modifier.width(SetTable.REPS_COL_W))
+                        Text("RPE", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, modifier = Modifier.width(SetTable.RPE_COL_W), textAlign = TextAlign.Center)
+                        Text("LAST", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, modifier = Modifier.width(SetTable.DELTA_COL_W), textAlign = TextAlign.End)
+                    }
                 }
                 HorizontalDivider(color = outline.copy(alpha = 0.3f), modifier = Modifier.padding(top = 4.dp))
 
