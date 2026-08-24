@@ -60,6 +60,7 @@ import com.forge.app.program.ExerciseDef
 import com.forge.app.program.ExerciseLibrary
 import com.forge.app.program.MuscleGroup
 import com.forge.app.ui.common.EditorialHeader
+import com.forge.app.ui.common.ForgeOutlineCapsule
 import com.forge.app.ui.common.ForgePrimaryCapsule
 import com.forge.app.ui.common.InlineEmptyHint
 import com.forge.app.ui.common.bounceClick
@@ -88,6 +89,28 @@ fun browseLibrary(
     }
 }
 
+/** Prefix marking a user-created move. Distinct from the program editor's `custom_…` ids (a
+ *  different table) and from the importer's `ext-…`, so the three never alias each other. */
+private const val CUSTOM_PREFIX = "custom-"
+
+/** True when this logged-exercise id is a move the user created rather than a library one. */
+fun isCustomExerciseId(id: String): Boolean = id.startsWith(CUSTOM_PREFIX)
+
+/**
+ * A stable id for a user-created move, keyed on its name — so creating "Sled Push" again next week
+ * lands on the same id and its sets group with the earlier ones in history/PRs/stats. Mirrors the
+ * importer's synthetic-id slugging for the same reason.
+ */
+fun customExerciseId(name: String): String {
+    val slug = name.trim().lowercase()
+        .map { if (it.isLetterOrDigit()) it else '-' }
+        .joinToString("")
+        .replace(Regex("-+"), "-")
+        .trim('-')
+        .take(40)
+    return CUSTOM_PREFIX + slug.ifBlank { "exercise" }
+}
+
 /**
  * The freestyle exercise browser (GYMAP-27): a full-screen List/browser that replaces the old search
  * dialog. Anatomy muscle-filter row → search → most-performed → a grid of anatomy-thumbnail tiles you
@@ -98,6 +121,8 @@ fun ExerciseBrowserScreen(
     exclude: Set<String>,
     onClose: () -> Unit,
     onConfirm: (Set<String>) -> Unit,
+    /** Create a move the library doesn't have (name, target muscle) and add it to the log. */
+    onCreateCustom: (String, MuscleGroup) -> Unit,
     viewModel: ExerciseBrowserViewModel = hiltViewModel()
 ) {
     val favorites by viewModel.favorites.collectAsStateWithLifecycle()
@@ -229,15 +254,97 @@ fun ExerciseBrowserScreen(
                 }
                 if (results.isEmpty()) {
                     item(span = full) {
-                        InlineEmptyHint(
-                            if (favoritesOnly) "No favorites yet. Tap a star to bookmark a move."
-                            else "No exercises match.",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        // A search that finds nothing is the moment to offer a custom move — the
+                        // library will never cover every gym, and the log shouldn't dead-end here.
+                        if (query.isNotBlank() && customExerciseId(query.trim()) in exclude) {
+                            // They already created this one and it's sitting in the log — say so
+                            // rather than offering a "Create" that would silently do nothing.
+                            InlineEmptyHint(
+                                "\u201C${query.trim()}\u201D is already in your log.",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        } else if (query.isNotBlank()) {
+                            CreateCustomCard(
+                                name = query.trim(),
+                                // Seed from the muscle filter if one is on — usually the right guess.
+                                initialMuscle = muscle ?: MuscleGroup.entries.first(),
+                                onCreate = { m -> onCreateCustom(query.trim(), m) }
+                            )
+                        } else {
+                            InlineEmptyHint(
+                                if (favoritesOnly) "No favorites yet. Tap a star to bookmark a move."
+                                else "No exercises match.",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
             }
         }
+    }
+}
+
+/**
+ * The dead-end rescue: when a search matches nothing, offer to create the typed name as a custom
+ * move so the workout can still be logged. Target muscle is a one-tap row (seeded from the active
+ * muscle filter) — it only drives the tile figure and the meta line, so a wrong guess costs nothing.
+ */
+@Composable
+private fun CreateCustomCard(name: String, initialMuscle: MuscleGroup, onCreate: (MuscleGroup) -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    var picked by remember(initialMuscle) { mutableStateOf(initialMuscle) }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(cs.surfaceVariant)
+            .padding(16.dp)
+    ) {
+        Text(
+            "No exercises match \u201C$name\u201D",
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = cs.onSurface
+        )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "Do you want to create it as a custom exercise? You can log it just like any other move.",
+            style = MaterialTheme.typography.bodySmall,
+            color = cs.onSurfaceVariant
+        )
+        Spacer(Modifier.height(14.dp))
+        Text(
+            "TARGET MUSCLE",
+            style = MaterialTheme.typography.labelSmall,
+            color = cs.onSurfaceVariant,
+            letterSpacing = 1.sp
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(
+            Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            MuscleGroup.entries.forEach { m ->
+                val sel = m == picked
+                Text(
+                    m.displayName,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (sel) cs.primary else cs.onSurfaceVariant,
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(50))
+                        .background(if (sel) cs.primaryContainer else Color.Transparent)
+                        .then(if (sel) Modifier.border(1.dp, cs.primary, RoundedCornerShape(50)) else Modifier)
+                        .clickableLabeled("${m.displayName} target", role = Role.RadioButton) { picked = m }
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                )
+            }
+        }
+        Spacer(Modifier.height(14.dp))
+        ForgeOutlineCapsule(
+            "Create \u201C$name\u201D",
+            onClick = { onCreate(picked) },
+            modifier = Modifier.fillMaxWidth()
+        )
     }
 }
 
