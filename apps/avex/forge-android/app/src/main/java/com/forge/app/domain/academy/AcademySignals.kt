@@ -18,7 +18,7 @@ internal object AcademySignals {
         id = "signals.stress_hrv",
         track = LessonTrack.SIGNALS,
         title = "What HRV tells you, and what it doesn't",
-        summary = "A trend against your own baseline is useful. A single night is mostly noise.",
+        summary = "Your own trend is worth reading. A single night is mostly noise.",
         unlock = LessonUnlock(
             label = "Connect a watch that records overnight HRV",
             detail = "About two weeks of nights before a trend is worth reading.",
@@ -26,19 +26,20 @@ internal object AcademySignals {
         ),
         blocks = listOf(
             Paragraph(
-                "Heart-rate variability is the variation in time between your heartbeats. Higher " +
-                    "generally means your nervous system is in a recovered state; lower means it is " +
-                    "still dealing with something, which might be training, illness, alcohol, poor " +
-                    "sleep or a stressful week."
+                "Heart-rate variability is how much the gap between your heartbeats changes. " +
+                    "Higher usually means your body is in a recovered state. Lower means it is " +
+                    "still dealing with something: hard training, illness, alcohol, bad sleep, or " +
+                    "a stressful week."
             ),
             Paragraph(
-                "It is genuinely noisy night to night, and the absolute number means little across " +
-                    "people. What is useful is YOUR trend against YOUR own recent normal."
+                "It jumps around a lot night to night, and your number next to someone else's " +
+                    "tells you nothing. The only useful reading is YOUR trend against YOUR own " +
+                    "recent normal."
             ),
             Bullets(
                 listOf(
-                    "The coach compares the last night or two against your prior fortnight",
-                    "A meaningful drop shaves a point off readiness, nothing more",
+                    "The coach compares the last night or two against your last two weeks",
+                    "A real drop takes a point off readiness, and nothing more",
                     "It never overrides what you said in your check-in",
                     "With no watch syncing it, nothing about your coaching changes"
                 )
@@ -48,7 +49,7 @@ internal object AcademySignals {
                 label = "Your trend",
                 fallback = "connect a watch that reports HRV and your trend appears here"
             ),
-            Callout("Treat it as one quiet input among several, not a verdict on your day.")
+            Callout("It is one quiet input among several, not a verdict on your day.")
         )
     )
 

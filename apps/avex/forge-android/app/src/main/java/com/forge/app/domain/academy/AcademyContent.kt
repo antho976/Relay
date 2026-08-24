@@ -6,6 +6,8 @@ package com.forge.app.domain.academy
  * actually does.
  *
  * A lesson is 1–3 minutes. If it needs more than that, the coach concept behind it is too big.
+ * Plain language is part of the contract: short sentences, everyday words, no term used before it
+ * is defined.
  */
 internal object AcademyContent {
 
@@ -14,7 +16,7 @@ internal object AcademyContent {
         id = "coach.readiness_built_from",
         track = LessonTrack.COACH,
         title = "What your score is built from",
-        summary = "Six readings, each one yours rather than a population average.",
+        summary = "Six readings, each one measured against your own normal rather than an average.",
         unlock = LessonUnlock(
             label = "Tap your readiness score",
             detail = "It sits on the Coach page once a score exists.",
@@ -23,28 +25,29 @@ internal object AcademyContent {
         blocks = listOf(
             LessonBlock.Paragraph(
                 "Readiness is not a mystery number. It is a short list of readings, each worth a " +
-                    "point or two, added up and capped so it can only ever nudge today's targets."
+                    "point or two, added up. The total is capped, so it can only ever nudge today's " +
+                    "targets."
             ),
             LessonBlock.Bullets(
                 listOf(
                     "Your morning check-in: sleep, soreness, stress and drive",
                     "Last night's measured sleep, when a watch reports it",
-                    "Resting heart rate against YOUR baseline, never an absolute number",
+                    "Your resting heart rate against YOUR baseline, never an absolute number",
                     "How your last session felt, in your own words",
-                    "Recent training and cardio load, which competes for the same recovery",
+                    "Recent training and cardio, which draw on the same recovery",
                     "Anything you flagged: illness, injury, time away"
                 )
             ),
             LessonBlock.Paragraph(
-                "Subjective answers are weighted seriously here, because in the research they hold " +
-                    "up at least as well as the gadgets. You usually know before your watch does."
+                "Your own answers count for a lot here. In the research they hold up at least as " +
+                    "well as the hardware does. You usually know before your watch does."
             ),
             LessonBlock.Example(
                 key = "readiness_parts",
                 label = "Today",
                 fallback = "your first readings will show here once a few sessions are logged"
             ),
-            LessonBlock.Callout("Bounded on purpose: readiness shapes the session, it never cancels it.")
+            LessonBlock.Callout("Capped on purpose. Readiness shapes the session, it never cancels it.")
         )
     )
 
@@ -53,7 +56,7 @@ internal object AcademyContent {
         id = "coach.why_goals_fight",
         track = LessonTrack.COACH,
         title = "Why some goals fight each other",
-        summary = "Physiology has budgets. Two goals drawing on the same one get sequenced, not blended.",
+        summary = "Two goals paid for out of the same recovery get put in an order rather than blended together.",
         unlock = LessonUnlock(
             label = "When two of your goals compete",
             detail = "Set more than one, and the coach flags it when they draw on the same recovery.",
@@ -61,24 +64,24 @@ internal object AcademyContent {
         ),
         blocks = listOf(
             LessonBlock.Paragraph(
-                "Some goals are genuinely compatible. A bench target, a consistency habit and an " +
-                    "easy cardio base can all run at once, because they draw on different budgets."
+                "Some goals sit together fine. A bench target, a consistency habit and an easy " +
+                    "cardio base can all run at once, because none of them is paying for the others."
             ),
             LessonBlock.Paragraph(
-                "Others do not. Losing weight means eating less than you burn, and adding to a " +
-                    "maximum lift means recovering from heavy work. Both draw on the same energy and " +
-                    "recovery budget, so pursuing them at once usually means doing neither well."
+                "Others do not. Losing weight means eating less than you burn. Adding to your best " +
+                    "lift means recovering from heavy work. Both come out of the same energy and " +
+                    "recovery, so chasing them together usually means doing neither well."
             ),
             LessonBlock.Heading("What the coach does instead"),
             LessonBlock.Bullets(
                 listOf(
-                    "Flags the pair rather than quietly degrading both",
-                    "Proposes an order, usually the shorter or more time-sensitive goal first",
-                    "Keeps the other goal on a maintenance floor rather than dropping it",
-                    "Re-reads the strength goal generously while you are in a deficit"
+                    "Flags the pair, rather than quietly letting both go badly",
+                    "Suggests an order, usually the shorter or more urgent goal first",
+                    "Holds the other goal at a maintenance level instead of dropping it",
+                    "Judges the strength goal more generously while you are eating less"
                 )
             ),
-            LessonBlock.Callout("Sequencing is not giving up on one. It is refusing to half-do both.")
+            LessonBlock.Callout("Taking them in order is not giving one up. It is refusing to half-do both.")
         )
     )
 
@@ -90,7 +93,7 @@ internal object AcademyContent {
         id = "coach.strength_on_a_cut",
         track = LessonTrack.COACH,
         title = "Holding strength while cutting is winning",
-        summary = "In a deficit, a flat lift is a good outcome. That's why the coach stops calling it a plateau.",
+        summary = "While you're losing weight, a lift that stays flat is a good result. That's why the coach stops calling it a plateau.",
         unlock = LessonUnlock(
             label = "When a lift holds while you're losing weight",
             detail = "The coach explains why it refuses to call that a plateau.",
@@ -98,22 +101,22 @@ internal object AcademyContent {
         ),
         blocks = listOf(
             LessonBlock.Paragraph(
-                "When you're losing weight, the default outcome is losing strength with it. " +
-                    "You have less fuel to train on and less to recover with, so the honest " +
-                    "expectation for a lift in a deficit is that it slips."
+                "When you're losing weight, losing a bit of strength with it is the normal " +
+                    "outcome. You have less fuel to train on and less to recover with, so the " +
+                    "honest expectation is that your lifts slip."
             ),
             LessonBlock.Paragraph(
                 "So a lift that holds flat while your weight drops is not a stall. You kept the " +
-                    "muscle that lift depends on, and you're moving the same load at a lighter " +
-                    "bodyweight, which means you got relatively stronger."
+                    "muscle behind it, and you're moving the same weight with less of you doing " +
+                    "the moving. Pound for pound, you got stronger."
             ),
             LessonBlock.Heading("What the coach does about it"),
             LessonBlock.Bullets(
                 listOf(
-                    "Reads your weigh-ins for a trend, not a single morning number",
-                    "While that trend is down, it stops escalating flat lifts into resets and swaps",
-                    "It still speaks up if a lift actually declines, because holding is fine and sliding is not",
-                    "When the trend flattens or turns up, normal progression rules come straight back"
+                    "Reads your weigh-ins as a trend, not as one morning's number",
+                    "While that trend is down, it stops turning flat lifts into resets and swaps",
+                    "It still speaks up if a lift actually drops, because holding is fine and sliding is not",
+                    "When the trend flattens or turns up, the normal rules come straight back"
                 )
             ),
             LessonBlock.Example(
@@ -122,7 +125,7 @@ internal object AcademyContent {
                 fallback = "logging a few more weigh-ins will show your trend here"
             ),
             LessonBlock.Callout(
-                "In a deficit, judge a lift by what it holds, not by what it adds."
+                "While you're cutting, judge a lift by what it holds, not by what it adds."
             ),
             LessonBlock.Paragraph(
                 "The reverse is also true. If you're gaining weight and a lift stays flat for " +
