@@ -184,10 +184,21 @@ fun ExerciseCard(
                     Spacer(Modifier.height(4.dp))
                 }
 
-                // Exercise name (large serif) — tap to open the swap picker.
+                // Exercise name (serif hero) — tap to open the swap picker.
+                //
+                // The hero steps DOWN as the name gets longer. At a flat 52sp a three-word lift
+                // ("Incline Barbell Bench") wrapped to three lines and pushed the set table off the
+                // fold, so the name — the one thing you already know — cost the most screen. Short
+                // names keep the full 52sp; the scale below stays inside the serif display/headline
+                // ramp (§7), so a stepped-down title is still the same voice, just quieter.
+                val heroStyle = when {
+                    state.effectiveName.length <= 13 -> MaterialTheme.typography.displayLarge   // "Hack Squat"
+                    state.effectiveName.length <= 20 -> MaterialTheme.typography.headlineLarge  // "Smith Bench Press"
+                    else -> MaterialTheme.typography.headlineMedium                             // "Incline Barbell Bench"
+                }
                 Text(
                     state.effectiveName,
-                    style = MaterialTheme.typography.displayLarge,
+                    style = heroStyle,
                     color = onBg,
                     textDecoration = if (state.skipped) TextDecoration.LineThrough else TextDecoration.None,
                     modifier = Modifier.clickable { onOpenSwapPicker() }
