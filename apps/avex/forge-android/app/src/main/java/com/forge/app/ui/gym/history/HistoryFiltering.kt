@@ -39,6 +39,39 @@ data class HistoryFilters(
 )
 
 /**
+ * One calendar day of history, and the group a History row sits inside.
+ *
+ * The list used to print the full date on every row, so a seven-session Monday rendered
+ * "AUG 24, 2026" seven times and the eye had to compare seven identical strings to learn there was
+ * only one day on screen. The date is a property of the DAY, so it is stated once, and the rows
+ * under it get their width back for what actually separates them.
+ */
+data class HistoryDay(
+    /** The date, already human ("TODAY", "SAT · AUG 22", "AUG 15, 2026") — never a machine stamp (§11). */
+    val label: String,
+    val items: List<HistoryItem>
+)
+
+/**
+ * What the list currently shows, for the reading under the title. Counts EVERY item on screen;
+ * volume is gym-only, so a cardio-only filter honestly reads zero and the caller drops the clause
+ * rather than printing "0 kg" (§12).
+ */
+data class HistorySummary(val sessions: Int, val volumeLb: Double)
+
+/** Group an already-filtered, newest-first list into its calendar days, order preserved. */
+internal fun groupByDay(items: List<HistoryItem>, label: (Long) -> String): List<HistoryDay> =
+    items.groupBy { label(it.dateMs) }
+        .map { (day, rows) -> HistoryDay(day, rows) }
+
+/** The reading for [items]: how many, and how much of it was lifted. */
+internal fun summarize(items: List<HistoryItem>): HistorySummary =
+    HistorySummary(
+        sessions = items.size,
+        volumeLb = items.filterIsInstance<HistoryItem.Workout>().sumOf { it.session.totalVolumeLb ?: 0.0 }
+    )
+
+/**
  * Pure: merge gym workouts + cardio, apply the [filters], and return them newest-first. Computed
  * once per data/filter emission in the ViewModel (NOT a recomposition-time getter), so the History
  * list reads a ready-made list. [exerciseNamesBySession] is the search index for exercise matches.

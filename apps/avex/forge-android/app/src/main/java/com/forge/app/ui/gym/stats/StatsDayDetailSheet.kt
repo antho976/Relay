@@ -77,15 +77,15 @@ internal fun StatsDayDetailSheet(
             } else {
                 detail.items.forEach { item ->
                     when (item) {
+                        // The rows carry no date of their own any more — the sheet's own day line
+                        // above already named the day, and it named it once.
                         is HistoryItem.Workout -> SessionRow(
                             session = item.session,
-                            onClick = { onOpenSession(item.session.id) },
-                            outline = cs.outline
+                            onClick = { onOpenSession(item.session.id) }
                         )
                         is HistoryItem.Cardio -> CardioHistoryRow(
                             entry = item.entry,
-                            onClick = { onOpenCardio(item.entry.id) },
-                            outline = cs.outline
+                            onClick = { onOpenCardio(item.entry.id) }
                         )
                     }
                 }

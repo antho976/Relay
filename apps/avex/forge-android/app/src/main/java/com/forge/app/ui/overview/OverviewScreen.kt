@@ -38,6 +38,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import com.forge.app.ui.settings.SettingsIcons
 import com.forge.app.ui.common.NotificationBell
 import com.forge.app.ui.nav.NavIcons
 import com.forge.app.ui.common.bounceCombinedClick
@@ -70,7 +71,6 @@ import com.forge.app.ui.goals.customPinKey
 import com.forge.app.ui.goals.goalGlyph
 import com.forge.app.ui.goals.liftGoalGlyph
 import com.forge.app.ui.goals.liftPinKey
-import com.forge.app.ui.settings.SettingsIcons
 import java.time.LocalDate
 
 /**

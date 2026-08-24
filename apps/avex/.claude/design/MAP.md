@@ -433,7 +433,24 @@ any activity, `buildYearActivity` in `ProfileRepository`), filmstrip.
 ### Routed — `Routes.kt`
 
 - `GYM_DAY` (`ui/gym/train`, **untouchable**)
-- `SESSION_HISTORY` (gym+cardio)
+- `SESSION_HISTORY` (gym+cardio. **Rebuilt 2026-08-24.** List archetype: tiny hero = "History" +
+  two `EditorialFigure`s (`Sessions` · `Volume`) that read the CURRENT filter, so tapping a pill is
+  answered by the figures moving rather than by a list you count; then search, then pills. The list
+  GROUPS BY DAY — one mono `labelLarge` date anchor per day (`historyDayLabel`: TODAY / YESTERDAY /
+  `SAT · AUG 22` inside the week / the date, year only when it is not this one), because the flat
+  list printed the full date on every row and a seven-session Monday said "AUG 24, 2026" seven times.
+  Per-row hairlines are GONE (§1: a line is a claim about data, and a row separator is not data) —
+  air and the anchors separate. Rows are the shared `HistoryRow` shape, one geometry for gym and
+  cardio so the rail, the indent and the figure column line up: leading glyph
+  (`SettingsIcons.Session` for a workout, the activity's own for cardio — a per-day-type glyph was
+  tried here and reverted, `SETTLED.md`) ·
+  name over a mono meta line (marker · sets · duration) over the user's own tags · ONE right-hand
+  figure. `formatVolume` already prints the unit, so the stacked "KG" under "149 kg" went (§4.3);
+  duration moved into the meta where a qualifier belongs. A PR is the only thing that earns a second
+  figure line — the exception is flagged, the 0-PR majority is not (§8). The `All` pill is now
+  always drawn: it used to appear only once a user had tagged a session, so everyone else could turn
+  a filter on with no drawn way off. `SessionRow`/`CardioHistoryRow` are shared with the Stats day
+  sheet, which supplies its own day line — hence rows carry no date of their own)
 - `SESSION_DETAIL` (one finished workout's breakdown; a page-end "Log again today" capsule (§8 ①)
   re-logs it verbatim as today's freestyle session — a full-fidelity data-layer copy incl. set
   type/RPE/holds, no editor, with an Undo — GYMAP-36. Lives here, NOT as a history-row button: a
