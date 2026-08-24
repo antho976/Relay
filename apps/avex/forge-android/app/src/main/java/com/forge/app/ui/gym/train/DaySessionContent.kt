@@ -44,7 +44,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -56,7 +55,7 @@ import com.forge.app.ui.gym.train.components.CollapsedRow
 import com.forge.app.ui.gym.train.components.ExerciseCard
 import com.forge.app.ui.gym.train.components.ExerciseChartSheet
 import com.forge.app.ui.gym.train.components.UpNextBubble
-import com.forge.app.ui.gym.train.components.WarmupGate
+import com.forge.app.ui.gym.train.components.WarmupFlow
 import com.forge.app.ui.gym.train.state.DayUiEvent
 import com.forge.app.ui.gym.train.state.DayUiState
 import com.forge.app.ui.theme.ForgeLastGreen
@@ -135,11 +134,12 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
     LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(vertical = 8.dp)) {
         if (!state.isWarmupComplete) {
             item(key = "warmup", contentType = "warmup") {
-                WarmupGate(
-                    warmupItems = state.customWarmupItems ?: state.dayPlan.warmup,
-                    checks = state.warmupChecks,
-                    onToggle = { idx -> onEvent(DayUiEvent.ToggleWarmupItem(idx)) },
-                    onSkip = { onEvent(DayUiEvent.SkipWarmup) },
+                WarmupFlow(
+                    protocol = state.warmupProtocol,
+                    checked = state.warmupChecked,
+                    weightUnit = weightUnit,
+                    onToggle = { id -> onEvent(DayUiEvent.ToggleWarmupStep(id)) },
+                    onStart = { onEvent(DayUiEvent.CompleteWarmup) },
                     onDisableToday = { onEvent(DayUiEvent.DisableWarmupToday) },
                     onDisableWeek = { onEvent(DayUiEvent.DisableWarmupWeek) }
                 )
@@ -250,6 +250,7 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
                                 state = ex.copy(isExpanded = true),
                                 isNow = exIsNow,
                                 totalExercises = state.exercises.size,
+                                sessionDone = state.exercises.map { it.isComplete },
                                 // The rest timer renders inside the card (right under the set log),
                                 // not far below it — passed off state.restTimer so it appears the
                                 // instant a set is logged (plan.id is unchanged → no re-animation).
@@ -432,12 +433,12 @@ internal fun SessionHero(state: DayUiState, onBack: () -> Unit, onFinish: () -> 
                 )
             }
             Spacer(Modifier.width(4.dp))
-            Box(modifier = Modifier.border(1.dp, outline.copy(alpha = 0.4f), RoundedCornerShape(50)).padding(horizontal = 10.dp, vertical = 4.dp)) {
+            Box(modifier = Modifier.border(1.dp, outline.copy(alpha = 0.35f), RoundedCornerShape(50)).padding(horizontal = 10.dp, vertical = 4.dp)) {
                 Text(datePillText, style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, maxLines = 1)
             }
             Spacer(Modifier.width(8.dp))
-            Box(modifier = Modifier.background(Color.White, RoundedCornerShape(50)).clickableLabeled("Finish session") { onFinish() }.padding(horizontal = 16.dp, vertical = 7.dp)) {
-                Text("FINISH", style = MaterialTheme.typography.labelSmall, color = Color.Black, maxLines = 1)
+            Box(modifier = Modifier.background(accent, RoundedCornerShape(50)).clickableLabeled("Finish session") { onFinish() }.padding(horizontal = 16.dp, vertical = 7.dp)) {
+                Text("FINISH", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onPrimary, maxLines = 1)
             }
         }
         // "Beat the ghost" running scoreboard — the duel vs last session, live as you log.

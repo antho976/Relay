@@ -11,19 +11,16 @@ import java.time.temporal.TemporalAdjusters
 
 internal fun DayViewModel.handleWarmupEvent(event: DayUiEvent) {
     when (event) {
-        is DayUiEvent.ToggleWarmupItem -> _state.update { current ->
-            // Size the checks list to the ACTUAL warmup item count (it defaults to 4). Otherwise a
-            // custom warmup with fewer than 4 items can never be completed, and one with more than
-            // 4 items auto-completes early once the first four are checked.
-            val itemCount = (current.customWarmupItems ?: current.dayPlan.warmup).size
-            val checks = MutableList(itemCount) { current.warmupChecks.getOrElse(it) { false } }
-            if (event.index in 0 until itemCount) checks[event.index] = !checks[event.index]
-            current.copy(
-                warmupChecks = checks,
-                isWarmupComplete = checks.isNotEmpty() && checks.all { it }
-            )
+        is DayUiEvent.ToggleWarmupStep -> _state.update { current ->
+            val next = current.warmupChecked.toMutableSet()
+            if (!next.add(event.id)) next.remove(event.id)
+            current.copy(warmupChecked = next)
         }
-        is DayUiEvent.SkipWarmup -> _state.update { it.copy(isWarmupComplete = true) }
+        // Starting and skipping were two buttons doing the same thing. There is one now, and the
+        // ticks are the user's own scratchpad: the app cannot know whether the arm circles happened,
+        // so it neither gates on them nor stores an outcome.
+        is DayUiEvent.CompleteWarmup, is DayUiEvent.SkipWarmup ->
+            _state.update { it.copy(isWarmupComplete = true) }
         is DayUiEvent.DisableWarmupToday -> viewModelScope.launch {
             val untilMs = LocalDate.now().plusDays(1)
                 .atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()

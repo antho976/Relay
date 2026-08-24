@@ -83,6 +83,9 @@ internal suspend fun DayViewModel.refreshExercises() {
     )
     val annotated = annotateNextExerciseDeltas(exercises)
     _state.update { it.copy(isLoading = false, exercises = annotated) }
+    // The warmup is derived from these exercises and their working loads, so it is rebuilt here
+    // rather than guessed at construction. No-ops once the user has stepped into it.
+    rebuildWarmupProtocol()
 }
 
 /**

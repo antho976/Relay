@@ -3,6 +3,11 @@
 package com.forge.app.ui.academy
 
 import androidx.annotation.DrawableRes
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -23,6 +28,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -43,6 +53,8 @@ import com.forge.app.domain.academy.AcademyRegistry
 import com.forge.app.domain.academy.ArticleRegistry
 import com.forge.app.domain.academy.readMinutes
 import com.forge.app.ui.common.bounceClick
+import com.forge.app.ui.theme.ForgeMotion
+import kotlinx.coroutines.delay
 
 /**
  * # The Academy gallery — plates and chapters (2026-08-20)
@@ -206,6 +218,17 @@ enum class PlateShape { LEAD, POSTER }
 
 private val LEAD_ASPECT = 3f / 2f
 private val POSTER_ASPECT = 3f / 4f
+
+/**
+ * The opening block's plate: wider and shorter than either gallery shape.
+ *
+ * A third shape needs a reason, and this is it — the block under the plate is a title, a deck, a
+ * meta line and a row of dots, roughly twice what a lead's caption carries, and at 3:2 all of that
+ * pushed the first chapter off the bottom of the screen. 2:1 gives back about a quarter of the
+ * plate's height, which is the difference between the page opening on a picture and the page
+ * opening on a pointer that happens to have one.
+ */
+private val POKE_ASPECT = 2f / 1f
 
 /** §7's photo rule: pictures clip to 16, never to a card radius. */
 private val PlateCorner = RoundedCornerShape(16.dp)
@@ -421,12 +444,174 @@ fun PosterRow(
 }
 
 /**
- * The page's opening pointer: the one piece to read next, set as type rather than as a picture.
+ * How long one poke holds the opening slot before the block turns to the next.
  *
- * It deliberately carries NO plate. The piece it names also appears in its own chapter below, with
- * its own cover, and printing the same photograph twice within a screen and a half is the "one card
- * rendered twice" bug the 2026-08-16 pass already hit. Words at the top, pictures underneath: the
- * two registers do different jobs and neither repeats the other.
+ * 7s is set from the block itself rather than from a house rotation speed: the kicker, a serif
+ * title, an italic deck and a mono meta line is about twenty words, and a turn that lands before
+ * the slowest reader finishes them is a page snatching its own content away. It is long enough
+ * that the movement reads as the page keeping itself current and short enough that someone who
+ * stops to look sees the second poke without doing anything.
+ */
+private const val POKE_ROTATE_MS = 7_000L
+
+/** How long one slide takes to dissolve into the next. See the spec in [StartHereRotator]. */
+private const val POKE_TURN_MS = 520
+
+/**
+ * The opening block, turning through every poke that is still unread.
+ *
+ * ## Why it rotates
+ *
+ * [AcademyViewModel.UiState.forYou] can hold several fired-and-unread moments at once, and until
+ * now the page named the newest and silently dropped the rest — from Antho: *"so we know which
+ * could we look and cycle between them"*. A shelf was never an option (`forYou`'s own doc: a queue
+ * of nine things is a backlog, and a backlog is the achievement feeling coming back in through the
+ * side door). One slot that turns is the shelf's opposite: the page still points at exactly one
+ * thing at a time, and nothing waiting is hidden.
+ *
+ * **Read pieces leave the cycle on their own.** `forYou` is *fired AND unread*, so opening a poke
+ * drops it from [pointers] on the next emission and it returns to its own chapter below, now in the
+ * read tone. Nothing here marks or forgets anything; the ledger already says it.
+ *
+ * The slide is tracked by ID, not by index. When the piece on screen is the one that was just read,
+ * every index after it shifts, and an index would have turned "you finished this" into "here is a
+ * different one, at random". By ID the block simply falls to the next poke still standing.
+ *
+ * ## A timer, and nothing to press
+ *
+ * There is no swipe: the Academy is a page of `HubScreen`'s pager, so a horizontal drag here
+ * belongs to the tabs, and an inner pager would eat it and strand the reader on one hub. There is
+ * no button either. The block has exactly one tap target — the piece it is showing — because a
+ * second control inside it would be the nested target §14 bans, and the row of dots that used to
+ * sit under it was chrome on a page that has none anywhere else.
+ *
+ * So the count in the kicker is a readout. What makes that honest is [turns], decided by the page
+ * and handed down here rather than worked out locally, because it has to govern two things at
+ * once:
+ *
+ *  - **true** — the slot turns on its own, and `buildSections` lifts EVERY poke out of its chapter.
+ *    The chapters below stay still while the block cycles, and nothing is printed twice.
+ *  - **false** — animations are off, or TalkBack is exploring, and a slot that changes under you is
+ *    the exact thing both of those are asking not to happen. Nothing turns; the block holds the
+ *    newest poke, and the page lifts only THAT one out of its chapter. The rest stay where they
+ *    were authored, each still carrying its accent dot, so every poke is reachable by scrolling
+ *    even though nothing here moves. Nothing pops in and out, because nothing is rotating.
+ *
+ * The counter reads "1/3" in that state, which is true: there are three, this is the first, and
+ * the other two are down the page.
+ */
+@Composable
+fun StartHereRotator(
+    pointers: List<Pointer>,
+    turns: Boolean,
+    onBg: Color,
+    muted: Color,
+    accent: Color,
+    modifier: Modifier = Modifier,
+    onOpen: (GalleryItem) -> Unit
+) {
+    if (pointers.isEmpty()) return
+
+    var shownId by rememberSaveable { mutableStateOf(pointers.first().item.id) }
+    // -1 (the piece was read and has left the cycle) falls to the top of what is left.
+    val at = pointers.indexOfFirst { it.item.id == shownId }.coerceAtLeast(0)
+    val current = pointers[at]
+
+    LaunchedEffect(pointers, at, turns) {
+        shownId = pointers[at].item.id   // resync after a poke left the cycle
+        if (!turns) return@LaunchedEffect
+        delay(POKE_ROTATE_MS)
+        shownId = pointers[(at + 1) % pointers.size].item.id
+    }
+
+    // ONE spec, used by all three halves of the turn — the fade in, the fade out, and the
+    // resize. That is what makes it a dissolve rather than a blink, and it is worth spelling
+    // out because the obvious version is wrong: enterTween and exitTween are different curves
+    // over different lengths, so the outgoing slide emptied out before the incoming one had
+    // filled in and the page showed through the gap for about a frame. Run both alphas off the
+    // same easing and they sum to 1 the whole way across, which is a true crossfade.
+    //
+    // [POKE_TURN_MS] is the other half of it. The house 240ms is tuned for content ARRIVING —
+    // a sheet, a tab — where fast is respectful. Nothing arrives here; the block is turning
+    // over on its own while the reader may not even be looking at it, and a swap that quick
+    // reads as a flicker in peripheral vision. Slow enough to be one movement, and the size
+    // rides the same curve so the chapters below settle with the picture instead of after it.
+    val turn = ForgeMotion.standardTween<Float>(POKE_TURN_MS)
+    AnimatedContent(
+        targetState = current,
+        modifier = modifier.fillMaxWidth(),
+        transitionSpec = {
+            (fadeIn(turn) togetherWith fadeOut(turn))
+                .using(
+                    SizeTransform(clip = false) { _, _ ->
+                        ForgeMotion.standardTween(POKE_TURN_MS)
+                    }
+                )
+        },
+        label = "academy_poke"
+    ) { slide ->
+        // Read off the SLIDE, not off `at`: mid-dissolve the outgoing copy is still on screen,
+        // and counting from the rotator's current index would relabel it with the incoming
+        // slide's position while it fades. -1 is the piece that was just read and has already
+        // left the cycle — it fades out under a bare kicker, which is the truth about it.
+        val slideAt = pointers.indexOfFirst { it.item.id == slide.item.id }
+        StartHereBlock(
+            kicker = slide.kicker,
+            item = slide.item,
+            chapter = slide.chapter,
+            numeral = slide.numeral,
+            // Suppressed at one, where "1/1" would be a counter counting nothing.
+            position = if (pointers.size > 1 && slideAt >= 0) {
+                "${slideAt + 1}/${pointers.size}"
+            } else {
+                null
+            },
+            onBg = onBg,
+            muted = muted,
+            accent = accent
+        ) { onOpen(slide.item) }
+    }
+}
+
+/**
+ * The page's opening pointer: the one piece to read next, with its picture.
+ *
+ * It used to carry no plate, on the grounds that the piece also appeared in its own chapter below
+ * and printing the same photograph twice within a screen and a half was the "one card rendered
+ * twice" bug the 2026-08-16 pass hit. That has not been true since `buildSections` started lifting
+ * the named pieces OUT of their chapters — the photograph appears once, here, and only returns
+ * below once it has been read. Antho asked for the picture back, and the reason to withhold it had
+ * already been removed.
+ *
+ * ## The count is in the kicker
+ *
+ * `FOR YOU · 2/3`, set in the same mono line as the label, and nothing else. The first cut hung a
+ * row of tappable dots under the meta line and Antho's read was that it *"doesn't fit in that spot
+ * at all"* — correct, and the reason is worth keeping: this page has no chrome anywhere. It is
+ * plates and type on the bare background, and a row of dots is a carousel control, an app-UI
+ * object with no relative on the page. The kicker line is already where the block says what it is,
+ * it is already mono and already separated by ` · `, and a position dropped into it is one more
+ * fact in a line of facts rather than a new kind of thing.
+ *
+ * It is a readout, not a control — see [StartHereRotator] for what happens when nothing is turning.
+ *
+ * ## Kicker, then plate, then caption
+ *
+ * The kicker sits ABOVE the picture and the title below it. The two lines are doing different
+ * jobs and the order says which: FOR YOU labels the *slot* — why this block is on the page at all,
+ * and which of the pokes you are looking at — while the title and deck are the caption of the
+ * photograph, the same relationship every piece further down the page has. Put the plate on top
+ * and the kicker slides down into the caption, where it reads as part of the piece rather than as
+ * the page talking. Antho, on the first cut: *"move the picture below the for you"*.
+ *
+ * ## Why it is not a LEAD plate
+ *
+ * [POKE_ASPECT] is 2:1, against the 3:2 a lead further down the page gets. A 3:2 here pushed the
+ * title, the deck, the meta line and the dots so far down that the first chapter header fell off
+ * the bottom of a phone — the block stopped being an opening pointer and became a cover. Wider and
+ * shorter keeps the photograph a real picture while leaving the words it introduces on screen
+ * beside it. It is the one plate on the page that is not one of the two gallery shapes, which is
+ * correct: it is the only slot that has to hold a whole caption AND a control under it.
  */
 @Composable
 fun StartHereBlock(
@@ -438,8 +623,11 @@ fun StartHereBlock(
     muted: Color,
     accent: Color,
     modifier: Modifier = Modifier,
+    /** "2/3" when the slot is turning through several pokes, null when it holds one piece. */
+    position: String? = null,
     onClick: () -> Unit
 ) {
+    val cover = AcademyCovers.forId(item.id)
     Column(modifier.fillMaxWidth().bounceClick { onClick() }) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             if (item.forYou) {
@@ -447,12 +635,19 @@ fun StartHereBlock(
                 Spacer(Modifier.width(7.dp))
             }
             Text(
-                kicker.uppercase(),
+                listOfNotNull(kicker, position).joinToString(" · ").uppercase(),
                 style = MaterialTheme.typography.labelLarge,
                 color = muted
             )
         }
-        Spacer(Modifier.height(10.dp))
+        if (cover != null) {
+            Spacer(Modifier.height(12.dp))
+            Plate(cover, POKE_ASPECT)
+        }
+        // The title hangs the same distance under the plate that every other caption on the page
+        // does, so the picture reads as belonging to the words below it rather than to the kicker
+        // above. With no plate the block closes back up to the old label-to-title gap.
+        Spacer(Modifier.height(if (cover != null) CAPTION_GAP + 4.dp else 10.dp))
         Text(item.title, style = MaterialTheme.typography.headlineMedium, color = onBg)
         Spacer(Modifier.height(8.dp))
         Text(

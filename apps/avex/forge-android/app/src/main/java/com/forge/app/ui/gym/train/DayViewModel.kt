@@ -135,9 +135,11 @@ class DayViewModel @Inject constructor(
             val dbWarmup = warmupRepo.customWarmupForDay(dayKey)
             if (dbWarmup != null) {
                 _state.update { it.copy(customWarmupItems = dbWarmup) }
+                rebuildWarmupProtocol()
             } else {
                 settingsRepo.getCustomWarmup(dayKey).collect { custom ->
                     _state.update { it.copy(customWarmupItems = custom) }
+                    rebuildWarmupProtocol()
                 }
             }
         }
@@ -227,7 +229,7 @@ class DayViewModel @Inject constructor(
             is DayUiEvent.DismissDislikePrompt, is DayUiEvent.SuppressDislikePromptThisSession,
             is DayUiEvent.NeverAskDislikePrompt -> handleSwapEvent(event)
 
-            is DayUiEvent.ToggleWarmupItem, is DayUiEvent.SkipWarmup,
+            is DayUiEvent.CompleteWarmup, is DayUiEvent.ToggleWarmupStep, is DayUiEvent.SkipWarmup,
             is DayUiEvent.DisableWarmupToday, is DayUiEvent.DisableWarmupWeek -> handleWarmupEvent(event)
 
             is DayUiEvent.RestTimerOpen, is DayUiEvent.RestTimerClose,

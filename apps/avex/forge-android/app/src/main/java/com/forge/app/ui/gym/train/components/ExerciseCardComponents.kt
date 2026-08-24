@@ -2,6 +2,7 @@ package com.forge.app.ui.gym.train.components
 
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateIntAsState
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -20,12 +21,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import android.content.Intent
 import android.net.Uri
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Description
-import androidx.compose.material.icons.outlined.SkipNext
-import androidx.compose.material.icons.outlined.SwapHoriz
-import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -57,6 +55,8 @@ import com.forge.app.data.db.types.EffortRating
 import com.forge.app.domain.timer.RestTimerState
 import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.domain.units.unitLabel
+import com.forge.app.ui.theme.ForgeLastGreen
+import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.theme.LocalForgeSettings
 import com.forge.app.program.ExerciseUnit
 import com.forge.app.ui.gym.stats.components.Sparkline
@@ -138,7 +138,7 @@ internal fun CollapsedRow(
                 )
             }
         }
-        // Trailing actions — eye (YouTube demo) + swap, both 18dp icons so they line up.
+        // Trailing actions — demo (YouTube) + swap, both 18dp icons so they line up.
         Row(
             modifier = Modifier.padding(start = 8.dp, top = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -151,16 +151,59 @@ internal fun CollapsedRow(
                     .clickable { runCatching { context.startActivity(youTubeSearchIntent(state.effectiveName, machine)) } },
                 contentAlignment = Alignment.Center
             ) {
-                Icon(Icons.Outlined.Visibility, contentDescription = "Watch a demo",
+                Icon(TrainIcons.Video, contentDescription = "Watch a demo",
                     tint = muted.copy(alpha = 0.55f), modifier = Modifier.size(18.dp))
             }
             Box(
                 modifier = Modifier.size(44.dp).clickable { onOpenSwapPicker() },
                 contentAlignment = Alignment.Center
             ) {
-                Icon(Icons.Outlined.SwapHoriz, contentDescription = "Swap",
+                Icon(TrainIcons.Swap, contentDescription = "Swap",
                     tint = muted.copy(alpha = 0.55f), modifier = Modifier.size(18.dp))
             }
+        }
+    }
+}
+
+/**
+ * Session progress under the exercise counter: one cell per exercise of the day, accent for the
+ * ones handled (done, skipped, or the one you are on), hollow for the ones ahead.
+ *
+ * §2② — a filled / hollow rail for a set of items, some present — and the same geometry as
+ * onboarding's `StepRail`. Written locally rather than promoted to `ui/common`: this is the
+ * pattern's SECOND screen, and §8 promotes on the third.
+ *
+ * It is also where this screen's accent starts. A session used to spend its accent only on the
+ * commit button at the very bottom, which left the colour reading as a sticker rather than as part
+ * of a system; anchoring the same accent at the top of the card gives it a span to belong to.
+ */
+@Composable
+internal fun SessionRail(done: List<Boolean>, currentIndex: Int, modifier: Modifier = Modifier) {
+    if (done.size < 2) return
+    val accent = MaterialTheme.colorScheme.primary
+    val track = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)
+    Row(
+        modifier
+            .fillMaxWidth()
+            .semantics {
+                contentDescription =
+                    "Exercise ${currentIndex + 1} of ${done.size}, ${done.count { it }} done"
+            },
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        done.forEachIndexed { i, isDone ->
+            val color by animateColorAsState(
+                if (isDone || i == currentIndex) accent else track,
+                ForgeMotion.standardTween(),
+                label = "session_rail_cell"
+            )
+            Box(
+                Modifier
+                    .weight(1f)
+                    .height(3.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(color)
+            )
         }
     }
 }
@@ -205,18 +248,18 @@ internal fun LastSessionStrip(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .border(0.5.dp, outline.copy(alpha = 0.4f), RoundedCornerShape(6.dp))
+            .border(1.dp, outline.copy(alpha = 0.35f), RoundedCornerShape(8.dp))
             .clickable { onClick() }
             .padding(horizontal = 12.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(elapsedStr, style = MaterialTheme.typography.labelMedium, color = onBg, fontSize = 11.sp)
+            Text(elapsedStr, style = MaterialTheme.typography.labelMedium, color = onBg)
             Text("·", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.5f))
-            Text("$animatedVolume ${unitLabel(weightUnit)}", style = MaterialTheme.typography.labelMedium, color = onBg, fontSize = 11.sp)
+            Text("$animatedVolume ${unitLabel(weightUnit)}", style = MaterialTheme.typography.labelMedium, color = onBg)
             Text("·", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.5f))
-            Text("$currentSets/$targetSets", style = MaterialTheme.typography.labelMedium, color = muted, fontSize = 11.sp)
+            Text("$currentSets/$targetSets", style = MaterialTheme.typography.labelMedium, color = muted)
         }
         Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
             // Only show the comparison line once you've logged a set this session —
@@ -225,7 +268,7 @@ internal fun LastSessionStrip(
                 DualSparkline(
                     current = currentVolumes,
                     previous = priorVolumes,
-                    currentColor = onBg,
+                    currentColor = MaterialTheme.colorScheme.primary,
                     previousColor = muted.copy(alpha = 0.75f),
                     modifier = Modifier.width(60.dp).height(16.dp)
                 )
@@ -296,7 +339,7 @@ internal fun ActionChip(icon: ImageVector, label: String, onClick: () -> Unit) {
 @Composable
 internal fun RestBetweenSets(seconds: Int) {
     if (seconds <= 0) return
-    val readyColor = Color(0xFF5CB85C)
+    val readyColor = ForgeLastGreen
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val m = seconds / 60; val s = seconds % 60
     val label = if (m > 0) "$m:${"%02d".format(s)}" else "0:${"%02d".format(s)}"
@@ -315,7 +358,7 @@ internal fun RestBetweenSets(seconds: Int) {
 @Composable
 internal fun InlineRestTimer(timer: RestTimerState, onTap: () -> Unit, onSkip: (() -> Unit)? = null) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val readyColor = Color(0xFF5CB85C)
+    val readyColor = ForgeLastGreen
     val isReady = timer.isFinished
     val timeColor = if (isReady) readyColor else muted
 
@@ -381,12 +424,12 @@ internal fun ExerciseCardFooter(
     val context = LocalContext.current
     var showNote by remember(state.effectiveName) { mutableStateOf(!state.note.isNullOrBlank()) }
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceAround) {
-        ActionChip(icon = Icons.Outlined.Description, label = "NOTE") { showNote = !showNote }
-        ActionChip(icon = Icons.Outlined.Visibility, label = "VIDEO") {
+        ActionChip(icon = TrainIcons.Note, label = "NOTE") { showNote = !showNote }
+        ActionChip(icon = TrainIcons.Video, label = "VIDEO") {
             runCatching { context.startActivity(youTubeSearchIntent(state.effectiveName, state.effectiveUnit == ExerciseUnit.PLATES)) }
         }
-        ActionChip(icon = Icons.Outlined.SwapHoriz, label = "SWAP") { onOpenSwapPicker() }
-        ActionChip(icon = Icons.Outlined.SkipNext, label = if (state.skipped) "UN-SKIP" else "SKIP") { onToggleSkipped() }
+        ActionChip(icon = TrainIcons.Swap, label = "SWAP") { onOpenSwapPicker() }
+        ActionChip(icon = TrainIcons.Skip, label = if (state.skipped) "UN-SKIP" else "SKIP") { onToggleSkipped() }
     }
 
     if (showNote) {

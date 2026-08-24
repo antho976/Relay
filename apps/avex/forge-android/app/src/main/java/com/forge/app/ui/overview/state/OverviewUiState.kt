@@ -71,8 +71,14 @@ data class OverviewUiState(
     /** The cold-start lesson the directive is carrying, while the coach is still learning you. */
     val coldStartLesson: com.forge.app.domain.academy.Lesson? = null,
     val workoutsThisWeek: Int = 0,
-    /** The user's chosen days/week — the "of N" denominator, NOT a hardcoded 6 (multi-user). */
-    val weeklyWorkoutTarget: Int = 4,
+    /**
+     * Training days in the generated program — the "of N" denominator, NOT a hardcoded 6
+     * (multi-user). Named for DAYS because that is what it denominates: [weekDaysTrained], the set
+     * the week strip draws. While it was called `weeklyWorkoutTarget`, Home read it as a target for
+     * [workoutsThisWeek] and printed "4 / 7 target" above a strip with one cell lit — three
+     * sessions on one Monday are four workouts and one day (2026-08-24).
+     */
+    val weeklyTrainingDays: Int = 4,
     val volumeThisWeekLb: Double = 0.0,
     val cardioMinutesThisWeek: Int = 0,
     val cardioWeeklyTargetMin: Int = 0,

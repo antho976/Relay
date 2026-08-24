@@ -567,10 +567,21 @@ fun OverviewScreen(
                 label = "This week",
                 muted = muted,
                 onBg = onBg,
-                meta = if (!freestyleMode && !programEmpty) {
-                    "${state.workoutsThisWeek} / ${state.weeklyWorkoutTarget} target"
-                } else {
-                    "${state.workoutsThisWeek} workouts"
+                // Days, not sessions. The strip below draws DAYS trained and the denominator is
+                // the program's training-day count, but this line counted SESSIONS — so three
+                // sessions logged on one Monday rendered "4 / 7 target" directly above a strip with
+                // a single cell lit: the section's header disagreeing with the section's own mark,
+                // in the same breath (Antho, 2026-08-24). Nothing in the page said which of the two
+                // numbers to believe, which is why it read as wrong without reading as broken.
+                // The session count is not restated anywhere on Home — a finished tally is settled,
+                // and Home carries what is at stake (`design/SETTLED.md`, 2026-08-16).
+                meta = run {
+                    val days = state.weekDaysTrained.size
+                    when {
+                        !freestyleMode && !programEmpty -> "$days / ${state.weeklyTrainingDays} days"
+                        days == 1 -> "1 day"
+                        else -> "$days days"
+                    }
                 }
             )
             Spacer(Modifier.height(12.dp))
@@ -581,24 +592,6 @@ fun OverviewScreen(
                 reading = "This week, ${state.weekDaysTrained.size} of 7 days trained",
                 modifier = Modifier.fillMaxWidth()
             )
-            // The workout count is NOT repeated here. The anchor's right meta states it and the
-            // strip above draws it, so this line was saying the same number a third time inside
-            // one section (§4.3, one home). It carries only what neither of those says now, and
-            // renders nothing at all rather than an empty line when there is nothing left.
-            val weeklyFacts = buildList {
-                if (state.volumeThisWeekLb > 0) {
-                    add(formatVolume(state.volumeThisWeekLb, LocalForgeSettings.current.weightUnit))
-                }
-                if (state.cardioMinutesThisWeek > 0) add("${state.cardioMinutesThisWeek} cardio min")
-            }
-            if (weeklyFacts.isNotEmpty()) {
-                Spacer(Modifier.height(12.dp))
-                Text(
-                    weeklyFacts.joinToString(" · "),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
 
             movement?.let { currentMovement ->
                 Spacer(Modifier.height(16.dp))

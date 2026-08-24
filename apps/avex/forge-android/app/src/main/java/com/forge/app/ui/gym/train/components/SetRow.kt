@@ -74,10 +74,6 @@ import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.theme.ForgePrGold
 import com.forge.app.ui.theme.LocalForgeSettings
 
-private val SET_COL_W = 36.dp
-private val REPS_COL_W = 48.dp
-private val RPE_COL_W = 44.dp
-private val DELTA_COL_W = 72.dp
 
 /** Weight deltas at or below this (lb) are treated as "matched" — absorbs kg/plate rounding noise so a
  *  sub-pound float difference doesn't render a phantom signed delta + trend arrow (#11). */
@@ -87,7 +83,7 @@ private const val WEIGHT_DELTA_EPS_LB = 0.5
 internal fun formatPlateCount(plates: Double): String =
     if (plates % 1.0 == 0.0) plates.toInt().toString() else "%.1f".format(plates)
 
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
 fun SetRow(
     set: LoggedSet,
@@ -177,7 +173,7 @@ fun SetRow(
             modifier = modifier.fillMaxWidth().padding(vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Box(modifier = Modifier.width(SET_COL_W)) {
+            Box(modifier = Modifier.width(SetTable.SET_COL_W)) {
                 Text("%02d".format(setIndex), style = MaterialTheme.typography.labelSmall, color = muted)
             }
             OutlinedTextField(
@@ -192,7 +188,7 @@ fun SetRow(
             OutlinedTextField(
                 value = editReps,
                 onValueChange = { if (it.all { c -> c.isDigit() }) editReps = it },
-                modifier = Modifier.width(REPS_COL_W + 24.dp),
+                modifier = Modifier.width(SetTable.REPS_COL_W + 24.dp),
                 label = { Text("Reps") },
                 singleLine = true,
                 textStyle = MaterialTheme.typography.bodyMedium,
@@ -264,7 +260,62 @@ fun SetRow(
                 SwipeDeleteBackground(active = dismissState.targetValue == SwipeToDismissBoxValue.EndToStart)
             }
         ) {
-        Row(
+        // Above the stacking threshold the trailing three cells drop to their own line rather than
+        // squeezing five columns of 2x text into a phone's width (§14, see SetTable).
+        val stacked = SetTable.stacked()
+        val repsCell: @Composable (Modifier) -> Unit = { m ->
+        // Reps col — a timed hold reads its held duration (0:45) here instead of a rep count.
+        Box(modifier = m, contentAlignment = Alignment.CenterStart) {
+            Text(
+                if (isTimed) formatHoldLabel(set.durationSeconds ?: 0) else "${set.reps}",
+                style = MaterialTheme.typography.headlineSmall,
+                color = onBg,
+                maxLines = 1
+            )
+        }
+        }
+        val rpeCell: @Composable (Modifier) -> Unit = { m ->
+        // RPE col — tappable framed box
+        Box(modifier = m, contentAlignment = Alignment.Center) {
+            if (onSetRpe != null) {
+                Box(
+                    modifier = Modifier
+                        .border(0.5.dp, outline.copy(alpha = 0.4f), RoundedCornerShape(3.dp))
+                        .combinedClickable(onClick = { showRpePicker = !showRpePicker }, onLongClick = { onSetRpe(null) })
+                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                ) {
+                    Text(
+                        set.rpe?.let { rpeLabel(it) } ?: "—",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (set.rpe != null) onBg else muted.copy(alpha = 0.4f),
+                        fontSize = 11.sp
+                    )
+                }
+            } else if (set.rpe != null) {
+                Text(rpeLabel(set.rpe), style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 11.sp)
+            }
+        }
+        }
+        val deltaCell: @Composable (Modifier) -> Unit = { m ->
+        // Delta col — trend icon + value, green when you beat last session. Suppressed for timed
+        // holds (no weight×reps delta; a hold's progress is its longer time, shown as the ghost).
+        Box(modifier = m, contentAlignment = Alignment.CenterEnd) {
+            if (!isTimed) deltaLabel?.let {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                    if (deltaPositive || deltaNegative) {
+                        Icon(
+                            if (deltaPositive) Icons.Filled.TrendingUp else Icons.Filled.TrendingDown,
+                            contentDescription = null,
+                            tint = deltaColor,
+                            modifier = Modifier.size(13.dp)
+                        )
+                    }
+                    Text(it, style = MaterialTheme.typography.labelSmall, color = deltaColor, fontSize = 9.sp)
+                }
+            }
+        }
+        }
+        Column(
             modifier = tapMod
                 .semantics(mergeDescendants = true) {
                     contentDescription = rowDescription
@@ -279,11 +330,11 @@ fun SetRow(
                     scaleX = s
                     scaleY = s
                 }
-                .padding(vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .padding(vertical = 6.dp)
         ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
             // Set number col (gold ★ inline next to number for set 1)
-            Box(modifier = Modifier.width(SET_COL_W), contentAlignment = Alignment.TopStart) {
+            Box(modifier = Modifier.width(SetTable.SET_COL_W), contentAlignment = Alignment.TopStart) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text("%02d".format(setIndex), style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
                     // Gold ★ marks the actual record-setting set (the session's best PR), not a fixed row.
@@ -341,54 +392,29 @@ fun SetRow(
                 }
             }
 
-            // Reps col — a timed hold reads its held duration (0:45) here instead of a rep count.
-            Box(modifier = Modifier.width(REPS_COL_W), contentAlignment = Alignment.CenterStart) {
-                Text(
-                    if (isTimed) formatHoldLabel(set.durationSeconds ?: 0) else "${set.reps}",
-                    style = MaterialTheme.typography.headlineSmall,
-                    color = onBg,
-                    maxLines = 1
-                )
+            if (!stacked) {
+                repsCell(Modifier.width(SetTable.REPS_COL_W))
+                rpeCell(Modifier.width(SetTable.RPE_COL_W))
+                deltaCell(Modifier.width(SetTable.DELTA_COL_W))
             }
-
-            // RPE col — tappable framed box
-            Box(modifier = Modifier.width(RPE_COL_W), contentAlignment = Alignment.Center) {
-                if (onSetRpe != null) {
-                    Box(
-                        modifier = Modifier
-                            .border(0.5.dp, outline.copy(alpha = 0.4f), RoundedCornerShape(3.dp))
-                            .combinedClickable(onClick = { showRpePicker = !showRpePicker }, onLongClick = { onSetRpe(null) })
-                            .padding(horizontal = 8.dp, vertical = 3.dp)
-                    ) {
-                        Text(
-                            set.rpe?.let { rpeLabel(it) } ?: "—",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (set.rpe != null) onBg else muted.copy(alpha = 0.4f),
-                            fontSize = 11.sp
-                        )
-                    }
-                } else if (set.rpe != null) {
-                    Text(rpeLabel(set.rpe), style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 11.sp)
-                }
+        }
+        if (stacked) {
+            // The stacked second line. Indented past the set-number gutter so it reads as a
+            // continuation of the row above rather than a sibling row, and each value carries the
+            // label its column header used to give it. FlowRow so a long delta wraps instead of
+            // pushing the RPE target off the screen.
+            FlowRow(
+                modifier = Modifier.padding(start = SetTable.SET_COL_W, top = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                StackedCellLabel(if (isTimed) "HOLD" else "REPS", muted)
+                repsCell(Modifier)
+                StackedCellLabel("RPE", muted)
+                rpeCell(Modifier)
+                deltaCell(Modifier)
             }
-
-            // Delta col — trend icon + value, green when you beat last session. Suppressed for timed
-            // holds (no weight×reps delta; a hold's progress is its longer time, shown as the ghost).
-            Box(modifier = Modifier.width(DELTA_COL_W), contentAlignment = Alignment.CenterEnd) {
-                if (!isTimed) deltaLabel?.let {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                        if (deltaPositive || deltaNegative) {
-                            Icon(
-                                if (deltaPositive) Icons.Filled.TrendingUp else Icons.Filled.TrendingDown,
-                                contentDescription = null,
-                                tint = deltaColor,
-                                modifier = Modifier.size(13.dp)
-                            )
-                        }
-                        Text(it, style = MaterialTheme.typography.labelSmall, color = deltaColor, fontSize = 9.sp)
-                    }
-                }
-            }
+        }
         }
         }
 
@@ -433,6 +459,14 @@ private fun SwipeDeleteBackground(active: Boolean) {
  * reps-in-reserve equivalent so you can think in either. Replaces the old modal dialog; slides
  * in under the set row.
  */
+/** The label a stacked cell carries now that the table header no longer heads its column. Plain
+ *  `labelSmall` — the column headers drop to 9sp to stay out of the way of a dense table, but this
+ *  one IS the label for its value, and there is no table left to stay out of the way of. */
+@Composable
+private fun StackedCellLabel(text: String, muted: Color) {
+    Text(text, style = MaterialTheme.typography.labelSmall, color = muted)
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun InlineEffortPicker(

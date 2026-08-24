@@ -217,7 +217,12 @@ violation.
 ### Home — `ui/overview`
 
 TODAY hero + Start session, week strip, goals, recent. Feel reference; defects (`SETTLED.md`) fixed
-when touched. THIS WEEK's stat row closes with a **MOVEMENT line** (W6): today's watch steps as one
+when touched. THIS WEEK reads `anchor (n / N days) → week strip → MOVEMENT line`. The anchor counts
+DAYS, the unit the strip draws — it counted sessions until 2026-08-24 and disagreed with its own
+mark (`design/FAILURES.md`, *Two units, one section*). No weekly volume or session figure follows
+the strip: that was tried as `WeekReadout` on 2026-08-24, rendered on device and cut on sight, and
+`SETTLED.md` records why it is not to be attempted a fourth way. It closes with a
+**MOVEMENT line** (W6): today's watch steps as one
 mono reading + a thin today-vs-typical bar (14-day median; bar = the mark, honest at zero), rendered
 only when the steps grant is held (GYMAP-64 rule: connected → honest zero, else hidden) and
 refreshed on resume. Deliberately NOT the removed recovery-snapshot card (2026-07-04) — one line +
@@ -750,3 +755,38 @@ excluded from every weight×reps stat (volume/e1RM/PR) — history/detail read i
 
 The system splash is background-only (`splash_blank`, no icon) so the wordmark is the brand beat;
 honors reduce-motion (short still hold, no fade).
+
+### Warm-up — the pre-session gate and its engine
+
+Rebuilt 2026-08-23. Two halves.
+
+**The engine** (`domain/warmup/`: `WarmupEngine`, `WarmupProtocol`, `MobilityCatalog`) derives the
+warmup from the session rather than from a fixed per-day string list. It emits three ordered phases
+(RAMP protocol, Jeffreys 2006): a pulse **raise** sized to whether the day is lower-body, dynamic
+**mobilise** drills claimed only by the muscle groups actually trained and capped at three, then the
+specific **ramp** for the lift about to start. Ramp depth scales with the working set's intensity
+(`intensityOf` inverts the same Epley relation `E1rm` uses, so warmup and plateau calls agree), reps
+fall as load climbs, the final jump into the working set is the smallest, and loads round to what
+the user can literally load (5 lb dumbbell grid, whole plates, metric steps for a kg user). A muscle
+already worked this session collapses to at most one feeler set; an unknown working load degrades to
+an unloaded rehearsal set rather than inventing a number. Only the FIRST exercise is ramped in the
+gate, because the effect decays in 15 to 20 minutes; later lifts get the same ladder on demand from
+`WarmupSuggesterDialog`, which now shares the engine instead of a fixed 40/60/80%.
+
+**The surface** (`ui/gym/train/components/WarmupFlow.kt`) is ONE screen with ONE button. Prep rows,
+then the ramp rows under a header naming the lift, then an accent-filled `Start lifting` matching
+Home's start CTA (same act, same coat). No stepper and no progress rail: a step-through flow turned a
+two-minute task into a seven-tap marathon.
+
+Rows tick off, but the ticks are the user's own place-keeper, not a checklist the app grades. Nothing
+is gated, nothing is stored, and the button works from the first frame. This is a deliberate,
+owner-approved reading of §4.10: the rows each carry a distinct reading (a duration, a rep count, a
+real weight), and the user asked to be able to see what they had already done.
+
+Two things are conditional. There is no time estimate: it is a number with no decision attached
+(§2①), and it read as a chore. The ramp section is dropped entirely unless it has real loads, because
+without a working weight the engine can only offer an unloaded rehearsal set, and "Bodyweight x 3"
+under a dumbbell lift's name reads as a bug rather than as advice.
+
+`Skip warm-up` is gone as a button: it and `Start lifting` did exactly the same thing. Not-today and
+not-this-week survive as the persistent opt-outs, as does Home's hold-to-skip long press.
