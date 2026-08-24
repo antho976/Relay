@@ -94,15 +94,13 @@
 1 alpha ui/gym/train/components/SessionSummarySheet.kt 0.4
 2 alpha ui/gym/train/components/SetInputRow.kt 0.05
 1 alpha ui/gym/train/components/SetInputRow.kt 0.3
-4 alpha ui/gym/train/components/SetInputRow.kt 0.5
+3 alpha ui/gym/train/components/SetInputRow.kt 0.5
 1 alpha ui/gym/train/components/SetInputRow.kt 0.75
 3 alpha ui/gym/train/components/SetRow.kt 0.4
 1 alpha ui/gym/train/components/SetRow.kt 0.45
 1 alpha ui/gym/train/components/SetRow.kt 0.5
 1 alpha ui/gym/train/components/SetRow.kt 0.8
 1 alpha ui/gym/train/components/SetRow.kt 0.85
-1 alpha ui/gym/train/components/SwapPickerSheet.kt 0.2
-1 alpha ui/gym/train/components/SwapPickerSheet.kt 0.3
 2 alpha ui/gym/train/components/WarmupGate.kt 0.5
 1 alpha ui/overview/OverviewScreen.kt 0.3
 1 alpha ui/overview/SummarySheet.kt 0.2
@@ -186,8 +184,6 @@
 1 divider ui/gym/train/components/RestTimerBubble.kt Divider(
 1 divider ui/gym/train/components/SessionSummaryComponents.kt Divider(
 1 divider ui/gym/train/components/SessionSummarySheet.kt Divider(
-1 divider ui/gym/train/components/SetInputRow.kt Divider(
-2 divider ui/gym/train/components/SwapPickerSheet.kt Divider(
 1 divider ui/gym/train/components/TrainingHelpers.kt Divider(
 1 divider ui/gym/train/components/WarmupGate.kt Divider(
 1 divider ui/nav/ForgeBottomBar.kt Divider(
@@ -221,7 +217,6 @@
 1 em-dash ui/gym/train/components/ExerciseChartSheet.kt em dash in string
 1 em-dash ui/gym/train/components/SetInputRow.kt em dash in string
 1 em-dash ui/gym/train/components/SetRow.kt em dash in string
-1 em-dash ui/gym/train/components/SwapPickerSheet.kt em dash in string
 1 em-dash ui/gym/train/components/WarmupGate.kt em dash in string
 1 em-dash ui/theme/ColorExt.kt em dash in string
 2 em-dash ui/trophies/TrophiesComponents.kt em dash in string
