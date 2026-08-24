@@ -229,52 +229,96 @@ typical compare, a reading no other screen has).
 one page: hero figures + muscle map → lens pills Strength/Volume/Effort/Days → drill rows → heatmap
 → records → Banister.
 
-### Cardio — `ui/cardio`
+### Cardio — `ui/cardio` — **rebuilt 2026-08-23**
 
-THIS WEEK figures hero (days · min · dist · streak) + a quiet `TODAY · N steps` line under the
-figures when a watch is connected (GYMAP-64: today's Health Connect step total, loaded eagerly into
-state on init/resume, honest zero when connected, hidden otherwise) + Mon–Sun accent bars + goal
-meter (falling back to the **WHO 150-min/week** reference meter when no personal minutes target is
-set — GYMAP-42, the same `MinutesMeter` bar with a `WHO 150 MIN` caption instead of `GOAL`, on the
-hero and the week overlay's current week; `WHO_WEEKLY_ACTIVITY_MIN`), GOALS trim (cardio-metric
-custom goals, shared `GoalProgressLine`, hidden at zero), **RECORDS** block (GYMAP-34: per-activity
-all-time bests — the longest distance as the accent headline + the fastest pace as meta, one row per
-type the user has distance sessions for, most-logged first, a row → its longest session;
-`cardioActivityRecords`, hidden entirely until a distance session lands since the hero carries the
-zero state), week-pager stats overlay (its current-week page alone carries a **PACE TREND** chart —
-GYMAP-35: a per-activity pace-over-time `LineChart` + a type `SegmentPill` selector, only types with
-≥2 paced sessions; pace is lower-is-faster so a downward line is improvement, said plainly in a dry
-caption; `cardioPaceSeries`, cross-week so it rides the current page alone and never repeats per
-week, §4.3), a **FROM YOUR WATCH** section above the recent rows (W5: watch-recorded HC sessions
-with no matching entry, ≤3 rows, whole-row tap = import via a prefilled log sheet, header `hide`
-dismisses the batch for good; hidden when empty), recent rows (header carries a small filled `+`
-circle = log) → session detail (stat rows carry best-pace/longest compare meta + previous-session
-read; a **HEART RATE** section (W5) draws the matched watch session's HR line — open chart, avg/max
-as the header reading — plus a "Watch measured …" line with an explicit `use watch stats →` adopt,
-never a silent overwrite). The activity picker lists the built-in `CardioType`s + the user's
-**custom activities** (GYMAP-37: name + a glyph from the shared cardio set), with an inline "+ add
-custom activity" row → `CustomActivityDialog` (a modal reused by the settings manager); custom defs
-live as a DataStore JSON list (NOT the schema-locked DB — a logged session stores only the `custom_`
-code), resolved to name/glyph at every cardio surface via `LocalCardioTypes` (a `CompositionLocal`
-fed once at the nav root, like `LocalGoHome`); a deleted def falls back to "Other". Calories inherit
-"Other"'s baseline (unknown code → `CardioType.OTHER`; kcal unsurfaced anyway, `SETTLED.md`).
-Managed in Settings → **Cardio activities** (rename/glyph/delete). The log sheet keeps the common
-case short — a date + **start-time** capsule pair at the head (GYMAP-33: the time capsule sets the
-time-of-day of the entry's existing `date` timestamp via a Material3 `TimePicker` — no separate
-start-time column, `combineTime` mirrors `combineDay` — and hides on rest days), then activity +
-duration/distance up top, everything else (effort · HR zone · HIIT intervals · **conditions** · the
-**per-type** fields) tucked behind a "More" expander; per-type = one field surfaced only for the
-activities it fits (GYMAP-38: incline % on treadmill/elliptical, laps on swim, elevation gain on
-run/walk/hike/cycle — the same idea as intervals showing for HIIT alone), gated on
-`CardioActivity.optionalFields` so the form never carries an irrelevant field and a value typed then
-switched away from is never saved; elevation rides the distance-unit toggle (ft with miles, m with
-km) via `ElevationFormatter`. **Conditions** (GYMAP-39): the weather a session was done in
-(hot/cold/rain/wind), a multi-select `PillChip` `FlowRow` in "More" (any non-rest activity, never
-gated by type), stored comma-joined on `cardio_entry.conditions` (DB v28) via
-`CardioCondition.encode`/`decode`, shown read-only as a ` · `-joined `StatRow` in session detail + a
-words column in the cardio CSV; descriptive only, never touches a total/pace. A **new** entry seeds
-its activity to the **last-logged** one (GYMAP-40: `last_cardio_type` in DataStore, written only on
-a new non-rest save), not always Run.
+**Hero + one action + two lenses.** The page was an overview whose richest content sat behind a tap
+on the hero (a full-screen week pager) that redrew the hero's own marks one screen away. The pager is
+gone (`SETTLED.md`); week browsing is a ledger, and the page is:
+
+1. **Hero** (`CardioComponents.CardioHero`) — `THIS WEEK · MMM D – MMM D` eyebrow with a `weeks →`
+   action, the week's figures (days · minutes · distance, streak once ≥2), the Mon–Sun accent bars,
+   and the minutes `MeterBar` (a personal target, else the **WHO 150-min/week** reference —
+   GYMAP-42/`WHO_WEEKLY_ACTIVITY_MIN`). The hero is no longer ONE page-wide tap target; it carries
+   two named ways out instead — `weeks →` to the weeks chart, and **the Mon–Sun strip, which opens
+   THIS week's page** (`Routes.cardioWeeks(weekStartMs)`; Antho, 2026-08-23). The strip is a single
+   tap target: seven day-wide ones would each fall under the 48dp minimum and all lead to the same
+   place anyway (§2③). Everything else in the hero stays passive.
+2. **`Log cardio`** — `ForgeHeroAction`, the same accent-filled button Home's Start session is
+   (2026-08-23: a hub tab's primary action reads the same on every tab; Cardio's was the one white
+   capsule in an accent app). Above the fold. Replaced a small white `+` disc that rode the sessions
+   header and was none of §2③'s three levels.
+3. **Lens pills** (`CardioLens`) — `Week` · `Progress`.
+   - **WEEK**: FROM YOUR WATCH (W5 import suggestions, leads because it is the only section still
+     asking for a decision) → SESSIONS (this week's rows; at zero, one line naming your last session
+     and opening it) → `view all N →` (History) → STEPS (the hourly `StepsByHourSection` mark for
+     today). No BY ACTIVITY split (Antho, 2026-08-23) — at the counts a real week has it was one
+     full-width bar restating the minutes figure and the session row beside it.
+   - **PROGRESS**: PACE (`CardioPaceTrendSection`, moved off the old overlay since it was always
+     cross-week data) → RECORDS → GOALS. All three absent → one line naming the unlock, not three
+     empty shells. Deliberately NO weekly-load chart: that is the weeks page's mark, and a visual
+     that only repeats another screen's answer is cut, not copied (§4.3).
+
+**THE WEEKS** (`CardioWeeksScreen` + `CardioWeeksViewModel`, route `Routes.CARDIO_WEEKS`) — the page
+`weeks →` opens, and the one home for comparing weeks. Its route takes an optional `week` argument:
+the cardio strip passes this week's Monday to land straight on that week, and backing out of a week
+arrived at that way leaves the route entirely rather than stranding you on a chart you never asked
+for (`CardioWeeksViewModel.arrivedOnWeek`). **One bar per week, taller the more you did**
+(`CardioWeekBars`): `WEEKS_PER_PAGE` = 8 on screen, `←` / `→` paging a window back through history to
+the first logged week (capped at 104), and **each bar is a tap target opening that week**. The whole
+column is the target, not the drawn bar, so a quiet week is still reachable. The week in progress is a
+dashed slot (a Monday must not read as a collapse), an untrained week keeps a ghost stub, and the
+target/WHO reference is drawn across each track as a dashed rule — per column rather than as an
+overlay, so nothing has to stay in sync with the rows above it. Bar labels are the day of the month
+(eight "18 Aug"s do not fit the gutter); the nav row above carries the full range, and TalkBack gets
+the full date. The tiny hero's two figures read the VISIBLE WINDOW, so paging says something.
+
+The series is `cardioWeekSeries` (`domain/cardio/`): Mon–Sun weeks oldest→newest **with gaps kept at
+zero**, because a chart that drops untrained weeks reads as an unbroken run. `cardioWeeksOnTarget`
+and `cardioLoadDeltaPct` (a week against the median of the completed weeks, null under three of them)
+ride alongside it.
+
+A bar opens **`CardioWeekDetail`** (Detail archetype): serif week name, per-day bars, figures, the
+meter (every week, not just the current one), BY ACTIVITY, and that week's sessions as
+`SessionTimelineRow`s — no dividers between them.
+
+**Session detail** (`CardioSessionDetailSheet`) — was ten `label — value` rows behind hairlines, which
+drew no mark at all: with no watch connected the page was pure text. Now: eyebrow + serif activity
+name → three figures (minutes · distance · pace, the pace figure absent rather than dashed when there
+is no distance) → the descriptive tags (effort · HR zone · intervals · the one per-type field ·
+weather) as ONE mono line, since §2② says a lone categorical state is a caption → **AGAINST YOUR
+{ACTIVITY}**, the `CardioSessionCompare` data drawn as ranked bars (distance as a share of your
+longest; pace inverted so lower-is-faster fills toward your best) with the previous outing as its
+closing line → HEART RATE (W5, matched watch HR + the explicit `use watch stats →` adopt, never a
+silent overwrite) → ROUTE → STEPS → note → Edit/Delete as two outlined capsules at the END, the
+destructive one tinted `error`.
+
+**Log form** (`CardioLogSheet`) — unchanged in shape (date + start-time capsules, activity dropdown,
+duration/distance side by side, everything else behind "More", save actions at the end). Duration now
+carries **quick-picks** (20 · 30 · 45 · 60) because §13 wants hot-path numbers on steppers, not a
+keyboard; the field stays typeable and accepts H:MM (GYMAP-41). The number fields size to their
+content rather than to a fixed 52/64dp box, which clipped at large font scales.
+
+The activity picker lists the built-in `CardioType`s + the user's **custom activities** (GYMAP-37:
+name + a glyph from the shared cardio set), with an inline "+ add custom activity" row →
+`CustomActivityDialog` (a modal reused by the settings manager); custom defs live as a DataStore JSON
+list (NOT the schema-locked DB — a logged session stores only the `custom_` code), resolved to
+name/glyph at every cardio surface via `LocalCardioTypes` (a `CompositionLocal` fed once at the nav
+root, like `LocalGoHome`); a deleted def falls back to "Other". Calories inherit "Other"'s baseline
+(unknown code → `CardioType.OTHER`; kcal unsurfaced anyway, `SETTLED.md`). Managed in Settings →
+**Cardio activities** (rename/glyph/delete). Per-type fields (GYMAP-38: incline on treadmill/
+elliptical, laps on swim, elevation gain on run/walk/hike/cycle) are gated on
+`CardioActivity.optionalFields`, so a value typed then switched away from is never saved; elevation
+rides the distance-unit toggle via `ElevationFormatter`. **Conditions** (GYMAP-39) are the weather a
+session was done in, a multi-select `PillChip` `FlowRow` in "More", stored comma-joined on
+`cardio_entry.conditions` (DB v28) via `CardioCondition.encode`/`decode`, shown in session detail's
+tag line and as a words column in the cardio CSV; descriptive only, never touching a total or pace. A
+**new** entry seeds its activity to the **last-logged** one (GYMAP-40: `last_cardio_type` in
+DataStore, written only on a new non-rest save), not always Run.
+
+Cardio-local shared marks live in `components/CardioBars.kt`: `VerticalBarRow`/`BarGeom`/`BarGeomBox`
+(the bar geometry behind every cardio chart), `MeterBar` (value vs target + mono caption) and
+`RankedBarRow` (name · thin bar · reading). Kept in the feature package rather than promoted, matching how
+`VerticalBarRow` was already shared across four cardio surfaces.
 
 ### Coach — `ui/coach` — **THE LEDGER** (2026-08-20 redesign)
 

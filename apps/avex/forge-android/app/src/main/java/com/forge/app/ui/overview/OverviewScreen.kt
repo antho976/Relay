@@ -55,6 +55,7 @@ import com.forge.app.domain.units.formatVolume
 import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.theme.LocalForgeSettings
 import com.forge.app.program.Program
+import com.forge.app.ui.common.ForgeHeroAction
 import com.forge.app.ui.experiment.CellShape
 import com.forge.app.ui.experiment.SectionAnchor
 import com.forge.app.ui.experiment.SurfaceListRow
@@ -97,27 +98,16 @@ private fun HomePrimaryAction(
     onLongClick: (() -> Unit)? = null,
     onClick: () -> Unit
 ) {
-    Box(
-        modifier = modifier
-            .heightIn(min = 56.dp)
-            .clip(HomeCapsuleShape)
-            .background(MaterialTheme.colorScheme.primary)
-            .bounceCombinedClick(
-                onClickLabel = label,
-                onLongClickLabel = if (onLongClick != null) "Start, skipping warmup" else null,
-                onLongClick = onLongClick,
-                onClick = onClick
-            )
-            .padding(horizontal = 20.dp, vertical = 14.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text,
-            style = MaterialTheme.typography.labelLarge,
-            fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onPrimary,
-        )
-    }
+    // The drawing moved to `ui/common` when Cardio needed the same button (§2⑥) — this stays as the
+    // name Home's call site reads by, and as the home of the skip-warmup hold label.
+    ForgeHeroAction(
+        text = text,
+        onClick = onClick,
+        modifier = modifier,
+        label = label,
+        onLongClick = onLongClick,
+        onLongClickLabel = if (onLongClick != null) "Start, skipping warmup" else null
+    )
 }
 
 @Composable

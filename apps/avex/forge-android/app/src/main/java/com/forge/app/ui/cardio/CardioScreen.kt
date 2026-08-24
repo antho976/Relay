@@ -1,9 +1,7 @@
 package com.forge.app.ui.cardio
 
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -12,10 +10,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -30,50 +27,56 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.forge.app.data.db.entities.CardioEntry
+import com.forge.app.domain.cardio.CardioType
 import com.forge.app.ui.cardio.components.CardioEntryRow
+import com.forge.app.ui.cardio.components.CardioPaceTrendSection
 import com.forge.app.ui.cardio.components.CardioSessionDetailSheet
-import com.forge.app.ui.cardio.components.CardioWeekDetailSheet
+import com.forge.app.ui.cardio.components.StepsByHourSection
+import com.forge.app.ui.cardio.components.WatchImportsSection
+import com.forge.app.ui.cardio.components.CardioLogSheet
+import com.forge.app.ui.cardio.state.CardioLens
+import com.forge.app.ui.cardio.state.CardioUiState
 import com.forge.app.ui.common.EditorialHeader
+import com.forge.app.ui.common.ForgeHeroAction
 import com.forge.app.ui.common.InlineEmptyHint
-import com.forge.app.ui.common.bounceClick
+import com.forge.app.ui.common.SegmentPill
 import com.forge.app.ui.common.clickableLabeled
 import com.forge.app.ui.common.forgeItemMotion
-import com.forge.app.ui.cardio.components.CardioLogSheet
-import com.forge.app.ui.cardio.state.CardioUiState
+import com.forge.app.ui.common.statsEntrance
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.temporal.WeekFields
 import java.util.Locale
 
-/** Most-recent entries shown inline; the rest sit behind "See all" (the full history is still one tap away). */
-private const val HISTORY_PREVIEW = 5
+/** Air between sections — §7's rhythm, applied once so no section carries its own leading spacer. */
+private val SECTION_GAP = 28.dp
 
 @Composable
 fun CardioScreen(
     // Null when shown as a hub pager page (no redundant back arrow); a real callback as a deep route.
     onBack: (() -> Unit)? = null,
-    // When set, the "See all" row opens the unified History page (where cardio + workouts merge);
+    // When set, "view all" opens the unified History page (where cardio + workouts merge);
     // null falls back to expanding the list inline.
     onOpenHistory: (() -> Unit)? = null,
     // Opens the full Goals screen — from the GOALS trim's header action / lines.
     onOpenGoals: () -> Unit = {},
+    // Opens the weeks chart — the hero's `weeks →`. Replaced the swipe-pager overlay (2026-08-23).
+    onOpenWeeks: () -> Unit = {},
+    // Opens one week's own page — the hero's Mon–Sun strip, with this week's Monday.
+    onOpenWeek: (Long) -> Unit = {},
     viewModel: CardioViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
 
     // Re-check the Health Connect grants whenever the screen resumes — the user can connect steps/GPS
-    // in Settings (or the HC app) and come back, and the banner should vanish + the placeholders appear
-    // without a manual reload.
+    // in Settings (or the HC app) and come back, and the placeholders should appear without a reload.
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
@@ -133,30 +136,20 @@ fun CardioScreen(
             onDelete = { viewModel.deleteEntry(sessionEntry.id) },
             onBack = viewModel::closeSessionDetail
         )
-        state.detailOpen -> CardioWeekDetailSheet(
-            allEntries = state.entries,
-            currentWeekStartMs = isoWeekStartMs,
-            useMiles = state.useMiles,
-            weekTargetMin = state.weekTargetMin,
-            cardioStreakDays = state.cardioStreakDays,
-            paceSeries = state.cardioPaceSeries,
-            wearable = state.weekWearable, // Today's watch steps on the current-week page (null when none).
-            wearableConnected = state.stepsConnected, // Show an empty placeholder once connected.
-            todayDow = todayDow,
-            zone = zone,
-            onOpenSession = viewModel::openSessionDetail,
-            onBack = viewModel::closeDetail
-        )
         else -> CardioListContent(
             state = state,
             weekLabel = weekLabel,
+            weekStartMs = isoWeekStartMs,
             today = today,
             todayDow = todayDow,
+            zone = zone,
             onBack = onBack,
             onOpenLog = viewModel::openSheet,
-            onOpenDetail = viewModel::openDetail,
+            onOpenWeeks = onOpenWeeks,
+            onOpenThisWeek = { onOpenWeek(isoWeekStartMs) },
             onOpenSession = viewModel::openSessionDetail,
             onRequestDelete = viewModel::deleteEntry,
+            onSetLens = viewModel::setLens,
             onSeeAll = onOpenHistory ?: viewModel::toggleHistoryExpanded,
             seeAllExpands = onOpenHistory == null,
             onOpenGoals = onOpenGoals,
@@ -166,18 +159,32 @@ fun CardioScreen(
     }
 }
 
+/**
+ * The overview (§3 Overview archetype). One hero, one primary action, then two lenses:
+ *
+ *   WEEK      what just happened — imports waiting, this week's split, its sessions, today's steps
+ *   PROGRESS  where it is going — load over weeks, pace, records, goals
+ *
+ * The lenses replaced a full-screen week pager reached by tapping the hero (2026-08-23). That pager
+ * redrew the hero's own marks one screen away, which is the §4.3 "one home" rule twice over; week
+ * BROWSING moved to a ledger where the weeks are rows, not pages.
+ */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CardioListContent(
     state: CardioUiState,
     weekLabel: String,
+    weekStartMs: Long,
     today: LocalDate,
     todayDow: Int,
+    zone: ZoneId,
     onBack: (() -> Unit)?,
     onOpenLog: () -> Unit,
-    onOpenDetail: () -> Unit,
+    onOpenWeeks: () -> Unit,
+    onOpenThisWeek: () -> Unit,
     onOpenSession: (Long) -> Unit,
     onRequestDelete: (Long) -> Unit,
+    onSetLens: (CardioLens) -> Unit,
     onSeeAll: () -> Unit,
     seeAllExpands: Boolean,
     onOpenGoals: () -> Unit,
@@ -189,9 +196,8 @@ private fun CardioListContent(
     val outline = MaterialTheme.colorScheme.outline
     val accent = MaterialTheme.colorScheme.primary
 
-    // The connect-a-wearable invite moved to the notifications page (2026-07-27) — it was the last
-    // strip standing between this screen's top bar and its hero. The feed applies the same two gates
-    // it did here: gone once dismissed for good, and gone once a watch is actually connected.
+    // The connect-a-wearable invite lives on the notifications page (2026-07-27) — a page never opens
+    // with a resident strip above its own answer (§4.6).
 
     Scaffold(
         topBar = {
@@ -212,133 +218,305 @@ private fun CardioListContent(
             contentPadding = PaddingValues(bottom = 56.dp)
         ) {
             item("hero") {
-                CardioHero(
-                    weekLabel = weekLabel,
-                    weekDays = state.cardioDaysThisWeek,
-                    weekMinutes = state.weekMinutes,
-                    weekDistanceKm = state.weekDistanceKm,
-                    streakDays = state.cardioStreakDays,
-                    todaySteps = state.todaySteps,
-                    weekTargetMin = state.weekTargetMin,
-                    useMiles = state.useMiles,
-                    days = state.weekDays,
-                    todayDow = todayDow,
-                    onBg = onBg, muted = muted, outline = outline, accent = accent,
-                    onOpenDetail = onOpenDetail
+                Column(Modifier.statsEntrance(0)) {
+                    CardioHero(
+                        weekLabel = weekLabel,
+                        weekDays = state.cardioDaysThisWeek,
+                        weekMinutes = state.weekMinutes,
+                        weekDistanceKm = state.weekDistanceKm,
+                        streakDays = state.cardioStreakDays,
+                        weekTargetMin = state.weekTargetMin,
+                        useMiles = state.useMiles,
+                        days = state.weekDays,
+                        todayDow = todayDow,
+                        onBg = onBg, muted = muted, outline = outline, accent = accent,
+                        onOpenWeeks = onOpenWeeks,
+                        onOpenThisWeek = onOpenThisWeek
+                    )
+                }
+            }
+
+            // The primary action, above the fold (§3) — the old affordance was a small white `+` disc
+            // riding a section header, which is not one of §2③'s three levels and named nothing.
+            item("log") {
+                Spacer(Modifier.height(24.dp))
+                // The same hero button Home draws (Antho, 2026-08-23) — a hub tab's primary action
+                // reads the same on every tab, and it was the one white capsule in an accent app.
+                ForgeHeroAction(
+                    text = "Log cardio",
+                    onClick = onOpenLog,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 24.dp)
+                        .statsEntrance(1)
                 )
             }
 
-            // GOALS — the cardio-metric goals as the same open progress lines Home draws, so a
-            // distance/minutes target reads identically wherever it shows. Hidden when none exist
-            // (Home owns the "set targets" nudge — no duplicate teaser here, §4.3).
-            if (state.cardioGoals.isNotEmpty()) {
-                item("goals") {
-                    Spacer(Modifier.height(28.dp))
-                    CardioGoalsSection(
-                        goals = state.cardioGoals,
-                        onOpenGoals = onOpenGoals,
-                        onBg = onBg, muted = muted, accent = accent, outline = outline
-                    )
-                }
-            }
-
-            // RECORDS — per-activity all-time bests (GYMAP-34). Hidden until a distance session exists;
-            // the hero already carries the zero state, so there's no empty records shell here (§12).
-            if (state.cardioRecords.isNotEmpty()) {
-                item("records") {
-                    Spacer(Modifier.height(28.dp))
-                    CardioRecordsSection(
-                        records = state.cardioRecords,
-                        useMiles = state.useMiles,
-                        onOpenSession = onOpenSession,
-                        onBg = onBg, muted = muted, accent = accent, outline = outline
-                    )
-                }
-            }
-
-            // FROM YOUR WATCH (W5) — sessions the watch recorded that have no entry here yet. Row tap
-            // imports (prefilled sheet); the header's `hide` dismisses the batch for good. Hidden when
-            // empty — the watch banner carries the unconnected state, so no empty shell (§12).
-            if (state.importSuggestions.isNotEmpty()) {
-                item("watch-imports") {
-                    Spacer(Modifier.height(28.dp))
-                    WatchImportsSection(
-                        suggestions = state.importSuggestions,
-                        useMiles = state.useMiles,
-                        onImport = onImportWatch,
-                        onDismiss = onDismissImports,
-                        onBg = onBg, muted = muted, accent = accent
-                    )
-                }
-            }
-
-            item("history-title") {
-                Spacer(Modifier.height(28.dp))
-                // The log affordance — the old white + circle, trimmed, riding the section anchor.
+            item("lenses") {
+                Spacer(Modifier.height(24.dp))
                 Row(
-                    modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 24.dp)
+                        .statsEntrance(2),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    EditorialHeader(
-                        label = "Recent sessions",
-                        muted = muted,
-                        accent = accent,
-                        modifier = Modifier.weight(1f)
-                    )
-                    Box(
-                        modifier = Modifier.size(44.dp).bounceClick(onClick = onOpenLog),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Box(
-                            modifier = Modifier.size(28.dp).background(onBg, CircleShape),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                "+",
-                                style = MaterialTheme.typography.titleMedium,
-                                color = MaterialTheme.colorScheme.background,
-                                modifier = Modifier.semantics { contentDescription = "Log cardio" }
-                            )
-                        }
+                    CardioLens.entries.forEach { lens ->
+                        SegmentPill(
+                            text = lens.label.uppercase(),
+                            selected = state.lens == lens,
+                            onClick = { onSetLens(lens) },
+                            accent = accent, onBg = onBg, muted = muted, outline = outline
+                        )
                     }
                 }
-                Spacer(Modifier.height(6.dp))
             }
-            if (state.entries.isEmpty() && !state.isLoading) {
-                item("history-empty") {
-                    InlineEmptyHint(
-                        text = "Your first session lands here.",
-                        color = muted,
-                        modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp)
-                    )
-                }
-            }
-            // When "See all" routes to History (the merged page), the home list stays capped at 5;
-            // only the inline-expand fallback grows the list in place.
-            val shown = if (seeAllExpands && state.historyExpanded) state.entries else state.entries.take(HISTORY_PREVIEW)
-            items(shown, key = { it.id }) { entry ->
-                CardioEntryRow(
-                    entry = entry,
+
+            when (state.lens) {
+                CardioLens.WEEK -> weekLens(
+                    state = state,
+                    weekStartMs = weekStartMs,
                     today = today,
-                    useMiles = state.useMiles,
-                    onRequestDelete = { onRequestDelete(entry.id) },
-                    onClick = { onOpenSession(entry.id) },
-                    modifier = forgeItemMotion()
+                    zone = zone,
+                    onOpenSession = onOpenSession,
+                    onRequestDelete = onRequestDelete,
+                    onSeeAll = onSeeAll,
+                    seeAllExpands = seeAllExpands,
+                    onImportWatch = onImportWatch,
+                    onDismissImports = onDismissImports,
+                    onBg = onBg, muted = muted, outline = outline, accent = accent
+                )
+                CardioLens.PROGRESS -> progressLens(
+                    state = state,
+                    onOpenSession = onOpenSession,
+                    onOpenGoals = onOpenGoals,
+                    onBg = onBg, muted = muted, outline = outline, accent = accent
                 )
             }
-            if (state.entries.size > HISTORY_PREVIEW) {
-                item("see-all") {
-                    SeeAllRow(
-                        expands = seeAllExpands,
-                        expanded = state.historyExpanded,
-                        total = state.entries.size,
-                        onClick = onSeeAll,
-                        accent = accent,
-                        muted = muted
-                    )
-                }
+        }
+    }
+}
+
+/**
+ * WEEK — what just happened. Ordered by §4.8 (placement is rank): the watch sessions still waiting on
+ * a decision, then this week's own split, then its sessions, then the passive steps read.
+ */
+private fun LazyListScope.weekLens(
+    state: CardioUiState,
+    weekStartMs: Long,
+    today: LocalDate,
+    zone: ZoneId,
+    onOpenSession: (Long) -> Unit,
+    onRequestDelete: (Long) -> Unit,
+    onSeeAll: () -> Unit,
+    seeAllExpands: Boolean,
+    onImportWatch: (com.forge.app.domain.health.WatchWorkout) -> Unit,
+    onDismissImports: () -> Unit,
+    onBg: Color,
+    muted: Color,
+    outline: Color,
+    accent: Color
+) {
+    // FROM YOUR WATCH (W5) — sessions the watch recorded that have no entry here yet. Row tap imports
+    // (prefilled sheet); the header's `hide` dismisses the batch for good. Hidden when empty.
+    if (state.importSuggestions.isNotEmpty()) {
+        item("watch-imports") {
+            Spacer(Modifier.height(SECTION_GAP))
+            WatchImportsSection(
+                suggestions = state.importSuggestions,
+                useMiles = state.useMiles,
+                onImport = onImportWatch,
+                onDismiss = onDismissImports,
+                onBg = onBg, muted = muted, accent = accent
+            )
+        }
+    }
+
+    // SESSIONS — this week's, newest first. The list follows the hero's week rather than showing an
+    // all-time "recent" list beside a THIS WEEK hero, which said two different things at once.
+    val weekEntries = state.entries.filter { it.date >= weekStartMs }
+    item("sessions-header") {
+        Spacer(Modifier.height(SECTION_GAP))
+        EditorialHeader(
+            label = "Sessions",
+            muted = muted,
+            accent = accent,
+            modifier = Modifier.padding(horizontal = 24.dp)
+        )
+        Spacer(Modifier.height(8.dp))
+    }
+    if (weekEntries.isEmpty() && !state.isLoading) {
+        item("sessions-empty") {
+            // The zero state names the concrete last session rather than a status word (§12) — the
+            // hero's all-zero bars already said the week is empty, so this adds the thing you'd ask next.
+            val last = state.entries.firstOrNull { it.type != CardioType.REST.code }
+            if (last != null) {
+                LastSessionLine(
+                    entry = last, today = today, zone = zone,
+                    muted = muted, accent = accent,
+                    onClick = { onOpenSession(last.id) }
+                )
+            } else {
+                InlineEmptyHint(
+                    text = "Your first session lands here.",
+                    color = muted,
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp)
+                )
             }
         }
+    }
+    items(weekEntries, key = { it.id }) { entry ->
+        CardioEntryRow(
+            entry = entry,
+            today = today,
+            useMiles = state.useMiles,
+            onRequestDelete = { onRequestDelete(entry.id) },
+            onClick = { onOpenSession(entry.id) },
+            modifier = forgeItemMotion()
+        )
+    }
+    // §12 overflow — a trim with `view all →` beside it, never a bare link.
+    if (state.entries.size > weekEntries.size) {
+        item("see-all") {
+            SeeAllRow(
+                expands = seeAllExpands,
+                expanded = state.historyExpanded,
+                total = state.entries.size,
+                onClick = onSeeAll,
+                accent = accent
+            )
+        }
+    }
+    // The inline-expand fallback (no History route wired) grows the list in place with the older rows.
+    if (seeAllExpands && state.historyExpanded) {
+        items(state.entries.filter { it.date < weekStartMs }, key = { it.id }) { entry ->
+            CardioEntryRow(
+                entry = entry,
+                today = today,
+                useMiles = state.useMiles,
+                onRequestDelete = { onRequestDelete(entry.id) },
+                onClick = { onOpenSession(entry.id) },
+                modifier = forgeItemMotion()
+            )
+        }
+    }
+
+    // STEPS — the hourly mark cardio owns (`design/MAP.md`), drawn for today. Replaced the hero's bare
+    // `TODAY · N STEPS` text line: a data section leads with its mark, not a sentence (§12).
+    if (state.todayWearable?.hasData == true || state.stepsConnected) {
+        item("steps") {
+            Spacer(Modifier.height(SECTION_GAP))
+            StepsByHourSection(
+                wearable = state.todayWearable,
+                connected = state.stepsConnected,
+                onBg = onBg, muted = muted, outline = outline, accent = accent
+            )
+        }
+    }
+}
+
+/**
+ * PROGRESS — where it is going. Pace leads (the live reading), records qualify it, goals (a target
+ * ladder) sit last per §4.8.
+ *
+ * There is deliberately NO weekly-load chart here: it is the same mark the weeks page draws, and a
+ * visual that only repeats another screen's answer is cut, not copied (§4.3). The hero's `weeks →`
+ * is the way to it.
+ */
+private fun LazyListScope.progressLens(
+    state: CardioUiState,
+    onOpenSession: (Long) -> Unit,
+    onOpenGoals: () -> Unit,
+    onBg: Color,
+    muted: Color,
+    outline: Color,
+    accent: Color
+) {
+    // PACE — a per-activity pace-over-time chart. It used to ride the week overlay's current page
+    // alone; it is cross-week data, so a lens about progress is where it belonged all along.
+    if (state.cardioPaceSeries.isNotEmpty()) {
+        item("pace") {
+            Spacer(Modifier.height(SECTION_GAP))
+            CardioPaceTrendSection(
+                series = state.cardioPaceSeries,
+                useMiles = state.useMiles,
+                onBg = onBg, muted = muted, outline = outline, accent = accent
+            )
+        }
+    }
+
+    if (state.cardioRecords.isNotEmpty()) {
+        item("records") {
+            Spacer(Modifier.height(SECTION_GAP))
+            CardioRecordsSection(
+                records = state.cardioRecords,
+                useMiles = state.useMiles,
+                onOpenSession = onOpenSession,
+                onBg = onBg, muted = muted, accent = accent, outline = outline
+            )
+        }
+    }
+
+    // GOALS — the cardio-metric goals as the same open progress lines Home draws. Hidden when none
+    // exist (Home owns the "set targets" nudge — no duplicate teaser here, §4.3).
+    if (state.cardioGoals.isNotEmpty()) {
+        item("goals") {
+            Spacer(Modifier.height(SECTION_GAP))
+            CardioGoalsSection(
+                goals = state.cardioGoals,
+                onOpenGoals = onOpenGoals,
+                onBg = onBg, muted = muted, accent = accent, outline = outline
+            )
+        }
+    }
+
+    // Every mark in this lens needs history to exist. Below that, ONE line naming the concrete unlock
+    // rather than four empty shells (§12 — collapse repetition).
+    if (state.cardioPaceSeries.isEmpty() &&
+        state.cardioRecords.isEmpty() && state.cardioGoals.isEmpty()
+    ) {
+        item("progress-empty") {
+            Spacer(Modifier.height(SECTION_GAP))
+            InlineEmptyHint(
+                text = "Pace and load read out after your second session.",
+                color = muted,
+                modifier = Modifier.padding(horizontal = 24.dp)
+            )
+        }
+    }
+}
+
+/** The zero-week line: which session was last, and how long ago, as a tap into it. */
+@Composable
+private fun LastSessionLine(
+    entry: CardioEntry,
+    today: LocalDate,
+    zone: ZoneId,
+    muted: Color,
+    accent: Color,
+    onClick: () -> Unit
+) {
+    val customs = LocalCardioTypes.current
+    val label = remember(entry, today, customs) {
+        val date = java.time.Instant.ofEpochMilli(entry.date).atZone(zone).toLocalDate()
+        val days = java.time.temporal.ChronoUnit.DAYS.between(date, today).toInt()
+        val name = com.forge.app.domain.cardio.CardioActivity.resolve(entry.type, customs).displayName
+        val ago = when (days) {
+            0 -> "today"
+            1 -> "yesterday"
+            else -> "$days days ago"
+        }
+        "Last: $name, $ago"
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickableLabeled("Open your last session", onClick = onClick)
+            .padding(horizontal = 24.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(label, style = MaterialTheme.typography.bodyMedium, color = muted)
+        Text("open →", style = MaterialTheme.typography.labelMedium, color = accent)
     }
 }
 
@@ -348,8 +526,7 @@ private fun SeeAllRow(
     expanded: Boolean,
     total: Int,
     onClick: () -> Unit,
-    accent: Color,
-    muted: Color
+    accent: Color
 ) {
     // Inline-expand mode toggles "show less"; navigate mode (and collapsed) reads "view all … →".
     val label = if (expands && expanded) "show less ↑" else "view all $total →"
@@ -360,74 +537,5 @@ private fun SeeAllRow(
             .padding(horizontal = 24.dp, vertical = 14.dp)
     ) {
         Text(label, style = MaterialTheme.typography.labelMedium, color = accent)
-    }
-}
-
-/**
- * FROM YOUR WATCH (W5) — watch-recorded workouts with no matching entry, offered as one-tap
- * imports. Each row's whole surface imports it (opens the prefilled log sheet); the header's
- * `hide` action dismisses the batch permanently. Suggestions only, never auto-logged.
- */
-@Composable
-private fun WatchImportsSection(
-    suggestions: List<com.forge.app.domain.health.WatchWorkout>,
-    useMiles: Boolean,
-    onImport: (com.forge.app.domain.health.WatchWorkout) -> Unit,
-    onDismiss: () -> Unit,
-    onBg: Color,
-    muted: Color,
-    accent: Color
-) {
-    Column {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            com.forge.app.ui.common.EditorialHeader(
-                label = "From your watch",
-                muted = muted,
-                accent = accent,
-                modifier = Modifier.weight(1f)
-            )
-            Text(
-                "hide",
-                style = MaterialTheme.typography.labelMedium,
-                color = muted,
-                modifier = Modifier
-                    .clickableLabeled("Hide watch workout suggestions", onClick = onDismiss)
-                    .padding(horizontal = 4.dp, vertical = 8.dp)
-            )
-        }
-        Spacer(Modifier.height(2.dp))
-        suggestions.forEach { w ->
-            val type = com.forge.app.domain.cardio.CardioType.entries
-                .firstOrNull { it.code == com.forge.app.data.health.HcExerciseTypes.toCardioCode(w.exerciseType) }
-            val dayLabel = remember(w.startMs) {
-                java.text.SimpleDateFormat("EEE h:mm a", java.util.Locale.getDefault())
-                    .format(java.util.Date(w.startMs))
-            }
-            val meta = buildList {
-                add(dayLabel)
-                add("${w.durationMin} min")
-                w.distanceKm?.let { add(com.forge.app.domain.units.formatDistance(it, useMiles)) }
-            }.joinToString(" · ")
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickableLabeled("Import ${type?.displayName ?: "workout"}", onClick = { onImport(w) })
-                    .padding(horizontal = 24.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(type?.displayName ?: "Workout", style = MaterialTheme.typography.bodyLarge, color = onBg)
-                    Text(
-                        meta.uppercase(),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = muted, letterSpacing = 0.5.sp
-                    )
-                }
-                Text("import →", style = MaterialTheme.typography.labelMedium, color = accent)
-            }
-        }
     }
 }

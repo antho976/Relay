@@ -238,6 +238,13 @@ fun CardioLogSheet(
                                 modifier = Modifier.weight(1f)
                             )
                         }
+                        Spacer(Modifier.height(12.dp))
+                        // §13 — the hot-path number gets its quick-picks; the field stays typeable.
+                        DurationQuickPicks(
+                            current = durationText,
+                            onPick = { durationText = it },
+                            onBg = onBg, bg = bg, muted = muted, outline = outline
+                        )
                         // Live pace readout once both fields are in — the instant sanity check.
                         val pace = pacePerUnit(durationInt, distanceKm, useMiles)
                         if (pace != null) {

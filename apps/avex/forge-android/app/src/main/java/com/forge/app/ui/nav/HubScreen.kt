@@ -118,7 +118,10 @@ fun HubScreen(
             when (tabs.getOrElse(page) { BottomTab.HOME }) {
                 BottomTab.CARDIO -> CardioScreen(
                     onOpenHistory = { nav.navigate(Routes.SESSION_HISTORY) },
-                    onOpenGoals = { nav.navigate(Routes.GOALS) }
+                    onOpenGoals = { nav.navigate(Routes.GOALS) },
+                    onOpenWeeks = { nav.navigate(Routes.cardioWeeks()) },
+                    // Tapping the hero's Mon–Sun strip opens THIS week in full.
+                    onOpenWeek = { weekStartMs -> nav.navigate(Routes.cardioWeeks(weekStartMs)) }
                 )
                 BottomTab.STATS -> DayListScreen(
                     onOpenDay = { dayKey -> nav.navigate(Routes.gymDay(dayKey)) },

@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -30,10 +31,10 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.data.db.entities.CardioEntry
+import com.forge.app.domain.cardio.CardioActivity
 import com.forge.app.domain.cardio.CardioCondition
 import com.forge.app.domain.cardio.CardioEffort
 import com.forge.app.domain.cardio.CardioRestReason
-import com.forge.app.domain.cardio.CardioActivity
 import com.forge.app.domain.cardio.CardioSessionCompare
 import com.forge.app.domain.cardio.CardioWearableDay
 import com.forge.app.domain.cardio.RoutePoint
@@ -48,7 +49,7 @@ import com.forge.app.domain.health.maxBpm
 import com.forge.app.domain.units.distanceUnitLabel
 import com.forge.app.domain.units.formatDistance
 import com.forge.app.domain.units.formatElevation
-import com.forge.app.ui.common.EditorialHairline
+import com.forge.app.ui.common.EditorialFigure
 import com.forge.app.ui.common.EditorialHeader
 import com.forge.app.ui.common.ForgeOutlineCapsule
 import com.forge.app.ui.common.clickableLabeled
@@ -56,12 +57,18 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+/** Air between sections, matching the overview's rhythm (§7). */
+private val SECTION_GAP = 28.dp
+
 /**
- * The complete stats for ONE cardio session — opened by tapping a row in "What I did". Every field
- * the entry carries (duration, distance, pace, effort, HR zone, intervals, route, note) is laid out
- * as a labelled table, each reading carrying its compare meta — how this session stands against the
- * same activity's best pace / longest distance — plus the previous same-type session underneath.
- * This is the home for the full detail the list rows deliberately omit.
+ * ONE cardio session (§3 Detail archetype).
+ *
+ * Rebuilt 2026-08-23. It used to be ten `label — value` rows separated by hairlines, which is §4.10's
+ * checklist look and drew no mark at all: without a watch connected the whole page was text. Now the
+ * three readings a session is judged on are figures, how it STANDS against the same activity is a
+ * ranked mark (built from data every session already has, watch or not), and the handful of tags that
+ * used to each own a row are one mono line — §2② is explicit that a lone categorical state is a
+ * caption, not a section.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -101,6 +108,8 @@ fun CardioSessionDetailSheet(
     }
     // How this session stands against its own activity type — null for rest days / a first session.
     val compare = remember(entry, allEntries) { compareCardioSession(entry, allEntries) }
+    val unit = distanceUnitLabel(useMiles)
+    val pace = pacePerUnit(entry.durationMin, entry.distanceKm, useMiles)
 
     Scaffold(
         topBar = {
@@ -122,58 +131,93 @@ fun CardioSessionDetailSheet(
         ) {
             item("hero") {
                 Column(Modifier.padding(horizontal = 24.dp).padding(top = 8.dp)) {
-                    Text(dateLine.uppercase(), style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp, letterSpacing = 1.sp)
+                    Text(dateLine.uppercase(), style = MaterialTheme.typography.labelSmall, color = muted, letterSpacing = 1.sp)
                     Spacer(Modifier.height(8.dp))
+                    // §11 — a serif title takes no terminal period.
                     Text(activity.displayName, style = MaterialTheme.typography.displaySmall, color = onBg)
-                    Spacer(Modifier.height(16.dp))
                 }
             }
 
-            item("stats") {
-                Column(Modifier.padding(horizontal = 24.dp, vertical = 8.dp)) {
-                    if (activity.isRest) {
-                        StatRow("Rest", CardioRestReason.fromCode(entry.restReason)?.displayName ?: "Rest day", onBg, muted, outline)
-                    } else {
-                        val unit = distanceUnitLabel(useMiles)
-                        StatRow("Duration", if (entry.durationMin > 0) "${entry.durationMin} min" else "0 min", onBg, muted, outline)
-                        entry.distanceKm?.let { dist ->
-                            val (meta, metaIsBest) = distanceCompareMeta(compare, useMiles)
-                            StatRow("Distance", formatDistance(dist, useMiles), onBg, muted, outline, meta = meta, metaColor = if (metaIsBest) accent else muted)
+            if (activity.isRest) {
+                item("rest") {
+                    Spacer(Modifier.height(SECTION_GAP))
+                    Text(
+                        CardioRestReason.fromCode(entry.restReason)?.displayName ?: "Rest day",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = onBg,
+                        modifier = Modifier.padding(horizontal = 24.dp)
+                    )
+                }
+            } else {
+                // The three readings a session is judged on. Honest zeros, never hidden (§12); they
+                // wrap rather than clip at large font scales (§14).
+                item("figures") {
+                    Spacer(Modifier.height(24.dp))
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 24.dp),
+                        horizontalArrangement = Arrangement.spacedBy(20.dp)
+                    ) {
+                        EditorialFigure(
+                            value = "${entry.durationMin}",
+                            label = "minutes",
+                            onBg = onBg, muted = muted, accent = accent,
+                            modifier = Modifier.weight(1f)
+                        )
+                        // A session with no distance RECORDED is not a session of zero distance —
+                        // printing "0 km" would be ghost data, which §12 bans as firmly as it
+                        // requires honest zeros for things that really are zero.
+                        val distance = entry.distanceKm
+                        if (distance != null) {
+                            EditorialFigure(
+                                value = formatDistance(distance, useMiles).removeSuffix(" $unit"),
+                                label = unit,
+                                onBg = onBg, muted = muted, accent = accent,
+                                modifier = Modifier.weight(1f)
+                            )
+                        } else {
+                            Spacer(Modifier.weight(1f))
                         }
-                        pacePerUnit(entry.durationMin, entry.distanceKm, useMiles)?.let { pace ->
-                            val (meta, metaIsBest) = paceCompareMeta(entry, compare, useMiles)
-                            StatRow("Pace", "$pace /$unit", onBg, muted, outline, meta = meta, metaColor = if (metaIsBest) accent else muted)
-                        }
-                        // Per-type fields (GYMAP-38) — at most one applies to any given activity.
-                        entry.laps?.takeIf { it > 0 }?.let { StatRow("Laps", "$it", onBg, muted, outline) }
-                        entry.inclinePct?.takeIf { it > 0 }?.let { StatRow("Incline", formatInclinePct(it), onBg, muted, outline) }
-                        entry.elevationM?.takeIf { it > 0 }?.let { StatRow("Elevation gain", formatElevation(it, useMiles), onBg, muted, outline) }
-                        CardioEffort.fromCode(entry.effort)?.let { StatRow("Effort", it.displayName, onBg, muted, outline) }
-                        entry.hrZone?.let { StatRow("HR zone", "Z$it", onBg, muted, outline) }
-                        entry.intervalCount?.takeIf { it > 0 }?.let { StatRow("Intervals", "$it", onBg, muted, outline) }
-                        // Weather tags (GYMAP-39), read-only here — the interactive chips live in the log sheet.
-                        CardioCondition.decode(entry.conditions).takeIf { it.isNotEmpty() }?.let { tags ->
-                            StatRow("Conditions", tags.joinToString(" · ") { it.displayName }, onBg, muted, outline)
+                        // No distance means there is no pace to show — a placeholder dash would be
+                        // both an em dash (§11) and a figure standing in for data it does not have (§12).
+                        if (pace != null) {
+                            EditorialFigure(
+                                value = pace,
+                                label = "/$unit",
+                                onBg = onBg, muted = muted, accent = accent,
+                                modifier = Modifier.weight(1f)
+                            )
+                        } else {
+                            Spacer(Modifier.weight(1f))
                         }
                     }
                 }
-            }
 
-            // The same activity's previous outing — the head-to-head the "am I improving" glance needs.
-            compare?.previous?.let { prev ->
-                item("previous") {
-                    Column(Modifier.padding(horizontal = 24.dp, vertical = 8.dp)) {
-                        EditorialHeader(label = "Previous ${activity.displayName}", muted = muted, accent = accent)
-                        Spacer(Modifier.height(8.dp))
-                        val prevDate = remember(prev.date) {
-                            SimpleDateFormat("MMM d", Locale.getDefault()).format(Date(prev.date))
-                        }
-                        val parts = remember(prev, useMiles) {
-                            cardioDetailParts(prev, useMiles = useMiles).joinToString(" · ")
-                        }
+                // The tags that each used to own a table row. §2②: a lone categorical state is not a
+                // section, it is a caption — and four of them are still a caption, not four sections.
+                val tags = sessionTags(entry, useMiles)
+                if (tags.isNotEmpty()) {
+                    item("tags") {
+                        Spacer(Modifier.height(16.dp))
                         Text(
-                            if (parts.isBlank()) prevDate else "$prevDate · $parts",
-                            style = MaterialTheme.typography.bodyMedium, color = onBg
+                            tags.joinToString(" · ").uppercase(),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = muted, letterSpacing = 1.sp,
+                            modifier = Modifier.padding(horizontal = 24.dp)
+                        )
+                    }
+                }
+
+                // STANDING — the compare data drawn instead of written. This is the section that makes
+                // the page work with no watch connected: every session has it from the second outing on.
+                if (compare != null) {
+                    item("standing") {
+                        Spacer(Modifier.height(SECTION_GAP))
+                        StandingSection(
+                            entry = entry,
+                            activityName = activity.displayName,
+                            compare = compare,
+                            useMiles = useMiles,
+                            onBg = onBg, muted = muted, outline = outline, accent = accent
                         )
                     }
                 }
@@ -183,6 +227,7 @@ fun CardioSessionDetailSheet(
             // ride the header line as its reading. Hidden entirely when no watch session matched.
             if (!activity.isRest && hr != null && hr.size >= 2) {
                 item("heart-rate") {
+                    Spacer(Modifier.height(SECTION_GAP))
                     HeartRateSection(
                         hr = hr,
                         watchStats = watchStats,
@@ -194,22 +239,13 @@ fun CardioSessionDetailSheet(
                 }
             }
 
-            // Wearable steps — shown when a watch fed data, or as a quiet placeholder once connected
-            // (so a connected user sees the section is live before that day's steps sync). Hidden
-            // entirely on a rest day, and when nothing's connected (the banner carries the invite).
-            if (!activity.isRest && (wearable?.hasData == true || wearableConnected)) {
-                item("steps") {
-                    StepsByHourSection(wearable = wearable, connected = wearableConnected, onBg = onBg, muted = muted, outline = outline, accent = accent)
-                }
-            }
             if (!activity.isRest && route != null && route.size >= 2) {
                 item("route") {
-                    Column(Modifier.padding(horizontal = 24.dp, vertical = 8.dp)) {
+                    Spacer(Modifier.height(SECTION_GAP))
+                    Column(Modifier.padding(horizontal = 24.dp)) {
                         EditorialHeader(label = "Route", muted = muted, accent = accent)
-                        Spacer(Modifier.height(10.dp))
-                        Box(
-                            modifier = Modifier.fillMaxWidth().height(160.dp)
-                        ) {
+                        Spacer(Modifier.height(12.dp))
+                        Box(modifier = Modifier.fillMaxWidth().height(160.dp)) {
                             RouteThumbnail(route = route, color = onBg, modifier = Modifier.fillMaxSize().padding(8.dp))
                         }
                     }
@@ -217,45 +253,146 @@ fun CardioSessionDetailSheet(
             } else if (!activity.isRest && onShowRoute != null) {
                 // A matching watch session has a route, but Health Connect needs per-route consent first.
                 item("route-cta") {
-                    Column(Modifier.padding(horizontal = 24.dp, vertical = 8.dp)) {
+                    Spacer(Modifier.height(SECTION_GAP))
+                    Column(Modifier.padding(horizontal = 24.dp)) {
                         EditorialHeader(label = "Route", muted = muted, accent = accent)
-                        Spacer(Modifier.height(10.dp))
+                        Spacer(Modifier.height(12.dp))
                         ForgeOutlineCapsule(label = "Show GPS route", onClick = onShowRoute)
                     }
                 }
             }
 
+            // Wearable steps — shown when a watch fed data, or as a quiet placeholder once connected.
+            // Hidden entirely on a rest day, and when nothing's connected (the feed carries the invite).
+            if (!activity.isRest && (wearable?.hasData == true || wearableConnected)) {
+                item("steps") {
+                    Spacer(Modifier.height(SECTION_GAP))
+                    StepsByHourSection(wearable = wearable, connected = wearableConnected, onBg = onBg, muted = muted, outline = outline, accent = accent)
+                }
+            }
+
             entry.note?.takeIf { it.isNotBlank() }?.let { note ->
                 item("note") {
-                    Column(Modifier.padding(horizontal = 24.dp, vertical = 8.dp)) {
+                    Spacer(Modifier.height(SECTION_GAP))
+                    Column(Modifier.padding(horizontal = 24.dp)) {
                         EditorialHeader(label = "Note", muted = muted, accent = accent)
-                        Spacer(Modifier.height(8.dp))
+                        Spacer(Modifier.height(10.dp))
                         Text(note, style = MaterialTheme.typography.bodyMedium, color = onBg, fontStyle = FontStyle.Italic)
                     }
                 }
             }
 
+            // §8 — one-shot actions grouped at the END of the page, never mid-scroll.
             item("actions") {
-                Spacer(Modifier.height(16.dp))
+                Spacer(Modifier.height(SECTION_GAP))
                 Row(
                     modifier = Modifier.padding(horizontal = 24.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(20.dp)
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     ForgeOutlineCapsule(label = "Edit", onClick = onEdit)
-                    Text(
-                        "Delete",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier
-                            .clickableLabeled("Delete session", onClick = onDelete)
-                            // Padding, not text size, carries the ≥48dp touch target (§8).
-                            .padding(horizontal = 12.dp, vertical = 16.dp)
+                    // A destructive one-shot is level ② tinted error, paired with the Undo snackbar —
+                    // never a filled red button, and never accent- or error-coloured body text (§14).
+                    ForgeOutlineCapsule(
+                        label = "Delete",
+                        onClick = onDelete,
+                        contentColor = MaterialTheme.colorScheme.error
                     )
                 }
             }
         }
     }
+}
+
+/**
+ * STANDING — this session against every other outing of the same activity, as the ranked bars the
+ * rest of cardio uses (§4.10: adjacent comparisons share one visual language).
+ *
+ * Distance is a share of your longest; pace inverts (lower is faster), so the bar fills toward your
+ * best rather than away from it. A record row says so in its reading — and the word rides the mono
+ * meta, not an accent-coloured sentence (§14).
+ */
+@Composable
+private fun StandingSection(
+    entry: CardioEntry,
+    activityName: String,
+    compare: CardioSessionCompare,
+    useMiles: Boolean,
+    onBg: Color,
+    muted: Color,
+    outline: Color,
+    accent: Color
+) {
+    val unit = distanceUnitLabel(useMiles)
+    val myDistance = entry.distanceKm?.takeIf { it > 0.0 }
+    val bestDistance = compare.bestOtherDistanceKm
+    val myPaceSec = paceSecPerUnit(entry.durationMin, entry.distanceKm, useMiles)
+    val bestPaceSec = compare.bestPaceEntry?.let { paceSecPerUnit(it.durationMin, it.distanceKm, useMiles) }
+
+    // Nothing comparable on either axis (a duration-only activity, first distance session) — the
+    // previous-outing line below still stands on its own, so no empty shell here (§12).
+    val comparable = (myDistance != null && bestDistance != null) || (myPaceSec != null && bestPaceSec != null)
+    if (!comparable && compare.previous == null) return
+
+    Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
+        EditorialHeader(label = "Against your $activityName", muted = muted, accent = accent)
+        Spacer(Modifier.height(12.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            if (myDistance != null && bestDistance != null) {
+                val leader = maxOf(myDistance, bestDistance)
+                RankedBarRow(
+                    label = "Distance",
+                    value = if (compare.isDistanceBest) {
+                        "${formatDistance(myDistance, useMiles)} · your longest"
+                    } else {
+                        "${formatDistance(myDistance, useMiles)} of ${formatDistance(bestDistance, useMiles)}"
+                    },
+                    fraction = (myDistance / leader).toFloat(),
+                    onBg = onBg, muted = muted, outline = outline, accent = accent
+                )
+            }
+            if (myPaceSec != null && bestPaceSec != null) {
+                val mine = formatPaceSec(myPaceSec)
+                val best = formatPaceSec(bestPaceSec)
+                // Lower is faster, so the fill is best/mine — your record reads as a full bar.
+                RankedBarRow(
+                    label = "Pace",
+                    value = if (compare.isPaceBest) "$mine /$unit · your fastest" else "$mine · best $best /$unit",
+                    fraction = (bestPaceSec.toFloat() / myPaceSec).coerceIn(0f, 1f),
+                    onBg = onBg, muted = muted, outline = outline, accent = accent
+                )
+            }
+        }
+        // The same activity's previous outing — the head-to-head the "am I improving" glance needs.
+        // One line, under the mark it qualifies, rather than a section of its own (§4.3).
+        compare.previous?.let { prev ->
+            Spacer(Modifier.height(14.dp))
+            val prevDate = remember(prev.date) {
+                SimpleDateFormat("MMM d", Locale.getDefault()).format(Date(prev.date))
+            }
+            val parts = remember(prev, useMiles) { cardioDetailParts(prev, useMiles = useMiles).joinToString(" · ") }
+            Text(
+                (if (parts.isBlank()) "Previous · $prevDate" else "Previous · $prevDate · $parts").uppercase(),
+                style = MaterialTheme.typography.labelSmall,
+                color = muted, letterSpacing = 0.5.sp
+            )
+        }
+    }
+}
+
+/**
+ * The session's descriptive tags, in the order they were rows: effort · HR zone · intervals · the one
+ * per-type field (laps / incline / elevation) · weather. Each is a single word or number that
+ * qualifies the session — §2②'s "fold it into a caption" case, not five sections.
+ */
+private fun sessionTags(entry: CardioEntry, useMiles: Boolean): List<String> = buildList {
+    CardioEffort.fromCode(entry.effort)?.let { add(it.displayName) }
+    entry.hrZone?.let { add("Z$it") }
+    entry.intervalCount?.takeIf { it > 0 }?.let { add("$it intervals") }
+    entry.laps?.takeIf { it > 0 }?.let { add("$it laps") }
+    entry.inclinePct?.takeIf { it > 0 }?.let { add("${formatInclinePct(it)} incline") }
+    entry.elevationM?.takeIf { it > 0 }?.let { add("${formatElevation(it, useMiles)} gain") }
+    CardioCondition.decode(entry.conditions).forEach { add(it.displayName) }
 }
 
 /**
@@ -277,7 +414,7 @@ private fun HeartRateSection(
 ) {
     val avg = hr.avgBpm()
     val max = hr.maxBpm()
-    Column(Modifier.padding(horizontal = 24.dp, vertical = 8.dp)) {
+    Column(Modifier.padding(horizontal = 24.dp)) {
         Row(
             Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -288,11 +425,11 @@ private fun HeartRateSection(
                 Text(
                     "AVG $avg · MAX $max BPM",
                     style = MaterialTheme.typography.labelSmall,
-                    color = muted, fontSize = 9.sp, letterSpacing = 0.5.sp
+                    color = muted, letterSpacing = 0.5.sp
                 )
             }
         }
-        Spacer(Modifier.height(10.dp))
+        Spacer(Modifier.height(12.dp))
         com.forge.app.ui.gym.stats.components.LineChart(
             values = hr.map { it.bpm.toDouble() },
             lineColor = accent,
@@ -309,7 +446,7 @@ private fun HeartRateSection(
             }
         }.orEmpty()
         if (watchParts.isNotEmpty()) {
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(10.dp))
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -317,8 +454,10 @@ private fun HeartRateSection(
             ) {
                 Text(
                     "Watch measured ${watchParts.joinToString(" · ")}",
-                    style = MaterialTheme.typography.bodySmall, color = muted
+                    style = MaterialTheme.typography.bodySmall, color = muted,
+                    modifier = Modifier.weight(1f)
                 )
+                Spacer(Modifier.width(12.dp))
                 if (onAdoptWatchStats != null &&
                     watchParts.any { !it.endsWith("kcal") } // kcal alone isn't adoptable onto the entry
                 ) {
@@ -333,65 +472,5 @@ private fun HeartRateSection(
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun StatRow(
-    label: String,
-    value: String,
-    onBg: Color,
-    muted: Color,
-    outline: Color,
-    /** The reading's compare line ("best 5:32 /km · +0:09", "your fastest · prev 5:48") — §4.9,
-     *  the deciding reading sits beside its value, never in a separate compare section. */
-    meta: String? = null,
-    metaColor: Color = muted
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(label, style = MaterialTheme.typography.bodyMedium, color = muted)
-        Column(horizontalAlignment = Alignment.End) {
-            Text(value, style = MaterialTheme.typography.bodyLarge, color = onBg)
-            if (meta != null) {
-                Text(
-                    meta.uppercase(),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = metaColor, fontSize = 9.sp, letterSpacing = 0.5.sp
-                )
-            }
-        }
-    }
-    // Table rule between stat rows — a line as data (§1), via the shared hairline.
-    EditorialHairline(outline)
-}
-
-/** ("meta line", isPersonalBest) for the distance row, or (null, false) when there's no compare. */
-private fun distanceCompareMeta(
-    compare: CardioSessionCompare?,
-    useMiles: Boolean
-): Pair<String?, Boolean> {
-    val best = compare?.bestOtherDistanceKm ?: return null to false
-    return when {
-        compare.isDistanceBest -> "your longest · prev ${formatDistance(best, useMiles)}" to true
-        else -> "longest ${formatDistance(best, useMiles)}" to false
-    }
-}
-
-/** ("meta line", isPersonalBest) for the pace row, or (null, false) when there's no compare. */
-private fun paceCompareMeta(
-    entry: CardioEntry,
-    compare: CardioSessionCompare?,
-    useMiles: Boolean
-): Pair<String?, Boolean> {
-    val bestEntry = compare?.bestPaceEntry ?: return null to false
-    val best = paceSecPerUnit(bestEntry.durationMin, bestEntry.distanceKm, useMiles) ?: return null to false
-    val mine = paceSecPerUnit(entry.durationMin, entry.distanceKm, useMiles) ?: return null to false
-    return when {
-        compare.isPaceBest -> "your fastest · prev ${formatPaceSec(best)}" to true
-        else -> "best ${formatPaceSec(best)} · +${formatPaceSec((mine - best).coerceAtLeast(0))}" to false
     }
 }

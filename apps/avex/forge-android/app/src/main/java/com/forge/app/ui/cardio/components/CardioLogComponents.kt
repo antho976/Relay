@@ -233,32 +233,67 @@ internal fun CompactNumberField(
     modifier: Modifier = Modifier
 ) {
     Column(modifier) {
-        Text(caption.uppercase(), style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.7f), fontSize = 9.sp, letterSpacing = 1.sp)
+        // §5's ladder has no 0.7 rung — the caption sits on muted 0.65, the measured floor.
+        Text(
+            caption.uppercase(),
+            style = MaterialTheme.typography.labelSmall,
+            color = muted.copy(alpha = 0.65f), fontSize = 9.sp, letterSpacing = 1.sp
+        )
         Spacer(Modifier.height(6.dp))
         Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Box(modifier = Modifier.width(52.dp)) {
-                BasicTextField(
-                    value = value,
-                    onValueChange = onValueChange,
-                    textStyle = MaterialTheme.typography.titleLarge.copy(color = onBg),
-                    singleLine = true,
-                    cursorBrush = SolidColor(accent),
-                    keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
-                    decorationBox = { inner ->
-                        Box {
-                            if (value.isEmpty()) {
-                                Text(placeholder, style = MaterialTheme.typography.titleLarge, color = muted.copy(alpha = 0.35f))
-                            }
-                            inner()
+            // The field sizes to the column, not to a fixed 52dp box — a hard width clipped the
+            // number at large font scales (§14: a container holding text sizes to its content).
+            BasicTextField(
+                value = value,
+                onValueChange = onValueChange,
+                textStyle = MaterialTheme.typography.titleLarge.copy(color = onBg),
+                singleLine = true,
+                cursorBrush = SolidColor(accent),
+                keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
+                decorationBox = { inner ->
+                    Box {
+                        if (value.isEmpty()) {
+                            // A placeholder may dim below the muted floor — it is a ghost affordance,
+                            // not content (§5's named exception).
+                            Text(placeholder, style = MaterialTheme.typography.titleLarge, color = muted.copy(alpha = 0.35f))
                         }
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
+                        inner()
+                    }
+                },
+                modifier = Modifier.weight(1f)
+            )
             Text(unit, style = MaterialTheme.typography.labelSmall, color = muted, modifier = Modifier.padding(bottom = 3.dp))
         }
         Spacer(Modifier.height(4.dp))
+        // The field's own underline — a bordered input earns its line (§13), not a section rule.
         HorizontalDivider(thickness = 1.dp, color = outline.copy(alpha = 0.35f))
+    }
+}
+
+/**
+ * The duration quick-picks — §13 is explicit that hot-path numbers get steppers and inline edit
+ * rather than a keyboard, and duration is the one field every non-rest entry must carry. These are
+ * the durations people actually log; the field above stays typeable for everything else.
+ */
+@Composable
+internal fun DurationQuickPicks(
+    current: String,
+    onPick: (String) -> Unit,
+    onBg: Color,
+    bg: Color,
+    muted: Color,
+    outline: Color,
+    modifier: Modifier = Modifier
+) {
+    Row(modifier, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        listOf(20, 30, 45, 60).forEach { mins ->
+            PillChip(
+                label = "$mins",
+                selected = current == mins.toString(),
+                onClick = { onPick(mins.toString()) },
+                onBg = onBg, bg = bg, muted = muted, outline = outline
+            )
+        }
     }
 }
 
@@ -276,29 +311,29 @@ internal fun NumberInputRow(
 ) {
     Column {
         Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Box(modifier = Modifier.width(64.dp)) {
-                BasicTextField(
-                    value = value,
-                    onValueChange = onValueChange,
-                    textStyle = MaterialTheme.typography.titleLarge.copy(color = onBg),
-                    singleLine = true,
-                    cursorBrush = SolidColor(accent),
-                    keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
-                    decorationBox = { inner ->
-                        Box {
-                            if (value.isEmpty()) {
-                                Text(placeholder, style = MaterialTheme.typography.titleLarge, color = muted.copy(alpha = 0.35f))
-                            }
-                            inner()
+            // Sizes to its content rather than a fixed 64dp box, so a three-digit value at 200%
+            // font scale still reads (§14). The underline follows the field.
+            BasicTextField(
+                value = value,
+                onValueChange = onValueChange,
+                textStyle = MaterialTheme.typography.titleLarge.copy(color = onBg),
+                singleLine = true,
+                cursorBrush = SolidColor(accent),
+                keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
+                decorationBox = { inner ->
+                    Box {
+                        if (value.isEmpty()) {
+                            Text(placeholder, style = MaterialTheme.typography.titleLarge, color = muted.copy(alpha = 0.35f))
                         }
-                    },
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
+                        inner()
+                    }
+                },
+                modifier = Modifier.weight(1f)
+            )
             Text(unit, style = MaterialTheme.typography.bodyMedium, color = muted)
         }
         Spacer(Modifier.height(4.dp))
-        HorizontalDivider(thickness = 1.dp, color = outline.copy(alpha = 0.35f), modifier = Modifier.width(72.dp))
+        HorizontalDivider(thickness = 1.dp, color = outline.copy(alpha = 0.35f))
     }
 }
 

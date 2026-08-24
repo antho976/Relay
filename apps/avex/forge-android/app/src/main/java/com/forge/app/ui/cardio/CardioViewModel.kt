@@ -13,7 +13,9 @@ import com.forge.app.data.repo.TrophyRepository
 import com.forge.app.domain.cardio.CardioActivity
 import com.forge.app.domain.cardio.CardioCondition
 import com.forge.app.domain.cardio.cardioActivityRecords
+import com.forge.app.domain.cardio.CardioWeekAggregate
 import com.forge.app.domain.cardio.cardioPaceSeries
+import com.forge.app.domain.cardio.cardioWeekAggregate
 import com.forge.app.domain.cardio.CardioEffort
 import com.forge.app.domain.cardio.CardioField
 import com.forge.app.domain.cardio.CardioRestReason
@@ -27,6 +29,7 @@ import com.forge.app.domain.health.HrPoint
 import com.forge.app.domain.health.WatchWorkout
 import com.forge.app.domain.health.downsampleHr
 import com.forge.app.ui.cardio.state.CardioDayCell
+import com.forge.app.ui.cardio.state.CardioLens
 import com.forge.app.ui.cardio.state.CardioUiState
 import com.forge.app.ui.common.SnackbarController
 import java.time.DayOfWeek
@@ -86,9 +89,10 @@ class CardioViewModel @Inject constructor(
         val steps = healthConnectManager.canReadSteps()
         val routes = healthConnectManager.canReadExercise()
         val hr = healthConnectManager.canReadHeartRate()
-        // Read today's steps only when granted; fail-soft to null so a read error just hides the line.
-        val todaySteps = if (steps) runCatching { loadStepsForDay(clock.nowMs()).totalSteps }.getOrNull() else null
-        connection.value = WearableConnection(steps = steps, routes = routes, todaySteps = todaySteps, hr = hr)
+        // Today's steps, hourly bars included — one read feeds the whole STEPS section. Fail-soft to
+        // null so a read error just hides it rather than drawing a broken mark.
+        val today = if (steps) runCatching { loadStepsForDay(clock.nowMs()) }.getOrNull() else null
+        connection.value = WearableConnection(steps = steps, routes = routes, today = today, hr = hr)
         // Candidate watch workouts for "recorded with your watch — import?" (W5). Already-logged and
         // dismissed sessions are filtered downstream against the live entry list.
         watchCandidates.value = if (routes) {
@@ -138,8 +142,9 @@ class CardioViewModel @Inject constructor(
                 .sumOf { it.distanceKm ?: 0.0 },
             // All-time per-activity bests (GYMAP-34) — off the full history, on this same background pass.
             records = cardioActivityRecords(all),
-            // Per-activity pace series (GYMAP-35) for the trend chart in the week overlay's current page.
-            paceSeries = cardioPaceSeries(all)
+            // Per-activity pace series (GYMAP-35) for the PROGRESS lens's trend chart.
+            paceSeries = cardioPaceSeries(all),
+            weekAggregate = cardioWeekAggregate(all, weekStartMs, zone)
         )
     }.flowOn(Dispatchers.Default)
 
@@ -170,18 +175,18 @@ class CardioViewModel @Inject constructor(
             weekDistanceKm = d.weekDistanceKm,
             cardioRecords = d.records,
             cardioPaceSeries = d.paceSeries,
+            weekAggregate = d.weekAggregate,
             cardioGoals = cardioGoals,
+            lens = tr.lens,
             entries = d.all,
             sheetOpen = tr.sheetOpen,
             editing = tr.editing,
-            detailOpen = tr.detailOpen,
             sessionDetailId = tr.sessionDetailId,
             sessionWearable = tr.sessionWearable,
             sessionRoute = tr.sessionRoute,
             sessionRouteConsentId = tr.sessionRouteConsentId,
             sessionHr = tr.sessionHr,
             sessionWatch = tr.sessionWatch,
-            weekWearable = tr.weekWearable,
             historyExpanded = tr.historyExpanded
         )
     }.combine(settingsRepo.useMiles) { st, useMiles ->
@@ -189,7 +194,7 @@ class CardioViewModel @Inject constructor(
     }.combine(connection) { st, conn ->
         st.copy(
             stepsConnected = conn.steps, routesConnected = conn.routes,
-            todaySteps = conn.todaySteps, hrConnected = conn.hr
+            todayWearable = conn.today, hrConnected = conn.hr
         )
     }.combine(settingsRepo.lastCardioType) { st, lastType ->
         st.copy(lastCardioType = lastType)
@@ -212,16 +217,8 @@ class CardioViewModel @Inject constructor(
 
     fun closeSheet() = transient.update { it.copy(sheetOpen = false, editing = null) }
 
-    /** Open / close the swipeable week-stats overlay. The current-week page shows today's watch steps,
-     *  loaded fail-soft (null when nothing's connected → the steps graph simply doesn't render). */
-    fun openDetail() {
-        transient.update { it.copy(detailOpen = true) }
-        viewModelScope.launch {
-            val today = loadStepsForDay(clock.nowMs())
-            transient.update { if (it.detailOpen) it.copy(weekWearable = today) else it }
-        }
-    }
-    fun closeDetail() = transient.update { it.copy(detailOpen = false, weekWearable = null) }
+    /** Switch the overview's lens (§4.4). Transient — leaving the tab returns to WEEK. */
+    fun setLens(lens: CardioLens) = transient.update { it.copy(lens = lens) }
 
     /** Open / close the per-session stats overlay for a logged entry. Loads that day's watch steps and
      *  the best-matching GPS route in the background; each load is dropped if the user has since closed
@@ -398,7 +395,8 @@ class CardioViewModel @Inject constructor(
     private data class WearableConnection(
         val steps: Boolean = false,
         val routes: Boolean = false,
-        val todaySteps: Int? = null,
+        /** Today's watch steps with their hourly split — the WEEK lens's STEPS mark. */
+        val today: CardioWearableDay? = null,
         /** HeartRateRecord read granted (W5) — drives the session HR graph. */
         val hr: Boolean = false
     )
@@ -416,7 +414,7 @@ class CardioViewModel @Inject constructor(
     private data class TransientState(
         val sheetOpen: Boolean = false,
         val editing: CardioEntry? = null,
-        val detailOpen: Boolean = false,
+        val lens: CardioLens = CardioLens.WEEK,
         val sessionDetailId: Long? = null,
         val sessionWearable: CardioWearableDay? = null,
         val sessionRoute: List<RoutePoint>? = null,
@@ -425,7 +423,6 @@ class CardioViewModel @Inject constructor(
         val sessionHr: List<HrPoint>? = null,
         /** The open session's matched watch workout with its measured stats (W5); null when none. */
         val sessionWatch: WatchWorkout? = null,
-        val weekWearable: CardioWearableDay? = null,
         val historyExpanded: Boolean = false
     )
 
@@ -438,7 +435,8 @@ class CardioViewModel @Inject constructor(
         val weekDays: List<CardioDayCell>,
         val weekDistanceKm: Double,
         val records: List<com.forge.app.domain.cardio.CardioActivityRecord>,
-        val paceSeries: List<com.forge.app.domain.cardio.CardioPaceSeries>
+        val paceSeries: List<com.forge.app.domain.cardio.CardioPaceSeries>,
+        val weekAggregate: CardioWeekAggregate
     )
 
     companion object {

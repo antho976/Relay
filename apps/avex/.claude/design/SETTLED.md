@@ -21,7 +21,7 @@ as a completed read; the FOR YOU shelf became the page's one opening pointer, wh
 its own chapter so nothing is printed twice. Do not re-add a card, a scrim-over-photo caption, or a
 second reader) · full-screen PR takeover (PR = confetti +
 gold row) · accent-tinted "important" prose · session-summary extras (share card/tags/ghost/vs-last/
-what's-next — the SESSION-summary card specifically; the Profile before/after share card `BeforeAfterCardRenderer` (GYMAP-55) is a separate, deliberate shareable artifact and stays) · cardio big-number hero · cardio kcal estimates (return only with real watch burn data) · new gamification surfaces (wait-listed) · Profile
+what's-next — the SESSION-summary card specifically; the Profile before/after share card `BeforeAfterCardRenderer` (GYMAP-55) is a separate, deliberate shareable artifact and stays) · cardio big-number hero · **the cardio week-stats overlay** (see the 2026-08-23 section below) · cardio kcal estimates (return only with real watch burn data) · new gamification surfaces (wait-listed) · Profile
 identity-first restructure · mood/subjective coach drivers · Coach hero week-dot calendar, "Pulse",
 pass-square record strip · **every page-level banner** (2026-07-27: Home's milestone toast, coach-brief
 strip, orphan-session notice and resume reminder; Cardio's connect-a-watch invite — all moved to the
@@ -140,6 +140,37 @@ Editor keeps its dot — it lists every day at once, where the colour is doing w
 **Do not re-add:** a welcome screen. The cold-launch `AvexIntro` plays the wordmark moments earlier,
 §3 bans a wordmark pre-app, and the plan-mode fork is a better opening beat than a greeting — it is
 the most consequential question in the flow and the only one with motion in it.
+
+## Cardio, rebuilt around one week and two lenses (2026-08-23)
+
+**Removed and not to be re-added**: the **swipeable week-stats overlay** (`CardioWeekDetailSheet` +
+`CardioWeekStatsPage`) — it was reached by tapping the hero, which made the page's richest content
+depend on a gesture nothing announced, and it redrew the hero's OWN marks (Mon–Sun bars, goal meter,
+days/minutes/distance figures) one screen away, which is §4.3 twice over. It also could only be
+walked one week per swipe, so "how do my weeks compare" — the question it existed for — was the one
+thing it could not answer. Week browsing is `CardioWeeksScreen`: **one bar per week, taller the more you
+did, tap a bar to open it, arrows to page further back** (Antho, 2026-08-23 — a first pass drew the
+weeks as a list of rows and it read as a table, not as a comparison). Do not put a week pager back on
+the cardio tab: the hub is itself a `HorizontalPager`, so a nested week-swipe would eat the tab
+gesture · the **LOAD chart on the overview's PROGRESS lens** (it was the weeks page's own mark drawn
+a second time; `weeks →` is the way to it) · **BY ACTIVITY**, on both the WEEK lens and the week page
+(Antho, 2026-08-23: at the counts a real week has, one or two types, it was a full-width bar
+restating the minutes figure and the session row beside it) · the **`stats →`** link on a week's
+session rows (the whole row already opens the session, so it was a second affordance for one tap) · the **hero as one page-wide tap target** (it is passive; `weeks →` is a
+named action) · the **white `+` disc** on the sessions header (the primary action is a filled
+`Log cardio` capsule above the fold) · the hero's **`TODAY · N STEPS` text line** (a data section
+leads with its mark — the hourly `StepsByHourSection` carries today's steps, and the line was a
+sentence standing in for a visual) · the **all-time "recent sessions" list** under a THIS WEEK hero
+(two different scopes claiming one page; the list follows the hero's week, `view all →` goes to
+History) · the session detail's **ten-row `label — value` stat table** and its hairlines (three
+figures, one tag line, and the compare data drawn as ranked bars — the old page drew no mark at all,
+so without a watch connected it was pure text) · **accent-coloured record distances** (they failed AA
+on four of the five accents, §14; the accent moved to the bar, where colour carries meaning without
+being read).
+
+**Kept deliberately**: the "More" expander on the log form (progressive disclosure on a FORM is not
+§4.2's banned "content behind a tap" — GYMAP-38/39 put those fields there on purpose) · the WHO
+150-minute fallback meter · the watch-import section's dismiss-for-good.
 
 ## Home, cut down to two questions (2026-08-16)
 

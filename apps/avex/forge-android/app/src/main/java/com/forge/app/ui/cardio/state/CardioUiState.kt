@@ -4,12 +4,16 @@ import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.data.repo.ExtendedGoalRepository
 import com.forge.app.domain.cardio.CardioActivityRecord
 import com.forge.app.domain.cardio.CardioPaceSeries
+import com.forge.app.domain.cardio.CardioWeekAggregate
 import com.forge.app.domain.cardio.CardioWearableDay
 import com.forge.app.domain.cardio.RoutePoint
 
 /** One Mon–Sun cell of the cardio week row — active minutes plus whether a rest day was logged.
  *  A single self-contained cell (vs two index-aligned parallel lists) can't drift out of sync. */
 data class CardioDayCell(val minutes: Int = 0, val isRest: Boolean = false)
+
+/** The overview's two lenses (§4.4). WEEK is what just happened; PROGRESS is where it is going. */
+enum class CardioLens(val label: String) { WEEK("Week"), PROGRESS("Progress") }
 
 /**
  * Cardio screen state. Entries are the raw rows from the DB (newest first); the UI
@@ -32,15 +36,17 @@ data class CardioUiState(
     val cardioGoals: List<ExtendedGoalRepository.Progress> = emptyList(),
     /** All-time per-activity bests (GYMAP-34) — the RECORDS block; empty until a distance session lands. */
     val cardioRecords: List<CardioActivityRecord> = emptyList(),
-    /** Per-activity pace series (GYMAP-35) — the week overlay's pace-trend chart. A type appears once it
-     *  has two paced sessions; empty until then. */
+    /** Per-activity pace series (GYMAP-35) — the PROGRESS lens's pace-trend chart. A type appears once
+     *  it has two paced sessions; empty until then. */
     val cardioPaceSeries: List<CardioPaceSeries> = emptyList(),
+    /** This week's Mon–Sun minutes and totals — the hero's own week, split by activity for BY ACTIVITY. */
+    val weekAggregate: CardioWeekAggregate? = null,
+    /** Which lens the overview is showing. Transient, so it resets when the tab is left and re-entered. */
+    val lens: CardioLens = CardioLens.WEEK,
     val entries: List<CardioEntry> = emptyList(),
     val sheetOpen: Boolean = false,
     /** Non-null when the open sheet is editing an existing entry (vs logging a new one). */
     val editing: CardioEntry? = null,
-    /** The swipeable week-stats overlay (per-week bars, graphs, numbers). */
-    val detailOpen: Boolean = false,
     /** Non-null → the per-session stats overlay is open for this entry id. */
     val sessionDetailId: Long? = null,
     /** Watch steps for the open session's day (Health Connect); null until loaded / when none. */
@@ -58,15 +64,14 @@ data class CardioUiState(
     val importSuggestions: List<com.forge.app.domain.health.WatchWorkout> = emptyList(),
     /** Avex holds the HeartRateRecord read grant (W5) — the session HR graph can load. */
     val hrConnected: Boolean = false,
-    /** Watch steps for today, shown on the current-week stats page; null until loaded / when none. */
-    val weekWearable: CardioWearableDay? = null,
     /** False → the main list shows only the 5 most-recent entries; true → the full history. */
     val historyExpanded: Boolean = false,
     /** Avex holds the StepsRecord read grant — drives the steps placeholder (and hides the banner). */
     val stepsConnected: Boolean = false,
-    /** Today's watch step total (GYMAP-64) — the hero's quiet "TODAY · N steps" line. Null when no watch
-     *  is connected or the read failed, so a non-null value (incl. 0) means "connected, show it". */
-    val todaySteps: Int? = null,
+    /** Today's watch steps with their hourly split (GYMAP-64) — the WEEK lens's STEPS mark. Null when
+     *  no watch is connected or the read failed, so a non-null value (incl. zero steps) means
+     *  "connected, draw it"; [stepsConnected] alone draws the ghost bars while the first sync lands. */
+    val todayWearable: CardioWearableDay? = null,
     /** Avex holds the ExerciseSession read grant — for GPS-route matching (also hides the banner). */
     val routesConnected: Boolean = false,
     /** Distance/pace unit — true shows miles, false km. Derives from the weight unit when unset. */
