@@ -87,8 +87,10 @@ class DayViewModel @Inject constructor(
      *  the training screen is left and re-entered), matching a per-session scope without persisting. */
     internal var dislikePromptSuppressedThisSession = false
 
-    /** Slot ids with a "Make default" swap currently in flight — dedupes a double-fired persistent swap
-     *  so it can't stack two dislike prompts. Touched only on the main dispatcher (event handling). */
+    /** Slot ids with a swap currently in flight — dedupes a double-fired swap of either scope, so a
+     *  persistent one can't stack two dislike prompts and neither can insert a second
+     *  logged_exercise row for the slot (see `DaySwapHandlers.applySessionSwap`). Touched only on
+     *  the main dispatcher (event handling). */
     internal val swapsInFlight = mutableSetOf<String>()
 
     internal val _state = MutableStateFlow(

@@ -43,7 +43,20 @@ internal fun DayViewModel.handleSwapEvent(event: DayUiEvent) {
 }
 
 private fun DayViewModel.applySessionSwap(exerciseId: String, swap: ExerciseDef) {
-    viewModelScope.launch { doSessionSwap(exerciseId, swap) }
+    // Same re-entrancy guard the persistent path uses, for a sharper reason (SM-2 follow-up):
+    // ensureLoggedExercise reads loggedExerciseId out of UI STATE, which only refreshes after the
+    // write completes. Two "just today" swaps landing on the same slot before that refresh both read
+    // null and both INSERT, leaving two logged_exercise rows for one slot — the day screen then draws
+    // the slot twice and the session's sets split across the copies. logged_exercise has no unique
+    // index on (session, slot) to catch it, so the guard is the only thing standing there.
+    if (!swapsInFlight.add(exerciseId)) return
+    viewModelScope.launch {
+        try {
+            doSessionSwap(exerciseId, swap)
+        } finally {
+            swapsInFlight.remove(exerciseId)
+        }
+    }
 }
 
 /** The shared session-swap body — applied by both "Just today" and "Make default" (the latter after

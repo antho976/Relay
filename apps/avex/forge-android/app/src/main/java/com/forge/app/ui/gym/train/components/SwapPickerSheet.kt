@@ -3,16 +3,18 @@ package com.forge.app.ui.gym.train.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -22,54 +24,49 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.role
-import androidx.compose.ui.semantics.selected
-import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import com.forge.app.program.ExerciseDef
 import com.forge.app.program.ExercisePlan
 import com.forge.app.ui.common.EditorialHeader
-import com.forge.app.ui.common.EntranceItem
 import com.forge.app.ui.common.ExerciseIcons
-import com.forge.app.ui.common.ForgeHeroAction
 import com.forge.app.ui.common.ForgeOutlineCapsule
+import com.forge.app.ui.common.ForgePrimaryCapsule
 import com.forge.app.ui.common.InlineEmptyHint
 import com.forge.app.ui.common.SegmentPill
-import com.forge.app.ui.common.bounceCombinedClick
-
-/** §7 — one vertical padding for every row in this sheet, so the list reads as one rhythm. */
-private val SWAP_ROW_PAD = 10.dp
-
-/** How far a pick reaches. Chosen per candidate, then spent by the one confirm. */
-private enum class SwapScope(val label: String) { TODAY("Today"), ALWAYS("Always") }
 
 /**
- * Modal sheet listing the swap [candidates] for [forExercise]'s muscle group, drawn from the single
- * [com.forge.app.program.ExerciseLibrary] pool (already filtered by equipment + dislikes).
+ * Swap picker — the Modal archetype (DESIGN §3) hosting a List: one mono anchor, trim rows, and the
+ * transient detail of the ONE exercise you tapped.
  *
- * DESIGN §3 Modal over §3 List: surface fill, 24dp gutter, trim rows, no hero. **Select, then
- * confirm** (Antho, 2026-08-24): each candidate carries its own `Today` / `Always` pair, and one
- * accent [ForgeHeroAction] pinned under the list commits the armed pick. The first candidate opens
- * with `Today` already lit, so the mechanism is visible the moment the sheet arrives rather than
- * waiting to be discovered.
+ * **Every row carries its own `Today` / `Every week` choice, and nothing commits until you confirm.**
+ * Selection is radio-style and starts on the LEAD candidate's `Today` (the library is ordered
+ * best-first), so the likeliest swap is one tap from done and the accent-filled commit is on screen
+ * from the moment the sheet opens. Arming a row is a selection, not an action, so both per-row
+ * controls are [SegmentPill]s rather than buttons — which is what keeps a two-control row off the *button wall* in `FAILURES.md` (that names
+ * a FILLED capsule per row, and there is exactly one filled capsule here, at the END per §8). The row
+ * itself is not clickable, so the two pills are siblings rather than taps nested inside a third
+ * (§2③). The previous build put a filled + outlined capsule pair in every row and fired on the first
+ * touch, which both stacked the wall and made a mis-tap a committed write.
  *
- * This is a deliberate departure from §8's "per-row action = one drawn outlined pill, never a button
- * per row" — see `design/SETTLED.md`. That rule exists because filled capsules per row stack into a
- * button wall; what keeps this the right side of it is that the row pair is a SELECTION (the §3 pill
- * formula, borders only, nothing filled) and the sheet still has exactly ONE filled action, at the end.
+ * [candidates] arrive best-first out of [com.forge.app.program.ExerciseLibrary], so the lead entry
+ * carries the sheet's ONE caption: its situational guidance, drawn inside the row it belongs to.
+ * [hasPersistentSwap] surfaces the restore action, which an earlier sheet accepted as a parameter and
+ * then never drew, leaving `onClearPersistent` unreachable.
  *
- * Rows carry the library's `muscleTarget` and nothing else. `why` / `whenToUse` ran two to four
- * sentences per candidate, which turned five alternatives into a prose wall no one reads between
- * sets; §4.2 cuts prose rather than folding it behind a tap.
+ * [currentSwapName] names the move being replaced in the anchor. It is deliberately NOT used to mark
+ * a row: `DayScreen` filters the day's own effective names out of [candidates], so the active swap is
+ * never in this list and a "current" mark here could never fire. The accent wash means ARMED.
  *
- * [currentSwapName] opens armed on the swap already in force. [hasPersistentSwap] reveals the way
- * back to the programmed exercise, which the old sheet accepted as a parameter and then never drew.
+ * No search field: the pool is already scoped to one muscle and the user's own equipment (4–18 moves
+ * before dislikes and same-day exclusions), and this opens one-handed mid-set. A keyboard over six
+ * rows costs more than it finds.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -83,9 +80,11 @@ fun SwapPickerSheet(
     onClearPersistent: () -> Unit,
     onDismiss: () -> Unit
 ) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        sheetState = sheetState,
         containerColor = MaterialTheme.colorScheme.surface
     ) {
         SwapPickerContent(
@@ -100,195 +99,218 @@ fun SwapPickerSheet(
     }
 }
 
+/** Which scope an armed row is waiting to commit under. */
+internal enum class SwapScope { TODAY, EVERY_WEEK }
+
 /**
- * The sheet's body, split out so it renders on its own in a preview and a golden. The sheet chrome
- * adds nothing you need to design (`ui/recipes/ModalRecipe.kt`).
+ * The sheet's body, separated from its chrome so it renders on its own — the sheet frame adds
+ * nothing you need to design, and `SwapPickerScreenshotTest` pins this at 100% and 200% font scale
+ * where a regex can't reach (§14).
  */
 @Composable
-internal fun ColumnScope.SwapPickerContent(
+internal fun SwapPickerContent(
     forExercise: ExercisePlan,
     candidates: List<ExerciseDef>,
     hasPersistentSwap: Boolean,
-    currentSwapName: String? = null,
-    onPickForSession: (ExerciseDef) -> Unit = {},
-    onPickPersistent: (ExerciseDef) -> Unit = {},
-    onClearPersistent: () -> Unit = {}
+    currentSwapName: String?,
+    onPickForSession: (ExerciseDef) -> Unit,
+    onPickPersistent: (ExerciseDef) -> Unit,
+    onClearPersistent: () -> Unit,
+    /** Preview/test seam: overrides which row opens armed. Null = the real default, the lead
+     *  candidate's `Today`. */
+    initialArmed: Pair<String, SwapScope>? = null
 ) {
-    val onBg = MaterialTheme.colorScheme.onBackground
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val accent = MaterialTheme.colorScheme.primary
-    val outline = MaterialTheme.colorScheme.outline
+    val cs = MaterialTheme.colorScheme
+    val onBg = cs.onBackground
+    val muted = cs.onSurfaceVariant
+    val accent = cs.primary
+    val outline = cs.outline
 
-    // Opening armed is the point: a sheet of inert rows gives no clue the pills are yours to press.
-    // It lands on the swap already in force when there is one, otherwise the first candidate, and on
-    // ALWAYS only when that live swap is the persistent kind — so the lit pill always tells the
-    // truth about what is set right now.
-    val opening = candidates.firstOrNull { it.name == currentSwapName } ?: candidates.firstOrNull()
-    var pickedId by rememberSaveable(opening?.id) { mutableStateOf(opening?.id) }
-    var scope by rememberSaveable(opening?.id) {
-        mutableStateOf(
-            if (currentSwapName != null && hasPersistentSwap) SwapScope.ALWAYS else SwapScope.TODAY
-        )
+    // The (library id, scope) the confirm capsule will commit. The sheet OPENS with the lead
+    // candidate's "Today" already selected — the library is ordered best-first, so the most likely
+    // swap is one tap away and the confirm is never a control you have to go find. Re-keyed on
+    // `candidates` so a refreshed pool re-seeds rather than stranding a row that is no longer there.
+    var armed by remember(candidates) {
+        mutableStateOf(initialArmed ?: candidates.firstOrNull()?.let { it.id to SwapScope.TODAY })
     }
-    val picked = candidates.firstOrNull { it.id == pickedId }
+    val armedDef = candidates.firstOrNull { it.id == armed?.first }
 
     Column(
-        modifier = Modifier
+        Modifier
             .fillMaxWidth()
-            .padding(horizontal = 24.dp)
+            .navigationBarsPadding()
+            // §7: the 24dp page gutter, plus enough top air that the anchor clears the sheet's
+            // drag handle instead of sitting on it.
+            .padding(horizontal = 24.dp, vertical = 8.dp)
     ) {
-        EditorialHeader("SWAP · ${forExercise.muscle.displayName}", muted, accent)
+        // §4.6 / ModalRecipe: one mono anchor naming what the sheet is about. It names the move
+        // being replaced rather than adding a serif title over the card it already covers.
+        EditorialHeader("SWAP · ${(currentSwapName ?: forExercise.name).uppercase()}", muted, accent)
+        Spacer(Modifier.height(10.dp))
+        // §4.3: the sheet's one caption, and the only place the two scopes are explained. The pills
+        // themselves are the labels; this says what each one costs you.
+        Text(
+            "Today swaps this session. Every week replaces it in your plan.",
+            style = MaterialTheme.typography.bodySmall,
+            color = muted.copy(alpha = 0.65f)
+        )
+
+        Spacer(Modifier.height(20.dp))
 
         if (candidates.isEmpty()) {
-            // §12 zero: name what would unlock the list. The count caption is suppressed rather
-            // than printed as "0 alternatives" — the hint already carries the fact, and saying it
-            // twice is the §4.3 one-home rule broken over two lines.
-            Spacer(Modifier.height(8.dp))
+            // §12: a pool with nothing in it has no zero-SHAPE to draw, which is the last-resort
+            // case InlineEmptyHint exists for. It names the concrete unlock, not the absence.
             InlineEmptyHint(
-                "Your equipment covers one ${forExercise.muscle.displayName.lowercase()} " +
-                    "movement. Add equipment in Settings to open up the rest.",
-                muted
+                "No other ${forExercise.muscle.displayName.lowercase()} moves your equipment can do. " +
+                    "Add gear in Settings to widen the pool.",
+                muted.copy(alpha = 0.65f)
             )
-            Spacer(Modifier.height(32.dp))
         } else {
-            Spacer(Modifier.height(2.dp))
-            Text(
-                // Singular gets its own string — a paren-plural is machine prose (§11).
-                if (candidates.size == 1) "One alternative to ${forExercise.name}."
-                else "${candidates.size} alternatives to ${forExercise.name}.",
-                style = MaterialTheme.typography.bodySmall,
-                color = muted
-            )
-            Spacer(Modifier.height(2.dp))
-            Text(
-                // §13 — the one explainer this sheet earns, beside the controls it explains.
-                "Today swaps this session. Always replaces it in your program.",
-                style = MaterialTheme.typography.bodySmall,
-                color = muted
-            )
-        }
-    }
-
-    if (candidates.isEmpty()) return
-
-    // The list scrolls; the confirm does not. Eleven alternatives would otherwise bury the action
-    // that spends them under a full screen of scrolling.
-    Column(
-        modifier = Modifier
-            .weight(1f, fill = false)
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 24.dp)
-            .padding(top = 14.dp, bottom = 4.dp)
-    ) {
-        candidates.forEachIndexed { index, swap ->
-            EntranceItem(index) {
-                SwapRow(
-                    swap = swap,
-                    isPicked = swap.id == pickedId,
-                    scope = scope,
-                    onArm = { armed ->
-                        pickedId = swap.id
-                        scope = armed
-                    }
-                )
+            LazyColumn(Modifier.fillMaxWidth().weight(1f, fill = false)) {
+                itemsIndexed(candidates, key = { _, def -> def.id }) { index, def ->
+                    SwapRow(
+                        def = def,
+                        armedScope = armed?.takeIf { it.first == def.id }?.second,
+                        // Best-first ordering earns the lead row the sheet's ONE caption (§4.3).
+                        caption = if (index == 0) def.whenToUse ?: def.why else null,
+                        // Radio-style: one row is always armed, so re-tapping the lit pill is a
+                        // no-op rather than leaving the sheet with no confirm to press.
+                        onArm = { scope -> armed = def.id to scope }
+                    )
+                }
             }
         }
-    }
 
-    // §8 — one filled action, at the END. Accent-filled rather than the light `ForgePrimaryCapsule`
-    // (Antho, 2026-08-24): the sheet's whole job is this one commit, so it reads as the thing to
-    // press. `ForgeHeroAction` takes `onPrimary` for its label, so a light or monochrome accent
-    // never renders same-on-same (§5).
-    Column(modifier = Modifier.fillMaxWidth().padding(24.dp)) {
-        ForgeHeroAction(
-            text = picked?.let {
-                when (scope) {
-                    SwapScope.TODAY -> "Swap to ${it.name}"
-                    SwapScope.ALWAYS -> "Always use ${it.name}"
-                }
-            } ?: "Pick an alternative",
-            onClick = {
-                val swap = picked ?: return@ForgeHeroAction
-                when (scope) {
-                    SwapScope.TODAY -> onPickForSession(swap)
-                    SwapScope.ALWAYS -> onPickPersistent(swap)
-                }
-            },
-            modifier = Modifier.fillMaxWidth()
-        )
+        // §8: actions at the END — ① the filled confirm, ② its outlined sidekick. The confirm is
+        // absent rather than dimmed until something is armed, because §2③ says nothing renders as an
+        // affordance while it cannot run. No enter animation: §9 keeps presentational motion out of
+        // the working surfaces, and the row's wash has already acknowledged the tap.
+        val armedScope = armed?.second
+        if (armedDef != null && armedScope != null) {
+            Spacer(Modifier.height(16.dp))
+            ForgePrimaryCapsule(
+                // §11: names the move AND the scope, so the confirm restates the decision instead
+                // of asking "are you sure" about an unnamed one.
+                when (armedScope) {
+                    SwapScope.TODAY -> "Swap to ${armedDef.name} for today"
+                    SwapScope.EVERY_WEEK -> "Swap to ${armedDef.name} every week"
+                },
+                onClick = {
+                    armed = null
+                    when (armedScope) {
+                        SwapScope.TODAY -> onPickForSession(armedDef)
+                        SwapScope.EVERY_WEEK -> onPickPersistent(armedDef)
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+                // Accent-filled: it has to out-rank a whole list of accent-bordered selection pills,
+                // and the light fill read as one more chip among them (§8, 2026-08-24).
+                accent = true
+            )
+        }
+
+        // §8 level ②: reverting is the sidekick to picking, never a filled capsule. Names its
+        // referent (§11), and is the only route back out of a persistent swap.
         if (hasPersistentSwap) {
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(if (armedDef != null) 10.dp else 16.dp))
             ForgeOutlineCapsule(
-                "Restore ${forExercise.name}",
+                "Back to ${forExercise.name}",
                 onClick = onClearPersistent,
                 modifier = Modifier.fillMaxWidth()
             )
         }
+        Spacer(Modifier.height(24.dp))
     }
 }
 
 /**
- * One alternative and the two reaches it can be taken with. The pills are a SELECTION, not two
- * actions — they arm the sheet's single confirm — so they take the §3 pill formula and nothing on
- * the row is filled. Tapping anywhere else on the row arms it at the scope already chosen, which
- * keeps a full-width target for the common case.
+ * One candidate: equipment glyph, name, what it actually hits, and its own `Today` / `Every week`
+ * choice. Both controls are [SegmentPill]s because arming a row SELECTS rather than acts — the
+ * commit is the single filled capsule at the sheet's end. [caption] is the lead entry's situational
+ * guidance, drawn inside the row it describes.
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SwapRow(
-    swap: ExerciseDef,
-    isPicked: Boolean,
-    scope: SwapScope,
+    def: ExerciseDef,
+    armedScope: SwapScope?,
+    caption: String?,
     onArm: (SwapScope) -> Unit
 ) {
-    val onBg = MaterialTheme.colorScheme.onBackground
-    val muted = MaterialTheme.colorScheme.onSurfaceVariant
-    val accent = MaterialTheme.colorScheme.primary
-    val outline = MaterialTheme.colorScheme.outline
+    val cs = MaterialTheme.colorScheme
+    val onBg = cs.onBackground
+    val muted = cs.onSurfaceVariant
+    val accent = cs.primary
+    val outline = cs.outline
 
     Row(
-        modifier = Modifier
+        Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(12.dp))
-            // The armed row takes the active-row wash (§5's 0.15 rung) and no border — the lit pill
-            // inside it already carries one, and two would read as a box inside a box.
-            .then(if (isPicked) Modifier.background(accent.copy(alpha = 0.15f)) else Modifier)
-            .bounceCombinedClick(
-                onClickLabel = "Choose ${swap.name}",
-                onClick = { onArm(scope) }
-            )
-            .semantics { role = Role.RadioButton; selected = isPicked }
-            .padding(horizontal = 10.dp, vertical = SWAP_ROW_PAD),
-        // Top, not centre: at 200% font scale the meta line wraps and a centred glyph drifts down
-        // to the second line, away from the name it labels (§14).
+            // The §3 tile wash marks the row waiting on the confirm, so the capsule at the bottom
+            // and the row it will act on read as one decision.
+            .background(if (armedScope != null) accent.copy(alpha = 0.15f) else Color.Transparent)
+            .padding(horizontal = 8.dp, vertical = 12.dp),
         verticalAlignment = Alignment.Top,
-        horizontalArrangement = Arrangement.spacedBy(10.dp)
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // §8 — exercise rows in a picker lead with their equipment-class glyph.
+        // §8: pickers lead with the ExerciseIcons equipment-class glyph, muted and never
+        // accent-tinted. Decorative to TalkBack — the row's text carries the movement (§14).
         Icon(
-            ExerciseIcons.forEquipment(swap.equipment),
+            ExerciseIcons.forEquipment(def.equipment),
             contentDescription = null,
             tint = muted,
-            // Optical alignment with the name's cap height, which sits below the line box top.
             modifier = Modifier.padding(top = 2.dp).size(20.dp)
         )
-        Column(modifier = Modifier.weight(1f)) {
-            Text(swap.name, style = MaterialTheme.typography.bodyLarge, color = onBg)
-            Spacer(Modifier.height(2.dp))
-            Text(
-                swap.muscleTarget ?: swap.muscle.displayName,
-                style = MaterialTheme.typography.bodySmall,
-                color = muted
-            )
-            Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                SwapScope.entries.forEach { option ->
-                    SegmentPill(
-                        text = option.label,
-                        selected = isPicked && scope == option,
-                        onClick = { onArm(option) },
-                        accent = accent, onBg = onBg, muted = muted, outline = outline
-                    )
+        Column(Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // §14: no maxLines on a movement name — a long one wraps rather than truncating.
+                Text(
+                    def.name,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = cs.onSurface,
+                    modifier = Modifier.weight(1f)
+                )
+                // §8: flag only the exception. A timed hold swaps the set logger's REPS column for a
+                // m:ss field, which is the one swap consequence the name and glyph don't carry.
+                if (def.timed) {
+                    Text("HOLD", style = MaterialTheme.typography.labelSmall, color = muted)
                 }
+            }
+            // Every candidate shares this row's muscle group, so the differentiator is what the
+            // movement specifically hits — never the group name repeated down the list (§4.3).
+            def.muscleTarget?.let { target ->
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    target,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = muted.copy(alpha = 0.65f)
+                )
+            }
+            caption?.let { guidance ->
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    guidance,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = muted.copy(alpha = 0.65f),
+                    fontStyle = FontStyle.Italic
+                )
+            }
+            Spacer(Modifier.height(10.dp))
+            // §14: FlowRow so the pair stacks instead of clipping once the font scale grows them
+            // past the row's width.
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                SegmentPill(
+                    "Today", armedScope == SwapScope.TODAY, { onArm(SwapScope.TODAY) },
+                    accent, onBg, muted, outline
+                )
+                SegmentPill(
+                    "Every week", armedScope == SwapScope.EVERY_WEEK, { onArm(SwapScope.EVERY_WEEK) },
+                    accent, onBg, muted, outline
+                )
             }
         }
     }

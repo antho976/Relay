@@ -193,7 +193,7 @@
 4 em-dash domain/coach/OutcomeWatcher.kt em dash in string
 1 em-dash domain/engine/ZoneCoach.kt em dash in string
 5 em-dash domain/notify/TrainingReminder.kt em dash in string
-74 em-dash program/ExerciseLibrary.kt em dash in string
+53 em-dash program/ExerciseLibrary.kt em dash in string
 19 em-dash program/Program.kt em dash in string
 1 em-dash security/LocalAppLock.kt em dash in string
 2 em-dash service/WeeklyRecapWorker.kt em dash in string

@@ -594,6 +594,14 @@ available beside it. Custom moves stay out of Your gear because they store no eq
 - heatmap "That day"
 - ExerciseLibraryPicker (`singleSelect` = radio-style choose-one for swaps — accent-wash pick, no
   checkbox)
+- SwapPickerSheet (**rebuilt 2026-08-23**) — the live session's swap picker, a List inside a Modal.
+  Arm-then-confirm: every row carries its own `Today` / `Every week` `SegmentPill` pair (selection,
+  not action), the armed row takes the accent tile wash, and ONE `ForgePrimaryCapsule` at the END
+  commits, naming the move and the scope. Rows are the `ExerciseIcons` equipment glyph + name +
+  `muscleTarget`; a timed hold flags `HOLD`; the lead entry (the library is ordered best-first)
+  carries the sheet's one caption. `hasPersistentSwap` draws the `Back to <plan exercise>` outlined
+  capsule beside the confirm, the only route out of a persistent swap. Body is `SwapPickerContent`
+  (`initialArmed` is its preview/test seam), pinned by `SwapPickerScreenshotTest` at 100% / 200%
 - the program SetsReps sheet
 - AvatarPickerSheet (profile cover — "select your own" + provided default covers by category,
   `DefaultAvatars`; picked default is baked into `avatar.jpg`)
