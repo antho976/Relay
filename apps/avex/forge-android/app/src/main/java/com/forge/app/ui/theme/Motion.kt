@@ -26,6 +26,17 @@ object ForgeMotion {
     @Volatile var durationScale: Float = 1f
 
     private val reduceMotion: Boolean get() = durationScale <= 0f
+
+    /**
+     * True when the user has turned animations off system-wide.
+     *
+     * Every spec below already collapses on its own, so nothing that merely *plays* an animation
+     * needs this. It exists for the one thing a duration cannot express: motion that REPEATS on a
+     * timer with no input, like the Academy's rotating poke. A zero-length tween would turn that
+     * into a silent hard cut every few seconds rather than into stillness, so the caller has to
+     * stop the timer itself and offer the manual control instead.
+     */
+    val animationsOff: Boolean get() = reduceMotion
     private fun scaled(durationMs: Int): Int = (durationMs * durationScale).roundToInt()
 
     /** Scale a one-off raw duration (for animations not built from the helpers below — e.g. a
