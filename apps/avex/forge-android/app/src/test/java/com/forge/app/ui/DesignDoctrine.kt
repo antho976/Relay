@@ -63,10 +63,21 @@ object DesignDoctrine {
      * Three rules — `m3-card`, `spinner`, `rtl` — carry ZERO debt. They cost nothing today and exist
      * so the doctrine's most load-bearing bans can never quietly regress.
      *
+     * 866 -> 771 (2026-08-23) when the active session screen was brought back onto doctrine: the
+     * LOG SET / MOVE TO NEXT slot became a capsule instead of M3's 16dp button corner, its pure
+     * `Color.White` became the theme's warm `onBackground`, the set-input slab took `surfaceVariant`
+     * at the 12dp tile radius instead of a 5% neutral wash at 10dp, the rest indicators took the
+     * palette's `ForgeLastGreen` instead of their own hex, and the footer's four Material stock
+     * glyphs became the in-house `TrainIcons`, and the coach's "Suggested next" line took the accent
+     * instead of an off-ladder muted 0.75. That accounts for 14; the other two (a `fontSize` in
+     * Cardio's week detail, an alpha in the Profile screen) were already fixed on main and had
+     * simply never been banked. The rest of the drop is the recorded ceiling catching up with what
+     * the file actually summed to.
+     *
      * Lower this as debt is paid down; raising it is a reviewable decision, not a convenience.
      * `design/AUDIT.md` has the per-rule breakdown and the recommended order of paydown.
      */
-    const val ALLOWLIST_BASELINE = 866
+    const val ALLOWLIST_BASELINE = 771
 
     data class Violation(val rule: String, val path: String, val token: String, val line: Int) {
         /**

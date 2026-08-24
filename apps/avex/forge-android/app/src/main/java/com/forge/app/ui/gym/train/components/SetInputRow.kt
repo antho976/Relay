@@ -44,11 +44,12 @@ import androidx.compose.ui.focus.FocusRequester
 import com.forge.app.ui.common.clickableLabeled
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
@@ -65,11 +66,6 @@ import com.forge.app.domain.units.parseToLb
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.domain.units.weightInputValue
 import com.forge.app.ui.theme.LocalForgeSettings
-
-// Match SetRow column widths so the input row aligns with logged-set rows.
-private val SET_COL_W = 36.dp
-private val REPS_COL_W = 48.dp
-private val DELTA_COL_W = 72.dp
 
 // Hoisted so it isn't recompiled on every weight keystroke. Matches a full "WxR"
 // entry (e.g. a pasted "45x10") so it splits into both fields at once.
@@ -230,24 +226,79 @@ fun SetInputRow(
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val bg = MaterialTheme.colorScheme.background
+    val outline = MaterialTheme.colorScheme.outline
 
     if (nextSetNumber != null) {
         // ── Ledger-style table input row ─────────────────────────────────────
-        val ctaShape = RoundedCornerShape(16.dp)
+        // §8 — every do-it-now action in the app is a CAPSULE (ForgePrimaryCapsule /
+        // ForgeOutlineCapsule / the top bar's FINISH). This slot used to be a 16dp rounded
+        // rectangle, which is M3's stock button corner and read as another app's button
+        // sitting inside ours.
+        val ctaShape = RoundedCornerShape(50)
+        val stacked = SetTable.stacked()
         Column(modifier = modifier.fillMaxWidth()) {
             // Active input row — hidden once the target sets are met (then the CTA
             // becomes "MOVE TO NEXT"; tap "+ ADD A SET" to log a bonus set).
             // Timed holds take the parallel HOLD/stopwatch body below; every other exercise is unchanged.
             if (!targetsMet && !isTimed) {
-                Row(
+                val repsField: @Composable (Modifier) -> Unit = { m ->
+                // Reps input
+                Box(modifier = m.padding(start = 4.dp)) {
+                    Column {
+                        Text("REPS", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
+                        Spacer(Modifier.height(2.dp))
+                        UnderlineNumberField(
+                            value = reps,
+                            onValueChange = { new -> if (new.all { it.isDigit() }) reps = new },
+                            placeholder = repsPlaceholder?.toString() ?: "0",
+                            keyboardType = KeyboardType.Number,
+                            imeAction = ImeAction.Done,
+                            focusRequester = repsFocus,
+                            keyboardActions = KeyboardActions(onDone = { submitSet() })
+                        )
+                    }
+                }
+                }
+                val ghostHint: @Composable (Modifier) -> Unit = { m ->
+                // Prior set hint ("try 45 × 10") — tap to autofill the inputs.
+                Box(modifier = m, contentAlignment = Alignment.BottomEnd) {
+                    priorSetForActiveRow?.let { prior ->
+                        // Plate exercises read as a plate count, never the lb equivalent (#9) — so
+                        // tapping autofills the plate COUNT into the plate field, not its poundage.
+                        val priorDisplay = prior.weightLb?.let { lb ->
+                            if (isPlates) "${formatPlateCount(lb / plateLb)} pl" else formatWeight(lb, weightUnit)
+                        } ?: prior.weightText
+                        Text(
+                            // The ghost to beat — tap to autofill the weight only so the user
+                            // pushes for one extra rep rather than copying the exact same set.
+                            "beat $priorDisplay × ${prior.reps}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = onBg.copy(alpha = 0.7f),
+                            fontSize = 9.sp,
+                            textAlign = TextAlign.End,
+                            modifier = Modifier
+                                .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
+                                .clickableLabeled(
+                                    "Autofill last session's weight"
+                                ) {
+                                    weight = prior.weightLb?.let { lb ->
+                                        if (isPlates) formatPlateCount(lb / plateLb) else weightInputValue(lb, weightUnit)
+                                    } ?: prior.weightText
+                                    // Reps intentionally left for the user — aim for one more.
+                                }
+                        )
+                    }
+                }
+                }
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(onBg.copy(alpha = 0.05f), RoundedCornerShape(10.dp))
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                    verticalAlignment = Alignment.Bottom
+                        .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp))
+                        .padding(horizontal = 12.dp, vertical = 10.dp)
                 ) {
+                Row(verticalAlignment = Alignment.Bottom) {
                     // Set number
-                    Box(modifier = Modifier.width(SET_COL_W).padding(bottom = 4.dp)) {
+                    Box(modifier = Modifier.width(SetTable.SET_COL_W).padding(bottom = 4.dp)) {
                         Text(
                             "%02d".format(nextSetNumber),
                             style = MaterialTheme.typography.labelSmall,
@@ -286,57 +337,26 @@ fun SetInputRow(
                         }
                     }
 
-                    // Reps input
-                    Box(modifier = Modifier.width(REPS_COL_W).padding(start = 4.dp)) {
-                        Column {
-                            Text("REPS", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
-                            Spacer(Modifier.height(2.dp))
-                            UnderlineNumberField(
-                                value = reps,
-                                onValueChange = { new -> if (new.all { it.isDigit() }) reps = new },
-                                placeholder = repsPlaceholder?.toString() ?: "0",
-                                keyboardType = KeyboardType.Number,
-                                imeAction = ImeAction.Done,
-                                focusRequester = repsFocus,
-                                keyboardActions = KeyboardActions(onDone = { submitSet() })
-                            )
+                    if (!stacked) {
+                        repsField(Modifier.width(SetTable.REPS_COL_W).padding(start = 4.dp))
+                        Box(modifier = Modifier.width(SetTable.RPE_COL_W), contentAlignment = Alignment.BottomCenter) {
+                            Text("—", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.3f), fontSize = 11.sp)
                         }
+                        ghostHint(Modifier.width(SetTable.DELTA_COL_W))
                     }
-
-                    // RPE column placeholder — RPE is set on the row after the set is logged.
-                    Box(modifier = Modifier.width(44.dp), contentAlignment = Alignment.BottomCenter) {
-                        Text("—", style = MaterialTheme.typography.labelSmall, color = muted.copy(alpha = 0.3f), fontSize = 11.sp)
+                }
+                if (stacked) {
+                    // Reps and the ghost drop below the weight field rather than sharing its line:
+                    // a headlineMedium field cannot live in a 48dp column at 2x (§14, see SetTable).
+                    // The RPE placeholder is gone with the column it was holding open.
+                    Row(
+                        modifier = Modifier.padding(start = SetTable.SET_COL_W, top = 12.dp),
+                        verticalAlignment = Alignment.Bottom
+                    ) {
+                        repsField(Modifier.weight(1f))
+                        ghostHint(Modifier)
                     }
-
-                    // Prior set hint ("try 45 × 10") — tap to autofill the inputs.
-                    Box(modifier = Modifier.width(DELTA_COL_W), contentAlignment = Alignment.BottomEnd) {
-                        priorSetForActiveRow?.let { prior ->
-                            // Plate exercises read as a plate count, never the lb equivalent (#9) — so
-                            // tapping autofills the plate COUNT into the plate field, not its poundage.
-                            val priorDisplay = prior.weightLb?.let { lb ->
-                                if (isPlates) "${formatPlateCount(lb / plateLb)} pl" else formatWeight(lb, weightUnit)
-                            } ?: prior.weightText
-                            Text(
-                                // The ghost to beat — tap to autofill the weight only so the user
-                                // pushes for one extra rep rather than copying the exact same set.
-                                "beat $priorDisplay × ${prior.reps}",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = onBg.copy(alpha = 0.7f),
-                                fontSize = 9.sp,
-                                textAlign = TextAlign.End,
-                                modifier = Modifier
-                                    .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
-                                    .clickableLabeled(
-                                        "Autofill last session's weight"
-                                    ) {
-                                        weight = prior.weightLb?.let { lb ->
-                                            if (isPlates) formatPlateCount(lb / plateLb) else weightInputValue(lb, weightUnit)
-                                        } ?: prior.weightText
-                                        // Reps intentionally left for the user — aim for one more.
-                                    }
-                            )
-                        }
-                    }
+                }
                 }
 
                 // ── Quick-adjust row — +/- steppers + inline "+ SET" (repeat-last-set is
@@ -371,11 +391,11 @@ fun SetInputRow(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(onBg.copy(alpha = 0.05f), RoundedCornerShape(10.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp))
                         .padding(horizontal = 12.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.Bottom
                 ) {
-                    Box(modifier = Modifier.width(SET_COL_W).padding(bottom = 4.dp)) {
+                    Box(modifier = Modifier.width(SetTable.SET_COL_W).padding(bottom = 4.dp)) {
                         Text(
                             "%02d".format(nextSetNumber),
                             style = MaterialTheme.typography.labelSmall,
@@ -394,7 +414,7 @@ fun SetInputRow(
                         )
                     }
                     // The hold to beat — tap to autofill last session's time.
-                    Box(modifier = Modifier.width(DELTA_COL_W), contentAlignment = Alignment.BottomEnd) {
+                    Box(modifier = Modifier.width(SetTable.DELTA_COL_W), contentAlignment = Alignment.BottomEnd) {
                         priorSetForActiveRow?.durationSeconds?.let { priorSec ->
                             Text(
                                 "beat ${formatHold(priorSec)}",
@@ -431,12 +451,12 @@ fun SetInputRow(
 
             if (targetsMet) {
                 // Targets hit — the input row (with its inline "+ SET") is gone, so
-                // "add a bonus set" takes the full-width slot, then the solid white advance
+                // "add a bonus set" takes the full-width slot, then the filled advance
                 // CTA moves to the next exercise.
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .border(1.dp, muted.copy(alpha = 0.6f), ctaShape)
+                        .border(1.dp, outline.copy(alpha = 0.35f), ctaShape)
                         .then(if (onAddSet != null) Modifier.clickable { onAddSet() } else Modifier)
                         .padding(vertical = 14.dp),
                     contentAlignment = Alignment.Center
@@ -444,18 +464,12 @@ fun SetInputRow(
                     Text("+ ADD A SET", style = MaterialTheme.typography.labelMedium, color = muted)
                 }
                 Spacer(Modifier.height(10.dp))
-                Button(
-                    onClick = onAdvance,
-                    modifier = Modifier.fillMaxWidth(),
+                FilledCta(
+                    label = advanceLabel,
                     shape = ctaShape,
-                    contentPadding = PaddingValues(vertical = 16.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Color.White,
-                        contentColor = Color.Black
-                    )
-                ) {
-                    Text(advanceLabel, style = MaterialTheme.typography.labelLarge)
-                }
+                    onClickLabel = advanceLabel,
+                    onClick = onAdvance
+                )
             } else {
                 // "Done with this exercise" — end the exercise with what you logged (files it
                 // under DONE, not skipped) and move on. It's the sidekick to LOG SET, so it's a
@@ -465,7 +479,7 @@ fun SetInputRow(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .border(1.dp, muted.copy(alpha = 0.6f), ctaShape)
+                            .border(1.dp, outline.copy(alpha = 0.35f), ctaShape)
                             .clickableLabeled(finishEarlyLabel) { onFinishEarly() }
                             .padding(vertical = 14.dp),
                         contentAlignment = Alignment.Center
@@ -488,32 +502,22 @@ fun SetInputRow(
                 // combinedClickable(enabled = …) carries the disabled state to TalkBack for the inert case.
                 val bgAlpha = when { canSubmit -> 1f; canRepeat -> 0.55f; else -> 0.3f }
                 val fgAlpha = when { canSubmit -> 1f; canRepeat -> 0.75f; else -> 0.5f }
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(ctaShape)
-                        .background(Color.White.copy(alpha = bgAlpha))
-                        .combinedClickable(
-                            enabled = canSubmit || canRepeat,
-                            onClickLabel = if (canSubmit) "Log set $nextSetNumber" else null,
-                            onLongClickLabel = if (canRepeat) "Repeat last set" else null,
-                            onLongClick = if (canRepeat) {
-                                {
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    onRepeatLastSet?.invoke()
-                                }
-                            } else null,
-                            onClick = { if (canSubmit) submitSet() }
-                        )
-                        .padding(vertical = 16.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        "LOG SET $nextSetNumber",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = Color.Black.copy(alpha = fgAlpha)
-                    )
-                }
+                FilledCta(
+                    label = "LOG SET $nextSetNumber",
+                    shape = ctaShape,
+                    enabled = canSubmit || canRepeat,
+                    bgAlpha = bgAlpha,
+                    fgAlpha = fgAlpha,
+                    onClickLabel = if (canSubmit) "Log set $nextSetNumber" else null,
+                    onLongClickLabel = if (canRepeat) "Repeat last set" else null,
+                    onLongClick = if (canRepeat) {
+                        {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onRepeatLastSet?.invoke()
+                        }
+                    } else null,
+                    onClick = { if (canSubmit) submitSet() }
+                )
                 if (canRepeat) {
                     Spacer(Modifier.height(6.dp))
                     Text(
@@ -582,6 +586,60 @@ fun SetInputRow(
     }
 }
 
+/**
+ * The one filled action in the input row's prominent slot — LOG SET while sets remain, then
+ * MOVE TO NEXT / FINISH WORKOUT once the targets are met. They are the same button in two states, so
+ * they share one definition rather than two that drift.
+ *
+ * Accent-filled, on Antho's call (2026-08-23): §8 reserves the accent ground for a hub tab's one
+ * primary action, but the session screen is where the app is actually used and it was spending no
+ * accent at all, so the rule now reads "the screen's one do-it-now action" here too. Same treatment
+ * as [com.forge.app.ui.common.ForgeHeroAction] — accent ground, `onPrimary` label (which flips to
+ * the background tone above luminance 0.18, so a mid-tone warm accent still gets dark text and a
+ * monochrome accent still reads), bold mono — so this and Home's CTA are visibly one button.
+ *
+ * A Box rather than [com.forge.app.ui.common.ForgePrimaryCapsule] because LOG SET carries a
+ * long-press (hold to repeat your last set), which a Material Button can't take and the shared
+ * capsule has no slot for; [bgAlpha]/[fgAlpha] carry its three states (ready / hold-to-repeat-only /
+ * inert).
+ */
+@Composable
+private fun FilledCta(
+    label: String,
+    shape: Shape,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    bgAlpha: Float = 1f,
+    fgAlpha: Float = 1f,
+    onClickLabel: String? = null,
+    onLongClickLabel: String? = null,
+    onLongClick: (() -> Unit)? = null
+) {
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(MaterialTheme.colorScheme.primary.copy(alpha = bgAlpha))
+            .combinedClickable(
+                enabled = enabled,
+                onClickLabel = onClickLabel,
+                onLongClickLabel = onLongClickLabel,
+                onLongClick = onLongClick,
+                onClick = onClick
+            )
+            .padding(vertical = 16.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(
+            label,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onPrimary.copy(alpha = fgAlpha)
+        )
+    }
+}
+
 /** A compact pill that rides the quick-adjust row and appends one set to the plan.
  *  Sized/shaped to sit flush with the +/- stepper pills beside it. */
 @Composable
@@ -591,7 +649,7 @@ private fun AddSetPill(onAdd: (() -> Unit)?) {
     Box(
         modifier = Modifier
             .sizeIn(minHeight = 40.dp)
-            .border(1.dp, outline.copy(alpha = 0.5f), RoundedCornerShape(50))
+            .border(1.dp, outline.copy(alpha = 0.35f), RoundedCornerShape(50))
             .then(if (onAdd != null) Modifier.clickableLabeled("Add a set") { onAdd() } else Modifier)
             .padding(horizontal = 18.dp),
         contentAlignment = Alignment.Center
@@ -617,7 +675,7 @@ private fun StopwatchButton(
         modifier = Modifier
             .clip(RoundedCornerShape(50))
             .then(if (running) Modifier.background(accent.copy(alpha = 0.15f)) else Modifier)
-            .border(1.dp, if (running) accent else outline.copy(alpha = 0.5f), RoundedCornerShape(50))
+            .border(1.dp, if (running) accent else outline.copy(alpha = 0.35f), RoundedCornerShape(50))
             .clickableLabeled(if (running) "Stop the hold timer" else "Start the hold timer") { onToggle() }
             .sizeIn(minWidth = 96.dp, minHeight = 44.dp)
             .padding(horizontal = 16.dp),
@@ -644,7 +702,7 @@ private fun StepperPill(
     val outline = MaterialTheme.colorScheme.outline
     Row(
         verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.border(1.dp, outline.copy(alpha = 0.5f), RoundedCornerShape(50))
+        modifier = Modifier.border(1.dp, outline.copy(alpha = 0.35f), RoundedCornerShape(50))
     ) {
         Box(
             modifier = Modifier
@@ -677,7 +735,6 @@ private fun UnderlineNumberField(
     val onBg = MaterialTheme.colorScheme.onBackground
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val accent = MaterialTheme.colorScheme.primary
-    val outline = MaterialTheme.colorScheme.outline
 
     Column(modifier = modifier) {
         BasicTextField(
@@ -698,7 +755,7 @@ private fun UnderlineNumberField(
                 }
             }
         )
-        HorizontalDivider(modifier = Modifier.padding(top = 2.dp), thickness = 1.dp, color = outline.copy(alpha = 0.5f))
+        HorizontalDivider(modifier = Modifier.padding(top = 2.dp), thickness = 1.dp, color = accent)
         if (supportingText != null) {
             Text(supportingText, style = MaterialTheme.typography.labelSmall, color = accent, modifier = Modifier.padding(top = 2.dp))
         }
