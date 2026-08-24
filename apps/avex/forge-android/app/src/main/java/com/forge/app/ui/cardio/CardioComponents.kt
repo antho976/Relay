@@ -39,6 +39,7 @@ import com.forge.app.ui.common.clickableLabeled
 import com.forge.app.ui.goals.GoalProgressLine
 import com.forge.app.ui.goals.customGoalTitle
 import com.forge.app.ui.goals.customGoalValueLine
+import com.forge.app.ui.goals.goalCaption
 import com.forge.app.ui.theme.LocalForgeSettings
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -193,15 +194,24 @@ internal fun CardioGoalsSection(
                 .sortedWith(compareBy<ExtendedGoalRepository.Progress> { it.achieved }.thenByDescending { it.fraction })
                 .take(3)
         }
+        // One timestamp for the whole trim, so its captions can't disagree about the day.
+        val now = remember(preview) { System.currentTimeMillis() }
         Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
-            preview.forEachIndexed { i, g ->
+            preview.forEach { g ->
                 GoalProgressLine(
                     title = customGoalTitle(g),
                     valueLine = customGoalValueLine(g, settings.weightUnit, settings.useMiles),
                     fraction = g.fraction,
                     achieved = g.achieved,
-                    index = i,
                     onBg = onBg, muted = muted, accent = accent, outline = outline,
+                    caption = goalCaption(
+                        achieved = g.achieved,
+                        metric = g.metric,
+                        period = g.period,
+                        baselineValue = g.baselineValue,
+                        weightUnit = settings.weightUnit,
+                        nowMs = now,
+                    ),
                     onClick = onOpenGoals
                 )
             }

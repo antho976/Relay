@@ -40,6 +40,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -54,6 +55,7 @@ import com.forge.app.domain.units.parseToLb
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.domain.units.weightInputValue
 import com.forge.app.ui.common.ExerciseIcons
+import com.forge.app.ui.common.ForgeOutlineCapsule
 import com.forge.app.ui.common.ForgePrimaryCapsule
 import com.forge.app.ui.common.ForgeSwitch
 import com.forge.app.ui.common.SegmentPill
@@ -215,15 +217,27 @@ fun GoalEditorScreen(
 
 // ─── Steps ──────────────────────────────────────────────────────────────────
 
-/** Step 1 of adding: pick a lift target or one of the custom-goal metrics. */
+/**
+ * Step 1 of adding: pick a lift target or one of the custom-goal metrics.
+ *
+ * Each option leads with the glyph the goal it creates will carry on every screen afterwards, so
+ * the chooser previews its own result. It was six identical text rows — the uniform-row shape §4.10
+ * names, and the one list in the flow with no mark on it, sitting one tap before an exercise picker
+ * whose every row has one.
+ */
 @Composable
 private fun ChooseTypeStep(muted: Color, onPickLift: () -> Unit, onPickMetric: (GoalMetric) -> Unit) {
     val onBg = MaterialTheme.colorScheme.onBackground
     val useMiles = LocalForgeSettings.current.useMiles
     Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
-        GoalTypeOption("Lift target", "Hit a target weight on any exercise", onBg, muted, onPickLift)
+        GoalTypeOption(
+            "Lift target", "Hit a target weight on any exercise",
+            // The lift branch has no exercise yet, so it shows the class the picker leads with
+            // rather than a specific implement.
+            ExerciseIcons.Barbell, onBg, muted, onPickLift
+        )
         customGoalMetrics.forEach { m ->
-            GoalTypeOption(metricDisplayName(m), metricHint(m, useMiles), onBg, muted) { onPickMetric(m) }
+            GoalTypeOption(metricDisplayName(m), metricHint(m, useMiles), goalGlyph(m), onBg, muted) { onPickMetric(m) }
         }
     }
 }
@@ -237,10 +251,25 @@ private fun metricHint(metric: GoalMetric, useMiles: Boolean): String = when (me
 }
 
 @Composable
-private fun GoalTypeOption(title: String, hint: String, onBg: Color, muted: Color, onClick: () -> Unit) {
-    Column(Modifier.fillMaxWidth().clickableLabeled(title, onClick = onClick).padding(vertical = 12.dp)) {
-        Text(title, style = MaterialTheme.typography.bodyLarge, color = onBg)
-        Text(hint, style = MaterialTheme.typography.labelSmall, color = muted)
+private fun GoalTypeOption(
+    title: String,
+    hint: String,
+    icon: ImageVector,
+    onBg: Color,
+    muted: Color,
+    onClick: () -> Unit
+) {
+    Row(
+        Modifier.fillMaxWidth().clickableLabeled(title, onClick = onClick).padding(vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // Matches the picker rows on the next step: a muted leading glyph, never accent-tinted (§8).
+        Icon(icon, contentDescription = null, tint = muted, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(12.dp))
+        Column {
+            Text(title, style = MaterialTheme.typography.bodyLarge, color = onBg)
+            Text(hint, style = MaterialTheme.typography.labelSmall, color = muted)
+        }
     }
 }
 
@@ -370,12 +399,14 @@ private fun LiftWeightStep(
         )
         if (step.currentTargetLb != null) {
             Spacer(Modifier.height(8.dp))
-            // Quiet error-colored text action: clearing a target is reversible (set it again).
-            Text(
+            // §8's destructive treatment: level ② outlined capsule tinted `error`, never a filled
+            // red button and never bare error-coloured text — §14 measures #BF4040 as text at
+            // 3.67:1, which fails AA on this ground. Clearing a target is reversible (set it again).
+            ForgeOutlineCapsule(
                 "Clear goal",
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.clickableLabeled("Clear goal", onClick = onClear).padding(vertical = 8.dp)
+                onClick = onClear,
+                modifier = Modifier.fillMaxWidth(),
+                contentColor = MaterialTheme.colorScheme.error
             )
         }
     }
@@ -476,12 +507,13 @@ private fun CustomEditStep(
         )
         Spacer(Modifier.height(8.dp))
         // §13 undo over confirm: delete now (the editor pops), with a short Undo in its place —
-        // no confirm dialog. What you logged is untouched either way; only the goal itself is removed.
-        Text(
+        // no confirm dialog. What you logged is untouched either way; only the goal itself is
+        // removed. §8/§14: the sidekick capsule tinted `error`, not error-coloured text.
+        ForgeOutlineCapsule(
             "Delete goal",
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.error,
-            modifier = Modifier.clickableLabeled("Delete goal", onClick = onDelete).padding(vertical = 8.dp)
+            onClick = onDelete,
+            modifier = Modifier.fillMaxWidth(),
+            contentColor = MaterialTheme.colorScheme.error
         )
     }
 }

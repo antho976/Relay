@@ -435,7 +435,15 @@ any activity, `buildYearActivity` in `ProfileRepository`), filmstrip.
   history row already owns its whole-surface tap for navigation, so a per-row action would be a banned
   nested tap (§8); an in-list long-press shortcut is a deliberate deferred follow-up)
 - `CARDIO_SESSION`
-- `GOALS`/`GOAL_EDITOR`
+- `GOALS`/`GOAL_EDITOR` (List archetype. ONE ranked ladder, closest-first, both goal kinds
+  interleaved and each carrying its own glyph; `Live`/`Reached` lens pills instead of
+  kind-sections; tiny hero = title + a `N LIVE · N REACHED` count. The row is the shared
+  `GoalProgressLine` (`ui/goals/GoalsComponents.kt`) that Home, Cardio and the Profile also
+  render — title + mono reading, meter, and ONE optional mono caption carrying whatever the
+  bar cannot draw: days left in a period window, the weigh-in a cut is measured from, or
+  `REACHED`. Adding is a trim filled capsule closing the list — §8 level ① at standard size; a corner
+  cube and a full-width bar were both tried and reverted. Scaled one rung above the List archetype's trim default — see SETTLED before
+  re-tightening. Rebuilt 2026-08-23, `design/SETTLED.md`)
 - `TROPHIES` (frozen)
 - `NUTRITION`
 - `SETTINGS?page=`

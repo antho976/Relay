@@ -46,6 +46,14 @@ class ExtendedGoalRepository @Inject constructor(
         val fraction: Float,
         val achieved: Boolean,
         val createdAt: Long,
+        /**
+         * BODYWEIGHT only: the weigh-in captured when the goal was created — the journey's start.
+         * It is what makes a bodyweight meter legible, because that bar measures travel FROM here
+         * rather than from zero, and without it the bar and the "now → target" reading beside it
+         * are quietly describing two different journeys. Null for every cumulative metric, whose
+         * journey genuinely does start at zero.
+         */
+        val baselineValue: Double? = null,
     )
 
     /**
@@ -98,10 +106,12 @@ class ExtendedGoalRepository @Inject constructor(
             val current = currentValue(parsed.metric, parsed.period, g, now)
             val fraction: Float
             val achieved: Boolean
+            var baseline: Double? = null
             if (parsed.metric == GoalMetric.BODYWEIGHT) {
-                val baseline = g.stretchValue ?: current
-                fraction = GoalProgressMath.bodyweightFraction(baseline, current, g.targetValue)
-                achieved = GoalProgressMath.bodyweightAchieved(baseline, current, g.targetValue)
+                val from = g.stretchValue ?: current
+                baseline = from
+                fraction = GoalProgressMath.bodyweightFraction(from, current, g.targetValue)
+                achieved = GoalProgressMath.bodyweightAchieved(from, current, g.targetValue)
             } else {
                 fraction = GoalProgressMath.cumulativeFraction(current, g.targetValue)
                 achieved = GoalProgressMath.cumulativeAchieved(current, g.targetValue)
@@ -116,6 +126,7 @@ class ExtendedGoalRepository @Inject constructor(
                 fraction = fraction,
                 achieved = achieved,
                 createdAt = g.createdAt,
+                baselineValue = baseline,
             )
         }.sortedWith(compareByDescending<Progress> { it.achieved }.thenByDescending { it.fraction })
     }

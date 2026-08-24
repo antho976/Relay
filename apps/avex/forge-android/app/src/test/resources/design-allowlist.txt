@@ -240,7 +240,6 @@
 1 font-size ui/coach/GoalPickerDialog.kt fontSize=
 3 font-size ui/common/Editorial.kt fontSize=
 1 font-size ui/common/SegmentPill.kt fontSize=
-1 font-size ui/goals/GoalsScreen.kt fontSize=
 11 font-size ui/gym/freestyle/FreestyleLogScreen.kt fontSize=
 2 font-size ui/gym/freestyle/FreestyleTemplatePicker.kt fontSize=
 6 font-size ui/gym/history/HistoryRows.kt fontSize=

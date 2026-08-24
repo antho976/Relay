@@ -65,6 +65,7 @@ import com.forge.app.ui.experiment.surfacePalette
 import com.forge.app.ui.goals.GoalProgressLine
 import com.forge.app.ui.goals.customGoalTitle
 import com.forge.app.ui.goals.customGoalValueLine
+import com.forge.app.ui.goals.goalCaption
 import com.forge.app.ui.goals.customPinKey
 import com.forge.app.ui.goals.goalGlyph
 import com.forge.app.ui.goals.liftGoalGlyph
@@ -215,7 +216,9 @@ private data class GoalLineData(
     val valueLine: String,
     val fraction: Float,
     val achieved: Boolean,
-    val icon: ImageVector
+    val icon: ImageVector,
+    /** The mono line under the meter — the clock on a period goal, the baseline on a cut. */
+    val caption: String?
 )
 
 @Composable
@@ -224,6 +227,8 @@ private fun pinnedGoals(
     pinnedKeys: List<String>
 ): List<GoalLineData> {
     val settings = LocalForgeSettings.current
+    // One timestamp for the whole trim, so three captions on one page can't disagree about the day.
+    val now = remember(state.customGoals) { System.currentTimeMillis() }
     val lift = state.goals.map { goal ->
         GoalLineData(
             key = liftPinKey(goal.exerciseId),
@@ -233,7 +238,9 @@ private fun pinnedGoals(
                 com.forge.app.domain.units.unitLabel(settings.weightUnit),
             fraction = goal.fraction,
             achieved = goal.achieved,
-            icon = liftGoalGlyph(goal.exerciseId)
+            icon = liftGoalGlyph(goal.exerciseId),
+            // A lift target has neither a window nor a baseline: it is done or it is not.
+            caption = if (goal.achieved) "Reached" else null
         )
     }
     val custom = state.customGoals.map { goal ->
@@ -243,7 +250,15 @@ private fun pinnedGoals(
             valueLine = customGoalValueLine(goal, settings.weightUnit, settings.useMiles),
             fraction = goal.fraction,
             achieved = goal.achieved,
-            icon = goalGlyph(goal.metric)
+            icon = goalGlyph(goal.metric),
+            caption = goalCaption(
+                achieved = goal.achieved,
+                metric = goal.metric,
+                period = goal.period,
+                baselineValue = goal.baselineValue,
+                weightUnit = settings.weightUnit,
+                nowMs = now,
+            )
         )
     }
     val all = lift + custom
@@ -610,11 +625,11 @@ fun OverviewScreen(
                         valueLine = goal.valueLine,
                         fraction = goal.fraction,
                         achieved = goal.achieved,
-                        index = index,
                         onBg = onBg,
                         muted = muted,
                         accent = accent,
                         outline = outline,
+                        caption = goal.caption,
                         icon = goal.icon,
                         onClick = onOpenGoals
                     )

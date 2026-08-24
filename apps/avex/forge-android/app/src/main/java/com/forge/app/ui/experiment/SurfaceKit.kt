@@ -272,15 +272,26 @@ fun HeroFigure(value: String, onBg: Color, modifier: Modifier = Modifier) {
  * Decorative by §14 — the label beside it already speaks, so the glyph takes a null description.
  */
 @Composable
-fun CardMark(icon: ImageVector, hue: Color, modifier: Modifier = Modifier) {
+fun CardMark(
+    icon: ImageVector,
+    hue: Color,
+    modifier: Modifier = Modifier,
+    /**
+     * The disc's edge, and the glyph inside it. Defaulted to what this drew as a fixed 30/16 pair,
+     * so every existing call site is byte-identical; the Goals ladder passes a larger pair because
+     * its rows grew around it and a 30dp mark became the weakest thing on the row (2026-08-23).
+     */
+    size: Dp = 30.dp,
+    glyphSize: Dp = 16.dp,
+) {
     Box(
         modifier
-            .size(30.dp)
+            .size(size)
             .clip(RoundedCornerShape(10.dp))
             .background(hue.copy(alpha = 0.15f)),
         contentAlignment = Alignment.Center
     ) {
-        Icon(icon, contentDescription = null, tint = hue, modifier = Modifier.size(16.dp))
+        Icon(icon, contentDescription = null, tint = hue, modifier = Modifier.size(glyphSize))
     }
 }
 
