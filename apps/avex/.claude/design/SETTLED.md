@@ -610,3 +610,33 @@ give it a home; do not re-add the line.
 strip with one cell lit, because it counted sessions while the strip drew days. See *Two units, one
 section* in `design/FAILURES.md`. `OverviewUiState.weeklyWorkoutTarget` is `weeklyTrainingDays` now,
 because the name was the bug.
+
+## Per-day-type session glyphs, drawn and reverted (2026-08-24)
+
+Home's RECENT rows and the History list lead every gym session with `SettingsIcons.Session` — a
+clock. The objection to that is real and stands on the page: three rows reading "Legs B / Pull B /
+Push B" carry three identical badges, and a leading glyph that never varies is a spacer with extra
+steps. A `SessionIcons` family was built to fix it — one glyph per training focus, resolved from the
+day key so it covered every split from three days to seven.
+
+**Reverted the same day, by the owner, on the look.** Two complete sets were drawn and neither was
+liked, so the clock is back and the slot is parked. Anyone picking this up again should read the
+attempts rather than repeat them:
+
+- **First set: skeletal.** A barbell with a chevron, a pulley and cables, thin bent legs, one flexed
+  arm. All fine at 88dp; at 22dp every part merged into one grey smudge.
+- **Second set: blunt.** The correction reached for weight — 2.4–2.8 strokes, solid slabs, bold
+  arrows. It survived the size and lost the meaning: a slab with an arrow over it is *upload*, and
+  its mirror is *download*. It also sat like a brick beside `ExerciseIcons` and `NavIcons`, whose
+  whole character is a 1.7 stroke.
+- **Third set: stations and body parts**, at the family's own weight — a bar over a bench for push, a
+  cable stack for pull, a pair of legs, a flexed arm, a torso, a figure. Closest of the three, still
+  not wanted.
+
+The reusable finding is a method, not a shape: **weight is never the fix for a legibility failure,
+and a glyph set is judged in a row beside the family at the size it ships, never alone on its own
+page.** `ExerciseIcons.Bodyweight` is a stick figure that holds at 22dp, so detail was never what
+failed — ambiguity was. The History row keeps its glyph SLOT (the left rail it gave gym rows is
+worth having on its own), so restoring this is a one-line change at `HistoryRows.SessionRow` and
+`OverviewScreen.RecentRow`; the family itself is in git, not in the tree.
+
