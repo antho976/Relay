@@ -18,7 +18,7 @@ internal object AcademyAutonomy {
         id = "coach.trust_tiers",
         track = LessonTrack.COACH,
         title = "What each trust tier means",
-        summary = "Five levels, earned from outcomes. You can cap it anywhere, any time.",
+        summary = "Five levels, earned from results. You can cap it anywhere, at any time.",
         unlock = LessonUnlock(
             label = "When the coach's trust tier moves",
             detail = "Tiers are earned from outcomes, and you can cap them in Settings at any time.",
@@ -26,29 +26,29 @@ internal object AcademyAutonomy {
         ),
         blocks = listOf(
             Paragraph(
-                "The coach's authority is earned rather than assumed. It starts by watching, and " +
-                    "each level up is bought with judged results on your own training."
+                "The coach doesn't start with authority. It earns it. It begins by watching, and " +
+                    "every level up is paid for with judged results on your own training."
             ),
             Heading("The five levels"),
             Bullets(
                 listOf(
                     "Observing: it watches and says nothing",
-                    "Proposing: it suggests, you decide every change",
-                    "Auto-applying: change types with a track record apply themselves, always undoable",
-                    "Proactive: it plans blocks and starts projects, announcing them first",
-                    "Autonomous: it owns the programme, acts first and tells you after"
+                    "Proposing: it suggests, and you decide every change",
+                    "Auto-applying: the kinds of change with a track record apply themselves, and all of them undo",
+                    "Proactive: it plans blocks and starts projects, telling you first",
+                    "Autonomous: it owns the program, acts first and tells you after"
                 )
             ),
             Heading("How it moves"),
             Paragraph(
-                "Up is a sustained win rate across enough judged calls, plus time. Down is a " +
-                    "sustained bad run or repeated reverts by you, never a single miss. That gap " +
-                    "matters: a coach that fell a level every time one call missed would spend its " +
-                    "life oscillating instead of coaching."
+                "It moves up on a good run across enough judged calls, plus time. It moves down on " +
+                    "a sustained bad run, or on you undoing its work again and again. Never on a " +
+                    "single miss. A coach that dropped a level every time one call went wrong " +
+                    "would spend its life bouncing up and down instead of coaching."
             ),
             Paragraph(
-                "The last level is different. Reaching it only earns the coach an offer. Full " +
-                    "autonomy turns on when you say so, and never before."
+                "The top level is different. Getting there only earns the coach the right to ask. " +
+                    "Full autonomy turns on when you say so, and not before."
             ),
             Callout("Trust the automation exactly as much as its record earns. The record is on the Coach page.")
         )
@@ -58,7 +58,7 @@ internal object AcademyAutonomy {
         id = "coach.taking_decisions_back",
         track = LessonTrack.COACH,
         title = "How to take any decision back",
-        summary = "Every act is watched, undoable, and cappable. The whole point is that you can stop using it.",
+        summary = "Every move is watched, undoable, and cappable. The whole point is that you can stop using it.",
         unlock = LessonUnlock(
             label = "The first time the coach acts on its own",
             detail = "Only ever after you've raised its tier that far.",
@@ -66,22 +66,23 @@ internal object AcademyAutonomy {
         ),
         blocks = listOf(
             Paragraph(
-                "Everything the coach does is written through the same paths you use, which means " +
-                    "everything it does can be undone the same way you would undo it."
+                "The coach changes things through the same screens you do. So anything it does, " +
+                    "you can undo the same way you'd undo your own edit."
             ),
             Bullets(
                 listOf(
-                    "Any single change: undo it from the Coach page",
-                    "A whole class of change: cap the tier in Settings and it stops",
-                    "Structural changes past their undo window: the coach rebuilds the old shape and keeps every logged session",
-                    "Your own manual edits always win, and become constraints the coach plans around"
+                    "One change: undo it from the Coach page",
+                    "A whole kind of change: cap the tier in Settings and it stops",
+                    "Bigger changes past their undo window: the coach rebuilds the old shape and keeps every session you logged",
+                    "Your own edits always win, and become rules the coach plans around"
                 )
             ),
             Heading("Reading its record"),
             Paragraph(
-                "Each applied change carries a verdict once its window closes: it worked, it " +
-                    "didn't, or you weren't there for it. The third is not counted against the " +
-                    "coach, because a window you spent ill or away says nothing about the advice."
+                "Every change it applies gets a verdict once enough time has passed to tell: it " +
+                    "worked, it didn't, or you weren't there for it. The third doesn't count " +
+                    "against the coach, because a fortnight you spent ill or away says nothing " +
+                    "about the advice."
             ),
             Callout(
                 "The goal of this whole system is that you could do it yourself. Using the coach is " +

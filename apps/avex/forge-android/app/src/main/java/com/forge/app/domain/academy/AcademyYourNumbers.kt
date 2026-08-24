@@ -18,8 +18,8 @@ internal object AcademyYourNumbers {
     val volumeLandmarks = Lesson(
         id = "programming.your_volume_landmarks",
         track = LessonTrack.PROGRAMMING,
-        title = "MEV and MRV: your volume landmarks",
-        summary = "The least volume that still works, and the most you can recover from. The useful zone is between them.",
+        title = "Your volume floor and ceiling",
+        summary = "The least work that still moves you forward, and the most you can recover from. Train between the two.",
         unlock = LessonUnlock(
             label = "When it measures your own volume ceiling",
             detail = "It starts from population defaults and replaces them as your log shows what you recover from.",
@@ -27,26 +27,30 @@ internal object AcademyYourNumbers {
         ),
         blocks = listOf(
             Paragraph(
-                "Two numbers bracket useful training for any muscle. The minimum effective volume " +
-                    "is the least weekly work that still produces progress. The maximum recoverable " +
-                    "volume is the most you can absorb before it stops paying back."
+                "Two numbers bracket useful training for any muscle. The floor is the least weekly " +
+                    "work that still makes you better. The ceiling is the most you can recover " +
+                    "from before extra work stops paying you back."
             ),
             Paragraph(
-                "More volume helps until it doesn't. The dose-response curve bends, and past your " +
-                    "own ceiling extra sets buy fatigue rather than growth."
+                "More sets help, up to a point. Past your own ceiling, extra sets buy fatigue " +
+                    "instead of growth."
             ),
             Heading("Where your numbers came from"),
             Paragraph(
-                "Population defaults started your caps. The coach has now watched your own weeks: " +
-                    "did the weeks where a muscle got more work produce more strength than the weeks " +
-                    "it got less? If yes, your ceiling moved up. If not, it came down."
+                "They started as averages. Since then the coach has watched your own weeks and " +
+                    "asked one question: when a muscle got more work, did you come out stronger? " +
+                    "If yes, your ceiling moved up. If not, it came down."
             ),
             Example(
                 key = "volume_caps",
                 label = "Your caps",
                 fallback = "a couple more months of history and your own numbers appear here"
             ),
-            Callout("Your cap can only move so far from the default. One noisy month should not rewrite your training.")
+            Paragraph(
+                "Both numbers are estimates read off your training, not measurements. Treat them " +
+                    "as a sensible range to work inside, not a line you must not cross."
+            ),
+            Callout("Your ceiling can only drift so far from the average. One odd month shouldn't rewrite your training.")
         )
     )
 
@@ -62,20 +66,20 @@ internal object AcademyYourNumbers {
         ),
         blocks = listOf(
             Paragraph(
-                "Everyone is told to train a muscle every two to three days. That range exists " +
-                    "because the real answer varies with load, volume, age, sleep and how much of " +
-                    "your life is already physical."
+                "The usual advice is to train a muscle every two to three days. It's a range " +
+                    "because the real answer moves with how heavy you go, how much you do, your " +
+                    "age, your sleep, and how physical the rest of your life already is."
             ),
             Paragraph(
-                "The coach reads it from your sessions: at which spacing does your work actually " +
-                    "hold up? That is the gap it plans around."
+                "The coach reads yours off your own sessions. At what gap does your work actually " +
+                    "hold up? That's the spacing it plans around."
             ),
             Example(
                 key = "recovery_days",
                 label = "Your spacing",
                 fallback = "a few more months of sessions and this will read your own gap"
             ),
-            Callout("Frequency is a lever, not a commandment. Total weekly volume matters more than how you split it.")
+            Callout("Frequency is a lever, not a rule. How much you do in a week matters more than how you split it.")
         )
     )
 
@@ -83,7 +87,7 @@ internal object AcademyYourNumbers {
         id = "programming.sweet_spot_reps",
         track = LessonTrack.PROGRAMMING,
         title = "Your sweet-spot rep ranges",
-        summary = "Muscle grows across a wide rep range. Within it, your log shows where you actually progress.",
+        summary = "Muscle grows across a wide rep range. Inside it, your log shows where you actually progress.",
         unlock = LessonUnlock(
             label = "When your best rep range emerges",
             detail = "Your log has to show where you actually progress before prescriptions lean there.",
@@ -91,14 +95,14 @@ internal object AcademyYourNumbers {
         ),
         blocks = listOf(
             Paragraph(
-                "Growth happens across a wide span of rep ranges, roughly five to thirty, as long " +
-                    "as the sets are taken close enough to failure. Strength is more specific: it " +
-                    "prefers the loads you actually train at."
+                "Muscle grows across a wide span of reps, roughly five to thirty, as long as the " +
+                    "sets get close enough to failure. Strength is fussier. It follows the weights " +
+                    "you actually train with."
             ),
             Paragraph(
-                "That freedom means your own data can decide. The coach buckets your bouts by rep " +
-                    "count and asks which bucket carried the most strength gain, then leans " +
-                    "prescriptions there."
+                "That leaves room for your own data to decide. The coach sorts your sessions by " +
+                    "rep count, checks which group carried the most progress, and leans your " +
+                    "targets that way."
             ),
             Callout("The best rep range is the one you progress and recover on. That's measurable, and it's yours.")
         )
@@ -108,24 +112,24 @@ internal object AcademyYourNumbers {
         id = "programming.imbalances",
         track = LessonTrack.PROGRAMMING,
         title = "Imbalances, and why the coach hunts them",
-        summary = "Ratios between opposing groups, measured in your own sets and strength.",
+        summary = "The gap between opposing muscle groups, measured in your own sets and your own strength.",
         unlock = LessonUnlock(
-            label = "When it finds a side-to-side gap",
+            label = "When it finds a gap between opposing groups",
             detail = "It watches push against pull, and quads against hamstrings, in both volume and strength.",
             byYou = false
         ),
         blocks = listOf(
             Paragraph(
-                "An imbalance is a persistent gap between opposing groups: pushing against pulling, " +
-                    "quads against hamstrings. The coach measures it in the work you actually log, " +
-                    "not in how you look."
+                "An imbalance is a gap that keeps showing up between opposing groups: pushing " +
+                    "against pulling, quads against hamstrings. The coach measures it in the work " +
+                    "you actually log, not in how you look."
             ),
             Heading("Why it's worth fixing"),
             Bullets(
                 listOf(
-                    "The lagging side eventually caps the strong one, so the plateau arrives anyway",
-                    "The joint-health argument is real but weaker than the evidence for volume, and it is stated as such here",
-                    "It's usually the cheapest lever available: a couple of sets a week, not a new programme"
+                    "The weaker side eventually caps the stronger one, so the plateau turns up anyway",
+                    "The joint-health argument is real, but the evidence behind it is thinner than the evidence on volume",
+                    "It's usually the cheapest fix available: a couple of sets a week, not a new program"
                 )
             ),
             Callout("A catch-up block is boring and it works. That is the whole method.")
@@ -136,7 +140,7 @@ internal object AcademyYourNumbers {
         id = "coach.what_a_project_is",
         track = LessonTrack.COACH,
         title = "What a project is",
-        summary = "One named improvement at a time, with a why, a plan and a finish line.",
+        summary = "One named improvement at a time, with a reason, a plan and a finish line.",
         unlock = LessonUnlock(
             label = "When the coach proposes a project",
             detail = "It hunts for your biggest single lever and runs one at a time.",
@@ -144,9 +148,9 @@ internal object AcademyYourNumbers {
         ),
         blocks = listOf(
             Paragraph(
-                "The coach permanently scans for your single biggest available improvement: a " +
-                    "lagging muscle, an imbalance, missing conditioning, short sleep, work you keep " +
-                    "skipping. It proposes ONE at a time."
+                "The coach is always looking for the single biggest thing you could improve: a " +
+                    "lagging muscle, an imbalance, no conditioning, short sleep, work you keep " +
+                    "skipping. It proposes one at a time."
             ),
             Paragraph(
                 "One is deliberate. A list of eight things to fix is a list nobody acts on. One " +
@@ -154,8 +158,8 @@ internal object AcademyYourNumbers {
             ),
             Bullets(
                 listOf(
-                    "Every project names why it exists, in your own numbers",
-                    "Every project states what ends it",
+                    "Every project says why it exists, in your own numbers",
+                    "Every project says what ends it",
                     "You can drop one at any time, and the coach won't propose that kind again",
                     "Finished and dropped projects both stay on the record"
                 )

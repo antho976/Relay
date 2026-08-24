@@ -17,7 +17,7 @@ internal object AcademyEngine {
         id = "engine.why_aerobic_base",
         track = LessonTrack.ENGINE,
         title = "Why lifters need an aerobic base",
-        summary = "Better recovery between sets, between sessions, and more capacity for hard blocks.",
+        summary = "You recover faster between sets, faster between sessions, and handle more work in a hard block.",
         unlock = LessonUnlock(
             label = "When the coach first prescribes cardio",
             detail = "Conditioning enters the plan once there's a lifting week to build it around.",
@@ -25,23 +25,23 @@ internal object AcademyEngine {
         ),
         blocks = listOf(
             Paragraph(
-                "Between your sets, your body clears the by-products of the last one and rebuilds " +
-                    "the fuel for the next. That process is aerobic, and how good you are at it " +
-                    "decides how much of your third and fourth set survives."
+                "Between sets, your body clears out what the last one left behind and rebuilds the " +
+                    "fuel for the next. That job runs on your aerobic system, and how good yours is " +
+                    "decides how much of your third and fourth set is left."
             ),
             Bullets(
                 listOf(
-                    "Faster recovery between sets, so late sets hold up",
-                    "Faster recovery between sessions, which is what lets volume rise",
-                    "A lower resting heart rate, which is a genuine health outcome on its own",
-                    "More capacity for the high-volume phases of a block"
+                    "You recover faster between sets, so your later sets hold up",
+                    "You recover faster between sessions, which is what lets your volume rise",
+                    "Your resting heart rate drops, which is worth having on its own",
+                    "You handle the high-volume stretch of a block better"
                 )
             ),
             Paragraph(
-                "None of that requires becoming a runner. The dose here is deliberately small: " +
-                    "conditioning that serves your lifting, with a ceiling as well as a floor."
+                "None of this means becoming a runner. The dose is deliberately small, and it has " +
+                    "a ceiling as well as a floor."
             ),
-            Callout("Conditioning is a support system for training. It should never colonise your week.")
+            Callout("Conditioning is there to support your lifting. It should never take over your week.")
         )
     )
 
@@ -49,7 +49,7 @@ internal object AcademyEngine {
         id = "engine.what_zone2_is",
         track = LessonTrack.ENGINE,
         title = "What zone 2 actually is",
-        summary = "The hardest you can go while still speaking in full sentences. That's the whole test.",
+        summary = "The hardest you can go while still talking in full sentences. That's the whole test.",
         unlock = LessonUnlock(
             label = "When your first zone-2 session is prescribed",
             detail = "The easy end of the range, where you can still talk in full sentences.",
@@ -57,21 +57,21 @@ internal object AcademyEngine {
         ),
         blocks = listOf(
             Paragraph(
-                "Zone 2 is easy aerobic work: the intensity where you could keep going for a long " +
-                    "time, and where you can still talk in full sentences without gasping between " +
-                    "them. That talk test is validated well enough to prescribe by, which matters " +
-                    "because most people have no strap on."
+                "Zone 2 is easy aerobic work. It's the pace you could hold for a long time, where " +
+                    "you can still talk in full sentences without gasping between them. That talk " +
+                    "test is accurate enough to train by, which matters, because most people " +
+                    "aren't wearing a heart-rate strap."
             ),
             Paragraph(
-                "It usually feels too easy, and that is the point. The adaptation it drives happens " +
-                    "without meaningful recovery cost, so it can be added to a training week without " +
-                    "taking anything from the training."
+                "It usually feels too easy, and that's the point. It builds what it builds without " +
+                    "costing you much recovery, so it fits into a training week without stealing " +
+                    "from the lifting."
             ),
             Heading("If you do have heart rate"),
             Paragraph(
-                "The coach anchors zones to YOUR max and resting heart rate rather than a poster on " +
-                    "the gym wall. Without an age or a max entered, it makes no zone claims at all " +
-                    "and prescribes by effort instead."
+                "The coach builds your zones from YOUR max and resting heart rate, not from the " +
+                    "chart on the gym wall. With neither your age nor a max, it doesn't guess at " +
+                    "zones at all. It gives you the session by effort instead."
             ),
             Callout("Explained, not enforced. If you would rather do it by feel, the talk test is enough.")
         )
@@ -81,7 +81,7 @@ internal object AcademyEngine {
         id = "engine.interference",
         track = LessonTrack.ENGINE,
         title = "Interference: why placement matters",
-        summary = "Hard cardio near hard lifting competes for the same recovery. Managed well, the cost is small.",
+        summary = "Hard cardio next to hard lifting draws on the same recovery. Spaced well, the cost is small.",
         unlock = LessonUnlock(
             label = "When cardio and lifting start competing",
             detail = "The coach either moves a session, or takes the cost out of your readiness.",
@@ -89,23 +89,24 @@ internal object AcademyEngine {
         ),
         blocks = listOf(
             Paragraph(
-                "The classic finding is that combining hard endurance work with strength training " +
-                    "blunts some strength and power gains. The important detail, often lost, is " +
-                    "where the effect concentrates: explosive qualities and long-duration running."
+                "The old finding is that hard endurance work alongside lifting eats into your " +
+                    "strength and power gains. The detail that usually gets dropped is where it " +
+                    "actually bites: explosive work, and long runs."
             ),
             Paragraph(
-                "Modern reading is more forgiving. Managed for modality, dose and spacing, the cost " +
-                    "is small, and that management is exactly what the Engine does for you."
+                "The newer read is more forgiving. Pick the right kind of cardio, keep the dose " +
+                    "sensible, and leave space between the hard sessions, and the cost is small. " +
+                    "That spacing is the work the coach is doing for you here."
             ),
             Bullets(
                 listOf(
-                    "Easy work costs almost nothing and can go nearly anywhere",
-                    "Hard intervals get a day's clearance from heavy lower-body work",
-                    "Cycling interferes less with squatting than running does",
-                    "Yesterday's cardio load is subtracted from today's readiness, once"
+                    "Easy work costs almost nothing and can go almost anywhere in the week",
+                    "Hard intervals get a day's clearance from heavy leg work",
+                    "Cycling gets in the way of squatting less than running does",
+                    "Yesterday's cardio comes out of today's readiness, once"
                 )
             ),
-            Callout("Placement is most of the answer. You rarely have to choose between the two.")
+            Callout("Where you put it is most of the answer. You rarely have to pick one or the other.")
         )
     )
 
@@ -113,7 +114,7 @@ internal object AcademyEngine {
         id = "engine.reading_hr",
         track = LessonTrack.ENGINE,
         title = "Reading heart rate: zones, drift, resting",
-        summary = "Zones are yours, not a poster's. Drift and resting HR are the two cheapest signals you have.",
+        summary = "Your zones are yours, not a poster's. Drift and resting heart rate are the two cheapest signals you have.",
         unlock = LessonUnlock(
             label = "Record a cardio session with heart rate",
             detail = "Needs a watch or strap feeding Health Connect while you train.",
@@ -122,21 +123,22 @@ internal object AcademyEngine {
         blocks = listOf(
             Heading("Zones"),
             Paragraph(
-                "Anchored to your own max and resting heart rate. A percentage-of-max chart ignores " +
-                    "that a fitter heart sits lower at rest, which shifts every band."
+                "Built from your own max and resting heart rate. A plain percentage-of-max chart " +
+                    "ignores the fact that a fitter heart sits lower at rest, and that moves every " +
+                    "zone."
             ),
             Heading("Drift"),
             Paragraph(
-                "Cardiovascular drift is your heart rate climbing while your pace stays the same. " +
-                    "It usually means heat, dehydration or simply duration, and it is why the coach " +
-                    "may call a session before the timer does."
+                "Drift is your heart rate climbing while your pace stays the same. Usually it " +
+                    "means heat, not enough fluid, or simply time on your feet. It's why the coach " +
+                    "may end a session before the timer does."
             ),
             Heading("Resting heart rate"),
             Paragraph(
-                "The cheapest recovery signal there is: your own trend against your own baseline. " +
-                    "A few beats up across a fortnight is worth noticing. One high morning is not."
+                "The cheapest recovery signal you have: your own trend against your own baseline. " +
+                    "A few beats up across two weeks is worth noticing. One high morning is not."
             ),
-            Callout("All three are trends about you. None of them mean anything as a single number.")
+            Callout("All three are trends. None of them mean much as a single reading.")
         )
     )
 
@@ -152,16 +154,16 @@ internal object AcademyEngine {
         ),
         blocks = listOf(
             Paragraph(
-                "Intervals are the most time-efficient way to raise your ceiling, and the easiest " +
-                    "way to wreck a training week. They cost real recovery, and that recovery comes " +
-                    "out of the same account your lifting draws on."
+                "Intervals are the fastest way to raise your ceiling and the easiest way to wreck " +
+                    "a training week. They cost real recovery, and it comes out of the same pot " +
+                    "your lifting draws on."
             ),
             Bullets(
                 listOf(
-                    "At most one hard session a week, on top of an existing easy base",
-                    "Never the day before heavy lower-body work",
-                    "Always with a warm-up and a cool-down, which are part of the prescription",
-                    "Dropped entirely during a deload week"
+                    "One hard session a week at most, on top of an easy base you already have",
+                    "Never the day before heavy leg work",
+                    "Always with a warm-up and a cool-down, which are part of the session",
+                    "Dropped completely during a deload week"
                 )
             ),
             Callout("A small dose on a solid base. Intervals are never the default answer.")
@@ -172,7 +174,7 @@ internal object AcademyEngine {
         id = "engine.base_without_a_lab",
         track = LessonTrack.ENGINE,
         title = "How your base is measured without a lab",
-        summary = "Pace at the same effort, heart-rate drift, and resting heart rate, triangulated.",
+        summary = "Three cheap signals read together: pace at the same effort, drift inside a session, and resting heart rate.",
         unlock = LessonUnlock(
             label = "When your aerobic base shows a trend",
             detail = "Needs enough sessions to compare pace at the same heart rate.",
@@ -180,20 +182,20 @@ internal object AcademyEngine {
         ),
         blocks = listOf(
             Paragraph(
-                "You do not need a lactate test to know whether your base is improving. Three cheap " +
+                "You don't need a lab test to know whether your base is improving. Three cheap " +
                     "signals, read together, are enough to steer by."
             ),
             Bullets(
                 listOf(
                     "Same route and same effort, covered faster, means fitter",
-                    "Less heart-rate drift within a steady session means better endurance",
-                    "A falling resting heart rate over weeks points the same way"
+                    "Less heart-rate climb inside a steady session means better endurance",
+                    "A resting heart rate falling over weeks points the same way"
                 )
             ),
             Paragraph(
-                "Sessions logged in heat, cold, rain or wind are left out of the pace comparison. " +
-                    "Weather inflates heart rate and slows pace, and counting those would read as " +
-                    "lost fitness that never happened."
+                "Sessions in heat, cold, rain or wind are left out of the pace comparison. Weather " +
+                    "pushes your heart rate up and your pace down, and counting those days would " +
+                    "look like fitness you never lost."
             ),
             Callout("It's your own trend against your own history. That's the only fair comparison.")
         )
