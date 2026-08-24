@@ -1,0 +1,21 @@
+{
+  "name": "avex-release-video",
+  "version": "1.0.0",
+  "description": "Avex 0.9 release video — 1920x1080 before/after cut, built from real device captures.",
+  "private": true,
+  "scripts": {
+    "studio": "remotion studio src/index.ts",
+    "render": "remotion render src/index.ts release out/avex-0.9.mp4"
+  },
+  "dependencies": {
+    "@remotion/cli": "^4.0.486",
+    "@remotion/transitions": "^4.0.516",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "remotion": "^4.0.486"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "typescript": "^5.6.0"
+  }
+}

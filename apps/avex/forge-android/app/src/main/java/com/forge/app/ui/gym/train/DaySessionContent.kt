@@ -137,7 +137,6 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
                 WarmupFlow(
                     protocol = state.warmupProtocol,
                     checked = state.warmupChecked,
-                    weightUnit = weightUnit,
                     onToggle = { id -> onEvent(DayUiEvent.ToggleWarmupStep(id)) },
                     onStart = { onEvent(DayUiEvent.CompleteWarmup) },
                     onDisableToday = { onEvent(DayUiEvent.DisableWarmupToday) },
