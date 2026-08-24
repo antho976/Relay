@@ -63,7 +63,11 @@ data class DayUiState(
      */
     val elapsedAnchorMs: Long? = null,
     val exercises: List<ExerciseUiState> = emptyList(),
-    val warmupChecks: List<Boolean> = List(4) { false },
+    /** The generated warmup for this session. Empty until the plan and working loads are known. */
+    val warmupProtocol: com.forge.app.domain.warmup.WarmupProtocol =
+        com.forge.app.domain.warmup.WarmupProtocol.EMPTY,
+    /** Warmup step ids the user has ticked off. Presentational only, never gates starting. */
+    val warmupChecked: Set<String> = emptySet(),
     val isWarmupComplete: Boolean = false,
     val restTimer: RestTimerState? = null,
     val showTimerControls: Boolean = false,
@@ -101,7 +105,10 @@ data class DayUiState(
     val showAddExercisePicker: Boolean = false,
     /** Exercise whose long-press quick-action menu is open (#25). */
     val quickActionsForExerciseId: String? = null,
-    /** Custom warmup list (#120). Null = use dayPlan.warmup. */
+    /**
+     * The user's own warmup lines (#120/#144). Non-null replaces the engine's generated raise and
+     * mobilise drills; the ramp is still generated either way. Null = fully generated.
+     */
     val customWarmupItems: List<String>? = null,
     /** Warmup suggester dialog: exerciseId whose working weight to suggest from (#10). */
     val warmupSuggesterForExerciseId: String? = null,
