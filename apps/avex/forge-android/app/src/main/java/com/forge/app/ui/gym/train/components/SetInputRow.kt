@@ -27,7 +27,6 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -247,7 +246,7 @@ fun SetInputRow(
                     Column {
                         Text("REPS", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp)
                         Spacer(Modifier.height(2.dp))
-                        UnderlineNumberField(
+                        BigNumberField(
                             value = reps,
                             onValueChange = { new -> if (new.all { it.isDigit() }) reps = new },
                             placeholder = repsPlaceholder?.toString() ?: "0",
@@ -326,7 +325,7 @@ fun SetInputRow(
                                 fontSize = 9.sp
                             )
                             Spacer(Modifier.height(2.dp))
-                            UnderlineNumberField(
+                            BigNumberField(
                                 value = weight,
                                 onValueChange = ::onWeightChange,
                                 placeholder = "0",
@@ -550,11 +549,11 @@ fun SetInputRow(
             Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.Bottom) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text("WEIGHT · LB", style = MaterialTheme.typography.labelSmall, color = muted)
-                    UnderlineNumberField(weight, ::onWeightChange, "0", KeyboardType.Text, ImeAction.Next, supportingText = prRepsHint?.let { "$it for PR" })
+                    BigNumberField(weight, ::onWeightChange, "0", KeyboardType.Text, ImeAction.Next, supportingText = prRepsHint?.let { "$it for PR" })
                 }
                 Column(modifier = Modifier.weight(0.7f).padding(start = 16.dp)) {
                     Text("REPS", style = MaterialTheme.typography.labelSmall, color = muted)
-                    UnderlineNumberField(reps, { new -> if (new.all { it.isDigit() }) reps = new }, "0", KeyboardType.Number, ImeAction.Done)
+                    BigNumberField(reps, { new -> if (new.all { it.isDigit() }) reps = new }, "0", KeyboardType.Number, ImeAction.Done)
                 }
                 Button(
                     onClick = {
@@ -720,8 +719,13 @@ private fun StepperPill(
     }
 }
 
+/**
+ * The set-input number field. No rule under it: the row's own surface fill and the +/- steppers
+ * already say the number is editable, so a line there would be decoration, and a line is a claim
+ * about data (DESIGN 1).
+ */
 @Composable
-private fun UnderlineNumberField(
+private fun BigNumberField(
     value: String,
     onValueChange: (String) -> Unit,
     placeholder: String,
@@ -755,7 +759,6 @@ private fun UnderlineNumberField(
                 }
             }
         )
-        HorizontalDivider(modifier = Modifier.padding(top = 2.dp), thickness = 1.dp, color = accent)
         if (supportingText != null) {
             Text(supportingText, style = MaterialTheme.typography.labelSmall, color = accent, modifier = Modifier.padding(top = 2.dp))
         }

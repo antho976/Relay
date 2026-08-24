@@ -509,6 +509,74 @@ Goals screen and Home ever want different weights, split the component before re
 meter track is one; 0.35 is the rung for borders on unselected controls, which had every empty goal
 quietly looking like an interactive element it is not.
 
+---
+
+## The swap picker, rebuilt (2026-08-24)
+
+**Removed on purpose: `why` and `whenToUse` on the rows.** The library authors two to four sentences
+of rationale per movement, and the sheet printed both under every candidate plus a `WHEN` label —
+roughly four screens of prose to choose between five chest exercises, read between sets. §4.2 cuts
+prose rather than folding it behind a tap, so it is cut: the row keeps `muscleTarget`, which is the
+line that actually differs between variants of one muscle ("Upper chest" vs "Whole chest, fixed
+path" vs "Chest only, stretch and squeeze"). The fields stay in `ExerciseLibrary` and are still the
+right content for a place that can afford them; this sheet is not that place. Do not re-add them
+here one field at a time.
+
+**Removed on purpose: the `a.` / `b.` serif letter markers and the rules between candidates.** The
+markers numbered a sequence that carries no information, and the rules were the hairline habit —
+three `HorizontalDivider`s doing the work air should do. Both are gone; `design-allowlist.txt` lost
+the entries rather than keeping them.
+
+**Restored: the way back.** `hasPersistentSwap` and `onClearPersistent` were accepted as parameters
+and then never drawn, so a user who made a swap their default had no route back to the programmed
+exercise from the sheet that created it. It is now the outlined sidekick under the confirm, per §8.
+
+### Select, then confirm — a sanctioned departure from §8 (Antho, same day)
+
+The sheet went through two shapes in one turn, and the second is the shipped one. **Do not
+"restore" the first.**
+
+*First shape:* one global `Today` / `Always` `SegmentPill` pair at the top of the sheet, then
+tapping any row committed immediately. That is the strict §8 reading — one tap target per row, no
+button per row, undo over confirm — and it is what the doctrine asks for unprompted.
+
+*Shipped shape:* every candidate carries **its own `Today` / `Always` pair**, and ONE accent
+`ForgeHeroAction` pinned under the scrolling list spends the armed pick. Antho called it twice,
+including after the button-wall objection was put in writing. Two things make it hold rather than
+become the `FAILURES.md` button wall, and both are load-bearing if this is ever edited:
+
+1. **The row pair is a SELECTION, not two actions.** It is the §3 pill formula — borders and the
+   0.15 wash, nothing filled. The wall Wearable built was five *filled capsules*; a column of
+   outlined pills is the same weight as a column of radio buttons, because that is what it is.
+2. **The sheet still has exactly ONE filled action, and it is at the end.** Per-row commits would
+   put eleven of them on the page.
+
+The confirm is **accent**-filled (`ForgeHeroAction`), not the light `ForgePrimaryCapsule` §8
+otherwise asks for: the sheet's entire job is this one commit. `ForgeHeroAction` draws its label in
+`onPrimary`, so a light or monochrome accent never renders same-on-same (§5).
+
+**The sheet opens armed**, on the swap already in force when there is one and otherwise on the first
+candidate, with `Always` lit only when that live swap is the persistent kind. This is the reason the
+shape was asked for: a list of inert rows gives no clue the pills are yours to press, and a lit pill
+on arrival demonstrates the mechanism instead of waiting for it to be discovered. It also means the
+lit pill always states what is set right now. Do not "clean this up" to an empty initial state.
+
+The cost, accepted knowingly: this is select-then-confirm where §12 prefers commit-plus-undo, and
+rows are three lines instead of two.
+
+Pinned by `SwapPickerScreenshotTest` at 100% and 200% font scale, on AMOLED, with a swap live, and
+at zero. The sheet body is split out as `SwapPickerContent` so the goldens and previews get it
+without the sheet chrome, per `ui/recipes/ModalRecipe.kt`.
+
+**Also removed the same turn: the rule under the set-input number fields** (`SetInputRow`). A line
+is a claim about data (§1) and that one was decoration — the row's own surface fill and the ± stepper
+pills already say the number is editable.
+
+**Known defect, not fixed here:** thirteen `muscleTarget` strings in `ExerciseLibrary` carry em
+dashes ("Whole chest — the heaviest pressing option"), which §11 bans in rendered strings. They now
+render on this sheet. Content edit, owned with the rest of the library copy.
+---
+
 ## Home's weekly volume, removed a second time — and this time tested (2026-08-24)
 
 The 2026-08-16 cut-down removed VOLUME THIS WEEK from Home, and it went on rendering anyway as a

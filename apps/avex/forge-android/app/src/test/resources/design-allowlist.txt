@@ -177,7 +177,6 @@
 1 divider ui/gym/train/components/RestTimerBubble.kt Divider(
 1 divider ui/gym/train/components/SessionSummaryComponents.kt Divider(
 1 divider ui/gym/train/components/SessionSummarySheet.kt Divider(
-1 divider ui/gym/train/components/SetInputRow.kt Divider(
 1 divider ui/gym/train/components/TrainingHelpers.kt Divider(
 1 divider ui/nav/ForgeBottomBar.kt Divider(
 1 divider ui/overview/SummarySheet.kt Divider(
