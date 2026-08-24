@@ -32,6 +32,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -76,6 +77,28 @@ import kotlinx.coroutines.withContext
  * GitHub-style contribution grid over the current month. The year is still in the package
  * ([YearConsistencySection]) and no longer called.
  *
+ * ## The colour rule (2026-08-24)
+ *
+ * **Colour is for marks; type stays type.** Every drawn reading on this page — the lifetime curve,
+ * the THIS WK bars, the activity ramp, the body-row trends — is the accent. Every figure, label,
+ * caption and zero-state line stays on `onBg` / `muted`.
+ *
+ * The page used to take its data colour from `SurfacePalette.hues`, which is
+ * `[onBg, muted, muted * 0.7]` — neutral by design, under the 2026-08-16 budget reserving ember for
+ * the four places that carry a decision. The effect on a page that is nothing *but* readings was
+ * that Profile drew its curve, its bars and its calendar in the same white as its own type, so the
+ * one screen made entirely of data was the one screen with no data colour in it — while Stats next
+ * door lights every chart line, heatmap and week bar off `colorScheme.primary`. Antho, 2026-08-24:
+ * *"use the accent color for the page, look at other pages to see what should be accented."*
+ *
+ * The split is what keeps that from becoming a rash. Marks are shapes, so the accent on them is
+ * exempt from the text contrast floor; accent TEXT is not, and §14 measures it at 2.35:1 on this
+ * ground — which is why the section anchors, the `CardLink` "view all →" and the zero-state lines
+ * are all deliberately still `onBg`. Nothing here reads by colour alone either: every bar carries
+ * its count, the grid carries its LESS/MORE key and its spoken reading, and with the accent
+ * switched off in Appearance `colorScheme.primary` resolves to the near-white neutral, so the whole
+ * page goes monochrome without a single branch in this file.
+ *
  * Sections that stayed: the gallery filmstrip, untouched on instruction. It was already unboxed and
  * full-bleed, so there was nothing to take from it. The "seeded pictures" turned out not to be code
  * at all — fifteen `pp_seed*.jpg` fixtures were sitting in the debug app's storage from an earlier
@@ -94,6 +117,60 @@ import kotlinx.coroutines.withContext
 
 /** The page gutter (§7). Sections apply it themselves so the strips can break out full-bleed. */
 private val GUTTER = 24.dp
+
+/**
+ * What keeps a white control legible over an arbitrary cover photo (Antho, 2026-08-24: the back
+ * arrow "is hard to see when you have a white background").
+ *
+ * ## Why a halo and not a colour test
+ *
+ * The obvious reading of "make it background-aware" is to measure the photo and flip the glyph to
+ * black over a bright one. That fails in two ways this page will actually hit. A photograph is not
+ * one colour: this cover is a bright misty sky in its top third and near-black forest below, so a
+ * single luminance sample decides the whole control on whichever half it happened to land in — and
+ * a flipped-to-black arrow would then sit directly above a white "Athlete" that never flips, on the
+ * same image, which reads as two different apps.
+ *
+ * So the answer is the one the cover already uses for every other mark on it: keep the glyph white
+ * and put a dark halo behind it. [NameShadow] and [MetaShadow] in [ProfileHeaderCard] are the same
+ * decision for text, made 2026-07-24 for the same reason. This is genuinely background-aware where
+ * it counts — it darkens what is behind the glyph whatever that is, so it cannot pick wrong — and
+ * over a dark photo it costs nothing visible.
+ *
+ * ## It goes on the BUTTON, not on the glyph
+ *
+ * Hung on the `Icon`, this drew a flat grey disc with a hard rim — the exact chip the paragraph
+ * above says not to make, and widening the gradient only made the rim crisper. The rim was never
+ * the gradient: Material's `IconButton` clips its content to a 48dp circle for its ripple, so a
+ * halo drawn inside it is cut off at 24dp from centre while it is still around 0.15 alpha, and that
+ * cut IS the edge you see. The falloff was working; it was being amputated.
+ *
+ * Applied to the button instead, the halo sits ahead of that clip in the modifier chain and fades
+ * out on its own terms. A draw modifier is only clipped by a `clip` that comes AFTER it.
+ *
+ * The rest is tail. It runs to 0.85× the 48dp target and gives its outer third to the last rung, so
+ * it reaches the background with room to spare — over a bright sky even a sixth of black still
+ * reads, and a fade that only arrives at zero at its own edge hands the eye an edge to find.
+ *
+ * The stops are §5 ladder rungs (0.6 / 0.35 / 0.15), not values picked for the curve. A gradient is
+ * the one place a one-off alpha could hide — nobody reads a stop as a tone — which is exactly why
+ * it should not: the ladder costs nothing here, and an exception granted where it would not have
+ * been noticed is how a system stops being one.
+ */
+private fun Modifier.coverHalo(): Modifier = drawBehind {
+    val r = size.maxDimension * 0.85f
+    drawCircle(
+        brush = Brush.radialGradient(
+            0f to Color.Black.copy(alpha = 0.6f),
+            0.30f to Color.Black.copy(alpha = 0.35f),
+            0.62f to Color.Black.copy(alpha = 0.15f),
+            1f to Color.Transparent,
+            center = center,
+            radius = r
+        ),
+        radius = r
+    )
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -157,7 +234,9 @@ fun ProfileScreen(
                     // §4.6: never the screen's own name. The cover's bumped name below is the identity.
                     title = {},
                     navigationIcon = {
-                        if (onBack != null) IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") }
+                        if (onBack != null) IconButton(onClick = onBack, modifier = Modifier.coverHalo()) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back", tint = Color.White)
+                        }
                     },
                     actions = {
                         if (Features.SHOW_GAMIFICATION) state.rank?.let { r ->
@@ -172,8 +251,8 @@ fun ProfileScreen(
                                     }
                                     uri?.let { RankCardRenderer.share(context, it) }
                                 }
-                            }) {
-                                Icon(Icons.Filled.Share, contentDescription = "Share rank card", tint = muted)
+                            }, modifier = Modifier.coverHalo()) {
+                                Icon(Icons.Filled.Share, contentDescription = "Share rank card", tint = Color.White)
                             }
                         }
                     },
@@ -197,8 +276,6 @@ fun ProfileScreen(
                     ProfileHeaderCard(
                         name = state.name,
                         sinceLabel = state.sinceLabel,
-                        streakDays = state.streakDays,
-                        longestStreakDays = state.longestStreakDays,
                         hasAvatar = state.hasAvatar,
                         avatarFile = viewModel.avatarFile(),
                         avatarStamp = state.avatarStamp,
@@ -237,7 +314,6 @@ fun ProfileScreen(
                 SectionAnchor("All time", muted, onBg, modifier = pad)
                 Spacer(Modifier.height(12.dp))
                 ProfileAllTime(
-                    palette = palette,
                     totalVolumeLb = state.lifetimeVolumeSeriesLb.lastOrNull() ?: state.totalVolumeLb,
                     series = state.lifetimeVolumeSeriesLb,
                     totalSets = state.totalSets,
@@ -249,6 +325,7 @@ fun ProfileScreen(
                     prsLastWeek = state.prsLastWeek,
                     onBg = onBg,
                     muted = muted,
+                    accent = accent,
                     modifier = pad.statsEntrance(1)
                 )
 
@@ -265,13 +342,21 @@ fun ProfileScreen(
                 Spacer(Modifier.height(34.dp))
                 ProfileActivityMonth(
                     activityByDay = state.activityByDay,
+                    // Attendance, so it lives with attendance. Both streak figures came off the
+                    // cover photo on 2026-08-24 — see [ProfileHeaderCard]'s header for why the
+                    // accent chip could not stay up there.
+                    streakDays = state.streakDays,
+                    longestStreakDays = state.longestStreakDays,
                     onBg = onBg,
                     muted = muted,
-                    // hues[0], not the accent. A green band would be more literally GitHub, and
-                    // ember is budgeted (2026-08-16) for the four places that carry a decision —
-                    // this one carries a fact. Taking the palette hue also keeps the band honest
-                    // in monochrome mode, where colour-as-data is switched off entirely.
-                    hue = palette.hues[0],
+                    // The accent, like every other heatmap in the app (Stats' adherence calendar
+                    // and its body map both light off `c.accent`). This grid used to take a neutral
+                    // palette hue under the 2026-08-16 ember budget, which left the page's one
+                    // texture the same colour as its type — see the colour rule in [ProfileScreen]'s
+                    // header. Monochrome mode is safe by construction: with the accent switched off
+                    // `colorScheme.primary` IS the near-white neutral, so the ramp goes grey with
+                    // the rest of the app rather than needing a branch here.
+                    hue = accent,
                     modifier = pad.statsEntrance(2)
                 )
 
@@ -284,7 +369,6 @@ fun ProfileScreen(
                 SectionAnchor("Body", muted, onBg, modifier = pad)
                 Spacer(Modifier.height(12.dp))
                 ProfileBodyRows(
-                    palette = palette,
                     bodyweight = bodyweight,
                     bodyFat = bodyFat,
                     onLogWeight = {
@@ -302,6 +386,7 @@ fun ProfileScreen(
                     onOpenMeasurements = onOpenMeasurements,
                     onBg = onBg,
                     muted = muted,
+                    accent = accent,
                     modifier = pad.statsEntrance(3)
                 )
 
@@ -323,7 +408,7 @@ fun ProfileScreen(
                     GalleryStrip(
                         state.photos, viewModel::fileFor,
                         onOpenGallery = onOpenPhotoGallery,
-                        palette = palette, muted = muted
+                        muted = muted
                     )
                 }
 

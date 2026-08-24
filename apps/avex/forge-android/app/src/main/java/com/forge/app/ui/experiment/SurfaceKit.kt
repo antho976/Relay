@@ -341,6 +341,20 @@ fun DeltaBadge(
  * rewrites, and the kit has to keep working when that file is restored.
  *
  * [reading] is what TalkBack speaks — §14 wants the value, not the shape.
+ *
+ * ## The plot is inset from the canvas, and has to be (2026-08-24)
+ *
+ * The first version mapped the series straight onto the canvas box: the minimum landed on `y = h`
+ * and the maximum on `y = 0`. A stroke is centred on its path, so at both of those the outer half
+ * of a 2dp line fell outside the canvas and was clipped — **the flat run at the series minimum
+ * rendered at half thickness**, which is exactly what a lifetime-volume curve opens with, and what
+ * Antho spotted at the start of the graph ("the line looks less big in height"). The end dot lost
+ * its right half to the same edge whenever the last point was also the peak.
+ *
+ * So the plot area is inset by whatever the widest mark needs — half the stroke, or the dot's
+ * radius, whichever is larger — and the series is mapped into what is left. The area fill still
+ * closes to the true bottom of the canvas, because a gradient that stops short of the baseline
+ * leaves a visible band under it.
  */
 @Composable
 fun SurfaceSparkline(
@@ -357,8 +371,16 @@ fun SurfaceSparkline(
     Canvas(modifier.semantics { contentDescription = reading }) {
         val h = size.height
         val w = size.width
-        val stepX = w / (values.size - 1)
-        fun yOf(v: Double) = h - ((v - min) / range * h).toFloat()
+        val stroke = 2.dp.toPx()
+        val dot = 3.dp.toPx()
+        // Half a stroke would clear the line; the dot is fatter, so it sets the inset.
+        val inset = maxOf(stroke / 2f, dot)
+        val plotH = (h - inset * 2f).coerceAtLeast(1f)
+        // Only the right edge needs the horizontal inset — the first point is a line end, the last
+        // one carries the dot.
+        val plotW = (w - inset).coerceAtLeast(1f)
+        val stepX = plotW / (values.size - 1)
+        fun yOf(v: Double) = inset + plotH - ((v - min) / range * plotH).toFloat()
         val line = Path().apply {
             values.forEachIndexed { i, v ->
                 if (i == 0) moveTo(0f, yOf(v)) else lineTo(stepX * i, yOf(v))
@@ -367,19 +389,19 @@ fun SurfaceSparkline(
         val area = Path().apply {
             moveTo(0f, h)
             values.forEachIndexed { i, v -> lineTo(stepX * i, yOf(v)) }
-            lineTo(w, h)
+            lineTo(stepX * (values.size - 1), h)
             close()
         }
         clipRect(right = (w * progress).coerceAtLeast(0.01f)) {
             drawPath(area, Brush.verticalGradient(listOf(color.copy(alpha = 0.15f), Color.Transparent)))
-            drawPath(line, color, style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round))
+            drawPath(line, color, style = Stroke(width = stroke, cap = StrokeCap.Round))
         }
         // The end dot rides the reveal frontier, then settles on the last point.
         val fx = (values.size - 1) * progress
         val i = fx.toInt().coerceIn(0, values.size - 2)
         val t = fx - i
         val y = yOf(values[i]) + (yOf(values[i + 1]) - yOf(values[i])) * t
-        drawCircle(color, radius = 3.dp.toPx(), center = Offset(stepX * fx, y))
+        drawCircle(color, radius = dot, center = Offset(stepX * fx, y))
     }
 }
 

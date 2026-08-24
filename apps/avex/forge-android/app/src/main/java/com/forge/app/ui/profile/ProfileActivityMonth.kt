@@ -50,17 +50,19 @@ import java.util.Locale
  * Turned, a month IS a calendar: seven weekday columns, five or six week rows. Same squares, same
  * ramp, same key — the mark is unchanged, only its axes swap to suit the window.
  *
- * ## Three quarters of the measure, not all of it
+ * ## Edge to edge (2026-08-24)
  *
- * Drawn edge to edge the calendar was right and too loud: seven full-width columns put a day near
- * 38dp and the section at ~266dp, taller than the hero above it. Antho: *"make it 25% smaller and
- * it's perfect."*
+ * The grid spent 0.75 of the measure for a while, to buy back the height seven full-width columns
+ * cost. On device that trade read as a bug, not as restraint: the anchor above it, the readings
+ * line below it and the LESS/MORE key all run to the right margin, so a grid stopping a quarter
+ * short is the one element on the page that fails to reach it — Antho pointed straight at the gap
+ * ("make the activity reach the full side, there's empty space").
  *
- * Because the cells are square and sized off the width, width IS the only size control — 0.75 of
- * the measure takes the day to ~28dp and the section to ~200dp, a quarter off both dimensions at
- * once. The grid stays LEFT-aligned rather than centred: it hangs off the same margin as the
- * section anchor above it and the readings line below, so the short right edge reads as an
- * editorial column ending, not as a grid that failed to fill its container.
+ * So it takes the whole measure. The cells are square and sized off the width, which means width is
+ * the only size control there is: full width puts a day near 42dp and the section near 295dp, and
+ * that height is the honest price of a month drawn as squares rather than a number to be trimmed
+ * back. It buys a calendar you can actually read a date off, on the same margins as everything
+ * else on the page.
  *
  * ## Why the ramp is fixed, not normalized
  *
@@ -78,20 +80,15 @@ import java.util.Locale
  */
 
 /**
- * How much of the page's measure the calendar spends. The cells are square and sized off the width,
- * so this fraction is the section's only size control — it scales height and cell alike.
+ * The gap between day cells. The cell itself is not a fixed size: seven columns have to fit the
+ * page's measure exactly, so each takes an equal share of what is left and the cell squares itself
+ * off that. Widening the gap therefore costs cell size rather than section height — the two trade
+ * against each other and the grid's height stays ~6/7 of the measure either way.
  */
-private const val MONTH_GRID_FRACTION = 0.75f
+private val MONTH_CELL_GAP = 8.dp
 
-/**
- * The gap between day cells. The cell itself is not a fixed size: seven columns have to fit
- * [MONTH_GRID_FRACTION] of the page exactly, so each takes an equal share of what is left and the
- * cell squares itself off that. The gap is wider than the year's because the cells are larger.
- */
-private val MONTH_CELL_GAP = 6.dp
-
-/** Larger cells want a proportionally larger radius, or a 28dp square reads as a hard-edged tile. */
-private val MONTH_CELL_SHAPE = RoundedCornerShape(6.dp)
+/** Larger cells want a proportionally larger radius, or a 42dp square reads as a hard-edged tile. */
+private val MONTH_CELL_SHAPE = RoundedCornerShape(9.dp)
 
 /** The key's swatch. Fixed, unlike the cells, so the key does not resize with the phone. */
 private val MONTH_SWATCH = 11.dp
@@ -121,6 +118,10 @@ private fun monthLevelOf(count: Int): Int = when {
 @Composable
 internal fun ProfileActivityMonth(
     activityByDay: Map<Long, Int>,
+    /** The run you are on right now, in days. Below 2 there is no run, and nothing is printed. */
+    streakDays: Int,
+    /** The longest run ever. Printed only when it beats [streakDays] — see [MonthStreak]. */
+    longestStreakDays: Int,
     onBg: Color,
     muted: Color,
     hue: Color,
@@ -149,6 +150,7 @@ internal fun ProfileActivityMonth(
     }
     val activeDays = monthCounts.size
     val sessions = monthCounts.sum()
+    val streak = remember(streakDays, longestStreakDays) { MonthStreak.of(streakDays, longestStreakDays) }
 
     val empty = MaterialTheme.colorScheme.outline.copy(alpha = MONTH_EMPTY_ALPHA)
     val future = MaterialTheme.colorScheme.outline.copy(alpha = MONTH_FUTURE_ALPHA)
@@ -158,6 +160,8 @@ internal fun ProfileActivityMonth(
     } else {
         "$monthName: trained on $activeDays days, $sessions sessions"
     }
+    // The grid's own description stays about the grid; the streak is spoken by its reading below.
+
 
     Column(modifier.fillMaxWidth()) {
         // Not `SectionAnchor`: its trailing slot is a navigation link ("view all →"), and the month
@@ -177,7 +181,7 @@ internal fun ProfileActivityMonth(
         }
         Spacer(Modifier.height(14.dp))
         // Header and grid share one width so the weekday labels stay centred over their columns.
-        Column(Modifier.fillMaxWidth(MONTH_GRID_FRACTION)) {
+        Column(Modifier.fillMaxWidth()) {
             WeekdayHeader(muted)
             Spacer(Modifier.height(8.dp))
             Column(
@@ -213,9 +217,23 @@ internal fun ProfileActivityMonth(
                 }
             }
         }
+        // The key goes under the grid it labels, on the right rail — NOT on the readings line
+        // (Antho, 2026-08-24: "the less/more is not aligned here").
+        //
+        // The two were sharing a row, which asked an 11dp swatch strip to line up with a
+        // `headlineSmall` figure and its 9sp caption. Bottom-aligning a Row aligns boxes, not
+        // baselines, and the caption is pinned to an 18dp box that its 9sp glyphs sit high inside —
+        // so the key hung off the bottom of that box, a few dp below everything it was meant to
+        // agree with. No alignment rule fixes that pairing, because the two things do not belong on
+        // one line to begin with: a reading is a figure you take off the page, a key is the axis of
+        // the mark above it. Put back against the grid it explains, it needs no alignment at all,
+        // and the readings get the whole measure for the streak that moved down off the cover.
+        Spacer(Modifier.height(12.dp))
+        MonthRampLegend(empty, hue, muted, Modifier.align(Alignment.End))
         Spacer(Modifier.height(18.dp))
-        // The two figures the grid cannot be counted for, and the key to its ramp — one line, the
-        // reading on the left where reading starts, the key at the right edge as GitHub places it.
+        // The figures the grid cannot be counted for. BEST sits off at the right margin and only
+        // when it beats the current run — printed beside an equal streak it is the same number
+        // twice, which is what it was doing up on the cover photo.
         Row(
             Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -225,8 +243,47 @@ internal fun ProfileActivityMonth(
                 MonthReading("$activeDays", "ACTIVE DAYS", onBg, muted)
                 Spacer(Modifier.width(20.dp))
                 MonthReading("$sessions", if (sessions == 1) "SESSION" else "SESSIONS", onBg, muted)
+                streak?.let {
+                    Spacer(Modifier.width(20.dp))
+                    MonthReading(it.figure, it.noun, onBg, muted)
+                }
             }
-            MonthRampLegend(empty, hue, muted)
+            streak?.best?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = muted,
+                    fontSize = 9.sp,
+                    // No `maxLines = 1` (§14): two mono words with the whole right margin to
+                    // themselves have nothing to truncate for, and clamping them is how a caption
+                    // silently loses its figure at a large font scale.
+                    modifier = Modifier.height(18.dp)
+                )
+            }
+        }
+    }
+}
+
+/**
+ * The streak, resolved into what the readings line actually prints.
+ *
+ * Three states, and the rule behind them is that a figure earns its place by being news. An active
+ * run is the live answer, so it leads. A best only appears alongside it when it is a DIFFERENT
+ * number — a "BEST 2" next to a 2-day streak is the redundancy that made the cover's caption and
+ * chip read as a duplicate. With no run going, the best is the only streak fact left, so it takes
+ * the reading slot itself rather than vanishing.
+ *
+ * Under two days there is no streak in either sense: one session is a session, not a run.
+ */
+private data class MonthStreak(val figure: String, val noun: String, val best: String?) {
+    companion object {
+        fun of(streakDays: Int, longestStreakDays: Int): MonthStreak? = when {
+            streakDays >= 2 -> MonthStreak(
+                "$streakDays", "DAY STREAK",
+                best = "BEST $longestStreakDays".takeIf { longestStreakDays > streakDays }
+            )
+            longestStreakDays >= 2 -> MonthStreak("$longestStreakDays", "BEST STREAK", best = null)
+            else -> null
         }
     }
 }
@@ -235,8 +292,13 @@ internal fun ProfileActivityMonth(
  * M T W T F S S, each centred over its column.
  *
  * The year band labels only Mon/Wed/Fri down its left edge, because seven labels beside a 9dp row
- * would not fit. Turned, every column is ~28dp wide and there is room for all seven — and a
+ * would not fit. Turned, every column is ~42dp wide and there is room for all seven — and a
  * calendar missing four of its weekday headers reads as broken rather than as restrained.
+ *
+ * On the scale's own `labelMedium` rung, not a hand-set 9sp. The 9sp was sized for the 28dp column
+ * the grid had at 0.75 of the measure; over a full-width column it read as a stray mark rather than
+ * as the axis of the grid beneath it. Taking the rung whole also puts the labels back under the
+ * user's font-size setting, which a call-site `fontSize` opts out of (§6).
  */
 @Composable
 private fun WeekdayHeader(muted: Color) {
@@ -244,9 +306,8 @@ private fun WeekdayHeader(muted: Color) {
         for (day in 1..7) {
             Text(
                 DayOfWeek.of(day).getDisplayName(TextStyle.NARROW, Locale.getDefault()).uppercase(),
-                style = MaterialTheme.typography.labelSmall,
+                style = MaterialTheme.typography.labelMedium,
                 color = muted,
-                fontSize = 9.sp,
                 maxLines = 1,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.weight(1f)

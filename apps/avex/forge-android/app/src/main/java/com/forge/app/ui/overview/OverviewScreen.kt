@@ -48,6 +48,7 @@ import com.forge.app.ui.overview.state.OverviewRecentItem
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -274,13 +275,30 @@ private fun pinnedGoals(
 /** Half the slack between a top-bar icon's 48dp touch target and its 20dp glyph. */
 private val GUTTER_SLACK = 14.dp
 
-/** Top-bar icon with a 48dp tappable area + spoken label, while the glyph stays visually small. */
+/**
+ * How far the profile and settings glyphs lean toward each other inside their own targets.
+ *
+ * The pair still measures 48dp per button, because that is the touch target and §14 does not
+ * negotiate it — which also fixes the seam between them at 48dp apart and the whitespace between
+ * two 20dp glyphs at 28dp. Moving the BOXES closer is therefore not available; moving the glyphs
+ * within them is, and costs nothing, because a touch target has never been required to sit
+ * concentric with the mark it answers for. Each glyph gives up 6dp of margin on its inner side and
+ * keeps 8dp — you would have to tap nearly a glyph's width past one icon to reach the other.
+ */
+private val PAIR_LEAN = 6.dp
+
+/**
+ * Top-bar icon with a 48dp tappable area + spoken label, while the glyph stays visually small.
+ *
+ * [nudge] slides the glyph inside that area without moving the area — see [PAIR_LEAN].
+ */
 @Composable
 private fun TopBarIconButton(
     icon: ImageVector,
     label: String,
     tint: Color,
     modifier: Modifier = Modifier,
+    nudge: Dp = 0.dp,
     onClick: () -> Unit
 ) {
     Box(
@@ -289,7 +307,10 @@ private fun TopBarIconButton(
             .clickableLabeled(label, onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
-        Icon(icon, contentDescription = label, tint = tint, modifier = Modifier.size(20.dp))
+        Icon(
+            icon, contentDescription = label, tint = tint,
+            modifier = Modifier.size(20.dp).offset(x = nudge)
+        )
     }
 }
 
@@ -423,18 +444,36 @@ fun OverviewScreen(
                         .offset(x = (-GUTTER_SLACK))
                         .sizeIn(minWidth = 48.dp, minHeight = 48.dp)
                 )
-                Row(verticalAlignment = Alignment.CenterVertically) {
+                // Profile + settings read as one cluster, so they are spaced like one (Antho,
+                // 2026-08-24, twice: "make these two closer", then "a bit closer").
+                //
+                // Two moves, because the first one ran out. The slack offset used to be on SETTINGS
+                // alone, to sit its glyph on the page's optical right rail rather than 14dp inside
+                // it — correct for settings, and it dragged that button 14dp further from the icon
+                // beside it, opening a 42dp hole. Giving the offset to the Row slides both onto the
+                // rail at once and hands those 14dp back, which is as far as moving buttons goes:
+                // 48dp targets sit 48dp apart, leaving 28dp between two 20dp glyphs.
+                //
+                // The rest comes from the glyphs leaning inside their own targets — see
+                // [PAIR_LEAN]. The Row takes the lean back on the right so SETTINGS does not walk
+                // off the rail to pay for it, which leaves the whole 12dp on the gap: 16dp between
+                // the glyphs, split evenly either side of the seam.
+                Row(
+                    modifier = Modifier.offset(x = GUTTER_SLACK + PAIR_LEAN),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     TopBarIconButton(
                         NavIcons.Profile,
                         "Profile",
                         MaterialTheme.colorScheme.onSurfaceVariant,
+                        nudge = PAIR_LEAN,
                         onClick = onOpenProfile
                     )
                     TopBarIconButton(
                         Icons.Default.Settings,
                         "Settings",
                         MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.offset(x = GUTTER_SLACK),
+                        nudge = -PAIR_LEAN,
                         onClick = onOpenSettings
                     )
                 }
