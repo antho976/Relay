@@ -116,6 +116,9 @@ private data class FsExercise(
     val bodyweight: Boolean,
     /** Timed-hold exercise (GYMAP-51) — sets log a held duration (mm:ss) instead of reps. */
     val timed: Boolean = false,
+    /** User-created move, not a library one — its name/muscle live here and in the draft/log row,
+     *  since there's no [ExerciseLibrary] entry to re-derive them from. */
+    val custom: Boolean = false,
     val sets: List<FsSet> = listOf(FsSet())
 )
 
@@ -124,16 +127,38 @@ private fun draftFrom(items: List<FsExercise>, openedAtMs: Long): FreestyleDraft
     FreestyleDraft(
         openedAtMs = openedAtMs,
         exercises = items.map { ex ->
-            FreestyleDraftExercise(ex.libId, ex.sets.map {
-                FreestyleDraftSet(it.weight, it.reps, it.setType, it.isAmrap, it.toFailure, it.rpe, it.hold)
-            })
+            FreestyleDraftExercise(
+                libId = ex.libId,
+                sets = ex.sets.map {
+                    FreestyleDraftSet(it.weight, it.reps, it.setType, it.isAmrap, it.toFailure, it.rpe, it.hold)
+                },
+                // Only a custom needs its identity written — a library move re-derives on restore.
+                name = ex.name.takeIf { ex.custom },
+                muscleCode = ex.muscle.code.takeIf { ex.custom }
+            )
         }
     )
 
 /** Rebuild the in-memory log from a draft, re-deriving name/muscle/bodyweight from the library and
- *  dropping any exercise whose library id no longer exists. */
+ *  dropping any exercise whose library id no longer exists. A custom move carries its own identity
+ *  in the draft (nothing to re-derive), so it restores from those fields instead. */
 private fun draftToItems(draft: FreestyleDraft): List<FsExercise> =
     draft.exercises.mapNotNull { de ->
+        val sets = de.sets.map { FsSet(it.weight, it.reps, it.setType, it.isAmrap, it.toFailure, it.rpe, it.hold) }
+            .ifEmpty { listOf(FsSet()) }
+        if (isCustomExerciseId(de.libId)) {
+            // A pre-v3 custom can't exist (the schema bump discards those drafts), but a hand-edited
+            // or truncated blob might still land here — drop it rather than invent a name.
+            val name = de.name?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            return@mapNotNull FsExercise(
+                libId = de.libId,
+                name = name,
+                muscle = de.muscleCode?.let { MuscleGroup.fromCode(it) } ?: MuscleGroup.entries.first(),
+                bodyweight = false,
+                custom = true,
+                sets = sets
+            )
+        }
         val def = ExerciseLibrary.byId(de.libId) ?: return@mapNotNull null
         FsExercise(
             libId = def.id,
@@ -141,8 +166,7 @@ private fun draftToItems(draft: FreestyleDraft): List<FsExercise> =
             muscle = def.muscle,
             bodyweight = def.unit == ExerciseUnit.BODYWEIGHT,
             timed = def.timed,
-            sets = de.sets.map { FsSet(it.weight, it.reps, it.setType, it.isAmrap, it.toFailure, it.rpe, it.hold) }
-                .ifEmpty { listOf(FsSet()) }
+            sets = sets
         )
     }
 
@@ -322,7 +346,7 @@ fun FreestyleLogScreen(
                     )
                 }
             }
-            if (sets.isEmpty()) null else FreestyleExerciseInput(ex.libId, sets)
+            if (sets.isEmpty()) null else FreestyleExerciseInput(ex.libId, sets, ex.name.takeIf { ex.custom })
         }
         if (payload.isNotEmpty()) {
             leaving = true   // stop the debounced autosave from re-writing the draft after save clears it
@@ -465,6 +489,14 @@ fun FreestyleLogScreen(
                         FsExercise(libId = def.id, name = def.name, muscle = def.muscle, bodyweight = def.unit == ExerciseUnit.BODYWEIGHT, timed = def.timed)
                     }
                     items = items + added
+                    showBrowser = false
+                },
+                onCreateCustom = { name, muscle ->
+                    val id = customExerciseId(name)
+                    // Same name twice resolves to the same id; don't add a second row for it.
+                    if (items.none { it.libId == id }) {
+                        items = items + FsExercise(libId = id, name = name, muscle = muscle, bodyweight = false, custom = true)
+                    }
                     showBrowser = false
                 }
             )

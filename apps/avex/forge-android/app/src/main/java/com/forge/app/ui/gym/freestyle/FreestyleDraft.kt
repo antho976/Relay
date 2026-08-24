@@ -19,9 +19,18 @@ internal data class FreestyleDraftSet(
     val hold: String = ""
 )
 
-/** One drafted exercise: a library id + its sets. Name/muscle/bodyweight are re-derived from the
- *  library on restore, so only the id is stored — a move dropped from the library resolves cleanly. */
-internal data class FreestyleDraftExercise(val libId: String, val sets: List<FreestyleDraftSet>)
+/**
+ * One drafted exercise: a library id + its sets. For a library move only the id is stored —
+ * name/muscle/bodyweight are re-derived on restore, so a move dropped from the library resolves
+ * cleanly. A user-created custom move ([customExerciseId]) has no library row to re-derive from, so
+ * it carries its own [name] and [muscleCode]; both are null for a library move.
+ */
+internal data class FreestyleDraftExercise(
+    val libId: String,
+    val sets: List<FreestyleDraftSet>,
+    val name: String? = null,
+    val muscleCode: String? = null
+)
 
 /**
  * A snapshot of an in-progress freestyle log — the exercises/sets typed so far plus when the logger
@@ -39,6 +48,9 @@ internal data class FreestyleDraft(
         put("exercises", JSONArray(exercises.map { ex ->
             JSONObject().apply {
                 put("libId", ex.libId)
+                // Custom-move identity, written only for a custom — a library draft stays as compact as before.
+                ex.name?.let { put("name", it) }
+                ex.muscleCode?.let { put("muscle", it) }
                 put("sets", JSONArray(ex.sets.map { s ->
                     JSONObject().apply {
                         put("w", s.weight)
@@ -59,19 +71,27 @@ internal data class FreestyleDraft(
 
     companion object {
         /** Bump if the shape changes so a draft written by an older build is discarded, not misread.
-         *  v2 (GYMAP-46): per-set type tags (t/amrap/fail/rpe). */
-        private const val SCHEMA = 2
+         *  v2 (GYMAP-46): per-set type tags (t/amrap/fail/rpe).
+         *  v3: custom (user-created) moves carry their own name/muscle. */
+        private const val SCHEMA = 3
+
+        /** Versions this build can still read. v3 only ADDED optional per-exercise name/muscle, so a
+         *  v2 blob parses identically (no custom moves existed then) — reading it costs nothing and
+         *  saves an in-progress log from being dropped on upgrade. */
+        private val READABLE = setOf(2, SCHEMA)
 
         /** Null on any parse failure or a stale schema — the logger just opens empty. */
         fun fromJson(json: String): FreestyleDraft? = runCatching {
             val o = JSONObject(json)
-            if (o.optInt("schema", 0) != SCHEMA) return null
+            if (o.optInt("schema", 0) !in READABLE) return null
             val exArr = o.getJSONArray("exercises")
             val exercises = (0 until exArr.length()).map { i ->
                 val exo = exArr.getJSONObject(i)
                 val setsArr = exo.getJSONArray("sets")
                 FreestyleDraftExercise(
                     libId = exo.getString("libId"),
+                    name = exo.optString("name").ifBlank { null },
+                    muscleCode = exo.optString("muscle").ifBlank { null },
                     sets = (0 until setsArr.length()).map { j ->
                         val so = setsArr.getJSONObject(j)
                         FreestyleDraftSet(

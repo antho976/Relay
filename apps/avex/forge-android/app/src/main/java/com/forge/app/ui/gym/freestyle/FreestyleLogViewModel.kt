@@ -29,8 +29,17 @@ data class FreestyleSetInput(
     val durationSeconds: Int? = null
 )
 
-/** One persisted exercise: a library id and its sets. */
-data class FreestyleExerciseInput(val libId: String, val sets: List<FreestyleSetInput>)
+/**
+ * One persisted exercise: a library id and its sets. [customName] is set only for a user-created
+ * move, which has no library row to resolve a name from — it's stored on the logged row so every
+ * display surface (history, PRs, stats, export) reads it through
+ * [com.forge.app.program.Program.exerciseDisplayName] instead of humanizing the raw id.
+ */
+data class FreestyleExerciseInput(
+    val libId: String,
+    val sets: List<FreestyleSetInput>,
+    val customName: String? = null
+)
 
 /**
  * Backs the dedicated freestyle ("go with the flow") logger — a log-after-the-fact workout with no
@@ -93,7 +102,8 @@ class FreestyleLogViewModel @Inject constructor(
             var setCount = 0
             var prCount = 0
             items.forEachIndexed { exIdx, ex ->
-                val loggedExerciseId = workoutRepo.addExerciseToSession(sessionId, ex.libId, exIdx)
+                val loggedExerciseId =
+                    workoutRepo.addExerciseToSession(sessionId, ex.libId, exIdx, swappedName = ex.customName)
                 ex.sets.forEachIndexed { setIdx, s ->
                     val setId = workoutRepo.logSet(loggedExerciseId, setIdx, s.weightText, s.weightLb, s.reps, s.durationSeconds)
                     // Persist the set-type tags via the existing per-field setters — only when set, so an
