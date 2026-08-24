@@ -217,7 +217,12 @@ violation.
 ### Home — `ui/overview`
 
 TODAY hero + Start session, week strip, goals, recent. Feel reference; defects (`SETTLED.md`) fixed
-when touched. THIS WEEK's stat row closes with a **MOVEMENT line** (W6): today's watch steps as one
+when touched. THIS WEEK reads `anchor (n / N days) → week strip → MOVEMENT line`. The anchor counts
+DAYS, the unit the strip draws — it counted sessions until 2026-08-24 and disagreed with its own
+mark (`design/FAILURES.md`, *Two units, one section*). No weekly volume or session figure follows
+the strip: that was tried as `WeekReadout` on 2026-08-24, rendered on device and cut on sight, and
+`SETTLED.md` records why it is not to be attempted a fourth way. It closes with a
+**MOVEMENT line** (W6): today's watch steps as one
 mono reading + a thin today-vs-typical bar (14-day median; bar = the mark, honest at zero), rendered
 only when the steps grant is held (GYMAP-64 rule: connected → honest zero, else hidden) and
 refreshed on resume. Deliberately NOT the removed recovery-snapshot card (2026-07-04) — one line +

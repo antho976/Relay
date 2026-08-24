@@ -200,3 +200,18 @@ screen at 100% and 200%.
 AA (§14). If something must recede further, it is the wrong element in the wrong place; cut it or move
 it, don't fade it. The one exception is a text-field placeholder, which is a ghost affordance rather
 than content (§5).
+
+## Two units, one section
+
+**Symptom** A section's header and its mark state the same fact in different units and disagree —
+"4 / 7 target" printed directly above a week strip with a single cell lit. Nothing is misspelled,
+nothing is misaligned, and nothing says which number to believe, so the section reads as *wrong*
+without reading as *broken*. Antho pointed at this one and could not name it (2026-08-24).
+**Cause** The header's numerator and the mark's data came from different fields that sound
+interchangeable — `workoutsThisWeek` (sessions) against `weekDaysTrained` (days) — and the
+denominator was named for the wrong one (`weeklyWorkoutTarget`, actually the program's training-DAY
+count). Three sessions logged on one Monday is the case that separates them, and it is a common one.
+**Fix** A mark and its caption state ONE unit. Pick the unit the mark draws, count in that unit, and
+name the field for it — the rename to `weeklyTrainingDays` is what stops the bug returning, not the
+call-site fix. A second, genuinely different figure (the session count) goes in the readout with its
+own label, where it cannot be mistaken for the first.

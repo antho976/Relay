@@ -267,8 +267,10 @@ renders it. Remove the chain or give it a home; do not re-add the strip.
 
 **Still open on Home, deliberately not touched:** `HomeHero` has no call sites — the hero is still
 assembled inline because the page's CTA row is `[action][Plan]` and `HomeHero` owns a full-width
-CTA. MOVEMENT and the weekly volume/cardio facts line are both listed as REMOVED from Home by the
-2026-08-16 cut-down above and are both rendering again; that is a content call, not a craft one.
+CTA. MOVEMENT is listed as REMOVED from Home by the 2026-08-16 cut-down above and is rendering
+again; that is a content call, not a craft one. The weekly volume line was the other half of this
+note and is **closed now** — the 2026-08-16 removal was tested against its alternative and held.
+See below.
 `RecentRow` still passes `palette.mutedOnCard` (the 0.70 on-card floor) on a page that has no card.
 
 ## Two rules narrowed — the Academy arrival receipt (2026-08-15)
@@ -437,3 +439,36 @@ Goals screen and Home ever want different weights, split the component before re
 meter track is one; 0.35 is the rung for borders on unselected controls, which had every empty goal
 quietly looking like an interactive element it is not.
 
+## Home's weekly volume, removed a second time — and this time tested (2026-08-24)
+
+The 2026-08-16 cut-down removed VOLUME THIS WEEK from Home, and it went on rendering anyway as a
+bare `424 kg` under the week strip; the open note above recorded that contradiction without
+resolving it. Antho pointed at the line: *"redesign this that looks bad"*.
+
+Three options were put to him — name it as the section's caption, cut it, or promote it to a real
+readout. He took **promote**, so it was built and shipped to his device: `WeekReadout`, two
+`EditorialFigure`s under the strip (`424 / KG LIFTED`, `4 / SESSIONS`), cardio appended only when
+non-zero, honest zeros throughout, on an 88dp column floor so the figures did not collide into
+"4244" at a squint. Verified at 100% and 200%.
+
+He looked at it on the phone and cut it: *"remove kg and sessions ... it doesn't look as good as I
+thought."* **The 2026-08-16 removal stands, and it now stands on evidence rather than on argument** —
+the alternative was built, rendered on device, and rejected on sight.
+
+**So the entry above is stronger than it was, not weaker.** The test it stated — *is something at
+stake?* — is what a labelled, well-spaced, doctrine-clean readout still failed. Volume lifted and
+sessions logged are both finished tallies; naming them properly makes them legible without making
+them matter, and a section of legible things that do not matter is exactly the "bland with nothing
+identifiably wrong in it" that the cut-down was written against. **Do not re-add the weekly volume
+to Home a third time.** Neither as a bare line, nor as a caption, nor as figures — all three have
+now been seen.
+
+THIS WEEK ends on its mark: anchor, strip, and the MOVEMENT line when there are steps. The state
+that fed the old line survives unused (`OverviewUiState.volumeThisWeekLb`, `.workoutsThisWeek`,
+`.cardioMinutesThisWeek`) — same shape as the Academy cold-start chain above. Remove the plumbing or
+give it a home; do not re-add the line.
+
+**What DID survive from this pass, and was the real defect**: the anchor read `4 / 7 target` over a
+strip with one cell lit, because it counted sessions while the strip drew days. See *Two units, one
+section* in `design/FAILURES.md`. `OverviewUiState.weeklyWorkoutTarget` is `weeklyTrainingDays` now,
+because the name was the bug.

@@ -254,11 +254,11 @@ class OverviewViewModel @Inject constructor(
         // can diverge (a frozen preset, equipment-driven slot merging). Fall back to the preference
         // while the program isn't populated yet (early startup).
         val target = com.forge.app.program.Program.days.size.takeIf { it in 1..7 } ?: days.coerceIn(1, 7)
-        s.copy(weeklyWorkoutTarget = target)
+        s.copy(weeklyTrainingDays = target)
     }.combine(freestyleMode) { s, freestyle ->
         // No fixed plan (freestyle) or no program yet → there's no weekly target to count toward, so
         // emit 0 (the home suppresses the "of N target" line when it's 0).
-        if (freestyle || com.forge.app.program.Program.days.isEmpty()) s.copy(weeklyWorkoutTarget = 0) else s
+        if (freestyle || com.forge.app.program.Program.days.isEmpty()) s.copy(weeklyTrainingDays = 0) else s
     }.combine(settingsRepo.weightUnit) { s, weightUnit ->
         // Attach each recent gym row's marquee lift (its heaviest set). Each lookup is a real DB
         // read, so withTopLifts memoizes by session: a finished session's top set is immutable.
