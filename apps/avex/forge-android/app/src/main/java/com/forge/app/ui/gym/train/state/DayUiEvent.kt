@@ -38,7 +38,10 @@ sealed interface DayUiEvent {
     data object NeverAskDislikePrompt : DayUiEvent
 
     // Warmup
-    data class ToggleWarmupItem(val index: Int) : DayUiEvent
+    /** Warmup done, open the session. */
+    data object CompleteWarmup : DayUiEvent
+    /** Tick one warmup row off, or untick it. Does not gate [CompleteWarmup]. */
+    data class ToggleWarmupStep(val id: String) : DayUiEvent
     data object SkipWarmup : DayUiEvent
     data object DisableWarmupToday : DayUiEvent
     data object DisableWarmupWeek : DayUiEvent

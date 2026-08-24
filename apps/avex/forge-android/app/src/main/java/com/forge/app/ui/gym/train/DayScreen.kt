@@ -283,9 +283,26 @@ fun DayScreen(
 
     state.warmupSuggesterForExerciseId?.let { exerciseId ->
         val ex = state.exercises.firstOrNull { it.plan.id == exerciseId }
-        val workingWeight = ex?.loggedSets?.lastOrNull()?.weightLb ?: ex?.prefillWeight?.toDoubleOrNull()
-        WarmupSuggesterDialog(workingWeightLb = workingWeight, weightUnit = LocalForgeSettings.current.weightUnit,
-            onDismiss = { viewModel.onEvent(DayUiEvent.DismissTrainingHelper) })
+        val workingWeight = ex?.suggestedTargetLb
+            ?: ex?.loggedSets?.lastOrNull()?.weightLb
+            ?: ex?.priorSets?.mapNotNull { it.weightLb }?.maxOrNull()
+        // "Already warm" = an earlier exercise for the same muscle has sets on the board. That
+        // collapses the ramp to at most one feeler set instead of a full ladder (WarmupEngine).
+        val alreadyWarm = ex != null && state.exercises
+            .takeWhile { it.plan.id != exerciseId }
+            .any { it.plan.muscle == ex.plan.muscle && it.loggedSets.isNotEmpty() }
+        WarmupSuggesterDialog(
+            exerciseName = ex?.effectiveName ?: "",
+            unit = ex?.effectiveUnit ?: com.forge.app.program.ExerciseUnit.WEIGHT,
+            isCompound = ex?.plan?.let { com.forge.app.program.SessionEstimate.isCompound(it) } ?: true,
+            targetReps = ex?.plan?.reps?.let { r ->
+                Regex("\\d+").findAll(r).mapNotNull { it.value.toIntOrNull() }.minOrNull()
+            } ?: 10,
+            muscleAlreadyWarm = alreadyWarm,
+            workingWeightLb = workingWeight,
+            weightUnit = LocalForgeSettings.current.weightUnit,
+            onDismiss = { viewModel.onEvent(DayUiEvent.DismissTrainingHelper) }
+        )
     }
     state.plateCalculatorForExerciseId?.let { exerciseId ->
         val ex = state.exercises.firstOrNull { it.plan.id == exerciseId }

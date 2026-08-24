@@ -56,7 +56,7 @@ import com.forge.app.ui.gym.train.components.CollapsedRow
 import com.forge.app.ui.gym.train.components.ExerciseCard
 import com.forge.app.ui.gym.train.components.ExerciseChartSheet
 import com.forge.app.ui.gym.train.components.UpNextBubble
-import com.forge.app.ui.gym.train.components.WarmupGate
+import com.forge.app.ui.gym.train.components.WarmupFlow
 import com.forge.app.ui.gym.train.state.DayUiEvent
 import com.forge.app.ui.gym.train.state.DayUiState
 import com.forge.app.ui.theme.ForgeLastGreen
@@ -135,11 +135,12 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
     LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(vertical = 8.dp)) {
         if (!state.isWarmupComplete) {
             item(key = "warmup", contentType = "warmup") {
-                WarmupGate(
-                    warmupItems = state.customWarmupItems ?: state.dayPlan.warmup,
-                    checks = state.warmupChecks,
-                    onToggle = { idx -> onEvent(DayUiEvent.ToggleWarmupItem(idx)) },
-                    onSkip = { onEvent(DayUiEvent.SkipWarmup) },
+                WarmupFlow(
+                    protocol = state.warmupProtocol,
+                    checked = state.warmupChecked,
+                    weightUnit = weightUnit,
+                    onToggle = { id -> onEvent(DayUiEvent.ToggleWarmupStep(id)) },
+                    onStart = { onEvent(DayUiEvent.CompleteWarmup) },
                     onDisableToday = { onEvent(DayUiEvent.DisableWarmupToday) },
                     onDisableWeek = { onEvent(DayUiEvent.DisableWarmupWeek) }
                 )

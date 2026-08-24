@@ -24,11 +24,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
+import com.forge.app.domain.units.fromDisplayWeight
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.domain.units.weightInputValue
+import com.forge.app.domain.warmup.WarmupEngine
+import com.forge.app.domain.warmup.WarmupExercise
+import com.forge.app.domain.warmup.WarmupRampSet
+import com.forge.app.program.ExerciseUnit
+import com.forge.app.program.MuscleGroup
 import java.util.Locale
 import kotlin.math.floor
-import kotlin.math.round
 
 // Both tools work entirely in the user's display unit: the seed weight is converted in, the
 // arithmetic (percentages, plate math) is unit-agnostic, and the labels read in kg or lb. Plate
@@ -41,67 +46,96 @@ private fun trimWeight(v: Double): String =
 // ─── Warmup Set Suggester (#10) ───────────────────────────────────────────────
 
 /**
- * Given a working weight, suggests warmup sets at 40%, 60%, and 80%.
+ * The ramp for one lift, on demand from its own card.
+ *
+ * Shares [WarmupEngine] with the pre-session warmup, so the ladder here and the one in the gate are
+ * the same ladder. It replaced a fixed 40/60/80%, which was too much warmup for a set of fifteen and
+ * too little for a heavy triple, and which never knew the muscle had already been worked.
+ *
+ * The field stays in the user's display unit; the engine is handed the exercise's own storage scale
+ * (a plate count on PLATES, pounds otherwise) and its results come back out the same way.
  */
 @Composable
 fun WarmupSuggesterDialog(
+    exerciseName: String,
+    unit: ExerciseUnit,
+    isCompound: Boolean,
+    targetReps: Int,
+    muscleAlreadyWarm: Boolean,
     workingWeightLb: Double?,
     weightUnit: com.forge.app.domain.units.WeightUnit,
     onDismiss: () -> Unit
 ) {
-    // Warmup percentages step in plate-friendly increments, so this stays a kg-or-lb view (stones has
-    // no plate denominations) — stones users see the lb figures they'd actually load.
-    val metric = weightUnit.isMetric
-    val unit = unitLabel(metric)
-    var input by remember { mutableStateOf(workingWeightLb?.let { weightInputValue(it, metric) } ?: "") }
-    val working = input.toDoubleOrNull()
+    val isPlates = unit == ExerciseUnit.PLATES
+    // Plate counts are already the value the user types, so they never go through the unit
+    // conversion; everything else is shown and entered in kg, lb or stones.
+    val seed = workingWeightLb?.let { if (isPlates) trimWeight(it) else weightInputValue(it, weightUnit) }
+    var input by remember { mutableStateOf(seed ?: "") }
+    val typed = input.toDoubleOrNull()
+    val workingStored = typed?.let { if (isPlates) it else fromDisplayWeight(it, weightUnit) }
+
+    val ramp = remember(workingStored, unit, isCompound, targetReps, muscleAlreadyWarm, weightUnit) {
+        if (workingStored == null || workingStored <= 0.0) emptyList()
+        else WarmupEngine.rampFor(
+            WarmupExercise(
+                id = "suggester",
+                name = exerciseName,
+                muscle = MuscleGroup.CHEST, // unused by rampFor; the ladder depends on load and reps
+                unit = unit,
+                isCompound = isCompound,
+                workingLoad = workingStored,
+                targetReps = targetReps,
+                loadStep = WarmupEngine.loadIncrement(unit, weightUnit.isMetric)
+            ),
+            alreadyWarm = muscleAlreadyWarm
+        )
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Warmup Sets") },
+        containerColor = MaterialTheme.colorScheme.surface,
+        title = { Text("Warm-up sets") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedTextField(
                     value = input,
                     onValueChange = { input = it },
-                    label = { Text("Working weight ($unit)") },
+                    label = { Text(if (isPlates) "Working plates" else "Working weight (${unitLabel(weightUnit)})") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     singleLine = true
                 )
-                if (working != null && working > 0) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(8.dp))
-                            .padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text("SUGGESTED WARMUP", style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant, fontWeight = FontWeight.SemiBold)
-                        listOf(
-                            "Set 1" to 0.4,
-                            "Set 2" to 0.6,
-                            "Set 3" to 0.8
-                        ).forEach { (label, pct) ->
-                            val weight = roundToNearest(working * pct, 2.5)
-                            val reps = when {
-                                pct <= 0.4 -> 12
-                                pct <= 0.6 -> 8
-                                else -> 5
-                            }
+                when {
+                    workingStored == null || workingStored <= 0.0 -> Unit
+                    // A real answer, not an empty panel: warm muscle plus light work needs no ramp,
+                    // and saying so is the useful result.
+                    ramp.isEmpty() -> Text(
+                        if (muscleAlreadyWarm) "Already warm from earlier work. Go straight to your working set."
+                        else "Light enough to start on your working set.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    else -> Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        ramp.forEachIndexed { index, set ->
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(label, style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Text("${trimWeight(weight)} $unit × $reps",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.SemiBold)
-                                Text("${(pct * 100).toInt()}%",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(
+                                    "SET ${index + 1}",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    suggesterLoadLabel(set, isPlates, weightUnit),
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme.colorScheme.onBackground
+                                )
+                                Text(
+                                    "${set.percentOfWorking}% · ${set.restSeconds}S",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
                             }
                         }
                     }
@@ -112,8 +146,22 @@ fun WarmupSuggesterDialog(
     )
 }
 
-private fun roundToNearest(value: Double, increment: Double): Double =
-    round(value / increment) * increment
+/** One ramp row's load and reps, in the unit the user enters that exercise in. */
+private fun suggesterLoadLabel(
+    set: WarmupRampSet,
+    isPlates: Boolean,
+    weightUnit: com.forge.app.domain.units.WeightUnit
+): String {
+    val load = set.load ?: return "Bodyweight × ${set.reps}"
+    val weight = if (isPlates) {
+        val plates = load.toInt()
+        if (plates == 1) "1 plate" else "$plates plates"
+    } else {
+        com.forge.app.domain.units.formatWeight(load, weightUnit)
+    }
+    return "$weight × ${set.reps}"
+}
+
 
 // ─── Plate Calculator (#11) ───────────────────────────────────────────────────
 

@@ -12,6 +12,16 @@ Also lists what may not be touched, and the known defects to fix opportunistical
 
 ## Settled — do not reintroduce / do not touch
 
+**The warm-up stepper** (removed 2026-08-23, same day it landed): the rebuild replaced a fixed
+per-day checklist with a step-at-a-time flow under a progress rail, which turned a two-minute task
+into a seven-tap marathon. **It does not come back.** The warmup is one screen and one button
+(`design/MAP.md`). Specifically settled there, by the owner: do NOT re-add a second button beside
+`Start lifting` (skip and start were the same action twice), do NOT re-add the time estimate, and do
+NOT gate the button on the tick state. The ticks stay, as a place-keeper only. Also gone with the old
+gate: its fixed per-day string list ("Jumping jacks — 20 reps"), which never knew what the session
+trained, and the fixed 40/60/80% warmup suggester, which prescribed the same three sets for a heavy
+triple and a set of fifteen.
+
 **Removed on purpose**: boxed cards for passive content · **the Academy's card tiles, its lesson
 sheet and its FOR YOU shelf** (2026-08-20: filled hairlined cards around 35 pieces of passive
 content read as a wall whatever is inside them, which is the same finding as the first entry in this
