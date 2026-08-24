@@ -40,6 +40,7 @@ import com.forge.app.ui.experiment.SurfacePalette
 import com.forge.app.ui.goals.GoalProgressLine
 import com.forge.app.ui.goals.customGoalTitle
 import com.forge.app.ui.goals.customGoalValueLine
+import com.forge.app.ui.goals.goalCaption
 import com.forge.app.ui.theme.LocalForgeSettings
 import com.forge.app.ui.theme.MonoSectionAnchor
 import java.io.File
@@ -127,23 +128,35 @@ private fun GoalLine(
     val settings = LocalForgeSettings.current
     val name: String
     val valueLine: String
+    val caption: String?
     when (tile) {
         is GoalTile.Lift -> {
             name = tile.g.name
             valueLine = "${weightInputValue(tile.g.currentBestLb, settings.weightUnit)} / " +
                 "${weightInputValue(tile.g.targetLb, settings.weightUnit)} ${unitLabel(settings.weightUnit)}"
+            // A lift target has neither a window nor a baseline: it is done or it is not.
+            caption = if (tile.g.achieved) "Reached" else null
         }
         is GoalTile.Custom -> {
             name = customGoalTitle(tile.g)
             valueLine = customGoalValueLine(tile.g, settings.weightUnit, settings.useMiles)
+            caption = goalCaption(
+                achieved = tile.g.achieved,
+                metric = tile.g.metric,
+                period = tile.g.period,
+                baselineValue = tile.g.baselineValue,
+                weightUnit = settings.weightUnit,
+                nowMs = System.currentTimeMillis(),
+            )
         }
     }
     // The shared goal line (ui/goals) — one visual language whether a goal shows here or on the
     // Goals screen; the sweep-in animation lives in the shared component.
     GoalProgressLine(
         title = name, valueLine = valueLine,
-        fraction = tile.fraction, achieved = tile.achieved, index = index,
+        fraction = tile.fraction, achieved = tile.achieved,
         onBg = onBg, muted = muted, accent = accent, outline = outline,
+        caption = caption,
         onClick = onClick
     )
 }

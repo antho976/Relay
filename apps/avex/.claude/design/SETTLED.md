@@ -290,3 +290,88 @@ Everything else measured clean: onBg 16.66:1 · muted 1.0 9.41:1 · muted@0.7 5.
 4.54:1 (the floor; 0.6 gives 4.05:1 and fails) · PR gold, △ green, success and warning all 7.1–9.9:1.
 Structural hairlines and tonal washes are exempt as decorative boundaries (§14).
 
+---
+
+## Goals, one ranked ladder with a clock (2026-08-23)
+
+The Goals screen and the shared `GoalProgressLine` it lends to Home, Cardio and the Profile were
+rebuilt together. Antho's brief was to tear the section apart; everything below came out of it, and
+none of it is missing from the product.
+
+**Removed from the Goals screen, and why each was noise rather than content:**
+
+- **The "Lift targets" / "Other goals" split.** That is the shape of the two tables behind the
+  screen, not of any question a person brings to it, and it cost the ladder its ranking twice over:
+  once by grouping, and again because the screen never re-sorted the rows it filtered. Rows are now
+  one list ordered closest-first. Do not re-group goals by which table they live in.
+- **The thirty-word opening explainer** ("Custom goals track themselves from what you log"). Prose
+  budget, §4.3 — and it narrated mechanics, which is cut rather than trimmed: the rows filling in by
+  themselves ARE that sentence. It also carried the screen's one `fontSize =` call (§6).
+- **`REACHED` in the row meta.** §2① rules a state word out of a row's right-hand slot, and putting
+  it there meant a finished goal stopped showing its own numbers at the moment they were worth
+  seeing. The word survives as the meter's caption — one line, under the mark it explains — and the
+  Reached lens now says it once for a whole list instead of once per row (§12, collapse repetition).
+- **The `+ add goal` line** (Antho, same day: *"I wanted this bigger, it's stuck in a corner, make it
+  take more space, it looks bad"*). §11's "+ log" idiom is right where an action belongs to the list
+  it closes and adds one more of the same thing. It is wrong here: adding a goal is the only thing a
+  person can DO on this screen, and the idiom rendered it as the smallest, dimmest mark on the page.
+  It is now a `ForgePrimaryCapsule` at its STANDARD trim size (~44dp, no `fillMaxWidth()`), closing
+  the list on the same left rail as the rows. §8 level ① — the one filled do-it-now action, grouped
+  at the END of the page. Do not put the mono line back.
+
+  **Two overshoots got it here, and both are worth not repeating.** First a 56dp filled cube in the
+  bottom corner: that makes the action *smaller* and pins it to an edge, which is the complaint
+  restated rather than fixed, and a corner FAB has no home here anyway — §8 has three button levels
+  and none of them float, and M3's `FloatingActionButton` would import its container colour,
+  elevation and ripple, all three of which this app spends differently (§9 presses bounce). Then a
+  full-width bar, which outweighed the ladder it was supposed to close (Antho: *"make add a goal
+  smaller now, looks weird"*).
+
+  The lesson is that the button was never the problem. It read as small because **everything around
+  it was small**; once the rows grew (below), the standard trim capsule was already enough. Reach for
+  the surrounding scale before reaching for the control.
+- **Bare error-coloured text actions** ("Clear goal", "Delete goal"). §14 measures `#BF4040` as text
+  at 3.67:1, which fails AA; §8's destructive treatment is the outlined capsule tinted `error`,
+  which is what both are now. Never re-add error-coloured body text.
+
+**Added, and each from data that already existed and was being thrown away:**
+
+- **The meter caption.** A weekly target is the one goal shape whose reading means opposite things on
+  different days — "3.2 of 5 km" is comfortable on Tuesday and lost on Sunday night — and the window
+  was stored all along in `GoalPeriod` without any surface drawing it. A bodyweight goal likewise
+  stored the weigh-in it is measured from (`stretch_value`) and showed a bar computed from a baseline
+  it never named. Both now render as one mono line under the bar. Sparse by design: most rows have no
+  caption and stay two lines tall.
+- **Lens pills, Live / Reached.** Shown only when both sides have rows; a toggle with an always-empty
+  half is a control that cannot run (§2③).
+- **Row glyphs on the Goals screen.** They were deliberately off while the list was grouped by kind,
+  because a column of identical marks says nothing. One mixed ladder inverts that premise: the marks
+  now differ per row and are the fastest read on the screen.
+
+**Not done, and deliberately.** The goals here carry no rate, no ETA and no on/off-track verdict.
+`domain/coach/GoalPortfolio` computes all three, but for `CoachGoal` — a separate goal system with a
+separate table. PRODUCT.md's "goals ... with a live reading and an ETA" describes that one, not this
+screen. Wiring a trajectory into `ExerciseGoal` / `ExtendedGoal` is a real feature with a data gate
+(`MIN_WEEKS_FOR_RATE` = 3), not a UI pass, and inventing one from two data points would be the kind
+of verdict §4.9 exists to prevent. **The two parallel goal systems are the open question here**, and
+worth resolving before either grows again.
+
+**The whole section was scaled up one rung** (Antho, same day: *"not just the add a goal button,
+everything"*). A ladder of six goals was leaving two thirds of the page empty while every element on
+it sat at the smallest rung it had. Nothing left the type scale — each moved one step along it:
+hero `headlineSmall` → `headlineMedium`, row title `bodyMedium` → `titleMedium`, the mono reading
+`labelMedium` → `labelLarge`, the caption `labelSmall` → `labelMedium`. The meter went 6dp → 10dp,
+which is also what lets the accent register on a reached goal instead of reading as a thread. Row
+rhythm went 18 → 24. `CardMark` gained a `size`/`glyphSize` pair defaulted to the fixed 30/16 it
+already drew — every other call site is unchanged and the goldens confirm it — and the goal row
+passes 38/20, because the mark became the weakest thing on the row once the row grew around it.
+
+This is a deliberate departure from §3's List archetype, which asks for "trim rows" and a "tiny
+hero", and it applies to the SHARED line, so Home, Cardio and the Profile trims grew with it. That
+is the point: the four surfaces render one component so goals read the same everywhere. If the
+Goals screen and Home ever want different weights, split the component before re-tuning either.
+
+**The bar's track moved from the outline 0.35 rung to 0.25.** §5 reserves 0.25 for data lines and a
+meter track is one; 0.35 is the rung for borders on unselected controls, which had every empty goal
+quietly looking like an interactive element it is not.
+
