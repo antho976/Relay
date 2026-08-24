@@ -47,7 +47,6 @@ import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.ui.common.bounceCombinedClick
 import com.forge.app.ui.experiment.HeroFigure
-import com.forge.app.ui.experiment.SurfacePalette
 import com.forge.app.ui.experiment.SurfaceSparkline
 import com.forge.app.ui.nav.NavIcons
 import com.forge.app.ui.settings.SettingsIcons
@@ -120,7 +119,6 @@ private val ROW_MIN_HEIGHT = 48.dp
  */
 @Composable
 internal fun ProfileAllTime(
-    palette: SurfacePalette,
     totalVolumeLb: Double,
     series: List<Double>,
     totalSets: Int,
@@ -132,6 +130,7 @@ internal fun ProfileAllTime(
     prsLastWeek: Int,
     onBg: Color,
     muted: Color,
+    accent: Color,
     modifier: Modifier = Modifier
 ) {
     val weightUnit = LocalForgeSettings.current.weightUnit
@@ -160,7 +159,7 @@ internal fun ProfileAllTime(
             Spacer(Modifier.height(16.dp))
             SurfaceSparkline(
                 values = displaySeries,
-                color = palette.hues[0],
+                color = accent,
                 reading = "Lifetime volume over ${displaySeries.size} sessions, " +
                     "now ${displaySeries.last().roundToInt()} ${unitLabel(weightUnit)}",
                 modifier = Modifier.fillMaxWidth().height(60.dp)
@@ -179,12 +178,12 @@ internal fun ProfileAllTime(
             AllTimeTally(
                 SettingsIcons.Session, "WORKOUTS", "$totalSessions",
                 workoutsThisWeek, workoutsLastWeek, "workouts",
-                palette.hues[0], onBg, muted, Modifier.weight(1f)
+                accent, onBg, muted, Modifier.weight(1f)
             )
             AllTimeTally(
                 NavIcons.Stats, "PRS", "$totalPrs",
                 prsThisWeek, prsLastWeek, "PRs",
-                palette.hues[1], onBg, muted, Modifier.weight(1f)
+                accent, onBg, muted, Modifier.weight(1f)
             )
         }
     }
@@ -217,7 +216,7 @@ private fun AllTimeTally(
     thisWeek: Int,
     lastWeek: Int,
     noun: String,
-    hue: Color,
+    accent: Color,
     onBg: Color,
     muted: Color,
     modifier: Modifier = Modifier
@@ -253,7 +252,10 @@ private fun AllTimeTally(
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             val peak = maxOf(thisWeek, lastWeek, 1)
-            ComparisonBar("THIS WK", thisWeek, thisWeek.toFloat() / peak, hue, onBg, muted)
+            // The lit bar is THIS week; last week is the same bar unlit. That is the pairing
+            // Home's MOVEMENT line already uses (accent fill, outline track) and the one Stats'
+            // week bars use — the accent marks the reading you are being asked to act on.
+            ComparisonBar("THIS WK", thisWeek, thisWeek.toFloat() / peak, accent, onBg, muted)
             ComparisonBar("LAST WK", lastWeek, lastWeek.toFloat() / peak, muted.copy(alpha = 0.4f), onBg, muted)
         }
     }
@@ -344,7 +346,6 @@ private data class BodyMetric(
  */
 @Composable
 internal fun ProfileBodyRows(
-    palette: SurfacePalette,
     bodyweight: List<BodyweightEntry>,
     bodyFat: List<BodyFatEntry>,
     onLogWeight: () -> Unit,
@@ -352,6 +353,7 @@ internal fun ProfileBodyRows(
     onOpenMeasurements: () -> Unit,
     onBg: Color,
     muted: Color,
+    accent: Color,
     modifier: Modifier = Modifier,
     measurementsVm: BodyMeasurementsViewModel = hiltViewModel(),
     leanMassVm: LeanMassViewModel = hiltViewModel()
@@ -378,10 +380,14 @@ internal fun ProfileBodyRows(
     // carry their own 48dp minimum and 14dp of padding, which is separation enough once nothing
     // else on the page is boxed either.
     Column(modifier.fillMaxWidth()) {
-        metrics.forEachIndexed { i, metric ->
+        // One colour for all four trends, not `hues[i % 3]`. Cycling the palette gave WEIGHT a
+        // white line, BODY FAT a muted one and SIZES a fainter one still, which reads as a ranking
+        // of the three metrics — and there is no such ranking. A trend line is a trend line, and on
+        // every other screen in the app a trend line is drawn in the accent.
+        metrics.forEach { metric ->
             BodyMetricRow(
                 metric = metric,
-                hue = palette.hues[i % palette.hues.size],
+                accent = accent,
                 onBg = onBg,
                 muted = muted
             )
@@ -390,7 +396,7 @@ internal fun ProfileBodyRows(
 }
 
 @Composable
-private fun BodyMetricRow(metric: BodyMetric, hue: Color, onBg: Color, muted: Color) {
+private fun BodyMetricRow(metric: BodyMetric, accent: Color, onBg: Color, muted: Color) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -420,7 +426,7 @@ private fun BodyMetricRow(metric: BodyMetric, hue: Color, onBg: Color, muted: Co
         if (metric.series.size >= 2) {
             SurfaceSparkline(
                 values = metric.series,
-                color = hue,
+                color = accent,
                 reading = "${metric.label}, ${metric.series.size} readings, latest ${metric.figure ?: "none"}",
                 modifier = Modifier.weight(1f).height(24.dp)
             )

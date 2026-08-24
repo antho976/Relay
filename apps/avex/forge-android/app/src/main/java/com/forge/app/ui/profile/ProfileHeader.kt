@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -26,7 +25,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -78,16 +76,31 @@ private val MetaShadow = Shadow(color = Color.Black.copy(alpha = 0.75f), offset 
 
 /**
  * The identity hero — the profile picture rendered as a full-bleed COVER photo across the top of the
- * page (not a small round avatar), with the editable name and a "since · streak" line laid over a
- * bottom scrim. Tapping the banner picks a new photo; tapping the name edits it. When no photo is set,
- * a quiet "tap to add" placeholder fills the banner instead.
+ * page (not a small round avatar), with the editable name and a "since" line laid over a bottom
+ * scrim. Tapping the banner picks a new photo; tapping the name edits it. When no photo is set, a
+ * quiet "tap to add" placeholder fills the banner instead.
+ *
+ * ## The streaks left the cover (2026-08-24)
+ *
+ * A "BEST n-DAY STREAK" caption and an accent streak chip used to sit above the name. Two things
+ * were wrong with that and only one of them was fixable here.
+ *
+ * The chip was accent-on-photograph. Every other tone on this cover is white with a shadow halo
+ * behind it, because that is the only treatment that survives an arbitrary image underneath; ember
+ * at 0.18 alpha on a dark forest is a pill you have to hunt for, which is what Antho saw. And when
+ * the current streak IS the best one — the common case, and the case a new user is always in — the
+ * two elements printed the same number twice, a caption and a chip side by side both reading
+ * "2-DAY STREAK".
+ *
+ * A streak is not identity, it is attendance, so it moved to the section that answers attendance:
+ * [ProfileActivityMonth]'s readings line, beside ACTIVE DAYS and SESSIONS. It is legible there, it
+ * sits next to the grid that shows the same days, and the best only prints when it beats the run
+ * you are on. The cover keeps what a cover is for.
  */
 @Composable
 internal fun ProfileHeaderCard(
     name: String,
     sinceLabel: String,
-    streakDays: Int,
-    longestStreakDays: Int,
     hasAvatar: Boolean,
     avatarFile: File,
     avatarStamp: Long,
@@ -159,24 +172,8 @@ internal fun ProfileHeaderCard(
             // 24dp = the page gutter (§7), so the name starts on the same rail as every section below.
             Modifier.align(Alignment.BottomStart).fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp)
         ) {
-            // Streak meta (achievements): "BEST n-DAY STREAK" + the gold current-streak chip when
-            // active. "Since …" moved out to below the name (GYMAP-23), so this row is streaks alone.
-            if (longestStreakDays >= 2 || streakDays >= 2) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (longestStreakDays >= 2) {
-                        Text(
-                            "BEST $longestStreakDays-DAY STREAK",
-                            style = MaterialTheme.typography.labelSmall.copy(shadow = MetaShadow),
-                            color = Color.White.copy(alpha = 0.9f),
-                            fontSize = 9.sp, maxLines = 1, overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f, fill = false)
-                        )
-                        if (streakDays >= 2) Spacer(Modifier.width(10.dp))
-                    }
-                    if (streakDays >= 2) StreakChip(streakDays, accent)
-                }
-                Spacer(Modifier.height(6.dp))
-            }
+            // The streak pair moved OFF the cover (Antho, 2026-08-24) — see the note on this file's
+            // header. What is left over the photo is identity alone: the name, and when you started.
             // Name — tap to edit. Its own click consumes the tap so it doesn't also open the photo picker.
             if (editing) {
                 val focus = remember { FocusRequester() }
@@ -223,15 +220,3 @@ internal fun ProfileHeaderCard(
     }
 }
 
-/** A small accent pill calling out an active streak. */
-@Composable
-private fun StreakChip(days: Int, accent: Color) {
-    Text(
-        "$days-DAY STREAK",
-        style = MaterialTheme.typography.labelSmall, color = accent, fontSize = 9.sp,
-        modifier = Modifier
-            .clip(RoundedCornerShape(50))
-            .background(accent.copy(alpha = 0.18f))
-            .padding(horizontal = 8.dp, vertical = 3.dp)
-    )
-}

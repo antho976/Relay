@@ -1,7 +1,6 @@
 package com.forge.app.ui.profile
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -36,7 +35,6 @@ import com.forge.app.domain.units.unitLabel
 import com.forge.app.domain.units.weightInputValue
 import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.experiment.CardShape
-import com.forge.app.ui.experiment.SurfacePalette
 import com.forge.app.ui.goals.GoalProgressLine
 import com.forge.app.ui.goals.customGoalTitle
 import com.forge.app.ui.goals.customGoalValueLine
@@ -51,6 +49,22 @@ import java.util.Locale
 /** Size of one filmstrip photo cell — portrait 3:4, tall enough to actually read as a photo. */
 private val StripCellWidth = 132.dp
 private val StripCellHeight = 176.dp
+
+/**
+ * An empty photo slot, on the same rung the calendar draws a rest day — one page-wide answer to
+ * "nothing here yet" instead of a second vocabulary for it. See this file's [GalleryStrip] header.
+ */
+private const val GHOST_ALPHA = 0.30f
+
+/** Each cell a step fainter, so the strip reads as continuing off the edge rather than ending. */
+private val GHOST_DEPTH = floatArrayOf(1f, 0.62f, 0.34f)
+
+/**
+ * The lead ghost's inner margin. Wider than the 8–9dp a filled cell insets its date by, because
+ * that caption sits on a photograph and this one sits in an empty frame — with nothing above it,
+ * the margin is the only thing giving the words a place to be.
+ */
+private val GHOST_PADDING = 14.dp
 
 /** A goal tile — a lift target or an auto-tracked custom goal, unified for previewing. */
 private sealed interface GoalTile {
@@ -183,13 +197,30 @@ private fun GoalLine(
  *
  * Viewing a single photo, adding one, albums and the guided camera all live in the Gallery, which
  * is where you now land. One home for each (§4.3).
+ *
+ * ## The ghost strip stopped being a row of cards (2026-08-24)
+ *
+ * Its empty state was the last boxed thing on the page: three cells with a card gradient inside a
+ * 1dp border, carrying the "+ First photo" line as their contents. That was written down as the one
+ * deliberate exception to the de-boxing, and once the ACTIVITY grid went full-width and took the
+ * accent it stopped surviving the comparison — Antho: *"looks out of place compared to the new UI
+ * in the page."* A bordered slab is a promise of a surface, and this page has no surfaces left.
+ *
+ * So the ghost cells are drawn the way the calendar draws a rest day: one quiet fill on the
+ * `outline` rung, no border, corners on the card radius, each successive cell a step fainter so the
+ * strip still reads as continuing into photos not taken yet. The page now has ONE shape for "this
+ * slot is empty", used by both sections that have one.
+ *
+ * The invitation came out of the first cell and became a line under the strip, on the gutter, which
+ * is where BODY's "Log your first" already puts the same offer. Text inside a bordered box was the
+ * card's last argument for existing; on a line it needs no container, and it is legible against the
+ * page instead of against a fill.
  */
 @Composable
 internal fun GalleryStrip(
     photos: List<ProgressPhoto>,
     fileFor: (ProgressPhoto) -> File,
     onOpenGallery: () -> Unit,
-    palette: SurfacePalette,
     muted: Color
 ) {
     Box(Modifier.padding(horizontal = 24.dp)) {
@@ -209,71 +240,22 @@ internal fun GalleryStrip(
         // the edge exactly as the real filmstrip does, not a single boxed frame. One frame alone read
         // as a lone empty container rather than as this section with nothing in it yet.
         //
-        // All three are tappable now, and all three open the Gallery. Previously only the lead cell
-        // did anything and it opened a different destination, so the strip taught you that two of
-        // its cells were dead — the exact gating Antho called out.
+        // All three are tappable, and all three open the Gallery. Previously only the lead cell did
+        // anything and it opened a different destination, so the strip taught you that two of its
+        // cells were dead — the exact gating Antho called out.
         Row(
             Modifier.padding(start = 24.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             repeat(3) { i ->
-                // design/surface-experiment v3 — the same dissolve the goals strip uses.
-                //
-                // v1 was a hollow outline: right on a bare page, where an outline is the only way
-                // to show an empty slot, and wrong beside filled cards. v2 was a flat filled slab:
-                // the colour was right and it still read badly — "stark and seeable" (Antho,
-                // 2026-08-15) — because three solid blocks shout louder than the photos they stand
-                // in for. Now each cell fades downward into the page and each successive one
-                // recedes, so the strip reads as continuing into photos not taken yet.
-                val depth = when (i) {
-                    0 -> 1f
-                    1 -> 0.62f
-                    else -> 0.34f
-                }
                 Box(
                     Modifier.width(StripCellWidth).height(StripCellHeight)
                         .clip(CardShape)
-                        .background(
-                            Brush.verticalGradient(
-                                listOf(
-                                    palette.card.copy(alpha = depth),
-                                    palette.card.copy(alpha = depth * 0.25f)
-                                )
-                            )
-                        )
-                        .border(
-                            1.dp,
-                            if (i == 0) muted.copy(alpha = 0.25f) else palette.hairline.copy(alpha = depth),
-                            CardShape
-                        )
+                        .background(MaterialTheme.colorScheme.outline.copy(alpha = GHOST_ALPHA * GHOST_DEPTH[i]))
                         .bounceClick { onOpenGallery() }
-                        .padding(14.dp)
+                        .padding(GHOST_PADDING)
                 ) {
-                    if (i == 0) {
-                        Column(Modifier.align(Alignment.BottomStart)) {
-                            // §14: the accent carries the glyph, the words stay on onBg. Accent
-                            // text measures 2.35:1 on Pearl, so it never carries meaning alone.
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    "+ ",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                                Text(
-                                    "First photo",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.onBackground
-                                )
-                            }
-                            Spacer(Modifier.height(5.dp))
-                            Text(
-                                "Same pose, same light.",
-                                style = MaterialTheme.typography.bodySmall,
-                                // 0.7, the re-measured on-card floor — 0.65 fails AA on the fill.
-                                color = muted.copy(alpha = 0.7f)
-                            )
-                        }
-                    }
+                    if (i == 0) GhostInvitation(muted, Modifier.align(Alignment.BottomStart))
                 }
             }
         }
@@ -286,6 +268,62 @@ internal fun GalleryStrip(
         items(photos.take(10), key = { it.fileName }) { photo ->
             StripPhotoCell(photo, fileFor(photo), onOpenGallery)
         }
+    }
+}
+
+/**
+ * The offer, written inside the first empty frame.
+ *
+ * ## Where it goes, and why the bottom
+ *
+ * A filled cell captions itself at the bottom-left — the date, and the pose chip up in the corner.
+ * The empty cell is that same cell with the photograph missing, so its words sit exactly where a
+ * filled one's words sit. Anything else (centred, floating, a plus in the middle of the frame)
+ * makes the zero-state a different object from the thing it stands in for, which is the failure §12
+ * is actually about.
+ *
+ * ## Why two voices and not one
+ *
+ * The first line is the action and the second is how to take the shot, and they are different kinds
+ * of sentence. Mono uppercase is this app's label voice — it is what the date on the filled cell
+ * beside it is set in, and what every anchor down the page is set in — so the action inherits the
+ * strip's own lettering. The tip is a spoken instruction, so it stays sans and drops to `muted`:
+ * one rung down in tone and one voice over in face, which is the whole hierarchy in two lines.
+ *
+ * The action is `labelMedium`, not the 9sp the first pass hand-set it at. Against a 12sp sans tip
+ * a 9sp label loses — the thing you are being offered read smaller than the note about how to
+ * shoot it, which is the hierarchy backwards. On the 11sp rung the uppercase mono and the brighter
+ * tone put the offer back on top, and both lines now take their size from the scale rather than
+ * from a call site (§6).
+ *
+ * The previous version put both on the page UNDER the strip, and before that crammed them into a
+ * bordered card at `bodySmall` where "Same pose, same light." wrapped mid-phrase against a 104dp
+ * measure. At 9sp mono over sans the block is three short lines that break where the comma already
+ * breaks, and it occupies the bottom quarter of the frame instead of a third of it.
+ *
+ * §14: the accent carries the `+` glyph only. Accent text measures 2.35:1 on Pearl, so the words
+ * themselves stay on `onBackground` and the mark is never the only thing saying "add".
+ */
+@Composable
+private fun GhostInvitation(muted: Color, modifier: Modifier = Modifier) {
+    Column(modifier) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("+", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.width(5.dp))
+            Text(
+                "FIRST PHOTO",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onBackground
+            )
+        }
+        Spacer(Modifier.height(7.dp))
+        Text(
+            "Same pose,\nsame light.",
+            style = MaterialTheme.typography.bodySmall,
+            // Plain muted, not the 0.7 on-card floor: there is no card fill under this any more,
+            // and on the page 0.65 measures 4.54:1 and passes.
+            color = muted
+        )
     }
 }
 
