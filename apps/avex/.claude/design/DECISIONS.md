@@ -8,6 +8,34 @@ an entry whenever a rule is added, changed or retired.
 
 ---
 
+## 2026-08-24 — §8: a modal's one commit may fill with the accent
+
+The rebuilt swap picker (`SETTLED.md`, 2026-08-23) puts a `Today` / `Every week` `SegmentPill` pair
+in every candidate row, and a selected pill is an accent border over an accent@0.15 wash. Against a
+list of those, the level-① light capsule at the foot of the sheet stopped reading as the commit and
+started reading as one more chip — the brightest thing on screen was whichever row you had armed, not
+the button that would act on it. Antho's call, and it is the right one: the capsule that ENDS a
+selection has to out-rank the selection.
+
+**§8 — `ForgePrimaryCapsule(accent = true)`.** One parameter on the existing primitive, not a second
+component. `ForgeHeroAction` already owns accent-filled at full weight, and its own note records why
+a lookalike drawn from a second definition is the failure mode here: Home's orange hero beside
+Cardio's white capsule was exactly that complaint. So the accent option lives on level ① rather than
+relaxing the hero's hub-tab-only rule.
+
+Scope is deliberately narrow, and the wording in §8 carries it: **a MODAL's one commit**. A page's
+do-it-now action stays light, a hub tab's stays `ForgeHeroAction`. The contrast is safe on every
+preset for free — the label rides `onPrimary`, which flips to the background tone above luminance
+0.18 (§14), so the default Red gets dark text at 4.53:1 and the dim presets keep near-white.
+
+Also settled the same turn: the picker OPENS with the lead candidate's `Today` armed rather than with
+nothing selected. The library is ordered best-first, so the likeliest swap is one tap from done, and
+the confirm is on screen from the moment the sheet opens instead of being a control that materialises
+once you have guessed that a row is tappable. Selection is radio-style — re-tapping the lit pill is a
+no-op, because a sheet whose confirm can vanish is worse than one that always has an answer ready.
+
+---
+
 ## 2026-08-22 — Onboarding rebuilt: the plan is visible while you answer for it
 
 First run was fifteen screens that showed the user nothing the app had made until the fifteenth. §3

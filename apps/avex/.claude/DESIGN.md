@@ -198,7 +198,7 @@ a padded `Text` kept missing · `ProvideTouchExploration` feeds the TalkBack fla
 undo-over-confirm soft-delete uses it (delete now, re-insert the captured row on undo) so a reversible
 delete never gets a confirm dialog. Don't re-roll a per-screen `SnackbarHostState`.
 
-**Buttons — three levels only**: ① filled light capsule = do-it-now, ≤1/section; ② outlined capsule =
+**Buttons — three levels only**: ① filled capsule = do-it-now, ≤1/section (light; `accent = true` only for a MODAL's one commit, which has to out-rank the selection controls above it); ② outlined capsule =
 its sidekick (a destructive one-shot = level ② tinted `error` via `ForgeOutlineCapsule(contentColor)`,
 paired with an Undo snackbar, never a filled red button); ③ mono accent `action →` = navigation. No M3
 default/floating-text/icon buttons in content. Settings reuse `SettingsPrimaryAction` (do-it-now) /

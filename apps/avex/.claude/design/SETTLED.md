@@ -354,6 +354,66 @@ Structural hairlines and tonal washes are exempt as decorative boundaries (§14)
 
 ---
 
+## Swap picker, rebuilt as an arm-then-confirm list (2026-08-23)
+
+`SwapPickerSheet` was rebuilt from scratch. It had been drawing a filled "Make default" plus an
+outlined "Just today" capsule inside EVERY candidate row, and firing the write on the first touch.
+
+The rebuild keeps the shape Antho liked — **every row carries its own `Today` / `Every week`
+choice** — and fixes what was actually wrong with it. Selection is radio-style and OPENS on the lead
+candidate's `Today`; the commit is accent-filled (`DECISIONS.md`, 2026-08-24). Both per-row controls are `SegmentPill`s, not
+buttons, because arming a row SELECTS rather than acts; the commit is a single `ForgePrimaryCapsule`
+at the END naming the move and the scope ("Swap to DB Fly every week"). So the *button wall* in
+`FAILURES.md` is answered on its own terms (it names a FILLED capsule per row, and there is exactly
+one filled capsule in the sheet, at the end per §8), the row is no longer a third tap target
+wrapping the two inside it (§2③), and a mis-tap now costs one more tap instead of a committed write.
+
+An intermediate build moved scope to ONE `SegmentPill` pair at the top of the sheet and made each row
+a single whole-row tap. It was tighter, and it was wrong for this surface: the scope belongs to the
+exercise you are choosing, not to the sheet, and reading a pill at the top to know what a tap 12 rows
+down will do is worse than reading the two words under the row itself. Do not re-hoist scope to the
+header.
+
+**Removed, and why none of it is missing:**
+
+- **Committing on first touch.** A swap mid-session is a write against the logged exercise; the
+  picker now arms and waits. This is the one place §12's undo-over-confirm does not reach, because
+  the act is not reversible from inside the sheet.
+- **The hairlines between variants.** §1: a line exists only as data. Two `HorizontalDivider`s per
+  row is the hairline habit, and the real fix was air plus the equipment glyph giving each row its
+  own left edge.
+- **The per-row `why` paragraph and `WHEN` line.** Twelve rationales stacked in a sheet opened
+  one-handed mid-set, against §4.3's one-caption budget. The library is ordered best-first, so the
+  LEAD entry keeps its `whenToUse` as the sheet's single caption, drawn inside the row it belongs
+  to. `why` no longer renders anywhere; do not re-add a "why this?" disclosure, §4.2 bans prose
+  behind a tap.
+- **The standing two-sentence explainer** under the header. Replaced by one line naming what each
+  scope costs, which is the only thing the two pill labels do not already say.
+- **The `· CURRENT` badge.** §8 keeps state words out of a row's right meta — and it could never
+  fire anyway: `DayScreen` filters the day's own effective names out of the candidate pool, so the
+  active swap is never in this list. The move being replaced is named in the anchor instead, and the
+  accent wash now means ARMED.
+- **The serif "A different way in." headline.** §4.6 / `ModalRecipe`: a sheet does not repeat a
+  title the row you tapped already said, and a modal has no serif hero in its toolkit.
+
+**Deliberately absent — do not add:**
+
+- **A search field.** §3 says a picker is search-first, and this one is the exception: the pool is
+  already filtered to one muscle AND the user's own equipment (4 to 18 moves before dislikes and
+  same-day exclusions), and the sheet opens one-handed between sets. A keyboard over six rows costs
+  more than it finds.
+
+**Added, because it was unreachable before:** `onClearPersistent` had been a parameter the sheet
+accepted and never drew, so a persistent swap could not be undone from the picker that made it. It
+is now the `Back to <plan exercise>` outlined capsule at the END (§8, level ② beside the confirm),
+shown only when a persistent swap is active.
+
+Along the way the 21 em dashes in the library copy this sheet actually renders (`muscleTarget` on
+every row, `whenToUse` on the lead) were rewritten (§11). The remaining 53 sit in `why`, which no
+longer reaches a screen.
+
+---
+
 ## Goals, one ranked ladder with a clock (2026-08-23)
 
 The Goals screen and the shared `GoalProgressLine` it lends to Home, Cardio and the Profile were

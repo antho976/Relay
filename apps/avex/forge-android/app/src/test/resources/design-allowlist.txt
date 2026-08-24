@@ -101,8 +101,6 @@
 1 alpha ui/gym/train/components/SetRow.kt 0.5
 1 alpha ui/gym/train/components/SetRow.kt 0.8
 1 alpha ui/gym/train/components/SetRow.kt 0.85
-1 alpha ui/gym/train/components/SwapPickerSheet.kt 0.2
-1 alpha ui/gym/train/components/SwapPickerSheet.kt 0.3
 2 alpha ui/gym/train/components/WarmupGate.kt 0.5
 1 alpha ui/overview/OverviewScreen.kt 0.3
 1 alpha ui/overview/SummarySheet.kt 0.2
@@ -187,7 +185,6 @@
 1 divider ui/gym/train/components/SessionSummaryComponents.kt Divider(
 1 divider ui/gym/train/components/SessionSummarySheet.kt Divider(
 1 divider ui/gym/train/components/SetInputRow.kt Divider(
-2 divider ui/gym/train/components/SwapPickerSheet.kt Divider(
 1 divider ui/gym/train/components/TrainingHelpers.kt Divider(
 1 divider ui/gym/train/components/WarmupGate.kt Divider(
 1 divider ui/nav/ForgeBottomBar.kt Divider(
@@ -205,7 +202,7 @@
 4 em-dash domain/coach/OutcomeWatcher.kt em dash in string
 1 em-dash domain/engine/ZoneCoach.kt em dash in string
 5 em-dash domain/notify/TrainingReminder.kt em dash in string
-74 em-dash program/ExerciseLibrary.kt em dash in string
+53 em-dash program/ExerciseLibrary.kt em dash in string
 19 em-dash program/Program.kt em dash in string
 1 em-dash security/LocalAppLock.kt em dash in string
 2 em-dash service/WeeklyRecapWorker.kt em dash in string
@@ -221,7 +218,6 @@
 1 em-dash ui/gym/train/components/ExerciseChartSheet.kt em dash in string
 1 em-dash ui/gym/train/components/SetInputRow.kt em dash in string
 1 em-dash ui/gym/train/components/SetRow.kt em dash in string
-1 em-dash ui/gym/train/components/SwapPickerSheet.kt em dash in string
 1 em-dash ui/gym/train/components/WarmupGate.kt em dash in string
 1 em-dash ui/theme/ColorExt.kt em dash in string
 2 em-dash ui/trophies/TrophiesComponents.kt em dash in string

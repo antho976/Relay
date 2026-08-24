@@ -32,18 +32,32 @@ fun ForgePrimaryCapsule(
     label: String,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    enabled: Boolean = true
+    enabled: Boolean = true,
+    /**
+     * Fill with the ACCENT instead of the light `onBackground` (2026-08-24). For a modal's one
+     * commit, where the capsule has to out-rank a list of accent-bordered selection pills the light
+     * fill sat quieter than. The label rides `onPrimary`, which `ForgeTheme` flips to the background
+     * tone above luminance 0.18 — so a mid-tone warm accent gets dark text and a monochrome accent
+     * still reads, exactly as [ForgeHeroAction] does. A page's do-it-now action stays light; a hub
+     * tab's stays [ForgeHeroAction].
+     */
+    accent: Boolean = false
 ) {
-    val onBg = MaterialTheme.colorScheme.onBackground
+    val cs = MaterialTheme.colorScheme
+    val fill = if (accent) cs.primary else cs.onBackground
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(50))
-            .background(onBg.copy(alpha = if (enabled) 1f else 0.35f))
+            .background(fill.copy(alpha = if (enabled) 1f else 0.35f))
             .bounceClick(enabled = enabled, onClick = onClick)
             .padding(horizontal = 18.dp, vertical = 13.dp),
         contentAlignment = Alignment.Center
     ) {
-        Text(label, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.background)
+        Text(
+            label,
+            style = MaterialTheme.typography.titleSmall,
+            color = if (accent) cs.onPrimary else cs.background
+        )
     }
 }
 
