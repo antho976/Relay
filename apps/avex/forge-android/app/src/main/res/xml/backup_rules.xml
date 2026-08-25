@@ -1,4 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+    Android 11 (API <= 30) auto-backup. Unlike data_extraction_rules.xml this format is
+    EXCLUDE-ONLY: everything in the app's data directory is backed up unless named here, and there
+    is no separate device-transfer channel to fall back on. So every path that must not reach the
+    user's Google Drive has to be listed explicitly.
+-->
 <full-backup-content>
     <!--
         Exclude WAL and shm sidecar files: Android Auto Backup can snapshot these at any moment.
@@ -12,4 +18,33 @@
     <exclude domain="file" path="pending_restore_prefs.pb" />
     <exclude domain="file" path="pending_restore_photos" />
     <exclude domain="file" path="pending_restore_avatar.jpg" />
+
+    <!--
+        Progress photos and the avatar: see the rationale in data_extraction_rules.xml. On this API
+        level there is no device-transfer channel, so excluding them here means they are not carried
+        to a new phone automatically either — the in-app export is the supported route.
+    -->
+    <exclude domain="file" path="progress_photos" />
+    <exclude domain="file" path="avatar.jpg" />
+
+    <!--
+        Crash reports, and the plaintext exports the share/export flows leave in filesDir. These are
+        scratch output the user already chose a destination for; re-uploading a copy to Drive is not
+        something they asked for, and the CSV/JSON files hold the same training data in the clear.
+    -->
+    <exclude domain="file" path="crashes" />
+    <exclude domain="file" path="forge_export.json" />
+    <exclude domain="file" path="forge_weekly_export.json" />
+    <exclude domain="file" path="forge_sessions.csv" />
+    <exclude domain="file" path="forge_bodyweight.csv" />
+    <exclude domain="file" path="forge_cardio.csv" />
+    <exclude domain="file" path="forge_prs.csv" />
+    <exclude domain="file" path="forge_session.pdf" />
+    <exclude domain="file" path="forge_rank_card.png" />
+    <exclude domain="file" path="avex_before_after_card.png" />
+    <!-- The auto-backup slot itself: a zip of the database, already covered by the database entry
+         above. Backing it up doubles the payload for no recovery benefit. -->
+    <exclude domain="file" path="forge_auto_backup.zip" />
+    <exclude domain="file" path="forge_auto_backup.zip.tmp" />
+    <exclude domain="file" path="forge_auto_backup.json" />
 </full-backup-content>

@@ -10,15 +10,22 @@
         <exclude domain="database" path="forge.db-wal" />
         <exclude domain="database" path="forge.db-shm" />
         <include domain="sharedpref" path="." />
-        <!-- DataStore prefs + progress photos live under files/ — include them so a cloud restore
-             brings settings and physique photos back, not just the Room database. -->
+        <!-- DataStore prefs live under files/ — include them so a cloud restore brings settings
+             back alongside the Room database. -->
         <include domain="file" path="datastore/" />
-        <include domain="file" path="progress_photos/" />
-        <include domain="file" path="avatar.jpg" />
-        <!-- Transient mid-restore staging files (pending_restore.db / _prefs.pb / _photos /
-             _avatar.jpg) are deliberately NOT listed above. Because this block uses explicit
-             <include> paths, anything not included is already excluded — so no <exclude> is needed,
-             and lint (FullBackupContent) rejects excluding a path that isn't under an <include>. -->
+        <!--
+            progress_photos/ and avatar.jpg are deliberately NOT listed here.
+
+            Cloud backup uploads to the user's Google Drive automatically, with no in-app prompt and
+            no per-restore choice. Settings → About tells the user "your data moves only when you
+            move it — exports and backups go where you point them, through Android's own picker",
+            and progress photos are the most sensitive thing this app holds. Shipping them off the
+            device by default contradicts that promise.
+
+            They stay in <device-transfer> below, which only runs when the user actively migrates to
+            a new phone — that IS them moving it. A user who wants photos in the cloud can take a
+            backup through the in-app export, which is the "where you point them" path.
+        -->
     </cloud-backup>
     <device-transfer>
         <include domain="database" path="forge.db" />
