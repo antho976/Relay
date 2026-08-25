@@ -2,6 +2,8 @@ package com.forge.app.data.repo
 
 import androidx.room.withTransaction
 import com.forge.app.core.time.Clock
+import com.forge.app.core.time.deloadWeekEndMs
+import com.forge.app.core.time.deloadWeekStartMs
 import com.forge.app.data.db.dao.BodyweightDao
 import com.forge.app.data.db.dao.LoggedExerciseDao
 import com.forge.app.data.db.dao.LoggedSetDao
@@ -85,10 +87,13 @@ class WorkoutRepository @Inject constructor(
     private val database: com.forge.app.data.db.ForgeDatabase
 ) {
 
-    private companion object {
-        /** A deload "week" — how long the applied deload pauses rotation / tags sessions (#18). */
-        const val DELOAD_WEEK_MS = 7L * 24 * 60 * 60 * 1000
-    }
+    /**
+     * The window an applied deload governs: it pauses rotation, tags the sessions logged inside it,
+     * and ends by restoring full volume. Monday-anchored (see [deloadWeekStartMs]) so a deload can
+     * never tag a session belonging to the next block.
+     */
+    private fun deloadWindow(appliedMs: Long): LongRange =
+        deloadWeekStartMs(appliedMs) until deloadWeekEndMs(appliedMs)
 
     // ─── Session lifecycle ─────────────────────────────────────────────────────
 
@@ -124,7 +129,7 @@ class WorkoutRepository @Inject constructor(
         // Tag sessions started inside the deload week so the deload actually shows up in history and
         // feeds DeloadAdvisor's repeat-suppression (the marker was previously never written — #18).
         val deloadStart = settingsRepo.deloadWeekStartMs.first()
-        val inDeloadWeek = deloadStart > 0 && clock.nowMs() - deloadStart in 0 until DELOAD_WEEK_MS
+        val inDeloadWeek = deloadStart > 0 && clock.nowMs() in deloadWindow(deloadStart)
         // First session after a real break: tag it FIRST_BACK (Coach v3 B1). The enum has existed
         // since #109 with nothing to write it; this is its writer. The tag keeps the return week out
         // of stall and fatigue reads (A1's filter), so easing back in never reads as a plateau.
@@ -428,7 +433,7 @@ class WorkoutRepository @Inject constructor(
         if (settingsRepo.freestyleMode.first()) return
 
         val deloadStart = settingsRepo.deloadWeekStartMs.first()
-        val sinceDeload = if (deloadStart > 0) clock.nowMs() - deloadStart else -1L
+        val deloadRange = if (deloadStart > 0) deloadWindow(deloadStart) else null
         // A deload WEEK has to end. applyDeloadWeek regenerates at reduced volume and stamps the
         // start, but nothing ever restored full volume: the only exits were a manual Settings
         // regenerate or auto-rotation, and rotationCadence defaults to "never". So for a default
@@ -436,9 +441,9 @@ class WorkoutRepository @Inject constructor(
         // aged past the window, nothing on screen said they were deloading either.
         //
         // This sits ABOVE the rotation gate deliberately: that gate is precisely the one most
-        // users never pass. A negative sinceDeload (the clock moved backwards) matches neither
-        // branch and leaves the program alone.
-        if (deloadStart > 0 && sinceDeload >= DELOAD_WEEK_MS) {
+        // users never pass. A clock that moved backwards lands before the window and matches
+        // neither branch, leaving the program alone.
+        if (deloadRange != null && clock.nowMs() > deloadRange.last) {
             programRepository.restoreAfterDeload()
             return
         }
@@ -446,7 +451,7 @@ class WorkoutRepository @Inject constructor(
         // Pause auto-rotation inside the deload week — a rotation regenerates a full-volume program
         // and would silently wipe the recovery week mid-deload (seam fix #18). The counter is left
         // untouched, so rotation resumes on the next finish after the deload ends.
-        if (deloadStart > 0 && sinceDeload in 0 until DELOAD_WEEK_MS) return
+        if (deloadRange != null && clock.nowMs() in deloadRange) return
         val n = settingsRepo.rotationEveryN.first().coerceAtLeast(1)
         val next = settingsRepo.rotationCounter.first() + 1
         if (next < n) {
