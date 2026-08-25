@@ -56,12 +56,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.util.Locale
 import com.forge.app.data.db.entities.LoggedSet
+import com.forge.app.domain.pr.PrDetector
+import com.forge.app.domain.units.MAX_REPS_DIGITS
 import com.forge.app.domain.units.MAX_HOLD_SECONDS
 import com.forge.app.domain.units.WeightUnit
 import com.forge.app.service.wear.toProtocol
 import com.forge.app.domain.units.formatHold
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.domain.units.parseToLb
+import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.domain.units.weightInputValue
 import com.forge.app.ui.theme.LocalForgeSettings
@@ -177,12 +180,30 @@ fun SetInputRow(
     // Single log path used by the LOG SET button and the reps field's "done" action. Validates the
     // weight too (the keyboard's Done bypassed the disabled-button guard, logging a weightless set).
     // Bodyweight exercises log "BW" and skip the weight requirement.
+    /**
+     * The weight to log: the user's text, unless they never touched the seeded value — in which case
+     * hand back the prior set's FULL-PRECISION display weight instead of the rounded seed.
+     *
+     * `weightInputValue` renders one decimal, which in STONES is a granularity of 0.1 st = 1.4 lb.
+     * "Repeat last set" on a 135 lb lift seeded "9.6" and logged 9.6 × 14 = 134.4 lb — 0.6 lb light,
+     * past the 0.5 lb epsilon, so the row painted a phantom "−0.6 lb" drop for a set the user had
+     * deliberately not changed. [SetRow]'s edit path has carried this guard for a while; the log
+     * path did not. LB and plate counts need no conversion, so they pass straight through.
+     */
+    fun untouchedSeedOrTyped(): String {
+        val typed = weight.trim()
+        val priorLb = priorSetForActiveRow?.weightLb
+        return if (!isPlates && weightUnit != WeightUnit.LB && priorLb != null && typed == seedWeight)
+            toDisplayWeight(priorLb, weightUnit).toString()
+        else typed
+    }
+
     fun submitSet() {
         if (isTimed) {
             val d = durationSec.takeIf { it > 0 } ?: return
             swRunning = false
             // Weight is optional on a hold (weighted plank/hang); bodyweight or blank logs "BW".
-            val wt = if (isBodyweight || weight.isBlank()) "BW" else weight.trim()
+            val wt = if (isBodyweight || weight.isBlank()) "BW" else untouchedSeedOrTyped()
             onSubmit(wt, 0, d)
             return
         }
@@ -191,7 +212,7 @@ fun SetInputRow(
             onSubmit("BW", r, null)
         } else {
             if (weight.isBlank()) return
-            onSubmit(weight.trim(), r, null)
+            onSubmit(untouchedSeedOrTyped(), r, null)
         }
         // Fields re-seed from the next set's prior automatically (keyed on the set number) (#8).
     }
@@ -248,7 +269,7 @@ fun SetInputRow(
                         Spacer(Modifier.height(2.dp))
                         BigNumberField(
                             value = reps,
-                            onValueChange = { new -> if (new.all { it.isDigit() }) reps = new },
+                            onValueChange = { new -> if (new.all { it.isDigit() }) reps = new.take(MAX_REPS_DIGITS) },
                             placeholder = repsPlaceholder?.toString() ?: "0",
                             keyboardType = KeyboardType.Number,
                             imeAction = ImeAction.Done,
@@ -553,7 +574,7 @@ fun SetInputRow(
                 }
                 Column(modifier = Modifier.weight(0.7f).padding(start = 16.dp)) {
                     Text("REPS", style = MaterialTheme.typography.labelSmall, color = muted)
-                    BigNumberField(reps, { new -> if (new.all { it.isDigit() }) reps = new }, "0", KeyboardType.Number, ImeAction.Done)
+                    BigNumberField(reps, { new -> if (new.all { it.isDigit() }) reps = new.take(MAX_REPS_DIGITS) }, "0", KeyboardType.Number, ImeAction.Done)
                 }
                 Button(
                     onClick = {
@@ -765,9 +786,24 @@ private fun BigNumberField(
     }
 }
 
+/**
+ * The lowest rep count at which this weight would be a record — asked of [PrDetector] itself rather
+ * than re-derived.
+ *
+ * The hint used to run its own rule: it thresholded the wrong dimension and dropped the `isAssisted`
+ * filter entirely. A pull-up history of one BAND-ASSISTED 100 lb x 10 made it print "11 for PR" at
+ * 100 lb, while `PrDetector` — which ignores assisted sets — would have flagged a record at ONE rep.
+ * Two answers to the same question, on the same screen.
+ *
+ * Null when the weight is never a record here, or when the answer is far enough out that showing it
+ * is discouraging rather than useful.
+ */
 private fun repsNeededForPr(history: List<LoggedSet>, weightLb: Double): Int? {
-    val maxRepsAtOrAbove = history
-        .filter { it.weightLb != null && it.weightLb >= weightLb }
-        .maxOfOrNull { it.reps }
-    return maxRepsAtOrAbove?.let { it + 1 }
+    for (n in 1..MAX_PR_HINT_REPS) {
+        if (PrDetector.isPr(history, weightLb, n)) return n
+    }
+    return null
 }
+
+/** Beyond this the hint stops being a nudge. Also bounds the search for a weight that never wins. */
+private const val MAX_PR_HINT_REPS = 50

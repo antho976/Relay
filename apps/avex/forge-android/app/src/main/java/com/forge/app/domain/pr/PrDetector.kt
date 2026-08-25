@@ -12,7 +12,8 @@ import com.forge.app.data.db.entities.LoggedSet
  * heavy work from being trivially "beaten" by high-rep light work (and vice versa).
  *
  * Sets without a numeric weight (e.g. "BW", parser returned null) never count as PRs
- * — bodyweight progression is tracked by reps, which we don't surface as a PR in 3c.
+ * — bodyweight progression is tracked by reps, which we don't surface as a PR in 3c. Nor does a
+ * zero weight, which the parser reads as a literal 0.0 rather than as "no weight".
  */
 object PrDetector {
 
@@ -23,7 +24,12 @@ object PrDetector {
      * @param newReps The proposed set's rep count. Must be > 0.
      */
     fun isPr(history: List<LoggedSet>, newWeightLb: Double?, newReps: Int): Boolean {
-        if (newWeightLb == null || newReps <= 0) return false
+        // A typed "0" parses to 0.0, not null (WeightParser accepts it as a literal weight), so it
+        // slipped past the null guard and — with no prior set at this rep count — returned true
+        // unconditionally. A brand-new exercise logged 0 x 5 in freestyle or from the watch got a
+        // gold star and a lifetime PR count; with history, 0 x 20 "beat" 100 x 5. Zero load is not
+        // a record at any rep count.
+        if (newWeightLb == null || newWeightLb <= 0.0 || newReps <= 0) return false
         val competingMax = history
             // Assisted sets (bands/spotter) are excluded from all-time PR comparison (LoggedSet.isAssisted).
             .filter { it.weightLb != null && !it.isAssisted && it.reps >= newReps }

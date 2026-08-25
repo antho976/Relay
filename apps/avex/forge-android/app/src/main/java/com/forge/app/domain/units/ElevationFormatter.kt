@@ -31,7 +31,16 @@ fun elevationInputValue(meters: Double, useMiles: Boolean): String =
  * [formatElevation] / [elevationInputValue].
  */
 fun parseToMeters(input: String, useMiles: Boolean): Double? {
-    val cleaned = input.trim().lowercase().removeSuffix("ft").removeSuffix("m").trim()
+    val cleaned = input.trim().lowercase()
+    // The typed suffix wins over the setting — "120 m" entered by a miles user is 120 metres, not
+    // 120 feet. (Note the old strip order also turned "394ft" into "394" and then, for a metric
+    // user, into 394 metres.)
+    ELEVATION_UNIT_REGEX.matchEntire(cleaned)?.let { m ->
+        val v = m.groupValues[1].toDoubleOrNull() ?: return null
+        return if (m.groupValues[2] == "ft") v / FEET_PER_METER else v
+    }
     val numeric = cleaned.toDoubleOrNull() ?: return null
     return if (useMiles) numeric / FEET_PER_METER else numeric
 }
+
+private val ELEVATION_UNIT_REGEX = Regex("""^\s*(\d+(?:\.\d+)?)\s*(ft|m)\s*$""")

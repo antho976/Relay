@@ -59,6 +59,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.data.db.entities.LoggedSet
+import com.forge.app.domain.units.MAX_REPS_DIGITS
 import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.formatHoldLabel
 import com.forge.app.domain.units.formatWeight
@@ -195,7 +196,7 @@ fun SetRow(
             )
             OutlinedTextField(
                 value = editReps,
-                onValueChange = { if (it.all { c -> c.isDigit() }) editReps = it },
+                onValueChange = { if (it.all { c -> c.isDigit() }) editReps = it.take(MAX_REPS_DIGITS) },
                 modifier = Modifier.width(SetTable.REPS_COL_W + 24.dp),
                 label = { Text("Reps") },
                 singleLine = true,

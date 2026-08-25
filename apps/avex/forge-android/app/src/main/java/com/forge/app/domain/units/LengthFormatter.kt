@@ -47,7 +47,14 @@ fun formatLengthDelta(cmDiff: Double, useCm: Boolean): String {
  */
 fun parseToCm(input: String, useCm: Boolean): Double? {
     val cleaned = input.trim().lowercase()
-        .removeSuffix("cm").removeSuffix("in").removeSuffix("\"").trim()
+    // The typed suffix wins over the setting. Stripping both and then converting by the preference
+    // read "32 in" as 32 cm for a metric user — a chest measurement 49 cm out.
+    LENGTH_UNIT_REGEX.matchEntire(cleaned)?.let { m ->
+        val v = m.groupValues[1].toDoubleOrNull() ?: return null
+        return if (m.groupValues[2] == "cm") v else v * CM_PER_INCH
+    }
     val numeric = cleaned.toDoubleOrNull() ?: return null
     return if (useCm) numeric else numeric * CM_PER_INCH
 }
+
+private val LENGTH_UNIT_REGEX = Regex("""^\s*(\d+(?:\.\d+)?)\s*(cm|in|")\s*$""")

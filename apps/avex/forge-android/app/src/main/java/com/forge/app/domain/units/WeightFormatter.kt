@@ -64,7 +64,9 @@ fun formatWeight(lb: Double, unit: WeightUnit): String = when (unit) {
 fun formatVolume(volumeLb: Double, unit: WeightUnit): String {
     val v = toDisplayWeight(volumeLb, unit)
     val u = unit.label
-    return if (v >= 1000) String.format(Locale.US, "%.1fk %s", v / 1000, u) else "${v.toInt()} $u"
+    // roundToInt, not toInt: truncation runs AFTER the kg/st conversion, so it bit hardest in the
+    // unit that needs it least — a 500 lb session is 226.796 kg and used to read "226 kg".
+    return if (v >= 1000) String.format(Locale.US, "%.1fk %s", v / 1000, u) else "${v.roundToInt()} $u"
 }
 
 /**
@@ -77,7 +79,7 @@ fun formatVolumeCompact(volumeLb: Double, unit: WeightUnit, withUnit: Boolean = 
     val suffix = if (withUnit) " ${unit.label}" else ""
     return if (v >= 1000)
         "${String.format(Locale.US, "%.1f", v / 1000).trimEnd('0').trimEnd('.')}k$suffix"
-    else "${v.toInt()}$suffix"
+    else "${v.roundToInt()}$suffix"
 }
 
 /** The numeric value in the display unit, UNformatted — for driving animated counters / raw math.
@@ -135,12 +137,32 @@ fun parseToLb(input: String, unit: WeightUnit): Double? {
     // See [normalizeDecimalInput] — a comma-locale keyboard produces "82,5", which toDoubleOrNull
     // rejects. Normalise before any of the unit branches touch it.
     val cleaned = normalizeDecimalInput(input).lowercase()
+    // A suffix the user actually typed states the unit they MEAN, and it wins over the setting.
+    // Each branch used to strip only its own suffix and then apply the setting's conversion, so
+    // "20 kg" typed while the app was in lb matched no branch at all, fell through to null, and was
+    // logged as a weightless bodyweight set. A "st"-suffixed value in kg mode was read as kilos.
+    explicitUnitToLb(cleaned)?.let { return it }
     return when (unit) {
         WeightUnit.KG -> cleaned.removeSuffix("kg").trim().toDoubleOrNull()?.let { it / KG_PER_LB }
         WeightUnit.LB -> cleaned.removeSuffix("lb").trim().toDoubleOrNull()
         WeightUnit.ST -> parseStonesToLb(cleaned)
     }
 }
+
+/** `"20 kg"` / `"9.6 st"` / `"135lb"` → lb, whatever the display unit is. Null when the text carries
+ *  no unit of its own (the overwhelmingly common case), leaving the setting to decide. */
+private fun explicitUnitToLb(cleaned: String): Double? {
+    val m = EXPLICIT_UNIT_REGEX.matchEntire(cleaned) ?: return null
+    val value = m.groupValues[1].toDoubleOrNull() ?: return null
+    return when (m.groupValues[2]) {
+        "kg", "kgs" -> value / KG_PER_LB
+        "st" -> value * LB_PER_STONE
+        else -> value // lb / lbs
+    }
+}
+
+private val EXPLICIT_UNIT_REGEX =
+    Regex("""^\s*(\d+(?:\.\d+)?)\s*(kgs?|lbs?|st)\s*$""")
 
 /**
  * Canonical stored weight text (always lb) for what the user typed in the display unit. A numeric

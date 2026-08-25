@@ -64,6 +64,7 @@ import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.data.db.entities.LoggedSet
+import com.forge.app.domain.units.MAX_REPS_DIGITS
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.domain.units.parseToLb
 import com.forge.app.domain.units.toStoredWeightText
@@ -765,7 +766,10 @@ private fun FsExerciseCard(
                         StepBtn("−", "Decrease reps") { onSetChange(setIdx, set.copy(reps = stepRepsStr(set.reps, -1))) }
                         FsUnderlineField(
                             value = set.reps,
-                            onValueChange = { new -> onSetChange(setIdx, set.copy(reps = new.filter { it.isDigit() })) },
+                            // Capped at MAX_REPS_DIGITS: the write boundary clamps reps to 999 anyway, and an
+                            // 11-digit entry overflows Int so toIntOrNull returns null and the whole
+                            // set is silently dropped at save with no error shown.
+                            onValueChange = { new -> onSetChange(setIdx, set.copy(reps = new.filter { it.isDigit() }.take(MAX_REPS_DIGITS))) },
                             placeholder = "0",
                             keyboardType = KeyboardType.Number,
                             modifier = Modifier.width(36.dp)
