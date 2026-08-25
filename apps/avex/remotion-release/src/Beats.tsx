@@ -3,6 +3,7 @@ import {AbsoluteFill, interpolate, useCurrentFrame, useVideoConfig} from 'remoti
 import {Camera, EASE, Shot} from './Camera';
 import {Clip, Device, FocusMove, Media, Seam, SeamDir} from './Device';
 import {Center, Full, Plate, Split} from './Layout';
+import {CueRun} from './Sound';
 import {Body, Counter, EraTag, Eyebrow, Line, Tag, Title, useEdgeFade, useRise} from './Type';
 import {ACCENT, H, MONO, MUTED, ON_BG, SERIF, SHOT_AR, W} from './theme';
 
@@ -89,7 +90,16 @@ export const Compare: React.FC<{
                     p={p}
                     dir={dir}
                     a={<Media clip={{...before, rate: before.rate ?? rate(beforeSpan)}} />}
-                    b={<Media clip={{...after, rate: after.rate ?? rate(afterSpan)}} />}
+                    b={
+                      <div
+                        style={{
+                          position: 'absolute', inset: 0,
+                          transform: `scale(${1 + (1 - Math.min(1, p * 1.35)) * 0.035})`,
+                        }}
+                      >
+                        <Media clip={{...after, rate: after.rate ?? rate(afterSpan)}} />
+                      </div>
+                    }
                   />
                 </Device>
                 <EraTag p={p} delay={8} />
@@ -210,10 +220,13 @@ export const ListCard: React.FC<{eyebrow: string; title: string; items: string[]
   return (
     <AbsoluteFill style={{opacity: o}}>
       <Plate>
-        <div style={{display: 'flex', flexDirection: 'column', gap: 30, width: 1400}}>
+        {/* one tick per item, quiet and decaying — eight of these should read as a list settling,
+            not as a drum roll */}
+        <CueRun from={12} every={2.5} count={items.length} sfx="count" gain={0.9} decay={0.94} />
+        <div style={{display: 'flex', flexDirection: 'column', gap: 32, width: 1500}}>
           <Eyebrow delay={0}>{eyebrow}</Eyebrow>
-          <Title delay={4} size={68}>{title}</Title>
-          <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 80, rowGap: 17, marginTop: 8}}>
+          <Title delay={4} size={76}>{title}</Title>
+          <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 92, rowGap: 30, marginTop: 14}}>
             {items.map((it, i) => (
               <ListItem key={i} n={i} v={it} />
             ))}
@@ -230,10 +243,10 @@ const ListItem: React.FC<{n: number; v: string}> = ({n, v}) => {
     <div
       style={{
         display: 'flex', gap: 16, alignItems: 'baseline',
-        fontFamily: SERIF, fontSize: 26, color: ON_BG, lineHeight: 1.38, ...r,
+        fontFamily: SERIF, fontSize: 31, color: ON_BG, lineHeight: 1.36, ...r,
       }}
     >
-      <span style={{fontFamily: MONO, fontSize: 16, color: ACCENT}}>{String(n + 1).padStart(2, '0')}</span>
+      <span style={{fontFamily: MONO, fontSize: 18, color: ACCENT}}>{String(n + 1).padStart(2, '0')}</span>
       <span>{v}</span>
     </div>
   );

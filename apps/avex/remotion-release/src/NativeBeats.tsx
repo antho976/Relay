@@ -1,12 +1,12 @@
 import React from 'react';
 import {AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig} from 'remotion';
 import {HomeScreen} from './ui/HomeScreen';
-import {GoalRow, ScaleCtx} from './ui/kit';
 import {Icon} from './ui/icons';
 import {C} from './ui/tokens';
 import {WatchRest, WatchRpe, WatchSet} from './ui/Watch';
 import {Body, Eyebrow, Title, useEdgeFade} from './Type';
 import {Plate} from './Layout';
+import {Cue} from './Sound';
 import {Device} from './Device';
 import {SHOT_AR} from './theme';
 
@@ -26,10 +26,11 @@ export const HomeMorph: React.FC = () => {
         <div style={{display: 'flex', width: '100%', height: '100%', alignItems: 'center'}}>
           <div style={{flex: '0 0 700px', paddingLeft: 110, display: 'flex', flexDirection: 'column', gap: 22}}>
             <Eyebrow delay={0}>Home</Eyebrow>
-            <Title delay={4} size={72}>{'One screen,\ntwo eras'}</Title>
+            <Title delay={4} size={72}>{'Home,\nredesigned'}</Title>
             <Body delay={12}>
-              The wordmark becomes the bell. The pill becomes the accent, and gives up half its width
-              to Plan. The meters bleed navy to red, and the fifth tab stops being you.
+              The logo is now a bell that shows what you have missed. Start session stands out, with
+              Plan beside it instead of buried. Your goal bars turned red. And the last tab is no
+              longer you.
             </Body>
             <div style={{display: 'flex', gap: 18, marginTop: 10, alignItems: 'center'}}>
               <Era label="0.8.9" on={1 - t} />
@@ -56,57 +57,11 @@ const Era: React.FC<{label: string; on: number; accent?: boolean}> = ({label, on
   <div
     style={{
       fontFamily: MONO, fontSize: 20, letterSpacing: 3, color: accent ? C.accent : C.muted,
-      opacity: 0.3 + on * 0.7, border: `1.5px solid ${accent ? C.accent : C.outline}`,
-      borderRadius: 999, padding: '8px 20px',
+      opacity: 0.32 + on * 0.68, border: `1.5px solid ${accent ? C.accent : C.outline}`,
+      borderRadius: 999, padding: '8px 20px', lineHeight: 1,
     }}
-  />
-);
-
-/**
- * A single goal row, lifted off the screen and blown up. This is the beat a screen recording cannot
- * give you: the component alone, at a size where the meter and the implement chip are the subject.
- */
-export const GoalCloseUp: React.FC = () => {
-  const frame = useCurrentFrame();
-  const {fps, durationInFrames} = useVideoConfig();
-  const o = useEdgeFade(durationInFrames, 14);
-  const t = spring({frame: frame - 50, fps, config: {damping: 200, stiffness: 30}});
-  const fill = interpolate(frame, [14, 70], [0, 0.94], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'});
-  const accent = t > 0.5 ? C.accent : C.accentOld;
-
-  return (
-    <AbsoluteFill style={{opacity: o}}>
-      <Plate>
-        <div style={{display: 'flex', flexDirection: 'column', gap: 46, width: 1400}}>
-          <div style={{display: 'flex', flexDirection: 'column', gap: 18}}>
-            <Eyebrow delay={0}>Goals</Eyebrow>
-            <Title delay={4} size={76}>A meter that means something</Title>
-          </div>
-          {/* 3.4x the on-device size */}
-          <ScaleCtx.Provider value={3.4}>
-            <div style={{background: C.surface, borderRadius: 26, padding: '46px 52px', border: `1px solid ${C.outline}`}}>
-              <GoalRow
-                name="Incline Barbell Bench" cur={150} target={160}
-                fill={fill} accent={accent} chip={t > 0.4} glyph="barbell"
-              />
-            </div>
-          </ScaleCtx.Provider>
-          <div style={{display: 'flex', gap: 40, opacity: interpolate(t, [0.3, 1], [0, 1], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'})}}>
-            {/* 0.8.9's meter was already accent-filled — in AccentNavy. What changed is which
-                colour the accent is, and that the row now carries the movement's implement. */}
-            <Note n="01" v="The meter bleeds navy to red — the accent moved" />
-            <Note n="02" v="The implement rides alongside the name" />
-          </div>
-        </div>
-      </Plate>
-    </AbsoluteFill>
-  );
-};
-
-const Note: React.FC<{n: string; v: string}> = ({n, v}) => (
-  <div style={{display: 'flex', gap: 14, alignItems: 'baseline'}}>
-    <span style={{fontFamily: MONO, fontSize: 18, color: C.accent}}>{n}</span>
-    <span style={{fontFamily: 'Georgia, serif', fontSize: 28, color: C.muted}}>{v}</span>
+  >
+    {label}
   </div>
 );
 
@@ -125,10 +80,12 @@ export const TabSwap: React.FC = () => {
   return (
     <AbsoluteFill style={{opacity: o}}>
       <Plate>
+        {/* the tab actually changing hands */}
+        <Cue at={48} sfx="tap" gain={0.9} />
         <div style={{display: 'flex', flexDirection: 'column', gap: 60, alignItems: 'center'}}>
           <div style={{display: 'flex', flexDirection: 'column', gap: 16, alignItems: 'center'}}>
             <Eyebrow delay={0}>The fifth tab</Eyebrow>
-            <Title delay={4} size={78}>Academy takes the slot</Title>
+            <Title delay={4} size={78}>Academy gets its own tab</Title>
           </div>
           <div
             style={{
@@ -149,8 +106,8 @@ export const TabSwap: React.FC = () => {
             </div>
           </div>
           <div style={{fontFamily: 'Georgia, serif', fontSize: 30, fontStyle: 'italic', color: C.muted, maxWidth: 900, textAlign: 'center'}}>
-            Profile moves up into Home&apos;s top bar. Academy was a link buried inside Coach — and it is
-            half the coach, not a footnote to it.
+            It used to be a link buried inside Coach, where most people never found it. Profile moved
+            up to the top of Home to make room.
           </div>
         </div>
       </Plate>

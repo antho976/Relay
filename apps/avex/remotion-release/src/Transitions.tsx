@@ -3,9 +3,9 @@ import {AbsoluteFill} from 'remotion';
 import {
   TransitionPresentation, TransitionPresentationComponentProps, TransitionSeries, linearTiming, springTiming,
 } from '@remotion/transitions';
+import {EASE} from './Camera';
 import {fade} from '@remotion/transitions/fade';
 import {wipe} from '@remotion/transitions/wipe';
-import {ACCENT} from './theme';
 import {XFADE} from './theme';
 
 /* ── whip ────────────────────────────────────────────────────────────────── */
@@ -43,44 +43,32 @@ export const whip = (opts: Partial<WhipProps> = {}): TransitionPresentation<Whip
   props: {axis: 'x', sign: 1, blur: 9, ...opts},
 });
 
-/* ── the accent sweep ────────────────────────────────────────────────────── */
+/* ── push ──────────────────────────────────────────────────────────────── */
 
-type SweepProps = {sign: 1 | -1};
+type PushProps = {axis: 'x' | 'y'; sign: 1 | -1};
 
-/**
- * The seam, promoted to a cut. Where a beat inside the film uses an accent edge to turn 0.8.9 into
- * 0.9 in one device, this uses the same edge to turn one beat into the next — so the film's one
- * recurring gesture also does its section breaks, instead of borrowing a stock wipe for them.
- */
-const Sweep: React.FC<TransitionPresentationComponentProps<SweepProps>> = ({
+/** A whip with the throw taken out of it: same travel, no blur, eased like a camera move. */
+const Push: React.FC<TransitionPresentationComponentProps<PushProps>> = ({
   children, presentationDirection, presentationProgress, passedProps,
 }) => {
-  const {sign} = passedProps;
-  const p = presentationProgress;
-  if (presentationDirection === 'exiting') return <AbsoluteFill>{children}</AbsoluteFill>;
-  const q = p * 100;
-  const clip = sign === 1 ? `inset(0 ${100 - q}% 0 0)` : `inset(0 0 0 ${100 - q}%)`;
-  const edge = `${sign === 1 ? q : 100 - q}%`;
+  const {axis, sign} = passedProps;
+  const entering = presentationDirection === 'entering';
+  const offset = (entering ? 1 - presentationProgress : -presentationProgress) * 100 * sign;
   return (
-    <>
-      <AbsoluteFill style={{clipPath: clip}}>{children}</AbsoluteFill>
-      {p > 0.01 && p < 0.99 ? (
-        <AbsoluteFill style={{pointerEvents: 'none'}}>
-          <div
-            style={{
-              position: 'absolute', top: 0, bottom: 0, left: edge, width: 4, marginLeft: -2,
-              background: ACCENT, boxShadow: `0 0 40px 8px ${ACCENT}55`,
-            }}
-          />
-        </AbsoluteFill>
-      ) : null}
-    </>
+    <AbsoluteFill
+      style={{
+        transform: axis === 'x' ? `translateX(${offset}%)` : `translateY(${offset}%)`,
+        willChange: 'transform',
+      }}
+    >
+      {children}
+    </AbsoluteFill>
   );
 };
 
-export const sweep = (opts: Partial<SweepProps> = {}): TransitionPresentation<SweepProps> => ({
-  component: Sweep,
-  props: {sign: 1, ...opts},
+export const push = (opts: Partial<PushProps> = {}): TransitionPresentation<PushProps> => ({
+  component: Push,
+  props: {axis: 'x', sign: 1, ...opts},
 });
 
 /* ── the table ───────────────────────────────────────────────────────────── */
@@ -89,7 +77,7 @@ export const sweep = (opts: Partial<SweepProps> = {}): TransitionPresentation<Sw
  * `cut` is a genuine zero-frame cut, not a very fast dissolve. An edit at this pace needs real cuts
  * — a film where every one of twenty joins is a crossfade has no punctuation, only commas.
  */
-export type Xit = 'cut' | 'fade' | 'whip' | 'whipUp' | 'sweep' | 'sweepBack' | 'wipe' | 'dissolve';
+export type Xit = 'cut' | 'fade' | 'whip' | 'whipUp' | 'push' | 'pushUp' | 'wipe' | 'dissolve';
 
 export const transition = (t: Xit, key: string): React.ReactNode | null => {
   switch (t) {
@@ -109,18 +97,18 @@ export const transition = (t: Xit, key: string): React.ReactNode | null => {
           timing={linearTiming({durationInFrames: XFADE.quick})}
         />
       );
-    case 'sweep':
+    case 'push':
       return (
         <TransitionSeries.Transition
-          key={key} presentation={sweep({sign: 1})}
-          timing={linearTiming({durationInFrames: XFADE.soft})}
+          key={key} presentation={push({axis: 'x', sign: 1})}
+          timing={linearTiming({durationInFrames: XFADE.pan, easing: EASE.glide})}
         />
       );
-    case 'sweepBack':
+    case 'pushUp':
       return (
         <TransitionSeries.Transition
-          key={key} presentation={sweep({sign: -1})}
-          timing={linearTiming({durationInFrames: XFADE.soft})}
+          key={key} presentation={push({axis: 'y', sign: 1})}
+          timing={linearTiming({durationInFrames: XFADE.pan, easing: EASE.glide})}
         />
       );
     case 'wipe':
@@ -149,5 +137,6 @@ export const transition = (t: Xit, key: string): React.ReactNode | null => {
 export const overlap = (t: Xit): number =>
   t === 'cut' ? 0
   : t === 'whip' || t === 'whipUp' ? XFADE.quick
+  : t === 'push' || t === 'pushUp' ? XFADE.pan
   : t === 'wipe' || t === 'dissolve' ? XFADE.wide
   : XFADE.soft;

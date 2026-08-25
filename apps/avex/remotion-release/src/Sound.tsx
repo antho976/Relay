@@ -16,6 +16,9 @@ export const SFX = {
   restDone:  'sfx/rest-done.wav',
   impact:    'sfx/impact.wav',
   count:     'sfx/count.wav',
+  swoosh:    'sfx/swoosh.wav',
+  ding:      'sfx/ding.wav',
+  pop:       'sfx/pop.wav',
 } as const;
 
 export type SfxName = keyof typeof SFX;
@@ -33,6 +36,7 @@ export type SfxName = keyof typeof SFX;
  */
 const LEVEL: Record<SfxName, number> = {
   tap: 0.8, tick: 0.62, confirm: 0.62, restStart: 0.5, restDone: 0.6, impact: 0.9, count: 0.3,
+  swoosh: 0.62, ding: 0.7, pop: 0.75,
 };
 
 /** Master trim — one place to pull the whole sound design up or down against picture. */

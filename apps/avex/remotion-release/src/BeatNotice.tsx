@@ -53,20 +53,22 @@ export const NoticeBeat: React.FC = () => {
   return (
     <AbsoluteFill style={{opacity: o}}>
       <Plate>
-        <Cue at={IN + 4} sfx="tap" gain={0.7} />
-        <Cue at={LAND} sfx="tick" gain={1} />
+        {/* the banner arriving, the flight itself, and the count acknowledging it */}
+        <Cue at={IN + 3} sfx="pop" gain={0.8} />
+        <Cue at={FLY - 1} sfx="swoosh" />
+        <Cue at={LAND} sfx="ding" />
 
         <Split
           flip
           copyWidth={640}
           copy={
             <>
-              <Eyebrow delay={0}>New in 0.9 · Notifications</Eyebrow>
-              <Title delay={4} size={68}>{'One feed,\nbehind one bell'}</Title>
-              <Body delay={10} width={580}>
-                Home used to open with four stacked banners. Now everything that used to interrupt you
-                lands in one feed, newest and most live first — and an unlocked lesson settles quietly,
-                then flies into the bell.
+              <Eyebrow delay={0}>New in 0.9</Eyebrow>
+              <Title delay={4} size={68}>{'All your alerts\nin one place'}</Title>
+              <Body delay={10} width={600}>
+                Home used to open with up to four banners stacked on top of each other. Now everything
+                lands in one feed behind the bell. Unlock a lesson mid-session and it slides in
+                quietly, waits a moment, then tucks itself away.
               </Body>
             </>
           }

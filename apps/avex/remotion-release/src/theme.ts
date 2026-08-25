@@ -40,4 +40,4 @@ export const PACE = {
 } as const;
 
 /** Transition lengths. A hard cut is genuinely zero — that is what makes a short edit feel fast. */
-export const XFADE = {cut: 0, quick: 7, soft: 12, wide: 16} as const;
+export const XFADE = {cut: 0, quick: 7, soft: 12, pan: 14, wide: 16} as const;

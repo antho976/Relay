@@ -10,23 +10,19 @@
 #
 # Output: remotion-release/public/sfx/*.wav — 48 kHz, stereo, 16-bit PCM.
 #
-# LEVELS. Each file is peak-normalised to an exact target:
+# LEVELS. Every sound is peak-normalised to the SAME target, -3 dBFS, via
+# `finish <name> -3`. Keep it that way when adding sounds.
 #
-#   confirm  -10      impact   -10      <- accents; these are meant to land
-#   rest-done -13     rest-start -15    <- functional cues, sit under the accents
-#   tap      -14      tick   -16.5      <- taps; tick is drier/quieter than tap
-#   count    -20                        <- fires many times a second, stays back
+# The perceived hierarchy — which cue is loud, which sits back — lives entirely
+# in src/Sound.tsx's LEVEL map. It used to be encoded here as well (tap -14,
+# confirm -10, count -20, ...) and every cue was consequently attenuated twice.
+# One source of truth: this script makes each file as loud as it can cleanly be,
+# and the timeline decides how loud it should actually sound.
 #
-# tick and count sit below the -14 tap reference on purpose, because the brief
-# for those two sounds is explicitly "quieter than tap" and "very quiet".
-#
-# Be aware that equal PEAK does not mean equal LOUDNESS here. The transients
-# (tap/tick/count) have a ~22-24 dB peak-to-momentary-loudness crest, while the
-# sustained tonal cues have only ~6-9 dB. Peak-matching therefore leaves the
-# taps perceptually ~20 LUFS below the chimes — which is the correct hierarchy
-# for a UI palette (a tap acknowledges, a chime announces), but it does mean
-# per-cue gain in the timeline is the right place to fine-tune the mix, not
-# this script. Measured momentary-LUFS figures are in the task report.
+# Note that equal peak still does not mean equal loudness: the transients
+# (tap/tick/count/pop) carry a ~22-24 dB peak-to-momentary-loudness crest while
+# the sustained tonal cues carry only ~6-9 dB. That is a property of the sounds,
+# not of the normalisation, and the LEVEL map is the right place to correct it.
 #
 # Usage (from anywhere, including the repo root):
 #   ./remotion-release/tools/make-sfx.sh
@@ -265,4 +261,111 @@ synth count "
     ,afade=type=out:start_time=0.016:duration=0.004:curve=tri[out]"
 finish count -3
 
-echo "make-sfx: done — 7 files in $OUT_DIR"
+
+# ---------------------------------------------------------------------------
+# 8. swoosh.wav — notification banner flying across and tucking into the bell,
+#    ~260 ms. Explicitly NOT the stock filtered-noise whoosh.
+#
+#    The generic whoosh is a noise sweep: broadband, unpitched, and it DISPERSES
+#    (peaks early, fades out). Everything here is built to be the opposite.
+#
+#    [a] the body is a TONE, not air — a triangle-ish voice (fundamental + 16%
+#        third + 4% fifth) gliding exponentially from C6 (1046.5 Hz) down to
+#        C4 (261.6 Hz) with a 40 ms time constant, phase integrated analytically:
+#            f(t)   = 261.6 + 784.9*exp(-t/0.040)
+#            phase  = 2*PI*(261.6*t + 31.396*(1 - exp(-t/0.040)))
+#        The endpoints are deliberate: it starts on the exact pitch ding.wav
+#        rings at and falls two octaves, so the pair reads as one gesture —
+#        the banner leaves the bell's note, flies down, and the ding answers it
+#        back at the top. Downward, not upward: the action is something tucking
+#        away and settling, and a rising glide would both contradict that and
+#        collide with the ding's register.
+#    [b] the amplitude envelope ARRIVES. A fast attack and decay (motion), then
+#        a gaussian swell centred at 195 ms — the tuck. Measured per 20 ms the
+#        shape is -4 -4 -5 -7 -9 -10 -11 -10 -8 -7 -7 -10 -13 dB: it decays,
+#        then gathers back up into the landing instead of trailing off. That
+#        late re-concentration is what a stock whoosh never does.
+#    [c] a hint of movement, not a wash: white noise through a DOUBLE bandpass
+#        at 2.2 kHz (1.4 kHz wide), so it is a narrow band of texture rather
+#        than broadband air, and it is faded out over 150 ms — gone before the
+#        arrival, leaving the landing pure tone. Gain is set so this layer is
+#        ~8% of total energy (measured; the brief's ceiling was 12%).
+# ---------------------------------------------------------------------------
+synth swoosh "
+  aevalsrc=exprs='(sin(2*PI*(261.6*t+31.396*(1-exp(-t/0.040))))+0.16*sin(6*PI*(261.6*t+31.396*(1-exp(-t/0.040))))+0.04*sin(10*PI*(261.6*t+31.396*(1-exp(-t/0.040)))))*(1-exp(-t/0.010))*((0.16+0.84*exp(-t/0.070))+0.30*exp(-((t-0.195)/0.035)*((t-0.195)/0.035)))':sample_rate=$SR:duration=0.26
+    ,volume=1.0[a];
+  anoisesrc=color=white:amplitude=0.9:duration=0.26:sample_rate=$SR:seed=505
+    ,bandpass=frequency=2200:width_type=h:width=1400
+    ,bandpass=frequency=2200:width_type=h:width=1400
+    ,afade=type=out:start_time=0.004:duration=0.150:curve=exp
+    ,volume=4.38[b];
+  [a][b]amix=inputs=2:normalize=0
+    ,highpass=frequency=60:poles=2
+    ,afade=type=in:start_time=0:duration=0.004:curve=tri
+    ,afade=type=out:start_time=0.250:duration=0.010:curve=tri[out]"
+finish swoosh -3
+
+# ---------------------------------------------------------------------------
+# 9. ding.wav — the arrival that answers the swoosh, ~450 ms. Struck metal bar.
+#
+#    A microwave beep is a square-ish tone with harmonic partials. A struck
+#    metal bar is not harmonic at all: an ideal free-free bar rings at
+#    1 : 2.756 : 5.404, and it is precisely that INHARMONIC spacing that the ear
+#    hears as "metal" rather than "flute". Those exact ratios are used here, on
+#    a C6 (1046.5 Hz) fundamental — the bottom of the suggested range, chosen
+#    because it is warm rather than shrill, and because the swoosh glides down
+#    from this same pitch.
+#      partial 1: 1046.5 Hz   gain 1.00   decay 130 ms
+#      partial 2: 2884.2 Hz   gain 0.22   decay  45 ms
+#      partial 3: 5655.3 Hz   gain 0.06   decay  18 ms
+#    The upper partials decay much faster than the fundamental, which is both
+#    what real metal does and what keeps this warm: the strike is bright for a
+#    few tens of ms, then the sound mellows into a clean fundamental instead of
+#    ringing shrill for half a second.
+#    The fundamental is a doublet — 1046.5 Hz plus 1048.5 Hz at 0.45 gain. Real
+#    bells have slightly detuned mode pairs; the resulting 2 Hz beat is under
+#    one full cycle across the file, so it reads as liveliness, not wobble.
+#    Pure exponential decay to -30 dB by 450 ms, then a 12 ms close. No reverb.
+# ---------------------------------------------------------------------------
+synth ding "
+  aevalsrc=exprs='(sin(2*PI*1046.5*t)+0.45*sin(2*PI*1048.5*t))*(1-exp(-t/0.0015))*exp(-t/0.130)':sample_rate=$SR:duration=0.45
+    ,volume=1.0[a];
+  aevalsrc=exprs='sin(2*PI*2884.2*t)*(1-exp(-t/0.0010))*exp(-t/0.045)':sample_rate=$SR:duration=0.45
+    ,volume=0.22[b];
+  aevalsrc=exprs='sin(2*PI*5655.3*t)*(1-exp(-t/0.0008))*exp(-t/0.018)':sample_rate=$SR:duration=0.45
+    ,volume=0.06[c];
+  [a][b][c]amix=inputs=3:normalize=0
+    ,afade=type=in:start_time=0:duration=0.002:curve=tri
+    ,afade=type=out:start_time=0.438:duration=0.012:curve=tri[out]"
+finish ding -3
+
+# ---------------------------------------------------------------------------
+# 10. pop.wav — a card landing on screen, ~90 ms. A round low-mid "pock".
+#
+#     Same family as tap but a different object: tap is a fingertip on glass
+#     (bright, dry, noise-led, 60 ms), pop is a small solid thing settling
+#     (round, pitched, body-led, 90 ms). The difference is carried by making
+#     the TONE dominant here rather than the noise, and putting it an octave
+#     below tap's 560 Hz pip.
+#     A sine drops from 320 Hz to 175 Hz with a 20 ms time constant — the same
+#     analytic phase integration as impact.wav, just smaller and faster — with
+#     15% second harmonic for body on phone speakers. 2 ms attack, 28 ms decay.
+#     The front transient is only 8 ms of noise, lowpassed TWICE at 900 Hz and
+#     highpassed at 120 Hz: enough to mark the contact, far too dark to click.
+# ---------------------------------------------------------------------------
+synth pop "
+  aevalsrc=exprs='(sin(2*PI*(175*t+2.90*(1-exp(-t/0.020))))+0.15*sin(4*PI*(175*t+2.90*(1-exp(-t/0.020)))))*(1-exp(-t/0.002))*exp(-t/0.028)':sample_rate=$SR:duration=0.09
+    ,volume=1.0[a];
+  anoisesrc=color=white:amplitude=0.9:duration=0.008:sample_rate=$SR:seed=606
+    ,highpass=frequency=120:poles=2
+    ,lowpass=frequency=900:poles=2
+    ,lowpass=frequency=900:poles=2
+    ,afade=type=out:start_time=0.0008:duration=0.0072:curve=exp
+    ,volume=0.18[b];
+  [a][b]amix=inputs=2:normalize=0
+    ,highpass=frequency=35:poles=2
+    ,afade=type=in:start_time=0:duration=0.002:curve=tri
+    ,afade=type=out:start_time=0.082:duration=0.008:curve=tri[out]"
+finish pop -3
+
+echo "make-sfx: done — 10 files in $OUT_DIR"

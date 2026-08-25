@@ -4,7 +4,7 @@ import {EASE} from './Camera';
 import {Plate} from './Layout';
 import {Cue, CueRun} from './Sound';
 import {Eyebrow, Line, Title, useEdgeFade, useRise} from './Type';
-import {ACCENT, ACCENT_OLD, MONO, MUTED, ON_BG, OUTLINE, SERIF, SURFACE, SURFACE_V} from './theme';
+import {ACCENT, ACCENT_OLD, BG, MONO, MUTED, ON_BG, OUTLINE, SERIF, SURFACE_V} from './theme';
 
 /**
  * The onboarding beat. The brief: lay the whole old flow down page by page, then one hard hit, and
@@ -31,92 +31,104 @@ export type Page = {
   ledger?: boolean;
 };
 
-const n = (s: Shape, d = 3) => {
-  const m = /-(\d+)$/.exec(s);
-  return m ? Number(m[1]) : d;
-};
+/* ── one page, in miniature ─────────────────────────────────────────────── */
 
-/* ── one page, in miniature ──────────────────────────────────────────────── */
+/**
+ * Each page is drawn as a small phone, not as a card. The first version used landscape wireframe
+ * tiles and they read as a Figma export sitting in the middle of a film made of real screens — the
+ * problem was never the size, it was the shape and the missing chrome. A portrait body with a status
+ * bar, a step rail and a real CTA reads as the product at any scale, because those three things are
+ * what a setup page looks like from across a room.
+ *
+ * Everything below is expressed as a fraction of the card's width, so one number resizes the page.
+ */
 
-const Bar: React.FC<{w: string | number; h: number; c?: string; r?: number}> = ({w, h, c = OUTLINE, r = 3}) => (
-  <div style={{width: w, height: h, background: c, borderRadius: r, flex: '0 0 auto'}} />
-);
+const SHAPE_AR = 2.05;
 
-const ShapeArt: React.FC<{shape: Shape; accent: string}> = ({shape, accent}) => {
-  const box = (h: number, fill?: string) => (
-    <div style={{height: h, borderRadius: 5, background: fill ?? SURFACE_V, border: `1px solid ${OUTLINE}`}} />
+const ShapeArt: React.FC<{shape: Shape; accent: string; u: number}> = ({shape, accent, u}) => {
+  const line = (w: string | number, h = 0.045) => (
+    <div style={{width: w, height: u * h, background: OUTLINE, borderRadius: u * 0.02}} />
   );
   if (shape === 'text-field') {
     return (
-      <div style={{display: 'flex', flexDirection: 'column', gap: 7}}>
-        <div style={{height: 22, borderRadius: 5, border: `1px solid ${OUTLINE}`, background: SURFACE_V, display: 'flex', alignItems: 'center', paddingLeft: 7}}>
-          <Bar w={2} h={11} c={accent} r={1} />
-        </div>
+      <div
+        style={{
+          height: u * 0.17, marginTop: 'auto', marginBottom: 'auto',
+          borderRadius: u * 0.035, border: `1px solid ${OUTLINE}`,
+          background: SURFACE_V, display: 'flex', alignItems: 'center', paddingLeft: u * 0.06,
+        }}
+      >
+        <div style={{width: Math.max(1, u * 0.012), height: u * 0.08, background: accent}} />
       </div>
     );
   }
   if (shape === 'slider') {
     return (
-      <div style={{display: 'flex', flexDirection: 'column', gap: 10, paddingTop: 6}}>
-        <div style={{height: 4, borderRadius: 999, background: OUTLINE, position: 'relative'}}>
+      <div style={{display: 'flex', flexDirection: 'column', gap: u * 0.07, height: '100%', justifyContent: 'center'}}>
+        <div style={{height: u * 0.028, borderRadius: 999, background: OUTLINE, position: 'relative'}}>
           <div style={{position: 'absolute', inset: 0, width: '58%', background: accent, borderRadius: 999}} />
-          <div style={{position: 'absolute', left: '58%', top: -5, width: 14, height: 14, marginLeft: -7, borderRadius: 999, background: accent}} />
+          <div
+            style={{
+              position: 'absolute', left: '58%', top: '50%', width: u * 0.09, height: u * 0.09,
+              marginLeft: -u * 0.045, marginTop: -u * 0.045, borderRadius: 999, background: accent,
+            }}
+          />
         </div>
-        <Bar w="34%" h={7} />
+        {line('34%')}
       </div>
     );
   }
   if (shape === 'days') {
     return (
-      <div style={{display: 'flex', gap: 4, justifyContent: 'space-between'}}>
-        {Array.from({length: 7}, (_, i) => (
-          <div
-            key={i}
-            style={{
-              flex: 1, height: 24, borderRadius: 5,
-              background: [1, 3, 5].includes(i) ? accent : 'transparent',
-              border: `1px solid ${[1, 3, 5].includes(i) ? accent : OUTLINE}`,
-            }}
-          />
-        ))}
+      <div style={{display: 'flex', gap: u * 0.022, justifyContent: 'space-between', alignItems: 'center', height: '100%'}}>
+        {Array.from({length: 7}, (_, i) => {
+          const on = [1, 3, 5].includes(i);
+          return (
+            <div
+              key={i}
+              style={{
+                flex: 1, height: u * 0.14, borderRadius: u * 0.035,
+                background: on ? accent : 'transparent',
+                border: `1px solid ${on ? accent : OUTLINE}`,
+              }}
+            />
+          );
+        })}
       </div>
     );
   }
   if (shape === 'meter') {
     return (
-      <div style={{display: 'flex', flexDirection: 'column', gap: 9, paddingTop: 4}}>
-        {[0.8, 0.55, 0.35].map((f, i) => (
-          <div key={i} style={{height: 7, borderRadius: 999, background: `${OUTLINE}80`, overflow: 'hidden'}}>
-            <div style={{width: `${f * 100}%`, height: '100%', background: accent, borderRadius: 999}} />
-          </div>
+      <div style={{display: 'flex', alignItems: 'flex-end', gap: u * 0.025, height: '100%', paddingTop: u * 0.06}}>
+        {[0.5, 0.85, 0.4, 0.7, 0.95, 0.35, 0.6].map((h, i) => (
+          <div key={i} style={{flex: 1, height: `${h * 100}%`, background: `${accent}D0`, borderRadius: u * 0.015}} />
         ))}
       </div>
     );
   }
   if (shape === 'summary') {
     return (
-      <div style={{display: 'flex', flexDirection: 'column', gap: 6}}>
-        {[0, 1, 2, 3].map((i) => (
-          <div key={i} style={{display: 'flex', justifyContent: 'space-between', gap: 8}}>
-            <Bar w={`${52 - i * 6}%`} h={6} />
-            <Bar w={`${18 + i * 3}%`} h={6} c={i === 0 ? accent : OUTLINE} />
+      <div style={{display: 'flex', flexDirection: 'column', gap: u * 0.045, justifyContent: 'space-evenly', height: '100%'}}>
+        {[0, 1, 2, 3, 4].map((i) => (
+          <div key={i} style={{display: 'flex', justifyContent: 'space-between', gap: u * 0.05}}>
+            {line(`${50 - i * 5}%`, 0.035)}
+            {line(`${16 + i * 3}%`, 0.035)}
           </div>
         ))}
       </div>
     );
   }
   if (shape.startsWith('chips')) {
-    const c = n(shape, 6);
+    const c = Math.min(shapeCount(shape, 6), 8);
     return (
-      <div style={{display: 'flex', flexWrap: 'wrap', gap: 5}}>
-        {Array.from({length: Math.min(c, 9) }, (_, i) => (
+      <div style={{display: 'flex', flexWrap: 'wrap', gap: u * 0.028, alignContent: 'center', height: '100%'}}>
+        {Array.from({length: c}, (_, i) => (
           <div
             key={i}
             style={{
-              height: 17, borderRadius: 999, paddingLeft: 9, paddingRight: 9,
+              height: u * 0.1, borderRadius: 999, width: u * (0.16 + (i % 3) * 0.07),
               border: `1px solid ${i % 3 === 0 ? accent : OUTLINE}`,
-              background: i % 3 === 0 ? `${accent}22` : 'transparent',
-              width: 26 + (i % 3) * 13,
+              background: i % 3 === 0 ? `${accent}1E` : 'transparent',
             }}
           />
         ))}
@@ -124,96 +136,154 @@ const ShapeArt: React.FC<{shape: Shape; accent: string}> = ({shape, accent}) => 
     );
   }
   if (shape.startsWith('toggle')) {
-    const c = n(shape, 2);
+    const c = shapeCount(shape, 2);
     return (
-      <div style={{display: 'flex', gap: 5, border: `1px solid ${OUTLINE}`, borderRadius: 6, padding: 3}}>
+      <div style={{display: 'flex', gap: u * 0.025, border: `1px solid ${OUTLINE}`, borderRadius: u * 0.045, padding: u * 0.02, marginTop: 'auto', marginBottom: 'auto'}}>
         {Array.from({length: c}, (_, i) => (
-          <div key={i} style={{flex: 1, height: 18, borderRadius: 4, background: i === 0 ? accent : 'transparent'}} />
+          <div key={i} style={{flex: 1, height: u * 0.11, borderRadius: u * 0.03, background: i === 0 ? accent : 'transparent'}} />
         ))}
       </div>
     );
   }
   if (shape.startsWith('list')) {
-    const c = Math.min(n(shape, 4), 5);
+    const c = Math.min(shapeCount(shape, 4), 5);
     return (
-      <div style={{display: 'flex', flexDirection: 'column', gap: 6}}>
+      <div style={{display: 'flex', flexDirection: 'column', gap: u * 0.04, justifyContent: 'space-evenly', height: '100%'}}>
         {Array.from({length: c}, (_, i) => (
-          <div key={i} style={{display: 'flex', gap: 7, alignItems: 'center'}}>
-            <Bar w={14} h={14} c={SURFACE_V} r={4} />
-            <Bar w={`${62 - i * 7}%`} h={6} />
+          <div key={i} style={{display: 'flex', gap: u * 0.045, alignItems: 'center'}}>
+            <div
+              style={{
+                width: u * 0.1, height: u * 0.1, borderRadius: u * 0.028, flex: '0 0 auto',
+                background: SURFACE_V, border: `1px solid ${i === 0 ? accent : OUTLINE}`,
+              }}
+            />
+            {line(`${58 - i * 6}%`, 0.035)}
           </div>
         ))}
       </div>
     );
   }
-  // cards-N
-  const c = Math.min(n(shape, 3), 4);
+  const c = Math.min(shapeCount(shape, 3), 4);
   return (
-    <div style={{display: 'flex', flexDirection: 'column', gap: 6}}>
+    <div style={{display: 'flex', flexDirection: 'column', gap: u * 0.042, height: '100%'}}>
       {Array.from({length: c}, (_, i) => (
-        <div key={i} style={{position: 'relative'}}>
-          {box(i === 0 ? 26 : 22, i === 0 ? `${accent}1A` : undefined)}
-          {i === 0 ? (
-            <div style={{position: 'absolute', inset: 0, borderRadius: 5, border: `1px solid ${accent}`}} />
-          ) : null}
-        </div>
+        <div
+          key={i}
+          style={{
+            flex: 1, minHeight: u * 0.12, borderRadius: u * 0.035,
+            background: i === 0 ? `${accent}1E` : SURFACE_V,
+            border: `1px solid ${i === 0 ? accent : OUTLINE}`,
+          }}
+        />
       ))}
     </div>
   );
 };
 
+const shapeCount = (s: Shape, d: number) => {
+  const m = /-(\d+)$/.exec(s);
+  return m ? Number(m[1]) : d;
+};
+
 export const PageCard: React.FC<{
-  page: Page; w: number; h: number; accent: string; index: number; total: number; era: 'old' | 'new';
-}> = ({page, w, h, accent, index, total, era}) => (
-  <div
-    style={{
-      width: w, height: h, overflow: 'hidden',
-      background: SURFACE, border: `1px solid ${OUTLINE}`, borderRadius: 12,
-      padding: 13, display: 'flex', flexDirection: 'column', gap: 8, boxSizing: 'border-box',
-      boxShadow: '0 10px 26px rgba(0,0,0,0.45)',
-    }}
-  >
-    {/* Tell one: 0.8.9's continuous bar had to guess the path length before the plan-mode fork,
-        so 0.9 replaced it with a segment per page. At card size it is the difference you see first. */}
-    {era === 'old' ? (
-      <div style={{height: 3, borderRadius: 999, background: `${OUTLINE}99`, overflow: 'hidden'}}>
-        <div style={{width: `${((index + 1) / total) * 100}%`, height: '100%', background: accent}} />
-      </div>
-    ) : (
-      <div style={{display: 'flex', gap: 3}}>
-        {Array.from({length: total}, (_, i) => (
-          <div key={i} style={{flex: 1, height: 3, borderRadius: 999, background: i <= index ? accent : `${OUTLINE}99`}} />
-        ))}
-      </div>
-    )}
+  page: Page; w: number; accent: string; index: number; total: number; era: 'old' | 'new';
+}> = ({page, w, accent, index, total, era}) => {
+  const h = w * SHAPE_AR;
+  const pad = w * 0.075;
+  const old = era === 'old';
+  const last = index === total - 1;
+  const cta = old ? (last ? 'Let’s go' : 'Continue') : last ? 'Start training' : 'Continue';
 
-    {/* Tell two: the uppercase chapter eyebrow, which 0.9 deleted outright. */}
-    {era === 'old' ? (
-      <div style={{fontFamily: MONO, fontSize: 8.5, letterSpacing: 1.5, color: accent, textTransform: 'uppercase', height: 11}}>
-        {page.eyebrow ?? ''}
-      </div>
-    ) : (
-      <div style={{height: 11}} />
-    )}
+  return (
+    <div
+      style={{
+        width: w, height: h, borderRadius: w * 0.1, background: '#000',
+        padding: Math.max(1.5, w * 0.012), boxSizing: 'border-box', flex: '0 0 auto',
+        boxShadow: `0 0 0 1px ${OUTLINE}, 0 14px 34px rgba(0,0,0,0.55)`,
+      }}
+    >
+      <div
+        style={{
+          width: '100%', height: '100%', borderRadius: w * 0.09, background: BG, overflow: 'hidden',
+          padding: pad, boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: w * 0.05,
+        }}
+      >
+        {/* status bar — every real capture has one, so its absence is what reads as fake */}
+        <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', height: w * 0.07}}>
+          <div style={{width: w * 0.14, height: w * 0.035, background: MUTED, opacity: 0.5, borderRadius: 999}} />
+          <div style={{display: 'flex', gap: w * 0.022}}>
+            {[0, 1, 2].map((i) => (
+              <div key={i} style={{width: w * 0.028, height: w * 0.028, borderRadius: 999, background: MUTED, opacity: 0.42}} />
+            ))}
+          </div>
+        </div>
 
-    <div style={{fontFamily: SERIF, fontSize: 13.5, lineHeight: 1.2, color: ON_BG, minHeight: 33}}>
-      {page.heading}
+        {/* Tell one: 0.8.9's step bar was continuous and had to guess the path length before the
+            plan-mode fork. 0.9 gives it one cell per step, so a short path visibly loses cells. */}
+        {old ? (
+          <div style={{height: w * 0.022, borderRadius: 999, background: `${OUTLINE}99`, overflow: 'hidden'}}>
+            <div style={{width: `${((index + 1) / total) * 100}%`, height: '100%', background: accent}} />
+          </div>
+        ) : (
+          <div style={{display: 'flex', gap: w * 0.018}}>
+            {Array.from({length: total}, (_, i) => (
+              <div key={i} style={{flex: 1, height: w * 0.022, borderRadius: 999, background: i <= index ? accent : `${OUTLINE}99`}} />
+            ))}
+          </div>
+        )}
+
+        {/* Tell two: the uppercase chapter eyebrow, which 0.9 deleted outright. */}
+        <div style={{height: w * 0.06}}>
+          {old && page.eyebrow ? (
+            <div
+              style={{
+                fontFamily: MONO, fontSize: w * 0.052, letterSpacing: w * 0.008,
+                color: accent, textTransform: 'uppercase', lineHeight: 1,
+              }}
+            >
+              {page.eyebrow}
+            </div>
+          ) : null}
+        </div>
+
+        <div style={{fontFamily: SERIF, fontSize: w * 0.088, lineHeight: 1.18, color: ON_BG}}>
+          {page.heading}
+        </div>
+
+        <div style={{display: 'flex', flexDirection: 'column', gap: w * 0.022}}>
+          <div style={{width: '86%', height: w * 0.026, background: MUTED, opacity: 0.24, borderRadius: 999}} />
+          <div style={{width: '54%', height: w * 0.026, background: MUTED, opacity: 0.24, borderRadius: 999}} />
+        </div>
+
+        {/* Tell three: the PlanLedger, new in 0.9 — the plan builds while you answer. */}
+        {page.ledger ? (
+          <div style={{display: 'flex', gap: w * 0.02, alignItems: 'flex-end', height: w * 0.085}}>
+            {[0.45, 0.8, 0.3, 0.65, 0.5].map((f, i) => (
+              <div key={i} style={{flex: 1, height: `${f * 100}%`, background: `${accent}CC`, borderRadius: w * 0.012}} />
+            ))}
+          </div>
+        ) : null}
+
+        <div style={{flex: 1, minHeight: 0, overflow: 'hidden'}}>
+          <ShapeArt shape={page.shape} accent={accent} u={w} />
+        </div>
+
+        {/* The CTA is its own tell: 0.8.9 shipped a white pill, 0.9 an accent-filled slab. */}
+        <div
+          style={{
+            height: w * 0.15, borderRadius: old ? 999 : w * 0.035,
+            background: old ? ON_BG : accent,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            fontFamily: MONO, fontSize: w * 0.058, letterSpacing: w * 0.004,
+            color: old ? BG : ON_BG, flex: '0 0 auto',
+          }}
+        >
+          {cta}
+        </div>
+      </div>
     </div>
-
-    {/* Tell three: the PlanLedger, new in 0.9 — the page answers back as you fill it in. */}
-    {page.ledger ? (
-      <div style={{display: 'flex', gap: 3, alignItems: 'flex-end', height: 13}}>
-        {[0.5, 0.8, 0.35, 0.65, 0.45].map((h, i) => (
-          <div key={i} style={{flex: 1, height: `${h * 100}%`, background: `${accent}CC`, borderRadius: 1.5}} />
-        ))}
-      </div>
-    ) : null}
-
-    <div style={{marginTop: 'auto'}}>
-      <ShapeArt shape={page.shape} accent={accent} />
-    </div>
-  </div>
-);
+  );
+};
 
 /* ── the beat ────────────────────────────────────────────────────────────── */
 
@@ -237,8 +307,10 @@ export const OnboardingBeat: React.FC<{
   const bam = P.bam || layEnd + P.hold;
   const bloom = P.bloom || bam + 7;
 
-  const beforeCols = cols?.[0] ?? Math.ceil(before.length / 3);
-  const afterCols = cols?.[1] ?? Math.ceil(after.length / 2);
+  // Two rows for both, but the block visibly narrows: fifteen small pages span ~1140px, nine
+  // larger ones span ~850. The shrink is the point, so it has to be legible as a shape.
+  const beforeCols = cols?.[0] ?? 8;
+  const afterCols = cols?.[1] ?? 5;
 
   // The hit: a flash, a shockwave ring, and the old grid collapsing toward the centre.
   const hit = spring({frame: frame - bam, fps, config: {damping: 200, stiffness: 220}});
@@ -260,9 +332,10 @@ export const OnboardingBeat: React.FC<{
         {/* every page landing is a real tap; they decay so seventeen of them do not become a drum roll */}
         <CueRun from={P.layIn + 6} every={P.per} count={before.length} sfx="tap" gain={0.5} decay={0.965} />
         <Cue at={bam} sfx="impact" />
-        <CueRun from={bloom + 4} every={P.bloomPer} count={after.length} sfx="tick" gain={0.45} decay={0.97} />
+        <CueRun from={bloom + 4} every={P.bloomPer} count={after.length} sfx="tick" gain={0.6} decay={0.97} />
+        <Cue at={Math.round(bloom + 4 + after.length * P.bloomPer)} sfx="ding" gain={0.75} />
 
-        <div style={{display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 34, width: 1560}}>
+        <div style={{display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 30, width: 1560, marginTop: 52}}>
           <div style={{display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', width: '100%'}}>
             <div style={{display: 'flex', flexDirection: 'column', gap: 16}}>
               <Eyebrow delay={0}>{eyebrow}</Eyebrow>
@@ -275,16 +348,16 @@ export const OnboardingBeat: React.FC<{
             </div>
           </div>
 
-          <div style={{position: 'relative', width: '100%', minHeight: 468, display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
+          <div style={{position: 'relative', width: '100%', minHeight: 668, display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
             {showBefore ? (
               <Grid
-                pages={before} cols={beforeCols} w={214} h={152} accent={ACCENT_OLD} era="old"
+                pages={before} cols={beforeCols} w={132} accent={ACCENT_OLD} era="old"
                 enterAt={P.layIn} per={P.per} exitAt={bam} exit={hit}
               />
             ) : null}
             {showAfter ? (
               <Grid
-                pages={after} cols={afterCols} w={262} h={186} accent={ACCENT} era="new"
+                pages={after} cols={afterCols} w={158} accent={ACCENT} era="new"
                 enterAt={bloom} per={P.bloomPer} bloom
               />
             ) : null}
@@ -309,8 +382,8 @@ export const OnboardingBeat: React.FC<{
           </div>
 
           {line ? (
-            <div style={{textAlign: 'center', maxWidth: 1180}}>
-              <Line delay={bloom + 6} width={1180}>{line}</Line>
+            <div style={{textAlign: 'center', maxWidth: 1460}}>
+              <Line delay={bloom + 6} width={1460}>{line}</Line>
             </div>
           ) : null}
         </div>
@@ -332,15 +405,15 @@ const Ledger: React.FC<{v: number; on: number; accent?: boolean}> = ({v, on, acc
 );
 
 const Grid: React.FC<{
-  pages: Page[]; cols: number; w: number; h: number; accent: string; era: 'old' | 'new';
+  pages: Page[]; cols: number; w: number; accent: string; era: 'old' | 'new';
   enterAt: number; per: number; exitAt?: number; exit?: number; bloom?: boolean;
-}> = ({pages, cols, w, h, accent, era, enterAt, per, exit = 0, bloom = false}) => {
+}> = ({pages, cols, w, accent, era, enterAt, per, exit = 0, bloom = false}) => {
   const frame = useCurrentFrame();
   const {fps} = useVideoConfig();
   return (
     <div
       style={{
-        display: 'grid', gridTemplateColumns: `repeat(${cols}, ${w}px)`, gap: 18,
+        display: 'grid', gridTemplateColumns: `repeat(${cols}, ${w}px)`, gap: bloom ? 15 : 12,
         justifyContent: 'center', alignContent: 'center',
       }}
     >
@@ -360,7 +433,7 @@ const Grid: React.FC<{
               transform: `translate(${dx}px, ${dy + (1 - s) * (bloom ? 26 : 18)}px) scale(${(0.9 + s * 0.1) * (1 - exit * 0.16)})`,
             }}
           >
-            <PageCard page={p} w={w} h={h} accent={accent} index={i} total={pages.length} era={era} />
+            <PageCard page={p} w={w} accent={accent} index={i} total={pages.length} era={era} />
           </div>
         );
       })}

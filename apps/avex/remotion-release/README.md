@@ -16,10 +16,22 @@ and turns a release into spot-the-difference. `Seam` (in `Device.tsx`) stacks th
 body and sweeps an accent edge between them — AccentRed replacing AccentNavy being, literally, what
 0.9 shipped. The same gesture does the section breaks, as the `sweep` transition.
 
-**Two kinds of camera.** `Device.focus` flies a window *inside* a capture, and `Camera`/`Shot` moves
-the whole frame. They are not interchangeable: `focus` at z > 1 crops horizontally as well as
-vertically, so it eats the edges of words. In-screen travel therefore belongs to `Detail`, which
-fills the frame edge to edge; a `Solo` shows the whole phone and moves the camera on it instead.
+**Two kinds of camera, and always one running.** `Device.focus` flies a window *inside* a capture;
+`Camera`/`Shot` moves the whole frame. They are not interchangeable: `focus` at z > 1 crops
+horizontally as well as vertically, so it eats the edges of words. In-screen travel therefore belongs
+to `Detail`, which fills the frame edge to edge; a `Solo` shows the whole phone and moves the camera
+on it instead. Every beat carries one or the other, and the joins are `push` — both frames travelling
+together, so the camera seems to pan from one subject to the next.
+
+The accent edge stays *inside* the phone, where it is one device changing version. Blown up to the
+whole frame as a transition it stopped being that and became a red bar crossing the screen, so it is
+gone as a cut.
+
+**Onboarding is drawn as phones, not cards.** The first version used landscape wireframe tiles and
+read as a Figma export dropped into a film made of real screens. The fix was shape and chrome, not
+size: a portrait body with a status bar, a step rail and a real CTA reads as the product at any
+scale. Its three era tells are the vanishing chapter eyebrow, the continuous step bar becoming
+segmented, and 0.8.9's white pill CTA becoming 0.9's accent slab.
 
 **Drawn and filmed, in one body.** `Device` takes `children`, so a natively rebuilt Compose screen
 (`ui/`) and a real capture sit in the same phone. Some beats can only be drawn — the Home morph needs
@@ -29,10 +41,14 @@ four frames of something small moving.
 
 ## Sound
 
-`public/sfx/`, synthesised by `tools/make-sfx.sh` — nothing licensed. Sound only where the picture
-shows an interaction that would make one: the watch (stepper, log, PR, rest), the onboarding pages
-landing, the banner reaching the bell. No music bed, no ambience, and deliberately nothing under the
-transitions. Silence is the default state, not a gap.
+`public/sfx/` — ten cues, synthesised by `tools/make-sfx.sh`, nothing licensed. Sound only where the
+picture shows an interaction that would make one: the watch stepper walking the weight up, the
+onboarding pages landing and the hit that clears them, the banner flying into the bell, a list
+settling. No music bed, no ambience, and nothing under the transitions. Measured per beat, the open
+and the Home morph are digital silence at −91 dB; onboarding peaks at −4.8; the list sits at −15.
+
+`swoosh.wav` is pitched, not a noise sweep — a C6→C4 glide that re-gathers energy before it lands,
+tuned so it *starts* on the exact pitch `ding.wav` rings at. A stock whoosh only ever disperses.
 
 `make-sfx.sh` normalises all seven files to the same **−3 dBFS** peak, so `Sound.tsx`'s `LEVEL` map
 is the only thing shaping the hierarchy. Setting it in both places attenuated every cue twice and put

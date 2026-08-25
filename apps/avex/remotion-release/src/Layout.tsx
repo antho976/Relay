@@ -1,6 +1,6 @@
 import React from 'react';
 import {AbsoluteFill, interpolate, useCurrentFrame} from 'remotion';
-import {ACCENT, MONO, MUTED, ON_BG} from './theme';
+import {ACCENT, MONO, ON_BG} from './theme';
 
 /**
  * One noise tile, rasterised once by the browser and then merely re-positioned each frame. Animating
@@ -56,7 +56,7 @@ export const Split: React.FC<{
       display: 'flex', width: '100%', height: '100%', alignItems: 'center',
       flexDirection: flip ? 'row-reverse' : 'row',
       paddingLeft: flip ? 0 : 104, paddingRight: flip ? 104 : 0, gap,
-      paddingTop: 22, paddingBottom: 46, boxSizing: 'border-box',
+      paddingTop: 26, paddingBottom: 26, boxSizing: 'border-box',
     }}
   >
     <div style={{flex: `0 0 ${copyWidth}px`, display: 'flex', flexDirection: 'column', gap: 22}}>
@@ -101,55 +101,33 @@ export const Full: React.FC<{copy: React.ReactNode; children: React.ReactNode}> 
           'linear-gradient(to top, rgba(10,8,6,0.97) 0%, rgba(10,8,6,0.94) 26%, rgba(10,8,6,0.66) 58%, rgba(10,8,6,0) 100%)',
       }}
     />
-    <div style={{position: 'absolute', left: 104, bottom: 116, display: 'flex', flexDirection: 'column', gap: 18}}>
+    <div style={{position: 'absolute', left: 104, bottom: 92, display: 'flex', flexDirection: 'column', gap: 18}}>
       {copy}
     </div>
   </div>
 );
 
-/* ── the rail ────────────────────────────────────────────────────────────── */
+/* ── the mark ────────────────────────────────────────────────────────────── */
 
 /**
- * A chapter rail that persists across every cut, drawn once over the whole film rather than per
- * beat. It does the job an edit this fast otherwise cannot: tells you where you are, and gives the
- * twenty cuts one continuous object so they read as one film instead of twenty slides.
+ * The only chrome that persists across every cut. It started as a full rail with an act label and a
+ * progress line along the bottom; the line drew the eye away from the phone on every beat and the
+ * act names read as a table of contents nobody asked for, so both are gone. What is left is a
+ * standing mark, which is all a ninety-second film needs to say whose film it is.
  */
-export type Act = {at: number; label: string};
-
-export const Rail: React.FC<{acts: Act[]; total: number; lead?: number; tail?: number}> = ({
-  acts, total, lead = 0, tail = 0,
+export const Mark: React.FC<{total: number; lead?: number; tail?: number; label?: string}> = ({
+  total, lead = 0, tail = 0, label = 'AVEX 0.9',
 }) => {
   const frame = useCurrentFrame();
-  const visible = frame >= lead && frame <= total - tail;
-  const p = interpolate(frame, [0, total], [0, 1], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'});
   const o = interpolate(frame, [lead, lead + 12, total - tail - 12, total - tail], [0, 1, 1, 0], {
     extrapolateLeft: 'clamp', extrapolateRight: 'clamp',
   });
-  const act = acts.filter((a) => a.at <= frame).pop();
-
-  if (!visible) return null;
+  if (o <= 0) return null;
   return (
     <AbsoluteFill style={{pointerEvents: 'none', opacity: o}}>
       <div style={{position: 'absolute', top: 54, left: 104, display: 'flex', gap: 14, alignItems: 'center'}}>
         <div style={{width: 9, height: 9, borderRadius: 999, background: ACCENT}} />
-        <div style={{fontFamily: MONO, fontSize: 17, letterSpacing: 4, color: ON_BG, opacity: 0.75}}>AVEX 0.9</div>
-      </div>
-      <div style={{position: 'absolute', bottom: 52, left: 104, right: 104, display: 'flex', alignItems: 'center', gap: 26}}>
-        <div style={{fontFamily: MONO, fontSize: 16, letterSpacing: 4, color: MUTED, opacity: 0.7, minWidth: 210}}>
-          {act ? act.label.toUpperCase() : ''}
-        </div>
-        <div style={{flex: 1, height: 1, background: '#38302A', position: 'relative'}}>
-          <div style={{position: 'absolute', left: 0, top: 0, height: 1, width: `${p * 100}%`, background: ACCENT, opacity: 0.85}} />
-          {acts.map((a, i) => (
-            <div
-              key={i}
-              style={{
-                position: 'absolute', left: `${(a.at / total) * 100}%`, top: -2,
-                width: 1, height: 5, background: '#38302A',
-              }}
-            />
-          ))}
-        </div>
+        <div style={{fontFamily: MONO, fontSize: 17, letterSpacing: 4, color: ON_BG, opacity: 0.62}}>{label}</div>
       </div>
     </AbsoluteFill>
   );

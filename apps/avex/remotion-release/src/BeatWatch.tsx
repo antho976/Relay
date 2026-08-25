@@ -2,15 +2,15 @@ import React from 'react';
 import {AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig} from 'remotion';
 import {WatchPr, WatchRest, WatchRpe, WatchSet} from './ui/Watch';
 import {C} from './ui/tokens';
+import {EASE} from './Camera';
 import {Plate, Split} from './Layout';
-import {Cue, CueRun} from './Sound';
+import {CueRun} from './Sound';
 import {Body, Eyebrow, Title, useEdgeFade, useRise} from './Type';
 import {ACCENT, MONO, MUTED, ON_BG, SERIF} from './theme';
 
 /**
  * Wear OS. The only genuinely new *surface* in 0.9 — neither `wear/` nor `shared/` existed at
- * 0.8.9 — so it gets the longest hold in the film and the only sound design with a narrative:
- * the stepper ticks, the set logs, the record answers in gold, the rest runs.
+ * 0.8.9 — so it gets the longest hold in the film.
  *
  * The flow is the watch's own (§16, one decision per screen): adjust → log → PR → rest → rate.
  * Nothing here is a screen recording; the watch is drawn from WearTheme.kt and SessionScreen.kt,
@@ -20,10 +20,10 @@ import {ACCENT, MONO, MUTED, ON_BG, SERIF} from './theme';
 type Step = {label: string; n: string};
 
 const STEPS: Step[] = [
-  {n: '01', label: 'Adjust and log, on the wrist'},
-  {n: '02', label: 'A record answers in gold'},
-  {n: '03', label: 'The rest is kept for you'},
-  {n: '04', label: 'Rate it, or don’t'},
+  {n: '01', label: 'Set the weight and log it'},
+  {n: '02', label: 'Beat your record and it says so'},
+  {n: '03', label: 'Rest counts down on your wrist'},
+  {n: '04', label: 'Say how hard it felt, or skip it'},
 ];
 
 export const WatchBeat: React.FC = () => {
@@ -54,38 +54,40 @@ export const WatchBeat: React.FC = () => {
     extrapolateLeft: 'clamp', extrapolateRight: 'clamp',
   });
 
+  // One light source walking across the case for the length of the beat. A watch drawn as a flat
+  // black disc reads as an icon; a moving specular band is what makes it read as a thing.
+  const light = interpolate(frame, [0, durationInFrames], [0.08, 0.92], {
+    extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: EASE.drift,
+  });
+
   return (
     <AbsoluteFill style={{opacity: o}}>
       <Plate>
-        {/* the stepper, the log, the double-tick a PR answers with, then the rest starting */}
-        <CueRun from={at(0.11)} every={(at(0.3) - at(0.1)) / 5} count={5} sfx="tick" gain={0.85} />
-        <Cue at={P.log} sfx="confirm" />
-        <Cue at={P.pr + 3} sfx="tick" gain={1.1} />
-        <Cue at={P.pr + 10} sfx="tick" gain={1.1} />
-        <Cue at={P.rest + 2} sfx="restStart" />
-        <Cue at={P.rpe + 4} sfx="tap" gain={0.8} />
+        {/* The stepper walking the weight up is the one sound on this beat that reads as the watch
+            rather than as stock UI, so it is the one that stays. The confirm/rest chimes are cut. */}
+        <CueRun from={at(0.11)} every={(at(0.3) - at(0.1)) / 5} count={5} sfx="tick" gain={0.95} />
 
         <Split
           copyWidth={700}
           copy={
             <>
               <Eyebrow delay={0}>New in 0.9 · Wear OS</Eyebrow>
-              <Title delay={4} size={72}>{'Leave the phone\nin your bag'}</Title>
+              <Title delay={4} size={72}>{'Leave your phone\nin your bag'}</Title>
               <Body delay={10} width={620}>
-                A companion app that mirrors the live session: turn the bezel to change the load, log
-                the set, and the rest timer runs on your wrist. Heart rate rides along, and it writes
-                back through Health Connect.
+                Avex runs on your watch now. Turn the bezel to change the weight, tap once to log the
+                set, and the rest timer counts down on your wrist. It reads your heart rate while you
+                lift and saves everything back through Health Connect.
               </Body>
               <StepLine step={step} />
               <Chips items={['2 tiles', '3 complications', 'Health Connect']} delay={22} />
             </>
           }
         >
-          <div style={{position: 'relative', width: 560, height: 620, display: 'flex', justifyContent: 'center'}}>
-            <Layer on={eSet}><WatchSet size={430} weight={String(weight)} reps="9" /></Layer>
-            <Layer on={ePr}><WatchPr size={430} value="155" on={ePr} /></Layer>
-            <Layer on={eRest}><WatchRest size={430} remaining={restT} total={210} /></Layer>
-            <Layer on={eRpe}><WatchRpe size={430} rpe={8.5} /></Layer>
+          <div style={{position: 'relative', width: 600, height: 660, display: 'flex', justifyContent: 'center'}}>
+            <Layer on={eSet}><WatchSet size={468} weight={String(weight)} reps="9" light={light} /></Layer>
+            <Layer on={ePr}><WatchPr size={468} value="155" on={ePr} light={light} /></Layer>
+            <Layer on={eRest}><WatchRest size={468} remaining={restT} total={210} light={light} /></Layer>
+            <Layer on={eRpe}><WatchRpe size={468} rpe={8.5} light={light} /></Layer>
           </div>
         </Split>
       </Plate>
