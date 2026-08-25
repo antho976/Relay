@@ -9,20 +9,23 @@ import {ACCENT, MONO, ON_BG} from './theme';
 const NOISE =
   "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='220' height='220' filter='url(%23n)' opacity='0.55'/%3E%3C/svg%3E\")";
 
-export const Grain: React.FC<{opacity?: number}> = ({opacity = 0.045}) => {
-  const frame = useCurrentFrame();
-  // A prime-ish step keeps the tile from visibly cycling back to where it started.
-  const x = (frame * 37) % 220;
-  const y = (frame * 53) % 220;
-  return (
-    <div
-      style={{
-        position: 'absolute', inset: -220, pointerEvents: 'none', opacity,
-        backgroundImage: NOISE, backgroundPosition: `${x}px ${y}px`, mixBlendMode: 'overlay',
-      }}
-    />
-  );
-};
+/**
+ * Static, deliberately.
+ *
+ * This used to translate the tile by 37px horizontally and 53px vertically per frame, which with a
+ * 220px tile wraps every 6 and 4 frames — a 5-7 Hz strobe across the whole frame. That is almost
+ * certainly what read as everything gently bouncing. Film grain that moves has to be regenerated per
+ * frame, not slid around; a still tile at low opacity does the job of breaking up flat black without
+ * putting a pulse under the picture.
+ */
+export const Grain: React.FC<{opacity?: number}> = ({opacity = 0.035}) => (
+  <div
+    style={{
+      position: 'absolute', inset: 0, pointerEvents: 'none', opacity,
+      backgroundImage: NOISE, mixBlendMode: 'overlay',
+    }}
+  />
+);
 
 /** The ground every beat sits on: a lifted centre so the dark plate never reads as flat black. */
 export const Plate: React.FC<{children: React.ReactNode; grain?: boolean}> = ({children, grain = true}) => (

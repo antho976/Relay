@@ -3,7 +3,7 @@ import {AbsoluteFill, interpolate, useCurrentFrame, useVideoConfig} from 'remoti
 import {Camera, EASE, Shot} from './Camera';
 import {Clip, Device, FocusMove, Media, Seam, SeamDir} from './Device';
 import {Center, Plate, Split} from './Layout';
-import {CueRun} from './Sound';
+import {Cue, CueRun} from './Sound';
 import {Body, Counter, EraTag, Eyebrow, Line, Tag, Title, useEdgeFade, useRise} from './Type';
 import {ACCENT, MONO, MUTED, ON_BG, SERIF} from './theme';
 
@@ -11,19 +11,33 @@ import {ACCENT, MONO, MUTED, ON_BG, SERIF} from './theme';
 
 export const Card: React.FC<{
   eyebrow: string; title: string; sub?: string; shot?: Shot;
-}> = ({eyebrow, title, sub, shot}) => {
+  /** frame the sub-line lands on — used to put the closing line on the bed's final chord */
+  subAt?: number;
+  /** the sub's two figures count in rather than fading up */
+  count?: [number, number];
+}> = ({eyebrow, title, sub, shot, subAt = 16, count}) => {
+  const frame = useCurrentFrame();
   const {durationInFrames} = useVideoConfig();
-  const o = useEdgeFade(durationInFrames, 12);
-  const rise = useRise(16, 10);
+  const o = useEdgeFade(durationInFrames, 10);
+  const rise = useRise(subAt, 10);
+  const p = interpolate(frame, [6, 40], [0, 1], {
+    extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: EASE.glide,
+  });
+  const fig = (n: number) => Math.round(n * p).toLocaleString('en-US');
   return (
     <AbsoluteFill style={{opacity: o}}>
       <Plate>
+        {sub && !count ? <Cue at={subAt} sfx="reveal" gain={0.8} /> : null}
         <Camera shot={shot}>
           <AbsoluteFill style={{alignItems: 'center', justifyContent: 'center'}}>
-            <Center gap={28}>
+            <Center gap={26}>
               <Eyebrow delay={0}>{eyebrow}</Eyebrow>
-              <Title delay={5} size={132}>{title}</Title>
-              {sub ? (
+              <Title delay={4} size={132}>{title}</Title>
+              {count ? (
+                <div style={{fontFamily: MONO, fontSize: 23, letterSpacing: 4, color: MUTED, fontVariantNumeric: 'tabular-nums'}}>
+                  {`${fig(count[0])} commits · ${fig(count[1])} files`}
+                </div>
+              ) : sub ? (
                 <div style={{fontFamily: MONO, fontSize: 23, letterSpacing: 4, color: MUTED, ...rise}}>{sub}</div>
               ) : null}
             </Center>
@@ -71,6 +85,8 @@ export const Compare: React.FC<{
   return (
     <AbsoluteFill style={{opacity: o}}>
       <Plate>
+        <Cue at={Math.max(0, start - 1)} sfx="sweep" />
+        <Cue at={start + sweep - 3} sfx="screen" />
         <Camera shot={shot}>
           <AbsoluteFill>
             <Split
@@ -118,12 +134,18 @@ export const Compare: React.FC<{
 export const Solo: React.FC<{
   clip: Clip; eyebrow: string; title: string; note?: string; line?: string;
   height?: number; flip?: boolean; focus?: FocusMove; shot?: Shot; tag?: string;
-}> = ({clip, eyebrow, title, note, line, height = 880, flip = false, focus, shot, tag}) => {
+  /** frames, beat-relative, where the capture visibly changes screen */
+  changes?: number[];
+  /** frame where something on the capture fills or climbs */
+  fill?: number;
+}> = ({clip, eyebrow, title, note, line, height = 880, flip = false, focus, shot, tag, changes, fill}) => {
   const {durationInFrames} = useVideoConfig();
   const o = useEdgeFade(durationInFrames, 10);
   return (
     <AbsoluteFill style={{opacity: o}}>
       <Plate>
+        {(changes ?? []).map((f, i) => <Cue key={i} at={f} sfx="screen" />)}
+        {fill !== undefined ? <Cue at={fill} sfx="fill" /> : null}
         <Camera shot={shot}>
           <AbsoluteFill>
             <Split

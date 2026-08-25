@@ -17,8 +17,11 @@ export const HomeMorph: React.FC = () => {
   const frame = useCurrentFrame();
   const {fps, durationInFrames} = useVideoConfig();
   const o = useEdgeFade(durationInFrames, 14);
-  const t = spring({frame: frame - 55, fps, config: {damping: 200, stiffness: 26}});
-  const fill = interpolate(frame, [12, 62], [0, 1], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'});
+  // Relative to the beat, not absolute: the bar grid re-times beats and a hard-coded frame 55 would
+  // put the morph anywhere from mid-beat to past the end.
+  const at = (f: number) => Math.round(durationInFrames * f);
+  const t = spring({frame: frame - at(0.34), fps, config: {damping: 200, stiffness: 34}});
+  const fill = interpolate(frame, [at(0.08), at(0.42)], [0, 1], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'});
 
   return (
     <AbsoluteFill style={{opacity: o}}>
@@ -28,10 +31,12 @@ export const HomeMorph: React.FC = () => {
             <Eyebrow delay={0}>Home</Eyebrow>
             <Title delay={4} size={72}>{'Home,\nredesigned'}</Title>
             <Body delay={12}>
-              The logo is now a bell that shows what you have missed. Start session stands out, with
-              Plan beside it instead of buried. Your goal bars turned red. And the last tab is no
-              longer you.
+              The logo is now a bell that shows what you missed. Start session stands out, with Plan
+              beside it instead of buried three taps deep. The goal bars turned red. And the last tab
+              stopped being you.
             </Body>
+            <Cue at={at(0.10)} sfx="fill" gain={0.7} />
+            <Cue at={at(0.34)} sfx="screen" gain={0.8} />
             <div style={{display: 'flex', gap: 18, marginTop: 10, alignItems: 'center'}}>
               <Era label="0.8.9" on={1 - t} />
               <div style={{width: 200, height: 3, borderRadius: 999, background: C.outline, position: 'relative'}}>
@@ -66,11 +71,13 @@ const Era: React.FC<{label: string; on: number; accent?: boolean}> = ({label, on
 );
 
 /** The fifth tab changing hands, isolated from everything else. */
-export const TabSwap: React.FC = () => {
+export const TabSwap: React.FC<{swapAt?: number}> = ({swapAt = 46}) => {
   const frame = useCurrentFrame();
   const {fps, durationInFrames} = useVideoConfig();
   const o = useEdgeFade(durationInFrames, 14);
-  const t = spring({frame: frame - 46, fps, config: {damping: 200, stiffness: 30}});
+  const t = spring({frame: frame - swapAt, fps, config: {damping: 200, stiffness: 44}});
+  const out = Math.max(0, Math.min(1, (0.42 - t) / 0.42));
+  const inn = Math.max(0, Math.min(1, (t - 0.58) / 0.42));
   const tabs = [
     {label: 'Cardio', icon: 'cardio' as const},
     {label: 'Stats', icon: 'stats' as const},
@@ -81,11 +88,11 @@ export const TabSwap: React.FC = () => {
     <AbsoluteFill style={{opacity: o}}>
       <Plate>
         {/* the tab actually changing hands */}
-        <Cue at={48} sfx="tap" gain={0.9} />
+        <Cue at={swapAt + 2} sfx="reveal" gain={0.95} />
         <div style={{display: 'flex', flexDirection: 'column', gap: 60, alignItems: 'center'}}>
           <div style={{display: 'flex', flexDirection: 'column', gap: 16, alignItems: 'center'}}>
             <Eyebrow delay={0}>The fifth tab</Eyebrow>
-            <Title delay={4} size={78}>Academy gets its own tab</Title>
+            <Title delay={4} size={78}>Academy gets a tab</Title>
           </div>
           <div
             style={{
@@ -96,18 +103,31 @@ export const TabSwap: React.FC = () => {
             {tabs.map((x, i) => (
               <Tab key={i} label={x.label} icon={x.icon} on={i === 2} />
             ))}
-            <div style={{position: 'relative', width: 128, height: 92}}>
-              <div style={{position: 'absolute', inset: 0, opacity: 1 - t, transform: `translateY(${t * -18}px)`}}>
+            {/* The two tabs share one slot, so they must never both be legible: a 50/50 crossfade
+                renders the words "Profile" and "Academy" on top of each other. The old one leaves
+                before the new one arrives. */}
+            <div style={{position: 'relative', width: 128, height: 79}}>
+              <div
+                style={{
+                  position: 'absolute', left: 0, right: 0, bottom: 0,
+                  opacity: out, transform: `translateY(${(1 - out) * -20}px)`,
+                }}
+              >
                 <Tab label="Profile" icon="profile" on={false} />
               </div>
-              <div style={{position: 'absolute', inset: 0, opacity: t, transform: `translateY(${(1 - t) * 18}px)`}}>
+              <div
+                style={{
+                  position: 'absolute', left: 0, right: 0, bottom: 0,
+                  opacity: inn, transform: `translateY(${(1 - inn) * 20}px)`,
+                }}
+              >
                 <Tab label="Academy" icon="academy" on={false} badge />
               </div>
             </div>
           </div>
           <div style={{fontFamily: 'Georgia, serif', fontSize: 30, fontStyle: 'italic', color: C.muted, maxWidth: 900, textAlign: 'center'}}>
-            It used to be a link buried inside Coach, where most people never found it. Profile moved
-            up to the top of Home to make room.
+            The Academy is new in 0.9, so it needed somewhere to live. Profile moved up to the top of
+            Home and gave up the fifth slot.
           </div>
         </div>
       </Plate>

@@ -19,30 +19,27 @@ import {BG, bar} from './theme';
  * Remotion, which counts composition frames at 30. The captures are transcoded to constant 30fps so
  * the two agree; only then do the offsets below land where they were measured.
  *
- * Four things govern this edit:
+ * Five things govern this edit:
  *
- *   Cut to the bar.  A beat is defined by the bar it ENDS on, never by a duration in seconds. The
- *                    grid is measured off the bed itself (see `BED` in theme.ts), and the lengths
- *                    below are derived so that a hard cut lands exactly on a downbeat and a
- *                    dissolve straddles one. That is the whole difference between a film that has
- *                    music and a film that is cut to it.
+ *   Cut to the bar.    A beat is declared by the bar it ENDS on, never by a duration in seconds. The
+ *                      grid is measured off the bed itself (`BED` in theme.ts) and lengths are
+ *                      derived so a hard cut lands exactly on a downbeat and a dissolve straddles
+ *                      one.
  *
- *   Say it plainly.  An earlier cut wrote headlines like "It shows its working" and "The coach, not
- *                    a footnote to it". They scan as clever and land as nothing — and the second one
- *                    is not even true, because the Academy is a place to read, not the coach.
+ *   Seam on stillness. Every capture was profiled frame by frame for motion, and each seam sits in a
+ *                      window where BOTH clips are at rest. A version change that fires while the
+ *                      old screen is still coasting from a scroll reads as a glitch. After the seam
+ *                      the clip may move as much as it likes, and on Coach it is meant to.
  *
- *   One device.      Before and after are the same phone, never two. A side-by-side halves both
- *                    screens and turns a release into spot-the-difference; here 0.9 arrives *over*
- *                    0.8.9 under an accent edge — AccentRed replacing AccentNavy being, literally,
- *                    what shipped. The seam is timed to start on a downbeat too.
+ *   Say it plainly.    No em dashes, no tricolons, no "not X but Y". Every line is what a person
+ *                      would say out loud about the thing.
  *
- *   Never crop the   The full-bleed close-ups are gone. Cropping a capture to the frame edge put
- *   subject.         copy on top of live UI text and sliced headlines in half; a phone that stays a
- *                    phone, with the copy beside it, is worth more than the extra legibility.
+ *   One device.        Before and after are the same phone, never two.
  *
- * The one deliberate sync: the onboarding beat's hit lands on bar 33, which is where the bed cuts
- * away and comes back at full strength. The film's biggest moment and the track's are the same
- * moment.
+ *   Keep it moving.    Every beat carries a camera, and the joins are pushes.
+ *
+ * The one deliberate sync: the fifth tab changing hands lands on bar 33, the frame the bed cuts away
+ * and comes back at full strength.
  */
 
 type Beat = {
@@ -55,158 +52,149 @@ type Beat = {
 };
 
 const BEATS: Beat[] = [
-  /* ── open ──────────────────────────────────── bed is near-silent until bar 5 ── */
+  /* ── open ─────────────────────── two bars; the bed is near-silent until bar 5 ── */
   {
-    endBar: 4, out: 'dissolve', shot: {z: [1.07, 1], ease: EASE.glide},
-    el: () => <Card eyebrow="What's new" title="Avex 0.9" sub="147 commits · 632 files" />,
+    endBar: 3, out: 'dissolve', shot: {z: [1.06, 1], ease: EASE.glide},
+    el: () => <Card eyebrow="What's new" title="Avex 0.9" count={[147, 632]} />,
   },
 
   /* ── the day ────────────────────────────────────────────── bed enters, bar 5 ── */
-  {endBar: 7, out: 'whip', shot: {z: [1, 1.05], x: [0, -22]}, el: () => <HomeMorph />},
-  {endBar: 9, out: 'push', shot: {z: [1.04, 1], x: [26, 0]}, el: () => <NoticeBeat />},
+  {endBar: 6, out: 'whip', shot: {z: [1, 1.05], x: [0, -20]}, el: () => <HomeMorph />},
+  {endBar: 8, out: 'push', shot: {z: [1.04, 1], x: [24, 0]}, el: () => <NoticeBeat />},
 
   /* ── the session ─────────────────────────────────── bed opens up at bar 17 ── */
   {
-    endBar: 13, out: 'cut', shot: {z: [1, 1.06], x: [0, -18], ease: EASE.drift},
+    endBar: 12, out: 'cut', shot: {z: [1, 1.05], x: [0, -16], ease: EASE.drift},
     el: (start) => (
       <Compare
         before={{src: 'cfr/before-session.mp4', start: 690}}
         after={{src: 'cfr/after-session.mp4', start: 890}}
         eyebrow="Your workout" title={'The screen you\ntrain on'}
-        note="The exercise name used to take up half the screen. Now your last session and what to lift next arrive together, the rest timer runs on its own, and one button finishes an exercise."
-        hold={bar(12) - start} sweep={30} dir="ltr" height={880}
+        note="The exercise name used to take up half the screen. Now your last session and what to lift next show up together, the rest timer runs on its own, and one button finishes an exercise."
+        hold={bar(9) - start} sweep={30} dir="ltr" height={880}
       />
     ),
   },
   {
-    endBar: 15, out: 'push',
+    endBar: 14, out: 'push',
     el: () => (
       <Solo
         clip={{src: 'cfr/after-session.mp4', start: 950}}
         eyebrow="Your workout" title="It tells you what to lift"
-        line="The weight to try next, and why. What you beat last time, right on the row. How many reps for a personal record."
-        height={900} flip
+        line="The weight to try next, and why. What you beat last time, right there on the row. How many reps you need for a personal record."
+        height={900} flip changes={[8]}
       />
     ),
   },
-  {endBar: 19, out: 'whip', shot: {z: [1.03, 1], y: [-12, 0], ease: EASE.drift}, el: () => <WatchBeat />},
+  {endBar: 18, out: 'whip', shot: {z: [1.03, 1], y: [-10, 0], ease: EASE.drift}, el: () => <WatchBeat />},
 
-  /* ── the record ─────────────────────────────── bed drops back at bar 25 ── */
+  /* ── the record ────────────────────────────────── bed drops back at bar 25 ── */
   {
-    endBar: 21, out: 'cut', shot: {z: [1, 1.05], x: [0, 20], ease: EASE.drift},
+    /* Seven bars. Coach was the biggest rebuild in the release and was getting four seconds; the
+       compare and the training-block beat are now one continuous shot, and the capture scrolls down
+       to the block rail on its own once the seam has passed. */
+    endBar: 25, out: 'cut', shot: {z: [1, 1.05], x: [0, 18], ease: EASE.drift},
     el: (start) => (
       <Compare
-        before={{src: 'cfr/before-coach.mp4', start: 107}}
-        after={{src: 'cfr/after-coach.mp4', start: 179}}
-        eyebrow="Coach" title="Coach explains itself"
-        note="Your week, how recovered you are, and where you are in your training block — all on one page. And the volume number no longer gets cut off halfway through."
-        hold={bar(20) - start + 30} sweep={30} dir="ltr" height={880} flip
+        /* The after clip tours the page: the seam happens at the top, where 0.8.9's volume figure
+           reads "52...." against 0.9's "52.8k lb", and then it scrolls down to the block rail. 0.8x
+           because the capture only travels from the header to the block over about 130 frames and
+           then scrolls back up again; slowed, that stretch fills the whole beat. */
+        before={{src: 'cfr/before-coach.mp4', start: 180}}
+        after={{src: 'cfr/after-coach.mp4', start: 424, rate: 0.8}}
+        eyebrow="Coach" title="Coach shows its work"
+        note="Your week, your recovery, and where you are in a training block, all on one page. The volume figure stops getting cut off halfway through. And the block itself is new: build up, push hard, peak, then take a lighter week, started straight from the brief."
+        hold={bar(19) - start} sweep={30} dir="ltr" height={880} flip
       />
     ),
   },
   {
-    endBar: 23, out: 'whip',
-    el: () => (
-      <Solo
-        clip={{src: 'cfr/after-coach.mp4', start: 690}}
-        eyebrow="New in 0.9" title="Training blocks"
-        line="Build up, push hard, peak, then take a lighter week. You can start one straight from your weekly brief."
-        height={900}
-      />
-    ),
-  },
-  {
-    endBar: 26, out: 'cut', shot: {z: [1.05, 1], ease: EASE.drift},
+    endBar: 28, out: 'cut', shot: {z: [1.04, 1], ease: EASE.drift},
     el: (start) => (
       <Compare
-        before={{src: 'cfr/before-cardio.mp4', start: 31}}
-        after={{src: 'cfr/after-cardio.mp4', start: 263}}
+        before={{src: 'cfr/before-cardio.mp4', start: 0}}
+        after={{src: 'cfr/after-cardio.mp4', start: 8}}
         eyebrow="Cardio" title="Built around your week"
-        line="Two views instead of one long list — this week at a glance, or how you're trending over time."
-        hold={bar(25) - start} sweep={28} dir="ttb" height={880} flip
+        line="Two views instead of one long list. This week at a glance, or how you are trending over time."
+        hold={bar(26) - start} sweep={24} dir="ttb" height={880}
       />
     ),
   },
   {
-    endBar: 28, out: 'pushUp',
+    endBar: 30, out: 'pushUp',
     el: () => (
       <Solo
         clip={{src: 'cfr/after-cardio.mp4', start: 880}}
         eyebrow="New in 0.9" title="Every week as a chart"
-        line="One bar per week, back to your first, against the 150 minutes a week the WHO recommends."
-        height={900}
+        line="One bar per week, back to your very first, against the 150 minutes a week the WHO recommends."
+        height={900} changes={[8]} fill={22}
       />
     ),
   },
   {
-    endBar: 30, out: 'push', shot: {z: [1, 1.05], y: [8, -10]},
+    /* before-lasttab is only still for its first 89 frames, so this seam sits early rather than on
+       the downbeat. A seam that fires while the old screen is still coasting looks broken. */
+    endBar: 32, out: 'dissolve', shot: {z: [1, 1.04], x: [0, 12], ease: EASE.drift},
     el: () => (
-      <Solo
-        clip={{src: 'cfr/after-cardio.mp4', start: 1655}}
-        eyebrow="History" title="Search everything you've done"
-        line="Lifting and cardio in one list. Filter by how long it took, or how hard it was."
-        height={900} flip
-      />
-    ),
-  },
-  {
-    endBar: 32, out: 'dissolve', shot: {z: [1, 1.04], x: [0, 14], ease: EASE.drift},
-    el: (start) => (
       <Compare
-        before={{src: 'cfr/before-lasttab.mp4', start: 30}}
-        after={{src: 'cfr/after-profile.mp4', start: 72}}
+        before={{src: 'cfr/before-lasttab.mp4', start: 4}}
+        after={{src: 'cfr/after-profile.mp4', start: 6}}
         eyebrow="Profile" title="Easier to read"
-        line="Your year used to be twelve rows of dots. Now it's a month you can actually read — and the photo gallery is open to everyone."
-        hold={bar(31) - start} sweep={30} dir="ltr" height={880}
+        line="Your year used to be twelve rows of dots. Now it is a month you can actually read, and the photo gallery is open to everyone."
+        hold={40} sweep={26} dir="ltr" height={880} flip
       />
     ),
   },
 
-  /* ── the shape of it ───── bar 32 is where the bed cuts away; 33 is the return ── */
+  /* ── the shape of it ────── bar 32 is where the bed cuts away, 33 is the return ── */
   {
-    endBar: 36, out: 'dissolve',
-    el: (start) => (
-      <OnboardingBeat
-        before={ONBOARDING_0_8_9} after={ONBOARDING_0_9}
-        eyebrow="Setting up"
-        title="Fifteen questions down to nine"
-        line="It used to ask fifteen things before showing you anything. Now it asks only what shapes your plan."
-        /* the hit lands on bar 33 — the frame the bed comes back at full strength */
-        phase={{bam: bar(33) - start}}
-      />
-    ),
+    endBar: 34, out: 'cut', shot: {z: [1.03, 1]},
+    el: (start) => <TabSwap swapAt={bar(33) - start} />,
   },
-  {endBar: 38, out: 'cut', shot: {z: [1.03, 1]}, el: () => <TabSwap />},
   {
-    endBar: 40, out: 'push', shot: {z: [1.02, 1.07], x: [10, -14], ease: EASE.drift},
+    endBar: 37, out: 'push', shot: {z: [1.02, 1.07], x: [8, -12], ease: EASE.drift},
     el: () => (
       <Solo
         clip={{src: 'cfr/after-academy.mp4', start: 40}}
         eyebrow="Academy" title={'Learn why\nyou’re doing it'}
-        note="Thirty-five short reads on how training actually works — sets and reps, what a program really is, why the order matters. All of it open from the day you install. No levels, no unlocking, no progress bar."
-        height={900} flip
+        note="Thirty-five short reads on how training actually works. Sets and reps, what a program really is, why the order you do things in matters. All of it open from the day you install, with nothing to unlock."
+        height={900} flip changes={[10]}
       />
     ),
   },
   {
-    endBar: 43, out: 'dissolve',
+    endBar: 41, out: 'dissolve',
+    el: () => (
+      <OnboardingBeat
+        before={ONBOARDING_0_8_9} after={ONBOARDING_0_9}
+        eyebrow="Setting up"
+        title="Fifteen questions down to nine"
+        line="It used to ask fifteen things before showing you anything. Now it asks what shapes your plan, and the rest waits until the end."
+      />
+    ),
+  },
+  {
+    endBar: 44, out: 'dissolve',
     el: () => (
       <ListCard
         eyebrow="Also in 0.9" title="Smaller things"
         items={[
           'Recovery is now called Wearable, with all three watch options on one row',
           'Tag a workout as a deload, a test, or technique work',
-          'Filter your exercises, and your gear',
+          'Filters for your exercises and for your gear',
           'Make a custom exercise right from the search box',
           'Hold Start to skip the warm-up',
-          'History groups by day — today, yesterday, Saturday',
+          'History groups by day: today, yesterday, Saturday',
           'The photo gallery is open to everyone',
-          'Ember, a warmer accent colour if red isn’t for you',
+          'Ember, a warmer accent colour if red is not for you',
         ]}
       />
     ),
   },
-  {endBar: 46, shot: {z: [1, 1.04]}, el: () => <Card eyebrow="Avex" title="0.9" sub="out now" />},
+  {
+    endBar: 46, shot: {z: [1, 1.035]},
+    el: (start) => <Card eyebrow="Avex" title="0.9" sub="out now" subAt={bar(45) - start} />,
+  },
 ];
 
 /* ── laying the beats on the grid ────────────────────────────────────────── */
@@ -222,7 +210,7 @@ const BEATS: Beat[] = [
  */
 const T = (b: Beat) => overlap(b.out ?? 'fade');
 
-const LAYOUT = BEATS.map((b, i) => ({beat: b, len: 0, start: 0}));
+const LAYOUT = BEATS.map(() => ({len: 0, start: 0}));
 {
   let prevEnd = 0;
   let clock = 0;
@@ -242,13 +230,28 @@ export const TOTAL = LAYOUT[LAYOUT.length - 1].start + LAYOUT[LAYOUT.length - 1]
 /* ── the bed ─────────────────────────────────────────────────────────────── */
 
 /**
- * Under the picture, not over it. At 0.5 the whole film measured -20.3 LUFS integrated, which is
- * quiet enough that a platform would have to normalise it up; 0.62 puts it near -18.6 with the peak a safe 1.8 dB under full scale, leaving the
- * cues, which are transients at -3 dBFS source, room to cut through the busiest bars.
+ * Under the picture, not over it.
+ *
+ * The bed's last third sat on top of everything, so this rides the fader the way a mix engineer
+ * would: the return at bar 33 lands at full strength, then settles over the following bars.
+ *
+ * The first attempt rode it to 0.6 and overshot — measured on the finished mix, the climax came out
+ * 1.7 dB QUIETER than the middle of the film, which is worse than the problem it was fixing. At 0.78
+ * the climax sits about half a decibel above the mid-section: still the loudest thing in the film,
+ * no longer shouting over it.
  */
-const BED_LEVEL = 0.62;
+const BED_LEVEL = 0.72;
+const RETURN = bar(33);
+const SETTLED = bar(36);
+
+const bedRide = (f: number) =>
+  interpolate(f, [0, RETURN - 2, RETURN, SETTLED, TOTAL], [1, 1, 1, 0.78, 0.78], {
+    extrapolateLeft: 'clamp', extrapolateRight: 'clamp',
+  });
+
 const bedVolume = (f: number) =>
-  BED_LEVEL * interpolate(f, [0, 20, TOTAL - 18, TOTAL], [0, 1, 1, 0], {
+  BED_LEVEL * bedRide(f) *
+  interpolate(f, [0, 16, TOTAL - 16, TOTAL], [0, 1, 1, 0], {
     extrapolateLeft: 'clamp', extrapolateRight: 'clamp',
   });
 
@@ -256,7 +259,8 @@ export const Release: React.FC = () => (
   <AbsoluteFill style={{backgroundColor: BG}}>
     <Audio src={staticFile('music/bed.mp3')} volume={bedVolume} />
     <TransitionSeries>
-      {LAYOUT.flatMap(({beat, len, start}, i) => {
+      {BEATS.flatMap((beat, i) => {
+        const {len, start} = LAYOUT[i];
         const seq = (
           <TransitionSeries.Sequence key={`s${i}`} durationInFrames={Math.round(len)}>
             <Camera shot={beat.shot}>{beat.el(start)}</Camera>
@@ -267,6 +271,6 @@ export const Release: React.FC = () => (
         return t ? [seq, t] : [seq];
       })}
     </TransitionSeries>
-    <Mark total={TOTAL} lead={bar(3)} tail={TOTAL - bar(42)} />
+    <Mark total={TOTAL} lead={bar(2)} tail={TOTAL - bar(43)} />
   </AbsoluteFill>
 );

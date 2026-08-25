@@ -19,6 +19,10 @@ export const SFX = {
   swoosh:    'sfx/swoosh.wav',
   ding:      'sfx/ding.wav',
   pop:       'sfx/pop.wav',
+  screen:    'sfx/screen.wav',
+  fill:      'sfx/fill.wav',
+  reveal:    'sfx/reveal.wav',
+  sweep:     'sfx/sweep.wav',
 } as const;
 
 export type SfxName = keyof typeof SFX;
@@ -37,6 +41,9 @@ export type SfxName = keyof typeof SFX;
 const LEVEL: Record<SfxName, number> = {
   tap: 0.8, tick: 0.62, confirm: 0.62, restStart: 0.5, restDone: 0.6, impact: 0.9, count: 0.3,
   swoosh: 0.62, ding: 0.7, pop: 0.75,
+  // The screen change fires on nearly every beat, so it sits well under everything else; anything
+  // that repeats that often becomes noise long before it becomes texture.
+  screen: 0.4, fill: 0.5, reveal: 0.6, sweep: 0.55,
 };
 
 /** Master trim — one place to pull the whole sound design up or down against picture. */
