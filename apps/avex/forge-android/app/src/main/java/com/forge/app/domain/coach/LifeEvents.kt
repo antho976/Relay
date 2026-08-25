@@ -25,6 +25,13 @@ object LifeEvents {
 
     private const val DAY_MS = 24L * 60 * 60 * 1000
 
+    /** Whole calendar days from [fromMs] to [toMs] in [zone] — never a truncated elapsed division. */
+    private fun calendarDaysBetween(fromMs: Long, toMs: Long, zone: java.time.ZoneId): Int =
+        java.time.temporal.ChronoUnit.DAYS.between(
+            java.time.Instant.ofEpochMilli(fromMs).atZone(zone).toLocalDate(),
+            java.time.Instant.ofEpochMilli(toMs).atZone(zone).toLocalDate()
+        ).toInt()
+
     /** A break this long stops being "life happened this week" and becomes detraining. */
     const val LAYOFF_MIN_DAYS = 14
 
@@ -99,7 +106,8 @@ object LifeEvents {
         checkins: List<CheckinEntry>,
         cardio: List<CardioEntry>,
         restrictions: List<InjuryRestriction>,
-        nowMs: Long
+        nowMs: Long,
+        zone: java.time.ZoneId = java.time.ZoneId.systemDefault()
     ): State {
         val sickFromCheckin = checkins
             .filter { it.sick && nowMs - it.recordedAt <= SICK_WINDOW_DAYS * DAY_MS }
@@ -126,7 +134,7 @@ object LifeEvents {
 
         return State(
             sick = sickFromCheckin || sickFromCardio,
-            layoff = layoff(sessions, nowMs),
+            layoff = layoff(sessions, nowMs, zone),
             soreMuscles = sore,
             restrictedMuscles = active
                 .filter { it.scope == InjuryRestriction.SCOPE_MUSCLE }
@@ -146,14 +154,25 @@ object LifeEvents {
      * Two shapes: still away (nothing logged for ≥ [LAYOFF_MIN_DAYS]), or back inside the ramp
      * window after such a gap. Deliberately measured in RAW days — a declared holiday is still
      * time your body spent not training, even though the weekly pass paused for it.
+     *
+     * The gap is counted in CALENDAR days, because [LAYOFF_MIN_DAYS] is a calendar-day threshold
+     * and the number lands in a sentence the user reads ("21 days"). Dividing elapsed milliseconds
+     * truncated: a gap the calendar calls fourteen days read as thirteen whenever the earlier
+     * session sat later in the day than the current moment, so the ease-back-in ramp didn't engage
+     * for exactly the users who had been away longest. The ramp WINDOW below stays elapsed-time —
+     * that one is a genuine duration.
      */
-    fun layoff(sessions: List<Session>, nowMs: Long): Layoff? {
+    fun layoff(
+        sessions: List<Session>,
+        nowMs: Long,
+        zone: java.time.ZoneId = java.time.ZoneId.systemDefault()
+    ): Layoff? {
         val finished = sessions.filter { it.finishedAt != null && !it.isUntracked }
             .sortedBy { it.startedAt }
         if (finished.isEmpty()) return null
 
         val last = finished.last()
-        val daysSinceLast = ((nowMs - last.startedAt) / DAY_MS).toInt()
+        val daysSinceLast = calendarDaysBetween(last.startedAt, nowMs, zone)
         if (daysSinceLast >= LAYOFF_MIN_DAYS) {
             return Layoff(
                 days = daysSinceLast, away = true, returning = false,
@@ -166,7 +185,7 @@ object LifeEvents {
             if (i == 0) break
             val session = finished[i]
             val previous = finished[i - 1]
-            val gapDays = ((session.startedAt - previous.startedAt) / DAY_MS).toInt()
+            val gapDays = calendarDaysBetween(previous.startedAt, session.startedAt, zone)
             if (gapDays >= LAYOFF_MIN_DAYS) {
                 val withinRamp = nowMs - session.startedAt <= RAMP_DAYS * DAY_MS
                 return Layoff(

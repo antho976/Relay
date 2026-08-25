@@ -277,6 +277,9 @@ class MainActivity : FragmentActivity() {
         // a re-request. Nothing interrupts a cold launch to ask.
 
         AutoBackupWorker.schedule(this)
+        // The widget rolls over at local midnight from here (REPLACE, so re-arming on each launch
+        // just re-anchors it to the current zone rather than stacking work).
+        com.forge.app.service.WidgetMidnightWorker.schedule(this)
 
         // Apply privacy mode (#152) synchronously BEFORE the first frame so it's never unsecured,
         // then keep a collector for live changes. Paint the window background to match the active

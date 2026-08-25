@@ -130,7 +130,16 @@ internal fun ActiveDot(color: Color) {
     }
 }
 
-private val dateFormat = SimpleDateFormat("MMM d", Locale.getDefault())
+/**
+ * Built per call, from the CURRENT default locale.
+ *
+ * As a top-level `val` this froze `Locale.getDefault()` at class load, so a user who changed their
+ * phone's language kept seeing dates in the old locale's format until the process restarted. It is
+ * one small allocation on a branch that only runs for sessions a week or more old — cheaper than
+ * the bug. (`SimpleDateFormat` is not thread-safe either, so a shared instance was a hazard as
+ * well as a staleness one.)
+ */
+private fun dateFormat() = SimpleDateFormat("MMM d", Locale.getDefault())
 
 /**
  * "Last trained" for a day card, in CALENDAR days — the same reading OverviewUiStateMapper's
@@ -149,6 +158,6 @@ internal fun formatRelative(epochMs: Long): String {
         daysAgo <= 0L -> "Today"
         daysAgo == 1L -> "Yesterday"
         daysAgo < 7L -> "$daysAgo days ago"
-        else -> dateFormat.format(Date(epochMs))
+        else -> dateFormat().format(Date(epochMs))
     }
 }
