@@ -96,8 +96,16 @@ object ImportParsing {
         return null
     }
 
-    /** Reps can arrive as "10", "10.0", or empty; parse leniently to an int (null when not a count). */
-    fun parseReps(raw: String): Int? = raw.trim().toDoubleOrNull()?.toInt()?.takeIf { it >= 0 }
+    /**
+     * Reps can arrive as "10", "10.0", or empty; parse leniently to an int (null when not a count).
+     *
+     * Zero is NOT a count. [ImportedSet] models a resistance set and carries no duration, so a
+     * 0-rep row is never a set that happened. Returning 0 here defeated every importer's
+     * cardio-row guard, which reads `reps == null && (weight == null || weight == 0.0)`: a Strong
+     * or Hevy distance row (Weight 0, Reps 0) passed it and became a phantom 0 x 0 set, inflating
+     * set counts, streaks and trophies with sessions the user never lifted in.
+     */
+    fun parseReps(raw: String): Int? = raw.trim().toDoubleOrNull()?.toInt()?.takeIf { it > 0 }
 
     /** Weight can be "", "0", "45.5", "45.5 kg", or "100,5" (European exports use a comma decimal —
      *  see [CsvParser]'s `;` handling); strip a unit suffix, normalise the separator, and parse. */
