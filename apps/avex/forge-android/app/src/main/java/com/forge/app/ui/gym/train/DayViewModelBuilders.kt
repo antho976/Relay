@@ -16,6 +16,9 @@ import com.forge.app.ui.gym.train.state.VsLastStatus
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import java.util.concurrent.TimeUnit
+import com.forge.app.domain.units.WeightUnit
+import com.forge.app.domain.units.formatWeight
+import com.forge.app.domain.units.weightInputValue
 
 /**
  * When true, fills the day screen with fabricated "last session" / "suggested next" /
@@ -31,6 +34,7 @@ internal suspend fun DayViewModel.buildExerciseUi(
     expandedOverride: Boolean?,
     plateLb: Double,
     dbMaxLb: Double?,
+    weightUnit: WeightUnit,
     bonusSets: Int = 0,
     finishedEarly: Boolean = false
 ): ExerciseUiState = coroutineScope {
@@ -87,7 +91,15 @@ internal suspend fun DayViewModel.buildExerciseUi(
     val (prevLE, prevSets) = prevDeferred.await()
     val prevFirstSet = prevSets.firstOrNull()
     // No prior-session set → first time on this exercise: prompt a baseline instead of a blank helper.
-    val preview = prevFirstSet?.let { "Last: ${it.weightText} × ${it.reps}" }
+    // Stored weights are lb (see LoggedSet). Everything below renders in the user's unit rather
+    // than printing the raw stored text, which showed a kg user "Last: 220.5 × 5" for their 100 kg.
+    // PLATES is the exception: its text is a plate COUNT, which is unit-independent already.
+    val isPlates = effectiveUnit == com.forge.app.program.ExerciseUnit.PLATES
+    fun displayWeight(set: LoggedSet): String {
+        val lb = set.weightLb
+        return if (isPlates || lb == null) set.weightText else formatWeight(lb, weightUnit)
+    }
+    val preview = prevFirstSet?.let { "Last: ${displayWeight(it)} × ${it.reps}" }
         ?: "First time — set your baseline"
 
     val priorFrontier = frontierDeferred.await()
@@ -129,7 +141,7 @@ internal suspend fun DayViewModel.buildExerciseUi(
 
     val pbSet = pbDeferred.await()
     val allTimePbLb = pbSet?.weightLb
-    val allTimePbText = pbSet?.let { "${it.weightText} × ${it.reps}" }
+    val allTimePbText = pbSet?.let { "${displayWeight(it)} × ${it.reps}" }
     val goalWeightLb = goalDeferred.await()
 
     val currentVolume = sets.sumOf { (it.weightLb ?: 0.0) * it.reps }
@@ -163,7 +175,12 @@ internal suspend fun DayViewModel.buildExerciseUi(
         }
     } else prevSets
 
-    val displaySuggested = suggestion?.inputText ?: if (DUMMY_TRAINING_DATA) "45" else null
+    // inputText is lb (or, on a PLATES exercise, a plate count). It seeds the weight FIELD, which
+    // is labelled in the display unit — so an unconverted lb number invited a kg user to log
+    // "Suggested next → 222.5" as 222.5 kg, i.e. 490 lb.
+    val displaySuggested = suggestion?.let { s ->
+        if (isPlates) s.inputText else weightInputValue(s.targetWeightLb, weightUnit)
+    } ?: if (DUMMY_TRAINING_DATA) "45" else null
     // Tier 3 — make the invisible weight calibration visible: append the SuggestionCalibrator's
     // StepMode to the suggestion reason, so it shows wherever the reason renders (card + input row).
     val stepModeNote = when (stepMode) {
@@ -197,7 +214,10 @@ internal suspend fun DayViewModel.buildExerciseUi(
         loggedExerciseId = logged?.id,
         loggedSets = sets,
         lastSessionPreviewText = preview,
-        prefillWeight = prevFirstSet?.weightText,
+        prefillWeight = prevFirstSet?.let {
+            val lb = it.weightLb
+            if (isPlates || lb == null) it.weightText else weightInputValue(lb, weightUnit)
+        },
         difficulty = logged?.difficulty,
         note = logged?.note,
         skipped = logged?.skipped ?: false,

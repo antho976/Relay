@@ -514,5 +514,11 @@ object ProgressionAdvisor {
     /** Floor to the increment grid — matches the old suggestion's rounding exactly. */
     private fun floorToGrid(weight: Double, grid: Double): Double = (weight / grid).toInt() * grid
 
-    private fun trim(v: Double): String = if (v % 1.0 == 0.0) "${v.toInt()}" else "$v"
+    /**
+     * One decimal, never a raw Double. `"$v"` printed the full binary expansion, so a target
+     * derived from an unrounded history rendered as "Suggested next → 220.46226218487757".
+     * Locale.US because this string can seed the weight field, so it is read back by WeightParser.
+     */
+    private fun trim(v: Double): String =
+        if (v % 1.0 == 0.0) "${v.toInt()}" else String.format(java.util.Locale.US, "%.1f", v)
 }

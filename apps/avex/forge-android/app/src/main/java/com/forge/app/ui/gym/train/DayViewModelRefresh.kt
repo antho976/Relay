@@ -57,6 +57,7 @@ internal suspend fun DayViewModel.refreshExercises() {
     // deriving the day one exercise at a time (the dominant cost of opening the screen).
     val plateLb = settingsRepo.plateWeightLb.first()
     val dbMaxLb = settingsRepo.maxDbWeightLb.first()
+    val weightUnit = settingsRepo.weightUnit.first()
     val built = coroutineScope {
         allPlans.mapIndexed { index, plan ->
             async {
@@ -67,6 +68,7 @@ internal suspend fun DayViewModel.refreshExercises() {
                     expandedOverride = previousExpandedById[plan.id],
                     plateLb = plateLb,
                     dbMaxLb = dbMaxLb,
+                    weightUnit = weightUnit,
                     bonusSets = previousBonusById[plan.id] ?: 0,
                     finishedEarly = previousFinishedEarlyById[plan.id] ?: false
                 )
@@ -116,6 +118,7 @@ internal suspend fun DayViewModel.refreshExercise(exerciseId: String) {
         expandedOverride = existing.isExpanded,
         plateLb = settingsRepo.plateWeightLb.first(),
         dbMaxLb = settingsRepo.maxDbWeightLb.first(),
+        weightUnit = settingsRepo.weightUnit.first(),
         bonusSets = existing.bonusSets,
         finishedEarly = existing.finishedEarly
     )
