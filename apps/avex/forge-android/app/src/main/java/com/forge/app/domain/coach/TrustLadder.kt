@@ -41,6 +41,9 @@ object TrustLadder {
     /** Reverts in the recent window that cap the coach regardless of its win rate. */
     const val REVERT_CAP = 3
 
+    /** How many recent coached weeks [REVERT_CAP] actually looks at. */
+    const val REVERT_WINDOW_WEEKS = 8
+
     enum class Tier(val level: Int, val displayName: String, val whatItMeans: String) {
         /** Watching, saying nothing. */
         OBSERVE(0, "Observing", "Learning your training. It won't suggest anything yet."),
@@ -117,7 +120,22 @@ object TrustLadder {
         val judged = decisions.filter {
             it.outcome == CoachDecision.OUTCOME_OK || it.outcome == CoachDecision.OUTCOME_FAILED
         }
-        val reverts = decisions.count { it.status == "reverted" }
+        // Reverts the COACH performed on itself. A "revert" decision carries the original's id in
+        // its payload, and applying it marks that original `reverted` — same status a user undo
+        // writes. Counting those against the coach punished it for correcting its own mistake,
+        // which is the behaviour the ladder is supposed to reward.
+        val selfRevertedIds = decisions
+            .filter { it.type == "revert" }
+            .mapNotNull { it.payload?.toLongOrNull() }
+            .toSet()
+        // REVERT_CAP is documented as "reverts in the recent window", but this method is handed the
+        // WHOLE ledger, so it was counting every revert ever. Three undos across a year of use
+        // pinned the coach at PROPOSE permanently, with no path back however well it did afterwards.
+        val recentWeeks = decisions.map { it.weekId }.distinct().sortedDescending()
+            .take(REVERT_WINDOW_WEEKS).toSet()
+        val reverts = decisions.count {
+            it.status == "reverted" && it.weekId in recentWeeks && it.id !in selfRevertedIds
+        }
         val wins = judged.count { it.outcome == CoachDecision.OUTCOME_OK }
         val decided = judged.size
         val rate = if (decided == 0) 0.0 else wins.toDouble() / decided

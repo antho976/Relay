@@ -81,13 +81,26 @@ object TrustLedger {
         // window (outcome pending) counts — it stays under the watcher and demotes later if it fails;
         // a folded change must be proven "ok", since the watcher can no longer revisit it after folding.
         var streak = 0
+        var pendingCounted = 0
         for (d in decided.reversed()) {
             val accepted = when (d.status) {
                 "applied" -> d.outcome != "failed"
                 "folded" -> d.outcome == "ok"
                 else -> false // skipped / reverted
             }
-            if (accepted) streak++ else break
+            if (!accepted) break
+            // A change still inside its watch window may hold the streak's LEADING EDGE — it is
+            // under the watcher and demotes later if it fails, which is why an unjudged decision
+            // counts at all. But only one. `outcome != "failed"` is true for the whole 14 days a
+            // decision sits at "pending", so an unbounded run of them let taps alone earn
+            // autopilot: two "Apply all" taps on two-proposal weeks put four unjudged rep_shifts
+            // in a row and cleared the required three, with zero verdicts behind them. That is a
+            // count of taps, not the track record the tier is supposed to represent.
+            if (d.status == "applied" && d.outcome == "pending") {
+                if (pendingCounted >= 1) break
+                pendingCounted++
+            }
+            streak++
         }
         TypeTrust(type = type, streak = streak, required = required, earned = streak >= required)
     }.sortedBy { it.type }
