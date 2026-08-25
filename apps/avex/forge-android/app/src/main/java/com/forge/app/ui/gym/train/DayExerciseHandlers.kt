@@ -302,7 +302,6 @@ internal fun DayViewModel.logSet(
 
         workoutRepo.logSet(
             loggedExerciseId = leId,
-            setIndex = currentUi.loggedSets.size,
             weightText = weightText,
             weightLb = newWeightLb,
             reps = reps,

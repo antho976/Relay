@@ -7,6 +7,7 @@ import com.forge.app.data.db.entities.LoggedExercise
 import com.forge.app.data.db.entities.LoggedSet
 import com.forge.app.data.db.entities.Session
 import com.forge.app.data.prefs.SettingsRepository
+import com.forge.app.domain.pr.PrDetector
 import com.forge.app.domain.units.WeightUnit
 import com.forge.app.program.ExerciseUnit
 import com.forge.app.program.Program
@@ -116,8 +117,22 @@ class WatchSessionMirror @Inject constructor(
         }?.let { stored -> toWristWeightText(stored, unit, isPlates) }
         // The most recent set in the session just went PR — the wrist's gold moment (also carried
         // on the log ack; this covers phone-logged PRs while the wrist mirrors).
+        //
+        // `wasPr` lives on the EXERCISE, so reading it alone made this a per-exercise flag: once any
+        // set of a lift set a record, every later SessionLiveDto for that lift kept reporting the
+        // last set as a PR, including the back-off sets after it. The exercise flag is still the
+        // gate — it is the only thing that knows about all-time history — but the last set must also
+        // be the one that earned it: a set that beats every earlier set of this exercise in this
+        // session at its own rep count, which is what PrDetector tests.
         val lastSetWasPr = sets.maxByOrNull { it.completedAt }?.let { lastSet ->
-            logged.firstOrNull { it.id == lastSet.loggedExerciseId }?.wasPr == true
+            val exercise = logged.firstOrNull { it.id == lastSet.loggedExerciseId }
+            exercise?.wasPr == true && !lastSet.isAssisted && PrDetector.isPr(
+                history = setsByLoggedExercise[lastSet.loggedExerciseId]
+                    ?.filter { it.id != lastSet.id && it.completedAt <= lastSet.completedAt }
+                    .orEmpty(),
+                newWeightLb = lastSet.weightLb,
+                newReps = lastSet.reps
+            )
         } ?: false
 
         return SessionLiveDto(

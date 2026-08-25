@@ -693,9 +693,17 @@ class WorkoutRepository @Inject constructor(
     suspend fun setsFor(loggedExerciseId: Long): List<LoggedSet> =
         loggedSetDao.forLoggedExercise(loggedExerciseId)
 
+    /**
+     * Insert one performed set.
+     *
+     * The set's index is resolved HERE, from the highest index already stored, rather than taken
+     * from the caller's live row count. Every caller passed a count, and a count is wrong the moment
+     * a set is deleted from the middle: indices 0 and 2 with a count of 2 wrote a second index 2,
+     * and the wrist's prefill (`maxByOrNull { setIndex }`) then picked arbitrarily between the two,
+     * so the target weight it showed flipped between different sets. One funnel, one rule.
+     */
     suspend fun logSet(
         loggedExerciseId: Long,
-        setIndex: Int,
         weightText: String,
         weightLb: Double?,
         reps: Int,
@@ -705,7 +713,7 @@ class WorkoutRepository @Inject constructor(
             val safeLb = sanitizeWeightLb(weightLb)
             LoggedSet(
                 loggedExerciseId = loggedExerciseId,
-                setIndex = setIndex,
+                setIndex = (loggedSetDao.maxSetIndex(loggedExerciseId) ?: -1) + 1,
                 // A clamped weight takes the text with it. Leaving the typed "1000000000" beside a
                 // stored 2000 would show the user a number the database does not hold, and every
                 // later edit would re-parse the text back to the absurd value.

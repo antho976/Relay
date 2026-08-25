@@ -101,7 +101,6 @@ class SetLogUseCase @Inject constructor(
             return Result(false, "exercise moved on")
         }
         val row = loggedFor(slotPlan.id)
-        val doneCount = row?.let { setsByLogged[it.id]?.size } ?: 0
 
         // Persistent swap (#11): the slot logs under the swapped exercise even before its first set.
         val swap = customizationRepo.getSwap(slotPlan.id)
@@ -167,7 +166,6 @@ class SetLogUseCase @Inject constructor(
         )
         val setId = workoutRepo.logSet(
             loggedExerciseId = leId,
-            setIndex = doneCount,
             weightText = weightText,
             weightLb = weightLb,
             reps = reps

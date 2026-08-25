@@ -7,6 +7,7 @@ import com.forge.app.data.repo.AdaptationRepository
 import com.forge.app.data.repo.StatsRepository
 import com.forge.app.domain.timer.RestTimerState
 import com.forge.app.domain.units.WeightUnit
+import com.forge.app.domain.units.formatVolumeCompact
 import com.forge.app.program.Program
 import com.forge.shared.protocol.ConfigDto
 import com.forge.shared.protocol.GlanceTodayDto
@@ -100,6 +101,7 @@ class WearStatePublisher @Inject constructor(
         val readiness = runCatching { adaptationRepo.readinessScale() }.getOrNull()
         val week = runCatching { statsRepo.observeWeeklyStats().first() }.getOrNull()
         val freestyle = settingsRepo.freestyleMode.first()
+        val unit = settingsRepo.weightUnit.first()
         val nextDayTitle = week?.nextUpDayKey
             ?.takeIf { !freestyle && Program.days.isNotEmpty() }
             ?.let { Program.dayDisplayName(it) }
@@ -116,7 +118,9 @@ class WearStatePublisher @Inject constructor(
             // The weekly target only means something with a real plan — freestyle shows the bare count.
             weekSessionsPlanned = settingsRepo.daysPerWeek.first()
                 .takeIf { it > 0 && !freestyle && Program.days.isNotEmpty() },
-            weekVolumeText = week?.volumeLb?.takeIf { it > 0 }?.let { formatVolumeLb(it) },
+            // The phone's own compact formatter, in the user's unit. A private lb-only helper here
+            // meant a kg user's Week tile read "12.4k LB" while the phone beside it read "5.6k kg".
+            weekVolumeText = week?.volumeLb?.takeIf { it > 0 }?.let { formatVolumeCompact(it, unit) },
             computedAtMs = clock.nowMs()
         )
         putItem(WearProtocol.PATH_GLANCE_TODAY, WearCodec.encode(dto))
@@ -174,9 +178,6 @@ class WearStatePublisher @Inject constructor(
             ).await()
         }
     }
-
-    private fun formatVolumeLb(volumeLb: Double): String =
-        if (volumeLb >= 10_000) "%.1fk lb".format(volumeLb / 1000) else "${volumeLb.toInt()} lb"
 
     private companion object {
         /** endAtMs jitter tolerated between tick-derived recomputes before it counts as a restart. */
