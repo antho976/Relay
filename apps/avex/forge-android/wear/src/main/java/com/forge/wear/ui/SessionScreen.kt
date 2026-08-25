@@ -263,7 +263,7 @@ fun SetView(
                         "undo",
                         style = WearType.label, color = colors.accent,
                         modifier = Modifier
-                            .clickable { pendingId = repo.sendUndoSet(session.sessionId) }
+                            .clickable { pendingId = repo.sendUndoSet(session.sessionId, log.setId) }
                             .padding(6.dp)
                     )
                     Spacer(Modifier.width(10.dp))

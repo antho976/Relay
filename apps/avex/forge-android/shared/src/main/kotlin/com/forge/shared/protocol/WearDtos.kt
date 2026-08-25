@@ -123,12 +123,20 @@ data class TimerCommand(
     enum class Action { SKIP, ADD_30, START }
 }
 
-/** Undo the last set ([WearProtocol.PATH_CMD_UNDO_SET]). */
+/**
+ * Undo a just-logged set ([WearProtocol.PATH_CMD_UNDO_SET]).
+ *
+ * [setId] is the set the wrist's undo row was OFFERING to undo, taken from that set's log ack.
+ * Without it the phone resolved the victim itself as "the session's most recent set", so a set
+ * logged on the phone in between — or a second tap on the wrist — deleted a set the user never
+ * pointed at. Null only from an older wrist build, which falls back to the previous behaviour.
+ */
 @Serializable
 data class UndoSetCommand(
     val v: Int = WearProtocol.VERSION,
     val commandId: String,
-    val sessionId: Long
+    val sessionId: Long,
+    val setId: Long? = null
 )
 
 /** Rate a just-logged set ([WearProtocol.PATH_CMD_SET_RPE]). [setId] comes off the log ack, so

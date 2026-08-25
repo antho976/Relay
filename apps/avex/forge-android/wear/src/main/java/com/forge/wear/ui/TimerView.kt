@@ -14,6 +14,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -47,6 +48,8 @@ fun TimerView(
     val session by repo.session.collectAsStateWithLifecycle()
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
     var buzzedForEndAt by remember { mutableLongStateOf(0L) }
+    // One undo per logged set: reset when a new set's ack arrives.
+    var undoSent by remember(lastLog?.setId) { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         while (true) { nowMs = System.currentTimeMillis(); delay(200) }
@@ -86,7 +89,15 @@ fun TimerView(
                         "undo",
                         style = WearType.label, color = colors.accent,
                         modifier = Modifier
-                            .clickable { session?.let { repo.sendUndoSet(it.sessionId) } }
+                            // Gated like SetView's undo: clearing lastLog only removes this row on
+                            // the NEXT recomposition, so two taps inside one frame both fired, each
+                            // with its own command id — two undos the deduper couldn't tell apart.
+                            .clickable(enabled = !undoSent) {
+                                session?.let {
+                                    undoSent = true
+                                    repo.sendUndoSet(it.sessionId, log.setId)
+                                }
+                            }
                             .padding(6.dp)
                     )
                     Spacer(Modifier.width(10.dp))

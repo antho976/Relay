@@ -189,16 +189,29 @@ class SetLogUseCase @Inject constructor(
         return Result(true, setId = setId)
     }
 
-    /** Undo the last set of the active session — repository-level, bounded to a short window. */
-    suspend fun undoLastFromWatch(sessionId: Long): Result {
+    /**
+     * Undo the set the wrist named — repository-level, bounded to a short window.
+     *
+     * [setId] comes off that set's own log ack, so this deletes the row the user was looking at.
+     * Resolving "the session's most recent set" instead meant a set logged on the phone between the
+     * wrist's set and the undo tap was the one that vanished, and a double-tapped undo deleted two
+     * different sets. A null [setId] is an older wrist build and keeps the previous behaviour; a
+     * setId that is no longer there (already undone — the second of two taps) is not an error worth
+     * a second deletion.
+     */
+    suspend fun undoLastFromWatch(sessionId: Long, setId: Long? = null): Result {
         val session = sessionDao.getActiveSession() ?: return Result(false, "no active session")
         if (session.id != sessionId) return Result(false, "session changed")
-        val last = loggedSetDao.allForSession(session.id).maxByOrNull { it.completedAt }
-            ?: return Result(false, "nothing to undo")
-        if (clock.nowMs() - last.completedAt > UNDO_WINDOW_MS) {
+        val sets = loggedSetDao.allForSession(session.id)
+        val target = if (setId != null) {
+            sets.firstOrNull { it.id == setId } ?: return Result(false, "already undone")
+        } else {
+            sets.maxByOrNull { it.completedAt } ?: return Result(false, "nothing to undo")
+        }
+        if (clock.nowMs() - target.completedAt > UNDO_WINDOW_MS) {
             return Result(false, "too late to undo here, use the phone")
         }
-        workoutRepo.deleteSet(last)
+        workoutRepo.deleteSet(target)
         return Result(true)
     }
 

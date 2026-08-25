@@ -77,7 +77,15 @@ class WearDataRepository private constructor(context: Context) : DataClient.OnDa
             runCatching {
                 val buffer = dataClient.dataItems.await()
                 try {
-                    for (item in buffer) applyItem(item.freeze(), deleted = false)
+                    // seeded = these DataItems were already on the node when we started. State items
+                    // (session, timer, config, glance) are exactly what we want back; a COMMAND ACK
+                    // is not. /cmd/ack is never deleted, so the last ack ever published — possibly
+                    // days old — was re-applied here and stamped with the local clock, arming the
+                    // 12-second undo + rate row from app launch rather than from the set. Wear OS
+                    // reclaims background processes readily, so a wrist raised mid-session offered
+                    // "undo · rate" for a set two exercises back, and the RPE window is ten minutes
+                    // wide: the rating landed on it.
+                    for (item in buffer) applyItem(item.freeze(), deleted = false, seeded = true)
                 } finally {
                     buffer.release()
                 }
@@ -91,7 +99,7 @@ class WearDataRepository private constructor(context: Context) : DataClient.OnDa
         }
     }
 
-    private fun applyItem(item: DataItem, deleted: Boolean) {
+    private fun applyItem(item: DataItem, deleted: Boolean, seeded: Boolean = false) {
         val bytes = item.data
         when (item.uri.path) {
             WearProtocol.PATH_SESSION_LIVE ->
@@ -104,8 +112,9 @@ class WearDataRepository private constructor(context: Context) : DataClient.OnDa
                 if (!deleted) decodeInto<ConfigDto>(bytes) { _config.value = it }
             WearProtocol.PATH_GLANCE_TODAY ->
                 if (!deleted) decodeInto<GlanceTodayDto>(bytes) { _glance.value = it }
+            // A replayed ack is not an event: it answers a command from a previous run of this app.
             WearProtocol.PATH_CMD_ACK ->
-                if (!deleted) decodeInto<CmdAckDto>(bytes) { ack ->
+                if (!deleted && !seeded) decodeInto<CmdAckDto>(bytes) { ack ->
                     _lastAck.value = ack
                     // A successful log names its set — remember it locally for undo/RPE.
                     if (ack.ok && ack.setId != null) {
@@ -150,9 +159,16 @@ class WearDataRepository private constructor(context: Context) : DataClient.OnDa
             )
         )
 
-    fun sendUndoSet(sessionId: Long): String {
+    /**
+     * Undo [setId] — the set the caller's row is offering to undo, not "whatever was logged last".
+     * Callers pass the id from [lastLog]; the phone falls back to its own resolution when it is null.
+     */
+    fun sendUndoSet(sessionId: Long, setId: Long?): String {
         _lastLog.value = null // The row acted; don't offer to rate an undone set.
-        return send(WearProtocol.PATH_CMD_UNDO_SET, UndoSetCommand(commandId = newId(), sessionId = sessionId))
+        return send(
+            WearProtocol.PATH_CMD_UNDO_SET,
+            UndoSetCommand(commandId = newId(), sessionId = sessionId, setId = setId)
+        )
     }
 
     fun sendSetRpe(setId: Long, rpe: Double): String {

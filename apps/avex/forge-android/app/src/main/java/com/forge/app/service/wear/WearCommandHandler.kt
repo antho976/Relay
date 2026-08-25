@@ -65,7 +65,7 @@ class WearCommandHandler @Inject constructor(
             else -> return
         }
         if (!deduper.isNew(cmd.commandId)) return
-        val result = setLog.undoLastFromWatch(cmd.sessionId)
+        val result = setLog.undoLastFromWatch(cmd.sessionId, cmd.setId)
         publisher.publishAck(
             CmdAckDto(
                 commandId = cmd.commandId,
