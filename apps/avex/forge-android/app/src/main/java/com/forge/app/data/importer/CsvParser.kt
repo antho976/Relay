@@ -19,6 +19,39 @@ object CsvParser {
     }
 
     /**
+     * Parse ONLY the header row — everything format detection actually needs.
+     *
+     * [parse]ing a whole file to look at its first line, discarding the result and parsing it again
+     * is what made the Import screen's folder scan hostile: a 20 MB CSV that isn't a workout export
+     * at all became ~1.5 M `String` cells (~150 MB of heap) TWICE before being rejected, once per
+     * unrecognised file, on every visit to the screen.
+     *
+     * Returns null when there is no header, or no data row beneath it.
+     */
+    fun parseHeader(text: String): List<String>? {
+        val clean = text.removePrefix("\uFEFF").trimStart('\n', '\r')
+        if (clean.isBlank()) return null
+        // A header with nothing under it is not an importable file, and the callers' resolve()
+        // used to establish that from `rows.size < 2`.
+        if (clean.lineSequence().filter { it.isNotBlank() }.take(2).count() < 2) return null
+        val record = firstRecord(clean)
+        return parseWith(record, detectDelimiter(clean)).firstOrNull()
+    }
+
+    /** The text up to the first record boundary — a newline that isn't inside a quoted field. */
+    private fun firstRecord(text: String): String {
+        var inQuotes = false
+        for (i in text.indices) {
+            val c = text[i]
+            when {
+                c == '"' -> inQuotes = !inQuotes
+                !inQuotes && (c == '\n' || c == '\r') -> return text.substring(0, i)
+            }
+        }
+        return text
+    }
+
+    /**
      * Pick the delimiter by counting `,` vs `;` OUTSIDE quotes on the first non-empty line. Comma is
      * the default; semicolon only wins when it clearly dominates (locale exports).
      */

@@ -91,7 +91,13 @@ class BackupRepository @Inject constructor(
                     put("id", s.id)
                     put("dayKey", s.dayKey)
                     put("date", dateFmt.format(Instant.ofEpochMilli(s.startedAt).atZone(zone)))
+                    // The exact instant, alongside the human date. Without it a weekly export
+                    // re-read at local midnight described a DIFFERENT session start from the full
+                    // export's, so importing both files inserted every recent workout twice.
+                    put("startedAt", s.startedAt)
+                    put("finishedAt", s.finishedAt ?: 0)
                     put("activeMin", activeMinutesOf(s))
+                    put("activeSeconds", activeSecondsOf(s))
                     put("totalVolumeLb", s.totalVolumeLb ?: 0)
                     put("prCount", s.prCount)
                     put("setCount", s.setCount)
@@ -558,6 +564,7 @@ class BackupRepository @Inject constructor(
      * concurrent writers, so the on-disk file is a consistent snapshot.
      */
     private fun snapshotDatabase(): File {
+        sweepStaleTemps()
         val temp = File(context.cacheDir, "forge_snapshot_${System.currentTimeMillis()}.db")
         if (temp.exists()) temp.delete()
         val writable = db.openHelper.writableDatabase
@@ -714,6 +721,7 @@ class BackupRepository @Inject constructor(
      * photo folder from different backups. Returns a [RestoreOutcome]. Deletes [incoming].
      */
     private suspend fun restoreFromIncoming(incoming: File): RestoreOutcome = withContext(Dispatchers.IO) {
+        sweepStaleTemps(keep = incoming)
         val temps = mutableListOf(incoming) // cache-dir temp files to clean up before returning
         // Set true only once EVERY staged component has landed. The finally below uses it to discard
         // a half-written pending set, which would otherwise be applied at the next cold start.
@@ -729,17 +737,26 @@ class BackupRepository @Inject constructor(
                 val exDb = File(context.cacheDir, "forge_restore_db_${System.currentTimeMillis()}.db")
                     .also { it.delete(); temps.add(it) }
                 var sawDb = false
+                // Every extraction below is bounded. The incoming ARCHIVE is capped by
+                // MAX_RESTORE_BYTES, but nothing capped what an entry expanded to, so a small
+                // high-ratio zip could write tens of GB into internal storage mid-restore and fill
+                // the device. An entry over its cap fails the whole restore rather than being
+                // silently truncated into a "valid-looking" half file.
+                var oversized = false
                 java.util.zip.ZipInputStream(incoming.inputStream()).use { zin ->
                     var entry = zin.nextEntry
-                    while (entry != null) {
+                    while (entry != null && !oversized) {
                         val name = entry.name
                         when {
-                            name == ZIP_DB_ENTRY -> { exDb.outputStream().use { zin.copyTo(it) }; sawDb = true }
+                            name == ZIP_DB_ENTRY -> {
+                                if (copyAtMost(zin, exDb, MAX_RESTORE_ENTRY_BYTES)) sawDb = true
+                                else oversized = true
+                            }
                             name == ZIP_PREFS_ENTRY -> {
                                 val exPrefs = File(context.cacheDir, "forge_restore_prefs_${System.currentTimeMillis()}.pb")
                                     .also { it.delete(); temps.add(it) }
-                                exPrefs.outputStream().use { zin.copyTo(it) }
-                                prefsFile = exPrefs
+                                if (copyAtMost(zin, exPrefs, MAX_RESTORE_PREFS_BYTES)) prefsFile = exPrefs
+                                else oversized = true
                             }
                             name.startsWith(PHOTOS_PREFIX) -> {
                                 val photoName = name.removePrefix(PHOTOS_PREFIX)
@@ -748,20 +765,21 @@ class BackupRepository @Inject constructor(
                                     val stage = photoStage ?: File(
                                         context.cacheDir, "forge_restore_photos_${System.currentTimeMillis()}"
                                     ).also { it.deleteRecursively(); it.mkdirs(); photoStage = it }
-                                    File(stage, photoName).outputStream().use { zin.copyTo(it) }
+                                    if (!copyAtMost(zin, File(stage, photoName), MAX_RESTORE_MEDIA_BYTES)) oversized = true
                                 }
                             }
                             name == ZIP_AVATAR_ENTRY -> {
                                 val a = File(context.cacheDir, "forge_restore_avatar_${System.currentTimeMillis()}.jpg")
                                     .also { it.delete(); temps.add(it) }
-                                a.outputStream().use { zin.copyTo(it) }
-                                avatarStage = a
+                                if (copyAtMost(zin, a, MAX_RESTORE_MEDIA_BYTES)) avatarStage = a
+                                else oversized = true
                             }
                         }
                         zin.closeEntry()
                         entry = zin.nextEntry
                     }
                 }
+                if (oversized) return@withContext RestoreOutcome.TOO_LARGE
                 if (!sawDb) return@withContext RestoreOutcome.NOT_A_BACKUP
                 dbFile = exDb
             }
@@ -852,6 +870,31 @@ class BackupRepository @Inject constructor(
             // so a half-written set was swapped over the live database at the next cold start,
             // silently discarding everything logged since the failed attempt.
             if (!stagedOk) clearPendingRestore()
+        }
+    }
+
+    /**
+     * Delete cache scratch left by a backup or restore that never got to run its `finally`.
+     *
+     * Every temp is named with `System.currentTimeMillis()`, so each attempt allocates a NEW file
+     * rather than reusing a slot. A process killed mid-backup therefore leaves a full copy of the
+     * database in `cacheDir` forever — and the kill that causes it is usually the low-storage one,
+     * so three failed weekly backups on a full phone leave three DB-sized files making the next
+     * attempt likelier to fail too. Android only reclaims `cacheDir` under system-wide pressure.
+     *
+     * Anything older than [TEMP_STALE_MS] cannot belong to a live operation; [keep] protects the
+     * file the caller is working on right now.
+     */
+    private fun sweepStaleTemps(keep: File? = null) {
+        runCatching {
+            val cutoff = System.currentTimeMillis() - TEMP_STALE_MS
+            context.cacheDir.listFiles()?.forEach { f ->
+                val name = f.name
+                if (f.absolutePath == keep?.absolutePath) return@forEach
+                if (!TEMP_PREFIXES.any { name.startsWith(it) }) return@forEach
+                if (f.lastModified() > cutoff) return@forEach
+                if (f.isDirectory) f.deleteRecursively() else f.delete()
+            }
         }
     }
 
@@ -1044,7 +1087,31 @@ class BackupRepository @Inject constructor(
          */
         private const val MIN_RESTORABLE_VERSION = 12
 
-        /** Cap on the staged restore copy — guards a budget device's cache against an oversized file (E3). */
-        private const val MAX_RESTORE_BYTES = 2L * 1024 * 1024 * 1024 // 2 GiB
+        /**
+         * Cap on the staged restore copy — guards a budget device's cache against an oversized file
+         * (E3). Sized to the largest plausible Avex backup (a decade of training plus a full photo
+         * gallery) rather than to "some big number": the old 2 GiB ceiling was written to disk IN
+         * FULL before being rejected, which on a phone with 3 GB free is itself the outage.
+         */
+        private const val MAX_RESTORE_BYTES = 512L * 1024 * 1024 // 512 MiB
+
+        /**
+         * Cap on a single decompressed ZIP entry. `MAX_RESTORE_BYTES` bounds the archive as it
+         * arrives; nothing bounded what it EXPANDED to. Zip compression of repetitive data runs
+         * past 1000:1, so a 4 MB "backup" from a forum thread could write 40 GB into internal
+         * storage during a restore and fill the device before the outer size check ever mattered.
+         */
+        private const val MAX_RESTORE_ENTRY_BYTES = 512L * 1024 * 1024 // 512 MiB
+
+        /** Cap on one extracted progress photo / avatar — a JPEG, not a database. */
+        private const val MAX_RESTORE_MEDIA_BYTES = 64L * 1024 * 1024 // 64 MiB
+
+        /** Cap on the extracted preferences blob — a few KB of protobuf in practice. */
+        private const val MAX_RESTORE_PREFS_BYTES = 8L * 1024 * 1024 // 8 MiB
+
+        /** Cache scratch this class creates, all timestamp-named. Swept by [sweepStaleTemps]. */
+        private val TEMP_PREFIXES = listOf("forge_snapshot_", "forge_restore_")
+        /** Nothing this old can still belong to a running backup or restore. */
+        private const val TEMP_STALE_MS = 6L * 60 * 60 * 1000 // 6 hours
     }
 }

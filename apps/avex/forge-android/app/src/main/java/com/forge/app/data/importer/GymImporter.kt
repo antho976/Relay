@@ -22,6 +22,19 @@ interface GymImporter {
      * unitless (Strong without a unit column, a bare spreadsheet) — set to the user's current unit.
      */
     fun parse(text: String, assumeKg: Boolean): List<ImportedSession>
+
+    /**
+     * Rows that aren't workouts — cardio, coach goals. Only Avex's own export carries any, so this
+     * defaults to empty and no other parser has to implement it.
+     */
+    fun parseExtras(text: String): ImportedExtras = ImportedExtras()
+
+    /**
+     * The export-format version the file declares, when the source versions its format at all.
+     * A file from a NEWER format than this build knows is refused rather than parsed on a guess.
+     * Null = the source doesn't version its exports, so there is nothing to check.
+     */
+    fun formatVersion(text: String): Int? = null
 }
 
 /** Shared parsing helpers: unit conversion, date parsing, header-indexed CSV row access. */
