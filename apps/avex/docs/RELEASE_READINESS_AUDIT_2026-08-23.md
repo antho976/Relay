@@ -23,7 +23,7 @@ The local release implementation is complete on an updated `main` base:
 - All 25 Roborazzi baselines affected by the intentional red default accent were inspected, refreshed, and verified, including the 200% font-scale and AMOLED variants.
 - Phone and Wear R8 release bundles build successfully. Both remain unsigned without the registered Play upload key.
 - Health Connect privacy actions now open one complete in-app policy. The repository policy and release checklist document the same permissions, retention, deletion, and sharing behavior.
-- Phone now targets API 36. Phone and Wear report version `0.8.9` with incremented version codes `90` and `100090`.
+- Phone now targets API 36. Phone and Wear report version `0.9` with incremented version codes `90` and `100090`.
 - Release lint is an explicit CI gate. Public exports, widget copy, rank-card output, and visible trophies use Avex branding while compatibility-sensitive `com.forge.*`, database, preference, and work identifiers remain unchanged.
 - Profile activity content wraps at large font scales and uses doctrine typography and alpha tokens. The doctrine allowlist was paid down by five buckets.
 - Machine-local `.env`, `.idea`, Gradle Kotlin state, and generated release artifacts are ignored. Previously tracked copies were removed from the repository.

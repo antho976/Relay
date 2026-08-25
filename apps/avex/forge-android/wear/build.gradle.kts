@@ -27,7 +27,7 @@ android {
         minSdk = 30 // Wear OS 3+ (every Galaxy Watch since 2021; the plan's locked floor).
         targetSdk = 35
         versionCode = 100_090
-        versionName = "0.8.9"
+        versionName = "0.9"
     }
 
     signingConfigs {

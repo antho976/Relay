@@ -1,4 +1,4 @@
-# Avex 0.8.9 Play release notes
+# Avex 0.9 Play release notes
 
 ## en-CA
 

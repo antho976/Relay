@@ -25,7 +25,7 @@ internal data class ReleaseNote(val version: String, val date: String, val notes
 
 internal val CHANGELOG: List<ReleaseNote> = listOf(
     ReleaseNote(
-        version = "0.8.9",
+        version = "0.9",
         date = "Aug 2026",
         notes = listOf(
             ChangeNote(ChangeKind.New, "Train from the Wear OS companion with live heart rate, tiles and complications"),

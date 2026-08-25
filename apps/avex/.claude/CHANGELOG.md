@@ -10,7 +10,7 @@ All notable changes to **Avex** are recorded here.
 ---
 
 ## What's new (user-facing)
-### 0.8.9
+### 0.9
 - **Wear OS companion.** Log sets from the watch, capture workout heart rate, and use Avex tiles and complications without an account or server.
 - **Academy and library.** Browse the rebuilt offline learning hub and read the complete lesson catalog without unlock gates.
 - **Profile activity.** Monthly activity, streaks, body trends, progress photos, and shareable rank cards now live in one profile.
