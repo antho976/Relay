@@ -5,7 +5,10 @@ import {GoalRow, ScaleCtx} from './ui/kit';
 import {Icon} from './ui/icons';
 import {C} from './ui/tokens';
 import {WatchRest, WatchRpe, WatchSet} from './ui/Watch';
-import {Body, Eyebrow, Plate, Title, useEdgeFade} from './Type';
+import {Body, Eyebrow, Title, useEdgeFade} from './Type';
+import {Plate} from './Layout';
+import {Device} from './Device';
+import {SHOT_AR} from './theme';
 
 const MONO = '"JetBrains Mono", ui-monospace, monospace';
 
@@ -23,7 +26,7 @@ export const HomeMorph: React.FC = () => {
         <div style={{display: 'flex', width: '100%', height: '100%', alignItems: 'center'}}>
           <div style={{flex: '0 0 700px', paddingLeft: 110, display: 'flex', flexDirection: 'column', gap: 22}}>
             <Eyebrow delay={0}>Home</Eyebrow>
-            <Title delay={4} size={72}>One screen,{'\n'}two eras</Title>
+            <Title delay={4} size={72}>{'One screen,\ntwo eras'}</Title>
             <Body delay={12}>
               The wordmark becomes the bell. The pill becomes the accent, and gives up half its width
               to Plan. The meters bleed navy to red, and the fifth tab stops being you.
@@ -37,8 +40,10 @@ export const HomeMorph: React.FC = () => {
             </div>
           </div>
           <div style={{flex: 1, display: 'flex', justifyContent: 'center'}}>
-            <div style={{transform: `translateY(${interpolate(t, [0, 1], [0, -8])}px)`, filter: 'drop-shadow(0 40px 90px rgba(0,0,0,.6))'}}>
-              <HomeScreen width={430} t={t} goalFill={fill} />
+            <div style={{transform: `translateY(${interpolate(t, [0, 1], [0, -8])}px)`}}>
+              <Device height={940}>
+                <HomeScreen width={940 / SHOT_AR} t={t} goalFill={fill} />
+              </Device>
             </div>
           </div>
         </div>
@@ -87,7 +92,9 @@ export const GoalCloseUp: React.FC = () => {
             </div>
           </ScaleCtx.Provider>
           <div style={{display: 'flex', gap: 40, opacity: interpolate(t, [0.3, 1], [0, 1], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'})}}>
-            <Note n="01" v="The bar takes the accent — it used to fill neutral" />
+            {/* 0.8.9's meter was already accent-filled — in AccentNavy. What changed is which
+                colour the accent is, and that the row now carries the movement's implement. */}
+            <Note n="01" v="The meter bleeds navy to red — the accent moved" />
             <Note n="02" v="The implement rides alongside the name" />
           </div>
         </div>
@@ -222,7 +229,7 @@ export const WatchBeat: React.FC = () => {
         <div style={{display: 'flex', width: '100%', height: '100%', alignItems: 'center'}}>
           <div style={{flex: '0 0 720px', paddingLeft: 110, display: 'flex', flexDirection: 'column', gap: 22}}>
             <Eyebrow delay={0}>New in 0.9 · Wear OS</Eyebrow>
-            <Title delay={4} size={74}>Leave the phone{'\n'}in your bag</Title>
+            <Title delay={4} size={74}>{'Leave the phone\nin your bag'}</Title>
             <Body delay={12}>
               A companion watch app that mirrors the live session: adjust the load, log the set, and
               the rest timer runs on your wrist. Heart rate rides along, and it writes back through

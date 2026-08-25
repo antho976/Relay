@@ -26,18 +26,18 @@ const Swap: React.FC<{t: number; a: React.ReactNode; b: React.ReactNode; style?:
  * every change is a tween instead of a cut: the wordmark becomes the bell, the pill becomes the
  * accent CTA, the meters bleed navy to red — all on the same clock.
  */
-export const HomeScreen: React.FC<{width: number; t: number; goalFill?: number}> = ({
-  width, t, goalFill = 1,
+export const HomeScreen: React.FC<{width: number; t: number; goalFill?: number; badge?: string}> = ({
+  width, t, goalFill = 1, badge = '9+',
 }) => {
   const accent = mix(t, C.accentOld, C.accent);
   return (
     <Screen width={width}>
-      <Inner t={t} accent={accent} goalFill={goalFill} />
+      <Inner t={t} accent={accent} goalFill={goalFill} badge={badge} />
     </Screen>
   );
 };
 
-const Inner: React.FC<{t: number; accent: string; goalFill: number}> = ({t, accent, goalFill}) => {
+const Inner: React.FC<{t: number; accent: string; goalFill: number; badge: string}> = ({t, accent, goalFill, badge}) => {
   const k = useK();
   const G = [
     {name: 'Incline Barbell Bench', cur: 150, target: 160, fill: 0.94, glyph: 'barbell' as const},
@@ -62,7 +62,7 @@ const Inner: React.FC<{t: number; accent: string; goalFill: number}> = ({t, acce
                     padding: `${1 * k}px ${4 * k}px`, ...type('labelSmall', k, C.onBg),
                   }}
                 >
-                  9+
+                  {badge}
                 </div>
               </div>
             }

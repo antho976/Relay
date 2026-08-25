@@ -185,3 +185,32 @@ export const WatchRpe: React.FC<{size: number; rpe: number}> = ({size, rpe}) => 
     </WatchBody>
   );
 };
+
+/**
+ * The PR beat. Doctrine reserves gold for one event and the watch keeps that promise: a set that
+ * beats the record answers in `prGold`, never the accent, and the app's other confirmations stay
+ * red so this one reads as different in a way a louder red never could.
+ */
+export const WatchPr: React.FC<{size: number; lift?: string; value: string; on?: number}> = ({
+  size, lift = 'INCLINE BARBELL BENCH', value, on = 1,
+}) => {
+  const k = size / DP;
+  return (
+    <div style={{position: 'relative'}}>
+      <WatchBody size={size}>
+        <Center k={k} gap={4}>
+          <div style={{...WT.labelSmall(k), color: W.prGold, letterSpacing: 2 * k}}>NEW PR</div>
+          <div style={{...WT.figure(k), color: W.prGold, fontVariantNumeric: 'tabular-nums'}}>{value}</div>
+          <div style={{...WT.label(k), color: W.muted, textAlign: 'center'}}>{lift}</div>
+        </Center>
+      </WatchBody>
+      <div
+        style={{
+          position: 'absolute', inset: -10 * k, borderRadius: '50%', pointerEvents: 'none',
+          boxShadow: `0 0 ${70 * k * on}px ${10 * k * on}px rgba(227,179,65,${0.42 * on})`,
+          background: `radial-gradient(circle, rgba(227,179,65,${0.2 * on}) 0%, rgba(227,179,65,0) 68%)`,
+        }}
+      />
+    </div>
+  );
+};
