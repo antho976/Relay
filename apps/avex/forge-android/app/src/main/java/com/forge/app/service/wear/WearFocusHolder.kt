@@ -2,6 +2,7 @@ package com.forge.app.service.wear
 
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.update
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -23,14 +24,23 @@ class WearFocusHolder @Inject constructor() {
     private val _earlyDone = MutableStateFlow<EarlyDone?>(null)
     val earlyDone: StateFlow<EarlyDone?> = _earlyDone
 
+    /**
+     * Mark a slot finished early. Called from the ViewModel's scope and, via `WearSyncService`'s
+     * `runBlocking`, from a Binder thread — so the mutation is an atomic `update {}` rather than a
+     * read-modify-write. The old form could drop a slot mark when a FinishExerciseEarly landed
+     * while the wrist was reading, pinning the watch to an exercise the phone had already filed
+     * under done.
+     */
     fun markEarlyDone(sessionId: Long, slotId: String) {
-        _earlyDone.value = _earlyDone.value
-            ?.takeIf { it.sessionId == sessionId }
-            ?.let { it.copy(slotIds = it.slotIds + slotId) }
-            ?: EarlyDone(sessionId, setOf(slotId))
+        _earlyDone.update { current ->
+            current?.takeIf { it.sessionId == sessionId }
+                ?.let { it.copy(slotIds = it.slotIds + slotId) }
+                ?: EarlyDone(sessionId, setOf(slotId))
+        }
     }
 
-    /** The early-done slot ids for [sessionId] (empty when the marks belong to another session). */
+    /** The early-done slot ids for [sessionId] (empty when the marks belong to another session).
+     *  Read CROSS-THREAD — from the Binder thread inside `SetLogUseCase` / `WatchSessionMirror`. */
     fun earlyDoneFor(sessionId: Long): Set<String> =
         _earlyDone.value?.takeIf { it.sessionId == sessionId }?.slotIds ?: emptySet()
 }

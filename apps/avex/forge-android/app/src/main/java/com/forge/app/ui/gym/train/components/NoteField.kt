@@ -25,9 +25,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
-import androidx.hilt.navigation.compose.hiltViewModel
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.forge.app.ui.settings.SettingsViewModel
 import kotlinx.coroutines.delay
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.rememberUpdatedState
@@ -49,7 +46,16 @@ fun NoteField(
     currentPinnedNote: String = "",
     showTemplates: Boolean = true,
     modifier: Modifier = Modifier,
-    settingsViewModel: SettingsViewModel = hiltViewModel()
+    /**
+     * The user's quick-insert prompts, passed in by a caller that already has them.
+     *
+     * This used to default to `hiltViewModel<SettingsViewModel>()`, resolved against the DAY
+     * screen's back-stack entry — so opening an exercise card's NOTE panel mid-workout constructed
+     * the whole 793-line Settings graph there and started its collection of some fifteen DataStore
+     * flows plus DB flows, on the one screen that has to stay responsive between sets. The single
+     * call site passes `showTemplates = false` and never rendered a chip from any of it.
+     */
+    noteTemplates: Set<String> = emptySet()
 ) {
     var field by rememberSaveable(stateSaver = TextFieldValue.Saver) {
         mutableStateOf(TextFieldValue(initialNote.orEmpty(), TextRange(initialNote.orEmpty().length)))
@@ -59,9 +65,8 @@ fun NoteField(
     val committed = remember { mutableStateOf(initialNote.orEmpty()) }
     val latestText = rememberUpdatedState(field.text)
     val latestCommit = rememberUpdatedState(onCommit)
-    val settingsState by settingsViewModel.state.collectAsStateWithLifecycle()
-    val templates = remember(settingsState.noteTemplates, field.text) {
-        settingsState.noteTemplates
+    val templates = remember(noteTemplates, field.text) {
+        noteTemplates
             .map { it.trim() }
             .filter { it.isNotBlank() }
             .distinctBy { it.lowercase() }
