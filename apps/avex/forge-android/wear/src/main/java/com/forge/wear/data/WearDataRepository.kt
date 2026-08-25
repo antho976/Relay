@@ -127,17 +127,23 @@ class WearDataRepository private constructor(context: Context) : DataClient.OnDa
     fun sendTimerCommand(action: TimerCommand.Action): String =
         send(WearProtocol.PATH_CMD_TIMER, TimerCommand(commandId = newId(), action = action))
 
+    /**
+     * [commandId] lets the caller REUSE an id rather than mint one. The phone dedupes by command
+     * id, so re-sending a command that may already have landed is only safe when it carries the
+     * same id — a fresh UUID reads as a second, unrelated set. See SetView's retry handling.
+     */
     fun sendLogSet(
         sessionId: Long,
         exerciseId: String?,
         weightText: String?,
         reps: Int?,
-        confirmedJump: Boolean = false
+        confirmedJump: Boolean = false,
+        commandId: String? = null
     ): String =
         send(
             WearProtocol.PATH_CMD_LOG_SET,
             LogSetCommand(
-                commandId = newId(), sessionId = sessionId,
+                commandId = commandId ?: newId(), sessionId = sessionId,
                 exerciseId = exerciseId, weightText = weightText, reps = reps,
                 confirmedJump = confirmedJump
             )
