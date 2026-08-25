@@ -11,6 +11,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 
 @Suppress("ComplexMethod")
 internal fun DayViewModel.handleExerciseEvent(event: DayUiEvent) {
@@ -51,8 +53,15 @@ internal fun DayViewModel.handleExerciseEvent(event: DayUiEvent) {
             refreshExercise(event.exerciseId)
         }
         is DayUiEvent.UpdateNote -> viewModelScope.launch {
-            val leId = ensureLoggedExercise(event.exerciseId) ?: return@launch
-            workoutRepo.setNote(leId, event.note.ifBlank { null })
+            // The note also commits from NoteField's onDispose, which fires while the screen is
+            // tearing down — the moment viewModelScope is about to be cancelled. Without
+            // NonCancellable the write is dropped mid-flight, losing exactly the last-moment edit
+            // the dispose commit exists to save. The refresh afterwards stays cancellable: it only
+            // updates UI state that is going away anyway.
+            withContext(NonCancellable) {
+                val leId = ensureLoggedExercise(event.exerciseId) ?: return@withContext
+                workoutRepo.setNote(leId, event.note.ifBlank { null })
+            }
             refreshExercise(event.exerciseId)
         }
         is DayUiEvent.ToggleSkipped -> viewModelScope.launch {

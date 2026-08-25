@@ -29,6 +29,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.ui.settings.SettingsViewModel
 import kotlinx.coroutines.delay
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.rememberUpdatedState
 
 /**
  * Multiline note field for an exercise. Includes quick-insert template chips (#113)
@@ -52,7 +54,11 @@ fun NoteField(
     var field by rememberSaveable(stateSaver = TextFieldValue.Saver) {
         mutableStateOf(TextFieldValue(initialNote.orEmpty(), TextRange(initialNote.orEmpty().length)))
     }
-    val baseline = remember { initialNote.orEmpty() }
+    // What the database is known to hold. Starts at the incoming note and advances on each commit,
+    // so the dispose commit below can tell "unsaved" from "already written".
+    val committed = remember { mutableStateOf(initialNote.orEmpty()) }
+    val latestText = rememberUpdatedState(field.text)
+    val latestCommit = rememberUpdatedState(onCommit)
     val settingsState by settingsViewModel.state.collectAsStateWithLifecycle()
     val templates = remember(settingsState.noteTemplates, field.text) {
         settingsState.noteTemplates
@@ -64,9 +70,22 @@ fun NoteField(
     }
 
     LaunchedEffect(field.text) {
-        if (field.text != baseline) {
+        if (field.text != committed.value) {
             delay(500)
-            onCommit(field.text)
+            latestCommit.value(field.text)
+            committed.value = field.text
+        }
+    }
+
+    // The debounce above was the ONLY commit path, so anything typed in the last 500ms died with
+    // the composition — and this field's composition ends routinely, not exceptionally: the card
+    // auto-collapses when the final set is logged, and "move to next" unmounts it outright. Typing
+    // a note and immediately logging the last set therefore discarded the note, which is precisely
+    // when a note is most likely to be written.
+    DisposableEffect(Unit) {
+        onDispose {
+            val text = latestText.value
+            if (text != committed.value) latestCommit.value(text)
         }
     }
 
