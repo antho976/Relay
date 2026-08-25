@@ -9,7 +9,6 @@ import androidx.compose.ui.unit.Density
 import com.github.takahirom.roborazzi.RobolectricDeviceQualifiers
 import com.github.takahirom.roborazzi.RoborazziOptions
 import com.github.takahirom.roborazzi.captureRoboImage
-import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.warmup.WarmupEngine
 import com.forge.app.domain.warmup.WarmupExercise
 import com.forge.app.program.ExerciseUnit
@@ -27,9 +26,12 @@ import org.robolectric.annotation.GraphicsMode
  * Goldens for the pre-session warmup.
  *
  * The warmup is a one-screen, one-button surface, and the thing most likely to break it silently is
- * length: a heavy compound's full five-rung ramp plus prep rows is roughly twice the content of the
- * common case, and at 200% font scale that is where a capsule would clip or two rows would collide.
- * These pin both ends.
+ * length. The ramp section was removed on 2026-08-24, so the remaining variable is the prep drills
+ * themselves: a lower-body day draws a different (and longer-named) set than a push day, and at 200%
+ * font scale that is where a capsule would clip or two rows would collide. These pin both ends.
+ *
+ * The lb/kg and no-history cases went with the ramp — with no loads on screen, both rendered
+ * identically to [warmup] and asserted nothing.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -74,13 +76,11 @@ class WarmupScreenshotTest {
     @Composable
     private fun flow(
         protocol: com.forge.app.domain.warmup.WarmupProtocol,
-        unit: WeightUnit,
         checked: Set<String> = emptySet()
     ) {
         WarmupFlow(
             protocol = protocol,
             checked = checked,
-            weightUnit = unit,
             onToggle = {},
             onStart = {},
             onDisableToday = {},
@@ -105,32 +105,14 @@ class WarmupScreenshotTest {
         compose.onRoot().captureRoboImage("src/test/screenshots/$name-200.png", options)
     }
 
-    @Test fun warmup() = shoot("warmup") { flow(typical, WeightUnit.LB) }
-    @Test fun warmupHeavy() = shoot("warmup-heavy") { flow(heaviest, WeightUnit.LB) }
-    @Test fun warmupMetric() = shoot("warmup-kg") { flow(heaviest, WeightUnit.KG) }
-    @Test fun warmupLarge() = shootLarge("warmup") { flow(typical, WeightUnit.LB) }
-    @Test fun warmupHeavyLarge() = shootLarge("warmup-heavy") { flow(heaviest, WeightUnit.LB) }
+    @Test fun warmup() = shoot("warmup") { flow(typical) }
+    @Test fun warmupHeavy() = shoot("warmup-heavy") { flow(heaviest) }
+    @Test fun warmupLarge() = shootLarge("warmup") { flow(typical) }
+    @Test fun warmupHeavyLarge() = shootLarge("warmup-heavy") { flow(heaviest) }
 
     /** Part-ticked: the state the user is actually looking at halfway through. */
     @Test fun warmupPartlyTicked() = shoot("warmup-ticked") {
-        flow(typical, WeightUnit.LB, checked = typical.steps.take(2).map { it.id }.toSet())
+        flow(typical, checked = typical.steps.take(2).map { it.id }.toSet())
     }
 
-    /**
-     * No history on the first lift, so the engine can only offer an unloaded rehearsal set. The ramp
-     * section must be absent rather than showing "Bodyweight x 3" under a dumbbell lift's name.
-     */
-    @Test fun warmupNoHistory() = shoot("warmup-no-history") {
-        flow(
-            WarmupEngine.build(
-                listOf(
-                    WarmupExercise(
-                        "a", "DB Bench Press", MuscleGroup.CHEST, ExerciseUnit.DUMBBELL,
-                        isCompound = true, workingLoad = null, targetReps = 8
-                    )
-                )
-            ),
-            WeightUnit.LB
-        )
-    }
 }

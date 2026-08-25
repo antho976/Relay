@@ -18,8 +18,8 @@ The local and canonical checkouts were also four commits behind GitHub `main` at
 
 The local release implementation is complete on an updated `main` base:
 
-- Phone and Wear release lint now report zero errors. The remaining output is 123 phone warnings, 12 phone hints, 9 Wear warnings, and 4 Wear hints.
-- The phone, shared, and Wear unit-test gate passes: 1,040 tests, zero failures, zero errors, and zero skipped tests.
+- Phone and Wear release lint now report zero errors. The remaining output is 122 phone warnings, 12 phone hints, 9 Wear warnings, and 4 Wear hints.
+- The phone, shared, and Wear unit-test gate passes: 1,038 tests, zero failures, zero errors, and zero skipped tests.
 - All 25 Roborazzi baselines affected by the intentional red default accent were inspected, refreshed, and verified, including the 200% font-scale and AMOLED variants.
 - Phone and Wear R8 release bundles build successfully. Both remain unsigned without the registered Play upload key.
 - Health Connect privacy actions now open one complete in-app policy. The repository policy and release checklist document the same permissions, retention, deletion, and sharing behavior.

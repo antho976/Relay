@@ -24,12 +24,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.forge.app.domain.units.WeightUnit
-import com.forge.app.domain.units.formatWeight
 import com.forge.app.domain.warmup.WarmupDrill
 import com.forge.app.domain.warmup.WarmupProtocol
-import com.forge.app.domain.warmup.WarmupRampSet
-import com.forge.app.program.ExerciseUnit
 import com.forge.app.ui.common.EditorialHeader
 import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.common.clickableLabeled
@@ -46,7 +42,6 @@ import com.forge.app.ui.common.clickableLabeled
 fun WarmupFlow(
     protocol: WarmupProtocol,
     checked: Set<String>,
-    weightUnit: WeightUnit,
     onToggle: (String) -> Unit,
     onStart: () -> Unit,
     onDisableToday: () -> Unit,
@@ -58,10 +53,6 @@ fun WarmupFlow(
     val accent = MaterialTheme.colorScheme.primary
 
     val prep = protocol.steps.filterIsInstance<WarmupDrill>()
-    // Only a ramp with real loads earns its section. Without a working weight the engine can only
-    // offer an unloaded rehearsal set, and "Bodyweight x 3" under a dumbbell lift's name reads as a
-    // bug rather than as advice.
-    val ramp = protocol.steps.filterIsInstance<WarmupRampSet>().filter { it.load != null }
 
     Column(modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
 
@@ -73,23 +64,6 @@ fun WarmupFlow(
             Spacer(Modifier.height(10.dp))
             prep.forEach {
                 WarmupRow(it.name, it.prescription, it.id in checked, onBg, muted, accent) {
-                    onToggle(it.id)
-                }
-            }
-        }
-
-        if (ramp.isNotEmpty()) {
-            Spacer(Modifier.height(20.dp))
-            // Named by the lift, so the numbers below need no second label.
-            EditorialHeader(
-                label = "Ramp · ${ramp.first().exerciseName}",
-                muted = muted,
-                accent = accent
-            )
-            Spacer(Modifier.height(6.dp))
-            ramp.forEach {
-                val label = rampLoadLabel(it, weightUnit)
-                WarmupRow(label, "${it.percentOfWorking}%", it.id in checked, onBg, muted, accent) {
                     onToggle(it.id)
                 }
             }
@@ -203,22 +177,6 @@ private fun OptOut(label: String, muted: Color, onClick: () -> Unit) {
             .clickableLabeled(label = label, onClick = onClick)
             .padding(horizontal = 10.dp, vertical = 15.dp)
     )
-}
-
-/**
- * The ramp set's load and reps. Plate machines read in plates because that is what the user loads;
- * everything else goes through `WeightFormatter` so lb, kg and stones all render correctly (§11).
- */
-private fun rampLoadLabel(step: WarmupRampSet, weightUnit: WeightUnit): String {
-    val load = step.load ?: return "Bodyweight × ${step.reps}"
-    val weight = when (step.unit) {
-        ExerciseUnit.PLATES -> {
-            val plates = load.toInt()
-            if (plates == 1) "1 plate" else "$plates plates"
-        }
-        else -> formatWeight(load, weightUnit)
-    }
-    return "$weight × ${step.reps}"
 }
 
 /** Matches Home's CTA corner so the two start buttons read as the same control. */

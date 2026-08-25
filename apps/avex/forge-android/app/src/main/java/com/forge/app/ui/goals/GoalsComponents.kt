@@ -157,7 +157,13 @@ internal fun goalCaption(
  * the meter measures. The SAME component renders Home's GOALS section, Cardio's and the Profile's
  * trims, and the Goals screen's rows, so the four read as one surface.
  *
- * ## The bar is neutral (2026-08-16)
+ * ## The bar is accent-filled (2026-08-24)
+ *
+ * Reverted to the accent for EVERY goal at Antho's request for the 0.9 release material —
+ * a neutral bar reads as an unfilled control in the launch video. A reached goal still
+ * names itself in words, so the reached/in-progress split survives without colour.
+ *
+ * ## Previously: the bar was neutral (2026-08-16)
  *
  * It used to fill in the accent for EVERY goal. On Home that meant three warm bars stacked under a
  * warm CTA, and the accent stopped flagging anything — which is the failure mode Antho named on the
@@ -251,7 +257,7 @@ internal fun GoalProgressLine(
                 )
             }
             Spacer(Modifier.height(12.dp))
-            GoalMeter(frac, achieved, onBg, accent, outline)
+            GoalMeter(frac, accent, outline)
             if (caption != null) {
                 Spacer(Modifier.height(8.dp))
                 Text(
@@ -279,7 +285,7 @@ internal fun GoalProgressLine(
  * every empty goal look like an interactive element it is not.)
  */
 @Composable
-private fun GoalMeter(frac: Float, achieved: Boolean, onBg: Color, accent: Color, outline: Color) {
+private fun GoalMeter(frac: Float, accent: Color, outline: Color) {
     Box(
         Modifier.fillMaxWidth().height(10.dp)
             .clip(RoundedCornerShape(50)).background(outline.copy(alpha = 0.25f))
@@ -287,7 +293,7 @@ private fun GoalMeter(frac: Float, achieved: Boolean, onBg: Color, accent: Color
         Box(
             Modifier.fillMaxWidth(frac).fillMaxHeight()
                 .clip(RoundedCornerShape(50))
-                .background(if (achieved) accent else onBg)
+                .background(accent)
         )
     }
 }
