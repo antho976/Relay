@@ -1,4 +1,4 @@
-# Forge — What's Inside
+# Avex: What's Inside
 
 *Your personal gym coach. Fully offline — no account, no internet, no ads.*
 
@@ -35,12 +35,12 @@
 - Fatigue & recovery scoring
 - Daily readiness
 - Training insights
-- Coach lab — see what it's tracking
+- Coach lab: see what it is tracking
 - Honest "still learning" status
 
 ## ❤️ Recovery
-- Health Connect sync (sleep + resting heart rate)
-- Bodyweight sync — import from a smart scale, or write your weigh-ins back
+- Health Connect sync for sleep, heart rate, HRV, steps, exercise, distance, calories, weight, and lean mass
+- Bodyweight sync: import from a smart scale, or write your weigh-ins back
 - Quick-log your bodyweight from the Stats Body tab
 - Post-workout mood check-ins
 - Soreness / sick-day flags
@@ -86,6 +86,21 @@
 - Lifetime stats
 - Shareable rank card
 - Monthly & yearly recaps
+- Monthly activity grid and streak history
+
+## ⌚ Wear OS
+- Log sets and RPE from the watch
+- Live workout heart rate and calories
+- Rest timer controls and wrist haptics
+- Today and week tiles
+- Session, readiness, and rest-timer complications
+- Disconnected operation with phone reconciliation
+
+## 📚 Academy
+- 35 offline training lessons
+- Open gallery with no unlock gates
+- Illustrated lesson and article reader
+- Training, recovery, cardio, and coaching curriculum
 
 ## 🔔 Reminders
 - Daily training reminder

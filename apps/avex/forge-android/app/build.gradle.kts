@@ -27,18 +27,15 @@ val hasReleaseKeystore = keystorePropertiesFile.exists() &&
 
 android {
     namespace = "com.forge.app"
-    // compileSdk 36 (Android 16) is required by Health Connect 1.1.0. It only changes which APIs
-    // are available at COMPILE time — targetSdk stays 35, so runtime behavior, permissions and
-    // minSdk are unchanged. Bumping compile without bumping target is the supported, low-risk way
-    // to adopt a library that needs newer APIs.
+    // Android 16 is both the Health Connect compile floor and the phone release target.
     compileSdk = 36
 
     defaultConfig {
         applicationId = "com.quietsoftware.avex"
         minSdk = 26
-        targetSdk = 35
-        versionCode = 89
-        versionName = "0.8.8.3"
+        targetSdk = 36
+        versionCode = 90
+        versionName = "0.9"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }

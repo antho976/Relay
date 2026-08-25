@@ -1,72 +1,61 @@
-# Forge — Android (native)
+# Avex Android
 
-Native Kotlin/Compose rewrite of the React/Expo prototype that lives in `../forge/`.
-The prototype is the **feature spec**, not the build target — see [`../forge/src/WorkoutTracker.web.jsx`](../forge/src/WorkoutTracker.web.jsx).
+Avex is a fully offline gym tracker and adaptive training coach built with Kotlin and Jetpack
+Compose. The Gradle project contains the phone app, Wear OS companion, shared protocol/domain code,
+and baseline-profile module.
 
-## Status — Phase 2 complete
+## Modules
 
-Phases 0–2 are done. The skeleton builds and installs, the static program data is in code, and the Room layer (8 entities, 8 DAOs, 4 repositories, all Hilt-wired) is in place. UI is still all placeholders — set logging lands in Phase 3.
+- `:app`: phone app, Room database, Health Connect, training, coach, Academy, Profile, exports
+- `:wear`: Wear OS set logging, live heart rate, tiles, complications, and phone pairing
+- `:shared`: pure Kotlin protocol, timer, and weight-step code used by phone and watch
+- `:baselineprofile`: Macrobenchmark and baseline-profile generation
 
-What is wired up:
+The shipping application ID is `com.quietsoftware.avex`. Internal `com.forge.*` packages, database
+names, settings keys, notification IDs, and legacy import names remain compatibility identifiers.
 
-- Gradle (Kotlin DSL) + version catalog at [`gradle/libs.versions.toml`](gradle/libs.versions.toml)
-- Compose (Material 3 dark theme), Activity, single-Activity nav
-- Hilt DI (Application + Activity entry points, ClockModule, DatabaseModule)
-- Room schema v2 with 8 entities — Session, LoggedExercise, LoggedSet, ExerciseCustomization, DayNameOverride, UnlockedTrophy, CardioEntry, MoodEntry. `fallbackToDestructiveMigration()` until first real workout is logged.
-- 4 repositories — WorkoutRepository, CustomizationRepository, CardioRepository, TrophyRepository
-- Static program in [`program/`](app/src/main/java/com/forge/app/program/) — Program (4 days, 25 exercises), Swaps (50 variants across 11 muscle groups), Trophies (21), Tutorials (per-exercise text)
-- DataStore Preferences dependency (not yet used — wires in Phase 3)
-- Coroutines + Lifecycle Compose integration
-- 5 placeholder screens routed through `ForgeNavHost`
+## Local setup
 
-## First-time setup
+Open `forge-android/` in Android Studio or use the wrapper from this directory:
 
-1. Open `forge-android/` in Android Studio (Iguana or newer).
-2. Let it run "Sync Project with Gradle Files" — first sync downloads ~1 GB of dependencies and creates the Gradle wrapper jar (~10 min).
-3. Build & Run on an emulator or your phone (USB-debug + Run).
-
-The Compose-side `ForgeTheme` governs the in-app look. The XML `Theme.Forge` only exists to set the window background so there's no white flash on cold launch.
-
-## Layout
-
-```
-app/src/main/java/com/forge/app/
-├── ForgeApp.kt           # @HiltAndroidApp
-├── MainActivity.kt       # @AndroidEntryPoint, hosts ForgeNavHost
-├── core/time/            # Injectable Clock
-├── data/db/              # Room: ForgeDatabase + entities + dao
-├── di/                   # Hilt modules (Database, Clock)
-└── ui/
-    ├── theme/            # Color, Type, Shape, ForgeTheme
-    ├── nav/              # Routes, ForgeNavHost
-    ├── common/           # PlaceholderScreen (gone by end of Phase 3)
-    ├── welcome/  overview/  cardio/  trophies/
-    └── gym/train/        # DayListScreen, DayScreen
+```fish
+set -lx ANDROID_HOME /home/anthony/Android/Sdk
+set -lx ANDROID_SDK_ROOT /home/anthony/Android/Sdk
+./gradlew :app:assembleDebug :wear:assembleDebug --no-daemon
 ```
 
-## Phase plan
+Install the phone and watch debug APKs with matching `.debug` application IDs so the Wear Data
+Layer can pair them.
 
-| # | Phase | Outcome |
-|---|---|---|
-| **0** ✅ | Scaffold | App builds, installs, navigates between placeholder screens |
-| **1** ✅ | Static program data | `program/` package with PROGRAM, SWAPS, TROPHIES, tutorials |
-| **2** ✅ | Room schema + DAOs + repositories | DB persists sessions, sets, customizations, cardio, moods, trophies |
-| **3** ◀ next | **Gym training feature** | Log a real workout end-to-end on the phone |
-| 4 | Overview screen | Real weekly stats |
-| 5 | Stats subtab | Heatmap, strength curves, weekly volume, PR timeline |
-| 6 | Trophies | Catalog + unlock evaluator + animation |
-| 7 | Cardio | Manual entry, recent list, weekly stats |
-| 8 | Polish | Haptics on PR, background notification for rest timer, export, mood prompt |
-| 9 | Nutrition | Planned separately when we get there |
+## Verification
 
-## Conventions
+```fish
+./gradlew :app:testDebugUnitTest :shared:test :wear:testDebugUnitTest \
+  :app:verifyRoborazziDebug :app:lintRelease :wear:lintRelease --no-daemon
+```
 
-- One Compose screen per file. Screens >~300 lines → split sub-components into a sibling `components/` package.
-- One ViewModel per screen. ViewModels >~150 lines → extract use-case logic into `domain/`.
-- One Room entity per file in `data/db/entities/`; one DAO per file in `data/db/dao/`.
-- KSP, not KAPT (faster builds, Kotlin-native).
-- Modules: `:app` (phone) + `:wear` (watch app, W1) + `:shared` (pure Kotlin — the wear protocol,
-  rest-timer core and weight-step table both apps compile) + `:baselineprofile`. Everything else
-  stays in `:app`; `:shared` holds ONLY what both apps need (no Room, no Hilt, no UI).
-- No chart library (custom Compose `Canvas`).
-- No analytics, no crash reporting, no cloud sync.
+The doctrine and screenshot tests cover Compose rules plus 100% and 200% font-scale recipes. Device
+checks still matter for migrations, Health Connect, notifications, the widget, biometrics, camera,
+and phone-watch behavior.
+
+## Release signing
+
+Copy `keystore.properties.example` to the gitignored `keystore.properties` and reference the
+registered Play upload key. With a complete file, both release modules use that signing config.
+Without it, local and CI release builds remain unsigned and are not uploadable.
+
+Build signed bundles with:
+
+```fish
+./gradlew :app:bundleRelease :wear:bundleRelease --no-daemon
+```
+
+The full Play checklist lives in [`.claude/RELEASING.md`](../.claude/RELEASING.md).
+
+## Architecture conventions
+
+- Compose UI reads values from `ui/theme/` and follows `.claude/DESIGN.md`.
+- KSP is used for Room and Hilt.
+- Room migrations and exported schemas are versioned in `app/schemas/`.
+- Avex has no analytics, crash-reporting SDK, cloud sync, or `INTERNET` permission.
+- Charts use Compose `Canvas`; no chart dependency is included.

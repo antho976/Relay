@@ -7,8 +7,9 @@ import java.time.LocalDate
 import java.time.ZoneId
 
 /**
- * Imports Avex's own JSON export (#GYMAP-17) — `forge_export.json` (full) or `forge_weekly_export.json`
- * (weekly). These exports are explicitly lossy and one-way (nothing read them back before), so this
+ * Imports Avex's own JSON export (#GYMAP-17), including new `avex_*.json` files and legacy
+ * `forge_*.json` files. Parsing is content-based, so the branding rename does not strand an older
+ * export. These exports are explicitly lossy and one-way (nothing read them back before), so this
  * re-imports the sessions/exercises/sets they DO contain: it lets a user move history between two
  * installs via the plain export, alongside the authoritative .zip backup. Weights are already stored
  * in pounds, so no unit conversion happens here.

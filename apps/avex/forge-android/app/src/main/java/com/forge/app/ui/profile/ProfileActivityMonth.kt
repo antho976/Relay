@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -25,7 +26,6 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.forge.app.ui.theme.MonoSectionAnchor
 import java.time.DayOfWeek
 import java.time.LocalDate
@@ -175,8 +175,7 @@ internal fun ProfileActivityMonth(
             Text(
                 "$monthName ${month.year}",
                 style = MaterialTheme.typography.labelSmall,
-                color = muted,
-                maxLines = 1
+                color = muted
             )
         }
         Spacer(Modifier.height(14.dp))
@@ -239,12 +238,15 @@ internal fun ProfileActivityMonth(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.Bottom
         ) {
-            Row(verticalAlignment = Alignment.Bottom) {
+            FlowRow(
+                modifier = Modifier.weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(20.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                itemVerticalAlignment = Alignment.Bottom
+            ) {
                 MonthReading("$activeDays", "ACTIVE DAYS", onBg, muted)
-                Spacer(Modifier.width(20.dp))
                 MonthReading("$sessions", if (sessions == 1) "SESSION" else "SESSIONS", onBg, muted)
                 streak?.let {
-                    Spacer(Modifier.width(20.dp))
                     MonthReading(it.figure, it.noun, onBg, muted)
                 }
             }
@@ -253,11 +255,9 @@ internal fun ProfileActivityMonth(
                     it,
                     style = MaterialTheme.typography.labelSmall,
                     color = muted,
-                    fontSize = 9.sp,
                     // No `maxLines = 1` (§14): two mono words with the whole right margin to
                     // themselves have nothing to truncate for, and clamping them is how a caption
                     // silently loses its figure at a large font scale.
-                    modifier = Modifier.height(18.dp)
                 )
             }
         }
@@ -308,7 +308,6 @@ private fun WeekdayHeader(muted: Color) {
                 DayOfWeek.of(day).getDisplayName(TextStyle.NARROW, Locale.getDefault()).uppercase(),
                 style = MaterialTheme.typography.labelMedium,
                 color = muted,
-                maxLines = 1,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.weight(1f)
             )
@@ -319,15 +318,12 @@ private fun WeekdayHeader(muted: Color) {
 @Composable
 private fun MonthReading(figure: String, noun: String, onBg: Color, muted: Color) {
     Row(verticalAlignment = Alignment.Bottom) {
-        Text(figure, style = MaterialTheme.typography.headlineSmall, color = onBg, maxLines = 1)
+        Text(figure, style = MaterialTheme.typography.headlineSmall, color = onBg)
         Spacer(Modifier.width(5.dp))
         Text(
             noun,
             style = MaterialTheme.typography.labelSmall,
-            color = muted,
-            fontSize = 9.sp,
-            maxLines = 1,
-            modifier = Modifier.height(18.dp)
+            color = muted
         )
     }
 }
@@ -340,7 +336,7 @@ private fun MonthReading(figure: String, noun: String, onBg: Color, muted: Color
 @Composable
 private fun MonthRampLegend(empty: Color, hue: Color, muted: Color, modifier: Modifier = Modifier) {
     Row(modifier, verticalAlignment = Alignment.CenterVertically) {
-        Text("LESS", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 8.sp)
+        Text("LESS", style = MaterialTheme.typography.labelSmall, color = muted)
         Spacer(Modifier.width(6.dp))
         Box(Modifier.size(MONTH_SWATCH).clip(MONTH_SWATCH_SHAPE).background(empty))
         MONTH_LIT_RUNGS.forEach { rung ->
@@ -348,6 +344,6 @@ private fun MonthRampLegend(empty: Color, hue: Color, muted: Color, modifier: Mo
             Box(Modifier.size(MONTH_SWATCH).clip(MONTH_SWATCH_SHAPE).background(lerp(empty, hue, rung)))
         }
         Spacer(Modifier.width(6.dp))
-        Text("MORE", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 8.sp)
+        Text("MORE", style = MaterialTheme.typography.labelSmall, color = muted)
     }
 }

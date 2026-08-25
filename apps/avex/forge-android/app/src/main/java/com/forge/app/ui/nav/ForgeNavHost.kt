@@ -65,7 +65,7 @@ import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.trophies.TrophiesScreen
 
 @Composable
-fun ForgeNavHost(initialDayKey: String? = null) {
+fun ForgeNavHost(initialDayKey: String? = null, privacyPolicyRequest: Int = 0) {
     val nav = rememberNavController()
     // App-wide "push" navigation (Material shared-axis X): a short directional slide + fade
     // rather than a full-width slide-and-fade — the eye travels less so it reads snappier.
@@ -96,6 +96,11 @@ fun ForgeNavHost(initialDayKey: String? = null) {
     LaunchedEffect(initialDayKey) {
         val key = initialDayKey ?: return@LaunchedEffect
         if (key in com.forge.app.program.Program.dayKeys) nav.navigate(Routes.gymDay(key))
+    }
+    LaunchedEffect(privacyPolicyRequest) {
+        if (privacyPolicyRequest > 0) {
+            nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.PrivacyPolicy.name))
+        }
     }
     val initialHubPage = if (initialDayKey?.startsWith("cardio") == true) BottomTab.CARDIO.ordinal else BottomTab.HOME.ordinal
 

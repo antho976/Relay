@@ -29,6 +29,10 @@ longer a second alignment to disagree with.
 The bell replaced the `• Avex` wordmark on 2026-07-27; "Avex" now appears only in the cold-launch
 `AvexIntro` beat and on exported artifacts (rank / before-after cards, the PDF footer).
 
+**Privacy policy** is a focused Settings reading page linked from About. Both Health Connect
+privacy actions deep-link to that same page, so Android's rationale surface and the in-app policy
+cannot drift into separate copies.
+
 ### Notifications — `ui/notifications`
 
 The one feed for everything that used to be a page-level banner, reached from any screen's bell.

@@ -14,6 +14,28 @@ The release is blocked by failing CI, release-lint errors with real minimum-SDK 
 
 The local and canonical checkouts were also four commits behind GitHub `main` at audit time. The latest remote changes do not appear to remove the blockers below, but final fixes and validation must run from an updated branch.
 
+## Remediation update: August 24, 2026
+
+The local release implementation is complete on an updated `main` base:
+
+- Phone and Wear release lint now report zero errors. The remaining output is 122 phone warnings, 12 phone hints, 9 Wear warnings, and 4 Wear hints.
+- The phone, shared, and Wear unit-test gate passes: 1,038 tests, zero failures, zero errors, and zero skipped tests.
+- All 25 Roborazzi baselines affected by the intentional red default accent were inspected, refreshed, and verified, including the 200% font-scale and AMOLED variants.
+- Phone and Wear R8 release bundles build successfully. Both remain unsigned without the registered Play upload key.
+- Health Connect privacy actions now open one complete in-app policy. The repository policy and release checklist document the same permissions, retention, deletion, and sharing behavior.
+- Phone now targets API 36. Phone and Wear report version `0.9` with incremented version codes `90` and `100090`.
+- Release lint is an explicit CI gate. Public exports, widget copy, rank-card output, and visible trophies use Avex branding while compatibility-sensitive `com.forge.*`, database, preference, and work identifiers remain unchanged.
+- Profile activity content wraps at large font scales and uses doctrine typography and alpha tokens. The doctrine allowlist was paid down by five buckets.
+- Machine-local `.env`, `.idea`, Gradle Kotlin state, and generated release artifacts are ignored. Previously tracked copies were removed from the repository.
+
+The release still must not be uploaded until the external gates are complete:
+
+1. Configure `forge-android/keystore.properties` with the registered Play upload key, rebuild both AABs, and verify their signer certificates.
+2. Push this branch and require a green GitHub Actions run for the exact release commit.
+3. Publish the matching privacy-policy URL and complete Play Data Safety, Health Apps, content-rating, tester, and store-listing declarations.
+4. Run clean-install and supported-upgrade tests on a phone, plus phone and Wear pairing, Health Connect rationale, permission, revocation, and foreground heart-rate tests. No isolated AVD was available during remediation, so the connected personal phone was not disturbed.
+5. Confirm Play has no supported install base on Room schemas 1 through 11 before relying on the destructive fallback for those versions.
+
 ## P0 release blockers
 
 | Area | Blocker | Required result |

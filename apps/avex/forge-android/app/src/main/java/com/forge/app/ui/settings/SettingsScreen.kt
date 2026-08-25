@@ -53,6 +53,7 @@ enum class SettingsPage(val title: String) {
     Backup("Backup"),
     Storage("Storage"),
     WhatsNew("What's new"),
+    PrivacyPolicy("Privacy policy"),
     About("About")
 }
 
@@ -302,9 +303,11 @@ fun SettingsScreen(
                 SettingsPage.Backup -> BackupPage(viewModel, Modifier.padding(inner))
                 SettingsPage.Storage -> StoragePage(viewModel, Modifier.padding(inner))
                 SettingsPage.WhatsNew -> WhatsNewPage(Modifier.padding(inner))
+                SettingsPage.PrivacyPolicy -> PrivacyPolicyPage(Modifier.padding(inner))
                 SettingsPage.About -> AboutPage(
                     Modifier.padding(inner), viewModel,
-                    onOpenExport = { showDataDialog = true }
+                    onOpenExport = { showDataDialog = true },
+                    onOpenPrivacyPolicy = { currentPage = SettingsPage.PrivacyPolicy }
                 )
             }
         }
@@ -320,9 +323,9 @@ fun SettingsScreen(
     if (showDataDialog) {
         DataExportDialog(
             viewModel = viewModel,
-            onBackup = { backupLauncher.launch("forge_backup_$dateStamp.zip") },
+            onBackup = { backupLauncher.launch("avex_backup_$dateStamp.zip") },
             onRestore = { restoreLauncher.launch(arrayOf("*/*")) },
-            onExportCrashLogs = { crashLauncher.launch("forge_crash_logs_$dateStamp.zip") },
+            onExportCrashLogs = { crashLauncher.launch("avex_crash_logs_$dateStamp.zip") },
             onDismiss = { showDataDialog = false }
         )
     }

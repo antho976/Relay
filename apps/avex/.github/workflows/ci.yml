@@ -1,6 +1,6 @@
 name: CI
 
-# Builds Forge and runs the JVM unit-test suite on every push/PR to main.
+# Builds Avex and runs the JVM unit-test suite on every push/PR to main.
 # Activates automatically once this repo has a GitHub remote — no setup needed.
 #
 # Notes for this project specifically:
@@ -72,13 +72,16 @@ jobs:
       - name: Assemble debug APKs (phone + wear)
         run: gradle -p forge-android assembleDebug --no-daemon
 
+      - name: Release lint (phone + wear)
+        run: gradle -p forge-android :app:lintRelease :wear:lintRelease --no-daemon
+
       - name: Assemble release (unsigned, exercises R8)
         run: gradle -p forge-android assembleRelease --no-daemon
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: forge-debug-apk
+          name: avex-debug-apk
           path: |
             forge-android/app/build/outputs/apk/debug/*.apk
             forge-android/wear/build/outputs/apk/debug/*.apk

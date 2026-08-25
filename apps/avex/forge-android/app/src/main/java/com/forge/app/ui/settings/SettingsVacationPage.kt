@@ -170,7 +170,8 @@ private fun DateRow(label: String, ms: Long?, onClick: () -> Unit) {
         // onBg, not accent: §14 bans accent-coloured text (four of five presets fail AA). The row
         // is already clickable, so the value does not need colour to read as editable.
         Text(
-            ms?.let { LocalDate.ofInstant(Instant.ofEpochMilli(it), ZoneOffset.UTC).format(DISPLAY_FMT) } ?: "Pick a date",
+            ms?.let { Instant.ofEpochMilli(it).atZone(ZoneOffset.UTC).toLocalDate().format(DISPLAY_FMT) }
+                ?: "Pick a date",
             style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onBackground
         )
     }
@@ -178,7 +179,7 @@ private fun DateRow(label: String, ms: Long?, onClick: () -> Unit) {
 
 /** DatePicker selects a UTC midnight instant; key it as the calendar date in UTC. */
 private fun toKey(ms: Long): String =
-    LocalDate.ofInstant(Instant.ofEpochMilli(ms), ZoneOffset.UTC).toString()
+    Instant.ofEpochMilli(ms).atZone(ZoneOffset.UTC).toLocalDate().toString()
 
 private fun formatRange(start: String, end: String): String {
     val s = runCatching { LocalDate.parse(start).format(DISPLAY_FMT) }.getOrDefault(start)

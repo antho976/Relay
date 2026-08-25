@@ -26,8 +26,8 @@ android {
         applicationId = "com.quietsoftware.avex"
         minSdk = 30 // Wear OS 3+ (every Galaxy Watch since 2021; the plan's locked floor).
         targetSdk = 35
-        versionCode = 100_089
-        versionName = "0.8.8.3"
+        versionCode = 100_090
+        versionName = "0.9"
     }
 
     signingConfigs {
@@ -44,6 +44,7 @@ android {
     buildTypes {
         release {
             isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             if (hasReleaseKeystore) signingConfig = signingConfigs.getByName("release")
         }

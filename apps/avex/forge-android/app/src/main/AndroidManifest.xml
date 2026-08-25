@@ -69,7 +69,7 @@
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
-        android:supportsRtl="false"
+        android:supportsRtl="true"
         android:theme="@style/Theme.Forge">
 
         <activity
@@ -80,8 +80,8 @@
             android:theme="@style/Theme.Forge.Splash">
             <!-- The MAIN/LAUNCHER filter lives on the .icon.* activity-aliases below (selectable app
                  icon), not here, so switching the enabled alias swaps the home-screen icon. -->
-            <!-- Health Connect permission rationale (Android 13 and below): HC opens this when the
-                 user taps "why does this app want my data". We just bring up Forge. -->
+            <!-- Health Connect permission rationale (Android 13 and below): MainActivity routes
+                 this action directly to the complete in-app privacy policy. -->
             <intent-filter>
                 <action android:name="androidx.health.connect.action.SHOW_PERMISSIONS_RATIONALE" />
             </intent-filter>
@@ -503,7 +503,7 @@
             </intent-filter>
         </activity-alias>
 
-        <!-- Health Connect permission rationale (Android 14+): same purpose, framework-routed. -->
+        <!-- Health Connect permission rationale (Android 14+): same policy, framework-routed. -->
         <activity-alias
             android:name="ViewPermissionUsageActivity"
             android:exported="true"
