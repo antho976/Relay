@@ -33,18 +33,28 @@ const WT = {
 
 const DP = 227; // the round display, in dp
 
-export const WatchBody: React.FC<{size: number; children: React.ReactNode; glow?: number}> = ({
-  size, children, glow = 0,
-}) => {
+export const WatchBody: React.FC<{
+  size: number; children: React.ReactNode; glow?: number;
+  /** 0..1 — walks the specular band around the case and tilts the body a degree or two. */
+  light?: number;
+}> = ({size, children, glow = 0, light = 0.35}) => {
   const k = size / DP;
+  const ang = 150 + light * 110;
+  const tilt = (light - 0.5) * 5;
   return (
-    <div style={{position: 'relative', width: size, height: size, flex: '0 0 auto'}}>
+    <div
+      style={{
+        position: 'relative', width: size, height: size, flex: '0 0 auto',
+        transform: `perspective(${size * 3.4}px) rotateY(${tilt}deg) rotateX(${-tilt * 0.5}deg)`,
+        transformStyle: 'preserve-3d',
+      }}
+    >
       {/* case */}
       <div
         style={{
           position: 'absolute', inset: -10 * k, borderRadius: '50%',
-          background: 'linear-gradient(150deg,#2a2724,#141210 55%,#0b0a09)',
-          boxShadow: `0 26px 60px rgba(0,0,0,.65), inset 0 0 0 ${1.5 * k}px #3a352f`,
+          background: `linear-gradient(${ang}deg,#3a3632 0%,#232019 26%,#141210 58%,#0b0a09 100%)`,
+          boxShadow: `0 30px 70px rgba(0,0,0,.7), inset 0 0 0 ${1.5 * k}px #423c35`,
         }}
       />
       {/* crown */}
@@ -63,6 +73,21 @@ export const WatchBody: React.FC<{size: number; children: React.ReactNode; glow?
         }}
       >
         <div style={{width: '100%', padding: `0 ${20 * k}px`, boxSizing: 'border-box'}}>{children}</div>
+        {/* cover glass: one soft specular band, clipped to the display so it curves with it */}
+        <div
+          style={{
+            position: 'absolute', inset: 0, borderRadius: '50%', pointerEvents: 'none',
+            background:
+              `linear-gradient(${ang - 40}deg, rgba(255,255,255,0.085) 0%, rgba(255,255,255,0.028) 18%,` +
+              ' rgba(255,255,255,0) 42%, rgba(255,255,255,0) 100%)',
+          }}
+        />
+        <div
+          style={{
+            position: 'absolute', inset: 0, borderRadius: '50%', pointerEvents: 'none',
+            boxShadow: `inset 0 0 ${26 * k}px ${6 * k}px rgba(0,0,0,0.55)`,
+          }}
+        />
       </div>
     </div>
   );
@@ -100,14 +125,14 @@ const Stepper: React.FC<{s: string; k: number}> = ({s, k}) => (
 /** SetView — the screen you actually lift from. */
 export const WatchSet: React.FC<{
   size: number; day?: string; min?: number; exercise?: string;
-  weight: string; reps: string; unit?: string; set?: number; total?: number; bpm?: number;
+  weight: string; reps: string; unit?: string; set?: number; total?: number; bpm?: number; light?: number;
 }> = ({
   size, day = 'UPPER A', min = 12, exercise = 'INCLINE BARBELL BENCH',
-  weight, reps, unit = 'LB', set = 2, total = 4, bpm = 132,
+  weight, reps, unit = 'LB', set = 2, total = 4, bpm = 132, light,
 }) => {
   const k = size / DP;
   return (
-    <WatchBody size={size}>
+    <WatchBody size={size} light={light}>
       <Center k={k} gap={2}>
         <div style={{...WT.labelSmall(k), color: W.muted}}>{`${day} · ${min} MIN`}</div>
         <div style={{...WT.label(k), color: W.onBg, textAlign: 'center', marginTop: 2 * k}}>{exercise}</div>
@@ -134,8 +159,8 @@ export const WatchSet: React.FC<{
 };
 
 /** TimerView — the rest countdown, with the ring draining. */
-export const WatchRest: React.FC<{size: number; remaining: number; total: number}> = ({
-  size, remaining, total,
+export const WatchRest: React.FC<{size: number; remaining: number; total: number; light?: number}> = ({
+  size, remaining, total, light,
 }) => {
   const k = size / DP;
   const mm = Math.floor(Math.max(0, remaining) / 60);
@@ -144,7 +169,7 @@ export const WatchRest: React.FC<{size: number; remaining: number; total: number
   const r = (DP / 2 - 7) * k;
   const c = 2 * Math.PI * r;
   return (
-    <WatchBody size={size}>
+    <WatchBody size={size} light={light}>
       <svg width={size} height={size} style={{position: 'absolute', inset: 0, transform: 'rotate(-90deg)'}}>
         <circle cx={size / 2} cy={size / 2} r={r} fill="none" stroke={W.outline} strokeWidth={4 * k} />
         <circle
@@ -164,11 +189,11 @@ export const WatchRest: React.FC<{size: number; remaining: number; total: number
 };
 
 /** RpeScreen — how hard was that, and what's left in the tank. */
-export const WatchRpe: React.FC<{size: number; rpe: number}> = ({size, rpe}) => {
+export const WatchRpe: React.FC<{size: number; rpe: number; light?: number}> = ({size, rpe, light}) => {
   const k = size / DP;
   const rir = (10 - rpe).toFixed(1).replace(/\.0$/, '');
   return (
-    <WatchBody size={size}>
+    <WatchBody size={size} light={light}>
       <Center k={k} gap={4}>
         <div style={{...WT.labelSmall(k), color: W.muted}}>RPE · HOW HARD</div>
         <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%'}}>
@@ -183,5 +208,34 @@ export const WatchRpe: React.FC<{size: number; rpe: number}> = ({size, rpe}) => 
         <div style={{...WT.label(k), color: W.accent, marginTop: 7 * k}}>close</div>
       </Center>
     </WatchBody>
+  );
+};
+
+/**
+ * The PR beat. Doctrine reserves gold for one event and the watch keeps that promise: a set that
+ * beats the record answers in `prGold`, never the accent, and the app's other confirmations stay
+ * red so this one reads as different in a way a louder red never could.
+ */
+export const WatchPr: React.FC<{
+  size: number; lift?: string; value: string; on?: number; light?: number;
+}> = ({size, lift = 'INCLINE BARBELL BENCH', value, on = 1, light}) => {
+  const k = size / DP;
+  return (
+    <div style={{position: 'relative'}}>
+      <WatchBody size={size} light={light}>
+        <Center k={k} gap={4}>
+          <div style={{...WT.labelSmall(k), color: W.prGold, letterSpacing: 2 * k}}>NEW PR</div>
+          <div style={{...WT.figure(k), color: W.prGold, fontVariantNumeric: 'tabular-nums'}}>{value}</div>
+          <div style={{...WT.label(k), color: W.muted, textAlign: 'center'}}>{lift}</div>
+        </Center>
+      </WatchBody>
+      <div
+        style={{
+          position: 'absolute', inset: -10 * k, borderRadius: '50%', pointerEvents: 'none',
+          boxShadow: `0 0 ${70 * k * on}px ${10 * k * on}px rgba(227,179,65,${0.42 * on})`,
+          background: `radial-gradient(circle, rgba(227,179,65,${0.2 * on}) 0%, rgba(227,179,65,0) 68%)`,
+        }}
+      />
+    </div>
   );
 };

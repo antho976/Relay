@@ -19,7 +19,71 @@ export const FPS = 30;
 /** Device captures are 1080×2400. */
 export const SHOT_W = 1080;
 export const SHOT_H = 2400;
+export const SHOT_AR = SHOT_H / SHOT_W;
 
 export const SERIF = 'Georgia, "Times New Roman", ui-serif, serif';
 export const MONO  = '"JetBrains Mono", "DejaVu Sans Mono", ui-monospace, monospace';
 export const SANS  = 'Inter, "Helvetica Neue", Arial, ui-sans-serif, sans-serif';
+
+/**
+ * One clock for the whole film. The 0.8.9 cut ran 3:36 because every beat was ~11s and entered the
+ * same way; at 90s the edit has to carry three speeds, and a beat's speed decides how much copy it
+ * is allowed to hold. HERO gets a paragraph, BEAT gets one line, FLASH gets a headline only.
+ */
+export const SEC = (n: number) => Math.round(n * FPS);
+
+export const PACE = {
+  hero:  SEC(6.5),
+  beat:  SEC(4.5),
+  flash: SEC(3),
+  card:  SEC(4),
+} as const;
+
+/** Transition lengths. A hard cut is genuinely zero — that is what makes a short edit feel fast. */
+export const XFADE = {cut: 0, quick: 7, soft: 12, pan: 14, wide: 16} as const;
+
+/**
+ * The bed's grid, MEASURED from `public/music/bed.mp3` rather than assumed from the prompt: spectral
+ * -flux onset envelope → autocorrelation for the period → phase locked to peak onset energy →
+ * downbeat picked as the 4-phase with the most low-band energy. It came back at 120.19 BPM, not the
+ * 120 that was asked for, and over 46 bars that 0.19 is a third of a second of drift — enough to put
+ * the last cut audibly off the beat if the nominal figure were used instead.
+ */
+export const BED = {firstDownbeat: 0.116, bar: 1.99667, bars: 46} as const;
+
+/** Frame of the downbeat that opens bar `n` (1-indexed). */
+export const bar = (n: number) => Math.round((BED.firstDownbeat + (n - 1) * BED.bar) * FPS);
+
+/* ── the sound grid ──────────────────────────────────────────────────────── */
+
+/**
+ * Cues used to fire wherever their picture happened to be, which against a 120 BPM bed is the
+ * difference between a sound design and a pile of noises. Everything audible now lands on a
+ * subdivision of the same grid the cuts use.
+ *
+ * At this tempo a bar is 59.90 frames, a quarter 14.98, an eighth 7.49 and a sixteenth 3.74. None of
+ * those are whole frames, so a run of cues has to be laid out in float and rounded per event —
+ * rounding the step first would drift a sixteenth of a beat every four events.
+ */
+export const BAR_F = BED.bar * FPS;
+export const QUARTER = BAR_F / 4;
+export const EIGHTH = BAR_F / 8;
+export const SIXTEENTH = BAR_F / 16;
+
+const FIRST_F = BED.firstDownbeat * FPS;
+
+/** Snap an absolute frame to the nearest grid point. `div` is subdivisions per bar. */
+export const snap = (f: number, div = 8) => {
+  const step = BAR_F / div;
+  return Math.round(FIRST_F + Math.round((f - FIRST_F) / step) * step);
+};
+
+/**
+ * A run of `count` events at `step` frames apart, beginning at the grid point at or after `from`.
+ * Returned as absolute frames. Used for the onboarding pages landing, the watch stepper and the
+ * list settling, all of which were previously spaced by whatever looked right.
+ */
+export const run = (from: number, count: number, step: number, div = 16): number[] => {
+  const first = snap(from, div);
+  return Array.from({length: count}, (_, i) => Math.round(first + i * step));
+};

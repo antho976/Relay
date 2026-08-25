@@ -1,21 +1,30 @@
 import React from 'react';
 import {AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig} from 'remotion';
 import {HomeScreen} from './ui/HomeScreen';
-import {GoalRow, ScaleCtx} from './ui/kit';
 import {Icon} from './ui/icons';
 import {C} from './ui/tokens';
 import {WatchRest, WatchRpe, WatchSet} from './ui/Watch';
-import {Body, Eyebrow, Plate, Title, useEdgeFade} from './Type';
+import {Body, Eyebrow, Title, useEdgeFade} from './Type';
+import {Plate} from './Layout';
+import {Cue} from './Sound';
+import {Device} from './Device';
+import {SHOT_AR, snap} from './theme';
 
 const MONO = '"JetBrains Mono", ui-monospace, monospace';
 
 /** Home, morphing 0.8.9 → 0.9 in place. No cut, so every change lands on one clock. */
-export const HomeMorph: React.FC = () => {
+export const HomeMorph: React.FC<{gridStart?: number}> = ({gridStart = 0}) => {
   const frame = useCurrentFrame();
   const {fps, durationInFrames} = useVideoConfig();
   const o = useEdgeFade(durationInFrames, 14);
-  const t = spring({frame: frame - 55, fps, config: {damping: 200, stiffness: 26}});
-  const fill = interpolate(frame, [12, 62], [0, 1], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'});
+  // Relative to the beat, not absolute: the bar grid re-times beats and a hard-coded frame 55 would
+  // put the morph anywhere from mid-beat to past the end.
+  // Both events on beats: the bars start filling on one, the era turns over on another.
+  const at = (f: number) => snap(gridStart + durationInFrames * f, 4) - gridStart;
+  const FILL = at(0.10);
+  const TURN = at(0.36);
+  const t = spring({frame: frame - TURN, fps, config: {damping: 200, stiffness: 34}});
+  const fill = interpolate(frame, [FILL, TURN], [0, 1], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'});
 
   return (
     <AbsoluteFill style={{opacity: o}}>
@@ -23,11 +32,14 @@ export const HomeMorph: React.FC = () => {
         <div style={{display: 'flex', width: '100%', height: '100%', alignItems: 'center'}}>
           <div style={{flex: '0 0 700px', paddingLeft: 110, display: 'flex', flexDirection: 'column', gap: 22}}>
             <Eyebrow delay={0}>Home</Eyebrow>
-            <Title delay={4} size={72}>One screen,{'\n'}two eras</Title>
+            <Title delay={4} size={72}>{'Home,\nredesigned'}</Title>
             <Body delay={12}>
-              The wordmark becomes the bell. The pill becomes the accent, and gives up half its width
-              to Plan. The meters bleed navy to red, and the fifth tab stops being you.
+              The logo is now a bell that shows what you missed. Start session stands out, with Plan
+              beside it instead of buried three taps deep. The goal bars turned red. And the last tab
+              stopped being you.
             </Body>
+            <Cue at={FILL} sfx="fill" gain={0.7} />
+            <Cue at={TURN} sfx="screen" gain={0.85} />
             <div style={{display: 'flex', gap: 18, marginTop: 10, alignItems: 'center'}}>
               <Era label="0.8.9" on={1 - t} />
               <div style={{width: 200, height: 3, borderRadius: 999, background: C.outline, position: 'relative'}}>
@@ -37,8 +49,10 @@ export const HomeMorph: React.FC = () => {
             </div>
           </div>
           <div style={{flex: 1, display: 'flex', justifyContent: 'center'}}>
-            <div style={{transform: `translateY(${interpolate(t, [0, 1], [0, -8])}px)`, filter: 'drop-shadow(0 40px 90px rgba(0,0,0,.6))'}}>
-              <HomeScreen width={430} t={t} goalFill={fill} />
+            <div style={{transform: `translateY(${interpolate(t, [0, 1], [0, -8])}px)`}}>
+              <Device height={940}>
+                <HomeScreen width={940 / SHOT_AR} t={t} goalFill={fill} />
+              </Device>
             </div>
           </div>
         </div>
@@ -51,64 +65,22 @@ const Era: React.FC<{label: string; on: number; accent?: boolean}> = ({label, on
   <div
     style={{
       fontFamily: MONO, fontSize: 20, letterSpacing: 3, color: accent ? C.accent : C.muted,
-      opacity: 0.3 + on * 0.7, border: `1.5px solid ${accent ? C.accent : C.outline}`,
-      borderRadius: 999, padding: '8px 20px',
+      opacity: 0.32 + on * 0.68, border: `1.5px solid ${accent ? C.accent : C.outline}`,
+      borderRadius: 999, padding: '8px 20px', lineHeight: 1,
     }}
-  />
-);
-
-/**
- * A single goal row, lifted off the screen and blown up. This is the beat a screen recording cannot
- * give you: the component alone, at a size where the meter and the implement chip are the subject.
- */
-export const GoalCloseUp: React.FC = () => {
-  const frame = useCurrentFrame();
-  const {fps, durationInFrames} = useVideoConfig();
-  const o = useEdgeFade(durationInFrames, 14);
-  const t = spring({frame: frame - 50, fps, config: {damping: 200, stiffness: 30}});
-  const fill = interpolate(frame, [14, 70], [0, 0.94], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'});
-  const accent = t > 0.5 ? C.accent : C.accentOld;
-
-  return (
-    <AbsoluteFill style={{opacity: o}}>
-      <Plate>
-        <div style={{display: 'flex', flexDirection: 'column', gap: 46, width: 1400}}>
-          <div style={{display: 'flex', flexDirection: 'column', gap: 18}}>
-            <Eyebrow delay={0}>Goals</Eyebrow>
-            <Title delay={4} size={76}>A meter that means something</Title>
-          </div>
-          {/* 3.4x the on-device size */}
-          <ScaleCtx.Provider value={3.4}>
-            <div style={{background: C.surface, borderRadius: 26, padding: '46px 52px', border: `1px solid ${C.outline}`}}>
-              <GoalRow
-                name="Incline Barbell Bench" cur={150} target={160}
-                fill={fill} accent={accent} chip={t > 0.4} glyph="barbell"
-              />
-            </div>
-          </ScaleCtx.Provider>
-          <div style={{display: 'flex', gap: 40, opacity: interpolate(t, [0.3, 1], [0, 1], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'})}}>
-            <Note n="01" v="The bar takes the accent — it used to fill neutral" />
-            <Note n="02" v="The implement rides alongside the name" />
-          </div>
-        </div>
-      </Plate>
-    </AbsoluteFill>
-  );
-};
-
-const Note: React.FC<{n: string; v: string}> = ({n, v}) => (
-  <div style={{display: 'flex', gap: 14, alignItems: 'baseline'}}>
-    <span style={{fontFamily: MONO, fontSize: 18, color: C.accent}}>{n}</span>
-    <span style={{fontFamily: 'Georgia, serif', fontSize: 28, color: C.muted}}>{v}</span>
+  >
+    {label}
   </div>
 );
 
 /** The fifth tab changing hands, isolated from everything else. */
-export const TabSwap: React.FC = () => {
+export const TabSwap: React.FC<{swapAt?: number}> = ({swapAt = 46}) => {
   const frame = useCurrentFrame();
   const {fps, durationInFrames} = useVideoConfig();
   const o = useEdgeFade(durationInFrames, 14);
-  const t = spring({frame: frame - 46, fps, config: {damping: 200, stiffness: 30}});
+  const t = spring({frame: frame - swapAt, fps, config: {damping: 200, stiffness: 44}});
+  const out = Math.max(0, Math.min(1, (0.42 - t) / 0.42));
+  const inn = Math.max(0, Math.min(1, (t - 0.58) / 0.42));
   const tabs = [
     {label: 'Cardio', icon: 'cardio' as const},
     {label: 'Stats', icon: 'stats' as const},
@@ -118,10 +90,12 @@ export const TabSwap: React.FC = () => {
   return (
     <AbsoluteFill style={{opacity: o}}>
       <Plate>
+        {/* the tab actually changing hands */}
+        <Cue at={swapAt + 2} sfx="reveal" gain={0.95} />
         <div style={{display: 'flex', flexDirection: 'column', gap: 60, alignItems: 'center'}}>
           <div style={{display: 'flex', flexDirection: 'column', gap: 16, alignItems: 'center'}}>
             <Eyebrow delay={0}>The fifth tab</Eyebrow>
-            <Title delay={4} size={78}>Academy takes the slot</Title>
+            <Title delay={4} size={78}>Academy gets a tab</Title>
           </div>
           <div
             style={{
@@ -132,18 +106,31 @@ export const TabSwap: React.FC = () => {
             {tabs.map((x, i) => (
               <Tab key={i} label={x.label} icon={x.icon} on={i === 2} />
             ))}
-            <div style={{position: 'relative', width: 128, height: 92}}>
-              <div style={{position: 'absolute', inset: 0, opacity: 1 - t, transform: `translateY(${t * -18}px)`}}>
+            {/* The two tabs share one slot, so they must never both be legible: a 50/50 crossfade
+                renders the words "Profile" and "Academy" on top of each other. The old one leaves
+                before the new one arrives. */}
+            <div style={{position: 'relative', width: 128, height: 79}}>
+              <div
+                style={{
+                  position: 'absolute', left: 0, right: 0, bottom: 0,
+                  opacity: out, transform: `translateY(${(1 - out) * -20}px)`,
+                }}
+              >
                 <Tab label="Profile" icon="profile" on={false} />
               </div>
-              <div style={{position: 'absolute', inset: 0, opacity: t, transform: `translateY(${(1 - t) * 18}px)`}}>
+              <div
+                style={{
+                  position: 'absolute', left: 0, right: 0, bottom: 0,
+                  opacity: inn, transform: `translateY(${(1 - inn) * 20}px)`,
+                }}
+              >
                 <Tab label="Academy" icon="academy" on={false} badge />
               </div>
             </div>
           </div>
           <div style={{fontFamily: 'Georgia, serif', fontSize: 30, fontStyle: 'italic', color: C.muted, maxWidth: 900, textAlign: 'center'}}>
-            Profile moves up into Home&apos;s top bar. Academy was a link buried inside Coach — and it is
-            half the coach, not a footnote to it.
+            The Academy is new in 0.9, so it needed somewhere to live. Profile moved up to the top of
+            Home and gave up the fifth slot.
           </div>
         </div>
       </Plate>
@@ -222,7 +209,7 @@ export const WatchBeat: React.FC = () => {
         <div style={{display: 'flex', width: '100%', height: '100%', alignItems: 'center'}}>
           <div style={{flex: '0 0 720px', paddingLeft: 110, display: 'flex', flexDirection: 'column', gap: 22}}>
             <Eyebrow delay={0}>New in 0.9 · Wear OS</Eyebrow>
-            <Title delay={4} size={74}>Leave the phone{'\n'}in your bag</Title>
+            <Title delay={4} size={74}>{'Leave the phone\nin your bag'}</Title>
             <Body delay={12}>
               A companion watch app that mirrors the live session: adjust the load, log the set, and
               the rest timer runs on your wrist. Heart rate rides along, and it writes back through

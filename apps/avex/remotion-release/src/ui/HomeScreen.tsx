@@ -14,30 +14,37 @@ const mix = (t: number, a: string, b: string) => {
 /** Cross-fade two things in the same box, so a change reads as one element becoming another. */
 const Swap: React.FC<{t: number; a: React.ReactNode; b: React.ReactNode; style?: React.CSSProperties}> = ({
   t, a, b, style,
-}) => (
-  <div style={{position: 'relative', ...style}}>
-    <div style={{opacity: 1 - t, transform: `translateY(${t * -6}px)`}}>{a}</div>
-    <div style={{position: 'absolute', inset: 0, opacity: t, transform: `translateY(${(1 - t) * 6}px)`}}>{b}</div>
-  </div>
-);
+}) => {
+  // The two states must never both be legible: crossfading them 50/50 double-exposes two different
+  // sentences in the same box, which is the one thing a morph must not do. The old one is gone
+  // before the new one arrives, with a beat of nothing between.
+  const out = Math.max(0, Math.min(1, (0.44 - t) / 0.44));
+  const inn = Math.max(0, Math.min(1, (t - 0.56) / 0.44));
+  return (
+    <div style={{position: 'relative', ...style}}>
+      <div style={{opacity: out, transform: `translateY(${(1 - out) * -7}px)`}}>{a}</div>
+      <div style={{position: 'absolute', inset: 0, opacity: inn, transform: `translateY(${(1 - inn) * 7}px)`}}>{b}</div>
+    </div>
+  );
+};
 
 /**
  * Home, drawn rather than filmed, with `t` walking 0.8.9 → 0.9. Because both eras are one component,
  * every change is a tween instead of a cut: the wordmark becomes the bell, the pill becomes the
  * accent CTA, the meters bleed navy to red — all on the same clock.
  */
-export const HomeScreen: React.FC<{width: number; t: number; goalFill?: number}> = ({
-  width, t, goalFill = 1,
+export const HomeScreen: React.FC<{width: number; t: number; goalFill?: number; badge?: string}> = ({
+  width, t, goalFill = 1, badge = '9+',
 }) => {
   const accent = mix(t, C.accentOld, C.accent);
   return (
     <Screen width={width}>
-      <Inner t={t} accent={accent} goalFill={goalFill} />
+      <Inner t={t} accent={accent} goalFill={goalFill} badge={badge} />
     </Screen>
   );
 };
 
-const Inner: React.FC<{t: number; accent: string; goalFill: number}> = ({t, accent, goalFill}) => {
+const Inner: React.FC<{t: number; accent: string; goalFill: number; badge: string}> = ({t, accent, goalFill, badge}) => {
   const k = useK();
   const G = [
     {name: 'Incline Barbell Bench', cur: 150, target: 160, fill: 0.94, glyph: 'barbell' as const},
@@ -62,7 +69,7 @@ const Inner: React.FC<{t: number; accent: string; goalFill: number}> = ({t, acce
                     padding: `${1 * k}px ${4 * k}px`, ...type('labelSmall', k, C.onBg),
                   }}
                 >
-                  9+
+                  {badge}
                 </div>
               </div>
             }
