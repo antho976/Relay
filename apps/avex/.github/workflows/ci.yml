@@ -5,10 +5,11 @@ name: CI
 #
 # Notes for this project specifically:
 #  • The Gradle project lives in forge-android/ (not the repo root) → `-p forge-android`.
-#  • There is no committed Gradle wrapper, so we provision Gradle via the official
-#    setup-gradle action (pinned to the same version used locally).
-#  • Release builds are intentionally left UNSIGNED in CI (no secrets), so we build
-#    the debug variant + assembleRelease(unsigned) to exercise R8 keep rules.
+#  • The Gradle wrapper IS committed (forge-android/gradle/wrapper), so CI runs ./gradlew —
+#    the same Gradle version contributors use, with no chance of the two drifting.
+#  • Release builds carry no signing secrets in CI. assembleRelease is unsigned in the build job;
+#    the instrumented job re-builds it under -PforgeCiSmokeSigning (debug key, CI-only) so the
+#    minified APK can actually be installed and launched — R8 finishing is not R8 working.
 
 on:
   push:
@@ -35,8 +36,6 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: "9.4.1"
 
       - name: Cache Robolectric runtime jars
         # Robolectric fetches its android-all jars at TEST time into ~/.m2, outside Gradle's
@@ -52,14 +51,14 @@ jobs:
         # testDebugUnitTest covers the Android modules (:app + :wear); :shared is a pure Kotlin/JVM
         # library whose task is `test` — without it the protocol + rest-timer suites would silently
         # never run in CI (W1).
-        run: gradle -p forge-android testDebugUnitTest :shared:test --no-daemon
+        run: ./forge-android/gradlew -p forge-android testDebugUnitTest :shared:test --no-daemon
 
       - name: Screenshot goldens (design doctrine §14)
         # Renders the six archetype recipes at 100% and 200% font scale, on Pearl and AMOLED, with
         # and without accent, and diffs them against the committed goldens in
         # app/src/test/screenshots/. Catches what no static rule can: clipping, overlap and spacing
         # regressions. Re-record deliberately with :app:recordRoborazziDebug and LOOK at the diff.
-        run: gradle -p forge-android :app:verifyRoborazziDebug --no-daemon
+        run: ./forge-android/gradlew -p forge-android :app:verifyRoborazziDebug --no-daemon
 
       - name: Upload screenshot diffs
         if: failure()
@@ -70,13 +69,13 @@ jobs:
           if-no-files-found: ignore
 
       - name: Assemble debug APKs (phone + wear)
-        run: gradle -p forge-android assembleDebug --no-daemon
+        run: ./forge-android/gradlew -p forge-android assembleDebug --no-daemon
 
       - name: Release lint (phone + wear)
-        run: gradle -p forge-android :app:lintRelease :wear:lintRelease --no-daemon
+        run: ./forge-android/gradlew -p forge-android :app:lintRelease :wear:lintRelease --no-daemon
 
       - name: Assemble release (unsigned, exercises R8)
-        run: gradle -p forge-android assembleRelease --no-daemon
+        run: ./forge-android/gradlew -p forge-android assembleRelease --no-daemon
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
@@ -86,3 +85,61 @@ jobs:
             forge-android/app/build/outputs/apk/debug/*.apk
             forge-android/wear/build/outputs/apk/debug/*.apk
           if-no-files-found: warn
+
+  instrumented:
+    # Everything above runs on the JVM. Two things can only be verified on a device, and both guard
+    # the release direction specifically:
+    #
+    #  • MigrationTest is the ONLY androidTest in the repo and the only automated guard on the
+    #    12 → 36 migration chain that DatabaseModule deliberately refuses to destructively fall back
+    #    from. It never ran in CI, so the single test standing between a wrong migration and "every
+    #    existing user crashes on launch while a fresh install works fine" was manual-only.
+    #  • assembleRelease proves R8 FINISHED, not that what it produced runs. Every R8-only defect —
+    #    an empty keep-rule file, an enum name that survives on one side of the wire and not the
+    #    other — is invisible until the minified APK is actually launched.
+    #
+    # Separate job so the fast feedback above is never blocked behind an emulator boot.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Room migration test + release smoke launch
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          disable-animations: true
+          script: |
+            ./forge-android/gradlew -p forge-android :app:connectedDebugAndroidTest --no-daemon
+            # Sign the minified APK with the debug key (CI-only flag), install it, and assert it
+            # reaches its first frame rather than dying in R8-shaped ways.
+            ./forge-android/gradlew -p forge-android :app:assembleRelease -PforgeCiSmokeSigning --no-daemon
+            adb install -r forge-android/app/build/outputs/apk/release/*.apk
+            adb shell am start -W -n com.forge.app/.MainActivity
+            sleep 5
+            adb shell pidof com.forge.app > /dev/null || (adb logcat -d -t 500 && exit 1)
+
+      - name: Upload instrumented test report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: connected-test-report
+          path: forge-android/app/build/reports/androidTests/**
+          if-no-files-found: ignore

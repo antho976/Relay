@@ -807,6 +807,7 @@ class SettingsRepository @Inject constructor(
         return StartupPreferences(
             privacyMode = prefs[PreferenceKeys.PRIVACY_MODE] ?: false,
             appLockEnabled = prefs[PreferenceKeys.APP_LOCK_ENABLED] ?: false,
+            galleryLockEnabled = prefs[PreferenceKeys.GALLERY_LOCK_ENABLED] ?: false,
             amoledMode = prefs[PreferenceKeys.AMOLED_MODE] ?: false,
             appIcon = prefs[PreferenceKeys.APP_ICON] ?: "",
             themedLaunchIntro = prefs[PreferenceKeys.THEMED_LAUNCH_INTRO] ?: true
@@ -817,6 +818,7 @@ class SettingsRepository @Inject constructor(
     data class StartupPreferences(
         val privacyMode: Boolean,
         val appLockEnabled: Boolean,
+        val galleryLockEnabled: Boolean,
         val amoledMode: Boolean,
         val appIcon: String,
         val themedLaunchIntro: Boolean

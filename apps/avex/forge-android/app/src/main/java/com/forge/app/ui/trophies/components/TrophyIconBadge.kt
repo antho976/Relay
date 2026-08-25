@@ -17,7 +17,7 @@ import androidx.compose.material.icons.filled.FitnessCenter
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.LocalFireDepartment
-import androidx.compose.material.icons.filled.Login
+import androidx.compose.material.icons.automirrored.filled.Login
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.SwapHoriz
@@ -98,7 +98,7 @@ private fun vectorFor(icon: TrophyIcon): ImageVector = when (icon) {
     TrophyIcon.CHECK -> Icons.Filled.CheckCircle
     TrophyIcon.STACK -> Icons.Filled.Layers
     TrophyIcon.CROWN -> Icons.Filled.WorkspacePremium
-    TrophyIcon.DOOR -> Icons.Filled.Login
+    TrophyIcon.DOOR -> Icons.AutoMirrored.Filled.Login
     TrophyIcon.FOUR -> Icons.Filled.Filter4
     TrophyIcon.DUMBBELL -> Icons.Filled.FitnessCenter
     TrophyIcon.BOLT -> Icons.Filled.Bolt

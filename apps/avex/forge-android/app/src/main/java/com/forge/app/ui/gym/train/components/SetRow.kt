@@ -29,8 +29,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.TrendingDown
-import androidx.compose.material.icons.filled.TrendingUp
+import androidx.compose.material.icons.automirrored.filled.TrendingDown
+import androidx.compose.material.icons.automirrored.filled.TrendingUp
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -313,7 +313,9 @@ fun SetRow(
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                     if (deltaPositive || deltaNegative) {
                         Icon(
-                            if (deltaPositive) Icons.Filled.TrendingUp else Icons.Filled.TrendingDown,
+                            // Auto-mirrored: the non-mirrored variants are deprecated and point the wrong way in RTL.
+                            if (deltaPositive) Icons.AutoMirrored.Filled.TrendingUp
+                            else Icons.AutoMirrored.Filled.TrendingDown,
                             contentDescription = null,
                             tint = deltaColor,
                             modifier = Modifier.size(13.dp)

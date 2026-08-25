@@ -62,7 +62,15 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            // Sign the release only when a complete keystore is configured; otherwise it stays unsigned.
+            // Sign the release only when a complete keystore is configured; otherwise it stays
+            // unsigned — EXCEPT under -PforgeCiSmokeSigning, which signs it with the DEBUG key so CI
+            // can install and launch the minified APK on an emulator. Every R8-only defect (an empty
+            // keep-rule file, an enum name asymmetry across the wire) is invisible to a pipeline that
+            // only checks R8 finished, and an unsigned APK cannot be installed to find out. The flag
+            // is opt-in and CI-only, so a real release can never be debug-signed by accident.
+            if (!hasReleaseKeystore && providers.gradleProperty("forgeCiSmokeSigning").isPresent) {
+                signingConfig = signingConfigs.getByName("debug")
+            }
             if (hasReleaseKeystore) {
                 signingConfig = signingConfigs.getByName("release")
             }
@@ -77,7 +85,16 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions { jvmTarget = "17" }
+    kotlinOptions {
+        jvmTarget = "17"
+        // Pin the annotation-use-site default (KT-73255) instead of inheriting whatever a future
+        // Kotlin release picks. The warnings this clears are spread across data/repo and service,
+        // and the change they warn about is BEHAVIOURAL — an annotation silently moving from the
+        // property to the constructor parameter (or back) rewires what Hilt, Room and
+        // kotlinx-serialization see. Choosing it deliberately now means a Kotlin upgrade is a
+        // version bump rather than a behaviour change.
+        freeCompilerArgs += listOf("-Xannotation-default-target=param-property")
+    }
 
     buildFeatures {
         compose = true
