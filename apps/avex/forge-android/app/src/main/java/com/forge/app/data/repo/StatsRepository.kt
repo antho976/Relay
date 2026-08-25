@@ -45,7 +45,6 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
@@ -115,6 +114,14 @@ class StatsRepository @Inject constructor(
     fun observeWeeklyStats(): Flow<WeeklyStats> =
         timeSignals.dayStarts().flatMapLatest { weeklyStatsForNow() }
 
+    /** The four session/preference signals the weekly fan-out folds together in one inner combine. */
+    private data class RecentSignals(
+        val recent: List<com.forge.app.data.db.entities.Session>,
+        val scheduleMode: String,
+        val schedule: List<String>,
+        val allFinishedAts: List<Long>
+    )
+
     private fun weeklyStatsForNow(): Flow<WeeklyStats> {
         val zone = ZoneId.systemDefault()
         val weekStartMs = mondayStartMs(clock.nowMs(), zone)
@@ -126,12 +133,20 @@ class StatsRepository @Inject constructor(
             combine(
                 sessionDao.observeRecent(120),
                 settingsRepo.scheduleMode,
-                settingsRepo.weeklySchedule
-            ) { recent, mode, schedule -> Triple(recent, mode, schedule) }
-        ) { workouts, volume, cardio, totalFinished, recentModeSchedule ->
-            val (recentSessions, scheduleMode, schedule) = recentModeSchedule
+                settingsRepo.weeklySchedule,
+                // The streak reads EVERY finished instant, not the 120-row window the rest of this
+                // fan-out uses: the walk stops at the end of the window rather than at a real rest
+                // gap, so a twice-a-day lifter's streak froze at whatever fitted in 120 rows.
+                sessionDao.observeFinishedAts()
+            ) { recent, mode, schedule, allFinishedAts ->
+                RecentSignals(recent, mode, schedule, allFinishedAts)
+            }
+        ) { workouts, volume, cardio, totalFinished, signals ->
+            val recentSessions = signals.recent
+            val scheduleMode = signals.scheduleMode
+            val schedule = signals.schedule
             val todayDate = todayLocal(zone)
-            val finishedAts = recentSessions.mapNotNull { it.finishedAt }
+            val finishedAts = signals.allFinishedAts
             // Sessions finished in the current ISO week — shared by the lit-day dots AND the
             // best-session tile so they filter the list once, not twice.
             val thisWeekSessions = recentSessions.filter { it.finishedAt != null && it.finishedAt!! >= weekStartMs }
@@ -226,7 +241,7 @@ class StatsRepository @Inject constructor(
      * the streak: two focused reads (recent finished sessions + vacation periods) instead of nine.
      */
     suspend fun currentStreakDays(): Int {
-        val finishedAts = sessionDao.observeRecent(120).first().mapNotNull { it.finishedAt }
+        val finishedAts = sessionDao.finishedAts()
         val periods = vacationDao.all()
         return computeStreak(finishedAts, com.forge.app.domain.vacation.VacationCalendar.onVacation(periods))
     }
