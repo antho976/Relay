@@ -5,7 +5,9 @@ import androidx.lifecycle.viewModelScope
 import com.forge.app.data.repo.BodyweightRepository
 import com.forge.app.data.repo.CheckinRepository
 import com.forge.app.program.MuscleGroup
+import com.forge.app.ui.common.SnackbarController
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -22,7 +24,8 @@ import com.forge.app.domain.units.filterDecimalInput
 @HiltViewModel
 class CheckinViewModel @Inject constructor(
     private val checkinRepo: CheckinRepository,
-    private val bodyweightRepo: BodyweightRepository
+    private val bodyweightRepo: BodyweightRepository,
+    private val snackbar: SnackbarController
 ) : ViewModel() {
 
     data class UiState(
@@ -84,6 +87,17 @@ class CheckinViewModel @Inject constructor(
         s.copy(soreMuscles = if (muscle in s.soreMuscles) s.soreMuscles - muscle else s.soreMuscles + muscle)
     }
 
+    /**
+     * Only a successful write closes the sheet and records the day as answered.
+     *
+     * The Result used to be discarded: on any failure the sheet closed, answeredToday flipped true —
+     * the app's own record that the user has answered, which backs the prompt off — and nothing had
+     * been written. runCatching swallows CancellationException too, so backing out of the sheet
+     * mid-write did the same. A morning weigh-in entered here would vanish, taking the day's
+     * bodyweight trend and readiness signal with it, and the user would never be asked again.
+     * AdaptationRepository.snapshotOrEmpty and OverviewViewModel already re-throw cancellation for
+     * exactly this reason.
+     */
     fun save() {
         val s = _state.value
         viewModelScope.launch {
@@ -99,15 +113,23 @@ class CheckinViewModel @Inject constructor(
                 )
                 // Morning is weigh-in time; logging it here saves a trip to the profile.
                 s.weightText.toDoubleOrNull()?.let { bodyweightRepo.logWeightOnly(it) }
+            }.onSuccess {
+                _state.value = _state.value.copy(visible = false, answeredToday = true)
+            }.onFailure { e ->
+                if (e is CancellationException) throw e
+                snackbar.show("Couldn't save your check-in. Try again.")
             }
-            _state.value = _state.value.copy(visible = false, answeredToday = true)
         }
     }
 
     fun skip() {
         viewModelScope.launch {
             runCatching { checkinRepo.skipToday() }
-            _state.value = _state.value.copy(visible = false)
+                .onSuccess { _state.value = _state.value.copy(visible = false) }
+                .onFailure { e ->
+                    if (e is CancellationException) throw e
+                    snackbar.show("Couldn't skip today's check-in. Try again.")
+                }
         }
     }
 

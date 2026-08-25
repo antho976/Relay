@@ -9,7 +9,10 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
 /**
@@ -80,15 +83,29 @@ class FreestyleLogViewModel @Inject constructor(
     internal suspend fun loadDraft(): FreestyleDraft? =
         settingsRepo.freestyleDraft()?.let { FreestyleDraft.fromJson(it) }
 
-    /** Autosave the current in-progress log (fire-and-forget; the screen debounces the calls). */
+    /**
+     * Autosave the current in-progress log (fire-and-forget; the screen debounces the calls).
+     *
+     * NonCancellable because the screen's last-chance flush calls this and then navigates on the very
+     * next line: the pop clears the ViewModel and cancels its scope, so the DataStore write raced the
+     * teardown and usually lost — losing exactly the sub-600 ms edits the flush exists to protect.
+     * The house rule GoalsViewModel documents: any write whose caller immediately navigates.
+     */
     internal fun saveDraft(draft: FreestyleDraft) {
-        viewModelScope.launch { settingsRepo.saveFreestyleDraft(draft.toJson()) }
+        viewModelScope.launch {
+            withContext(NonCancellable) { settingsRepo.saveFreestyleDraft(draft.toJson()) }
+        }
     }
 
     /** Drop the saved draft — used for "start fresh" and once the log is empty. */
     fun clearDraft() {
-        viewModelScope.launch { settingsRepo.clearFreestyleDraft() }
+        viewModelScope.launch {
+            withContext(NonCancellable) { settingsRepo.clearFreestyleDraft() }
+        }
     }
+
+    /** In-flight save, so a double-tapped "Save workout" can't write the workout twice. */
+    private var saveJob: Job? = null
 
     /**
      * Persist the workout as a finished freestyle session, then invoke [onSaved] on the main thread.
@@ -96,28 +113,42 @@ class FreestyleLogViewModel @Inject constructor(
      * duration reflects the real time spent logging instead of ~0.
      */
     fun save(items: List<FreestyleExerciseInput>, startedAtMs: Long, onSaved: () -> Unit) {
-        viewModelScope.launch {
-            val sessionId = workoutRepo.createFreestyleSession(startedAtMs)
-            items.forEachIndexed { exIdx, ex ->
-                val loggedExerciseId =
-                    workoutRepo.addExerciseToSession(sessionId, ex.libId, exIdx, swappedName = ex.customName)
-                ex.sets.forEachIndexed { setIdx, s ->
-                    val setId = workoutRepo.logSet(loggedExerciseId, setIdx, s.weightText, s.weightLb, s.reps, s.durationSeconds)
-                    // Persist the set-type tags via the existing per-field setters — only when set, so an
-                    // untagged set writes exactly as before. Warm-ups still count toward volume/PRs (label
-                    // only), matching the structured flow's set model (GYMAP-46).
-                    if (s.setType != null) workoutRepo.setSetType(setId, s.setType)
-                    if (s.isAmrap) workoutRepo.setAmrap(setId, true)
-                    if (s.toFailure) workoutRepo.setToFailure(setId, true)
-                    if (s.rpe != null) workoutRepo.setRpe(setId, s.rpe)
+        // One save per tap-storm: the button stays enabled through a multi-exercise write, and a
+        // second run inserts the whole workout again as a separate session.
+        if (saveJob?.isActive == true) return
+        saveJob = viewModelScope.launch {
+            // NonCancellable + one transaction: this used to write a session, then its exercises,
+            // then each set as separate suspending calls on a scope the back-press cancels, so
+            // leaving mid-loop left a half-written workout in history — a session with two of five
+            // exercises, its totals stamped from what happened to land.
+            withContext(NonCancellable) {
+                val sessionId = workoutRepo.inTransaction {
+                    val sessionId = workoutRepo.createFreestyleSession(startedAtMs)
+                    items.forEachIndexed { exIdx, ex ->
+                        val loggedExerciseId =
+                            workoutRepo.addExerciseToSession(sessionId, ex.libId, exIdx, swappedName = ex.customName)
+                        ex.sets.forEachIndexed { setIdx, s ->
+                            val setId = workoutRepo.logSet(loggedExerciseId, setIdx, s.weightText, s.weightLb, s.reps, s.durationSeconds)
+                            // Persist the set-type tags via the existing per-field setters — only when set, so an
+                            // untagged set writes exactly as before. Warm-ups still count toward volume/PRs (label
+                            // only), matching the structured flow's set model (GYMAP-46).
+                            if (s.setType != null) workoutRepo.setSetType(setId, s.setType)
+                            if (s.isAmrap) workoutRepo.setAmrap(setId, true)
+                            if (s.toFailure) workoutRepo.setToFailure(setId, true)
+                            if (s.rpe != null) workoutRepo.setRpe(setId, s.rpe)
+                        }
+                        // Flag wasPr the same way the live day screen does, so a PR logged after the fact still
+                        // counts toward the lifetime PR total + the PRs list (not just the raw max-weight stats).
+                        workoutRepo.flagPrForLoggedExercise(loggedExerciseId, ex.libId)
+                    }
+                    sessionId
                 }
-                // Flag wasPr the same way the live day screen does, so a PR logged after the fact still
-                // counts toward the lifetime PR total + the PRs list (not just the raw max-weight stats).
-                workoutRepo.flagPrForLoggedExercise(loggedExerciseId, ex.libId)
+                // Outside the transaction: finishing mirrors to Health Connect and can rotate the
+                // program, neither of which belongs inside a database transaction.
+                workoutRepo.finishSession(sessionId)
+                // The log is now a real finished session — drop its resume draft so it can't be re-offered.
+                settingsRepo.clearFreestyleDraft()
             }
-            workoutRepo.finishSession(sessionId)
-            // The log is now a real finished session — drop its resume draft so it can't be re-offered.
-            settingsRepo.clearFreestyleDraft()
             onSaved()
         }
     }

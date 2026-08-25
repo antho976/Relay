@@ -163,6 +163,14 @@ class WorkoutRepository @Inject constructor(
      * segment, [finishSession] falls back to wall-clock (finish − [startedAt]) for the duration — so
      * passing the open time records the real time spent logging instead of ~0.
      */
+    /**
+     * Run [block] in one database transaction — for callers that compose several of this
+     * repository's writes into a single unit of work (the freestyle logger writes a session, its
+     * exercises and every set). Without it, a failure or a cancellation part-way through leaves a
+     * torn session in history.
+     */
+    suspend fun <T> inTransaction(block: suspend () -> T): T = database.withTransaction(block)
+
     suspend fun createFreestyleSession(startedAt: Long = clock.nowMs()): Long {
         val session = Session(
             dayKey = Program.FREESTYLE_DAY_KEY, startedAt = startedAt, finishedAt = null
