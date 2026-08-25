@@ -13,6 +13,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -70,9 +71,8 @@ class SessionDetailViewModel @Inject constructor(
                             realizedSeconds = it.realizedSeconds
                         )
                     }
-                    _state.value = _state.value.copy(
-                        hrView = com.forge.app.domain.health.buildSessionHrView(samples, sets, rests)
-                    )
+                    val hrView = com.forge.app.domain.health.buildSessionHrView(samples, sets, rests)
+                    _state.update { it.copy(hrView = hrView) }
                 }
             }
         }
@@ -129,7 +129,7 @@ class SessionDetailViewModel @Inject constructor(
         if (current.sessionType == key) return
         // Optimistic: the row is a single column write that can't meaningfully fail, and the header
         // pill re-reading instantly is the whole feedback (§13 — no toast for what the UI shows).
-        _state.value = _state.value.copy(data = current.copy(sessionType = key))
+        _state.update { it.copy(data = current.copy(sessionType = key)) }
         viewModelScope.launch { workoutRepo.setSessionType(sessionId, key) }
     }
 }

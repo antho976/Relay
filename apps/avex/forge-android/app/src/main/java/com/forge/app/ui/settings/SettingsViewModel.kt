@@ -15,9 +15,10 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
 data class SettingsUiState(
@@ -159,7 +160,20 @@ class SettingsViewModel @Inject constructor(
         runCatching { _coachSignals.value = coachRepo.coachLab().recoverySignals }
     }
 
-    fun setCoachMode(mode: String) = viewModelScope.launch { settingsRepo.setCoachMode(mode) }
+    /**
+     * Every preference write goes through here, shielded from cancellation.
+     *
+     * A preference is app state, not screen state — but each mutation was a bare
+     * `viewModelScope.launch { … }`, and this ViewModel is scoped to the Settings destination, so
+     * popping that destination cancels an edit still in flight. `DataStore.edit` suspends across an
+     * actor hop plus a file write, fsync and rename, so the window is real: drag "Compound rest" to
+     * 180 s and swipe back immediately and it was still 150 s on the next visit, with nothing to say
+     * the change hadn't taken. `GoalsViewModel` already shields its writes exactly this way.
+     */
+    private fun write(block: suspend () -> Unit) =
+        viewModelScope.launch { withContext(NonCancellable) { block() } }
+
+    fun setCoachMode(mode: String) = write { settingsRepo.setCoachMode(mode) }
 
     // ─── Day-aware scheduling (weekly plan vs sequence) ───────────────────────
     val scheduleMode: StateFlow<String> = settingsRepo.scheduleMode
@@ -169,7 +183,7 @@ class SettingsViewModel @Inject constructor(
     val weeklySchedule: StateFlow<List<String>> = settingsRepo.weeklySchedule
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    fun setScheduleMode(mode: String) = viewModelScope.launch { settingsRepo.setScheduleMode(mode) }
+    fun setScheduleMode(mode: String) = write { settingsRepo.setScheduleMode(mode) }
 
     /** Assign [dayKey] ("" = rest) to weekday [weekdayIndex] (0=Mon..6=Sun) in the weekly schedule. */
     fun setScheduleDay(weekdayIndex: Int, dayKey: String) = viewModelScope.launch {
@@ -204,10 +218,10 @@ class SettingsViewModel @Inject constructor(
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     fun addCustomCardioType(type: com.forge.app.domain.cardio.CustomCardioType) =
-        viewModelScope.launch { settingsRepo.addCustomCardioType(type) }
+        write { settingsRepo.addCustomCardioType(type) }
 
     fun updateCustomCardioType(type: com.forge.app.domain.cardio.CustomCardioType) =
-        viewModelScope.launch { settingsRepo.updateCustomCardioType(type) }
+        write { settingsRepo.updateCustomCardioType(type) }
 
     /** §12 undo-over-confirm — the removed activity comes back intact on Undo. */
     fun deleteCustomCardioType(code: String) =
@@ -344,46 +358,46 @@ class SettingsViewModel @Inject constructor(
             .sortedByDescending { it.second }
             .map { (muscle, sets) -> muscle.displayName to sets }
 
-    fun setAmoledMode(v: Boolean) = viewModelScope.launch { settingsRepo.setAmoledMode(v) }
+    fun setAmoledMode(v: Boolean) = write { settingsRepo.setAmoledMode(v) }
     fun setWeightUnit(u: com.forge.app.domain.units.WeightUnit) =
-        viewModelScope.launch { settingsRepo.setWeightUnit(u) }
-    fun setUseMiles(v: Boolean) = viewModelScope.launch { settingsRepo.setUseMiles(v) }
-    fun setUseCm(v: Boolean) = viewModelScope.launch { settingsRepo.setUseCm(v) }
-    fun setDateFormat(v: String) = viewModelScope.launch { settingsRepo.setDateFormat(v) }
-    fun setTimeFormat24h(v: Boolean) = viewModelScope.launch { settingsRepo.setTimeFormat24h(v) }
-    fun setFirstDayMonday(v: Boolean) = viewModelScope.launch { settingsRepo.setFirstDayMonday(v) }
-    fun setHapticStrength(v: String) = viewModelScope.launch { settingsRepo.setHapticStrength(v) }
-    fun setKeepScreenOn(v: Boolean) = viewModelScope.launch { settingsRepo.setKeepScreenOn(v) }
-    fun setRestCompoundSeconds(s: Int) = viewModelScope.launch { settingsRepo.setRestCompoundSeconds(s) }
-    fun setRestIsolationSeconds(s: Int) = viewModelScope.launch { settingsRepo.setRestIsolationSeconds(s) }
-    fun addNoteTemplate(t: String) = viewModelScope.launch { settingsRepo.addNoteTemplate(t) }
-    fun removeNoteTemplate(t: String) = viewModelScope.launch { settingsRepo.removeNoteTemplate(t) }
-    fun setQuietHoursEnabled(v: Boolean) = viewModelScope.launch { settingsRepo.setQuietHoursEnabled(v) }
+        write { settingsRepo.setWeightUnit(u) }
+    fun setUseMiles(v: Boolean) = write { settingsRepo.setUseMiles(v) }
+    fun setUseCm(v: Boolean) = write { settingsRepo.setUseCm(v) }
+    fun setDateFormat(v: String) = write { settingsRepo.setDateFormat(v) }
+    fun setTimeFormat24h(v: Boolean) = write { settingsRepo.setTimeFormat24h(v) }
+    fun setFirstDayMonday(v: Boolean) = write { settingsRepo.setFirstDayMonday(v) }
+    fun setHapticStrength(v: String) = write { settingsRepo.setHapticStrength(v) }
+    fun setKeepScreenOn(v: Boolean) = write { settingsRepo.setKeepScreenOn(v) }
+    fun setRestCompoundSeconds(s: Int) = write { settingsRepo.setRestCompoundSeconds(s) }
+    fun setRestIsolationSeconds(s: Int) = write { settingsRepo.setRestIsolationSeconds(s) }
+    fun addNoteTemplate(t: String) = write { settingsRepo.addNoteTemplate(t) }
+    fun removeNoteTemplate(t: String) = write { settingsRepo.removeNoteTemplate(t) }
+    fun setQuietHoursEnabled(v: Boolean) = write { settingsRepo.setQuietHoursEnabled(v) }
     fun setQuietWindow(day: java.time.DayOfWeek, start: Int, end: Int) =
-        viewModelScope.launch { settingsRepo.setQuietWindow(day, start, end) }
+        write { settingsRepo.setQuietWindow(day, start, end) }
 
-    fun setTrainingReminderEnabled(v: Boolean) = viewModelScope.launch {
+    fun setTrainingReminderEnabled(v: Boolean) = write {
         settingsRepo.setTrainingReminderEnabled(v)
         reminderScheduler.apply(v, settingsRepo.trainingReminderHour.first())
     }
-    fun setTrainingReminderHour(h: Int) = viewModelScope.launch {
+    fun setTrainingReminderHour(h: Int) = write {
         settingsRepo.setTrainingReminderHour(h)
         // Re-arm only if reminders are on; otherwise just persist the preferred time for later.
         if (settingsRepo.trainingReminderEnabled.first()) reminderScheduler.apply(true, h.coerceIn(0, 23))
     }
-    fun setWeeklyRecapEnabled(v: Boolean) = viewModelScope.launch { settingsRepo.setWeeklyRecapEnabled(v) }
-    fun setRestTimerAlertEnabled(v: Boolean) = viewModelScope.launch { settingsRepo.setRestTimerAlertEnabled(v) }
+    fun setWeeklyRecapEnabled(v: Boolean) = write { settingsRepo.setWeeklyRecapEnabled(v) }
+    fun setRestTimerAlertEnabled(v: Boolean) = write { settingsRepo.setRestTimerAlertEnabled(v) }
 
     /** Show or hide one notification KIND in the feed (Settings → Notifications). */
     fun setNoticeKindEnabled(key: String, enabled: Boolean) =
-        viewModelScope.launch { settingsRepo.setNoticeKindEnabled(key, enabled) }
+        write { settingsRepo.setNoticeKindEnabled(key, enabled) }
 
-    fun setTileHidden(id: String, hidden: Boolean) = viewModelScope.launch { settingsRepo.setTileHidden(id, hidden) }
-    fun setCompactSetLogging(v: Boolean) = viewModelScope.launch { settingsRepo.setCompactSetLogging(v) }
+    fun setTileHidden(id: String, hidden: Boolean) = write { settingsRepo.setTileHidden(id, hidden) }
+    fun setCompactSetLogging(v: Boolean) = write { settingsRepo.setCompactSetLogging(v) }
     fun setCustomWarmup(dayKey: String, items: List<String>) =
-        viewModelScope.launch { settingsRepo.setCustomWarmup(dayKey, items) }
+        write { settingsRepo.setCustomWarmup(dayKey, items) }
     fun setOverviewTileOrder(order: List<String>) =
-        viewModelScope.launch { settingsRepo.setOverviewTileOrder(order) }
+        write { settingsRepo.setOverviewTileOrder(order) }
 
     fun resetSessions() = viewModelScope.launch { resetRepo.resetSessions() }
     fun resetTrophies() = viewModelScope.launch { resetRepo.resetTrophies() }
@@ -391,33 +405,33 @@ class SettingsViewModel @Inject constructor(
     fun resetSettings() = viewModelScope.launch { resetRepo.resetAppSettings() }
     /** Scoped per-section "reset to defaults" (#544) — clears just this page's preferences. */
     fun resetSection(section: com.forge.app.data.prefs.SettingsSection) =
-        viewModelScope.launch { settingsRepo.resetSection(section) }
+        write { settingsRepo.resetSection(section) }
     fun factoryReset() = viewModelScope.launch { resetRepo.factoryReset() }
     fun loadSampleData() = viewModelScope.launch { sampleDataSeeder.seed() }
-    fun setPrivacyMode(v: Boolean) = viewModelScope.launch { settingsRepo.setPrivacyMode(v) }
+    fun setPrivacyMode(v: Boolean) = write { settingsRepo.setPrivacyMode(v) }
     // App / gallery lock (GYMAP-69). Enabling is gated on an available device credential in the UI
     // (Security page), so these persist the choice directly.
-    fun setAppLockEnabled(v: Boolean) = viewModelScope.launch { settingsRepo.setAppLockEnabled(v) }
-    fun setGalleryLockEnabled(v: Boolean) = viewModelScope.launch { settingsRepo.setGalleryLockEnabled(v) }
-    fun setAppLockTimeoutSec(v: Int) = viewModelScope.launch { settingsRepo.setAppLockTimeoutSec(v) }
-    fun setAvailableEquipment(codes: Set<String>) = viewModelScope.launch {
+    fun setAppLockEnabled(v: Boolean) = write { settingsRepo.setAppLockEnabled(v) }
+    fun setGalleryLockEnabled(v: Boolean) = write { settingsRepo.setGalleryLockEnabled(v) }
+    fun setAppLockTimeoutSec(v: Int) = write { settingsRepo.setAppLockTimeoutSec(v) }
+    fun setAvailableEquipment(codes: Set<String>) = write {
         settingsRepo.setAvailableEquipment(codes)
         // Hand-editing the equipment set leaves any curated preset — drop the freeze.
         settingsRepo.setFrozenExerciseIds(null)
     }
     /** One-tap preset: fills the equipment set AND applies/clears its curated freeze together. */
-    fun selectEquipmentPreset(preset: com.forge.app.program.EquipmentPreset) = viewModelScope.launch {
+    fun selectEquipmentPreset(preset: com.forge.app.program.EquipmentPreset) = write {
         settingsRepo.setAvailableEquipment(preset.equipment)
         settingsRepo.setFrozenExerciseIds(preset.frozenIds)
     }
-    fun setPlateWeightLb(lb: Double) = viewModelScope.launch { settingsRepo.setPlateWeightLb(lb) }
-    fun setDaysPerWeek(n: Int) = viewModelScope.launch { settingsRepo.setDaysPerWeek(n) }
+    fun setPlateWeightLb(lb: Double) = write { settingsRepo.setPlateWeightLb(lb) }
+    fun setDaysPerWeek(n: Int) = write { settingsRepo.setDaysPerWeek(n) }
     /** Toggle "go with the flow" (no fixed plan; home leads with freestyle logging). */
-    fun setFreestyleMode(v: Boolean) = viewModelScope.launch { settingsRepo.setFreestyleMode(v) }
+    fun setFreestyleMode(v: Boolean) = write { settingsRepo.setFreestyleMode(v) }
     /** Show/hide the Coach feature (tab + banners). */
-    fun setCoachEnabled(v: Boolean) = viewModelScope.launch { settingsRepo.setCoachEnabled(v) }
+    fun setCoachEnabled(v: Boolean) = write { settingsRepo.setCoachEnabled(v) }
     /** Weekly cardio-minutes goal for the cardio tab (no effect on the lifting plan). */
-    fun setCardioWeeklyTargetMin(min: Int) = viewModelScope.launch { settingsRepo.setCardioWeeklyTargetMin(min) }
+    fun setCardioWeeklyTargetMin(min: Int) = write { settingsRepo.setCardioWeeklyTargetMin(min) }
     /** All generation inputs read from prefs — keeps the three generate paths in sync (Phase 2 / 3). */
     private suspend fun buildParams(days: Int) = com.forge.app.program.GenerationParams(
         daysPerWeek = days,
@@ -442,16 +456,16 @@ class SettingsViewModel @Inject constructor(
      * toggle decision is made against the freshly persisted set inside the DataStore edit (not the UI
      * snapshot), so a rapid double-tap cycles the chip correctly instead of no-op'ing the second tap.
      */
-    fun toggleExercisesLiked(ids: Set<String>) = viewModelScope.launch {
+    fun toggleExercisesLiked(ids: Set<String>) = write {
         settingsRepo.toggleExercisesLiked(ids)
     }
-    fun toggleExercisesDisliked(ids: Set<String>) = viewModelScope.launch {
+    fun toggleExercisesDisliked(ids: Set<String>) = write {
         settingsRepo.toggleExercisesDisliked(ids)
     }
-    fun setSwapDislikePromptEnabled(enabled: Boolean) = viewModelScope.launch {
+    fun setSwapDislikePromptEnabled(enabled: Boolean) = write {
         settingsRepo.setSwapDislikePromptEnabled(enabled)
     }
-    fun setRotationCadence(cadence: String, n: Int) = viewModelScope.launch {
+    fun setRotationCadence(cadence: String, n: Int) = write {
         settingsRepo.setRotationCadence(cadence)
         if (cadence == "every_n") settingsRepo.setRotationEveryN(n)
         settingsRepo.setRotationCounter(0)
@@ -475,18 +489,18 @@ class SettingsViewModel @Inject constructor(
 
     // Goal/experience/problem-areas/priority/pins are staged config — applied when the user taps
     // Generate or Re-roll (avoids reshuffling the whole plan on every chip tap).
-    fun setUserGoal(goal: String) = viewModelScope.launch { settingsRepo.setUserGoal(goal) }
-    fun setUserSex(sex: String) = viewModelScope.launch { settingsRepo.setUserSex(sex) }
-    fun setMaxDbWeightLb(lb: Double?) = viewModelScope.launch { settingsRepo.setMaxDbWeightLb(lb) }
-    fun setExperience(level: String) = viewModelScope.launch { settingsRepo.setProgramExperience(level) }
-    fun setProgramEmphasis(v: String) = viewModelScope.launch { settingsRepo.setProgramEmphasis(v) }
-    fun toggleProblemArea(code: String) = viewModelScope.launch {
+    fun setUserGoal(goal: String) = write { settingsRepo.setUserGoal(goal) }
+    fun setUserSex(sex: String) = write { settingsRepo.setUserSex(sex) }
+    fun setMaxDbWeightLb(lb: Double?) = write { settingsRepo.setMaxDbWeightLb(lb) }
+    fun setExperience(level: String) = write { settingsRepo.setProgramExperience(level) }
+    fun setProgramEmphasis(v: String) = write { settingsRepo.setProgramEmphasis(v) }
+    fun toggleProblemArea(code: String) = write {
         settingsRepo.toggleProblemArea(code, code !in settingsRepo.problemAreas.first())
     }
-    fun togglePriorityMuscle(code: String) = viewModelScope.launch {
+    fun togglePriorityMuscle(code: String) = write {
         settingsRepo.togglePriorityMuscle(code, code !in settingsRepo.priorityMuscles.first())
     }
-    fun togglePin(libId: String) = viewModelScope.launch {
+    fun togglePin(libId: String) = write {
         settingsRepo.togglePinned(libId, libId !in settingsRepo.pinnedExercises.first())
     }
 
@@ -525,19 +539,19 @@ class SettingsViewModel @Inject constructor(
             _statusMessage.value = "Deload week generated at lighter volume. Open Gym to see it."
         }
     }
-    fun setAccentColorHex(hex: String) = viewModelScope.launch { settingsRepo.setAccentColorHex(hex) }
-    fun setAccentEnabled(enabled: Boolean) = viewModelScope.launch { settingsRepo.setAccentEnabled(enabled) }
+    fun setAccentColorHex(hex: String) = write { settingsRepo.setAccentColorHex(hex) }
+    fun setAccentEnabled(enabled: Boolean) = write { settingsRepo.setAccentEnabled(enabled) }
 
     /** Persist the pick, which rings it in the picker immediately. The actual launcher-alias swap is
      *  deferred to a user-initiated app-background by [com.forge.app.MainActivity]'s onStop (gated on
      *  onUserLeaveHint): toggling the alias here, in the foreground, disables the alias backing the
      *  current task and closes the app on some OEMs. See [com.forge.app.appicon.AppIconManager]. */
-    fun setAppIcon(icon: com.forge.app.appicon.AppIcon) = viewModelScope.launch {
+    fun setAppIcon(icon: com.forge.app.appicon.AppIcon) = write {
         settingsRepo.setAppIcon(icon.name)
     }
-    fun setThemedLaunchIntro(v: Boolean) = viewModelScope.launch { settingsRepo.setThemedLaunchIntro(v) }
-    fun setTimezone(id: String) = viewModelScope.launch { settingsRepo.setTimezone(id) }
-    fun toggleFavoriteTimezone(id: String) = viewModelScope.launch { settingsRepo.toggleFavoriteTimezone(id) }
+    fun setThemedLaunchIntro(v: Boolean) = write { settingsRepo.setThemedLaunchIntro(v) }
+    fun setTimezone(id: String) = write { settingsRepo.setTimezone(id) }
+    fun toggleFavoriteTimezone(id: String) = write { settingsRepo.toggleFavoriteTimezone(id) }
     fun exportLastSessionPdf() = viewModelScope.launch {
         val file = pdfExport.exportLastSessionPdf()
         if (file != null) _exportPath.value = file.absolutePath
@@ -750,7 +764,7 @@ class SettingsViewModel @Inject constructor(
     val backupFolderUri: StateFlow<String?> = settingsRepo.backupFolderUri
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
-    fun setAutoBackupEnabled(v: Boolean) = viewModelScope.launch { settingsRepo.setAutoBackupEnabled(v) }
+    fun setAutoBackupEnabled(v: Boolean) = write { settingsRepo.setAutoBackupEnabled(v) }
 
     /** Persist + take a write grant on the picked folder, then seed it with a backup right away so it
      *  isn't empty until the next weekly run. */

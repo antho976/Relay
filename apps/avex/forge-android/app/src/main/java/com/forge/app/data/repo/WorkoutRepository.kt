@@ -591,20 +591,16 @@ class WorkoutRepository @Inject constructor(
     suspend fun updateExercise(loggedExercise: LoggedExercise) =
         loggedExerciseDao.update(loggedExercise)
 
-    suspend fun setRating(loggedExerciseId: Long, rating: EffortRating) {
-        val ex = loggedExerciseDao.get(loggedExerciseId) ?: return
-        loggedExerciseDao.update(ex.copy(difficulty = rating))
-    }
+    // Targeted single-column writes rather than read-modify-write of the whole row: see the DAO's
+    // note — a note commit racing a SKIP tap used to silently un-skip the exercise.
+    suspend fun setRating(loggedExerciseId: Long, rating: EffortRating) =
+        loggedExerciseDao.setDifficulty(loggedExerciseId, rating)
 
-    suspend fun setSkipped(loggedExerciseId: Long, skipped: Boolean) {
-        val ex = loggedExerciseDao.get(loggedExerciseId) ?: return
-        loggedExerciseDao.update(ex.copy(skipped = skipped))
-    }
+    suspend fun setSkipped(loggedExerciseId: Long, skipped: Boolean) =
+        loggedExerciseDao.setSkipped(loggedExerciseId, skipped)
 
-    suspend fun setNote(loggedExerciseId: Long, note: String?) {
-        val ex = loggedExerciseDao.get(loggedExerciseId) ?: return
-        loggedExerciseDao.update(ex.copy(note = note))
-    }
+    suspend fun setNote(loggedExerciseId: Long, note: String?) =
+        loggedExerciseDao.setNote(loggedExerciseId, note)
 
     /**
      * Apply a session swap to a logged exercise, preserving every other column (superset group, etc.).

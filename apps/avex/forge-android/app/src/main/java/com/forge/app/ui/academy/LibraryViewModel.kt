@@ -9,6 +9,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -67,19 +68,17 @@ class LibraryViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             libraryRepo.observeStates().collect { states ->
-                _state.value = _state.value.copy(articles = states)
+                _state.update { it.copy(articles = states) }
             }
         }
     }
 
     fun onQueryChange(query: String) {
-        _state.value = _state.value.copy(query = query)
+        _state.update { it.copy(query = query) }
     }
 
     /** Tapping the selected topic clears it, so the row never traps you inside one shelf. */
     fun onTopicSelected(topic: ArticleTopic?) {
-        _state.value = _state.value.copy(
-            topic = if (topic == _state.value.topic) null else topic
-        )
+        _state.update { st -> st.copy(topic = if (topic == st.topic) null else topic) }
     }
 }

@@ -51,12 +51,35 @@ class RestTimerController(
     private val _state = MutableStateFlow<RestTimerState?>(null)
     val state: StateFlow<RestTimerState?> = _state.asStateFlow()
 
+    /**
+     * Fired when the timer's SHAPE changes — start, pause, resume, reset, stop, ±30s — and never on
+     * a tick. Lets an owner persist the timer without polling a 1 Hz flow; see
+     * `SessionTimerHolder`, which uses it so a rest survives process death.
+     */
+    @Volatile
+    var onStructuralChange: ((RestTimerState?) -> Unit)? = null
+
+    /**
+     * `tickJob` and `endAtElapsedMs` are mutated from more than one thread, so every public mutator
+     * below is `@Synchronized` and both fields are `@Volatile`.
+     *
+     * The controller runs on `Dispatchers.Main.immediate`, but its non-suspend mutators are also
+     * called straight from a Data Layer BINDER thread: `WearSyncService.onMessageReceived` handles a
+     * wrist "+30s" / "skip" inside `runBlocking`, and so does `SetLogUseCase.logFromWatch`. A
+     * non-atomic `tickJob?.cancel(); tickJob = launch { … }` reachable from two threads could leave
+     * two tick loops writing `_state` at once — the displayed seconds oscillating — and there was no
+     * happens-before edge at all between the binder thread's write of the end instant and the Main
+     * thread's read of it, so a wrist "+30s" could show up as the countdown jumping backwards.
+     */
+    @Volatile
     private var tickJob: Job? = null
 
     /** Elapsed-time reading (ms) at which the countdown reaches zero. Authoritative while running. */
+    @Volatile
     private var endAtElapsedMs: Long = 0L
 
     /** (Re)start the timer at [seconds] and begin counting down. */
+    @Synchronized
     fun start(seconds: Int = defaultSeconds) {
         endAtElapsedMs = elapsed.elapsedMs() + seconds * 1000L
         _state.value = RestTimerState(
@@ -65,16 +88,20 @@ class RestTimerController(
             isPaused = false
         )
         relaunchTickJob()
+        notifyStructural()
     }
 
+    @Synchronized
     fun pause() {
         val current = _state.value ?: return
         tickJob?.cancel()
         tickJob = null
         // Freeze the live remaining value so resume() can rebuild the end instant from it.
         _state.value = current.copy(secondsRemaining = remainingNow(current), isPaused = true)
+        notifyStructural()
     }
 
+    @Synchronized
     fun resume() {
         val current = _state.value ?: return
         // The rest is already over — "Resume" means get back to working out, so dismiss the timer
@@ -84,9 +111,11 @@ class RestTimerController(
         endAtElapsedMs = elapsed.elapsedMs() + current.secondsRemaining * 1000L
         _state.update { it?.copy(isPaused = false) }
         relaunchTickJob()
+        notifyStructural()
     }
 
     /** Reset to the original total seconds and pause. */
+    @Synchronized
     fun reset() {
         val current = _state.value ?: return
         tickJob?.cancel()
@@ -95,16 +124,20 @@ class RestTimerController(
             secondsRemaining = current.totalSeconds,
             isPaused = true
         )
+        notifyStructural()
     }
 
     /** Stop the timer entirely — bubble disappears. */
+    @Synchronized
     fun stop() {
         tickJob?.cancel()
         tickJob = null
         _state.value = null
+        notifyStructural()
     }
 
     /** Add [seconds] to the remaining time. Resumes if the timer was paused. */
+    @Synchronized
     fun addSeconds(seconds: Int) {
         val current = _state.value ?: return
         if (current.isPaused) {
@@ -116,6 +149,7 @@ class RestTimerController(
             _state.value = current.copy(secondsRemaining = remainingNow(current.copy(isPaused = false)))
         }
         relaunchTickJob()
+        notifyStructural()
     }
 
     /** Seconds left of real elapsed time (never negative). Rounds up so a fresh 150 reads 150, not 149.
@@ -123,12 +157,34 @@ class RestTimerController(
      *  A wall-clock correction in EITHER direction is now simply invisible here — the elapsed clock
      *  it reads cannot jump. The ceiling clamp stays as a display bound (and as a backstop should an
      *  implementation ever hand back something implausible). */
+    /**
+     * Rebuild a timer that outlived its process. [remainingSeconds] is what is left of
+     * [totalSeconds]; a paused timer is restored frozen at that value.
+     */
+    @Synchronized
+    fun restore(totalSeconds: Int, remainingSeconds: Int, paused: Boolean) {
+        if (totalSeconds <= 0 || remainingSeconds <= 0) return
+        endAtElapsedMs = elapsed.elapsedMs() + remainingSeconds * 1000L
+        _state.value = RestTimerState(
+            totalSeconds = totalSeconds,
+            secondsRemaining = remainingSeconds.coerceAtMost(totalSeconds.coerceAtLeast(remainingSeconds)),
+            isPaused = paused
+        )
+        if (!paused) relaunchTickJob()
+    }
+
+    private fun notifyStructural() {
+        runCatching { onStructuralChange?.invoke(_state.value) }
+    }
+
+    @Synchronized
     private fun remainingNow(state: RestTimerState): Int {
         if (state.isPaused) return state.secondsRemaining
         val ms = endAtElapsedMs - elapsed.elapsedMs()
         return if (ms <= 0) 0 else ((ms + 999) / 1000).toInt().coerceAtMost(MAX_REST_SECONDS)
     }
 
+    @Synchronized
     private fun relaunchTickJob() {
         tickJob?.cancel()
         tickJob = scope.launch {

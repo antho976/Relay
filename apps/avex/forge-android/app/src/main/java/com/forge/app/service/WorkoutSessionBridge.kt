@@ -25,12 +25,22 @@ class WorkoutSessionBridge @Inject constructor() {
     private val _sessionState = MutableStateFlow<SessionNotifState?>(null)
     val sessionState: StateFlow<SessionNotifState?> = _sessionState.asStateFlow()
 
-    private val _timerDone = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    /**
+     * Buffered and DROP_OLDEST, so a slow collector can never make [notifyTimerDone] fail silently.
+     * With a one-slot SUSPEND buffer and the emit result discarded, a second rest timer expiring
+     * while the service was still handling the first was simply lost.
+     */
+    private val _timerDone = MutableSharedFlow<Unit>(
+        extraBufferCapacity = 8,
+        onBufferOverflow = kotlinx.coroutines.channels.BufferOverflow.DROP_OLDEST
+    )
     val timerDone: SharedFlow<Unit> = _timerDone.asSharedFlow()
 
     fun startSession(state: SessionNotifState) { _sessionState.value = state }
     fun endSession() { _sessionState.value = null }
-    fun notifyTimerDone() { _timerDone.tryEmit(Unit) }
+    /** Never fails now that the buffer drops oldest rather than suspending, but the result is
+     *  checked rather than discarded so a future change can't reintroduce a silent drop. */
+    fun notifyTimerDone(): Boolean = _timerDone.tryEmit(Unit)
 }
 
 data class SessionNotifState(

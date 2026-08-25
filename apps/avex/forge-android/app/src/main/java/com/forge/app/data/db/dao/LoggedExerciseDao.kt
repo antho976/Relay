@@ -183,6 +183,24 @@ interface LoggedExerciseDao {
     suspend fun allForFinishedSessions(): List<LoggedExercise>
 
     /** Set superset group for an exercise (#38). */
+    /**
+     * Single-column writes, so two of these racing can't clobber each other.
+     *
+     * They used to be SELECT-then-`update(row.copy(...))` in the repository: each built a whole row
+     * from its own pre-read snapshot, so a note debounce firing while the user tapped SKIP wrote
+     * `skipped = false` straight back over the skip. The exercise silently un-skipped itself and
+     * counted against the session's honesty percentage. [setSupersetGroup] below already had the
+     * right shape.
+     */
+    @Query("UPDATE logged_exercise SET difficulty = :rating WHERE id = :id")
+    suspend fun setDifficulty(id: Long, rating: EffortRating?)
+
+    @Query("UPDATE logged_exercise SET skipped = :skipped WHERE id = :id")
+    suspend fun setSkipped(id: Long, skipped: Boolean)
+
+    @Query("UPDATE logged_exercise SET note = :note WHERE id = :id")
+    suspend fun setNote(id: Long, note: String?)
+
     @Query("UPDATE logged_exercise SET superset_group = :group WHERE id = :id")
     suspend fun setSupersetGroup(id: Long, group: String?)
 

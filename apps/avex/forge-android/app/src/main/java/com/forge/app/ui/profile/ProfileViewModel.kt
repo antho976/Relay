@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.io.File
 import java.time.LocalDate
@@ -146,7 +147,16 @@ class ProfileViewModel @Inject constructor(
         // read that matches load()'s, but dropping it risks losing a bump that lands between load()'s
         // read and this collector subscribing (that bump would BE the replayed value we'd skip).
         viewModelScope.launch {
-            photoRepo.revision.collect { _state.value = _state.value.copy(photos = photoRepo.photos()) }
+            // Read FIRST, then update atomically. `_state.value = _state.value.copy(x = suspendCall())`
+            // evaluates the receiver before the argument, so the whole state object was snapshotted
+            // BEFORE the suspension and written back after it — silently reverting anything another
+            // coroutine wrote in between. Renaming yourself in the header just as a photo import
+            // finished snapped the name back to the old one (persisted correctly, so it reappeared
+            // on the next open — reading as a mysterious flicker rather than a bug).
+            photoRepo.revision.collect {
+                val photos = photoRepo.photos()
+                _state.update { st -> st.copy(photos = photos) }
+            }
         }
     }
 
@@ -246,7 +256,7 @@ class ProfileViewModel @Inject constructor(
     fun setUserName(name: String) = viewModelScope.launch {
         val trimmed = name.trim()
         settingsRepo.setUserName(trimmed)
-        _state.value = _state.value.copy(name = trimmed)
+        _state.update { it.copy(name = trimmed) }
     }
 
     /** Save a caption for a progress photo (edited in the viewer dialog). */
@@ -254,9 +264,11 @@ class ProfileViewModel @Inject constructor(
         val trimmed = note.trim()
         photoRepo.setNote(photo, trimmed)
         // Patch the one edited caption in place rather than re-reading + re-decoding the whole index.
-        _state.value = _state.value.copy(
-            photos = _state.value.photos.map { if (it.fileName == photo.fileName) it.copy(note = trimmed) else it }
-        )
+        _state.update { st ->
+            st.copy(
+                photos = st.photos.map { if (it.fileName == photo.fileName) it.copy(note = trimmed) else it }
+            )
+        }
     }
 
     fun fileFor(photo: ProgressPhoto) = photoRepo.fileFor(photo)
@@ -268,7 +280,8 @@ class ProfileViewModel @Inject constructor(
 
     fun deletePhoto(photo: ProgressPhoto) = viewModelScope.launch {
         photoRepo.delete(photo)
-        _state.value = _state.value.copy(photos = photoRepo.photos())
+        val photos = photoRepo.photos()
+        _state.update { it.copy(photos = photos) }
     }
 
     fun avatarFile(): File = avatarRepo.file
@@ -276,20 +289,20 @@ class ProfileViewModel @Inject constructor(
     /** The user's own photo (system Photo Picker) — clears any active default and the edit hint. */
     fun setAvatar(uri: Uri) = viewModelScope.launch {
         if (avatarRepo.adoptOwn(uri)) {
-            _state.value = _state.value.copy(
+            _state.update { it.copy(
                 hasAvatar = true, avatarStamp = System.currentTimeMillis(),
                 avatarDefaultKey = null, showAvatarHint = false
-            )
+            ) }
         }
     }
 
     /** Adopt one of the app's bundled default covers (GYMAP-22) — baked into avatar.jpg. */
     fun setAvatarFromDefault(avatar: DefaultAvatars.Item) = viewModelScope.launch {
         if (avatarRepo.adoptDefault(avatar.key, avatar.resId)) {
-            _state.value = _state.value.copy(
+            _state.update { it.copy(
                 hasAvatar = true, avatarStamp = System.currentTimeMillis(),
                 avatarDefaultKey = avatar.key, showAvatarHint = false
-            )
+            ) }
         }
     }
 
@@ -297,5 +310,5 @@ class ProfileViewModel @Inject constructor(
     fun markAvatarHintSeen() = viewModelScope.launch { settingsRepo.setAvatarEditHintShown() }
 
     /** Hide the edit hint now (the user opened the picker). */
-    fun dismissAvatarHint() { _state.value = _state.value.copy(showAvatarHint = false) }
+    fun dismissAvatarHint() { _state.update { it.copy(showAvatarHint = false) } }
 }

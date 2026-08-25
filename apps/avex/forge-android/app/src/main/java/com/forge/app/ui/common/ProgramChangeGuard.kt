@@ -8,6 +8,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.getAndUpdate
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -29,7 +30,19 @@ class ProgramChangeGuard @Inject constructor(
     /** A staged change waiting on confirmation; [loggedSets] tells the dialog how much is at stake. */
     data class Pending(val loggedSets: Int)
 
-    private var stagedAction: (suspend () -> Unit)? = null
+    /**
+     * The staged action, held atomically alongside [_pending].
+     *
+     * This was a plain `var` on a @Singleton written by every ViewModel that can mutate the program.
+     * [run] overwrote it unconditionally and [confirm] read-then-cleared it with no lock, so a
+     * dialog dismissed by a recomposition or a back gesture (neither of which calls [cancel]) left
+     * a stale action staged: trigger a re-roll from Settings next and "Discard & continue" ran the
+     * RE-ROLL, discarding the in-progress workout for an action the user never confirmed, while the
+     * deload they actually asked for never happened.
+     *
+     * `getAndUpdate { null }` in [confirm] means it can also never double-run.
+     */
+    private val stagedAction = MutableStateFlow<(suspend () -> Unit)?>(null)
     private val _pending = MutableStateFlow<Pending?>(null)
     val pending: StateFlow<Pending?> = _pending.asStateFlow()
 
@@ -48,21 +61,22 @@ class ProgramChangeGuard @Inject constructor(
             action()
             return
         }
-        stagedAction = action
+        // A newer request replaces an older one — the user's latest intent is the live one — but the
+        // dialog is re-raised with it so the two can never describe different actions.
+        stagedAction.value = action
         _pending.value = Pending(workoutRepo.allSetsForSession(active.id).size)
     }
 
     /** User chose "Discard & continue": run the staged action (its own path discards the session). */
     suspend fun confirm() {
-        val action = stagedAction ?: return
-        stagedAction = null
+        val action = stagedAction.getAndUpdate { null } ?: return
         _pending.value = null
         action()
     }
 
     /** User backed out — drop the staged action, leave the workout untouched. */
     fun cancel() {
-        stagedAction = null
+        stagedAction.value = null
         _pending.value = null
     }
 }

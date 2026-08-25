@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.time.Instant
 import javax.inject.Inject
@@ -189,13 +190,14 @@ class CoachViewModel @Inject constructor(
     fun startBlock() = viewModelScope.launch {
         val weekId = _state.value.brief?.pass?.weekId ?: return@launch
         runCatching { blockRepo.start(weekId = weekId) }
-        _state.value = _state.value.copy(block = runCatching { blockRepo.active() }.getOrNull())
+        val block = runCatching { blockRepo.active() }.getOrNull()
+        _state.update { it.copy(block = block) }
     }
 
     /** End it early — the user's veto is always one tap away. */
     fun endBlock() = viewModelScope.launch {
         runCatching { blockRepo.end() }
-        _state.value = _state.value.copy(block = null)
+        _state.update { it.copy(block = null) }
     }
 
     // ─── Projects (D) ──────────────────────────────────────────────────────────
@@ -225,12 +227,21 @@ class CoachViewModel @Inject constructor(
     }
 
     private suspend fun refreshProjects() {
-        _state.value = _state.value.copy(
-            project = runCatching { projectRepo.active() }.getOrNull(),
-            projectProposal = runCatching { projectRepo.proposal() }.getOrNull(),
-            projectOptions = runCatching { projectRepo.proposals() }.getOrDefault(emptyList()),
-            newLessons = runCatching { academyRepo.newCount() }.getOrDefault(_state.value.newLessons)
-        )
+        // Read everything first, then update atomically: `_state.value = _state.value.copy(...)`
+        // snapshotted the state BEFORE these suspending reads and wrote the whole object back after,
+        // reverting whatever another coroutine had written in between.
+        val project = runCatching { projectRepo.active() }.getOrNull()
+        val proposal = runCatching { projectRepo.proposal() }.getOrNull()
+        val options = runCatching { projectRepo.proposals() }.getOrDefault(emptyList())
+        val lessons = runCatching { academyRepo.newCount() }.getOrNull()
+        _state.update {
+            it.copy(
+                project = project,
+                projectProposal = proposal,
+                projectOptions = options,
+                newLessons = lessons ?: it.newLessons
+            )
+        }
     }
 
     // ─── Chart series (pure reads off the snapshot) ────────────────────────────

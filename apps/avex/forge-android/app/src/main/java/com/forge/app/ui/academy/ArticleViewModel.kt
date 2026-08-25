@@ -11,6 +11,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -45,10 +46,8 @@ class ArticleViewModel @Inject constructor(
         if (article != null) {
             viewModelScope.launch {
                 runCatching { libraryRepo.markOpened(article.id) }
-                _state.value = _state.value.copy(
-                    finished = runCatching { libraryRepo.stateOf(article.id)?.finished }
-                        .getOrNull() == true
-                )
+                val finished = runCatching { libraryRepo.stateOf(article.id)?.finished }.getOrNull() == true
+                _state.update { it.copy(finished = finished) }
             }
         }
     }
@@ -76,7 +75,7 @@ class ArticleViewModel @Inject constructor(
     fun onReachedEnd() {
         val article = _state.value.article ?: return
         if (_state.value.finished) return
-        _state.value = _state.value.copy(finished = true)
+        _state.update { it.copy(finished = true) }
         viewModelScope.launch { runCatching { libraryRepo.markFinished(article.id) } }
     }
 }

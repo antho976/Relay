@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -128,7 +129,7 @@ class HealthConnectViewModel @Inject constructor(
         val writeCalories = settingsRepo.hcWriteCalories.first()
         val writeSessions = settingsRepo.hcWriteSessions.first()
         val wearableBrand = settingsRepo.wearableBrand.first()
-        _state.value = _state.value.copy(
+        _state.update { it.copy(
             loading = false,
             available = available,
             needsUpdate = manager.needsUpdate,
@@ -149,11 +150,11 @@ class HealthConnectViewModel @Inject constructor(
             // importMessage + signalFlow preserved (copy, not a fresh UiState): the import line so a
             // just-shown result isn't wiped by a lifecycle refresh; the prior reading so rows keep
             // "receiving"/"nothing yet" until the fresh probe below resolves, instead of flickering to "ON".
-        )
+        ) }
         // Then probe what's actually arriving (a cheap single-row read per granted type) and fill the
         // reading in. Separate step so the grant state — and the whole page — renders without waiting on it.
         val flow = if (available) manager.probeSignalFlow(clock.nowMs()) else null
-        _state.value = _state.value.copy(signalFlow = flow)
+        _state.update { it.copy(signalFlow = flow) }
 
         // First time bodyweight READ is granted, backfill the WHOLE Health Connect weight history once
         // (GYMAP-63) — runs after the page has rendered so it never blocks the grant state. A pref gate
@@ -165,9 +166,9 @@ class HealthConnectViewModel @Inject constructor(
             if (imported != null) {
                 settingsRepo.setHcWeightHistoryImported(true)
                 if (imported > 0) {
-                    _state.value = _state.value.copy(
+                    _state.update { it.copy(
                         importMessage = "Imported $imported day${if (imported == 1) "" else "s"} of weight history."
-                    )
+                    ) }
                 }
             }
         }
@@ -175,47 +176,47 @@ class HealthConnectViewModel @Inject constructor(
 
     fun setWearableBrand(key: String) = viewModelScope.launch {
         settingsRepo.setWearableBrand(key)
-        _state.value = _state.value.copy(wearableBrand = key)
+        _state.update { it.copy(wearableBrand = key) }
     }
 
     fun setWriteBodyweight(value: Boolean) = viewModelScope.launch {
         settingsRepo.setHcWriteBodyweight(value)
-        _state.value = _state.value.copy(writeBodyweight = value)
+        _state.update { it.copy(writeBodyweight = value) }
     }
 
     fun setWriteCalories(value: Boolean) = viewModelScope.launch {
         settingsRepo.setHcWriteCalories(value)
-        _state.value = _state.value.copy(writeCalories = value)
+        _state.update { it.copy(writeCalories = value) }
     }
 
     fun setWriteSessions(value: Boolean) = viewModelScope.launch {
         settingsRepo.setHcWriteSessions(value)
-        _state.value = _state.value.copy(writeSessions = value)
+        _state.update { it.copy(writeSessions = value) }
     }
 
     fun setWriteBodyFat(value: Boolean) = viewModelScope.launch {
         settingsRepo.setHcWriteBodyFat(value)
-        _state.value = _state.value.copy(writeBodyFat = value)
+        _state.update { it.copy(writeBodyFat = value) }
     }
 
     fun importNow() = viewModelScope.launch {
         val imported = bodyweightRepo.importLatestFromHealthConnect()
-        _state.value = _state.value.copy(
+        _state.update { it.copy(
             importMessage = if (imported != null) "Imported your latest weight." else "No newer weight in Health Connect."
-        )
+        ) }
     }
 
     fun importBodyFatNow() = viewModelScope.launch {
         val imported = bodyFatRepo.importLatestFromHealthConnect()
-        _state.value = _state.value.copy(
+        _state.update { it.copy(
             bodyFatImportMessage = if (imported != null) "Imported your latest body fat." else "No newer body fat in Health Connect."
-        )
+        ) }
     }
 
     fun importLeanMassNow() = viewModelScope.launch {
         val imported = leanMassRepo.importLatestFromHealthConnect()
-        _state.value = _state.value.copy(
+        _state.update { it.copy(
             leanMassImportMessage = if (imported != null) "Imported your latest muscle mass." else "No newer muscle mass in Health Connect."
-        )
+        ) }
     }
 }
