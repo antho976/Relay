@@ -1,5 +1,8 @@
 # Avex 0.9 — release film
 
+> **Building another one? Read [RULES.md](RULES.md) first.** It is the list of mistakes this cut
+> already made, with the measurements that caught each one. Every rule in it cost a round.
+
 90 seconds, 1920×1080, 30fps. `npm run studio` to work on it, `npm run render` to output
 `out/avex-0.9.mp4`.
 
