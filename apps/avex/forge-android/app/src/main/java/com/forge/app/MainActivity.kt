@@ -54,7 +54,6 @@ import dagger.hilt.android.AndroidEntryPoint
 import java.io.File
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import javax.inject.Inject
@@ -278,17 +277,19 @@ class MainActivity : FragmentActivity() {
         // first frame (no plain→themed pop), plus the "Custom startup animation" setting so a user who
         // turned it off goes straight to the plain black-and-white Avex with no themed flash. One cached
         // DataStore read pass, same as privacy/amoled.
-        val (introIconKey, themedIntro) = runBlocking {
-            val privacy = settingsRepo.privacyMode.first()
-            val lockEnabled = settingsRepo.appLockEnabled.first()
-            // Secure the window on the very first frame when EITHER privacy mode or the app lock is
-            // on, and seed the lock state synchronously so a locked cold start never flashes the
-            // content behind the gate (GYMAP-69).
-            applyPrivacyMode(privacy || lockEnabled)
-            appLock.primeEnabled(lockEnabled)
-            applyAdaptiveWindowBackground(settingsRepo.amoledMode.first())
-            settingsRepo.appIcon.first() to settingsRepo.themedLaunchIntro.first()
-        }
+        // ONE read of the preferences file, not five subscriptions to it. These values have to be
+        // applied before the first frame — the secure-window flag, the lock gate and the window
+        // background all decide what that frame looks like — so the read is still synchronous, but
+        // it is now a single file read instead of five with the main thread parked on each.
+        val startup = runBlocking { settingsRepo.startupPreferences() }
+        // Secure the window on the very first frame when EITHER privacy mode or the app lock is
+        // on, and seed the lock state synchronously so a locked cold start never flashes the
+        // content behind the gate (GYMAP-69).
+        applyPrivacyMode(startup.privacyMode || startup.appLockEnabled)
+        appLock.primeEnabled(startup.appLockEnabled)
+        applyAdaptiveWindowBackground(startup.amoledMode)
+        val introIconKey = startup.appIcon
+        val themedIntro = startup.themedLaunchIntro
         appIconKey = introIconKey
         lifecycleScope.launch {
             // FLAG_SECURE follows privacy mode OR the app lock — turning on a lock implies keeping the

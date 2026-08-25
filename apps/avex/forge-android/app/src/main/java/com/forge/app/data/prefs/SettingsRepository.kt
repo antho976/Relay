@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.edit
 import com.forge.app.core.time.Clock
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.map
 import javax.inject.Inject
@@ -830,6 +831,35 @@ class SettingsRepository @Inject constructor(
         context.forgePreferences.edit { it[PreferenceKeys.WARMUP_DISABLED_UNTIL_MS] = untilMs }
 
     // ─── Privacy mode (#152) ──────────────────────────────────────────────────
+
+    /**
+     * Everything MainActivity needs before it can draw its first frame, from ONE read of the
+     * preferences file.
+     *
+     * It used to collect five separate flows inside a single runBlocking on the UI thread, and each
+     * `.first()` is its own subscription to `forgePreferences.data` — five file reads, plus the
+     * file's creation on a first-ever launch, with the main thread parked. StrictMode's disk-read
+     * detector is debug-only and penaltyLog, so in release this only ever surfaced as an ANR report.
+     */
+    suspend fun startupPreferences(): StartupPreferences {
+        val prefs = context.forgePreferences.data.first()
+        return StartupPreferences(
+            privacyMode = prefs[PreferenceKeys.PRIVACY_MODE] ?: false,
+            appLockEnabled = prefs[PreferenceKeys.APP_LOCK_ENABLED] ?: false,
+            amoledMode = prefs[PreferenceKeys.AMOLED_MODE] ?: false,
+            appIcon = prefs[PreferenceKeys.APP_ICON] ?: "",
+            themedLaunchIntro = prefs[PreferenceKeys.THEMED_LAUNCH_INTRO] ?: true
+        )
+    }
+
+    /** The first-frame settings — see [startupPreferences]. Defaults match each flow's own default. */
+    data class StartupPreferences(
+        val privacyMode: Boolean,
+        val appLockEnabled: Boolean,
+        val amoledMode: Boolean,
+        val appIcon: String,
+        val themedLaunchIntro: Boolean
+    )
 
     val privacyMode: Flow<Boolean> = context.forgePreferences.data
         .map { it[PreferenceKeys.PRIVACY_MODE] ?: false }
