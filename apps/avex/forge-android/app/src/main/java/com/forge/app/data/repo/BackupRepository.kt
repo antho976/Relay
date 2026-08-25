@@ -63,6 +63,23 @@ class BackupRepository @Inject constructor(
     /** The outcome of a restore attempt — distinct reasons so the UI can explain a failure (E6). */
     enum class RestoreOutcome { SUCCESS, NOT_A_BACKUP, NEWER_VERSION, TOO_OLD, CORRUPT, TOO_LARGE, IO_ERROR, NO_BACKUP_FILE }
 
+    /**
+     * Write [value] under [key], or leave the key out entirely when it is null.
+     *
+     * A nullable NUMBER used to be written as the empty string ("elevationM": ""), which makes the
+     * same field a number on one row and a string on the next — any reader using optDouble/optLong
+     * on the empty form silently gets the default instead of a signal that the value was absent.
+     * Omission is the JSON way to say "not recorded": our own importer already reads every one of
+     * these through opt*(key, default), so a missing key lands on exactly the same default, and an
+     * outside reader sees one type per field.
+     *
+     * Deliberately not JSONObject.NULL: org.json renders that back through optString as the literal
+     * text "null", which would be worse than the empty string it replaced.
+     */
+    private fun JSONObject.putOrOmit(key: String, value: Any?) {
+        if (value != null) put(key, value)
+    }
+
     // ── Active-time helpers (per-sitting timing) ────────────────────────────────
     /** Real active seconds: the stamped sum of sittings, falling back to wall-clock for old rows. */
     private fun activeSecondsOf(s: com.forge.app.data.db.entities.Session): Int =
@@ -127,16 +144,22 @@ class BackupRepository @Inject constructor(
                         val sets = loggedSetDao.forLoggedExercise(ex.id)
                         exArr.put(JSONObject().apply {
                             put("exerciseId", ex.exerciseId)
-                            put("name", ex.swappedName ?: ex.exerciseId)
+                            // The DISPLAY name, the same resolution exportSessionJson uses. Falling
+                            // back to the raw id wrote "ua1" as the human name for the seed-split
+                            // ids, which resolve only on the display path and are deliberately not
+                            // in ExerciseLibrary: re-importing the file matched nothing, so years of
+                            // bench-press history came back as a movement called "Ua1", de-linked
+                            // from its own stats. The AI reading this file saw the id too.
+                            put("name", com.forge.app.program.Program.exerciseDisplayName(ex.exerciseId, ex.swappedName))
                             put("effort", ex.difficulty?.name ?: "")
                             put("note", ex.note ?: "")
                             put("skipped", ex.skipped)
                             val setArr = JSONArray()
                             sets.forEach { set ->
                                 setArr.put(JSONObject().apply {
-                                    put("weightLb", set.weightLb ?: 0)
+                                    putOrOmit("weightLb", set.weightLb)
                                     put("reps", set.reps)
-                                    put("rpe", set.rpe ?: 0)
+                                    putOrOmit("rpe", set.rpe)
                                     put("difficultyTag", set.difficultyTag ?: "")
                                 })
                             }
@@ -154,7 +177,7 @@ class BackupRepository @Inject constructor(
                     put("date", dateFmt.format(Instant.ofEpochMilli(c.date).atZone(zone)))
                     put("type", c.type)
                     put("durationMin", c.durationMin)
-                    put("distanceKm", c.distanceKm ?: 0)
+                    putOrOmit("distanceKm", c.distanceKm)
                     put("effort", c.effort ?: "")
                 })
             }
@@ -227,9 +250,9 @@ class BackupRepository @Inject constructor(
                             sets.forEach { set ->
                                 setArr.put(JSONObject().apply {
                                     put("weightText", set.weightText)
-                                    put("weightLb", set.weightLb ?: 0)
+                                    putOrOmit("weightLb", set.weightLb)
                                     put("reps", set.reps)
-                                    put("rpe", set.rpe ?: 0)
+                                    putOrOmit("rpe", set.rpe)
                                     put("completedAt", set.completedAt)
                                     put("difficultyTag", set.difficultyTag ?: "")
                                     // These change what the set MEANS, so an export without them is
@@ -260,14 +283,14 @@ class BackupRepository @Inject constructor(
                     put("date", c.date)
                     put("type", c.type)
                     put("durationMin", c.durationMin)
-                    put("distanceKm", c.distanceKm ?: 0)
+                    putOrOmit("distanceKm", c.distanceKm)
                     put("effort", c.effort ?: "")
                     put("restReason", c.restReason ?: "")
                     put("note", c.note ?: "")
                     // Per-type fields (GYMAP-38); elevation stays canonical metres like distance is km.
-                    put("inclinePct", c.inclinePct ?: "")
-                    put("laps", c.laps ?: "")
-                    put("elevationM", c.elevationM ?: "")
+                    putOrOmit("inclinePct", c.inclinePct)
+                    putOrOmit("laps", c.laps)
+                    putOrOmit("elevationM", c.elevationM)
                 })
             }
             put("cardio", cardioArr)
@@ -280,11 +303,11 @@ class BackupRepository @Inject constructor(
                 goalsArr.put(JSONObject().apply {
                     put("kind", g.kind)
                     put("targetKey", g.targetKey)
-                    put("targetValue", g.targetValue ?: "")
+                    putOrOmit("targetValue", g.targetValue)
                     put("priority", g.priority)
                     put("createdAt", g.createdAt)
-                    put("completedAt", g.completedAt ?: "")
-                    put("archivedAt", g.archivedAt ?: "")
+                    putOrOmit("completedAt", g.completedAt)
+                    putOrOmit("archivedAt", g.archivedAt)
                     put("source", g.source)
                     put("note", g.note)
                 })
@@ -340,9 +363,9 @@ class BackupRepository @Inject constructor(
                         sets.forEach { set ->
                             setArr.put(JSONObject().apply {
                                 put("weightText", set.weightText)
-                                put("weightLb", set.weightLb ?: 0.0)
+                                putOrOmit("weightLb", set.weightLb)
                                 put("reps", set.reps)
-                                put("rpe", set.rpe ?: 0)
+                                putOrOmit("rpe", set.rpe)
                                 put("completedAt", set.completedAt)
                                 put("difficultyTag", set.difficultyTag ?: "")
                             })
