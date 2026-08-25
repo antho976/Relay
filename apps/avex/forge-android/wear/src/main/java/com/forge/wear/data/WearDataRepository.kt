@@ -20,6 +20,7 @@ import com.google.android.gms.wearable.DataEventBuffer
 import com.google.android.gms.wearable.DataItem
 import com.google.android.gms.wearable.Wearable
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -188,19 +189,67 @@ class WearDataRepository private constructor(context: Context) : DataClient.OnDa
     }
 
     private fun sendBytes(path: String, bytes: ByteArray) {
-        scope.launch {
-            runCatching {
-                val nodes = Wearable.getNodeClient(appContext).connectedNodes.await()
-                nodes.forEach { node ->
-                    Wearable.getMessageClient(appContext).sendMessage(node.id, path, bytes).await()
-                }
+        scope.launch { sendWithRetry(path, bytes) }
+    }
+
+    /**
+     * Deliver [bytes], retrying a few times with backoff.
+     *
+     * MessageClient is fire-and-forget and requires a LIVE connection, so a send attempted while
+     * the phone is out of Bluetooth range simply does not happen. The previous implementation wrote
+     * that off in three separate ways: a single `runCatching` swallowed every failure, an EMPTY
+     * connected-node list made `forEach` a no-op that returned normally — so "nothing was sent"
+     * was indistinguishable from success — and a throw on the first node skipped every node after
+     * it. A set logged at the far end of the gym was gone, with nothing retried and nothing said.
+     *
+     * Retrying covers the case that actually dominates: a transient flap, or the user walking back
+     * into range within a few seconds. Combined with SetView reusing the command id on a re-tap,
+     * a redelivery that races a landed command is dropped by the phone's deduper rather than
+     * logging twice.
+     *
+     * This does NOT survive process death — the queue is in memory. Genuine offline durability
+     * needs the commands moved onto DataClient, whose items persist and sync on reconnect (the
+     * /cmd/ack path already uses it), and that is a transport change on both sides rather than a
+     * fix here.
+     */
+    private suspend fun sendWithRetry(path: String, bytes: ByteArray): Boolean {
+        var wait = SEND_RETRY_INITIAL_MS
+        repeat(SEND_ATTEMPTS) { attempt ->
+            if (deliverOnce(path, bytes)) return true
+            if (attempt < SEND_ATTEMPTS - 1) {
+                delay(wait)
+                wait = (wait * 2).coerceAtMost(SEND_RETRY_MAX_MS)
             }
         }
+        return false
+    }
+
+    /** One delivery pass. True when at least one connected node accepted the payload. */
+    private suspend fun deliverOnce(path: String, bytes: ByteArray): Boolean {
+        val nodes = runCatching {
+            Wearable.getNodeClient(appContext).connectedNodes.await()
+        }.getOrNull() ?: return false
+        // No connected node means nothing was delivered. Reporting that as success is what let an
+        // out-of-range log disappear silently.
+        if (nodes.isEmpty()) return false
+        var delivered = false
+        for (node in nodes) {
+            // Per node, so one unreachable node cannot skip the rest.
+            runCatching {
+                Wearable.getMessageClient(appContext).sendMessage(node.id, path, bytes).await()
+            }.onSuccess { delivered = true }
+        }
+        return delivered
     }
 
     private fun newId(): String = UUID.randomUUID().toString()
 
     companion object {
+        /** Total delivery attempts, including the first. Backoff runs 1s, 2s, 4s, 8s. */
+        private const val SEND_ATTEMPTS = 5
+        private const val SEND_RETRY_INITIAL_MS = 1_000L
+        private const val SEND_RETRY_MAX_MS = 8_000L
+
         @SuppressLint("StaticFieldLeak") // application context only
         @Volatile private var INSTANCE: WearDataRepository? = null
 
