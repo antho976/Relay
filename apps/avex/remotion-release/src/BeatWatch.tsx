@@ -6,7 +6,7 @@ import {EASE} from './Camera';
 import {Plate, Split} from './Layout';
 import {Cue} from './Sound';
 import {Body, Eyebrow, Title, useEdgeFade, useRise} from './Type';
-import {ACCENT, EIGHTH, MONO, MUTED, ON_BG, SERIF, run} from './theme';
+import {ACCENT, EIGHTH, MONO, MUTED, ON_BG, SERIF, run, snap} from './theme';
 
 /**
  * Wear OS. The only genuinely new *surface* in 0.9 — neither `wear/` nor `shared/` existed at
@@ -33,9 +33,10 @@ export const WatchBeat: React.FC<{gridStart?: number}> = ({gridStart = 0}) => {
 
   // Phase boundaries as fractions of the beat, so re-timing the cut does not desync the sound.
   // The beat is three bars in the release cut (it was four): the five ticks are done by 0.31, the
-  // set logs at 0.33, and the PR screen keeps a full second before the rest timer takes over.
+  // set logs at 0.33, the PR screen keeps most of a second, and the rest timer runs out ON a grid
+  // point, because the chime that says so has to.
   const at = (f: number) => Math.round(durationInFrames * f);
-  const P = {set: 0, log: at(0.33), pr: at(0.36), rest: at(0.52), rpe: at(0.78)};
+  const P = {set: 0, log: at(0.33), pr: at(0.36), rest: at(0.47), rpe: snap(gridStart + at(0.76), 4) - gridStart};
 
   // The stepper walks 150 → 155 on eighth notes, and the picture is driven BY the cue frames rather
   // than the other way round, so the number changing and the tick are the same instant.
@@ -51,7 +52,9 @@ export const WatchBeat: React.FC<{gridStart?: number}> = ({gridStart = 0}) => {
   const idx = frame >= P.rpe ? 3 : frame >= P.rest ? 2 : frame >= P.pr ? 1 : 0;
   const step = STEPS[idx];
 
-  const restT = interpolate(frame, [P.rest, P.rpe], [180, 121], {
+  // The ring drains to 0:00 on the frame the rate screen takes over. Five seconds in 1.7 s: the
+  // countdown is a device, not a claim, and the previous cut ran 3:00 → 2:01 in the same time.
+  const restT = interpolate(frame, [P.rest + 4, P.rpe], [5, 0], {
     extrapolateLeft: 'clamp', extrapolateRight: 'clamp',
   });
 
@@ -67,6 +70,9 @@ export const WatchBeat: React.FC<{gridStart?: number}> = ({gridStart = 0}) => {
         {/* The stepper walking the weight up is the one sound on this beat that reads as the watch
             rather than as stock UI, so it is the one that stays. The confirm/rest chimes are cut. */}
         {ticks.map((f, i) => <Cue key={i} at={f} sfx="tick" gain={0.95} />)}
+        {/* time's up: the three rising pips synthesised for exactly this, on the frame the ring
+            reaches empty */}
+        <Cue at={P.rpe} sfx="restDone" gain={0.9} />
 
         <Split
           copyWidth={700}
@@ -87,7 +93,7 @@ export const WatchBeat: React.FC<{gridStart?: number}> = ({gridStart = 0}) => {
           <div style={{position: 'relative', width: 600, height: 660, display: 'flex', justifyContent: 'center'}}>
             <Layer on={eSet}><WatchSet size={468} weight={String(weight)} reps="9" light={light} /></Layer>
             <Layer on={ePr}><WatchPr size={468} value="155" on={ePr} light={light} /></Layer>
-            <Layer on={eRest}><WatchRest size={468} remaining={restT} total={210} light={light} /></Layer>
+            <Layer on={eRest}><WatchRest size={468} remaining={restT} total={15} light={light} /></Layer>
             <Layer on={eRpe}><WatchRpe size={468} rpe={8.5} light={light} /></Layer>
           </div>
         </Split>

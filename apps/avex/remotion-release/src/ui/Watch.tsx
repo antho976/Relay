@@ -33,28 +33,44 @@ const WT = {
 
 const DP = 227; // the round display, in dp
 
+/**
+ * No box-shadow anywhere on the watch. The case's drop shadow, the display's vignette and the PR
+ * halo were all large box-shadow blurs on an element under a perspective transform, and Chromium
+ * rasterises those in tiles: on screen the glow was a blocky cross and the shadow a set of steps.
+ * Every soft edge here is a radial gradient instead, drawn outside the 3D-transformed subtree,
+ * which renders as one smooth ramp at any size.
+ */
 export const WatchBody: React.FC<{
-  size: number; children: React.ReactNode; glow?: number;
+  size: number; children: React.ReactNode;
   /** 0..1 — walks the specular band around the case and tilts the body a degree or two. */
   light?: number;
-}> = ({size, children, glow = 0, light = 0.35}) => {
+}> = ({size, children, light = 0.35}) => {
   const k = size / DP;
   const ang = 150 + light * 110;
   const tilt = (light - 0.5) * 5;
   return (
-    <div
-      style={{
-        position: 'relative', width: size, height: size, flex: '0 0 auto',
-        transform: `perspective(${size * 3.4}px) rotateY(${tilt}deg) rotateX(${-tilt * 0.5}deg)`,
-        transformStyle: 'preserve-3d',
-      }}
-    >
+    <div style={{position: 'relative', width: size, height: size, flex: '0 0 auto'}}>
+      {/* the shadow the case throws on the plate — a gradient, not a blur */}
+      <div
+        style={{
+          position: 'absolute', left: -34 * k, right: -34 * k, top: -6 * k, bottom: -50 * k,
+          borderRadius: '50%', pointerEvents: 'none',
+          background: 'radial-gradient(ellipse at 50% 52%, rgba(0,0,0,0.62) 0%, rgba(0,0,0,0.42) 38%, rgba(0,0,0,0.14) 58%, rgba(0,0,0,0) 72%)',
+        }}
+      />
+      <div
+        style={{
+          position: 'absolute', inset: 0,
+          transform: `perspective(${size * 3.4}px) rotateY(${tilt}deg) rotateX(${-tilt * 0.5}deg)`,
+          transformStyle: 'preserve-3d',
+        }}
+      >
       {/* case */}
       <div
         style={{
           position: 'absolute', inset: -10 * k, borderRadius: '50%',
           background: `linear-gradient(${ang}deg,#3a3632 0%,#232019 26%,#141210 58%,#0b0a09 100%)`,
-          boxShadow: `0 30px 70px rgba(0,0,0,.7), inset 0 0 0 ${1.5 * k}px #423c35`,
+          boxShadow: `inset 0 0 0 ${1.5 * k}px #423c35`,
         }}
       />
       {/* crown */}
@@ -69,7 +85,6 @@ export const WatchBody: React.FC<{
         style={{
           position: 'absolute', inset: 0, borderRadius: '50%', background: W.ground,
           overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center',
-          boxShadow: glow ? `inset 0 0 ${40 * k}px rgba(226,61,61,${0.16 * glow})` : undefined,
         }}
       >
         <div style={{width: '100%', padding: `0 ${20 * k}px`, boxSizing: 'border-box'}}>{children}</div>
@@ -82,12 +97,14 @@ export const WatchBody: React.FC<{
               ' rgba(255,255,255,0) 42%, rgba(255,255,255,0) 100%)',
           }}
         />
+        {/* the display's edge falling off into the bezel */}
         <div
           style={{
             position: 'absolute', inset: 0, borderRadius: '50%', pointerEvents: 'none',
-            boxShadow: `inset 0 0 ${26 * k}px ${6 * k}px rgba(0,0,0,0.55)`,
+            background: 'radial-gradient(circle at 50% 50%, rgba(0,0,0,0) 66%, rgba(0,0,0,0.28) 86%, rgba(0,0,0,0.55) 100%)',
           }}
         />
+      </div>
       </div>
     </div>
   );
@@ -222,6 +239,14 @@ export const WatchPr: React.FC<{
   const k = size / DP;
   return (
     <div style={{position: 'relative'}}>
+      {/* a faint gold wash behind the case, drawn as one gradient with no blur — the record is
+          said by the digits, the halo only agrees with them */}
+      <div
+        style={{
+          position: 'absolute', inset: -70 * k, borderRadius: '50%', pointerEvents: 'none',
+          background: `radial-gradient(circle, rgba(227,179,65,${0.16 * on}) 0%, rgba(227,179,65,${0.07 * on}) 34%, rgba(227,179,65,0) 62%)`,
+        }}
+      />
       <WatchBody size={size} light={light}>
         <Center k={k} gap={4}>
           <div style={{...WT.labelSmall(k), color: W.prGold, letterSpacing: 2 * k}}>NEW PR</div>
@@ -229,13 +254,6 @@ export const WatchPr: React.FC<{
           <div style={{...WT.label(k), color: W.muted, textAlign: 'center'}}>{lift}</div>
         </Center>
       </WatchBody>
-      <div
-        style={{
-          position: 'absolute', inset: -10 * k, borderRadius: '50%', pointerEvents: 'none',
-          boxShadow: `0 0 ${70 * k * on}px ${10 * k * on}px rgba(227,179,65,${0.42 * on})`,
-          background: `radial-gradient(circle, rgba(227,179,65,${0.2 * on}) 0%, rgba(227,179,65,0) 68%)`,
-        }}
-      />
     </div>
   );
 };

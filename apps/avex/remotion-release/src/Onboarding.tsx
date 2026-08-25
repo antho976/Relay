@@ -452,7 +452,11 @@ const Grid: React.FC<{
       }}
     >
       {pages.map((p, i) => {
-        const s = spring({frame: frame - (enterAt + arrival[i] * per - LEAD), fps, config: {damping: 200, stiffness: bloom ? 190 : 210}});
+        // Softer than the rest of the film's springs, and started earlier to compensate: at 210
+        // each page snapped in over four frames and fifteen of them on sixteenths read as typing.
+        // At 120, started seven frames ahead of its tap, a page is three-quarters there when the
+        // tap sounds and still settling as the next one starts, so the run reads as one motion.
+        const s = spring({frame: frame - (enterAt + arrival[i] * per - LEAD - 2), fps, config: {damping: 200, stiffness: bloom ? 120 : 120}});
         // This card's offset from the centre of the grid, which is where the hit lands.
         const col = i % cols;
         const row = Math.floor(i / cols);
@@ -469,8 +473,8 @@ const Grid: React.FC<{
           // Lands with a small rise; leaves thrown outward from the same point, further the further
           // from it the card sat, so the outer columns clear the frame.
           tx = ox * 0.9 * exit;
-          ty = oy * 1.6 * exit + (1 - s) * 18;
-          sc = (0.9 + s * 0.1) * (1 + exit * 0.2);
+          ty = oy * 1.6 * exit + (1 - s) * 30;
+          sc = (0.92 + s * 0.08) * (1 + exit * 0.2);
           op = s * fade;
         }
         return (

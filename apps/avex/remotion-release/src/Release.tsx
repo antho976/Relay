@@ -2,6 +2,7 @@ import React from 'react';
 import {AbsoluteFill, Audio, interpolate, staticFile} from 'remotion';
 import {TransitionSeries} from '@remotion/transitions';
 import {Card, Compare, ListCard, Solo} from './Beats';
+import {QUARTER} from './theme';
 import {Camera, EASE, Shot} from './Camera';
 import {HomeMorph, TabSwap} from './NativeBeats';
 import {WatchBeat} from './BeatWatch';
@@ -84,31 +85,43 @@ const BEATS: Beat[] = [
 
   /* ── the session ─────────────────────────────────── bed opens up at bar 17 ── */
   {
-    endBar: 12, out: 'cut', shot: {z: [1, 1.05], x: [0, -16], ease: EASE.drift},
+    /* Two bars, down from three: the bar went to the beat after it, which now has to show three
+       things and log a set. The note is one line for the same reason. Pushes up into that beat
+       rather than cutting: it is the same screen on the same phone, so the phone stays where it is
+       and the next page of copy scrolls in — the join the cardio section uses. */
+    endBar: 11, out: 'pushUp', shot: {z: [1, 1.05], x: [0, -16], ease: EASE.drift},
     el: (start) => (
       <Compare
         before={{src: 'cfr/before-session.mp4', start: 690}}
         after={{src: 'cfr/after-session.mp4', start: 890}}
         eyebrow="Your workout" title={'The screen you\ntrain on'}
-        note="The exercise name used to take up half the screen. Now your last session and what to lift next show up together, the rest timer runs on its own, and one button finishes an exercise."
+        line="The exercise name used to take half the screen. Now your last session, what to lift next and the rest timer fit on one."
         hold={bar(10) - start} sweep={30} dir="ltr" height={880}
       />
     ),
   },
   {
+    /* Three bars. "It tells you what to lift" is shown, not asserted: each claim lights up as an
+       accent outline draws around the thing on the screen it is about — the suggestion line, the
+       "beat 150 lb × 9" on the row, "10 for PR" — one every half bar, and then the set is logged
+       on bar 13 with the callouts gone: the row flips, "Set logged" lands and the rest timer starts.
+       The capture's own change is at source frame 1083. The boxes are measured on the capture in
+       fractions of the 1080×2400 screen, so they sit on their elements at any phone size. */
     endBar: 14, out: 'push', shot: {z: [1, 1.045], x: [0, -14], y: [6, -6], ease: EASE.drift},
     el: (start) => {
-      // The set is logged on bar 13: the row flips to logged, "Set logged" lands and the rest timer
-      // starts running. The capture's own change is at source frame 1083, so the clip starts
-      // wherever puts that frame on the downbeat. This beat used to sit on a still screen for four
-      // seconds with no camera, and its one cue fired eight frames in, inside the push.
       const logAt = bar(13) - start;
+      const step = (n: number) => bar(11) + n * QUARTER * 2 - start;
       return (
         <Solo
           clip={{src: 'cfr/after-session.mp4', start: 1083 - logAt}}
           eyebrow="Your workout" title="It tells you what to lift"
-          line="The weight to try next, and why. What you beat last time, right there on the row. How many reps you need for a personal record."
-          height={900} flip cues={[{at: logAt, sfx: 'confirm'}]}
+          steps={[
+            {at: Math.round(step(1)), text: 'The weight to try next, and why.', box: [0.045, 0.222, 0.905, 0.048]},
+            {at: Math.round(step(2)), text: 'What you beat last time, right there on the row.', box: [0.718, 0.398, 0.215, 0.046]},
+            {at: Math.round(step(3)), text: 'How many reps you need for a personal record.', box: [0.168, 0.44, 0.2, 0.034]},
+          ]}
+          stepsOut={logAt}
+          height={880} cues={[{at: logAt, sfx: 'swoosh'}]}
         />
       );
     },
@@ -134,7 +147,10 @@ const BEATS: Beat[] = [
     ),
   },
   {
-    endBar: 25, out: 'cut', shot: {z: [1.04, 1], ease: EASE.drift},
+    /* Pushes up into the chart rather than cutting: the two beats share a phone in the same place
+       at the same size, and a hard cut between them read as the screen glitching. The push's
+       midpoint still sits on bar 25. */
+    endBar: 25, out: 'pushUp', shot: {z: [1.04, 1], ease: EASE.drift},
     el: (start) => {
       // Two views: the seam reveals 0.9's week, then on beat 4 of bar 23 the toggle goes to
       // Progress and the pace trend takes over. The toggle is at source frame 162 of the capture.
@@ -152,15 +168,16 @@ const BEATS: Beat[] = [
     },
   },
   {
-    /* Cut in on bar 25, the bar the bed drops back, with the chart already standing: the picture
-       and the music change on the same frame. */
+    /* Lands on bar 25, the bar the bed drops back, with the chart already standing: the picture
+       and the music change together. It says Cardio, because "every week" of what was not
+       answered by a bar chart with no label. */
     endBar: 27, out: 'pushUp', shot: {z: [1.05, 1], y: [10, -6], ease: EASE.drift},
     el: () => (
       <Solo
         clip={{src: 'cfr/after-cardio.mp4', start: 822}}
-        eyebrow="New in 0.9" title="Every week as a chart"
-        line="One bar per week, back to your very first, against the 150 minutes a week the WHO recommends."
-        height={900}
+        eyebrow="Cardio · New in 0.9" title="Every week as a chart"
+        line="One bar per week of cardio, back to your very first, against the 150 minutes a week the WHO recommends."
+        height={880}
       />
     ),
   },
@@ -209,7 +226,8 @@ const BEATS: Beat[] = [
     ),
   },
   {
-    endBar: 41, out: 'dissolve',
+    /* A slow push-in for the whole beat, so the pages arrive on a stage that is itself moving. */
+    endBar: 41, out: 'dissolve', shot: {z: [1, 1.04], ease: EASE.drift},
     el: (start) => (
       <OnboardingBeat
         before={ONBOARDING_0_8_9} after={ONBOARDING_0_9}
@@ -244,8 +262,15 @@ const BEATS: Beat[] = [
     ),
   },
   {
+    /* The film ends the way every beat in it went: 0.8.9 standing, then 0.9. The flip lands on
+       bar 45, the bed's final drop, with the sweep; "tomorrow" follows a beat later. */
     endBar: 46, shot: {z: [1, 1.035]},
-    el: (start) => <Card eyebrow="Avex" title="0.9" sub="tomorrow" subAt={bar(45) - start} />,
+    el: (start) => (
+      <Card
+        eyebrow="Avex" title="0.9" flipFrom="0.8.9" flipAt={bar(45) - start}
+        sub="tomorrow" subAt={Math.round(bar(45) + QUARTER - start)}
+      />
+    ),
   },
 ];
 
@@ -316,7 +341,7 @@ export const Release: React.FC = () => (
         const seq = (
           <TransitionSeries.Sequence key={`s${i}`} durationInFrames={len}>
             {/* No beat fades at a join — the transition is the join. Only the film fades. */}
-            <Edges.Provider value={{head: i === 0 ? 12 : 0, tail: i === BEATS.length - 1 ? 16 : 0}}>
+            <Edges.Provider value={{head: i === 0 ? 12 : 0, tail: i === BEATS.length - 1 ? 12 : 0}}>
               <Camera shot={beat.shot}>{beat.el(start)}</Camera>
             </Edges.Provider>
           </TransitionSeries.Sequence>

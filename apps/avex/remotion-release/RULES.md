@@ -202,6 +202,22 @@ device shot moves the camera on the device instead.
 
 **Every beat needs a camera.** A held frame in a ninety-second film reads as a slide.
 
+**A screenshot next to a claim does not show the claim.** "It tells you what to lift" sat beside a
+full session screen for four seconds and the director asked what he was supposed to be looking at.
+Point at it: an accent outline around the element each sentence is about, in the screen's own
+coordinates, one per half bar, with the sentence lighting up as its outline draws (`steps` on
+`Solo`). Then let the capture do the thing the copy promised — the set logs, the row flips.
+
+**Never put a box-shadow on anything under a 3D transform.** The watch case's drop shadow and the
+PR halo were 70 px box-shadow blurs on a `perspective()`-rotated element, and Chromium rasterises
+those in tiles: on screen the halo was a blocky cross and the shadow a staircase. Draw every soft
+edge as a radial gradient, outside the transformed subtree. It costs nothing and cannot band.
+
+**Two beats on the same phone join with a push, not a cut.** Cardio→chart and session→"what to
+lift" were hard cuts between the same device in the same place showing the same screen; they read
+as the picture glitching. A `pushUp` with the phone kept at the same size and on the same side
+reads as scrolling one device to its next page. Save the hard cuts for a change of subject.
+
 **A cut is one frame, so nothing may fade across it.** Every beat used to fade itself in and out
 over ten frames, which turned each hard cut into a dip to black and each seven-frame whip into a
 throw between two frames at 35% brightness. On a hard cut the picture was darkest ON the downbeat

@@ -4,8 +4,9 @@
 > already made, with the measurements that caught each one. Every rule in it cost a round.
 
 90 seconds, 1920×1080, 30fps. `npm run studio` to work on it, `npm run render` to output
-`out/avex-0.9.mp4`, `npm run render:4k` for the 3840×2160 delivery (CRF 20, under Discord's 500 MB
-Nitro cap). `npm run check` prints every handover against its bar and fails if one is off the grid.
+`out/avex-0.9.mp4`, `npm run render:4k` for the 3840×2160 delivery (CRF 18, ~120 MB, under Discord's 500 MB
+Nitro cap — there is no point going past 4K: the captures are 1080×2400 and are already shown
+upscaled 1.5× at 4K, so a larger frame adds pixels to the footage without adding detail). `npm run check` prints every handover against its bar and fails if one is off the grid.
 Chromium is not downloaded on this machine: pass `--browser-executable=/usr/bin/chromium` to the
 render commands (or set it once in a `remotion.config.ts`).
 
@@ -57,7 +58,9 @@ four frames of something small moving.
 
 ## Sound
 
-`public/sfx/` — cues synthesised or finished by `tools/make-sfx.sh`, nothing licensed. Sound only
+`public/sfx/` — cues synthesised or finished by `tools/make-sfx.sh`, nothing licensed. The watch
+detent (`tick`) is synthesised now; the keyboard-switch take it replaced kept 53% of its energy
+above 4 kHz and read as hiss on five repeats. Sound only
 where the picture shows an interaction that would make one, and every cue means exactly one thing:
 `tap` a page or a row landing, `pop` a card settling, `impact` the hit, `tick` the watch stepper,
 `confirm` a set logged, `swoosh`/`ding` the banner into the bell, `sweep` the version changing (every

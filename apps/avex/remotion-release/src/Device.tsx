@@ -159,8 +159,10 @@ export const Device: React.FC<{
   bare?: boolean;
   glow?: boolean;
   children?: React.ReactNode;
+  /** drawn over the screen, in the screen's own coordinates — callouts, never chrome */
+  overlay?: React.ReactNode;
   style?: React.CSSProperties;
-}> = ({height, clip, focus, bare = false, glow = false, children, style}) => {
+}> = ({height, clip, focus, bare = false, glow = false, children, overlay, style}) => {
   const width = height / SHOT_AR;
   const radius = bare ? 20 : 46;
   const bezel = bare ? 0 : Math.round(height * 0.011);
@@ -191,6 +193,7 @@ export const Device: React.FC<{
         <div style={{position: 'absolute', inset: 0, ...f}}>
           {children ?? (clip ? <Media clip={clip} /> : null)}
         </div>
+        {overlay ? <div style={{position: 'absolute', inset: 0, pointerEvents: 'none'}}>{overlay}</div> : null}
       </div>
     </div>
   );

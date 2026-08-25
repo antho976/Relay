@@ -50,8 +50,11 @@ export const HomeMorph: React.FC<{gridStart?: number; turnAt?: number}> = ({grid
             <Cue at={TURN} sfx="sweep" gain={0.8} />
             <div style={{display: 'flex', gap: 18, marginTop: 10, alignItems: 'center'}}>
               <Era label="0.8.9" on={1 - t} />
+              {/* The bar between the two eras fills from the first beat to the switch — the same
+                  clock the goal meters fill on — so it reads as a count-in to the music entering,
+                  and the pills change hands on the frame it completes. */}
               <div style={{width: 200, height: 3, borderRadius: 999, background: C.outline, position: 'relative'}}>
-                <div style={{position: 'absolute', inset: 0, width: `${t * 100}%`, background: C.accent, borderRadius: 999}} />
+                <div style={{position: 'absolute', inset: 0, width: `${Math.max(fill, t) * 100}%`, background: C.accent, borderRadius: 999}} />
               </div>
               <Era label="0.9" on={t} accent />
             </div>
