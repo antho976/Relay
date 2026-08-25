@@ -10,3 +10,11 @@
 # Machine-local SDK path. The tree-root copy exists for the ADE's preflight;
 # forge-android/local.properties is what gradle itself reads.
 local.properties
+
+# Secrets. Tracked as an empty file until 2026-08-25, which meant one `git add -A`
+# at the repo root would have committed whatever was in it. Untracked now; the
+# file itself stays on disk. Nothing was ever leaked: no commit in history
+# contains a key, checked with `git log --all -S'sk_' -- .env`.
+.env
+.env.*
+!.env.example
