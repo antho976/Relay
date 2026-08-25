@@ -53,8 +53,20 @@ interface CoachDao {
     @Query("UPDATE coach_decision SET status = :status WHERE id = :id")
     suspend fun setStatus(id: Long, status: String)
 
-    @Query("UPDATE coach_decision SET status = 'applied', applied_at = :appliedAt, undo_data = :undoData WHERE id = :id")
-    suspend fun markApplied(id: Long, appliedAt: Long, undoData: String?)
+    /**
+     * [undoExpiresAt] is stamped here, at apply time, because that is the only moment that knows
+     * when the clock on one-tap undo started. It was declared and never written, so `undoDecision`
+     * would happily unwind a structural change the user had been training under for months —
+     * rewriting the overlay to a rep range from before the current block and recording it as a
+     * revert, which counts permanently against the coach's trust tier.
+     */
+    @Query("""
+        UPDATE coach_decision
+        SET status = 'applied', applied_at = :appliedAt, undo_data = :undoData,
+            undo_expires_at = :undoExpiresAt
+        WHERE id = :id
+    """)
+    suspend fun markApplied(id: Long, appliedAt: Long, undoData: String?, undoExpiresAt: Long?)
 
     @Query("UPDATE coach_decision SET status = 'reverted', outcome = 'failed' WHERE id = :id")
     suspend fun markReverted(id: Long)

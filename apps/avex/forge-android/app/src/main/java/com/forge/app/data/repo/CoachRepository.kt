@@ -162,6 +162,9 @@ class CoachRepository @Inject constructor(
 
         /** Autopilot won't fire twice inside this much real time, however the week ids fall. */
         private const val MIN_AUTO_APPLY_GAP_MS = 20L * 60 * 60 * 1000
+
+        /** How long a one-tap undo stays on an applied change. See [markAppliedNow]. */
+        internal const val UNDO_WINDOW_MS = 7L * 24 * 60 * 60 * 1000
     }
 
     // Serialises the weekly pass so two concurrent callers (e.g. Overview load + Week Brief) can't
@@ -233,7 +236,13 @@ class CoachRepository @Inject constructor(
                                 weekId = weekId, type = it.type, targetKey = it.targetKey,
                                 targetName = it.targetName, summary = it.summary,
                                 reason = it.reason, status = proposeStatus,
-                                dayKey = it.dayKey, payload = it.payload
+                                dayKey = it.dayKey, payload = it.payload,
+                                // The scope's key, left empty since the column was added. Every
+                                // decision here belongs to the weekly cadence (scope defaults to
+                                // "week"), so its key is the ISO week id — without it the column
+                                // the day/session cadences will sort and group on has nothing in it
+                                // for the rows that already exist.
+                                scopeKey = weekId
                             )
                         }
                         CoachPass(weekId, clock.nowMs(), proposeStatus, null)
@@ -522,7 +531,7 @@ class CoachRepository @Inject constructor(
                 // A deload already running means this proposal has been served; retire it.
                 if (deloadAlreadyRunning()) { coachDao.setStatus(id, STATUS_SKIPPED); return }
                 adaptationRepository.applyDeloadWeek()
-                coachDao.markApplied(id, clock.nowMs(), null)
+                markAppliedNow(id, null)
             }
             "swap" -> {
                 val def = d.payload?.let { ExerciseLibrary.byId(it) } ?: return retireUnresolvable(id)
@@ -536,13 +545,13 @@ class CoachRepository @Inject constructor(
                 // Record name|unit|swapId so undo restores the exact prior swap — including its
                 // re-attribution id (#11). Without the id, undo would strand the coach's id on the
                 // restored row and mis-attribute every PR/stat. Old 2-part rows parse with a null id.
-                coachDao.markApplied(id, clock.nowMs(), prev?.let { encodeSwapUndo(it.swappedName, it.swappedUnit, it.swappedExerciseId) } ?: NONE)
+                markAppliedNow(id, prev?.let { encodeSwapUndo(it.swappedName, it.swappedUnit, it.swappedExerciseId) } ?: NONE)
             }
             "rep_shift" -> {
                 val to = d.payload ?: return retireUnresolvable(id)
                 val prev = programCustomizationRepo.overrideFor(d.dayKey, d.targetKey)?.repRangeOverride
                 programCustomizationRepo.setRepRange(d.dayKey, d.targetKey, to, source = OverlaySource.COACH)
-                coachDao.markApplied(id, clock.nowMs(), prev ?: NONE)
+                markAppliedNow(id, prev ?: NONE)
             }
             "volume_up", "volume_down" -> {
                 // payload is an ABSOLUTE set count, minted while Monday's pass ran. Anything that
@@ -565,7 +574,7 @@ class CoachRepository @Inject constructor(
                 // the decision, or the bound clamped it). Writing it is still correct — the overlay
                 // records the coach's intent for the slot — but there is nothing to undo back to.
                 programCustomizationRepo.setSetsOverride(d.dayKey, d.targetKey, newSets, source = OverlaySource.COACH)
-                coachDao.markApplied(id, clock.nowMs(), prev.toString())
+                markAppliedNow(id, prev.toString())
             }
             "revert" -> {
                 val originalId = d.payload?.toLongOrNull() ?: return retireUnresolvable(id)
@@ -580,7 +589,7 @@ class CoachRepository @Inject constructor(
                 // Tapping it did nothing, and the watcher's 14-day catch-all then scored it as a
                 // WIN for the revert type.
                 if (undoDecisionLocked(originalId)) {
-                    coachDao.markApplied(id, clock.nowMs(), null)
+                    markAppliedNow(id, null)
                 } else {
                     coachDao.setStatus(id, STATUS_SKIPPED)
                     // Retire the original too, so it stops re-deriving a revert nobody can run.
@@ -621,6 +630,22 @@ class CoachRepository @Inject constructor(
      */
     suspend fun undoDecision(id: Long) = lifecycleMutex.withLock { undoDecisionLocked(id) }
 
+    /**
+     * Stamp a decision applied, with the moment its one-tap undo stops being offered.
+     *
+     * `undo_expires_at` is documented on the column as the gate for "past this stamp the coach
+     * offers revert forward instead of one-tap undo", and nothing wrote it — so the gate didn't
+     * exist and LIFO undo reached back indefinitely. [UNDO_WINDOW_MS] is a week, matching that
+     * docstring's own reasoning: undo can't unwind a structural change the user has already trained
+     * under. Past the window the change is still reversible — the coach proposes a revert when the
+     * watcher rules against it, and the program is directly editable — it just isn't one tap on a
+     * months-old row any more.
+     */
+    private suspend fun markAppliedNow(id: Long, undoData: String?) {
+        val now = clock.nowMs()
+        coachDao.markApplied(id, now, undoData, undoExpiresAt = now + UNDO_WINDOW_MS)
+    }
+
     /** Serialize a swap's prior state for undo as JSON — robust to '|' or any char in the name (#11). */
     private fun encodeSwapUndo(name: String, unit: String, swapId: String?): String =
         org.json.JSONObject().apply {
@@ -647,6 +672,10 @@ class CoachRepository @Inject constructor(
     private suspend fun undoDecisionLocked(id: Long): Boolean {
         val d = coachDao.decision(id) ?: return false
         if (d.status != STATUS_APPLIED) return false
+        // Past its window, a change is no longer one-tap undoable — see [markAppliedNow]. Rows
+        // applied before the stamp existed carry null and keep the old unbounded behaviour rather
+        // than having a window retro-fitted onto them.
+        d.undoExpiresAt?.let { if (clock.nowMs() > it) return false }
         // Per-slot LIFO: if a newer still-active coach decision owns this slot's overlay, refuse —
         // restoring the older before-state would silently wipe the newer change, and the watcher's
         // own revert pipeline reverts newest-first so the chain unwinds cleanly (seam fix, finding 9).

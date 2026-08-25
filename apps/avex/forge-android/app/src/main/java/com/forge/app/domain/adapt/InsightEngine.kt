@@ -123,7 +123,11 @@ object InsightEngine {
             val name = slots[exerciseId]?.name ?: return@mapNotNull null
             val perSession = bouts
                 .filter { it.sessionStartedAt >= since && !it.skipped }
-                .mapNotNull { b -> b.sets.mapNotNull { it.weightLb }.maxOrNull() }
+                // Assisted sets are excluded from every other strength read in this engine
+                // (bestWorkingE1rm, E1rm, WeeklyReview.prs) and they belong out of this one too: a
+                // band-assisted pull-up logged with the band's weight anchored "most improved", so
+                // the insight reported a 40% gain off a change of band rather than of strength.
+                .mapNotNull { b -> b.sets.filterNot { it.isAssisted }.mapNotNull { it.weightLb }.maxOrNull() }
             if (perSession.size < t.insightImprovedMinSessions) return@mapNotNull null
             val mid = perSession.size / 2
             val first = perSession.take(mid).maxOrNull() ?: return@mapNotNull null
@@ -410,9 +414,14 @@ object InsightEngine {
         if (amRatios.size < t.insightTimePerfMinBouts || pmRatios.size < t.insightTimePerfMinBouts) return null
         val amMean = amRatios.average()
         val pmMean = pmRatios.average()
+        // Both means are ratios of positive bests, so a zero here means every bout on that side
+        // carried no load — a user who types "0" for bodyweight movements rather than "BW". The
+        // division then yields NaN or Infinity, and NaN fails every comparison, so `gap * 100 <
+        // threshold` was false and the insight went out reading "~0% higher".
+        if (amMean <= 0.0 || pmMean <= 0.0) return null
         val strongerAm = amMean >= pmMean
         val gap = if (strongerAm) amMean / pmMean - 1 else pmMean / amMean - 1
-        if (gap * 100 < t.insightTimePerfPct) return null
+        if (!gap.isFinite() || gap * 100 < t.insightTimePerfPct) return null
         val pct = (gap * 100).roundToInt()
         val tail = if (strongerAm) "earlier in the day — put the hard sessions in the morning."
         else "later in the day — save the hard sessions for the afternoon."
