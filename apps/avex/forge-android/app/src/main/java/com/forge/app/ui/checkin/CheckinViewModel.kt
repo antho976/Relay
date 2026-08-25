@@ -97,7 +97,7 @@ class CheckinViewModel @Inject constructor(
                     soreMuscles = if (s.askWhichMuscles) s.soreMuscles else emptySet()
                 )
                 // Morning is weigh-in time; logging it here saves a trip to the profile.
-                s.weightText.toDoubleOrNull()?.let { bodyweightRepo.log(it) }
+                s.weightText.toDoubleOrNull()?.let { bodyweightRepo.logWeightOnly(it) }
             }
             _state.value = _state.value.copy(visible = false, answeredToday = true)
         }

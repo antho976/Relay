@@ -19,6 +19,15 @@ interface BodyweightDao {
     @Query("SELECT * FROM bodyweight_entry ORDER BY date_key DESC, recorded_at DESC LIMIT 1")
     suspend fun latest(): BodyweightEntry?
 
+    /**
+     * That day's row, or null. Needed because [upsert] is INSERT OR REPLACE: on a `date_key`
+     * conflict SQLite DELETES the existing row and inserts a new one, so any column the caller
+     * does not set is lost and the row gets a fresh id. Callers that mean to update rather than
+     * overwrite read the row first and carry forward what they are not changing.
+     */
+    @Query("SELECT * FROM bodyweight_entry WHERE date_key = :dateKey LIMIT 1")
+    suspend fun byDateKey(dateKey: String): BodyweightEntry?
+
     /** Every weigh-in, newest first — for the bodyweight CSV export. */
     @Query("SELECT * FROM bodyweight_entry ORDER BY date_key DESC, recorded_at DESC")
     suspend fun all(): List<BodyweightEntry>

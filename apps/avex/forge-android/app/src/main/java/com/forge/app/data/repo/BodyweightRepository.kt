@@ -33,18 +33,43 @@ class BodyweightRepository @Inject constructor(
      * the current time-of-day) so a backdated entry sorts onto the right day in the trend rather than
      * jumping to "now".
      */
-    suspend fun log(weightLb: Double, date: LocalDate = LocalDate.now(), note: String? = null) {
+    suspend fun log(weightLb: Double, date: LocalDate = LocalDate.now(), note: String?) =
+        record(weightLb, date, note, keepExistingNote = false)
+
+    /**
+     * Record a weigh-in from a surface that has no note field — the daily check-in and onboarding.
+     *
+     * Distinct from [log] because `note = null` is ambiguous on its own: from the editor it means
+     * "the user cleared the note", but from here it only means "this screen has nothing to say
+     * about the note". Treating the second as the first is how a check-in silently erased a note
+     * typed hours earlier, so the two intents get two entry points rather than one nullable.
+     */
+    suspend fun logWeightOnly(weightLb: Double, date: LocalDate = LocalDate.now()) =
+        record(weightLb, date, note = null, keepExistingNote = true)
+
+    private suspend fun record(
+        weightLb: Double,
+        date: LocalDate,
+        note: String?,
+        keepExistingNote: Boolean
+    ) {
         val now = clock.nowMs()
         val today = LocalDate.now()
         val recordedAt =
             if (date == today) now
             else date.atTime(LocalTime.now()).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+        val dateKey = date.toString()
+        // dao.upsert is INSERT OR REPLACE, which DELETES the conflicting row rather than updating
+        // it — so the day's existing note and id only survive if we carry them forward ourselves.
+        val existing = dao.byDateKey(dateKey)
         dao.upsert(
             BodyweightEntry(
-                dateKey = date.toString(),
+                id = existing?.id ?: 0,
+                dateKey = dateKey,
                 weightLb = weightLb,
                 recordedAt = recordedAt,
-                note = note?.trim()?.takeIf { it.isNotBlank() }
+                note = if (keepExistingNote) existing?.note
+                       else note?.trim()?.takeIf { it.isNotBlank() }
             )
         )
         // Mirror ONLY a same-day weigh-in to Health Connect, and only when the user has opted in AND
@@ -72,7 +97,19 @@ class BodyweightRepository @Inject constructor(
         val localLatestMs = dao.latest()?.recordedAt
         if (!BodyweightSync.shouldImport(hc.timeMs, hc.weightLb, localLatestMs)) return null
         val dateKey = Instant.ofEpochMilli(hc.timeMs).atZone(ZoneId.systemDefault()).toLocalDate().toString()
-        dao.upsert(BodyweightEntry(dateKey = dateKey, weightLb = hc.weightLb, recordedAt = hc.timeMs))
+        // shouldImport compares timestamps only, so a scale reading later the SAME day passes the
+        // guard and collides on date_key. Under INSERT OR REPLACE that deleted the typed weigh-in
+        // outright, taking its note with it — the one thing Health Connect cannot supply.
+        val existing = dao.byDateKey(dateKey)
+        dao.upsert(
+            BodyweightEntry(
+                id = existing?.id ?: 0,
+                dateKey = dateKey,
+                weightLb = hc.weightLb,
+                recordedAt = hc.timeMs,
+                note = existing?.note
+            )
+        )
         return hc.weightLb
     }
 
