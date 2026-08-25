@@ -110,7 +110,9 @@ object AutoCoachPlanner {
     /** Per-muscle net applied-volume drift cap, in sets (hardening 11). */
     private const val VOLUME_DRIFT_CAP = 2
     /** Never push a slot past this many sets (mirrors VolumeModel.MAX_SETS). */
-    private const val MAX_SLOT_SETS = 5
+    /** Ceiling on sets the coach will drive a slot to. Also read by CoachRepository, which
+     *  re-derives the adjustment at apply time and must respect the same bound. */
+    internal const val MAX_SLOT_SETS = 5
     /** An exercise skipped this often in its last 4 bouts is oversized — drop a set. */
     private const val SKIP_DOWNSIZE_COUNT = 3
     private const val DAY_MS = 24L * 60 * 60 * 1000
