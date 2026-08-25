@@ -51,7 +51,7 @@ hilt-work = "1.2.0"
 junit = "4.13.2"
 # Screenshot testing (Roborazzi runs on the JVM via Robolectric, so no emulator and no AGP coupling).
 roborazzi = "1.70.0"
-robolectric = "4.14.1"
+robolectric = "4.16.1"
 androidx-test-junit = "1.2.1"
 espresso = "3.6.1"
 
