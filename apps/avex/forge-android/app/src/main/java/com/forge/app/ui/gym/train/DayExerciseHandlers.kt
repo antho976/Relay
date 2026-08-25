@@ -287,15 +287,9 @@ internal fun DayViewModel.logSet(
             startedAtMs = restEndedAtMs
         )
 
-        val leId = currentUi.loggedExerciseId
-            ?: workoutRepo.addExerciseToSession(
-                sessionId = sessionId,
-                exerciseId = effectiveExerciseId,
-                orderIndex = _state.value.exercises.indexOfFirst { it.plan.id == exerciseId },
-                swappedName = currentUi.sessionSwapName ?: currentUi.persistentSwapName,
-                swappedUnit = currentUi.sessionSwapUnit ?: currentUi.persistentSwapUnit,
-                slotId = exerciseId.takeIf { it != effectiveExerciseId }
-            )
+        // Was an inline copy of ensureLoggedExercise's body, and the copy had no guard: two rapid
+        // taps both read a stale null from UI state and both inserted a row for the same slot.
+        val leId = ensureLoggedExercise(exerciseId) ?: return@launch
 
         workoutRepo.logSet(
             loggedExerciseId = leId,

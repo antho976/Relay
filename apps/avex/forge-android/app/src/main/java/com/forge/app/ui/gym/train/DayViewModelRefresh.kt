@@ -9,6 +9,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.sync.withLock
 
 // Exercise-state refresh/derivation, set lookups, and session-service lifecycle —
 // extracted from DayViewModel as extension functions, matching the Day*Handlers /
@@ -135,24 +136,45 @@ internal suspend fun DayViewModel.refreshExerciseForSet(setId: Long) {
 internal fun DayViewModel.findExerciseIdForSet(setId: Long): String? =
     _state.value.exercises.firstOrNull { ex -> ex.loggedSets.any { it.id == setId } }?.plan?.id
 
-internal suspend fun DayViewModel.ensureLoggedExercise(exerciseId: String): Long? {
-    val sessionId = _state.value.sessionId ?: return null
-    val currentUi = _state.value.exercises.firstOrNull { it.plan.id == exerciseId } ?: return null
-    // Log under the REAL exercise (the swapped one when a persistent swap is active), stashing the
-    // slot id so the slot stays mapped (#11). `exerciseId` here is the slot (plan.id).
-    val effective = currentUi.effectiveExerciseId.ifBlank { exerciseId }
-    return currentUi.loggedExerciseId
-        ?: workoutRepo.addExerciseToSession(
-            sessionId = sessionId,
-            exerciseId = effective,
-            // Order index from the rendered list, not the static day plan (which is -1 for
-            // custom/cross-day exercises that aren't in dayPlan.exercises).
-            orderIndex = _state.value.exercises.indexOfFirst { it.plan.id == exerciseId },
-            swappedName = currentUi.sessionSwapName ?: currentUi.persistentSwapName,
-            swappedUnit = currentUi.sessionSwapUnit ?: currentUi.persistentSwapUnit,
-            slotId = exerciseId.takeIf { it != effective }
-        )
-}
+/**
+ * The slot's logged_exercise row id, creating it lazily on first use.
+ *
+ * Serialised, and with a DATABASE check before inserting. Both matter, for different reasons:
+ *
+ * `loggedExerciseId` comes from UI state, which only refreshes after a write completes. Two rapid
+ * LOG SET taps (or a superset alternating between two cards) both read null and both INSERT,
+ * leaving two rows for one slot. refreshExercises then keeps whichever has more sets, and the sets
+ * on the other row become invisible — still in the database, absent from the screen and from the
+ * session's totals. logged_exercise has no unique index on (session, slot) to catch it.
+ *
+ * The mutex alone would not fix that: the second caller would wait, then still read a stale null
+ * from UI state. So inside the lock we ask Room, not the UI. And the second caller must WAIT rather
+ * than bail out — returning null there would drop the user's set, which is worse than the race.
+ *
+ * DaySwapHandlers guards its own paths with `swapsInFlight` for the same underlying bug; this is
+ * the set-logging half, which never had a guard.
+ */
+internal suspend fun DayViewModel.ensureLoggedExercise(exerciseId: String): Long? =
+    loggedExerciseMutex.withLock {
+        val sessionId = _state.value.sessionId ?: return@withLock null
+        val currentUi = _state.value.exercises.firstOrNull { it.plan.id == exerciseId }
+            ?: return@withLock null
+        // Log under the REAL exercise (the swapped one when a persistent swap is active), stashing the
+        // slot id so the slot stays mapped (#11). `exerciseId` here is the slot (plan.id).
+        val effective = currentUi.effectiveExerciseId.ifBlank { exerciseId }
+        currentUi.loggedExerciseId
+            ?: workoutRepo.loggedExerciseForSlot(sessionId, exerciseId)
+            ?: workoutRepo.addExerciseToSession(
+                sessionId = sessionId,
+                exerciseId = effective,
+                // Order index from the rendered list, not the static day plan (which is -1 for
+                // custom/cross-day exercises that aren't in dayPlan.exercises).
+                orderIndex = _state.value.exercises.indexOfFirst { it.plan.id == exerciseId },
+                swappedName = currentUi.sessionSwapName ?: currentUi.persistentSwapName,
+                swappedUnit = currentUi.sessionSwapUnit ?: currentUi.persistentSwapUnit,
+                slotId = exerciseId.takeIf { it != effective }
+            )
+    }
 
 internal fun DayViewModel.findSet(setId: Long) =
     _state.value.exercises.flatMap { it.loggedSets }.firstOrNull { it.id == setId }

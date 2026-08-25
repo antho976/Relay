@@ -539,6 +539,10 @@ class WorkoutRepository @Inject constructor(
         )
     )
 
+    /** This session's existing row for a program slot, or null. See [LoggedExerciseDao.forSessionSlot]. */
+    suspend fun loggedExerciseForSlot(sessionId: Long, slotId: String): Long? =
+        loggedExerciseDao.forSessionSlot(sessionId, slotId)?.id
+
     suspend fun updateExercise(loggedExercise: LoggedExercise) =
         loggedExerciseDao.update(loggedExercise)
 

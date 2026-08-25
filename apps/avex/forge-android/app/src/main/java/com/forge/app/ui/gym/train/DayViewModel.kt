@@ -93,6 +93,9 @@ class DayViewModel @Inject constructor(
      *  the main dispatcher (event handling). */
     internal val swapsInFlight = mutableSetOf<String>()
 
+    /** Serialises lazy logged_exercise creation — see [ensureLoggedExercise]. */
+    internal val loggedExerciseMutex = kotlinx.coroutines.sync.Mutex()
+
     internal val _state = MutableStateFlow(
         DayUiState(dayPlan = dayPlan, displayName = dayPlan.defaultName)
     )
