@@ -859,19 +859,41 @@ class BackupRepository @Inject constructor(
     }
 
     /**
-     * Sanity check that a candidate file is a SQLite DB containing Avex's core tables.
+     * Sanity check that a candidate file is a SQLite DB containing Avex's core tables, and that the
+     * rest of the file is actually readable.
      * Checking only `session` let any SQLite DB from another app pass validation and get swapped in.
      * We now require all three tables that every real Avex backup must contain — so picking the wrong
      * app's DB fails with NOT_A_BACKUP / CORRUPT instead of silently replacing your data.
+     *
+     * The table check reads page 1 and nothing else, so a backup whose DATA pages were damaged in
+     * transit — emailed, synced through a flaky provider, copied off a failing SD card — passed it
+     * with the schema page intact. It was then staged and swapped over the live database at boot, at
+     * which point Room hit the bad page on the first read that touched it and its default
+     * onCorruption handler DELETED the file. The original was already gone, so the user was left
+     * with an empty schema and no way back. [quickCheck] reads every page before we commit to the
+     * swap, which is the only point where refusing still costs nothing.
      */
     private fun isForgeDatabase(file: File): Boolean = runCatching {
         android.database.sqlite.SQLiteDatabase.openDatabase(
             file.path, null, android.database.sqlite.SQLiteDatabase.OPEN_READONLY
         ).use { dbFile ->
-            dbFile.rawQuery(
+            val hasTables = dbFile.rawQuery(
                 "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN " +
                     "('session','logged_exercise','logged_set')", null
             ).use { c -> c.moveToFirst() && c.getInt(0) >= 3 }
+            hasTables && quickCheck(dbFile)
+        }
+    }.getOrDefault(false)
+
+    /**
+     * `PRAGMA quick_check` over the whole file — the per-page structural check, without
+     * integrity_check's much slower cross-index verification. Returns false on anything but "ok",
+     * and on a read that throws part-way through (which is itself corruption). A multi-year Avex
+     * database is a few MB, so this is a one-off read of a file we are about to copy anyway.
+     */
+    private fun quickCheck(dbFile: android.database.sqlite.SQLiteDatabase): Boolean = runCatching {
+        dbFile.rawQuery("PRAGMA quick_check(1)", null).use { c ->
+            c.moveToFirst() && c.getString(0).equals("ok", ignoreCase = true)
         }
     }.getOrDefault(false)
 

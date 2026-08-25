@@ -62,8 +62,17 @@ class WorkoutImportRepository @Inject constructor(
         val importer = importers.firstOrNull { it.canParse(text) }
             ?: return@withContext ImportResult.UnrecognisedFormat
         val assumeKg = settingsRepo.useKg.first()
-        val sessions = runCatching { importer.parse(text, assumeKg) }.getOrDefault(emptyList())
-            .filter { it.exercises.isNotEmpty() }
+        // An OOM building a huge JSON tree is not "nothing to import". runCatching catches Throwable,
+        // so a power user's multi-year export that couldn't fit in memory used to be reported as "No
+        // new workouts found in that file" — they concluded the export was empty and gave up.
+        val parsed = try {
+            importer.parse(text, assumeKg)
+        } catch (e: OutOfMemoryError) {
+            return@withContext ImportResult.TooLarge
+        } catch (e: Exception) {
+            emptyList()
+        }
+        val sessions = parsed.filter { it.exercises.isNotEmpty() }
         if (sessions.isEmpty()) return@withContext ImportResult.NothingToImport
 
         insert(importer.source, sessions)
@@ -87,7 +96,15 @@ class WorkoutImportRepository @Inject constructor(
             val text = (readBounded(doc.uri) as? Read.Ok)?.text ?: continue
             if (text.isBlank()) continue
             val importer = importers.firstOrNull { it.canParse(text) } ?: continue
-            val count = runCatching { importer.parse(text, assumeKg).count { it.exercises.isNotEmpty() } }.getOrDefault(0)
+            // A file too big to parse is skipped rather than listed — and never allowed to take the
+            // whole scan down with it.
+            val count = try {
+                importer.parse(text, assumeKg).count { it.exercises.isNotEmpty() }
+            } catch (e: OutOfMemoryError) {
+                0
+            } catch (e: Exception) {
+                0
+            }
             if (count == 0) continue
             found.add(FoundImport(doc.uri, doc.name ?: "export", importer.source, count, doc.lastModified()))
         }
