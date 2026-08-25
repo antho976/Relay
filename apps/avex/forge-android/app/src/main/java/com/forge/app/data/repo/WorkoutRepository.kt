@@ -329,7 +329,15 @@ class WorkoutRepository @Inject constructor(
             // division dropped up to ~1 min per session and skipped sessions under a full minute entirely.
             ActiveCalorieEstimator.estimate(activeSeconds / 60.0, weightLb, session.intensity) ?: return
         }
-        health.writeActiveCalories(kcal, session.startedAt, finishedAtMs)
+        health.writeActiveCalories(
+            kcal = kcal,
+            startMs = session.startedAt,
+            endMs = finishedAtMs,
+            // Same key shape as the session and HR mirrors above, so a re-finish updates the
+            // record rather than adding another.
+            clientRecordId = "avex-session-kcal-${session.id}",
+            clientRecordVersion = finishedAtMs
+        )
     }
 
     /**

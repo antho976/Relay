@@ -355,7 +355,13 @@ class HealthConnectManager @Inject constructor(
      * permission / a provider error all return false without throwing, so a failed mirror never breaks
      * the local finish. The span is clamped to be strictly positive — HC rejects a zero/negative range.
      */
-    suspend fun writeActiveCalories(kcal: Double, startMs: Long, endMs: Long): Boolean = withContext(Dispatchers.IO) {
+    suspend fun writeActiveCalories(
+        kcal: Double,
+        startMs: Long,
+        endMs: Long,
+        clientRecordId: String,
+        clientRecordVersion: Long
+    ): Boolean = withContext(Dispatchers.IO) {
         val client = clientOrNull() ?: return@withContext false
         if (!canWriteActiveCalories()) return@withContext false
         val safeEnd = maxOf(endMs, startMs + 1)
@@ -368,7 +374,15 @@ class HealthConnectManager @Inject constructor(
                         endTime = Instant.ofEpochMilli(safeEnd),
                         endZoneOffset = null,
                         energy = Energy.kilocalories(kcal),
-                        metadata = Metadata.manualEntry()
+                        // Keyed like the session and HR mirrors, which are upserts on (our package,
+                        // clientRecordId). This one carried no key, so every pass INSERTED: a
+                        // re-finish or an orphan-session recovery added a second calorie record for
+                        // the same workout, inflating the day's burn in Samsung Health or Fit with
+                        // no local trace to find it by and no way to repair it.
+                        metadata = Metadata.manualEntry(
+                            clientRecordId = clientRecordId,
+                            clientRecordVersion = clientRecordVersion
+                        )
                     )
                 )
             )
@@ -736,7 +750,12 @@ class HealthConnectManager @Inject constructor(
             client.aggregate(
                 AggregateRequest(
                     metrics = metrics,
-                    timeRangeFilter = TimeRangeFilter.between(startTime, endTime)
+                    timeRangeFilter = TimeRangeFilter.between(startTime, endTime),
+                    // Only the app that wrote THIS session. Without the filter the aggregate sums
+                    // every provider that covered the window, so a user running Samsung Health and
+                    // Google Fit side by side saw one 5 km run reported as nearly 10 km — and that
+                    // inflated figure is what the import card offers and then writes back.
+                    dataOriginFilter = setOf(metadata.dataOrigin)
                 )
             )
         }
