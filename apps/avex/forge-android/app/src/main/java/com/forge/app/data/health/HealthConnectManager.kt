@@ -438,8 +438,7 @@ class HealthConnectManager @Inject constructor(
         hcCatching {
             val zone = java.time.ZoneId.systemDefault()
             val range = TimeRangeFilter.between(Instant.ofEpochMilli(startMs), Instant.ofEpochMilli(endMs))
-            client.readRecords(ReadRecordsRequest(StepsRecord::class, timeRangeFilter = range))
-                .records
+            client.readAllPages(StepsRecord::class, range)
                 .groupBy { Instant.ofEpochMilli(it.startTime.toEpochMilli()).atZone(zone).toLocalDate() }
                 .map { (day, recs) ->
                     DailySteps(
@@ -449,6 +448,36 @@ class HealthConnectManager @Inject constructor(
                 }
                 .sortedBy { it.dayStartMs }
         }.orEmpty()
+    }
+
+    /**
+     * Read EVERY record of [type] in [range], following Health Connect's page tokens.
+     *
+     * `readRecords(...).records` returns only the FIRST page — 1000 records by default, ordered
+     * ascending. High-frequency record types blow past that easily: a watch writing steps or heart
+     * rate every few minutes fills 1000 rows well inside a two-week window, so the reads that
+     * matter were silently truncated to their OLDEST page. Today's data was the part that fell off
+     * the end, which is why a step read over a fortnight could report zero steps today and hand the
+     * coach a phantom sedentary athlete.
+     *
+     * Bounded by [HISTORY_MAX_RECORDS], and it stops on an empty page even if a token lingers —
+     * without that a provider returning a non-null continuation token with no records loops
+     * forever. Both guards are lifted from readWeightHistory, which already got this right.
+     */
+    private suspend fun <T : Record> HealthConnectClient.readAllPages(
+        type: KClass<T>,
+        range: TimeRangeFilter
+    ): List<T> {
+        val out = mutableListOf<T>()
+        var token: String? = null
+        do {
+            val resp = readRecords(
+                ReadRecordsRequest(type, timeRangeFilter = range, pageSize = HISTORY_PAGE_SIZE, pageToken = token)
+            )
+            out += resp.records
+            token = resp.pageToken
+        } while (token != null && resp.records.isNotEmpty() && out.size < HISTORY_MAX_RECORDS)
+        return out
     }
 
     /** Minutes this sleep session spent in [stageType], per the provider's stage list (0 = absent). */
@@ -472,8 +501,8 @@ class HealthConnectManager @Inject constructor(
         if (!canReadSteps()) return@withContext CardioWearableDay()
         hcCatching {
             val range = TimeRangeFilter.between(Instant.ofEpochMilli(dayStartMs), Instant.ofEpochMilli(dayEndMs))
-            val samples = client.readRecords(ReadRecordsRequest(StepsRecord::class, timeRangeFilter = range))
-                .records.map { StepSample(startMs = it.startTime.toEpochMilli(), count = it.count) }
+            val samples = client.readAllPages(StepsRecord::class, range)
+                .map { StepSample(startMs = it.startTime.toEpochMilli(), count = it.count) }
             CardioWearableDay(hourlySteps = bucketStepsByHour(samples, java.time.ZoneId.systemDefault()))
         } ?: CardioWearableDay()
     }
@@ -635,8 +664,8 @@ class HealthConnectManager @Inject constructor(
         if (!canReadHeartRate()) return@withContext emptyList()
         hcCatching {
             val range = TimeRangeFilter.between(Instant.ofEpochMilli(startMs), Instant.ofEpochMilli(endMs))
-            client.readRecords(ReadRecordsRequest(HeartRateRecord::class, timeRangeFilter = range))
-                .records.asSequence()
+            client.readAllPages(HeartRateRecord::class, range)
+                .asSequence()
                 .flatMap { it.samples }
                 .mapNotNull { s ->
                     val bpm = s.beatsPerMinute.toInt()
