@@ -55,6 +55,24 @@ class WearCodecTest {
     }
 
     @Test
+    fun `enum constants have fixed wire strings on both ends of the protocol`() {
+        // The phone APK and the watch APK are minified by two independent R8 runs, and an enum
+        // travels as its constant name. If one end renamed a constant, decode would report Invalid
+        // and the payload would be dropped in silence — release-only, with no crash and no log.
+        // Golden strings, so a rename becomes a red test instead of a field report.
+        assertEquals(
+            """{"v":1,"commandId":"c-2","action":"ADD_30"}""",
+            WearCodec.encode(TimerCommand(commandId = "c-2", action = TimerCommand.Action.ADD_30))
+                .decodeToString()
+        )
+        assertEquals(
+            """{"v":1,"accentHex":"#3D4F73","accentEnabled":false,"unit":"ST"}""",
+            WearCodec.encode(ConfigDto(accentHex = "#3D4F73", accentEnabled = false, unit = ProtocolWeightUnit.ST))
+                .decodeToString()
+        )
+    }
+
+    @Test
     fun `a newer protocol version is dropped as NewerVersion, not a crash`() {
         val newer = WearCodec.encode(session.copy(v = WearProtocol.VERSION + 1))
         val result = WearCodec.decode<SessionLiveDto>(newer)

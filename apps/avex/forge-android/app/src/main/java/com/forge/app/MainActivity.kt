@@ -162,10 +162,19 @@ class MainActivity : FragmentActivity() {
      */
     override fun onStop() {
         super.onStop()
-        if (isChangingConfigurations || !userLeaving) return
-        // Genuine backgrounding (Home/Recents), not a self-launched picker/overlay: start the
-        // app-lock re-lock timer, then do the deferred icon-alias swap.
+        if (isChangingConfigurations) return
+        // The app-lock timer arms on ANY backgrounding. It used to sit behind the userLeaving gate
+        // below, and onUserLeaveHint fires only when the user chooses to leave — Home or Recents.
+        // Android does not call it for the power button, the display timing out, an incoming call or
+        // a notification tap into another app, so in all of those the timer never armed, onForeground
+        // saw no recorded background and left the session valid. A user with "lock immediately" set
+        // could pocket the phone and have anyone past the lock screen open Avex straight into their
+        // training data. One flag was answering two unrelated questions; a picker round-trip
+        // re-locking under a zero-second timeout is what "lock immediately" asks for.
         appLock.onGenuineBackground()
+        // The icon-alias swap keeps the gate: flipping the alias while a sub-activity WE launched
+        // covers us can tear the task down on some OEMs.
+        if (!userLeaving) return
         userLeaving = false
         runCatching { appIconManager.reconcileTo(AppIcon.fromKey(appIconKey)) }
     }

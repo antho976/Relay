@@ -1,5 +1,6 @@
 package com.forge.shared.weight
 
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
@@ -7,7 +8,14 @@ import kotlinx.serialization.Serializable
  * depends on :app's domain types. :app maps its `WeightUnit` onto this at the publisher boundary.
  */
 @Serializable
-enum class ProtocolWeightUnit { LB, KG, ST }
+enum class ProtocolWeightUnit {
+    // Explicit wire strings: the phone APK and the watch APK are minified by two
+    // independent R8 runs, and an enum travels as its constant name. A @SerialName is a
+    // source-level literal neither run can touch.
+    @SerialName("LB") LB,
+    @SerialName("KG") KG,
+    @SerialName("ST") ST
+}
 
 /**
  * ONE table for the ± / bezel weight-adjust step, shared by the phone's stepper pills and the

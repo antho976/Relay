@@ -25,7 +25,10 @@ android {
         // scheme: phone versionCode + 100_000 (Play requires distinct codes per APK on one listing).
         applicationId = "com.quietsoftware.avex"
         minSdk = 30 // Wear OS 3+ (every Galaxy Watch since 2021; the plan's locked floor).
-        targetSdk = 35
+        // Matches :app and compileSdk. Play's annual target-API rule reaches API 36 for updates at
+        // the end of August 2026, and a listing is only as current as its least-current APK — a
+        // wear APK left at 35 would block the whole release.
+        targetSdk = 36
         versionCode = 100_090
         versionName = "0.9"
     }

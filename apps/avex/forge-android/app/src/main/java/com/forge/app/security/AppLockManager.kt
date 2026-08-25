@@ -78,10 +78,14 @@ class AppLockManager @Inject constructor(
     }
 
     /**
-     * The user genuinely sent the app to the background (Home / Recents), NOT a self-launched
-     * sub-activity we opened (photo picker, share sheet, camera). The caller gates this on
-     * `MainActivity.userLeaving` — the same [android.app.Activity.onUserLeaveHint] guard the app-icon
-     * swap already relies on — so returning from a picker never re-locks.
+     * The app left the foreground — Home, Recents, the screen going off, a call, another app taking
+     * over. Everything except a configuration change, which is not a backgrounding.
+     *
+     * This used to be gated on `MainActivity.userLeaving`, i.e. on
+     * [android.app.Activity.onUserLeaveHint], which the framework raises only for a user's own
+     * choice to leave. The power button and a display timeout raise none, so the re-lock timer never
+     * started for the most common way a phone is put down. The icon-alias swap still needs that
+     * distinction; the lock does not.
      */
     fun onGenuineBackground() {
         backgroundedAtElapsed = SystemClock.elapsedRealtime()

@@ -1,6 +1,7 @@
 package com.forge.shared.protocol
 
 import com.forge.shared.weight.ProtocolWeightUnit
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 /**
@@ -120,7 +121,12 @@ data class TimerCommand(
     val action: Action
 ) {
     @Serializable
-    enum class Action { SKIP, ADD_30, START }
+    enum class Action {
+        // Explicit wire strings — see ProtocolWeightUnit. These cross the Data Layer watch → phone.
+        @SerialName("SKIP") SKIP,
+        @SerialName("ADD_30") ADD_30,
+        @SerialName("START") START
+    }
 }
 
 /**
