@@ -33,6 +33,10 @@ import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.gym.train.state.DayListItem
 import com.forge.app.ui.theme.toAccentColor
 import java.text.SimpleDateFormat
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.temporal.ChronoUnit
 import java.util.Date
 import java.util.Locale
 
@@ -128,14 +132,23 @@ internal fun ActiveDot(color: Color) {
 
 private val dateFormat = SimpleDateFormat("MMM d", Locale.getDefault())
 
+/**
+ * "Last trained" for a day card, in CALENDAR days — the same reading OverviewUiStateMapper's
+ * relativeDay gives the same session.
+ *
+ * Bucketing elapsed milliseconds made this disagree with that surface exactly where it matters: a
+ * session finished Tuesday 22:30, opened Wednesday 08:00, is 9.5 hours old, so it read "Today"
+ * while the Overview read "YESTERDAY". A user who believes they have already trained today skips
+ * the session.
+ */
 internal fun formatRelative(epochMs: Long): String {
-    val nowMs = System.currentTimeMillis()
-    val deltaMs = nowMs - epochMs
-    val day = 24L * 60 * 60 * 1000
+    val zone = ZoneId.systemDefault()
+    val date = Instant.ofEpochMilli(epochMs).atZone(zone).toLocalDate()
+    val daysAgo = ChronoUnit.DAYS.between(date, LocalDate.now(zone))
     return when {
-        deltaMs < day -> "Today"
-        deltaMs < 2 * day -> "Yesterday"
-        deltaMs < 7 * day -> "${deltaMs / day} days ago"
+        daysAgo <= 0L -> "Today"
+        daysAgo == 1L -> "Yesterday"
+        daysAgo < 7L -> "$daysAgo days ago"
         else -> dateFormat.format(Date(epochMs))
     }
 }
