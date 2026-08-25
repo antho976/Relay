@@ -25,6 +25,7 @@ import com.forge.app.domain.units.lengthInputValue
 import com.forge.app.domain.units.lengthUnitLabel
 import com.forge.app.domain.units.parseToCm
 import com.forge.app.ui.common.ForgePrimaryCapsule
+import com.forge.app.domain.units.filterDecimalInput
 
 /**
  * Quick-log sheet for body measurements (GYMAP-52) — one field per type, each seeded with its latest
@@ -95,12 +96,7 @@ internal fun BodyMeasurementLogSheet(
             BodyMeasurementType.entries.forEach { type ->
                 OutlinedTextField(
                     value = inputs[type].orEmpty(),
-                    onValueChange = { v ->
-                        // Digits + at most ONE decimal point (same guard as the bodyweight sheet).
-                        val f = v.filter { ch -> ch.isDigit() || ch == '.' }
-                        val dot = f.indexOf('.')
-                        inputs[type] = if (dot < 0) f else f.substring(0, dot + 1) + f.substring(dot + 1).replace(".", "")
-                    },
+                    onValueChange = { v -> inputs[type] = filterDecimalInput(v) },
                     label = { Text("${type.label} ($unit)") },
                     singleLine = true,
                     isError = isInvalid(type),

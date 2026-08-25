@@ -31,6 +31,7 @@ import com.forge.app.domain.coach.CoachGoalKind
 import com.forge.app.program.MuscleGroup
 import com.forge.app.program.Program
 import com.forge.app.ui.common.clickableLabeled
+import com.forge.app.domain.units.filterDecimalInput
 
 /**
  * Add one goal to the portfolio (Coach v3 A2). Two steps in one small dialog: what kind, then its
@@ -110,7 +111,7 @@ internal fun GoalPickerDialog(
                         Spacer(Modifier.height(12.dp))
                         OutlinedTextField(
                             value = targetText,
-                            onValueChange = { targetText = it.filter { ch -> ch.isDigit() || ch == '.' } },
+                            onValueChange = { targetText = filterDecimalInput(it) },
                             label = { Text("Target (${chosen.unit})") },
                             placeholder = { Text("optional") },
                             singleLine = true,

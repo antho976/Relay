@@ -57,6 +57,7 @@ import java.time.format.DateTimeFormatter
 import java.time.format.TextStyle
 import java.util.Locale
 import kotlin.math.roundToInt
+import com.forge.app.domain.units.filterDecimalInput
 
 /**
  * Quick-log sheet for bodyweight — lives on the Profile's BODYWEIGHT section (moved from the old
@@ -194,13 +195,7 @@ internal fun BodyweightLogSheet(
             } else {
                 OutlinedTextField(
                     value = input,
-                    onValueChange = { v ->
-                        // Digits + at most ONE decimal point: collapse any extra dots so '7.5.2' can't slip
-                        // through and surface as a misleading out-of-range error.
-                        val f = v.filter { ch -> ch.isDigit() || ch == '.' }
-                        val dot = f.indexOf('.')
-                        input = if (dot < 0) f else f.substring(0, dot + 1) + f.substring(dot + 1).replace(".", "")
-                    },
+                    onValueChange = { v -> input = filterDecimalInput(v) },
                     label = { Text("Weight (${unitLabel(weightUnit)})") },
                     singleLine = true,
                     isError = invalid,

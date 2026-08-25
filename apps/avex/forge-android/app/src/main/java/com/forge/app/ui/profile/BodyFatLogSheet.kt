@@ -32,6 +32,7 @@ import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.time.format.TextStyle
 import java.util.Locale
+import com.forge.app.domain.units.filterDecimalInput
 
 /** Sane manual-entry bounds for a body-fat % (essential-fat floor to severe-obesity ceiling). */
 internal const val MIN_BODY_FAT_PCT = 3.0
@@ -79,7 +80,10 @@ internal fun BodyFatLogSheet(
     // Keyed on the day + seed so switching date re-seeds from that day, and a late flow emission still
     // lands the prefill instead of leaving a stale value that fails validation and locks Save.
     var input by remember(seed, date) {
-        mutableStateOf(seed?.let { "%.1f".format(it) } ?: "")
+        // Locale.US: this seeds the field above, so it is read back by the same parser. The bare
+        // format used the device locale and opened the sheet already holding "18,5" — a value the
+        // range check then rejected, on a device where the user had typed nothing.
+        mutableStateOf(seed?.let { String.format(Locale.US, "%.1f", it) } ?: "")
     }
 
     val parsed = parseSaneBodyFat(input)
@@ -127,12 +131,7 @@ internal fun BodyFatLogSheet(
             Spacer(Modifier.height(12.dp))
             OutlinedTextField(
                 value = input,
-                onValueChange = { v ->
-                    // Digits + at most ONE decimal point.
-                    val f = v.filter { ch -> ch.isDigit() || ch == '.' }
-                    val dot = f.indexOf('.')
-                    input = if (dot < 0) f else f.substring(0, dot + 1) + f.substring(dot + 1).replace(".", "")
-                },
+                onValueChange = { v -> input = filterDecimalInput(v) },
                 label = { Text("Body fat (%)") },
                 singleLine = true,
                 isError = invalid,

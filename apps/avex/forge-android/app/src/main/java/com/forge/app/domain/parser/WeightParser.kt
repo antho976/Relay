@@ -1,6 +1,7 @@
 package com.forge.app.domain.parser
 
 import com.forge.app.program.ExerciseUnit
+import com.forge.app.domain.units.normalizeDecimalInput
 
 /**
  * Converts what the user typed in the weight field into a numeric pound value used
@@ -23,7 +24,10 @@ object WeightParser {
     const val PLATE_LB: Double = 15.0
 
     fun parse(input: String, unit: ExerciseUnit, plateLb: Double = PLATE_LB): Double? {
-        val text = input.trim().lowercase()
+        // Normalise the decimal separator first: toDoubleOrNull below is locale-independent and
+        // takes only '.', so a comma-locale keyboard's "82,5" parsed as null and logged a set with
+        // no weight — while still displaying "82,5" back to the user.
+        val text = normalizeDecimalInput(input).lowercase()
         if (text.isEmpty() || text == "bw") return null
 
         // "N plate" / "N plates" / "Np" — explicit plate notation
