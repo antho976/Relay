@@ -42,13 +42,20 @@ interface LoggedSetDao {
      * only ever asks "max prior weight at >= N reps", so this aggregate gives identical answers
      * to scanning the full set history while staying bounded by distinct rep counts (a few dozen
      * rows forever, vs every set ever logged). Assisted sets are excluded, matching isPr's filter.
+     *
+     * Untracked sessions are excluded too: `Session.isUntracked` promises a session is kept out of
+     * stats and trophies, so a one-off max-out at a friend's gym must not raise the bar a later
+     * tracked lift has to clear — that silently suppressed real PRs with nothing on screen to
+     * explain why (every PR surface hides untracked rows).
      */
     @Query("""
         SELECT s.reps AS reps, MAX(s.weight_lb) AS weight_lb
         FROM logged_set s
         INNER JOIN logged_exercise le ON s.logged_exercise_id = le.id
+        INNER JOIN session sess ON le.session_id = sess.id
         WHERE le.exercise_id = :exerciseId
           AND s.logged_exercise_id != :excludeLoggedExerciseId
+          AND sess.is_untracked = 0
           AND s.weight_lb IS NOT NULL
           AND s.is_assisted = 0
           AND s.duration_seconds IS NULL
@@ -75,6 +82,7 @@ interface LoggedSetDao {
         INNER JOIN session sess ON le.session_id = sess.id
         WHERE le.exercise_id IN (:exerciseIds)
           AND sess.started_at < :beforeStartedAt
+          AND sess.is_untracked = 0
           AND s.weight_lb IS NOT NULL
           AND s.is_assisted = 0
           AND s.duration_seconds IS NULL
@@ -110,11 +118,18 @@ interface LoggedSetDao {
      * Timed-hold sets (`duration_seconds` set, reps not meaningful) are excluded here and in every
      * weight×reps / e1RM / volume aggregate below — a weighted plank must not read as a strength best
      * (GYMAP-51). Read/display queries (forLoggedExercise, allForSession) keep timed sets.
+     *
+     * Assisted and untracked sets are excluded here and in every max-weight query below, matching
+     * [repMaxFrontierForExercise] and isPr: a set the PR engine refuses to recognise must not become
+     * the personal best, fill a goal bar or unlock a trophy. The app used to contradict itself on
+     * two adjacent screens — "PB 40 lb" on a lift with no PR ever recorded.
      */
     @Query("""
         SELECT s.* FROM logged_set s
         INNER JOIN logged_exercise le ON s.logged_exercise_id = le.id
+        INNER JOIN session sess ON le.session_id = sess.id
         WHERE le.exercise_id = :exerciseId AND s.weight_lb IS NOT NULL AND s.duration_seconds IS NULL
+          AND s.is_assisted = 0 AND sess.is_untracked = 0
         ORDER BY s.weight_lb DESC, s.reps DESC
         LIMIT 1
     """)
@@ -131,11 +146,14 @@ interface LoggedSetDao {
     """)
     suspend fun bestHoldSecondsForExercise(exerciseId: String): Int?
 
-    /** Max numeric weight ever lifted for the given exercise. Null if all logs are non-numeric (e.g. BW). */
+    /** Max numeric weight ever lifted for the given exercise, unassisted and tracked. Null if all
+     *  logs are non-numeric (e.g. BW). */
     @Query("""
         SELECT MAX(s.weight_lb) FROM logged_set s
         INNER JOIN logged_exercise le ON s.logged_exercise_id = le.id
+        INNER JOIN session sess ON le.session_id = sess.id
         WHERE le.exercise_id = :exerciseId AND s.duration_seconds IS NULL
+          AND s.is_assisted = 0 AND sess.is_untracked = 0
     """)
     suspend fun maxWeightForExercise(exerciseId: String): Double?
 
@@ -143,7 +161,9 @@ interface LoggedSetDao {
     @Query("""
         SELECT MAX(s.weight_lb) FROM logged_set s
         INNER JOIN logged_exercise le ON s.logged_exercise_id = le.id
+        INNER JOIN session sess ON le.session_id = sess.id
         WHERE le.exercise_id IN (:exerciseIds) AND s.duration_seconds IS NULL
+          AND s.is_assisted = 0 AND sess.is_untracked = 0
     """)
     suspend fun maxWeightAcrossExercises(exerciseIds: List<String>): Double?
 
@@ -156,7 +176,9 @@ interface LoggedSetDao {
         SELECT le.exercise_id AS exercise_id, MAX(s.weight_lb) AS weight_lb
         FROM logged_set s
         INNER JOIN logged_exercise le ON s.logged_exercise_id = le.id
+        INNER JOIN session sess ON le.session_id = sess.id
         WHERE le.exercise_id IN (:exerciseIds) AND s.weight_lb IS NOT NULL AND s.duration_seconds IS NULL
+          AND s.is_assisted = 0 AND sess.is_untracked = 0
         GROUP BY le.exercise_id
     """)
     suspend fun maxWeightPerExercise(exerciseIds: List<String>): List<ExerciseMaxRow>
@@ -203,12 +225,26 @@ interface LoggedSetDao {
     """)
     suspend fun bestE1rmLbSince(sinceMs: Long): Double?
 
-    /** Max reps in any single logged set. */
-    @Query("SELECT MAX(reps) FROM logged_set")
+    /** Max reps in any single logged set of a tracked session. */
+    @Query("""
+        SELECT MAX(s.reps) FROM logged_set s
+        INNER JOIN logged_exercise le ON s.logged_exercise_id = le.id
+        INNER JOIN session sess ON le.session_id = sess.id
+        WHERE sess.is_untracked = 0
+    """)
     suspend fun maxRepsAnySet(): Int?
 
     /** Max reps summed across one exercise's sets (per logged exercise) — the "Rep Machine" trophy (#105). */
-    @Query("SELECT MAX(total_reps) FROM (SELECT SUM(reps) AS total_reps FROM logged_set GROUP BY logged_exercise_id)")
+    @Query("""
+        SELECT MAX(total_reps) FROM (
+            SELECT SUM(s.reps) AS total_reps
+            FROM logged_set s
+            INNER JOIN logged_exercise le ON s.logged_exercise_id = le.id
+            INNER JOIN session sess ON le.session_id = sess.id
+            WHERE sess.is_untracked = 0
+            GROUP BY s.logged_exercise_id
+        )
+    """)
     suspend fun maxRepsSummedPerExercise(): Int?
 
     /** Toggle per-set difficulty tag (#68). */
@@ -300,7 +336,7 @@ interface LoggedSetDao {
             FROM logged_set s
             INNER JOIN logged_exercise le ON s.logged_exercise_id = le.id
             INNER JOIN session ss ON le.session_id = ss.id
-            WHERE ss.finished_at IS NOT NULL AND s.duration_seconds IS NULL
+            WHERE ss.finished_at IS NOT NULL AND ss.is_untracked = 0 AND s.duration_seconds IS NULL
             GROUP BY le.session_id
         )
     """)
@@ -313,6 +349,7 @@ interface LoggedSetDao {
         INNER JOIN logged_exercise le ON s.logged_exercise_id = le.id
         INNER JOIN session ss ON le.session_id = ss.id
         WHERE ss.finished_at IS NOT NULL AND s.weight_lb IS NOT NULL AND s.duration_seconds IS NULL
+          AND s.is_assisted = 0 AND ss.is_untracked = 0
         ORDER BY s.weight_lb DESC
         LIMIT 1
     """)
