@@ -60,6 +60,24 @@ internal const val MAX_LOGGED_REPS = 999
 internal fun sanitizeReps(reps: Int): Int = reps.coerceIn(0, MAX_LOGGED_REPS)
 
 /**
+ * Sane upper bound on a single logged set's weight, in pounds.
+ *
+ * Reps and holds were clamped at the write boundary; weight was not, and the only guard on it was
+ * the jump-confirm dialog, which is skipped outright on the FIRST set of an exercise (there is no
+ * prior weight to compare against). So a fat-fingered 1000000000 on a brand-new lift went straight
+ * into the row: the session's volume became 1e9, XpEngine granted five million XP, and every volume
+ * chart's y-axis was flattened for good. Deleting the set repairs the charts; the XP and any
+ * trophies it unlocked stay.
+ *
+ * 2000 lb clears the heaviest loaded machine anyone will put in a log — a leg press stacked past
+ * anything a competitive lifter moves — while killing the digit-slip that poisons every aggregate.
+ */
+internal const val MAX_LOGGED_WEIGHT_LB = 2000.0
+
+/** Clamp a set's weight to a sane, non-poisoning range at the write boundary. Pure + testable. */
+internal fun sanitizeWeightLb(weightLb: Double?): Double? = weightLb?.coerceIn(0.0, MAX_LOGGED_WEIGHT_LB)
+
+/**
  * The aggregate the day-screen ViewModel talks to. Wraps sessions, logged exercises,
  * sets, and mood entries — anything that's part of one workout's lifecycle.
  *
@@ -683,22 +701,30 @@ class WorkoutRepository @Inject constructor(
         reps: Int,
         durationSeconds: Int? = null
     ): Long = loggedSetDao.insert(
-        LoggedSet(
-            loggedExerciseId = loggedExerciseId,
-            setIndex = setIndex,
-            weightText = weightText,
-            weightLb = weightLb,
-            reps = sanitizeReps(reps),
-            completedAt = clock.nowMs(),
-            // Timed holds (GYMAP-51): a held duration in whole seconds. null for a normal rep set;
-            // when present, `reps` is not a meaningful count and the set is skipped by weight×reps stats.
-            durationSeconds = durationSeconds?.coerceIn(0, MAX_HOLD_SECONDS)
-        )
+        run {
+            val safeLb = sanitizeWeightLb(weightLb)
+            LoggedSet(
+                loggedExerciseId = loggedExerciseId,
+                setIndex = setIndex,
+                // A clamped weight takes the text with it. Leaving the typed "1000000000" beside a
+                // stored 2000 would show the user a number the database does not hold, and every
+                // later edit would re-parse the text back to the absurd value.
+                weightText = if (safeLb != null && weightLb != null && safeLb != weightLb)
+                    com.forge.app.domain.units.weightInputValue(safeLb, useKg = false) else weightText,
+                weightLb = safeLb,
+                reps = sanitizeReps(reps),
+                completedAt = clock.nowMs(),
+                // Timed holds (GYMAP-51): a held duration in whole seconds. null for a normal rep set;
+                // when present, `reps` is not a meaningful count and the set is skipped by weight×reps stats.
+                durationSeconds = durationSeconds?.coerceIn(0, MAX_HOLD_SECONDS)
+            )
+        }
     )
 
     suspend fun deleteSet(set: LoggedSet) = loggedSetDao.delete(set)
 
-    suspend fun updateSet(set: LoggedSet) = loggedSetDao.update(set.copy(reps = sanitizeReps(set.reps)))
+    suspend fun updateSet(set: LoggedSet) =
+        loggedSetDao.update(set.copy(reps = sanitizeReps(set.reps), weightLb = sanitizeWeightLb(set.weightLb)))
 
     /**
      * Bounded all-time-history reads — replace loading every set ever logged for an
