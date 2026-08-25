@@ -49,6 +49,27 @@ class ImporterTest {
         assertNull(ExerciseNameMatcher.match(""))
     }
 
+    @Test fun neverInfersEquipmentTheSourceNameDidNotState() {
+        // Each of these used to fuzzy-match a dumbbell/machine/cable variant at exactly 2/3, filing
+        // history under equipment the export never claimed. Unmatched keeps the user's own label.
+        assertNull(ExerciseNameMatcher.match("Reverse Fly (Dumbbell)"))  // matched DB Fly — CHEST
+        assertNull(ExerciseNameMatcher.match("Bicep Curl"))              // matched a machine curl
+        assertNull(ExerciseNameMatcher.match("Good Morning"))            // matched the bodyweight one
+        assertNull(ExerciseNameMatcher.match("Crunch"))                  // matched the cable crunch
+        assertNull(ExerciseNameMatcher.match("Shoulder Press"))          // matched the barbell press
+    }
+
+    @Test fun bareBenchPressNamesAreTheBarbellLifts() {
+        assertEquals("barbell-bench-press", ExerciseNameMatcher.match("Bench Press"))
+        assertEquals("incline-barbell-bench", ExerciseNameMatcher.match("Incline Bench Press"))
+    }
+
+    @Test fun anEquipmentQualifierOnTheSourceNameStillMatches() {
+        // The source may be MORE specific than the library name — that invents nothing.
+        assertEquals("lat-pulldown", ExerciseNameMatcher.match("Lat Pulldown (Cable)"))
+        assertEquals("leg-extension", ExerciseNameMatcher.match("Leg Extension (Machine)"))
+    }
+
     // ── Strong ──────────────────────────────────────────────────────────────────
     private val strongCsv = """
         Date,Workout Name,Duration,Exercise Name,Set Order,Weight,Weight Unit,Reps,RPE

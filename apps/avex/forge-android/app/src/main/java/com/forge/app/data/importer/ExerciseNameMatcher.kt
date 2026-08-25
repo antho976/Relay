@@ -46,7 +46,6 @@ object ExerciseNameMatcher {
         "barbell deadlift" to "conventional-deadlift",
         "military press" to "barbell-overhead-press",
         "overhead press" to "barbell-overhead-press",
-        "shoulder press" to "barbell-overhead-press",
         "romanian deadlift" to "barbell-rdl",
         "chinup" to "chin-up",
         "pullup" to "pull-up",
@@ -55,7 +54,19 @@ object ExerciseNameMatcher {
         "barbell hip thrust" to "barbell-hip-thrust",
         "calf raise" to "standing-calf-raise",
         "seated leg curl" to "leg-curl",
-        "crunch" to "cable-crunch"
+        // Bare "Bench Press" / "Incline Bench Press" are the barbell lifts in every app that exports
+        // them without an equipment suffix (FitNotes, most spreadsheets), and the fuzzy pass cannot
+        // reach them: the barbell library names score 0.667 and 0.5 against these. Curating them the
+        // way "squat" and "deadlift" already are stops the equipment guard below from leaving the two
+        // most-logged lifts in the gym unmatched.
+        "bench press" to "barbell-bench-press",
+        "incline bench press" to "incline-barbell-bench"
+        // "crunch" is deliberately absent: the catalogue's only crunches are the weighted cable and
+        // high-pulley machine variants, and a plain bodyweight crunch — the most common ab entry in
+        // every gym app — is not either of them. It imports under its own name instead.
+        // "shoulder press" is absent for the same reason: unqualified, it is usually a dumbbell press
+        // in the apps that export it that way, so mapping it to the barbell lift asserted equipment
+        // the export never stated.
     ).mapKeys { (name, _) -> canonicalKey(name) }
 
     /** Library id keyed by canonical token-set string, built once. */
@@ -80,18 +91,44 @@ object ExerciseNameMatcher {
         CURATED[key]?.let { return it }
         libraryByKey[key]?.let { return it }
 
-        // Fuzzy: highest Jaccard over the library, accepted only above a safe floor.
+        // Fuzzy: highest Jaccard over the library, accepted only above a safe floor, never across an
+        // equipment mismatch, and never on a tie.
         var bestId: String? = null
         var bestScore = 0.0
+        var bestTies = 0
         for ((id, libTokens) in libraryTokens) {
             val inter = tokens.count { it in libTokens }
             if (inter == 0) continue
+            if (assertsEquipment(tokens, libTokens)) continue
+            // "Lat Pulldown (Cable)" against "Lat Pulldown": the source is the library name plus an
+            // equipment qualifier and nothing else, so it is an exact match once the qualifier is
+            // dropped — not a 0.667 fuzzy one that the floor below would reject. Extra tokens that
+            // are NOT equipment ("Reverse Fly (Dumbbell)" over "DB Fly") change the movement and get
+            // no such treatment.
+            val equipmentQualifiedOnly =
+                inter == libTokens.size && tokens.all { it in libTokens || it in EQUIPMENT_TOKENS }
             val union = (tokens.size + libTokens.size - inter).toDouble()
-            val score = inter / union
-            if (score > bestScore) { bestScore = score; bestId = id }
+            val score = if (equipmentQualifiedOnly) 1.0 else inter / union
+            when {
+                score > bestScore -> { bestScore = score; bestId = id; bestTies = 1 }
+                score == bestScore && id != bestId -> bestTies++
+            }
         }
+        // A tie is genuine ambiguity — declaration order is not evidence, and picking by it is how
+        // "Bicep Curl" landed on a machine variant. Import under the original name instead.
+        if (bestTies > 1) return null
         return if (bestScore >= JACCARD_FLOOR) bestId else null
     }
+
+    /**
+     * True when the library name names equipment the source name never did — "Bench Press" against
+     * "DB Bench Press", "Reverse Fly (Dumbbell)" against "DB Fly". Token overlap alone rates those
+     * 0.667, so without this guard the matcher INVENTS the equipment and files three years of 245 lb
+     * barbell benching under a dumbbell lift (or, in the Fly case, moves rear-delt volume into CHEST).
+     * The reverse direction is fine: a source name may be more specific than the library's.
+     */
+    private fun assertsEquipment(sourceTokens: Set<String>, libTokens: Set<String>): Boolean =
+        libTokens.any { it in EQUIPMENT_TOKENS && it !in sourceTokens }
 
     /** Canonical, order-independent key: sorted distinct tokens joined by spaces. */
     private fun canonicalKey(name: String): String = tokenize(name).sorted().joinToString(" ")
@@ -109,5 +146,15 @@ object ExerciseNameMatcher {
             .toSet()
     }
 
-    private const val JACCARD_FLOOR = 0.66
+    /** Equipment words that must not be inferred — only carried across from the source name. */
+    private val EQUIPMENT_TOKENS = setOf(
+        "barbell", "dumbbell", "cable", "machine", "bodyweight", "smith", "kettlebell", "band"
+    )
+
+    /**
+     * Above 0.667. A two-token source name shares both tokens with a three-token library name at
+     * exactly 2/3, which is the shape "<equipment> + <the user's name>" — the single biggest source
+     * of wrong matches. Genuine three-of-four overlaps score 0.75 and still pass.
+     */
+    private const val JACCARD_FLOOR = 0.72
 }
