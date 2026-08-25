@@ -10,11 +10,23 @@ import androidx.room.PrimaryKey
  * One performed set within a logged exercise.
  *
  * Both `weightText` and `weightLb` are stored:
- *  - `weightText` is what the user typed verbatim ("BW", "2 plates", "45")
- *    and is what's shown back in the UI.
- *  - `weightLb` is the parsed numeric value used by aggregates (volume,
- *    PR detection, strength curves). `null` when the input is non-numeric
- *    (e.g. "BW") — aggregates should treat that as 0 lb or skip it.
+ *  - `weightText` is the user's NOTATION, always expressed in POUNDS. It preserves how they
+ *    entered the set ("BW", "2 plates", "45") rather than only its numeric value, and it is what
+ *    the UI shows back after converting to the display unit.
+ *  - `weightLb` is the parsed numeric value used by aggregates (volume, PR detection, strength
+ *    curves). `null` when the input is non-numeric (e.g. "BW") — aggregates should treat that as
+ *    0 lb or skip it.
+ *
+ * **`weightText` is in lb, not in the user's display unit.** Write it through
+ * [com.forge.app.domain.units.toStoredWeightText], which converts a kg/stones entry to its lb
+ * value and passes non-numeric notation through untouched. This is load-bearing rather than a
+ * convention: [com.forge.app.domain.session.SetLogUseCase] reads a stored `weightText` back out of
+ * the database and re-parses it with `WeightParser` as pounds, so a row written in the display
+ * unit does not merely display wrong — it is re-logged at the wrong weight.
+ *
+ * This doc previously said "what the user typed verbatim", which contradicted
+ * `toStoredWeightText`'s own contract and is how the freestyle logger came to store display-unit
+ * text (2026-08-25).
  */
 @Entity(
     tableName = "logged_set",
