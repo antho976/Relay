@@ -53,8 +53,8 @@ class LessonViewModel @Inject constructor(
         if (lesson != null) {
             viewModelScope.launch {
                 runCatching { academyRepo.markOpened(lesson.id) }
-                val examples = runCatching { examples() }.getOrDefault(emptyMap())
-                _state.update { it.copy(examples = examples) }
+                val loadedExamples = runCatching { examples() }.getOrDefault(emptyMap())
+                _state.update { it.copy(examples = loadedExamples) }
             }
         }
     }

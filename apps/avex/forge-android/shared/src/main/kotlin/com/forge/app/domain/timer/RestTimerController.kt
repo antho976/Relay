@@ -152,11 +152,6 @@ class RestTimerController(
         notifyStructural()
     }
 
-    /** Seconds left of real elapsed time (never negative). Rounds up so a fresh 150 reads 150, not 149.
-     *
-     *  A wall-clock correction in EITHER direction is now simply invisible here — the elapsed clock
-     *  it reads cannot jump. The ceiling clamp stays as a display bound (and as a backstop should an
-     *  implementation ever hand back something implausible). */
     /**
      * Rebuild a timer that outlived its process. [remainingSeconds] is what is left of
      * [totalSeconds]; a paused timer is restored frozen at that value.
@@ -166,8 +161,9 @@ class RestTimerController(
         if (totalSeconds <= 0 || remainingSeconds <= 0) return
         endAtElapsedMs = elapsed.elapsedMs() + remainingSeconds * 1000L
         _state.value = RestTimerState(
-            totalSeconds = totalSeconds,
-            secondsRemaining = remainingSeconds.coerceAtMost(totalSeconds.coerceAtLeast(remainingSeconds)),
+            // A restored remaining can't exceed its total, or the progress ring reads past full.
+            totalSeconds = maxOf(totalSeconds, remainingSeconds),
+            secondsRemaining = remainingSeconds,
             isPaused = paused
         )
         if (!paused) relaunchTickJob()
@@ -177,6 +173,11 @@ class RestTimerController(
         runCatching { onStructuralChange?.invoke(_state.value) }
     }
 
+    /** Seconds left of real elapsed time (never negative). Rounds up so a fresh 150 reads 150, not 149.
+     *
+     *  A wall-clock correction in EITHER direction is now simply invisible here — the elapsed clock
+     *  it reads cannot jump. The ceiling clamp stays as a display bound (and as a backstop should an
+     *  implementation ever hand back something implausible). */
     @Synchronized
     private fun remainingNow(state: RestTimerState): Int {
         if (state.isPaused) return state.secondsRemaining
