@@ -24,7 +24,8 @@ class WearCommandHandler @Inject constructor(
     suspend fun handleLogSet(bytes: ByteArray) {
         val cmd = when (val d = WearCodec.decode<LogSetCommand>(bytes)) {
             is WearCodec.DecodeResult.Ok -> d.value
-            else -> return // NewerVersion/Invalid: dropped; the wrist surfaces its own state.
+            WearCodec.DecodeResult.NewerVersion -> return refuseNewerVersion(bytes)
+            else -> return // Invalid: corrupt bytes, nothing to ack against.
         }
         if (!deduper.isNew(cmd.commandId)) return
         val result = setLog.logFromWatch(cmd)
@@ -44,6 +45,7 @@ class WearCommandHandler @Inject constructor(
     suspend fun handleSetRpe(bytes: ByteArray) {
         val cmd = when (val d = WearCodec.decode<SetRpeCommand>(bytes)) {
             is WearCodec.DecodeResult.Ok -> d.value
+            WearCodec.DecodeResult.NewerVersion -> return refuseNewerVersion(bytes)
             else -> return
         }
         if (!deduper.isNew(cmd.commandId)) return
@@ -59,9 +61,35 @@ class WearCommandHandler @Inject constructor(
         )
     }
 
+    /**
+     * Tell the wrist its command was understood-but-refused because THIS side is out of date.
+     *
+     * Version handling used to be one-directional: the watch has an UpdateScreen for a newer phone,
+     * but the phone dropped a newer watch's command with a bare `return` — before publishing any
+     * ack. Wear apps update on their own Play schedule and routinely land ahead of the phone build,
+     * so the wrist sat at "LOGGING…", timed out to "Not logged · reconnecting", and invited a
+     * re-tap into the duplicate loop — every attempt guaranteed to fail, with no stated cause and no
+     * path to a fix.
+     *
+     * The body can't be decoded, but [WearCodec.probeCommandId] reads the id out of the raw JSON,
+     * which is all an ack needs.
+     */
+    private suspend fun refuseNewerVersion(bytes: ByteArray) {
+        val commandId = WearCodec.probeCommandId(bytes) ?: return
+        publisher.publishAck(
+            CmdAckDto(
+                commandId = commandId,
+                ok = false,
+                reason = "Update Avex on your phone",
+                atMs = clock.nowMs()
+            )
+        )
+    }
+
     suspend fun handleUndoSet(bytes: ByteArray) {
         val cmd = when (val d = WearCodec.decode<UndoSetCommand>(bytes)) {
             is WearCodec.DecodeResult.Ok -> d.value
+            WearCodec.DecodeResult.NewerVersion -> return refuseNewerVersion(bytes)
             else -> return
         }
         if (!deduper.isNew(cmd.commandId)) return

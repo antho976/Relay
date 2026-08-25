@@ -12,6 +12,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -64,6 +65,46 @@ fun WearRoot(repo: WearDataRepository, haptics: WristHaptics) {
         }
     }
 
+    // ── The rest-done buzz (W1, DESIGN §16: one buzz, one body part) ───────────
+    //
+    // It lives HERE rather than in TimerView because TimerView does not outlive the moment it needs
+    // to fire. When the countdown expires the phone republishes the timer as paused-at-zero within
+    // milliseconds (setUrgent), WearRoot's `timerLive` goes false and TimerView is unmounted —
+    // usually BEFORE the watch's own 200 ms tick notices zero. Whether the wrist buzzed at all came
+    // down to that race, so the phone's fallback buzz fired instead: in the user's locker, which is
+    // precisely the outcome the handoff exists to avoid.
+    //
+    // Both signals now converge on one guard, so the buzz happens exactly once per rest: the local
+    // countdown reaching zero, or the phone's expiry arriving, whichever comes first.
+    var runningEndAt by remember { mutableLongStateOf(0L) }
+    var buzzedForEndAt by remember { mutableLongStateOf(0L) }
+    LaunchedEffect(timer) {
+        suspend fun fireTimerDone() {
+            val id = runningEndAt
+            if (id == 0L || buzzedForEndAt == id) return
+            buzzedForEndAt = id
+            haptics.timerDone()
+            repo.sendHapticAck(id)
+        }
+        val t = timer
+        when {
+            t == null -> runningEndAt = 0L
+            !t.paused && t.endAtMs != 0L -> {
+                runningEndAt = t.endAtMs
+                // publishedAtMs makes this a DURATION measured on this watch, instead of a phone
+                // wall-clock instant counted down against the watch's own — which made every
+                // millisecond of skew between the devices a millisecond of error.
+                val remainingMs = if (t.publishedAtMs > 0L) t.endAtMs - t.publishedAtMs
+                    else t.endAtMs - System.currentTimeMillis()
+                if (remainingMs > 0) delay(remainingMs)
+                fireTimerDone()
+            }
+            // Paused with nothing left is the phone telling us the rest expired. A manual pause
+            // keeps its remaining seconds, so it can't be mistaken for one.
+            t.paused && t.pausedRemainingSeconds == 0 -> fireTimerDone()
+        }
+    }
+
     // One Finished beat when the live session disappears — then back to the idle glance.
     var showFinished by remember { mutableStateOf(false) }
     var hadSession by remember { mutableStateOf(false) }
@@ -81,7 +122,7 @@ fun WearRoot(repo: WearDataRepository, haptics: WristHaptics) {
                     val t = timer
                     // A finished/stopped timer (paused at 0) hands back to the set view.
                     val timerLive = t != null && (!t.paused || t.pausedRemainingSeconds > 0)
-                    if (timerLive) TimerView(t!!, repo, haptics, onRpe = { rpeSetId = it })
+                    if (timerLive) TimerView(t!!, repo, onRpe = { rpeSetId = it })
                     else SetView(session!!, repo, onRpe = { rpeSetId = it })
                 }
                 showFinished -> FinishedScreen(onDone = { showFinished = false })

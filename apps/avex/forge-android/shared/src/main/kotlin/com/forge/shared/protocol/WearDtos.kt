@@ -176,7 +176,17 @@ data class HrBatchDto(
     val samples: List<Sample>,
     /** The watch's cumulative measured calories for this exercise so far (Health Services);
      *  null when the watch isn't reporting them. Replaces the phone's MET estimate at finish. */
-    val totalKcal: Double? = null
+    val totalKcal: Double? = null,
+    /**
+     * The WATCH's wall clock when this batch was sent.
+     *
+     * Samples are stamped on the watch's clock and were filtered on the phone against a PHONE-clock
+     * session start, so a watch running a few seconds behind — routine, since Wear time sync is
+     * periodic — had the first seconds of every trace silently dropped at every session start. With
+     * this the phone can measure the offset and compare like with like. 0 = an older watch build
+     * that doesn't send it; the phone then falls back to a fixed skew tolerance.
+     */
+    val sentAtMs: Long = 0L
 ) {
     @Serializable
     data class Sample(val atMs: Long, val bpm: Int)

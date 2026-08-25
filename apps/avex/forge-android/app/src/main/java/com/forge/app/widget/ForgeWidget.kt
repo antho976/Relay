@@ -1,8 +1,6 @@
 package com.forge.app.widget
 
 import android.content.Context
-import android.os.Bundle
-import androidx.glance.ExperimentalGlanceApi
 import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
 import androidx.glance.GlanceTheme
@@ -42,12 +40,16 @@ import com.forge.app.ui.theme.PearlBackground
 import com.forge.app.ui.theme.PearlMuted
 import com.forge.app.ui.theme.PearlOnBg
 
-/** Intent extra key carrying the next-up dayKey. MainActivity/ForgeNavHost can read this
- *  in a future pass to navigate directly to the day screen; for now it rides along unused. */
+/** Intent extra key carrying the next-up dayKey — read by MainActivity to open that day. */
 const val EXTRA_START_DAY_KEY = "forge.widget.START_DAY_KEY"
 
 /** Intent extra key set when the widget tap is for an active/in-progress session resume. */
 const val EXTRA_RESUME_SESSION = "forge.widget.RESUME_SESSION"
+
+/** The same two keys as Glance ActionParameters — Glance writes these into the launch INTENT, so
+ *  MainActivity reads them back with plain `getStringExtra` / `getBooleanExtra`. */
+private val startDayKeyParam = androidx.glance.action.ActionParameters.Key<String>(EXTRA_START_DAY_KEY)
+private val resumeSessionParam = androidx.glance.action.ActionParameters.Key<Boolean>(EXTRA_RESUME_SESSION)
 
 /**
  * Home screen widget showing next planned workout day + main exercises (#146).
@@ -63,7 +65,6 @@ const val EXTRA_RESUME_SESSION = "forge.widget.RESUME_SESSION"
  */
 class ForgeWidget : GlanceAppWidget() {
 
-    @OptIn(ExperimentalGlanceApi::class)
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         // Reuse the Hilt singleton DB + program facade via an EntryPoint instead of opening a
         // second Room instance. This removes the destructive-migration data wipe and the leaked
@@ -84,41 +85,47 @@ class ForgeWidget : GlanceAppWidget() {
 
         // Next day via the shared resolver — calendar-aware in weekday mode, legacy day-after-last
         // otherwise — so the widget agrees with the day list and Overview.
-        val finished = entryPoint.sessionDao().allFinished()
+        //
+        // Three narrow queries, not `allFinished()`. This used to deserialize EVERY finished session
+        // as a full entity and walk the list three times — for a three-year daily user, 900 entities
+        // and 900 ZonedDateTimes allocated inside the AppWidgetService update window, to answer
+        // "which of these seven days have a dot".
         val settings = entryPoint.settingsRepository()
         val zone = java.time.ZoneId.systemDefault()
         val today = java.time.LocalDate.now(zone)
-        val trainedTodayKeys = finished
-            .filter { it.finishedAt != null && java.time.Instant.ofEpochMilli(it.finishedAt!!).atZone(zone).toLocalDate() == today }
-            .map { it.dayKey }.toSet()
+        val monday = today.with(java.time.DayOfWeek.MONDAY)
+        val mondayMs = monday.atStartOfDay(zone).toInstant().toEpochMilli()
+        val todayStartMs = today.atStartOfDay(zone).toInstant().toEpochMilli()
+        val trainedTodayKeys = entryPoint.sessionDao().finishedDayKeysSince(todayStartMs).toSet()
         val nextDayKey = com.forge.app.domain.schedule.WeeklySchedule.resolveNextUp(
             mode = settings.scheduleMode.first(),
             todayIndex = today.dayOfWeek.value - 1,
             schedule = settings.weeklySchedule.first(),
             dayKeys = Program.dayKeys,
-            lastFinishedDayKey = finished.maxByOrNull { it.finishedAt ?: it.startedAt }?.dayKey,
+            lastFinishedDayKey = entryPoint.sessionDao().lastFinishedDayKey(),
             trainedTodayKeys = trainedTodayKeys
         )
         val nextDayPlan = nextDayKey?.let { key -> Program.days.firstOrNull { it.key == key } }
         // "Go with the flow" — drives the fallback copy below so the widget doesn't claim a plan exists.
         val freestyleMode = settings.freestyleMode.first()
 
-        // --- Item 1: build the extras bundle for this widget state ---
-        // Active session → set EXTRA_RESUME_SESSION=true (+ dayKey) for future intent handler.
-        // Next day resolved → carry the dayKey for future deep-link wiring.
-        // No session / no next day → empty bundle; lands on Overview.
-        // Glance actionStartActivity(Class, ActionParameters, Bundle) passes the Bundle as
-        // activity extras; FLAGS are not settable via Glance but Android starts single-task
-        // activities correctly without them.
-        val extrasBundle: Bundle = when {
-            activeSession != null -> Bundle().apply {
-                putBoolean(EXTRA_RESUME_SESSION, true)
-                putString(EXTRA_START_DAY_KEY, activeSession.dayKey)
-            }
-            nextDayKey != null -> Bundle().apply {
-                putString(EXTRA_START_DAY_KEY, nextDayKey)
-            }
-            else -> Bundle.EMPTY
+        // --- Item 1: what the tap should carry ---
+        // Active session → resume it; otherwise open the next-up day; otherwise just Overview.
+        //
+        // Through ActionParameters, which Glance writes into the INTENT. The bundle used to be
+        // handed to `actionStartActivity`'s third parameter, which is `activityOptions` — the
+        // ActivityOptions slot for PendingIntent.getActivity — not intent extras. (The
+        // @OptIn(ExperimentalGlanceApi) this file used to carry was the tell: that annotation is
+        // required by exactly that overload.) MainActivity really does read these extras, so the
+        // widget's whole tap purpose — open Pull B — silently landed on Overview instead, and
+        // "Tap to resume" could never resume anything.
+        val tapParameters = when {
+            activeSession != null -> actionParametersOf(
+                resumeSessionParam to true,
+                startDayKeyParam to activeSession.dayKey
+            )
+            nextDayKey != null -> actionParametersOf(startDayKeyParam to nextDayKey)
+            else -> actionParametersOf()
         }
 
         // Theme-matched colours: honour the user's AMOLED + accent choices (the same Pearl palette the
@@ -136,11 +143,11 @@ class ForgeWidget : GlanceAppWidget() {
         // This-week dot row from `finished`; streak reuses the app's vacation-aware computation
         // (bridges holidays + the one rest-day grace) so the widget can't contradict the in-app number
         // a hand-rolled walk over finished dates would have ignored vacation bridging.
-        val finishedDates = finished.mapNotNull { it.finishedAt }
-            .map { java.time.Instant.ofEpochMilli(it).atZone(zone).toLocalDate() }
-            .toSortedSet()
+        val finishedDates = entryPoint.sessionDao().finishedAtsSince(mondayMs)
+            .mapTo(HashSet()) { java.time.Instant.ofEpochMilli(it).atZone(zone).toLocalDate() }
         val streak = entryPoint.statsRepository().currentStreakDays()
-        val monday = today.with(java.time.DayOfWeek.MONDAY)
+        val hasAnyFinished = streak >= 1 || finishedDates.isNotEmpty() ||
+            entryPoint.sessionDao().lastFinishedDayKey() != null
         val weekDots = (0..6).joinToString(" ") { off ->
             if (monday.plusDays(off.toLong()) in finishedDates) "●" else "○"
         }
@@ -155,7 +162,7 @@ class ForgeWidget : GlanceAppWidget() {
                         // Item 1: whole-widget tap target — launches MainActivity with EXTRA_START_DAY_KEY
                         // (the next-up day, or the active session's day). MainActivity reads it and the
                         // nav host opens that day on top of Overview (so Back returns home).
-                        .clickable(actionStartActivity(MainActivity::class.java, actionParametersOf(), extrasBundle)),
+                        .clickable(actionStartActivity(MainActivity::class.java, tapParameters)),
                     verticalAlignment = Alignment.Top
                 ) {
                     Text(
@@ -223,7 +230,7 @@ class ForgeWidget : GlanceAppWidget() {
                         Text(sub, style = TextStyle(color = ColorProvider(Color(mutedArgb), Color(mutedArgb))))
                     }
                     // Streak + this-week dots (Cat 21) — once there's any finished session to count.
-                    if (finished.isNotEmpty()) {
+                    if (hasAnyFinished) {
                         if (streak >= 1) {
                             Text(
                                 "$streak-day streak",

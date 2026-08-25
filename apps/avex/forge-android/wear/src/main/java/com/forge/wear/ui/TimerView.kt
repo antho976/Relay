@@ -25,7 +25,6 @@ import androidx.wear.compose.material.Text
 import com.forge.shared.protocol.TimerCommand
 import com.forge.shared.protocol.TimerStateDto
 import com.forge.wear.data.WearDataRepository
-import com.forge.wear.data.WristHaptics
 import kotlinx.coroutines.delay
 
 /**
@@ -39,7 +38,6 @@ import kotlinx.coroutines.delay
 fun TimerView(
     timer: TimerStateDto,
     repo: WearDataRepository,
-    haptics: WristHaptics,
     onRpe: (Long) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -47,7 +45,6 @@ fun TimerView(
     val lastLog by repo.lastLog.collectAsStateWithLifecycle()
     val session by repo.session.collectAsStateWithLifecycle()
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
-    var buzzedForEndAt by remember { mutableLongStateOf(0L) }
     // When THIS watch first saw this timer instance. endAtMs is an absolute instant on the PHONE's
     // clock; rendering it against the watch's own made every millisecond of skew between the two
     // devices a millisecond of error in the countdown. With publishedAtMs the payload carries a
@@ -68,14 +65,9 @@ fun TimerView(
     val remainingSec = if (timer.paused) timer.pausedRemainingSeconds
     else ((remainingMs + 999) / 1000).toInt().coerceAtLeast(0)
 
-    // The one strong buzz, once per timer instance (endAtMs identifies it), acked to the phone.
-    LaunchedEffect(remainingSec, timer.endAtMs) {
-        if (!timer.paused && remainingSec == 0 && buzzedForEndAt != timer.endAtMs) {
-            buzzedForEndAt = timer.endAtMs
-            haptics.timerDone()
-            repo.sendHapticAck(timer.endAtMs)
-        }
-    }
+    // The rest-done buzz is NOT fired here — see WearRoot. This composable is unmounted the moment
+    // the phone republishes the timer as paused-at-zero, which usually beats the local tick to
+    // zero, so a buzz owned by this lifetime was a race the wrist mostly lost.
 
     val progress = if (timer.totalSeconds <= 0) 0f else remainingSec.toFloat() / timer.totalSeconds
 

@@ -122,10 +122,27 @@ class WearStatePublisher @Inject constructor(
         putItem(WearProtocol.PATH_GLANCE_TODAY, WearCodec.encode(dto))
     }
 
-    /** Ack a wrist command (latest-wins DataItem; the watch matches on commandId). */
+    /**
+     * Ack a wrist command, at that command's OWN path so a later ack can never supersede an
+     * unsynced earlier one (see [WearProtocol.PATH_CMD_ACK]).
+     *
+     * Per-path items would otherwise accumulate in the Data Layer forever, so the oldest is dropped
+     * once [ACK_HISTORY] newer ones exist — long past any plausible sync delay, and never the item
+     * just written.
+     */
     suspend fun publishAck(ack: com.forge.shared.protocol.CmdAckDto) {
-        putItem(WearProtocol.PATH_CMD_ACK, WearCodec.encode(ack))
+        val path = WearProtocol.ackPath(ack.commandId)
+        putItem(path, WearCodec.encode(ack))
+        val stale = synchronized(recentAckPaths) {
+            recentAckPaths.remove(path)
+            recentAckPaths.addLast(path)
+            if (recentAckPaths.size > ACK_HISTORY) recentAckPaths.removeFirst() else null
+        }
+        stale?.let { deleteItem(it) }
     }
+
+    /** Ack paths written recently, oldest first — the bound on live ack DataItems. */
+    private val recentAckPaths = ArrayDeque<String>()
 
     private fun RestTimerState.toDto(): TimerStateDto {
         val now = clock.nowMs()
@@ -164,5 +181,7 @@ class WearStatePublisher @Inject constructor(
     private companion object {
         /** endAtMs jitter tolerated between tick-derived recomputes before it counts as a restart. */
         const val TIMER_REPUBLISH_SLOP_MS = 1_500L
+        /** How many per-command acks stay live before the oldest is deleted. */
+        const val ACK_HISTORY = 10
     }
 }
