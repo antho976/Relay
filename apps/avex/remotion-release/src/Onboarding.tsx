@@ -2,7 +2,7 @@ import React from 'react';
 import {AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig} from 'remotion';
 import {EASE} from './Camera';
 import {Plate} from './Layout';
-import {Cue} from './Sound';
+import {Cue, LEAD} from './Sound';
 import {Eyebrow, Line, Title, useEdgeFade, useRise} from './Type';
 import {ACCENT, ACCENT_OLD, BG, EIGHTH, MONO, MUTED, ON_BG, OUTLINE, QUARTER, SERIF, SIXTEENTH, SURFACE_V, run, snap} from './theme';
 
@@ -287,7 +287,7 @@ export const PageCard: React.FC<{
 
 /* ── the beat ────────────────────────────────────────────────────────────── */
 
-type Phase = {layIn: number; per: number; hold: number; bam: number; bloom: number; bloomPer: number};
+type Phase = {layIn: number; bam: number};
 
 export const OnboardingBeat: React.FC<{
   before: Page[]; after: Page[];
@@ -298,45 +298,66 @@ export const OnboardingBeat: React.FC<{
   gridStart?: number;
 }> = ({before, after, eyebrow = 'Onboarding', title, line, cols, phase, gridStart = 0}) => {
   const frame = useCurrentFrame();
-  const {fps, durationInFrames} = useVideoConfig();
+  const {durationInFrames} = useVideoConfig();
   const o = useEdgeFade(durationInFrames, 10);
 
   // Absolute grid points, converted back to beat-local. The cards ARE the rhythm here, so they are
   // laid out from the grid and the springs follow them, not the other way round.
   const lay = run(gridStart + (phase?.layIn ?? QUARTER), before.length, SIXTEENTH).map((f) => f - gridStart);
   const bam = phase?.bam ?? Math.round(snap(gridStart + lay[lay.length - 1] + QUARTER * 2, 4) - gridStart);
-  const bloomRun = run(gridStart + bam + QUARTER, after.length, EIGHTH).map((f) => f - gridStart);
-  const P: Phase = {layIn: lay[0], per: SIXTEENTH, hold: 0, bam, bloom: bloomRun[0], bloomPer: EIGHTH};
+  // The nine come back on sixteenths from the eighth after the hit, not on eighths from the next
+  // quarter. On eighths the first page stood alone in an empty frame for a quarter of a second
+  // before the second one arrived, which read as a mistake rather than a beginning; now the first
+  // grows out of the impact point as the old pages clear and all nine are standing 1.3 s after the
+  // hit. They arrive nearest-the-centre first, so the grid reads as blooming rather than typing.
+  const bloomRun = run(gridStart + bam + EIGHTH, after.length, SIXTEENTH).map((f) => f - gridStart);
   const bloom = bloomRun[0];
+  const bloomEnd = bloomRun[bloomRun.length - 1];
 
   // Two rows for both, but the block visibly narrows: fifteen small pages span ~1140px, nine
   // larger ones span ~850. The shrink is the point, so it has to be legible as a shape.
   const beforeCols = cols?.[0] ?? 8;
   const afterCols = cols?.[1] ?? 5;
 
-  // The hit: a flash, a shockwave ring, and the old grid collapsing toward the centre.
-  const hit = spring({frame: frame - bam, fps, config: {damping: 200, stiffness: 220}});
-  const flash = interpolate(frame, [bam - 1, bam + 2, bam + 12], [0, 1, 0], {
+  /*
+   * The hit.
+   *
+   * The first cut faded the old grid out under a red glow while nudging it a few pixels toward the
+   * centre. Rendered, that was a smear that stayed half-legible for eight frames, then six empty
+   * frames, then one small page alone in the middle. Now the impact throws the fifteen pages
+   * outward and off, fast and decelerating, gone in ten frames with the shock ring travelling with
+   * them; the fade starts a frame after the motion so the throw reads before the fade does; and
+   * the nine grow out of the point of impact as the last of them clears. At no frame are the two
+   * grids both legible.
+   */
+  const blast = interpolate(frame, [bam, bam + 10], [0, 1], {
+    extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: EASE.glide,
+  });
+  const fade = interpolate(frame, [bam + 1, bam + 8], [1, 0], {
     extrapolateLeft: 'clamp', extrapolateRight: 'clamp',
   });
-  const shock = interpolate(frame, [bam, bam + 22], [0, 1], {
+  const flash = interpolate(frame, [bam - 1, bam + 1, bam + 9], [0, 1, 0], {
+    extrapolateLeft: 'clamp', extrapolateRight: 'clamp',
+  });
+  const shock = interpolate(frame, [bam, bam + 18], [0, 1], {
     extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: EASE.snap,
   });
 
-  const showBefore = frame < bam + 10;
-  const showAfter = frame >= bloom - 2;
+  const showBefore = frame < bam + 9;
+  const showAfter = frame >= bloom - LEAD;
 
   const rise = useRise(4, 12);
 
   return (
     <AbsoluteFill style={{opacity: o}}>
       <Plate>
-        {/* Fifteen pages on sixteenths, the hit on a downbeat, nine pages back on eighths. The taps
-            decay so fifteen of them read as a flow rather than a drum roll. */}
+        {/* Fifteen pages on sixteenths, the hit on a downbeat, nine pages back on sixteenths. Each
+            page's spring starts LEAD frames before its cue, so the tap sounds as the page is standing
+            rather than a sixth of a second before it appears. The taps and pops decay so a run of
+            them reads as a flow rather than a drum roll. */}
         {lay.map((f, i) => <Cue key={i} at={f} sfx="tap" gain={0.55 * Math.pow(0.968, i)} />)}
         <Cue at={bam} sfx="impact" />
-        {bloomRun.map((f, i) => <Cue key={i} at={f} sfx="pop" gain={0.6 * Math.pow(0.97, i)} />)}
-        <Cue at={Math.round(snap(gridStart + bloomRun[bloomRun.length - 1] + EIGHTH, 4) - gridStart)} sfx="ding" gain={0.75} />
+        {bloomRun.map((f, i) => <Cue key={i} at={f} sfx="pop" gain={0.6 * Math.pow(0.94, i)} />)}
 
         <div style={{display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 30, width: 1560, marginTop: 52}}>
           <div style={{display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', width: '100%'}}>
@@ -345,9 +366,9 @@ export const OnboardingBeat: React.FC<{
               <Title delay={4} size={62}>{title ?? `${before.length} pages down to ${after.length}`}</Title>
             </div>
             <div style={{display: 'flex', alignItems: 'baseline', gap: 18, ...rise}}>
-              <Ledger v={before.length} on={1 - hit} />
+              <Ledger v={before.length} on={1 - blast} />
               <div style={{fontFamily: MONO, fontSize: 34, color: MUTED, opacity: 0.5}}>→</div>
-              <Ledger v={after.length} on={hit} accent />
+              <Ledger v={after.length} on={blast} accent />
             </div>
           </div>
 
@@ -355,13 +376,13 @@ export const OnboardingBeat: React.FC<{
             {showBefore ? (
               <Grid
                 pages={before} cols={beforeCols} w={132} accent={ACCENT_OLD} era="old"
-                enterAt={lay[0]} per={SIXTEENTH} exitAt={bam} exit={hit}
+                enterAt={lay[0]} per={SIXTEENTH} exit={blast} fade={fade}
               />
             ) : null}
             {showAfter ? (
               <Grid
                 pages={after} cols={afterCols} w={158} accent={ACCENT} era="new"
-                enterAt={bloom} per={EIGHTH} bloom
+                enterAt={bloom} per={SIXTEENTH} bloom radial
               />
             ) : null}
 
@@ -386,7 +407,7 @@ export const OnboardingBeat: React.FC<{
 
           {line ? (
             <div style={{textAlign: 'center', maxWidth: 1460}}>
-              <Line delay={bloom + 6} width={1460}>{line}</Line>
+              <Line delay={bloomEnd + 4} width={1460}>{line}</Line>
             </div>
           ) : null}
         </div>
@@ -409,33 +430,55 @@ const Ledger: React.FC<{v: number; on: number; accent?: boolean}> = ({v, on, acc
 
 const Grid: React.FC<{
   pages: Page[]; cols: number; w: number; accent: string; era: 'old' | 'new';
-  enterAt: number; per: number; exitAt?: number; exit?: number; bloom?: boolean;
-}> = ({pages, cols, w, accent, era, enterAt, per, exit = 0, bloom = false}) => {
+  enterAt: number; per: number; exit?: number; fade?: number; bloom?: boolean;
+  /** arrive nearest-the-centre first rather than in reading order */
+  radial?: boolean;
+}> = ({pages, cols, w, accent, era, enterAt, per, exit = 0, fade = 1, bloom = false, radial = false}) => {
   const frame = useCurrentFrame();
   const {fps} = useVideoConfig();
+  const rows = Math.ceil(pages.length / cols);
+  const gap = bloom ? 15 : 12;
+  const h = w * SHAPE_AR;
+  const dist = (i: number) =>
+    Math.hypot(((i % cols) - (cols - 1) / 2) * (w + gap), (Math.floor(i / cols) - (rows - 1) / 2) * (h + gap));
+  const order = pages.map((_, i) => i);
+  if (radial) order.sort((a, b) => dist(a) - dist(b) || a - b);
+  const arrival = pages.map((_, i) => order.indexOf(i));
   return (
     <div
       style={{
-        display: 'grid', gridTemplateColumns: `repeat(${cols}, ${w}px)`, gap: bloom ? 15 : 12,
+        display: 'grid', gridTemplateColumns: `repeat(${cols}, ${w}px)`, gap,
         justifyContent: 'center', alignContent: 'center',
       }}
     >
       {pages.map((p, i) => {
-        const s = spring({frame: frame - (enterAt + i * per), fps, config: {damping: 200, stiffness: bloom ? 170 : 210}});
-        // Cards leave by falling toward the centre of the grid, not straight down: the flow is being
-        // compressed, and the motion should say compression.
+        // Softer than the rest of the film's springs, and started earlier to compensate: at 210
+        // each page snapped in over four frames and fifteen of them on sixteenths read as typing.
+        // At 120, started seven frames ahead of its tap, a page is three-quarters there when the
+        // tap sounds and still settling as the next one starts, so the run reads as one motion.
+        const s = spring({frame: frame - (enterAt + arrival[i] * per - LEAD - 2), fps, config: {damping: 200, stiffness: bloom ? 120 : 120}});
+        // This card's offset from the centre of the grid, which is where the hit lands.
         const col = i % cols;
         const row = Math.floor(i / cols);
-        const dx = (cols / 2 - 0.5 - col) * 46 * exit;
-        const dy = (Math.ceil(pages.length / cols) / 2 - 0.5 - row) * 40 * exit;
+        const ox = (col - (cols - 1) / 2) * (w + gap);
+        const oy = (row - (rows - 1) / 2) * (h + gap);
+        let tx: number, ty: number, sc: number, op: number;
+        if (bloom) {
+          // Grows out of the point of impact into its place.
+          tx = -ox * (1 - s);
+          ty = -oy * (1 - s);
+          sc = 0.5 + 0.5 * s;
+          op = s;
+        } else {
+          // Lands with a small rise; leaves thrown outward from the same point, further the further
+          // from it the card sat, so the outer columns clear the frame.
+          tx = ox * 0.9 * exit;
+          ty = oy * 1.6 * exit + (1 - s) * 30;
+          sc = (0.92 + s * 0.08) * (1 + exit * 0.2);
+          op = s * fade;
+        }
         return (
-          <div
-            key={i}
-            style={{
-              opacity: s * (1 - exit),
-              transform: `translate(${dx}px, ${dy + (1 - s) * (bloom ? 26 : 18)}px) scale(${(0.9 + s * 0.1) * (1 - exit * 0.16)})`,
-            }}
-          >
+          <div key={i} style={{opacity: op, transform: `translate(${tx}px, ${ty}px) scale(${sc})`}}>
             <PageCard page={p} w={w} accent={accent} index={i} total={pages.length} era={era} />
           </div>
         );

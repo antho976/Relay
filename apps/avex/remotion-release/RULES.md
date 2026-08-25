@@ -60,29 +60,41 @@ gets **a** tab.
 **Never declare a beat in seconds.** Declare it by **the bar it ends on**. A beat length in seconds
 survives exactly until someone adds a soundtrack, and then every cut in the film is subtly wrong.
 
-**Measure the tempo off the rendered audio. Never trust the prompt.** The bed was asked for at 120
-BPM and came back at **120.19**. Over 46 bars that 0.19 is a third of a second of accumulated drift,
-which is enough to put the last cut audibly off the beat.
+**Measure the tempo off the rendered audio. Never trust the prompt — and do not trust one
+measurement either.** The bed was asked for at 120 BPM. The first measurement said **120.19** with
+the first downbeat at 0.116 s and the whole cut was laid on that. A second one, done because the
+director said cuts were off the beat, says **120.021** with the first beat at 0.008 s, residual
+2.2 ms rms over 110 beats. The first grid put every cut in the first half of the film **two to three
+frames late** and only agreed with the music around bar 33 — which is why the one cut everyone
+checked (the tab swap) sounded right and the rest did not.
 
 The measurement chain that works, all in numpy, no dependencies:
 
 ```
-spectral-flux onset envelope
-  → autocorrelation for the beat period
-  → phase locked to peak onset energy
-  → downbeat = whichever of the 4 phases carries the most low-band energy
+spectral-flux onset envelope at a ~1.5 ms hop
+  → autocorrelation for a first guess at the period
+  → the onset peak nearest each predicted beat
+  → least-squares line through those peaks: period and phase, with a residual you can quote
+  → downbeat = whichever of the 4 phases carries the most low-band flux
 ```
 
-**Derive lengths so the handover lands on the downbeat.** A transition of T frames overlaps the two
-sequences by T, so the beat has to run half a transition past its bar and the next starts half a
-transition early:
+A coarse-hop autocorrelation alone gives you the period to ±0.2 BPM and the phase to ±100 ms. The
+regression is what gets both to the frame. If the residual is not a few milliseconds, the track is
+not at a constant tempo and no grid will fit it.
+
+**Derive lengths so the handover lands on the downbeat, in whole frames.** A transition of T frames
+overlaps the two sequences by T, so it has to straddle the bar: the next beat starts floor(T/2)
+before the downbeat and this one runs ceil(T/2) past it. Splitting T in half as a float put every
+beat after a seven-frame whip on a half frame, and every cue placed by `bar(n) − start` was then
+rounded off the grid by Remotion.
 
 ```
-len[i] = bar(endBar[i]) − bar(endBar[i−1]) + T[i−1]/2 + T[i]/2
+start[i] = bar(endBar[i−1]) − floor(T[i−1]/2)
+len[i]   = bar(endBar[i]) + ceil(T[i]/2) − start[i]
 ```
 
-Verify it. All 16 handovers in the current cut sit at **zero frames of error**; if that check ever
-prints anything but zeros, the arithmetic is wrong, not the music.
+Verify it: `npm run check` prints every handover and fails if one is off. If that check ever fails,
+the arithmetic is wrong, not the music.
 
 **Changing one beat's length shifts every downbeat after it.** "Make the watch two seconds longer"
 means re-deciding the bar allocation, not bumping a number. Cheap, but say what it costs the
@@ -102,6 +114,21 @@ animation happens to reach sound, in the director's words, "all over the place".
 **Where a cue accompanies an animation, the animation follows the cue.** Not the reverse. The watch
 weight changes *on* the tick because the tick frames drive the number, not because they were tuned to
 line up.
+
+**Where a cue accompanies an entrance, start the entrance before the cue.** A spring at the
+stiffnesses used here is at 0.6–0.7 five frames in. The first cut started every page's spring on the
+frame its tap fired, so every tap sounded a sixth of a second before the page it announced existed.
+`LEAD` in `Sound.tsx` is that offset, and every entrance that has a sound uses it.
+
+**A cue has to have a referent, every time it fires.** `screen` fired eight frames into every Solo
+beat because "the capture visibly changes screen" was written into the prop name and nobody checked
+that it did; eight frames in is inside the push transition, where the only thing changing is the
+transition. Repeated nine times, a sound with no referent reads as a noise, and it was the second
+note the director gave. Before placing a cue, name the frame on the capture that makes the noise.
+
+**Do not score things that do not make a noise.** A meter filling, a number counting, a colour
+changing. The glass-xylophone run under the Home goal bars was the first note the director gave, and
+it was also the loudest thing in the first ten seconds because the bed had not entered yet.
 
 **Lay runs out in float, round per event.** At 120 BPM a sixteenth is 3.74 frames. Rounding the step
 to 4 and multiplying drifts a sixteenth of a beat every four events.
@@ -132,6 +159,12 @@ with no attack at all — a formless sub. Describe the object and the impact.
 
 **Silence is a level.** The film's sound should have an arc the way the music does. The current one
 runs −71 (silence) → −33 → −24 → −21 → −19 at the peak → −26 to close. Flat density reads as noise.
+
+**Measure the delivered file against the picture, not the render against itself.** Remotion's mp4
+put the whole soundtrack 42.7 ms (2048 samples of undeclared AAC priming) behind the picture, in
+this cut and the one before it. Every cue was on its frame in the composition and 1.3 frames late in
+the file. Cross-correlate the delivered audio against the bed and against one sample at a known
+frame; `tools/deliver.sh` exists because of this.
 
 **Measure the finished mix, not the automation.** The first fader ride on the bed overshot and put the
 climax **1.7 dB below** the middle of the film — worse than the problem it was fixing. It only showed
@@ -168,6 +201,30 @@ than the extra legibility.
 device shot moves the camera on the device instead.
 
 **Every beat needs a camera.** A held frame in a ninety-second film reads as a slide.
+
+**A screenshot next to a claim does not show the claim.** "It tells you what to lift" sat beside a
+full session screen for four seconds and the director asked what he was supposed to be looking at.
+Point at it: an accent outline around the element each sentence is about, in the screen's own
+coordinates, one per half bar, with the sentence lighting up as its outline draws (`steps` on
+`Solo`). Then let the capture do the thing the copy promised — the set logs, the row flips.
+
+**Never put a box-shadow on anything under a 3D transform.** The watch case's drop shadow and the
+PR halo were 70 px box-shadow blurs on a `perspective()`-rotated element, and Chromium rasterises
+those in tiles: on screen the halo was a blocky cross and the shadow a staircase. Draw every soft
+edge as a radial gradient, outside the transformed subtree. It costs nothing and cannot band.
+
+**Two beats on the same phone join with a push, not a cut.** Cardio→chart and session→"what to
+lift" were hard cuts between the same device in the same place showing the same screen; they read
+as the picture glitching. A `pushUp` with the phone kept at the same size and on the same side
+reads as scrolling one device to its next page. Save the hard cuts for a change of subject.
+
+**A cut is one frame, so nothing may fade across it.** Every beat used to fade itself in and out
+over ten frames, which turned each hard cut into a dip to black and each seven-frame whip into a
+throw between two frames at 35% brightness. On a hard cut the picture was darkest ON the downbeat
+and the new frame arrived a third of a second later — which is exactly what "the cuts are off the
+beat" feels like when the grid is right. `Edges` in `Type.tsx` gives every beat zero fade at a
+join; only the film's first frame fades up and its last fades down. Render a strip of frames across
+every join and look at the frame ON the bar: it has to be a full picture.
 
 **Check the render, not the code.** The era indicators were `<div ... />` — self-closing, so the
 `label` prop was never rendered and both pills drew as empty outlines. It shipped through several
@@ -220,8 +277,11 @@ round. Name the beat back before cutting it.
 
 ## Standing facts about this film
 
-- Bed: `public/music/bed.mp3`, **120.19 BPM**, bar 1.99667 s, first downbeat 0.116 s, 46 bars
-- Cut: 16 beats, 2699 frames, **89.97 s**, ending exactly on bar 46
+- Bed: `public/music/bed.mp3`, **120.021 BPM**, bar 1.99964 s, first beat 0.0082 s, 46 bars.
+  At 30 fps that is 60 frames a bar to within rounding: bar n is frame 60·(n−1).
+- Cut: 16 beats, 2700 frames, **90.00 s**, ending exactly on bar 46. Syncs: Home turns red on
+  bar 5 (bed enters), watch→Coach on 17 (bed opens), chart on 25 (bed drops back), tab swap on 33
+  (bed returns), closing line on 45 (bed drops out).
 - Captures are 1080×2400 CFR 30 in `public/cfr/`
 - Unused but available: `before/after-settings`, `before/after-stats`, `before-home`, `after-checkin`
 - **`versionName` is still `0.8.8.3` and `versionCode` 89 at `main`.** Nothing in `2fe2379..main`

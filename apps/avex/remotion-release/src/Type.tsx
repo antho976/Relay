@@ -147,10 +147,25 @@ export const Counter: React.FC<{
   );
 };
 
-/** Frame-accurate fade at the head and tail of a scene. */
+/**
+ * How many frames a beat fades over at its head and tail. `Release` provides this per beat, and
+ * it is zero at every join: a beat that fades itself in and out over ten frames turns a hard cut
+ * into a dip to black — the picture is darkest ON the downbeat and the new frame only arrives a
+ * third of a second later — and puts a seven-frame whip between two frames at 35% brightness.
+ * Every cut in the first release cut did this, and it is a large part of why they read as late.
+ * Only the film's first frame fades up and its last frame fades down; the transitions do the rest.
+ */
+export const Edges = React.createContext<{head: number; tail: number} | null>(null);
+
+/** Frame-accurate fade at the head and tail of a scene; see `Edges`. */
 export const useEdgeFade = (durationInFrames: number, len = 10) => {
   const frame = useCurrentFrame();
-  return interpolate(frame, [0, len, durationInFrames - len, durationInFrames], [0, 1, 1, 0], {
-    extrapolateLeft: 'clamp', extrapolateRight: 'clamp',
-  });
+  const edges = React.useContext(Edges);
+  const head = edges ? edges.head : len;
+  const tail = edges ? edges.tail : len;
+  const a = head > 0 ? interpolate(frame, [0, head], [0, 1], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'}) : 1;
+  const b = tail > 0
+    ? interpolate(frame, [durationInFrames - tail, durationInFrames], [1, 0], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'})
+    : 1;
+  return a * b;
 };

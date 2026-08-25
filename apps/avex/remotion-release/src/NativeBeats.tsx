@@ -6,23 +6,30 @@ import {C} from './ui/tokens';
 import {WatchRest, WatchRpe, WatchSet} from './ui/Watch';
 import {Body, Eyebrow, Title, useEdgeFade} from './Type';
 import {Plate} from './Layout';
-import {Cue} from './Sound';
+import {Cue, LEAD} from './Sound';
 import {Device} from './Device';
 import {SHOT_AR, snap} from './theme';
 
 const MONO = '"JetBrains Mono", ui-monospace, monospace';
 
-/** Home, morphing 0.8.9 → 0.9 in place. No cut, so every change lands on one clock. */
-export const HomeMorph: React.FC<{gridStart?: number}> = ({gridStart = 0}) => {
+/**
+ * Home, morphing 0.8.9 → 0.9 in place. No cut, so every change lands on one clock.
+ *
+ * `turnAt` is the frame the era turns over on. The release cut puts it on bar 5, the bar the bed
+ * enters: the accent going red and the music arriving are one event. It used to sit a bar earlier,
+ * in the silence before the bed, with a glass-xylophone run under the goal bars filling — the
+ * loudest thing in the first ten seconds of the film and the first note anyone gave about the
+ * sound. The bars now fill without a cue; a meter filling is not something that makes a noise.
+ */
+export const HomeMorph: React.FC<{gridStart?: number; turnAt?: number}> = ({gridStart = 0, turnAt}) => {
   const frame = useCurrentFrame();
   const {fps, durationInFrames} = useVideoConfig();
   const o = useEdgeFade(durationInFrames, 14);
   // Relative to the beat, not absolute: the bar grid re-times beats and a hard-coded frame 55 would
   // put the morph anywhere from mid-beat to past the end.
-  // Both events on beats: the bars start filling on one, the era turns over on another.
   const at = (f: number) => snap(gridStart + durationInFrames * f, 4) - gridStart;
   const FILL = at(0.10);
-  const TURN = at(0.36);
+  const TURN = turnAt ?? at(0.62);
   const t = spring({frame: frame - TURN, fps, config: {damping: 200, stiffness: 34}});
   const fill = interpolate(frame, [FILL, TURN], [0, 1], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'});
 
@@ -38,12 +45,16 @@ export const HomeMorph: React.FC<{gridStart?: number}> = ({gridStart = 0}) => {
               beside it instead of buried three taps deep. The goal bars turned red. And the last tab
               stopped being you.
             </Body>
-            <Cue at={FILL} sfx="fill" gain={0.7} />
-            <Cue at={TURN} sfx="screen" gain={0.85} />
+            {/* The same sound every seam makes: this is the version changing, drawn instead of
+                filmed. Its swell peaks ten frames in, where the morph is halfway. */}
+            <Cue at={TURN} sfx="sweep" gain={0.8} />
             <div style={{display: 'flex', gap: 18, marginTop: 10, alignItems: 'center'}}>
               <Era label="0.8.9" on={1 - t} />
+              {/* The bar between the two eras fills from the first beat to the switch — the same
+                  clock the goal meters fill on — so it reads as a count-in to the music entering,
+                  and the pills change hands on the frame it completes. */}
               <div style={{width: 200, height: 3, borderRadius: 999, background: C.outline, position: 'relative'}}>
-                <div style={{position: 'absolute', inset: 0, width: `${t * 100}%`, background: C.accent, borderRadius: 999}} />
+                <div style={{position: 'absolute', inset: 0, width: `${Math.max(fill, t) * 100}%`, background: C.accent, borderRadius: 999}} />
               </div>
               <Era label="0.9" on={t} accent />
             </div>
@@ -78,7 +89,9 @@ export const TabSwap: React.FC<{swapAt?: number}> = ({swapAt = 46}) => {
   const frame = useCurrentFrame();
   const {fps, durationInFrames} = useVideoConfig();
   const o = useEdgeFade(durationInFrames, 14);
-  const t = spring({frame: frame - swapAt, fps, config: {damping: 200, stiffness: 44}});
+  // The spring starts early enough that the handover's midpoint, not its first frame, sits on
+  // `swapAt` — which the release cut puts on the downbeat the bed comes back on.
+  const t = spring({frame: frame - (swapAt - LEAD - 4), fps, config: {damping: 200, stiffness: 44}});
   const out = Math.max(0, Math.min(1, (0.42 - t) / 0.42));
   const inn = Math.max(0, Math.min(1, (t - 0.58) / 0.42));
   const tabs = [
@@ -90,8 +103,9 @@ export const TabSwap: React.FC<{swapAt?: number}> = ({swapAt = 46}) => {
   return (
     <AbsoluteFill style={{opacity: o}}>
       <Plate>
-        {/* the tab actually changing hands */}
-        <Cue at={swapAt + 2} sfx="reveal" gain={0.95} />
+        {/* the tab actually changing hands. 0.7, not 0.95: this lands on the downbeat the bed comes
+            back on at full strength, and the two summed put the loudest sample of the film here. */}
+        <Cue at={swapAt} sfx="reveal" gain={0.7} />
         <div style={{display: 'flex', flexDirection: 'column', gap: 60, alignItems: 'center'}}>
           <div style={{display: 'flex', flexDirection: 'column', gap: 16, alignItems: 'center'}}>
             <Eyebrow delay={0}>The fifth tab</Eyebrow>

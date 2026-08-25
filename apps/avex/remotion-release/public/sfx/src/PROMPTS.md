@@ -18,7 +18,7 @@ To regenerate a variant by hand:
 |---|---|---|---|
 | ding.mp3 | 1.2 | 0.6 | a single struck bell from a music box, warm and rounded, close microphone, dry, one clean strike with a pure sustained note, no room reverb, no hiss, no shimmer |
 | swoosh.mp3 | 0.8 | 0.7 | a wooden domino card flicked quickly across a table and landing flat with a distinct tap, close mic, dry, brief motion then a clear landing, no wind, no air, no hiss |
-| tick.mp3 | 0.5 | 0.7 | one press of a small mechanical keyboard switch, close mic, dry, crisp click with body, single event, no reverb, no hiss |
+| tick.mp3 | 0.5 | 0.7 | one press of a small mechanical keyboard switch, close mic, dry, crisp click with body, single event, no reverb, no hiss — **no longer shipped**: rejected on the watch as sounding bad (53% of its energy above 4 kHz even after a shelf); `tick.wav` is synthesised in make-sfx.sh now |
 | screen.mp3 | 0.6 | 0.7 | a quiet short muted card placed down onto a smooth surface, close mic, dry, gentle soft contact, tiny and neutral, one event, no whoosh, no wind |
 | fill.mp3 | 1.0 | 0.7 | an ascending musical run on a glass xylophone, notes going up the scale from low to high, landing on a final bright high note, dry close mic, no reverb |
 | reveal.mp3 | 0.7 | 0.6 | a single soft mallet strike on a warm wooden marimba bar, close mic, dry, round gentle attack and short decay, one note only, no reverb |
