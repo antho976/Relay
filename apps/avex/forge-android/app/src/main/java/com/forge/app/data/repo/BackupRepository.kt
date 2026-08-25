@@ -420,13 +420,30 @@ class BackupRepository @Inject constructor(
      */
     suspend fun autoBackup(folderUri: Uri? = null): File = withContext(Dispatchers.IO) {
         val file = File(context.filesDir, AUTO_BACKUP_NAME)
+        val tmp = File(context.filesDir, AUTO_BACKUP_TMP_NAME)
         val snap = snapshotDatabase()
         try {
-            file.outputStream().use { out -> writeBackupZip(out, snap) }
+            // Write to a temp file and rename over the slot, rather than truncating the slot and
+            // writing into it. `File.outputStream()` truncates on open, so the old behaviour
+            // destroyed the previous good backup the instant it started writing — and a failure
+            // part-way (ENOSPC is the likely one, since a full disk is exactly when a backup is
+            // attempted and fails) left a truncated, unrestorable zip. autoBackupSavedAtMs() reads
+            // this file's mtime, so the user was then shown a fresh "last backed up" date for a
+            // backup that could not be restored. rename(2) within a directory is atomic, so the
+            // slot now only ever holds a complete zip.
+            tmp.delete()
+            tmp.outputStream().use { out -> writeBackupZip(out, snap) }
+            if (!tmp.renameTo(file)) {
+                // Same-directory rename should not fail on Android. If it somehow does, keep the
+                // previous backup instead of truncating it for a copy we cannot guarantee; the
+                // worker retries, and records a failure the user can see once retries run out.
+                throw java.io.IOException("could not replace $AUTO_BACKUP_NAME")
+            }
             // Also mirror into a user-picked folder so the backup survives an uninstall (GYMAP-67). A
             // folder write must not fail the whole backup — the internal copy already succeeded.
             if (folderUri != null) runCatching { writeZipToFolder(folderUri, snap) }
         } finally {
+            tmp.delete()
             snap.delete()
         }
         // Drop the stale lossy JSON slot from earlier builds so it can't mislead a future restore.
@@ -439,10 +456,25 @@ class BackupRepository @Inject constructor(
     /** Write the full backup zip into a user-granted SAF tree, overwriting the prior slot (GYMAP-67). */
     private fun writeZipToFolder(folderUri: Uri, snap: File) {
         val tree = DocumentFile.fromTreeUri(context, folderUri) ?: return
-        // Keep exactly one current backup in the folder — replace the previous one.
+        // Write the replacement under a temp name FIRST, then retire the old one. Deleting the
+        // previous backup before creating its replacement (the old order) meant any failure below
+        // left the folder with NO backup: createFile returning null on a revoked grant,
+        // openOutputStream returning null, or the volume filling mid-write. The caller wraps this
+        // in runCatching and clears the "backup failed" marker regardless, so the user was told
+        // the backup succeeded while their off-device copy had just been deleted.
+        tree.findFile(FOLDER_TMP_NAME)?.delete()
+        val tmp = tree.createFile("application/zip", FOLDER_TMP_NAME) ?: return
+        val wrote = runCatching {
+            val out = context.contentResolver.openOutputStream(tmp.uri) ?: return@runCatching false
+            out.use { writeBackupZip(it, snap) }
+            true
+        }.getOrDefault(false)
+        if (!wrote) { tmp.delete(); return }
+        // The replacement is complete on disk: only now retire the previous backup and take its
+        // name. If the rename fails the data is still present under the temp name, so leave it
+        // rather than deleting the only copy in this folder.
         tree.findFile(AUTO_BACKUP_NAME)?.delete()
-        val doc = tree.createFile("application/zip", AUTO_BACKUP_NAME) ?: return
-        context.contentResolver.openOutputStream(doc.uri)?.use { out -> writeBackupZip(out, snap) }
+        tmp.renameTo(AUTO_BACKUP_NAME)
     }
 
     /** Take a persistable read+write grant on the picked backup folder and remember it (GYMAP-67). */
@@ -920,6 +952,10 @@ class BackupRepository @Inject constructor(
         private const val PHOTOS_PREFIX = "progress_photos/"
         /** The weekly auto-backup slot, written by [autoBackup] and read by [restoreFromAutoBackup] (#86). */
         private const val AUTO_BACKUP_NAME = "forge_auto_backup.zip"
+        /** Temp slots written before replacing [AUTO_BACKUP_NAME], so a failed write never destroys
+         *  the previous good backup. Internal storage and the user-picked SAF folder each need one. */
+        private const val AUTO_BACKUP_TMP_NAME = "forge_auto_backup.zip.tmp"
+        private const val FOLDER_TMP_NAME = "forge_auto_backup.zip.part"
         /** Marker written when the auto-backup worker gives up (storage full / corrupt) — see [recordAutoBackupFailure]. */
         private const val AUTO_BACKUP_FAILED_MARKER = "auto_backup_failed"
         /** Marker written after a successful user-initiated backup ([backupToUri]) — see [hasAnyBackup]. */
