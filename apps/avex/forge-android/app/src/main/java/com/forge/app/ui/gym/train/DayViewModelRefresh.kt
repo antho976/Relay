@@ -123,8 +123,23 @@ internal suspend fun DayViewModel.refreshExercise(exerciseId: String) {
         bonusSets = existing.bonusSets,
         finishedEarly = existing.finishedEarly
     )
-    val newList = current.toMutableList().also { it[idx] = rebuilt }
-    _state.update { it.copy(isLoading = false, exercises = annotateNextExerciseDeltas(newList)) }
+    // Splice into the list as it is AT WRITE TIME, not into `current` — which was snapshotted
+    // before roughly seven suspending DB reads above. Rebuilding from the stale snapshot published
+    // it back wholesale, so a set logged on a DIFFERENT exercise while those reads were in flight
+    // (superset alternation is the everyday case) was erased from state: still in the database,
+    // gone from the screen, and gone from the totals the finish path used to read off this list.
+    //
+    // _state.update retries its block on contention, so re-finding the index inside it is what
+    // makes the splice safe rather than merely narrower.
+    _state.update { s ->
+        val list = s.exercises.toMutableList()
+        val at = list.indexOfFirst { it.plan.id == exerciseId }
+        if (at < 0) s
+        else {
+            list[at] = rebuilt
+            s.copy(isLoading = false, exercises = annotateNextExerciseDeltas(list))
+        }
+    }
 }
 
 /** Resolve the exercise that owns [setId] and rebuild just it (per-set edits). */
