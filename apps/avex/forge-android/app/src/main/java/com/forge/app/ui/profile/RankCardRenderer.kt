@@ -14,6 +14,7 @@ import androidx.core.content.FileProvider
 import java.io.File
 import java.io.FileOutputStream
 import java.util.Locale
+import com.forge.app.core.io.exportFile
 
 /**
  * Renders the profile's rank into a 1080×1080 PNG "rank card" and shares it. Pure Android Canvas (no
@@ -88,7 +89,7 @@ object RankCardRenderer {
             textSize = 52f; letterSpacing = 0.12f; typeface = Typeface.create(Typeface.SERIF, Typeface.ITALIC)
         })
 
-        val file = File(context.filesDir, "avex_rank_card.png")
+        val file = exportFile(context, "avex_rank_card.png")
         FileOutputStream(file).use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
         FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
         } finally {

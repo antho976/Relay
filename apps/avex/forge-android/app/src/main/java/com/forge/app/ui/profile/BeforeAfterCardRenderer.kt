@@ -22,6 +22,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
+import com.forge.app.core.io.exportFile
 
 /**
  * Renders a before/after progress pair into a 1080×1350 (4:5) PNG "share card" and shares it. Pure
@@ -109,7 +110,7 @@ object BeforeAfterCardRenderer {
                 textSize = 50f; letterSpacing = 0.12f; typeface = Typeface.create(Typeface.SERIF, Typeface.ITALIC)
             })
 
-            val file = File(context.filesDir, "avex_before_after_card.png")
+            val file = exportFile(context, "avex_before_after_card.png")
             FileOutputStream(file).use { card.compress(Bitmap.CompressFormat.PNG, 100, it) }
             FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
         } finally {

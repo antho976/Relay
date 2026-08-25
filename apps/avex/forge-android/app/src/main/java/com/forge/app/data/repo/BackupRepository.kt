@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.documentfile.provider.DocumentFile
+import com.forge.app.core.io.exportFile
 import com.forge.app.core.time.mondayStartMs
 import com.forge.app.data.db.ForgeDatabase
 import com.forge.app.data.db.dao.CardioDao
@@ -185,7 +186,7 @@ class BackupRepository @Inject constructor(
         }
 
         // Fixed filename (overwrite) so repeated exports don't accumulate forever (#84).
-        val file = File(context.filesDir, "avex_weekly_export.json")
+        val file = exportFile(context, "avex_weekly_export.json")
         file.writeText(root.toString(2))
         return file
     }
@@ -316,7 +317,7 @@ class BackupRepository @Inject constructor(
         }
 
         // Fixed filename (overwrite) — see #84; avoids unbounded accumulation in filesDir.
-        val file = File(context.filesDir, "avex_export.json")
+        val file = exportFile(context, "avex_export.json")
         file.writeText(root.toString(2))
         return file
     }
@@ -378,7 +379,7 @@ class BackupRepository @Inject constructor(
         }
         // Session-id in the filename so saving several sessions doesn't overwrite one another (and a
         // re-export of the same session overwrites its own file rather than accumulating).
-        val file = File(context.filesDir, "avex_session_${s.id}.json")
+        val file = exportFile(context, "avex_session_${s.id}.json")
         file.writeText(root.toString(2))
         file
     }
@@ -402,7 +403,7 @@ class BackupRepository @Inject constructor(
             sb.appendLine("${s.id},${csv(s.dayKey)},$date,$dur,${s.totalVolumeLb ?: 0},${s.prCount},${s.setCount},${csv(s.intensity)},${csv(s.tags)}")
         }
         // Fixed filename (overwrite) — see #84.
-        val file = File(context.filesDir, "avex_sessions.csv")
+        val file = exportFile(context, "avex_sessions.csv")
         file.writeText(sb.toString())
         return file
     }
@@ -422,7 +423,7 @@ class BackupRepository @Inject constructor(
             val date = dateFmt.format(Instant.ofEpochMilli(pr.sessionDate).atZone(zone))
             sb.appendLine("${csv(pr.exerciseName)},${csv(pr.muscle.displayName)},${pr.maxWeightLb},${pr.bestReps},$date")
         }
-        val file = File(context.filesDir, "avex_prs.csv")
+        val file = exportFile(context, "avex_prs.csv")
         file.writeText(sb.toString())
         return file
     }
@@ -433,7 +434,7 @@ class BackupRepository @Inject constructor(
         val sb = StringBuilder()
         sb.appendLine("date,weightLb")
         entries.forEach { e -> sb.appendLine("${e.dateKey},${e.weightLb}") }
-        val file = File(context.filesDir, "avex_bodyweight.csv")
+        val file = exportFile(context, "avex_bodyweight.csv")
         file.writeText(sb.toString())
         return file
     }
@@ -461,7 +462,7 @@ class BackupRepository @Inject constructor(
                     csv(conditions)
             )
         }
-        val file = File(context.filesDir, "avex_cardio.csv")
+        val file = exportFile(context, "avex_cardio.csv")
         file.writeText(sb.toString())
         return file
     }

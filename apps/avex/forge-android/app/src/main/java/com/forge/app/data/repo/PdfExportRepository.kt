@@ -5,6 +5,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.pdf.PdfDocument
+import com.forge.app.core.io.exportFile
 import com.forge.app.data.db.dao.CardioDao
 import com.forge.app.data.db.dao.LoggedExerciseDao
 import com.forge.app.data.db.dao.LoggedSetDao
@@ -190,7 +191,7 @@ class PdfExportRepository @Inject constructor(
         doc.finishPage(page)
         // Fixed filename (overwrite) so exported PDFs don't accumulate in filesDir (#84); the file
         // is shared out immediately, so there's nothing to keep per session.
-        val file = File(context.filesDir, "avex_session.pdf")
+        val file = exportFile(context, "avex_session.pdf")
         file.outputStream().use { doc.writeTo(it) }
         doc.close()
         return file

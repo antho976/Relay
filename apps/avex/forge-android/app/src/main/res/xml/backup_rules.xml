@@ -28,20 +28,18 @@
     <exclude domain="file" path="avatar.jpg" />
 
     <!--
-        Crash reports, and the plaintext exports the share/export flows leave in filesDir. These are
+        Crash reports, and the plaintext exports the share/export flows leave on disk. These are
         scratch output the user already chose a destination for; re-uploading a copy to Drive is not
         something they asked for, and the CSV/JSON files hold the same training data in the clear.
+
+        One directory rather than a list of filenames. The list named forge_export.json,
+        forge_rank_card.png and their siblings, none of which had been the real filenames since the
+        rename to avex_*: every plaintext export was reaching Drive on API 30 and below while this
+        file looked like it covered them. A path can drift out of date; a directory the writers all
+        go through (core/io/ExportFiles.kt) cannot.
     -->
     <exclude domain="file" path="crashes" />
-    <exclude domain="file" path="forge_export.json" />
-    <exclude domain="file" path="forge_weekly_export.json" />
-    <exclude domain="file" path="forge_sessions.csv" />
-    <exclude domain="file" path="forge_bodyweight.csv" />
-    <exclude domain="file" path="forge_cardio.csv" />
-    <exclude domain="file" path="forge_prs.csv" />
-    <exclude domain="file" path="forge_session.pdf" />
-    <exclude domain="file" path="forge_rank_card.png" />
-    <exclude domain="file" path="avex_before_after_card.png" />
+    <exclude domain="file" path="exports" />
     <!-- The auto-backup slot itself: a zip of the database, already covered by the database entry
          above. Backing it up doubles the payload for no recovery benefit. -->
     <exclude domain="file" path="forge_auto_backup.zip" />
