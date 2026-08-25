@@ -413,12 +413,27 @@ class WorkoutRepository @Inject constructor(
         // stays hidden behind the freestyle home (the manual Settings paths flip freestyle off, but
         // this background path can't ask). Skip entirely.
         if (settingsRepo.freestyleMode.first()) return
+
+        val deloadStart = settingsRepo.deloadWeekStartMs.first()
+        val sinceDeload = if (deloadStart > 0) clock.nowMs() - deloadStart else -1L
+        // A deload WEEK has to end. applyDeloadWeek regenerates at reduced volume and stamps the
+        // start, but nothing ever restored full volume: the only exits were a manual Settings
+        // regenerate or auto-rotation, and rotationCadence defaults to "never". So for a default
+        // user the recovery week quietly became their permanent program — and once the marker
+        // aged past the window, nothing on screen said they were deloading either.
+        //
+        // This sits ABOVE the rotation gate deliberately: that gate is precisely the one most
+        // users never pass. A negative sinceDeload (the clock moved backwards) matches neither
+        // branch and leaves the program alone.
+        if (deloadStart > 0 && sinceDeload >= DELOAD_WEEK_MS) {
+            programRepository.restoreAfterDeload()
+            return
+        }
         if (settingsRepo.rotationCadence.first() != "every_n") return
         // Pause auto-rotation inside the deload week — a rotation regenerates a full-volume program
         // and would silently wipe the recovery week mid-deload (seam fix #18). The counter is left
         // untouched, so rotation resumes on the next finish after the deload ends.
-        val deloadStart = settingsRepo.deloadWeekStartMs.first()
-        if (deloadStart > 0 && clock.nowMs() - deloadStart in 0 until DELOAD_WEEK_MS) return
+        if (deloadStart > 0 && sinceDeload in 0 until DELOAD_WEEK_MS) return
         val n = settingsRepo.rotationEveryN.first().coerceAtLeast(1)
         val next = settingsRepo.rotationCounter.first() + 1
         if (next < n) {
