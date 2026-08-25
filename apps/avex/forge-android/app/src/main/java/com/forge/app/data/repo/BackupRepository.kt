@@ -3,6 +3,7 @@ package com.forge.app.data.repo
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.documentfile.provider.DocumentFile
 import com.forge.app.data.db.ForgeDatabase
 import com.forge.app.data.db.dao.CardioDao
@@ -21,7 +22,10 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 
@@ -787,9 +791,17 @@ class BackupRepository @Inject constructor(
             if (pendingDb.exists()) pendingDb.delete()
             dbFile.copyTo(pendingDb, overwrite = true)
 
+            // The prefs half of a backup used to be staged with no validation at all, while the
+            // database half gets a zip sniff, a SQLite magic-byte check, a schema check and two
+            // version floors. Anything whose settings entry is not a Preferences protobuf — a
+            // hand-built zip, a third-party tool, a future format — was swapped into the live
+            // DataStore file at the next boot, before any UI exists. Read it back the way DataStore
+            // will, and simply skip a blob that doesn't parse: the restore proceeds with the
+            // database (the part that holds the training history) and the user keeps their current
+            // settings, instead of the app failing to start.
             val pendingPrefs = File(context.filesDir, PENDING_PREFS_NAME)
             if (pendingPrefs.exists()) pendingPrefs.delete()
-            prefsFile?.copyTo(pendingPrefs, overwrite = true)
+            prefsFile?.takeIf { isPreferencesBlob(it) }?.copyTo(pendingPrefs, overwrite = true)
 
             // Photos passed validation alongside the DB — stage them as a pending folder rather than
             // touching the live one. ForgeApp.applyPendingRestore swaps it in at boot in the SAME pass
@@ -896,6 +908,29 @@ class BackupRepository @Inject constructor(
             c.moveToFirst() && c.getString(0).equals("ok", ignoreCase = true)
         }
     }.getOrDefault(false)
+
+    /**
+     * True when [file] parses as the Preferences protobuf DataStore stores — the prefs-side
+     * counterpart to [isForgeDatabase]. Read through DataStore itself over a throwaway copy, so
+     * "this file reads" here means "this file reads" at boot.
+     */
+    private suspend fun isPreferencesBlob(file: File): Boolean {
+        val probe = File(context.cacheDir, "restore_prefs_probe.preferences_pb")
+        val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+        return try {
+            runCatching {
+                file.copyTo(probe, overwrite = true)
+                // No corruptionHandler on purpose: an unreadable blob must THROW here, where the
+                // restore can decline it, rather than be quietly replaced with defaults at boot.
+                PreferenceDataStoreFactory.create(scope = scope) { probe }
+                    .data.first()
+                true
+            }.getOrDefault(false)
+        } finally {
+            scope.cancel()
+            probe.delete()
+        }
+    }
 
     /** The SQLite user_version (Room schema version) of a candidate DB file; MAX if unreadable (→ rejected). */
     private fun databaseUserVersion(file: File): Int = runCatching {

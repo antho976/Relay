@@ -290,7 +290,18 @@ class MainActivity : FragmentActivity() {
         // applied before the first frame — the secure-window flag, the lock gate and the window
         // background all decide what that frame looks like — so the read is still synchronous, but
         // it is now a single file read instead of five with the main thread parked on each.
-        val startup = runBlocking { settingsRepo.startupPreferences() }
+        // Defaults rather than a crash if the read fails anyway: this runs before setContent, so an
+        // exception here is an uncaught crash on EVERY launch with no way back into the app.
+        val startup = runBlocking {
+            runCatching { settingsRepo.startupPreferences() }
+                .getOrDefault(SettingsRepository.StartupPreferences(
+                    privacyMode = false,
+                    appLockEnabled = false,
+                    amoledMode = false,
+                    appIcon = "",
+                    themedLaunchIntro = true
+                ))
+        }
         // Secure the window on the very first frame when EITHER privacy mode or the app lock is
         // on, and seed the lock state synchronously so a locked cold start never flashes the
         // content behind the gate (GYMAP-69).
