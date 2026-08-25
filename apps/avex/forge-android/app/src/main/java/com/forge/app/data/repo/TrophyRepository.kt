@@ -135,7 +135,18 @@ class TrophyRepository @Inject constructor(
 
     fun observeNearMisses() = nearMissDao.observeRecent()
 
+    /**
+     * Rewrites the near-miss list for every trophy this pass evaluated: insert the ones currently in
+     * the 80–99 % band, then drop everything recorded for those trophies earlier than this pass.
+     * One live row per trophy, so the `LIMIT 50` read window means "the 50 closest trophies" rather
+     * than "whatever a single recent pass happened to write" — and a trophy that has since fallen
+     * back below 80 % leaves with its stale row instead of lingering as a near-miss.
+     *
+     * Insert-then-prune (rather than prune-then-insert) keeps the observed list non-empty
+     * throughout; rows are stamped with a single `now` so the `< now` prune can't touch them.
+     */
     private suspend fun recordNearMisses(snapshot: TrophyStatsSnapshot, lockedIds: Set<String>) {
+        if (lockedIds.isEmpty()) return
         val now = clock.nowMs()
         Trophies.all
             .filter { it.id in lockedIds }
@@ -153,6 +164,7 @@ class TrophyRepository @Inject constructor(
                     )
                 }
             }
+        runCatching { nearMissDao.deleteForTrophiesBefore(lockedIds, now) }
     }
 
     // ─── Snapshot helpers ─────────────────────────────────────────────────────
