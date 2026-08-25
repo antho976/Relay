@@ -40,7 +40,7 @@ const LEVEL: Record<SfxName, number> = {
 };
 
 /** Master trim — one place to pull the whole sound design up or down against picture. */
-export const MIX = 0.9;
+export const MIX = 0.89;
 
 /** Fire a sound at a frame within the current scene. */
 export const Cue: React.FC<{at: number; sfx: SfxName; gain?: number}> = ({at, sfx, gain = 1}) => (

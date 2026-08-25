@@ -77,36 +77,6 @@ export const Center: React.FC<{children: React.ReactNode; gap?: number; width?: 
   </div>
 );
 
-/**
- * The subject fills the frame and the copy sits on a scrim over it.
- *
- * Both scrims are load-bearing. The bottom one has to beat live footage — a 150 in 200pt white will
- * read straight through a polite gradient — so it is tall and nearly opaque where the copy sits. The
- * top one exists because a full-bleed crop lands wherever it lands, and a headline sliced in half by
- * the frame edge reads as a mistake rather than as a crop; under a scrim it reads as depth.
- */
-export const Full: React.FC<{copy: React.ReactNode; children: React.ReactNode}> = ({copy, children}) => (
-  <div style={{position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
-    {children}
-    <div
-      style={{
-        position: 'absolute', left: 0, right: 0, top: 0, height: 190,
-        background: 'linear-gradient(to bottom, rgba(10,8,6,0.82) 0%, rgba(10,8,6,0.34) 46%, rgba(10,8,6,0) 100%)',
-      }}
-    />
-    <div
-      style={{
-        position: 'absolute', left: 0, right: 0, bottom: 0, height: 500,
-        background:
-          'linear-gradient(to top, rgba(10,8,6,0.97) 0%, rgba(10,8,6,0.94) 26%, rgba(10,8,6,0.66) 58%, rgba(10,8,6,0) 100%)',
-      }}
-    />
-    <div style={{position: 'absolute', left: 104, bottom: 92, display: 'flex', flexDirection: 'column', gap: 18}}>
-      {copy}
-    </div>
-  </div>
-);
-
 /* ── the mark ────────────────────────────────────────────────────────────── */
 
 /**

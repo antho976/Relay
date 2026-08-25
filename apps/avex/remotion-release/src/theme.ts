@@ -41,3 +41,15 @@ export const PACE = {
 
 /** Transition lengths. A hard cut is genuinely zero — that is what makes a short edit feel fast. */
 export const XFADE = {cut: 0, quick: 7, soft: 12, pan: 14, wide: 16} as const;
+
+/**
+ * The bed's grid, MEASURED from `public/music/bed.mp3` rather than assumed from the prompt: spectral
+ * -flux onset envelope → autocorrelation for the period → phase locked to peak onset energy →
+ * downbeat picked as the 4-phase with the most low-band energy. It came back at 120.19 BPM, not the
+ * 120 that was asked for, and over 46 bars that 0.19 is a third of a second of drift — enough to put
+ * the last cut audibly off the beat if the nominal figure were used instead.
+ */
+export const BED = {firstDownbeat: 0.116, bar: 1.99667, bars: 46} as const;
+
+/** Frame of the downbeat that opens bar `n` (1-indexed). */
+export const bar = (n: number) => Math.round((BED.firstDownbeat + (n - 1) * BED.bar) * FPS);

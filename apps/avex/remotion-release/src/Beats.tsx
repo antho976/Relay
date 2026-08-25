@@ -2,10 +2,10 @@ import React from 'react';
 import {AbsoluteFill, interpolate, useCurrentFrame, useVideoConfig} from 'remotion';
 import {Camera, EASE, Shot} from './Camera';
 import {Clip, Device, FocusMove, Media, Seam, SeamDir} from './Device';
-import {Center, Full, Plate, Split} from './Layout';
+import {Center, Plate, Split} from './Layout';
 import {CueRun} from './Sound';
 import {Body, Counter, EraTag, Eyebrow, Line, Tag, Title, useEdgeFade, useRise} from './Type';
-import {ACCENT, H, MONO, MUTED, ON_BG, SERIF, SHOT_AR, W} from './theme';
+import {ACCENT, MONO, MUTED, ON_BG, SERIF} from './theme';
 
 /* ── openers ─────────────────────────────────────────────────────────────── */
 
@@ -140,65 +140,6 @@ export const Solo: React.FC<{
             >
               <Device height={height} clip={clip} focus={focus} />
             </Split>
-          </AbsoluteFill>
-        </Camera>
-      </Plate>
-    </AbsoluteFill>
-  );
-};
-
-/**
- * Detail: the capture fills the frame edge to edge and the camera flies a band down it. A phone body
- * cannot do this beat — a 1080×2400 capture drawn as a phone at 880px tall shows a 12sp label at
- * about nine pixels, which is why the 0.8.9 cut had to fall back on ring-and-dim callouts. Here the
- * source's own width fills 1920, so that same label lands at sixty pixels and simply reads.
- *
- * `z` is the source width as a multiple of the frame width; keep it near 1, because past that the
- * capture is being upscaled beyond what 1080-wide footage can carry.
- */
-export const Detail: React.FC<{
-  clip: Clip; eyebrow: string; title: string; line?: string;
-  focus?: {from: {y: number; z?: number}; to?: {y: number; z?: number}; ease?: (t: number) => number};
-  shot?: Shot;
-}> = ({clip, eyebrow, title, line, focus, shot}) => {
-  const frame = useCurrentFrame();
-  const {durationInFrames} = useVideoConfig();
-  const o = useEdgeFade(durationInFrames, 10);
-
-  const from = focus?.from ?? {y: 0.3, z: 1};
-  const to = {...from, ...(focus?.to ?? {})};
-  const t = interpolate(frame, [0, durationInFrames], [0, 1], {
-    extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: focus?.ease ?? EASE.drift,
-  });
-  const z = (from.z ?? 1) + ((to.z ?? 1) - (from.z ?? 1)) * t;
-  const fy = from.y + (to.y - from.y) * t;
-
-  const w = W * z;
-  const h = w * SHOT_AR;
-  // Hold the focus band at the vertical centre, and never travel past either end of the capture.
-  const top = Math.min(0, Math.max(H - h, H / 2 - fy * h));
-
-  return (
-    <AbsoluteFill style={{opacity: o}}>
-      <Plate grain={false}>
-        <Camera shot={shot}>
-          <AbsoluteFill style={{overflow: 'hidden', background: '#000'}}>
-            <div style={{position: 'absolute', left: (W - w) / 2, top, width: w, height: h}}>
-              <Media clip={clip} />
-            </div>
-          </AbsoluteFill>
-          <AbsoluteFill>
-            <Full
-              copy={
-                <>
-                  <Eyebrow delay={0}>{eyebrow}</Eyebrow>
-                  <Title delay={4} size={62}>{title}</Title>
-                  {line ? <Line delay={10} width={1080}>{line}</Line> : null}
-                </>
-              }
-            >
-              {null}
-            </Full>
           </AbsoluteFill>
         </Camera>
       </Plate>
