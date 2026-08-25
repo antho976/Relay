@@ -159,6 +159,9 @@ class CoachRepository @Inject constructor(
 
         /** undo_data sentinel: there was no prior override/swap — undo removes, not restores. */
         private const val NONE = "∅"
+
+        /** Autopilot won't fire twice inside this much real time, however the week ids fall. */
+        private const val MIN_AUTO_APPLY_GAP_MS = 20L * 60 * 60 * 1000
     }
 
     // Serialises the weekly pass so two concurrent callers (e.g. Overview load + Week Brief) can't
@@ -182,6 +185,14 @@ class CoachRepository @Inject constructor(
             if (existing.status != STATUS_SHADOW || coachOff) return@withLock existing
             coachDao.clearPass(weekId)
         }
+
+        // When the last pass ran, before this one is written. The pass is keyed to the ISO week but
+        // triggered by any app open, so a Sunday-night lifter who opens the app at 23:30 and reloads
+        // Overview at 00:20 crosses into a new week 50 minutes later and runs a second full pass. The
+        // pass itself is harmless — but auto-applying a second round of coach changes inside one
+        // workout is not, so autopilot waits out MIN_AUTO_APPLY_GAP_MS. The proposals are still there
+        // to tap in the meantime.
+        val previousPassRanAt = coachDao.latestPass()?.ranAt
 
         // Switched OFF, the coach keeps *watching* but goes silent: a weekly pass still runs and is
         // recorded so the history stays continuous — a user who parks the coach for two months and
@@ -236,7 +247,9 @@ class CoachRepository @Inject constructor(
         val won = coachDao.insertPassWithDecisions(pass, decisions)
         // A switched-off coach records but never acts — shadow decisions aren't proposals, so there is
         // nothing to auto-apply (and autoApplyEarnedTypes only touches STATUS_PROPOSED rows anyway).
-        if (won && decisions.isNotEmpty() && !coachOff) autoApplyEarnedTypes(weekId)
+        val autoApplyTooSoon = previousPassRanAt != null &&
+            clock.nowMs() - previousPassRanAt < MIN_AUTO_APPLY_GAP_MS
+        if (won && decisions.isNotEmpty() && !coachOff && !autoApplyTooSoon) autoApplyEarnedTypes(weekId)
         coachDao.pass(weekId) ?: pass
     }
 
