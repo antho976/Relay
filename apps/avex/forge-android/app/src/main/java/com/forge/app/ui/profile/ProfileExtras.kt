@@ -221,7 +221,8 @@ internal fun GalleryStrip(
     photos: List<ProgressPhoto>,
     fileFor: (ProgressPhoto) -> File,
     onOpenGallery: () -> Unit,
-    muted: Color
+    muted: Color,
+    locked: Boolean = false,
 ) {
     Box(Modifier.padding(horizontal = 24.dp)) {
         // Label only. `SectionAnchor` with no action renders exactly the same mono anchor the other
@@ -235,7 +236,7 @@ internal fun GalleryStrip(
         )
     }
     Spacer(Modifier.height(12.dp))
-    if (photos.isEmpty()) {
+    if (locked || photos.isEmpty()) {
         // Empty is drawn (§12), and the zero-shape is the STRIP — a run of ghost cells that runs off
         // the edge exactly as the real filmstrip does, not a single boxed frame. One frame alone read
         // as a lone empty container rather than as this section with nothing in it yet.
@@ -255,7 +256,7 @@ internal fun GalleryStrip(
                         .bounceClick { onOpenGallery() }
                         .padding(GHOST_PADDING)
                 ) {
-                    if (i == 0) GhostInvitation(muted, Modifier.align(Alignment.BottomStart))
+                    if (i == 0) GhostInvitation(muted, locked, Modifier.align(Alignment.BottomStart))
                 }
             }
         }
@@ -305,20 +306,22 @@ internal fun GalleryStrip(
  * themselves stay on `onBackground` and the mark is never the only thing saying "add".
  */
 @Composable
-private fun GhostInvitation(muted: Color, modifier: Modifier = Modifier) {
+private fun GhostInvitation(muted: Color, locked: Boolean, modifier: Modifier = Modifier) {
     Column(modifier) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("+", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
-            Spacer(Modifier.width(5.dp))
+            if (!locked) {
+                Text("+", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.width(5.dp))
+            }
             Text(
-                "FIRST PHOTO",
+                if (locked) "UNLOCK PHOTOS" else "FIRST PHOTO",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onBackground
             )
         }
         Spacer(Modifier.height(7.dp))
         Text(
-            "Same pose,\nsame light.",
+            if (locked) "Gallery locked" else "Same pose,\nsame light.",
             style = MaterialTheme.typography.bodySmall,
             // Plain muted, not the 0.7 on-card floor: there is no card fill under this any more,
             // and on the page 0.65 measures 4.54:1 and passes.

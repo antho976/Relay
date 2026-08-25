@@ -3,6 +3,9 @@ package com.forge.app.data.repo
 import android.content.Context
 import android.net.Uri
 import androidx.exifinterface.media.ExifInterface
+import com.forge.app.core.io.existsAtomically
+import com.forge.app.core.io.readTextAtomically
+import com.forge.app.core.io.writeTextAtomically
 import com.forge.app.data.db.dao.BodyweightDao
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -91,7 +94,7 @@ class ProgressPhotoRepository @Inject constructor(
 
     /** All photos, newest first. */
     suspend fun photos(): List<ProgressPhoto> = withContext(Dispatchers.IO) {
-        readIndex().sortedByDescending { it.takenAtMs }
+        runCatching { readIndex().sortedByDescending { it.takenAtMs } }.getOrDefault(emptyList())
     }
 
     fun fileFor(photo: ProgressPhoto): File = File(dir, photo.fileName)
@@ -118,7 +121,8 @@ class ProgressPhotoRepository @Inject constructor(
         }.getOrDefault(false)
         if (!ok || dest.length() == 0L) { dest.delete(); return@withContext null }
         val takenAt = exifTakenAtMs(dest) ?: takenAtMsOverride ?: System.currentTimeMillis()
-        index(fileName, takenAt, note, album, pose, muscles)
+        runCatching { index(fileName, takenAt, note, album, pose, muscles) }
+            .getOrElse { dest.delete(); null }
     }
 
     /**
@@ -133,7 +137,8 @@ class ProgressPhotoRepository @Inject constructor(
             val ok = runCatching { temp.copyTo(dest, overwrite = true); true }.getOrDefault(false)
             temp.delete()
             if (!ok || dest.length() == 0L) { dest.delete(); return@withContext null }
-            index(fileName, System.currentTimeMillis(), "", album, pose, emptyList())
+            runCatching { index(fileName, System.currentTimeMillis(), "", album, pose, emptyList()) }
+                .getOrElse { dest.delete(); null }
         }
 
     /** Append a copied-in file to the index, snapshotting the nearest bodyweight for its date. */
@@ -158,10 +163,12 @@ class ProgressPhotoRepository @Inject constructor(
     }
 
     suspend fun delete(photo: ProgressPhoto) = withContext(Dispatchers.IO) {
-        File(dir, photo.fileName).delete()
-        writeMutex.withLock {
-            writeIndex(readIndex().filterNot { it.fileName == photo.fileName })
-            bump()
+        runCatching {
+            writeMutex.withLock {
+                writeIndex(readIndex().filterNot { it.fileName == photo.fileName })
+                File(dir, photo.fileName).delete()
+                bump()
+            }
         }
     }
 
@@ -189,15 +196,19 @@ class ProgressPhotoRepository @Inject constructor(
 
     private suspend fun updatePhoto(photo: ProgressPhoto, transform: (ProgressPhoto) -> ProgressPhoto) =
         withContext(Dispatchers.IO) {
-            writeMutex.withLock {
-                writeIndex(readIndex().map { if (it.fileName == photo.fileName) transform(it) else it })
-                bump()
+            runCatching {
+                writeMutex.withLock {
+                    writeIndex(readIndex().map { if (it.fileName == photo.fileName) transform(it) else it })
+                    bump()
+                }
             }
         }
 
     // ── Albums ───────────────────────────────────────────────────────────────
     /** The user's album names, in creation order (does not include the implicit "Unsorted"). */
-    suspend fun albums(): List<String> = withContext(Dispatchers.IO) { readAlbums() }
+    suspend fun albums(): List<String> = withContext(Dispatchers.IO) {
+        runCatching { readAlbums() }.getOrDefault(emptyList())
+    }
 
     /** Create a named album (no-op for a blank name or a case-insensitive duplicate). Returns the
      *  CANONICAL name — the existing album's casing on a duplicate, else the new trimmed name — so
@@ -205,34 +216,44 @@ class ProgressPhotoRepository @Inject constructor(
     suspend fun createAlbum(name: String): String = withContext(Dispatchers.IO) {
         val n = name.trim()
         if (n.isEmpty()) return@withContext ""
-        writeMutex.withLock {
-            val current = readAlbums()
-            val existing = current.firstOrNull { it.equals(n, ignoreCase = true) }
-            if (existing != null) return@withContext existing
-            writeAlbums(current + n)
-            bump()
-        }
-        n
+        runCatching {
+            writeMutex.withLock {
+                val current = readAlbums()
+                val existing = current.firstOrNull { it.equals(n, ignoreCase = true) }
+                if (existing != null) return@withLock existing
+                writeAlbums(current + n)
+                bump()
+                n
+            }
+        }.getOrDefault("")
     }
 
     /** Rename an album, carrying its photos over to the new name. Matches the old name case-insensitively. */
     suspend fun renameAlbum(old: String, new: String) = withContext(Dispatchers.IO) {
         val n = new.trim()
         if (n.isEmpty() || old.isBlank()) return@withContext
-        writeMutex.withLock {
-            writeAlbums(readAlbums().map { if (it.equals(old, ignoreCase = true)) n else it }.distinct())
-            writeIndex(readIndex().map { if (it.album.equals(old, ignoreCase = true)) it.copy(album = n) else it })
-            bump()
+        runCatching {
+            writeMutex.withLock {
+                val albums = readAlbums()
+                val photos = readIndex()
+                writeAlbums(albums.map { if (it.equals(old, ignoreCase = true)) n else it }.distinct())
+                writeIndex(photos.map { if (it.album.equals(old, ignoreCase = true)) it.copy(album = n) else it })
+                bump()
+            }
         }
     }
 
     /** Delete an album — its photos fall back to Unsorted (the images themselves are kept). Case-insensitive. */
     suspend fun deleteAlbum(name: String) = withContext(Dispatchers.IO) {
         if (name.isBlank()) return@withContext
-        writeMutex.withLock {
-            writeAlbums(readAlbums().filterNot { it.equals(name, ignoreCase = true) })
-            writeIndex(readIndex().map { if (it.album.equals(name, ignoreCase = true)) it.copy(album = "") else it })
-            bump()
+        runCatching {
+            writeMutex.withLock {
+                val albums = readAlbums()
+                val photos = readIndex()
+                writeAlbums(albums.filterNot { it.equals(name, ignoreCase = true) })
+                writeIndex(photos.map { if (it.album.equals(name, ignoreCase = true)) it.copy(album = "") else it })
+                bump()
+            }
         }
     }
 
@@ -286,28 +307,28 @@ class ProgressPhotoRepository @Inject constructor(
     }.getOrNull()
 
     private fun readIndex(): List<ProgressPhoto> {
-        if (!indexFile.exists()) return emptyList()
-        return runCatching {
-            val arr = JSONArray(indexFile.readText())
-            (0 until arr.length()).mapNotNull { i ->
-                val o = arr.optJSONObject(i) ?: return@mapNotNull null
-                val name = o.optString("file").ifBlank { return@mapNotNull null }
-                // Drop dangling index entries whose file was removed out-of-band.
-                if (!File(dir, name).exists()) return@mapNotNull null
-                // Fields absent in older indexes read as their defaults, so pre-revamp data loads cleanly.
-                ProgressPhoto(
-                    name,
-                    o.optLong("takenAtMs"),
-                    o.optString("note"),
-                    o.optString("album"),
-                    o.optString("pose"),
-                    if (o.has("weightLb") && !o.isNull("weightLb")) o.optDouble("weightLb") else null,
-                    o.optString("title"),
-                    stringList(o.optJSONArray("muscles")),
-                    stringList(o.optJSONArray("tags"))
-                )
+        if (!indexFile.existsAtomically()) return emptyList()
+        val arr = JSONArray(indexFile.readTextAtomically())
+        return (0 until arr.length()).mapNotNull { i ->
+            val o = arr.getJSONObject(i)
+            val name = o.getString("file").trim().ifBlank {
+                throw IllegalStateException("Progress photo index contains a blank file name")
             }
-        }.getOrDefault(emptyList())
+            // Drop dangling index entries whose file was removed out-of-band.
+            if (!File(dir, name).exists()) return@mapNotNull null
+            // Fields absent in older indexes read as their defaults, so pre-revamp data loads cleanly.
+            ProgressPhoto(
+                name,
+                o.getLong("takenAtMs"),
+                o.optString("note"),
+                o.optString("album"),
+                o.optString("pose"),
+                if (o.has("weightLb") && !o.isNull("weightLb")) o.optDouble("weightLb") else null,
+                o.optString("title"),
+                stringList(o.optJSONArray("muscles")),
+                stringList(o.optJSONArray("tags"))
+            )
+        }
     }
 
     private fun writeIndex(photos: List<ProgressPhoto>) {
@@ -327,7 +348,7 @@ class ProgressPhotoRepository @Inject constructor(
                 if (p.tags.isNotEmpty()) put("tags", JSONArray(p.tags))
             })
         }
-        indexFile.writeText(arr.toString())
+        indexFile.writeTextAtomically(arr.toString())
     }
 
     /** Read a JSON string array as a clean list, dropping blanks. Absent array reads as empty. */
@@ -337,17 +358,15 @@ class ProgressPhotoRepository @Inject constructor(
     }
 
     private fun readAlbums(): List<String> {
-        if (!albumsFile.exists()) return emptyList()
-        return runCatching {
-            val arr = JSONArray(albumsFile.readText())
-            (0 until arr.length()).mapNotNull { i -> arr.optString(i).trim().ifBlank { null } }
-        }.getOrDefault(emptyList())
+        if (!albumsFile.existsAtomically()) return emptyList()
+        val arr = JSONArray(albumsFile.readTextAtomically())
+        return (0 until arr.length()).mapNotNull { i -> arr.getString(i).trim().ifBlank { null } }
     }
 
     private fun writeAlbums(names: List<String>) {
         val arr = JSONArray()
         names.forEach { arr.put(it) }
-        albumsFile.writeText(arr.toString())
+        albumsFile.writeTextAtomically(arr.toString())
     }
 
     private companion object {

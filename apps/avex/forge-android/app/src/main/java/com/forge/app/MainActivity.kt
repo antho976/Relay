@@ -13,7 +13,10 @@ import android.view.WindowManager
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -59,6 +62,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import javax.inject.Inject
 
+private const val PENDING_IMPORT_URI_KEY = "pending_import_uri"
+
 @AndroidEntryPoint
 // FragmentActivity (a superclass of ComponentActivity) is required by androidx.biometric's
 // BiometricPrompt, which drives the app / gallery lock (GYMAP-69). Everything else — Compose,
@@ -70,7 +75,8 @@ class MainActivity : FragmentActivity() {
     @Inject lateinit var appIconManager: AppIconManager
     @Inject lateinit var appLock: AppLockManager
 
-    /** Set when a shared/opened export file has been imported — shows a one-time result dialog (#GYMAP-17). */
+    /** A shared export waiting for unlock and explicit approval before any import work starts. */
+    private var pendingImportUri by mutableStateOf<Uri?>(null)
 
     /**
      * The widget deep-link day to open. State (not a local) because `launchMode=singleTask` delivers a
@@ -95,16 +101,26 @@ class MainActivity : FragmentActivity() {
     private var userLeaving = false
 
     /**
-     * A CSV/JSON export shared into or opened with Avex (#GYMAP-17): import it directly, no file
-     * browsing. The sender grants a one-shot read permission on the URI, so we read it immediately.
+     * Stage a CSV/JSON export shared into or opened with Avex. The import starts only after the app is
+     * unlocked and the user confirms it in the foreground.
      */
     private fun handleImportIntent(intent: Intent?) {
-        val uri: Uri? = when (intent?.action) {
-            Intent.ACTION_SEND -> IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java)
-            Intent.ACTION_VIEW -> intent.data
+        val incoming = intent ?: return
+        val uri: Uri? = when (incoming.action) {
+            Intent.ACTION_SEND -> IntentCompat.getParcelableExtra(incoming, Intent.EXTRA_STREAM, Uri::class.java)
+            Intent.ACTION_VIEW -> incoming.data
             else -> null
         }
         if (uri == null) return
+        pendingImportUri = uri
+        incoming.action = null
+        incoming.data = null
+        incoming.removeExtra(Intent.EXTRA_STREAM)
+    }
+
+    private fun confirmPendingImport() {
+        val uri = pendingImportUri ?: return
+        pendingImportUri = null
         lifecycleScope.launch {
             val result = runCatching { importRepo.import(uri) }.getOrDefault(ImportResult.ReadError)
             // Queued for the notifications feed rather than thrown up as an OK dialog over whatever
@@ -121,6 +137,11 @@ class MainActivity : FragmentActivity() {
         // host opens it (the deep-link would otherwise be dropped and the tap do nothing).
         intent.getStringExtra(com.forge.app.widget.EXTRA_START_DAY_KEY)?.let { pendingWidgetDayKey = it }
         if (opensHealthConnectPrivacyPolicy(intent.action)) privacyPolicyRequest++
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        pendingImportUri?.let { outState.putString(PENDING_IMPORT_URI_KEY, it.toString()) }
+        super.onSaveInstanceState(outState)
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
@@ -232,6 +253,7 @@ class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         val splash = installSplashScreen()
         super.onCreate(savedInstanceState)
+        pendingImportUri = savedInstanceState?.getString(PENDING_IMPORT_URI_KEY)?.let(Uri::parse)
         enableEdgeToEdge()
         // Consume the restore flag on a fresh launch only (not a config-change recreate) and queue the
         // confirmation for the notifications feed — the silent boot-swap otherwise gives no sign at all.
@@ -318,7 +340,7 @@ class MainActivity : FragmentActivity() {
         // Home, and the Recents thumbnail showed the photo grid — with screenshots and screen
         // recording working normally on it. The lock guarded the door and left the window open.
         applyPrivacyMode(startup.privacyMode || startup.appLockEnabled || startup.galleryLockEnabled)
-        appLock.primeEnabled(startup.appLockEnabled)
+        appLock.primeEnabled(startup.appLockEnabled, startup.galleryLockEnabled)
         applyAdaptiveWindowBackground(startup.amoledMode)
         val introIconKey = startup.appIcon
         val themedIntro = startup.themedLaunchIntro
@@ -442,7 +464,21 @@ class MainActivity : FragmentActivity() {
                             // The morning check-in (Coach v3 B1): asked once a day at first open,
                             // hosted here so it rides over whatever screen the app resumed to, and
                             // silent for anyone who has stopped answering it.
-                            com.forge.app.ui.checkin.CheckinSheet()
+                            val showImportConfirmation = shouldShowImportConfirmation(
+                                onboardingDone = onboardingDone,
+                                appLocked = locked,
+                                showIntro = showIntro,
+                                hasPendingImport = pendingImportUri != null,
+                            )
+                            if (!showImportConfirmation) {
+                                com.forge.app.ui.checkin.CheckinSheet()
+                            }
+                            if (showImportConfirmation) {
+                                ImportConfirmationDialog(
+                                    onConfirm = ::confirmPendingImport,
+                                    onDismiss = { pendingImportUri = null },
+                                )
+                            }
                         }
                         }
                     }
@@ -450,6 +486,32 @@ class MainActivity : FragmentActivity() {
             }
         }
     }
+}
+
+internal fun shouldShowImportConfirmation(
+    onboardingDone: Boolean?,
+    appLocked: Boolean,
+    showIntro: Boolean,
+    hasPendingImport: Boolean,
+): Boolean = onboardingDone == true && !appLocked && !showIntro && hasPendingImport
+
+@Composable
+private fun ImportConfirmationDialog(
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        containerColor = MaterialTheme.colorScheme.surface,
+        onDismissRequest = onDismiss,
+        title = { Text("Import workout history?") },
+        text = { Text("Avex will add every recognized workout in this file. Existing workouts are kept.") },
+        confirmButton = {
+            TextButton(onClick = onConfirm) { Text("Import") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        },
+    )
 }
 
 internal fun opensHealthConnectPrivacyPolicy(action: String?): Boolean =

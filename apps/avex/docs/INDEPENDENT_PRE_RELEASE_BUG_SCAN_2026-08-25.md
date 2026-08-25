@@ -8,34 +8,37 @@
 
 **Scope:** `forge-android/`
 
-**Result:** 0 additional critical, 3 additional high, 2 medium
+**Result:** 0 additional critical, 3 additional high, 2 medium; all 5 fixed in the current worktree
 
 ## Purpose
 
 This is a focused second-pass scan. Claude's `BUG_SCAN.md` and all eight detailed reports under
 `docs/bug-scan-2026-08/` were indexed first. Their 154 findings are intentionally not repeated here.
 
-The five findings below do not appear in that report. Their affected files are unchanged between
-`60fac9e` and `e5b3879`, so they remain present after the current post-scan fixes.
+The five findings below do not appear in that report. Their affected files were unchanged between
+`60fac9e` and `e5b3879`, so both revisions contained them. The current worktree now includes the
+remediation described under each finding.
 
 ## Release verdict
 
-**Do not ship either revision as-is.** The three high-severity findings should be fixed before the
-release candidate is promoted:
+**Do not ship `60fac9e` or `e5b3879` as-is.** The current worktree fixes these five findings. This
+does not supersede Claude's broader release verdict or the existing CI blocker.
 
-1. The app and gallery locks can fail open on temporary biometric errors.
-2. The gallery lock does not protect the progress-photo filmstrip on Profile.
-3. An interrupted JSON write can silently orphan the progress-photo library and its metadata.
+Those two revisions were blocked because:
+
+1. The app and gallery locks could fail open on temporary biometric errors.
+2. The gallery lock did not protect the progress-photo filmstrip on Profile.
+3. An interrupted JSON write could silently orphan the progress-photo library and its metadata.
 
 ## Summary
 
-| Severity | Area | Finding |
-|---|---|---|
-| HIGH | App lock | Temporary biometric unavailability is treated as successful authentication. |
-| HIGH | Photo privacy | Profile renders up to ten progress photos without passing through the gallery lock. |
-| HIGH | Photo storage | `index.json` is overwritten non-atomically and corrupt reads become a valid empty library. |
-| MEDIUM | Avatar storage | A failed replacement deletes the previous valid avatar. |
-| MEDIUM | Import boundary | Exported intents can import workout history before app-lock authentication or confirmation. |
+| Severity | Area | Finding | Status |
+|---|---|---|---|
+| HIGH | App lock | Temporary biometric unavailability is treated as successful authentication. | Fixed |
+| HIGH | Photo privacy | Profile renders up to ten progress photos without passing through the gallery lock. | Fixed |
+| HIGH | Photo storage | `index.json` is overwritten non-atomically and corrupt reads become a valid empty library. | Fixed |
+| MEDIUM | Avatar storage | A failed replacement deletes the previous valid avatar. | Fixed |
+| MEDIUM | Import boundary | Exported intents can import workout history before app-lock authentication or confirmation. | Fixed |
 
 ## HIGH 1: App lock fails open on temporary biometric errors
 
@@ -67,6 +70,13 @@ Preserve the actual `canAuthenticate` result. Fail open only after explicitly co
 device credential is enrolled. Hardware unavailable, unknown, unsupported, security-update, and
 prompt failures must remain locked and offer retry or cancellation.
 
+### Resolution
+
+Authentication capability now has three states: available, no enrolled credential, and unavailable.
+Only the explicit no-credential state can fail open. Temporary, hardware, and unknown failures remain
+locked with a retry action. Prompt errors re-check the system capability instead of trusting a broad
+error-code list.
+
 ## HIGH 2: Gallery lock exposes the Profile filmstrip
 
 **Files:**
@@ -95,6 +105,13 @@ gated gallery, but the thumbnail itself is already sensitive content.
 
 Do not load or render photo bytes on Profile while `galleryLocked` is true. Render a locked
 placeholder that invokes the same authentication gate before displaying the filmstrip.
+
+### Resolution
+
+Profile now observes the shared gallery-lock state. While locked, it passes no photo records to the
+filmstrip and renders the existing three-cell strip as an `UNLOCK PHOTOS` placeholder. The gallery
+lock is also seeded synchronously on cold start, preventing a first-frame thumbnail flash before the
+settings flow emits.
 
 ## HIGH 3: Progress-photo index writes are not crash-safe
 
@@ -125,6 +142,13 @@ Preserve the corrupt file or a last-known-good copy for recovery.
 
 Apply the same write pattern to `albums.json`, which currently has the same direct-overwrite shape.
 
+### Resolution
+
+`index.json` and `albums.json` now use Android's `AtomicFile`, including recovery of a last-known-good
+backup after an interrupted write. Read failures still produce a safe empty display, but every
+mutation performs a strict read first and refuses to rewrite corrupt metadata. Failed new-photo
+indexing also removes only the uncommitted new image.
+
 ## MEDIUM 1: Failed avatar replacement deletes the current avatar
 
 **File:** `app/src/main/java/com/forge/app/data/repo/AvatarRepository.kt:46-75,86-95`
@@ -135,6 +159,11 @@ An interrupted encode can also truncate the live file because it is overwritten 
 
 Write the replacement to a temporary file and rename it only after decode and JPEG compression both
 succeed. A failed replacement must leave the existing avatar untouched.
+
+### Resolution
+
+Avatar JPEGs now use the same atomic writer. Decode and compression failures leave the previous file
+untouched, bitmap cleanup runs in `finally`, and reads recover an interrupted replacement backup.
 
 ## MEDIUM 2: Exported import intents bypass app-lock authentication
 
@@ -156,6 +185,13 @@ which keeps this below high severity.
 Stage or parse the import first, then require an authenticated session and explicit user confirmation
 before committing it. Clear the consumed intent so recreation cannot repeat the operation.
 
+### Resolution
+
+Incoming share and view intents now stage only their URI. Avex waits until onboarding, the launch
+intro, and the app lock are clear, then asks for explicit confirmation before calling the importer.
+The consumed intent is neutralized, and the pending URI survives Activity recreation without being
+committed twice.
+
 ## Validation
 
 - Claude's complete report and its eight detailed area reports were searched for every class, method,
@@ -167,7 +203,21 @@ before committing it. Clear the consumed intent so recreation cannot repeat the 
 - Biometric, process-death, storage-full, and lock-screen behavior were source-verified but not
   reproduced on a physical Android device.
 
-## Fix order
+### Remediation validation
+
+- `:app:compileDebugKotlin` passes.
+- Ten focused regression tests pass for biometric classification, the locked Profile strip, atomic
+  rollback and backup recovery, corrupt photo-index preservation, failed avatar replacement, and the
+  import lock gate.
+- The complete app unit task ran 1,024 tests: 1,021 passed. The only failures are the same three
+  pre-existing Profile doctrine failures in `ProfileActivityMonth.kt`, `ProfileActivityYear.kt`, and
+  `ProfileSurfaceSections.kt`; none of those files changed in this remediation.
+- `:app:lintDebug` reports no findings in any touched file. The repo-wide gate remains blocked by 29
+  unrelated errors, with the first in `widget/ForgeWidget.kt:150`.
+- Physical biometric prompts, process death, and exported-intent delivery still require device-level
+  verification.
+
+## Completed fix order
 
 1. Biometric fail-open.
 2. Profile filmstrip privacy gate.

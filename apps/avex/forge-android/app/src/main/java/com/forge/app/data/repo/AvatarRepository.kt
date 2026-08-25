@@ -4,8 +4,11 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Matrix
-import android.media.ExifInterface
 import android.net.Uri
+import android.util.AtomicFile
+import androidx.exifinterface.media.ExifInterface
+import com.forge.app.core.io.existsAtomically
+import com.forge.app.core.io.writeAtomically
 import com.forge.app.data.prefs.SettingsRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -33,7 +36,14 @@ class AvatarRepository @Inject constructor(
     /** Public so the backup archive + factory reset can read/clear it. */
     val file: File get() = File(context.filesDir, FILE_NAME)
 
-    fun exists(): Boolean = file.let { it.exists() && it.length() > 0 }
+    fun exists(): Boolean {
+        val atomicFile = AtomicFile(file)
+        if (!file.existsAtomically()) return false
+        return runCatching {
+            atomicFile.openRead().use { }
+            file.exists() && file.length() > 0
+        }.getOrDefault(false)
+    }
 
     /**
      * Import the picked image: decode downsampled to ~[MAX_PX], apply its EXIF rotation, and write a
@@ -67,12 +77,17 @@ class AvatarRepository @Inject constructor(
             }.getOrDefault(0f)
             val upright = if (degrees == 0f) decoded
                 else Bitmap.createBitmap(decoded, 0, 0, decoded.width, decoded.height, Matrix().apply { postRotate(degrees) }, true)
-            file.outputStream().use { upright.compress(Bitmap.CompressFormat.JPEG, 90, it) }
-            if (upright !== decoded) decoded.recycle()
-            upright.recycle()
-            true
+            try {
+                file.writeAtomically { output ->
+                    check(upright.compress(Bitmap.CompressFormat.JPEG, 90, output))
+                }
+                true
+            } finally {
+                if (upright !== decoded) decoded.recycle()
+                upright.recycle()
+            }
         }.getOrDefault(false)
-        if (!ok || file.length() == 0L) { file.delete(); false } else true
+        ok && exists()
     }
 
     /**
@@ -88,14 +103,19 @@ class AvatarRepository @Inject constructor(
             // inScaled = false: keep the nodpi bitmap at its stored pixels (no density upscaling).
             val opts = BitmapFactory.Options().apply { inScaled = false }
             val decoded = BitmapFactory.decodeResource(context.resources, resId, opts) ?: return@runCatching false
-            file.outputStream().use { decoded.compress(Bitmap.CompressFormat.JPEG, 90, it) }
-            decoded.recycle()
-            true
+            try {
+                file.writeAtomically { output ->
+                    check(decoded.compress(Bitmap.CompressFormat.JPEG, 90, output))
+                }
+                true
+            } finally {
+                decoded.recycle()
+            }
         }.getOrDefault(false)
-        if (!ok || file.length() == 0L) { file.delete(); false } else true
+        ok && exists()
     }
 
-    suspend fun clear() = withContext(Dispatchers.IO) { file.delete(); Unit }
+    suspend fun clear() = withContext(Dispatchers.IO) { AtomicFile(file).delete() }
 
     // ── File + pref, owned together (GYMAP-22) ───────────────────────────────────
     // These are the ONLY sanctioned ways to change the avatar: each writes the file and its paired

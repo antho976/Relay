@@ -60,12 +60,30 @@ fun AppLockScreen(
     val amoled = LocalForgeSettings.current.amoledMode
     val (gradTop, gradBottom) = forgeBackgroundGradient(amoled)
 
-    val canAuth = remember { activity != null && BiometricAuthenticator.canAuthenticate(activity) }
+    val initialAvailability = remember(activity) {
+        activity?.let(BiometricAuthenticator::availability)
+            ?: BiometricAuthenticator.Availability.UNAVAILABLE
+    }
     var note by remember { mutableStateOf<String?>(null) }
     var hasAutoPrompted by remember { mutableStateOf(false) }
 
     val launchPrompt: () -> Unit = launchPrompt@{
-        val act = activity ?: return@launchPrompt
+        val act = activity
+        if (act == null) {
+            note = "Unlock isn't available right now. Try again."
+            return@launchPrompt
+        }
+        when (BiometricAuthenticator.availability(act)) {
+            BiometricAuthenticator.Availability.NO_CREDENTIAL -> {
+                onUnlocked()
+                return@launchPrompt
+            }
+            BiometricAuthenticator.Availability.UNAVAILABLE -> {
+                note = "Unlock isn't available right now. Try again."
+                return@launchPrompt
+            }
+            BiometricAuthenticator.Availability.AVAILABLE -> Unit
+        }
         note = null
         BiometricAuthenticator.authenticate(
             activity = act,
@@ -73,8 +91,9 @@ fun AppLockScreen(
             onSuccess = onUnlocked,
             onError = { code, message ->
                 when {
-                    // Credential removed after enabling → don't trap the user; open.
-                    BiometricAuthenticator.isNoCredentialError(code) -> onUnlocked()
+                    // A removed credential cannot be satisfied, so do not trap the user.
+                    BiometricAuthenticator.availability(act) ==
+                        BiometricAuthenticator.Availability.NO_CREDENTIAL -> onUnlocked()
                     code == BiometricPrompt.ERROR_USER_CANCELED ||
                         code == BiometricPrompt.ERROR_NEGATIVE_BUTTON ||
                         code == BiometricPrompt.ERROR_CANCELED -> onCancel?.invoke()
@@ -87,12 +106,20 @@ fun AppLockScreen(
         )
     }
 
-    // No enrolled credential — the lock can't work, so open rather than trap.
-    LaunchedEffect(canAuth) { if (!canAuth) onUnlocked() }
+    LaunchedEffect(initialAvailability) {
+        when (initialAvailability) {
+            BiometricAuthenticator.Availability.NO_CREDENTIAL -> onUnlocked()
+            BiometricAuthenticator.Availability.UNAVAILABLE ->
+                note = "Unlock isn't available right now. Try again."
+            BiometricAuthenticator.Availability.AVAILABLE -> Unit
+        }
+    }
 
     // Auto-invoke the prompt once, when ready (the intro has finished).
-    LaunchedEffect(canAuth, promptReady) {
-        if (canAuth && promptReady && !hasAutoPrompted) {
+    LaunchedEffect(initialAvailability, promptReady) {
+        if (initialAvailability == BiometricAuthenticator.Availability.AVAILABLE &&
+            promptReady && !hasAutoPrompted
+        ) {
             hasAutoPrompted = true
             delay(150) // let the activity settle to RESUMED before showing the system sheet
             launchPrompt()
