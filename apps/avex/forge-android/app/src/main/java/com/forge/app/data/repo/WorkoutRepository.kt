@@ -94,6 +94,11 @@ class WorkoutRepository @Inject constructor(
 
     fun observeActiveSession(): Flow<Session?> = sessionDao.observeActiveSession()
 
+    /** Every set in a session, reactive off Room invalidation — the live day screen watches this
+     *  so a set written by another surface (the wrist) shows up without a manual refresh. */
+    fun observeSetsForSession(sessionId: Long): Flow<List<LoggedSet>> =
+        loggedSetDao.observeAllForSession(sessionId)
+
     /** The current in-progress session, if any. Does NOT create one (unlike [startOrResumeSession]). */
     suspend fun activeSession(): Session? = sessionDao.getActiveSession()
 
