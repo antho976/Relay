@@ -113,6 +113,11 @@ class DayViewModel @Inject constructor(
 
     internal var undoClearJob: Job? = null
 
+    /** In-flight finish (FINISH WORKOUT / save-and-exit). The controls stay enabled until the
+     *  summary lands, and the finish path is ~8 DB round-trips, so without this a double tap ran the
+     *  whole thing twice — mirroring SessionDetailViewModel's exportJob/reLogJob guards. */
+    internal var finishJob: Job? = null
+
     init {
         var prevTimerFinished = false
         viewModelScope.launch {

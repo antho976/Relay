@@ -688,6 +688,28 @@ class SettingsRepository @Inject constructor(
     suspend fun setRotationCounter(n: Int) =
         context.forgePreferences.edit { it[PreferenceKeys.ROTATION_COUNTER] = n }
 
+    /**
+     * Count one finished session toward the next program re-roll, and report whether it lands on
+     * [limit]. Returns true exactly once per [limit] sessions, having already reset the counter.
+     *
+     * The whole compare-and-set happens inside one `edit {}` because the caller used to read,
+     * increment and write as three separate suspending steps. Two finishes racing — a double-tapped
+     * FINISH, or a finish and an orphan recovery — both read the same value, so either the increment
+     * was lost (the re-roll the user expects after four workouts arrives after five) or both saw the
+     * limit and started two full program generations with different seeds, the loser's writes
+     * discarded after the user had already seen the program change.
+     */
+    suspend fun countSessionTowardRotation(limit: Int): Boolean {
+        val n = limit.coerceAtLeast(1)
+        var reached = false
+        context.forgePreferences.edit { prefs ->
+            val next = (prefs[PreferenceKeys.ROTATION_COUNTER] ?: 0) + 1
+            reached = next >= n
+            prefs[PreferenceKeys.ROTATION_COUNTER] = if (reached) 0 else next
+        }
+        return reached
+    }
+
     /** When the active deload week began (epoch-ms); 0 = not in a deload week (auto-coach seam, #18). */
     val deloadWeekStartMs: Flow<Long> = context.forgePreferences.data
         .map { it[PreferenceKeys.DELOAD_WEEK_START_MS] ?: 0L }

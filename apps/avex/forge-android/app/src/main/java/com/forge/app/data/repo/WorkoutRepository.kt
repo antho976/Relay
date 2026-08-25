@@ -281,6 +281,13 @@ class WorkoutRepository @Inject constructor(
      */
     suspend fun finishSession(sessionId: Long): Int {
         val now = clock.nowMs()
+        // Already finished — a double-tapped FINISH, or a finish racing an orphan recovery. Report
+        // the duration that was stamped and do nothing else: re-running would re-stamp finished_at,
+        // count a second session toward the program rotation and mirror the session's calories to
+        // Health Connect a second time.
+        sessionDao.get(sessionId)?.let { existing ->
+            if (existing.finishedAt != null) return existing.activeSeconds
+        }
         sessionSegmentDao.closeOpen(sessionId, now)
         // Soft-fail instead of crashing if the row vanished (e.g. a concurrent program regenerate
         // discarded the active session mid-finish): nothing to stamp, report 0 active seconds.
@@ -452,13 +459,10 @@ class WorkoutRepository @Inject constructor(
         // and would silently wipe the recovery week mid-deload (seam fix #18). The counter is left
         // untouched, so rotation resumes on the next finish after the deload ends.
         if (deloadRange != null && clock.nowMs() in deloadRange) return
-        val n = settingsRepo.rotationEveryN.first().coerceAtLeast(1)
-        val next = settingsRepo.rotationCounter.first() + 1
-        if (next < n) {
-            settingsRepo.setRotationCounter(next)
-            return
-        }
-        settingsRepo.setRotationCounter(0)
+        // Read-increment-compare-write in ONE DataStore edit: two finishes racing used to lose an
+        // increment, or both trip the limit and start two full program generations at once.
+        val n = settingsRepo.rotationEveryN.first()
+        if (!settingsRepo.countSessionTowardRotation(n)) return
         // Use the user's full saved generation profile (goal/experience/emphasis/problem-areas/
         // priority-muscles/pinned), not a near-empty GenerationParams that dropped them all.
         programRepository.rerollAll()
