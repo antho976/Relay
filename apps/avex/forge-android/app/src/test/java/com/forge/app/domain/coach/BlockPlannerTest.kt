@@ -72,6 +72,20 @@ class BlockPlannerTest {
         assertNotNull(ended.endedAt)
     }
 
+    @Test
+    fun weeksAwayAreCaughtUp_notCollapsedIntoOne() {
+        // Three unopened weeks used to advance the block by one, so "Deload in N weeks" was wrong by
+        // however long the user was away.
+        val b = BlockPlanner.advance(start(weeks = 6), "2026-W04", now)
+        assertEquals(4, b.weekIndex)
+    }
+
+    @Test
+    fun anEarlierWeekNeverRewindsTheBlock() {
+        val b = BlockPlanner.advance(start(weeks = 5), "2026-W03", now)
+        assertEquals(b, BlockPlanner.advance(b, "2026-W02", now))
+    }
+
     // ── Fatigue still speaks ───────────────────────────────────────────────────
 
     @Test

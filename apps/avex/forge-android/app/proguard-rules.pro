@@ -1,9 +1,13 @@
 # ─── Forge release R8 / ProGuard rules ───────────────────────────────────────
-# Forge is fully offline (no INTERNET permission) and ships NO reflection-based
-# serialization library — JSON/CSV exports are built by hand. So almost everything
-# R8 needs already comes from the "consumer" rules bundled in the AndroidX / Hilt /
-# Room / Health-Connect / Glance AARs. The rules below cover the few seams those
-# don't, with the persistence-critical enum-name preservation first.
+# Forge is fully offline (no INTERNET permission), and its JSON/CSV exports are built
+# by hand rather than reflected over. It is NOT free of a serialization library: :app
+# api-depends on :shared, which api-depends on kotlinx.serialization for the wear
+# protocol, so those @Serializable classes go through this R8 pass — they survive on
+# the rules embedded in the kotlinx-serialization artifacts, not on anything here. So
+# almost everything R8 needs already comes from the "consumer" rules bundled in the
+# AndroidX / Hilt / Room / Health-Connect / Glance AARs. The rules below cover the few
+# seams those don't, with the persistence-critical enum-name preservation first.
+# The :wear module has its own copy of the enum rule — same protocol, two R8 runs.
 
 # Readable crash reports (line numbers) without leaking original file names.
 -keepattributes SourceFile,LineNumberTable

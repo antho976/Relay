@@ -78,7 +78,11 @@ internal fun DayViewModel.applyOrderedExercises(suggestion: com.forge.app.domain
 }
 
 private fun DayViewModel.finishWorkout() {
-    viewModelScope.launch {
+    // One finish per session. The FINISH control stays enabled until isFinished lands at the end of
+    // ~8 DB round-trips, so a double tap used to run the whole path twice: two finishSession calls,
+    // two rotation-counter bumps and the session's calories written to Health Connect twice.
+    if (finishJob?.isActive == true) return
+    finishJob = viewModelScope.launch {
         val sessionId = _state.value.sessionId ?: return@launch
         val exercises = _state.value.exercises
         val allSets = exercises.flatMap { it.loggedSets }
@@ -157,7 +161,8 @@ private fun DayViewModel.finishWorkout() {
 }
 
 private fun DayViewModel.saveAndExit() {
-    viewModelScope.launch {
+    if (finishJob?.isActive == true) return
+    finishJob = viewModelScope.launch {
         val sessionId = _state.value.sessionId ?: run {
             _navigation.send(DayNavigationEffect.PopBack)
             return@launch

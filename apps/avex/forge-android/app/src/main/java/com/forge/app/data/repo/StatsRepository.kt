@@ -205,6 +205,36 @@ class StatsRepository @Inject constructor(
         return computeStreak(finishedAts, com.forge.app.domain.vacation.VacationCalendar.onVacation(periods))
     }
 
+    /**
+     * Workouts, volume and cardio minutes for the LAST COMPLETED calendar week (Monday 00:00 local
+     * to this Monday 00:00 local) — what a Monday recap is about.
+     *
+     * [observeWeeklyStats] deliberately reports the week IN PROGRESS, which is right for the
+     * Overview and wrong for a weekly recap: a recap fired on Monday morning read a week that was
+     * hours old, so it reported zero workouts for a user who trains three times a week and fired the
+     * come-back nudge at them, every Monday.
+     */
+    suspend fun lastCompletedWeekStats(): CompletedWeekStats {
+        val zone = ZoneId.systemDefault()
+        val thisWeekStart = LocalDate.now(zone).let { it.minusDays(it.dayOfWeek.value.toLong() - 1) }
+        val fromMs = thisWeekStart.minusWeeks(1).atStartOfDay(zone).toInstant().toEpochMilli()
+        val toMs = thisWeekStart.atStartOfDay(zone).toInstant().toEpochMilli()
+        val agg = sessionDao.aggregateInRange(fromMs, toMs)
+        val cardioMinutes = cardioDao.between(fromMs, toMs).sumOf { it.durationMin }
+        return CompletedWeekStats(
+            workouts = agg.sessionCount,
+            volumeLb = agg.totalVolume ?: 0.0,
+            cardioMinutes = cardioMinutes
+        )
+    }
+
+    /** The completed-week numbers behind the weekly recap. */
+    data class CompletedWeekStats(
+        val workouts: Int,
+        val volumeLb: Double,
+        val cardioMinutes: Int
+    )
+
     // ─── History / comparison helpers ─────────────────────────────────────────
 
     fun observeAllFinishedSessions(): Flow<List<Session>> = sessionDao.observeAllFinishedSessions()

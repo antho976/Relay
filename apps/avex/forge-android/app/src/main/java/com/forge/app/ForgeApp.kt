@@ -135,19 +135,34 @@ class ForgeApp : Application(), Configuration.Provider {
      * Swap [pending] into place at [live] via a temp-in-the-same-dir + atomic rename. A direct
      * copyTo(live, overwrite=true) truncates and streams — if it dies mid-copy (disk full, process
      * killed) the live file is left partial/corrupt with the original gone. Rename on one filesystem
-     * is atomic: a failed copy leaves the intact original untouched and the next boot retries from
+     * is atomic: a failed swap leaves the intact original untouched and the next boot retries from
      * [pending]. Returns true once [live] is the restored file; [afterSwap] runs only on success.
+     *
+     * The staging step MOVES rather than copies. This runs in Application.onCreate, on the main
+     * thread, before any UI exists, and it copied a multi-megabyte forge.db byte-for-byte — seconds
+     * of frozen screen on a mid-range device with a long history, and a plausible ANR at the one
+     * moment a user is least willing to force-stop the app. filesDir and databases/ are the same
+     * filesystem, so the move is O(1); a device where it isn't falls back to the copy.
+     *
+     * Retry semantics are preserved on both failure paths: a failed final rename puts the file back
+     * where the next boot looks for it, and a failed [afterSwap] re-stages from the now-live file.
      */
     private fun swapStagedFile(pending: File, live: File, afterSwap: () -> Unit = {}): Boolean = runCatching {
         live.parentFile?.mkdirs()
         val staged = File(live.parentFile, "${live.name}.restoring")
         if (staged.exists()) staged.delete()
-        pending.copyTo(staged, overwrite = true)
+        val moved = pending.renameTo(staged)
+        if (!moved) pending.copyTo(staged, overwrite = true)
         if (!staged.renameTo(live)) {
-            staged.delete()
+            if (!moved || !staged.renameTo(pending)) staged.delete()
             error("Could not move ${live.name} into place")
         }
-        afterSwap()
+        runCatching { afterSwap() }.onFailure { e ->
+            // live IS the restored file now, but the post-swap cleanup (dropping stale WAL sidecars)
+            // didn't finish, so the swap counts as failed. Put a staged copy back for the next boot.
+            if (moved) runCatching { live.copyTo(pending, overwrite = true) }
+            throw e
+        }
     }.isSuccess
 
     /** Delete [f]; throw if it survives so the enclosing runCatching treats the swap as failed. */

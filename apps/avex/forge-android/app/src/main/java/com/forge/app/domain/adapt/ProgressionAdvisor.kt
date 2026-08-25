@@ -311,6 +311,13 @@ object ProgressionAdvisor {
                     // series, the stall counter AND the prevMax anchor in one place.
                     .filter { b -> b.countsForProgression }
                     .filter { b -> !b.skipped && b.sets.any { it.weightLb != null && !it.isAssisted } }
+                    // A swap changes what the series MEASURES. Rotating a barbell row (e1RM ~160) to
+                    // a dumbbell row (e1RM ~62) left `best` pinned to the pre-swap lift, so no bout on
+                    // the new exercise could ever beat it and the stall counter grew by one every
+                    // session — forever. The coach then re-proposed the same rotation every week, and
+                    // the outcome watcher, which judges swaps on attendance alone, walked it to
+                    // autopilot. The series restarts at the boundary instead.
+                    .let { history -> sinceLastSwap(history) }
                 if (bouts.size <= t.plateauMinBouts) continue
 
                 val e1rms = bouts.map { bestE1rm(it.sets) }
@@ -509,6 +516,18 @@ object ProgressionAdvisor {
         } else {
             "${trim(targetLb)} lb"
         }
+    }
+
+    /**
+     * The tail of [bouts] performed on the exercise the slot holds NOW — everything from the last
+     * change of swap onward. A bout's swappedName is the lift it was actually performed on (null for
+     * the base exercise), so a change between consecutive bouts is a swap boundary.
+     */
+    private fun sinceLastSwap(bouts: List<ExerciseBout>): List<ExerciseBout> {
+        val boundary = (bouts.indices.reversed()
+            .firstOrNull { i -> i > 0 && bouts[i].swappedName != bouts[i - 1].swappedName })
+            ?: return bouts
+        return bouts.subList(boundary, bouts.size)
     }
 
     /** Floor to the increment grid — matches the old suggestion's rounding exactly. */

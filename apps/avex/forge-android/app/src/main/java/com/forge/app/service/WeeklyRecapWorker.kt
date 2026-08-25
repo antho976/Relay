@@ -20,8 +20,12 @@ import dagger.assisted.Assisted
 import dagger.assisted.AssistedInject
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
+import java.time.DayOfWeek
+import java.time.Duration
 import java.time.LocalDate
 import java.time.ZoneId
+import java.time.ZonedDateTime
+import java.time.temporal.TemporalAdjusters
 import java.util.concurrent.TimeUnit
 
 /**
@@ -30,7 +34,9 @@ import java.util.concurrent.TimeUnit
  *  - a "your coach has an update" push when a new Week Brief is ready and unseen,
  *  - a gentle, non-guilt-y "come back" when a whole week passed with no sessions (suppressed on holiday).
  *
- * Weekly cadence keeps re-engagement from nagging. Scheduled on first app open; KEEP-idempotent.
+ * Weekly cadence keeps re-engagement from nagging. Anchored to Monday, the day the week's numbers
+ * are complete and the Week Brief is published; re-anchored on every app open, which is idempotent
+ * because the delay targets the next Monday rather than a fixed interval from now.
  * All three honour quiet hours; only the recap honours the "Weekly recap" per-type opt-out (the
  * coach-brief and come-back nudges are separate features with their own channels).
  */
@@ -87,7 +93,12 @@ class WeeklyRecapWorker @AssistedInject constructor(
                 }
         }
 
-        val stats = statsRepo.observeWeeklyStats().firstOrNull() ?: return Result.success()
+        // The week that ENDED, not the one in progress. observeWeeklyStats counts from this Monday
+        // 00:00, so a Monday-morning recap read a week a few hours old: a user training three times a
+        // week got "0 workouts", the come-back nudge fired at them every single Monday, and everyone
+        // else got a recap describing a partial week.
+        val stats = statsRepo.lastCompletedWeekStats()
+        val streakDays = statsRepo.currentStreakDays()
 
         if (stats.workouts == 0) {
             // ── Re-engagement (#13): a whole week with no sessions = a lapse. Nudge gently — unless
@@ -114,12 +125,12 @@ class WeeklyRecapWorker @AssistedInject constructor(
             val weightUnit = settingsRepo.weightUnit.first()
             // A full-week streak milestone turns the recap into a small celebration via its title — so
             // when it does, the streak is dropped from the body line to avoid stating it twice.
-            val isStreakMilestone = stats.streakDays >= 7 && stats.streakDays % 7 == 0
+            val isStreakMilestone = streakDays >= 7 && streakDays % 7 == 0
             val body = buildString {
                 append("${stats.workouts} workout${if (stats.workouts != 1) "s" else ""}")
                 if (stats.volumeLb > 0) append(" · ${formatWeight(stats.volumeLb, weightUnit)}")
                 if (stats.cardioMinutes > 0) append(" · ${stats.cardioMinutes} min cardio")
-                if (stats.streakDays > 0 && !isStreakMilestone) append(" · ${stats.streakDays}-day streak")
+                if (streakDays > 0 && !isStreakMilestone) append(" · $streakDays-day streak")
                 // Retention hooks: the closest trophy you're chasing, and a memory from this date.
                 trophyRepo.observeNearMisses().firstOrNull()?.firstOrNull()?.let { nmiss ->
                     append(" · Almost: ${nmiss.trophyName} (${nmiss.progress}/${nmiss.target})")
@@ -130,7 +141,7 @@ class WeeklyRecapWorker @AssistedInject constructor(
                 }
             }
             // DESIGN §11: no exclamation marks in a rendered string.
-            val title = if (isStreakMilestone) "${stats.streakDays}-day streak" else "Weekly recap"
+            val title = if (isStreakMilestone) "$streakDays-day streak" else "Weekly recap"
             ForgeNotifications.ensureChannel(ctx, CHANNEL_ID, "Weekly recap", "Your weekly training summary")
             nm.notify(NOTIF_ID, ForgeNotifications.build(ctx, CHANNEL_ID, title, body))
         }
@@ -155,23 +166,48 @@ class WeeklyRecapWorker @AssistedInject constructor(
         private const val REENGAGE_NOTIF_ID = 2004
         private const val DELOAD_NOTIF_ID = 2005
 
+        /** The recap's period boundary: Monday noon local, with the 6 h flex below putting the run
+         *  somewhere in Monday morning. Quiet hours defer anything too early. */
+        private const val RECAP_HOUR = 12
+
         fun schedule(context: Context) {
             val constraints = Constraints.Builder()
                 .setRequiresBatteryNotLow(true)
                 .build()
             // Flex window: let WorkManager fire anywhere in the last 6h of each 7-day period so it can
             // batch with other jobs / pick a low-power moment, instead of pinning the exact 7-day mark.
+            //
+            // The initial delay anchors that period to Monday, the day the week's numbers are
+            // complete and the day the coach's Week Brief is published. Without it the first run was
+            // ~7 days after the user's first-ever launch, on whatever weekday and hour that happened
+            // to be, and KEEP meant it stayed on that phase forever — so a Wednesday-anchored user's
+            // "week in numbers" described Monday to Wednesday, and the coach-brief push could land
+            // six days after the brief was ready. UPDATE re-anchors installs already running on an
+            // arbitrary phase; because the delay targets the NEXT Monday rather than "7 days from
+            // now", re-running this on every app open can't starve the worker.
             val request = PeriodicWorkRequestBuilder<WeeklyRecapWorker>(7, TimeUnit.DAYS, 6, TimeUnit.HOURS)
                 .setConstraints(constraints)
+                .setInitialDelay(minutesUntilNextMonday(), TimeUnit.MINUTES)
                 // Quiet-hours / transient failures return Result.retry(); back off instead of
                 // hammering the default ~30s-then-immediate cadence.
                 .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.MINUTES)
                 .build()
             WorkManager.getInstance(context).enqueueUniquePeriodicWork(
                 WORK_NAME,
-                ExistingPeriodicWorkPolicy.KEEP,
+                ExistingPeriodicWorkPolicy.UPDATE,
                 request
             )
+        }
+
+        /** Minutes until the next Monday [RECAP_HOUR]:00 (always >= 1). ZonedDateTime, not
+         *  LocalDateTime, so the delay spans real elapsed time across a DST transition. */
+        private fun minutesUntilNextMonday(): Long {
+            val zone = ZoneId.systemDefault()
+            val now = ZonedDateTime.now(zone)
+            var next = now.with(TemporalAdjusters.nextOrSame(DayOfWeek.MONDAY))
+                .withHour(RECAP_HOUR).withMinute(0).withSecond(0).withNano(0)
+            if (!next.isAfter(now)) next = next.plusWeeks(1)
+            return Duration.between(now, next).toMinutes().coerceAtLeast(1)
         }
     }
 }

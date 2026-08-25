@@ -17,14 +17,32 @@ import java.time.ZoneId
 class ForgeJsonImporter : GymImporter {
     override val source = ImportSource.FORGE_JSON
 
+    /**
+     * A cheap sniff, deliberately not a parse. Building the whole document as a JSONObject just to
+     * test for one key doubled the peak memory of an import: org.json allocates a HashMap and boxed
+     * values per field, so a pretty-printed multi-year export runs 5-10x the text size as a tree,
+     * and [parse] immediately built a second one. On a power user's ~12 MB export that was enough to
+     * OutOfMemoryError on a modest device — and because the caller's runCatching catches Throwable,
+     * the failure surfaced as "No new workouts found in that file", so the user concluded their
+     * export was empty and abandoned the migration.
+     */
     override fun canParse(text: String): Boolean {
         val t = text.trimStart()
         if (!t.startsWith("{")) return false
-        return runCatching { JSONObject(text).has("sessions") }.getOrDefault(false)
+        // The key is written near the front by exportFullDataJson, but scan generously rather than
+        // depending on key order.
+        return t.contains("\"sessions\"")
     }
 
     override fun parse(text: String, assumeKg: Boolean): List<ImportedSession> {
-        val root = runCatching { JSONObject(text) }.getOrNull() ?: return emptyList()
+        // Only a malformed document is "no sessions here". An OutOfMemoryError from building the
+        // tree is a different fact and must reach the caller, which reports it as a file too large
+        // to import rather than as an empty one.
+        val root = try {
+            JSONObject(text)
+        } catch (e: org.json.JSONException) {
+            return emptyList()
+        }
         val sessionsArr = root.optJSONArray("sessions") ?: return emptyList()
         val out = ArrayList<ImportedSession>(sessionsArr.length())
         for (i in 0 until sessionsArr.length()) {
@@ -49,7 +67,20 @@ class ForgeJsonImporter : GymImporter {
                     val weightLb = set.optDouble("weightLb", 0.0).takeIf { it > 0.0 }
                     val reps = set.optInt("reps", 0)
                     val rpe = set.optDouble("rpe", 0.0).takeIf { it in 1.0..10.0 }
-                    sets.add(ImportedSet(weightLb = weightLb, reps = reps, rpe = rpe))
+                    // Read back everything that changes what the set means. Older exports simply
+                    // don't carry these keys and fall through to the same defaults as before.
+                    val setType = set.optString("setType").ifBlank { null }
+                    sets.add(ImportedSet(
+                        weightLb = weightLb,
+                        reps = reps,
+                        rpe = rpe,
+                        isWarmup = setType == "warmup",
+                        durationSeconds = set.optInt("durationSeconds", 0).takeIf { it > 0 },
+                        isAssisted = set.optBoolean("isAssisted", false),
+                        isAmrap = set.optBoolean("isAmrap", false),
+                        toFailure = set.optBoolean("toFailure", false),
+                        setType = setType
+                    ))
                 }
                 if (sets.isNotEmpty()) {
                     exercises.add(ImportedExercise(

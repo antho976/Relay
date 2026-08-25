@@ -31,4 +31,11 @@ class VolumeCalculatorTest {
         val sets = listOf(set(null, 12), set(40.0, 10))
         assertEquals(400.0, VolumeCalculator.sessionVolumeLb(sets), 0.0)
     }
+
+    @Test
+    fun timedHoldsContributeNothing() {
+        // reps on a timed hold is a duration, not a count — a 90 s weighted plank added 4050 lb.
+        val sets = listOf(set(40.0, 10), set(45.0, 90).copy(durationSeconds = 90))
+        assertEquals(400.0, VolumeCalculator.sessionVolumeLb(sets), 0.0)
+    }
 }

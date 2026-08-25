@@ -14,13 +14,31 @@ package com.forge.app.data.importer
  * a per-row unit column) up front, so nothing downstream has to think about units.
  */
 
-/** One performed set. [weightLb] is null for a bodyweight / non-numeric entry (contributes 0 volume). */
+/**
+ * One performed set. [weightLb] is null for a bodyweight / non-numeric entry (contributes 0 volume).
+ *
+ * [durationSeconds] and [isAssisted] are not decoration: a set with a duration is a timed HOLD, so
+ * its `reps` is not a count and it must stay out of every weight x reps aggregate, and an assisted
+ * set is excluded from all-time PR comparison (see `LoggedSet`). Dropping either on the way through
+ * this model turned a 90-second weighted plank into a 90-rep 45 lb set and made band-assisted
+ * pull-ups PR-eligible — on the migration path the Avex JSON export exists to serve.
+ */
 data class ImportedSet(
     val weightLb: Double?,
     val reps: Int,
     val rpe: Double? = null,
-    /** True when the source marked this as a warm-up set — kept so we could filter later; imported as normal today. */
-    val isWarmup: Boolean = false
+    /** True when the source marked this as a warm-up set. Imported as a "warmup" set type. */
+    val isWarmup: Boolean = false,
+    /** Timed hold: `reps` is not a count and the set is excluded from weight x reps aggregates. */
+    val durationSeconds: Int? = null,
+    /** Bands / spotter — excluded from all-time PR comparison. */
+    val isAssisted: Boolean = false,
+    /** Intent was max reps; `reps` is what was achieved. */
+    val isAmrap: Boolean = false,
+    /** Set ended at muscular failure. */
+    val toFailure: Boolean = false,
+    /** Advanced set type: null = normal | "warmup" | "drop" | "myo" | "rest_pause". */
+    val setType: String? = null
 )
 
 /**

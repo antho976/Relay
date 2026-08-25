@@ -53,6 +53,7 @@ class AdaptationRepository @Inject constructor(
     private val vacationDao: com.forge.app.data.db.dao.VacationDao,
     private val programRepository: ProgramRepository,
     private val programCustomizationRepo: ProgramCustomizationRepository,
+    private val customizationRepo: CustomizationRepository,
     private val settingsRepository: SettingsRepository,
     private val healthConnectManager: com.forge.app.data.health.HealthConnectManager,
     private val clock: Clock
@@ -155,8 +156,20 @@ class AdaptationRepository @Inject constructor(
         // The engine plans against EFFECTIVE sets (baseline + the user's/coach's per-slot overrides),
         // not the bare baseline — otherwise the coach re-proposes volume onto a slot it already boosted
         // and bakes a phantom set at the next regenerate (seam findings 2/15).
+        //
+        // ...and against the EFFECTIVE EXERCISE. Persistent swaps live in their own globally-keyed
+        // table, which effectivePlanForDay doesn't touch, so a swapped slot reached the engine with
+        // the BASE exercise's name and unit while its history was the swapped lift's. The plateau
+        // ladder then priced a dumbbell press in plates — "Barbell Bench Press stalled ... drop ~10%
+        // and build back up: 3 plates" for a lift that is neither. The day screen already resolves
+        // this for the in-session chip (DayViewModelBuilders' effectiveUnit); this is the same
+        // resolution on the snapshot path.
+        val swaps = customizationRepo.allSwaps()
         val effectiveDays = Program.days.map { day ->
-            day.copy(exercises = programCustomizationRepo.effectivePlanForDay(day.key))
+            day.copy(
+                exercises = programCustomizationRepo.effectivePlanForDay(day.key)
+                    .map { plan -> resolveSwap(plan, swaps[plan.id]) }
+            )
         }
 
         val now = clock.nowMs()
@@ -164,9 +177,13 @@ class AdaptationRepository @Inject constructor(
             nowMs = now,
             program = effectiveDays,
             swapCandidateIds = { plan ->
+                // Never offer the exercise the slot is ALREADY swapped to: it was the deterministic
+                // first candidate, so the coach re-proposed a rotation that was already in effect,
+                // every week, permanently occupying the change budget.
+                val current = swaps[plan.id]?.swappedExerciseId
                 ExerciseLibrary.swapCandidates(plan.muscle, equipment, disliked + restrictedIds, frozenIds)
                     .map { it.id }
-                    .filter { it != plan.id }
+                    .filter { it != plan.id && it != current }
             },
             sessions = sessions,
             loggedExercises = loggedExercises,
@@ -187,6 +204,32 @@ class AdaptationRepository @Inject constructor(
         lastSnapshot = snap
         lastSnapshotAtMs = now
         return snap
+    }
+
+    /**
+     * Overlay a persistent swap onto a plan slot: the swapped lift's name, unit, muscle and tags,
+     * with [ExercisePlan.id] left as the SLOT id — history, goals, coach targeting and the swap
+     * overlay itself are all slot-keyed, so re-keying here would hide the slot's own history.
+     *
+     * Sets and reps stay the slot's prescription: the user trains this slot for 3 x 6-8 whatever
+     * exercise fills it, and the program-customization overlay above owns those numbers.
+     */
+    private fun resolveSwap(
+        plan: com.forge.app.program.ExercisePlan,
+        swap: com.forge.app.data.db.entities.ExerciseCustomization?
+    ): com.forge.app.program.ExercisePlan {
+        // A cleared swap can leave a blank-name row behind (it shares the row with a rest-timer
+        // override / pinned note), and a blank name means "no swap" everywhere (#11).
+        val name = swap?.swappedName?.takeIf { it.isNotBlank() } ?: return plan
+        val swapped = swap.swappedExerciseId?.let { ExerciseLibrary.byId(it) }
+        return plan.copy(
+            name = name,
+            unit = com.forge.app.program.ExerciseUnit.fromCode(swap.swappedUnit)
+                ?: swapped?.unit ?: plan.unit,
+            muscle = swapped?.muscle ?: plan.muscle,
+            tags = swapped?.tags ?: plan.tags,
+            equipment = swapped?.equipment ?: plan.equipment
+        )
     }
 
     @Volatile private var lastSnapshot: AdaptationSnapshot? = null

@@ -54,7 +54,6 @@ import dagger.hilt.android.AndroidEntryPoint
 import java.io.File
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.combine
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import javax.inject.Inject
@@ -163,10 +162,19 @@ class MainActivity : FragmentActivity() {
      */
     override fun onStop() {
         super.onStop()
-        if (isChangingConfigurations || !userLeaving) return
-        // Genuine backgrounding (Home/Recents), not a self-launched picker/overlay: start the
-        // app-lock re-lock timer, then do the deferred icon-alias swap.
+        if (isChangingConfigurations) return
+        // The app-lock timer arms on ANY backgrounding. It used to sit behind the userLeaving gate
+        // below, and onUserLeaveHint fires only when the user chooses to leave — Home or Recents.
+        // Android does not call it for the power button, the display timing out, an incoming call or
+        // a notification tap into another app, so in all of those the timer never armed, onForeground
+        // saw no recorded background and left the session valid. A user with "lock immediately" set
+        // could pocket the phone and have anyone past the lock screen open Avex straight into their
+        // training data. One flag was answering two unrelated questions; a picker round-trip
+        // re-locking under a zero-second timeout is what "lock immediately" asks for.
         appLock.onGenuineBackground()
+        // The icon-alias swap keeps the gate: flipping the alias while a sub-activity WE launched
+        // covers us can tear the task down on some OEMs.
+        if (!userLeaving) return
         userLeaving = false
         runCatching { appIconManager.reconcileTo(AppIcon.fromKey(appIconKey)) }
     }
@@ -278,17 +286,30 @@ class MainActivity : FragmentActivity() {
         // first frame (no plain→themed pop), plus the "Custom startup animation" setting so a user who
         // turned it off goes straight to the plain black-and-white Avex with no themed flash. One cached
         // DataStore read pass, same as privacy/amoled.
-        val (introIconKey, themedIntro) = runBlocking {
-            val privacy = settingsRepo.privacyMode.first()
-            val lockEnabled = settingsRepo.appLockEnabled.first()
-            // Secure the window on the very first frame when EITHER privacy mode or the app lock is
-            // on, and seed the lock state synchronously so a locked cold start never flashes the
-            // content behind the gate (GYMAP-69).
-            applyPrivacyMode(privacy || lockEnabled)
-            appLock.primeEnabled(lockEnabled)
-            applyAdaptiveWindowBackground(settingsRepo.amoledMode.first())
-            settingsRepo.appIcon.first() to settingsRepo.themedLaunchIntro.first()
+        // ONE read of the preferences file, not five subscriptions to it. These values have to be
+        // applied before the first frame — the secure-window flag, the lock gate and the window
+        // background all decide what that frame looks like — so the read is still synchronous, but
+        // it is now a single file read instead of five with the main thread parked on each.
+        // Defaults rather than a crash if the read fails anyway: this runs before setContent, so an
+        // exception here is an uncaught crash on EVERY launch with no way back into the app.
+        val startup = runBlocking {
+            runCatching { settingsRepo.startupPreferences() }
+                .getOrDefault(SettingsRepository.StartupPreferences(
+                    privacyMode = false,
+                    appLockEnabled = false,
+                    amoledMode = false,
+                    appIcon = "",
+                    themedLaunchIntro = true
+                ))
         }
+        // Secure the window on the very first frame when EITHER privacy mode or the app lock is
+        // on, and seed the lock state synchronously so a locked cold start never flashes the
+        // content behind the gate (GYMAP-69).
+        applyPrivacyMode(startup.privacyMode || startup.appLockEnabled)
+        appLock.primeEnabled(startup.appLockEnabled)
+        applyAdaptiveWindowBackground(startup.amoledMode)
+        val introIconKey = startup.appIcon
+        val themedIntro = startup.themedLaunchIntro
         appIconKey = introIconKey
         lifecycleScope.launch {
             // FLAG_SECURE follows privacy mode OR the app lock — turning on a lock implies keeping the

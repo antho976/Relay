@@ -3,6 +3,7 @@ package com.forge.app.data.repo
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.documentfile.provider.DocumentFile
 import com.forge.app.data.db.ForgeDatabase
 import com.forge.app.data.db.dao.CardioDao
@@ -21,7 +22,10 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 
@@ -206,6 +210,17 @@ class BackupRepository @Inject constructor(
                                     put("rpe", set.rpe ?: 0)
                                     put("completedAt", set.completedAt)
                                     put("difficultyTag", set.difficultyTag ?: "")
+                                    // These change what the set MEANS, so an export without them is
+                                    // not the same training history: a timed hold's reps is not a
+                                    // count, and an assisted set is not PR-eligible. Re-importing an
+                                    // export that omitted them turned a 90 s weighted plank into a
+                                    // 90-rep 45 lb set at the top of the Hall of Fame.
+                                    put("durationSeconds", set.durationSeconds ?: 0)
+                                    put("isAssisted", set.isAssisted)
+                                    put("isAmrap", set.isAmrap)
+                                    put("toFailure", set.toFailure)
+                                    put("setType", set.setType ?: "")
+                                    put("dropAnnotation", set.dropAnnotation ?: "")
                                 })
                             }
                             put("sets", setArr)
@@ -776,9 +791,17 @@ class BackupRepository @Inject constructor(
             if (pendingDb.exists()) pendingDb.delete()
             dbFile.copyTo(pendingDb, overwrite = true)
 
+            // The prefs half of a backup used to be staged with no validation at all, while the
+            // database half gets a zip sniff, a SQLite magic-byte check, a schema check and two
+            // version floors. Anything whose settings entry is not a Preferences protobuf — a
+            // hand-built zip, a third-party tool, a future format — was swapped into the live
+            // DataStore file at the next boot, before any UI exists. Read it back the way DataStore
+            // will, and simply skip a blob that doesn't parse: the restore proceeds with the
+            // database (the part that holds the training history) and the user keeps their current
+            // settings, instead of the app failing to start.
             val pendingPrefs = File(context.filesDir, PENDING_PREFS_NAME)
             if (pendingPrefs.exists()) pendingPrefs.delete()
-            prefsFile?.copyTo(pendingPrefs, overwrite = true)
+            prefsFile?.takeIf { isPreferencesBlob(it) }?.copyTo(pendingPrefs, overwrite = true)
 
             // Photos passed validation alongside the DB — stage them as a pending folder rather than
             // touching the live one. ForgeApp.applyPendingRestore swaps it in at boot in the SAME pass
@@ -848,21 +871,66 @@ class BackupRepository @Inject constructor(
     }
 
     /**
-     * Sanity check that a candidate file is a SQLite DB containing Avex's core tables.
+     * Sanity check that a candidate file is a SQLite DB containing Avex's core tables, and that the
+     * rest of the file is actually readable.
      * Checking only `session` let any SQLite DB from another app pass validation and get swapped in.
      * We now require all three tables that every real Avex backup must contain — so picking the wrong
      * app's DB fails with NOT_A_BACKUP / CORRUPT instead of silently replacing your data.
+     *
+     * The table check reads page 1 and nothing else, so a backup whose DATA pages were damaged in
+     * transit — emailed, synced through a flaky provider, copied off a failing SD card — passed it
+     * with the schema page intact. It was then staged and swapped over the live database at boot, at
+     * which point Room hit the bad page on the first read that touched it and its default
+     * onCorruption handler DELETED the file. The original was already gone, so the user was left
+     * with an empty schema and no way back. [quickCheck] reads every page before we commit to the
+     * swap, which is the only point where refusing still costs nothing.
      */
     private fun isForgeDatabase(file: File): Boolean = runCatching {
         android.database.sqlite.SQLiteDatabase.openDatabase(
             file.path, null, android.database.sqlite.SQLiteDatabase.OPEN_READONLY
         ).use { dbFile ->
-            dbFile.rawQuery(
+            val hasTables = dbFile.rawQuery(
                 "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN " +
                     "('session','logged_exercise','logged_set')", null
             ).use { c -> c.moveToFirst() && c.getInt(0) >= 3 }
+            hasTables && quickCheck(dbFile)
         }
     }.getOrDefault(false)
+
+    /**
+     * `PRAGMA quick_check` over the whole file — the per-page structural check, without
+     * integrity_check's much slower cross-index verification. Returns false on anything but "ok",
+     * and on a read that throws part-way through (which is itself corruption). A multi-year Avex
+     * database is a few MB, so this is a one-off read of a file we are about to copy anyway.
+     */
+    private fun quickCheck(dbFile: android.database.sqlite.SQLiteDatabase): Boolean = runCatching {
+        dbFile.rawQuery("PRAGMA quick_check(1)", null).use { c ->
+            c.moveToFirst() && c.getString(0).equals("ok", ignoreCase = true)
+        }
+    }.getOrDefault(false)
+
+    /**
+     * True when [file] parses as the Preferences protobuf DataStore stores — the prefs-side
+     * counterpart to [isForgeDatabase]. Read through DataStore itself over a throwaway copy, so
+     * "this file reads" here means "this file reads" at boot.
+     */
+    private suspend fun isPreferencesBlob(file: File): Boolean {
+        val probe = File(context.cacheDir, "restore_prefs_probe.preferences_pb")
+        val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+        return try {
+            runCatching {
+                file.copyTo(probe, overwrite = true)
+                // No corruptionHandler on purpose: an unreadable blob must THROW here, where the
+                // restore can decline it, rather than be quietly replaced with defaults at boot.
+                PreferenceDataStoreFactory.create(scope = scope) { probe }
+                    .data.first()
+                true
+            }.getOrDefault(false)
+        } finally {
+            scope.cancel()
+            probe.delete()
+        }
+    }
 
     /** The SQLite user_version (Room schema version) of a candidate DB file; MAX if unreadable (→ rejected). */
     private fun databaseUserVersion(file: File): Int = runCatching {

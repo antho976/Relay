@@ -2,6 +2,9 @@ package com.forge.app.domain.coach
 
 import com.forge.app.data.db.entities.TrainingBlock
 import com.forge.app.domain.adapt.AdaptThresholds
+import java.time.DayOfWeek
+import java.time.LocalDate
+import java.time.temporal.ChronoUnit
 
 /**
  * Periodization as a state machine (Coach v3 C).
@@ -12,7 +15,8 @@ import com.forge.app.domain.adapt.AdaptThresholds
  * way rest ever happens.
  *
  * Pure and idempotent: [advance] is keyed by ISO week, so running the weekly pass twice in one week
- * moves nothing.
+ * moves nothing — and because it compares weeks ORDINALLY rather than for equality, a block also
+ * can't move backwards, and weeks the user never opened the app in are not lost.
  */
 object BlockPlanner {
 
@@ -43,7 +47,13 @@ object BlockPlanner {
     )
 
     /**
-     * Move the block on by one week, or return it untouched when this week already advanced it.
+     * Move the block on to [weekId], or return it untouched when it has already reached that week.
+     *
+     * The guard used to be `lastAdvancedWeek == weekId` — equality, not ordering — and the block
+     * moved exactly one week per pass regardless of how many had actually gone by. So a user who
+     * didn't open the app for three weeks advanced the block by ONE, and "Deload in N weeks" was
+     * then wrong by however long they were away. Weeks elapsed are counted from the two week ids
+     * and applied in full, so the block's position always reflects real elapsed time.
      *
      * @param fatigueScore the deload advisor's current score; a high one pulls the deload forward,
      *   which is the whole point of keeping the tripwire alive alongside the schedule.
@@ -55,9 +65,30 @@ object BlockPlanner {
         fatigueScore: Int = 0,
         t: AdaptThresholds = AdaptThresholds()
     ): TrainingBlock {
-        if (block.lastAdvancedWeek == weekId) return block
         if (!block.isActive) return block
+        // Ordinal, not equal: a week id that is the same as — or earlier than — the last one it
+        // advanced on moves nothing, so a clock change or an out-of-order pass can't rewind a block.
+        val weeksElapsed = weeksBetween(block.lastAdvancedWeek, weekId)
+        if (weeksElapsed <= 0) return block
 
+        // A long absence is caught up rather than lost, bounded by the block's own length: stepping
+        // past the deload ends the block, so the loop always terminates inside plannedWeeks + 1.
+        var out = block
+        repeat(weeksElapsed.coerceAtMost(block.plannedWeeks + 1)) {
+            if (!out.isActive) return out
+            out = step(out, weekId, nowMs, fatigueScore, t)
+        }
+        return out
+    }
+
+    /** One week of block progression — the state machine's single transition. */
+    private fun step(
+        block: TrainingBlock,
+        weekId: String,
+        nowMs: Long,
+        fatigueScore: Int,
+        t: AdaptThresholds
+    ): TrainingBlock {
         val nextIndex = block.weekIndex + 1
         // The block is done: its deload week has been served.
         if (block.phase == BlockPhase.DELOAD.code) {
@@ -78,6 +109,28 @@ object BlockPlanner {
             lastAdvancedWeek = weekId
         )
     }
+
+    /**
+     * Whole ISO weeks from [from] to [to], both "yyyy-Www". 0 when either is missing or unparseable,
+     * so a block with no recorded week (or a malformed one) simply doesn't move until the next pass
+     * records a good id.
+     */
+    private fun weeksBetween(from: String, to: String): Int {
+        val a = weekStart(from) ?: return 0
+        val b = weekStart(to) ?: return 0
+        return ChronoUnit.WEEKS.between(a, b).toInt()
+    }
+
+    /** The Monday of an ISO week id, or null when it isn't one. */
+    private fun weekStart(weekId: String): LocalDate? {
+        val m = WEEK_ID.matchEntire(weekId) ?: return null
+        val year = m.groupValues[1].toIntOrNull() ?: return null
+        val week = m.groupValues[2].toIntOrNull() ?: return null
+        // Jan 4 is always in ISO week 1 of its week-based year.
+        return LocalDate.of(year, 1, 4).with(DayOfWeek.MONDAY).plusWeeks((week - 1).toLong())
+    }
+
+    private val WEEK_ID = Regex("""(\d{4})-W(\d{2})""")
 
     /** How many weeks until this block's deload week, or 0 when it is the deload week. */
     fun weeksToDeload(block: TrainingBlock): Int =

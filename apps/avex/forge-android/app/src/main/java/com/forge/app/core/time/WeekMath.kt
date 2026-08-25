@@ -3,6 +3,7 @@ package com.forge.app.core.time
 import java.time.DayOfWeek
 import java.time.Instant
 import java.time.ZoneId
+import java.time.temporal.ChronoUnit
 
 /**
  * Epoch-ms of the start (00:00) of the ISO week (Monday-anchored) containing [nowMs], in [zone].
@@ -20,3 +21,32 @@ fun mondayStartMs(nowMs: Long, zone: ZoneId = ZoneId.systemDefault()): Long =
 fun monthStartMs(nowMs: Long, zone: ZoneId = ZoneId.systemDefault()): Long =
     Instant.ofEpochMilli(nowMs).atZone(zone).toLocalDate()
         .withDayOfMonth(1).atStartOfDay(zone).toInstant().toEpochMilli()
+
+/**
+ * The half-open window [start, end) that a deload applied at [appliedMs] governs, anchored to local
+ * Monday midnights like every other week in the coach.
+ *
+ * It used to be a rolling 7 x 24 h from the instant the user tapped Apply, and the result is
+ * PERSISTED into `session.deload_marked_here`. A deload applied Monday 19:00 therefore still
+ * counted the following Monday at 08:00 — the first session of the NEXT block — as a deload
+ * session. That moved `WeeklyReview.mesocycleFocus`'s block anchor forward a week, and made
+ * DeloadAdvisor's stall and fatigue reads treat a normal heavy session as a deload one when
+ * deciding the next deload. Whether history was corrupted came down to what time of day the user
+ * happened to tap a button.
+ *
+ * Applied Monday to Wednesday, the window is that ISO week. Applied Thursday to Sunday — where an
+ * ISO week alone would leave a "deload week" of three days or fewer — it runs to the end of the
+ * following week, so the reduced program always governs at least four days and every boundary
+ * still lands on a Monday midnight.
+ */
+fun deloadWeekStartMs(appliedMs: Long, zone: ZoneId = ZoneId.systemDefault()): Long =
+    mondayStartMs(appliedMs, zone)
+
+/** End (exclusive) of the window described by [deloadWeekStartMs]. */
+fun deloadWeekEndMs(appliedMs: Long, zone: ZoneId = ZoneId.systemDefault()): Long {
+    val applied = Instant.ofEpochMilli(appliedMs).atZone(zone).toLocalDate()
+    val monday = applied.with(DayOfWeek.MONDAY)
+    val daysLeftInWeek = ChronoUnit.DAYS.between(applied, monday.plusWeeks(1))
+    val weeks = if (daysLeftInWeek >= 4) 1L else 2L
+    return monday.plusWeeks(weeks).atStartOfDay(zone).toInstant().toEpochMilli()
+}

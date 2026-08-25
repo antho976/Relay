@@ -49,6 +49,43 @@ class ImporterTest {
         assertNull(ExerciseNameMatcher.match(""))
     }
 
+    @Test fun neverInfersEquipmentTheSourceNameDidNotState() {
+        // Each of these used to fuzzy-match a dumbbell/machine/cable variant at exactly 2/3, filing
+        // history under equipment the export never claimed. Unmatched keeps the user's own label.
+        assertNull(ExerciseNameMatcher.match("Reverse Fly (Dumbbell)"))  // matched DB Fly — CHEST
+        assertNull(ExerciseNameMatcher.match("Bicep Curl"))              // matched a machine curl
+        assertNull(ExerciseNameMatcher.match("Good Morning"))            // matched the bodyweight one
+        assertNull(ExerciseNameMatcher.match("Crunch"))                  // matched the cable crunch
+        assertNull(ExerciseNameMatcher.match("Shoulder Press"))          // matched the barbell press
+    }
+
+    @Test fun bareBenchPressNamesAreTheBarbellLifts() {
+        assertEquals("barbell-bench-press", ExerciseNameMatcher.match("Bench Press"))
+        assertEquals("incline-barbell-bench", ExerciseNameMatcher.match("Incline Bench Press"))
+    }
+
+    @Test fun anEquipmentQualifierOnTheSourceNameStillMatches() {
+        // The source may be MORE specific than the library name — that invents nothing.
+        assertEquals("lat-pulldown", ExerciseNameMatcher.match("Lat Pulldown (Cable)"))
+        assertEquals("leg-extension", ExerciseNameMatcher.match("Leg Extension (Machine)"))
+    }
+
+    // ── Weight parsing ──────────────────────────────────────────────────────────
+    @Test fun parseWeightTellsThousandsSeparatorsFromDecimalCommas() {
+        // A lone comma with a 1-2 digit tail is a European decimal point...
+        assertEquals(82.5, ImportParsing.parseWeight("82,5")!!, 0.001)
+        assertEquals(100.5, ImportParsing.parseWeight("100,5")!!, 0.001)
+        // ...anything else is a thousands separator. "1,250" used to parse as 1.25.
+        assertEquals(1250.0, ImportParsing.parseWeight("1,250")!!, 0.001)
+        assertEquals(12345.0, ImportParsing.parseWeight("12,345")!!, 0.001)
+        assertEquals(1234567.0, ImportParsing.parseWeight("1,234,567")!!, 0.001)
+        // With both separators, the last one is the decimal point.
+        assertEquals(1234.5, ImportParsing.parseWeight("1,234.5")!!, 0.001)
+        assertEquals(1250.75, ImportParsing.parseWeight("1.250,75")!!, 0.001)
+        assertEquals(45.5, ImportParsing.parseWeight("45.5 kg")!!, 0.001)
+        assertNull(ImportParsing.parseWeight(""))
+    }
+
     // ── Strong ──────────────────────────────────────────────────────────────────
     private val strongCsv = """
         Date,Workout Name,Duration,Exercise Name,Set Order,Weight,Weight Unit,Reps,RPE

@@ -25,6 +25,12 @@ class CustomizationRepository @Inject constructor(
     suspend fun getSwap(exerciseId: String): ExerciseCustomization? =
         customizationDao.get(exerciseId)
 
+    /** Every persistent swap, slot-keyed — one read for callers that resolve a whole program. */
+    suspend fun allSwaps(): Map<String, ExerciseCustomization> =
+        customizationDao.all()
+            .filter { it.swappedName.isNotBlank() }
+            .associateBy { it.exerciseId }
+
     suspend fun setSwap(
         exerciseId: String,
         swappedName: String,

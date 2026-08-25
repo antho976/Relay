@@ -107,20 +107,37 @@ object ImportParsing {
      */
     fun parseReps(raw: String): Int? = raw.trim().toDoubleOrNull()?.toInt()?.takeIf { it > 0 }
 
-    /** Weight can be "", "0", "45.5", "45.5 kg", or "100,5" (European exports use a comma decimal —
-     *  see [CsvParser]'s `;` handling); strip a unit suffix, normalise the separator, and parse. */
+    /**
+     * Weight can be "", "0", "45.5", "45.5 kg", "100,5" (European exports use a comma decimal — see
+     * [CsvParser]'s `;` handling) or "1,250" (a US thousands separator); strip a unit suffix,
+     * normalise the separator, and parse.
+     *
+     * A lone comma is only a decimal point when it is followed by ONE OR TWO digits and nothing
+     * else. Treating every lone comma that way read "1,250" as 1.25 — a 1250 lb leg press stored as
+     * 1.3 lb, with the session's denormalised totalVolumeLb computed from it, so a 10,000 lb session
+     * landed in history as a 10 lb one and dragged every volume chart down permanently. A comma
+     * followed by exactly three digits, or more than one comma, is a thousands separator.
+     */
     fun parseWeight(raw: String): Double? {
         val s = raw.trim().lowercase().removeSuffix("kg").removeSuffix("kgs").removeSuffix("lb")
             .removeSuffix("lbs").trim()
         if (s.isEmpty()) return null
-        // "1,234.5" → comma is a thousands separator; "100,5" → comma is the decimal point.
         val normalised = when {
-            s.contains(',') && s.contains('.') -> s.replace(",", "")
-            s.contains(',') -> s.replace(',', '.')
-            else -> s
+            // Both separators present: whichever comes LAST is the decimal point — "1,234.5" is US,
+            // "1.250,75" is European.
+            s.contains('.') && s.contains(',') ->
+                if (s.lastIndexOf(',') > s.lastIndexOf('.')) s.replace(".", "").replace(',', '.')
+                else s.replace(",", "")
+            // "100,5" / "82,25" — a single comma with a 1-2 digit tail is the decimal point.
+            COMMA_DECIMAL.matches(s) -> s.replace(',', '.')
+            // "1,250" / "12,345" / "1,234,567" — thousands separators.
+            else -> s.replace(",", "")
         }
         return normalised.toDoubleOrNull()
     }
+
+    /** A single comma with a 1-2 digit tail: the only shape a lone comma is a decimal point in. */
+    private val COMMA_DECIMAL = Regex("""^-?\d+,\d{1,2}$""")
 
     /** The first non-blank line, lowercased — the cheap header sniff each CSV importer's canParse uses. */
     fun firstLine(text: String): String =

@@ -62,8 +62,17 @@ class WorkoutImportRepository @Inject constructor(
         val importer = importers.firstOrNull { it.canParse(text) }
             ?: return@withContext ImportResult.UnrecognisedFormat
         val assumeKg = settingsRepo.useKg.first()
-        val sessions = runCatching { importer.parse(text, assumeKg) }.getOrDefault(emptyList())
-            .filter { it.exercises.isNotEmpty() }
+        // An OOM building a huge JSON tree is not "nothing to import". runCatching catches Throwable,
+        // so a power user's multi-year export that couldn't fit in memory used to be reported as "No
+        // new workouts found in that file" — they concluded the export was empty and gave up.
+        val parsed = try {
+            importer.parse(text, assumeKg)
+        } catch (e: OutOfMemoryError) {
+            return@withContext ImportResult.TooLarge
+        } catch (e: Exception) {
+            emptyList()
+        }
+        val sessions = parsed.filter { it.exercises.isNotEmpty() }
         if (sessions.isEmpty()) return@withContext ImportResult.NothingToImport
 
         insert(importer.source, sessions)
@@ -87,7 +96,15 @@ class WorkoutImportRepository @Inject constructor(
             val text = (readBounded(doc.uri) as? Read.Ok)?.text ?: continue
             if (text.isBlank()) continue
             val importer = importers.firstOrNull { it.canParse(text) } ?: continue
-            val count = runCatching { importer.parse(text, assumeKg).count { it.exercises.isNotEmpty() } }.getOrDefault(0)
+            // A file too big to parse is skipped rather than listed — and never allowed to take the
+            // whole scan down with it.
+            val count = try {
+                importer.parse(text, assumeKg).count { it.exercises.isNotEmpty() }
+            } catch (e: OutOfMemoryError) {
+                0
+            } catch (e: Exception) {
+                0
+            }
             if (count == 0) continue
             found.add(FoundImport(doc.uri, doc.name ?: "export", importer.source, count, doc.lastModified()))
         }
@@ -115,6 +132,12 @@ class WorkoutImportRepository @Inject constructor(
         // Nudge each one after the first at a given instant a few seconds forward — deterministic from
         // file order, so a genuine re-import reproduces the same instants and the duplicate guard below
         // still recognises them, while distinct same-day workouts no longer collide and get dropped.
+        //
+        // The nonce is per-run; the DB is not. A slot already occupied by a DIFFERENT workout — the
+        // morning session from a FitNotes export, when the evening one arrives later in a Strong
+        // export whose Date column is date-only — used to make the incoming workout "a duplicate"
+        // and drop it silently. The slot search below walks past occupied instants instead, and only
+        // calls it a duplicate when the stored session holds the same work.
         val startNonce = HashMap<Long, Int>()
         // Memoise name→catalogue-id for this import: the same movement recurs across many sessions and
         // ExerciseNameMatcher.match scans the whole library, so resolve each distinct name only once.
@@ -125,18 +148,33 @@ class WorkoutImportRepository @Inject constructor(
                 val totalSets = session.exercises.sumOf { it.sets.size }
                 if (totalSets == 0) continue
 
-                val nth = startNonce.getOrDefault(session.startedAtMs, 0)
-                startNonce[session.startedAtMs] = nth + 1
-                val startedAt = session.startedAtMs + nth * 1000L
-
-                // Duplicate guard (#GYMAP-17): a workout already logged at this exact start time is a
-                // re-import of the same data — skip it so scanning/importing twice doesn't double-count.
-                if (sessionDao.countAtStart(startedAt) > 0) { duplicates++; continue }
-
-                // Denormalised volume from lb weights, matching how a real finished session is stamped.
+                // Denormalised volume from lb weights, matching how a real finished session is
+                // stamped — including VolumeCalculator's exclusion of timed holds, whose reps is a
+                // duration, not a count.
                 val volumeLb = session.exercises.sumOf { ex ->
-                    ex.sets.sumOf { (it.weightLb ?: 0.0) * it.reps }
+                    ex.sets.filter { it.durationSeconds == null }
+                        .sumOf { (it.weightLb ?: 0.0) * it.reps }
                 }
+
+                // Duplicate guard (#GYMAP-17): a workout already logged at this start time WITH THE
+                // SAME CONTENT is a re-import of the same data — skip it so scanning/importing twice
+                // doesn't double-count. A different workout at the same instant takes the next slot.
+                var nth = startNonce.getOrDefault(session.startedAtMs, 0)
+                var startedAt = session.startedAtMs + nth * 1000L
+                var duplicate = false
+                while (nth < MAX_START_NUDGES) {
+                    val stored = sessionDao.contentAtStart(startedAt)
+                    if (stored.isEmpty()) break
+                    if (stored.any { it.setCount == totalSets && sameVolume(it.totalVolumeLb, volumeLb) }) {
+                        duplicate = true
+                        break
+                    }
+                    nth++
+                    startedAt = session.startedAtMs + nth * 1000L
+                }
+                startNonce[session.startedAtMs] = nth + 1
+                if (duplicate) { duplicates++; continue }
+
                 val activeSec = (session.finishedAtMs
                     ?.let { ((it - startedAt) / 1000L).toInt() }
                     ?: (totalSets * SECONDS_PER_SET))
@@ -186,7 +224,15 @@ class WorkoutImportRepository @Inject constructor(
                                 weightLb = s.weightLb,
                                 reps = s.reps,
                                 completedAt = finishedAt,
-                                rpe = s.rpe
+                                rpe = s.rpe,
+                                // Carried through rather than left at the entity defaults: a timed
+                                // hold whose durationSeconds went missing reads as a rep set, and an
+                                // assisted set that came back as unassisted becomes PR-eligible.
+                                durationSeconds = s.durationSeconds,
+                                isAssisted = s.isAssisted,
+                                isAmrap = s.isAmrap,
+                                toFailure = s.toFailure,
+                                setType = s.setType ?: if (s.isWarmup) "warmup" else null
                             )
                         }
                     )
@@ -263,6 +309,14 @@ class WorkoutImportRepository @Inject constructor(
         private val IMPORTABLE_EXTENSIONS = listOf(".csv", ".json", ".txt")
         /** Cap folder-scan work; Downloads can be large and we only need the recent exports. */
         private const val MAX_SCAN_FILES = 60
+        /** How far the start-instant nudge may walk before giving up and letting the collision stand.
+         *  Nobody logs 60 distinct workouts at one midnight; this only bounds a pathological file. */
+        private const val MAX_START_NUDGES = 60
+
+        /** Two denormalised volumes describe the same work — tolerant of the 0.1 lb rounding the
+         *  importer applies, and treating a missing volume as "unknown, not equal". */
+        private fun sameVolume(stored: Double?, incoming: Double): Boolean =
+            stored != null && kotlin.math.abs(stored - incoming) < 0.5
     }
 }
 
