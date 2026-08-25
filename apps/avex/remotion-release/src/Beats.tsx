@@ -3,7 +3,7 @@ import {AbsoluteFill, interpolate, useCurrentFrame, useVideoConfig} from 'remoti
 import {Camera, EASE, Shot} from './Camera';
 import {Clip, Device, FocusMove, Media, Seam, SeamDir} from './Device';
 import {Center, Plate, Split} from './Layout';
-import {Cue, CueRun} from './Sound';
+import {Cue, CuePoint, LEAD} from './Sound';
 import {Body, Counter, EraTag, Eyebrow, Line, Tag, Title, useEdgeFade, useRise} from './Type';
 import {ACCENT, EIGHTH, MONO, MUTED, ON_BG, QUARTER, SERIF, run} from './theme';
 
@@ -19,7 +19,7 @@ export const Card: React.FC<{
   const frame = useCurrentFrame();
   const {durationInFrames} = useVideoConfig();
   const o = useEdgeFade(durationInFrames, 10);
-  const rise = useRise(subAt, 10);
+  const rise = useRise(subAt - LEAD, 10);
   const p = interpolate(frame, [6, 40], [0, 1], {
     extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: EASE.glide,
   });
@@ -66,9 +66,11 @@ export const Compare: React.FC<{
   beforeSpan?: number; afterSpan?: number;
   hold?: number; sweep?: number; dir?: SeamDir;
   height?: number; flip?: boolean; focus?: FocusMove; shot?: Shot;
+  /** something visible happening on the capture after the seam — a toggle, a view switching */
+  cues?: CuePoint[];
 }> = ({
   before, after, eyebrow, title, note, line, beforeSpan, afterSpan,
-  hold, sweep = 26, dir = 'ltr', height = 830, flip = false, focus, shot,
+  hold, sweep = 26, dir = 'ltr', height = 830, flip = false, focus, shot, cues,
 }) => {
   const frame = useCurrentFrame();
   const {durationInFrames} = useVideoConfig();
@@ -85,8 +87,11 @@ export const Compare: React.FC<{
   return (
     <AbsoluteFill style={{opacity: o}}>
       <Plate>
+        {/* The sweep is the only sound the seam makes. It used to be followed by a second thunk
+            when the edge reached the far side, and with five seams in the film that pair became
+            the most repeated sound in it. */}
         <Cue at={start} sfx="sweep" />
-        <Cue at={start + sweep} sfx="screen" />
+        {(cues ?? []).map((c, i) => <Cue key={i} {...c} />)}
         <Camera shot={shot}>
           <AbsoluteFill>
             <Split
@@ -134,18 +139,17 @@ export const Compare: React.FC<{
 export const Solo: React.FC<{
   clip: Clip; eyebrow: string; title: string; note?: string; line?: string;
   height?: number; flip?: boolean; focus?: FocusMove; shot?: Shot; tag?: string;
-  /** frames, beat-relative, where the capture visibly changes screen */
-  changes?: number[];
-  /** frame where something on the capture fills or climbs */
-  fill?: number;
-}> = ({clip, eyebrow, title, note, line, height = 880, flip = false, focus, shot, tag, changes, fill}) => {
+  /** something visible happening on the capture: a set logged, a view switching. Not the beat
+   *  starting — the old `changes={[8]}` fired a thunk eight frames into the push, where the only
+   *  thing changing was the transition. */
+  cues?: CuePoint[];
+}> = ({clip, eyebrow, title, note, line, height = 880, flip = false, focus, shot, tag, cues}) => {
   const {durationInFrames} = useVideoConfig();
   const o = useEdgeFade(durationInFrames, 10);
   return (
     <AbsoluteFill style={{opacity: o}}>
       <Plate>
-        {(changes ?? []).map((f, i) => <Cue key={i} at={f} sfx="screen" />)}
-        {fill !== undefined ? <Cue at={fill} sfx="fill" /> : null}
+        {(cues ?? []).map((c, i) => <Cue key={i} {...c} />)}
         <Camera shot={shot}>
           <AbsoluteFill>
             <Split
@@ -180,12 +184,13 @@ export const ListCard: React.FC<{
 }> = ({eyebrow, title, items, gridStart = 0}) => {
   const {durationInFrames} = useVideoConfig();
   const o = useEdgeFade(durationInFrames, 12);
-  // One per eighth note. The rise and the tick share a frame, so the list settles in time.
+  // One per eighth note. Each row is standing by the time its tap sounds, so the list settles in
+  // time rather than a sixth of a second behind its own sound.
   const beats = run(gridStart + QUARTER * 2, items.length, EIGHTH).map((f) => f - gridStart);
   return (
     <AbsoluteFill style={{opacity: o}}>
       <Plate>
-        {beats.map((f, i) => <Cue key={i} at={f} sfx="count" gain={0.95 * Math.pow(0.96, i)} />)}
+        {beats.map((f, i) => <Cue key={i} at={f} sfx="tap" gain={0.5 * Math.pow(0.96, i)} />)}
         <div style={{display: 'flex', flexDirection: 'column', gap: 32, width: 1500}}>
           <Eyebrow delay={0}>{eyebrow}</Eyebrow>
           <Title delay={4} size={76}>{title}</Title>
@@ -201,7 +206,7 @@ export const ListCard: React.FC<{
 };
 
 const ListItem: React.FC<{n: number; v: string; at: number}> = ({n, v, at}) => {
-  const r = useRise(at, 10);
+  const r = useRise(at - LEAD, 10);
   return (
     <div
       style={{

@@ -6,7 +6,7 @@ import {Icon} from './ui/icons';
 import {C, type as tokenType} from './ui/tokens';
 import {EASE} from './Camera';
 import {Plate, Split} from './Layout';
-import {Cue} from './Sound';
+import {Cue, LEAD} from './Sound';
 import {Body, Eyebrow, Title, useEdgeFade} from './Type';
 import {ACCENT, MONO, MUTED, ON_BG, QUARTER, SERIF, SHOT_AR, snap} from './theme';
 
@@ -38,7 +38,7 @@ export const NoticeBeat: React.FC<{gridStart?: number}> = ({gridStart = 0}) => {
   const FLY = g(durationInFrames * 0.56);
   const LAND = g(FLY + QUARTER);
 
-  const drop = spring({frame: frame - IN, fps, config: {damping: 200, stiffness: 90}});
+  const drop = spring({frame: frame - (IN - LEAD), fps, config: {damping: 200, stiffness: 90}});
   const fly = interpolate(frame, [FLY, LAND], [0, 1], {
     extrapolateLeft: 'clamp', extrapolateRight: 'clamp', easing: EASE.rush,
   });
@@ -56,8 +56,8 @@ export const NoticeBeat: React.FC<{gridStart?: number}> = ({gridStart = 0}) => {
     <AbsoluteFill style={{opacity: o}}>
       <Plate>
         {/* the banner arriving, the flight itself, and the count acknowledging it */}
-        <Cue at={IN + 3} sfx="pop" gain={0.8} />
-        <Cue at={FLY - 1} sfx="swoosh" />
+        <Cue at={IN} sfx="pop" gain={0.8} />
+        <Cue at={FLY} sfx="swoosh" />
         <Cue at={LAND} sfx="ding" />
 
         <Split

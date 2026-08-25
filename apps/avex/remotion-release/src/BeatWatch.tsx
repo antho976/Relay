@@ -32,8 +32,10 @@ export const WatchBeat: React.FC<{gridStart?: number}> = ({gridStart = 0}) => {
   const o = useEdgeFade(durationInFrames, 10);
 
   // Phase boundaries as fractions of the beat, so re-timing the cut does not desync the sound.
+  // The beat is three bars in the release cut (it was four): the five ticks are done by 0.31, the
+  // set logs at 0.33, and the PR screen keeps a full second before the rest timer takes over.
   const at = (f: number) => Math.round(durationInFrames * f);
-  const P = {set: 0, log: at(0.34), pr: at(0.38), rest: at(0.48), rpe: at(0.76)};
+  const P = {set: 0, log: at(0.33), pr: at(0.36), rest: at(0.52), rpe: at(0.78)};
 
   // The stepper walks 150 → 155 on eighth notes, and the picture is driven BY the cue frames rather
   // than the other way round, so the number changing and the tick are the same instant.

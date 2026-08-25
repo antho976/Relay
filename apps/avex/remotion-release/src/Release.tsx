@@ -8,8 +8,9 @@ import {WatchBeat} from './BeatWatch';
 import {NoticeBeat} from './BeatNotice';
 import {ONBOARDING_0_8_9, ONBOARDING_0_9, OnboardingBeat} from './Onboarding';
 import {Mark} from './Layout';
+import {Edges} from './Type';
 import {Xit, overlap, transition} from './Transitions';
-import {BG, bar} from './theme';
+import {BG, bar, snap} from './theme';
 
 /**
  * Avex 0.9 — the release cut.
@@ -38,8 +39,9 @@ import {BG, bar} from './theme';
  *
  *   Keep it moving.    Every beat carries a camera, and the joins are pushes.
  *
- * The one deliberate sync: the fifth tab changing hands lands on bar 33, the frame the bed cuts away
- * and comes back at full strength.
+ * The deliberate syncs: Home turns red on bar 5 as the bed enters, the chart lands on bar 25 as it
+ * drops back, and the fifth tab changes hands on bar 33, the frame the bed comes back at full
+ * strength after cutting away for a bar.
  */
 
 type Beat = {
@@ -51,6 +53,19 @@ type Beat = {
   el: (start: number) => React.ReactNode;
 };
 
+/**
+ * Bar allocation. The bed's own shape, measured per bar: near-silent 1-4, enters at 5, builds to
+ * 16, opens up at 17, drops back at 25, builds again to 31, cuts out for bar 32, returns at 33 and
+ * runs full until it drops at 45. The cuts that matter sit on those bars: Home turns red on 5, the
+ * watch hands to Coach on 17, the chart lands on 25, the fifth tab changes hands on 33, and the
+ * closing line lands on 45.
+ *
+ * Against the previous cut: Coach was six bars, of which four and a half seconds were a still
+ * screen waiting for the capture to start moving — it is five, with the tour starting a bar after
+ * the seam. That bar and one from the watch (four to three) went to the notifications beat, which
+ * carries a paragraph and needed six seconds to be read, and to Profile, whose capture now has
+ * time to scroll to the month grid the copy is about.
+ */
 const BEATS: Beat[] = [
   /* ── open ─────────────────────── two bars; the bed is near-silent until bar 5 ── */
   {
@@ -59,48 +74,59 @@ const BEATS: Beat[] = [
   },
 
   /* ── the day ────────────────────────────────────────────── bed enters, bar 5 ── */
-  {endBar: 6, out: 'whip', shot: {z: [1, 1.05], x: [0, -20]}, el: (start) => <HomeMorph gridStart={start} />},
-  {endBar: 8, out: 'push', shot: {z: [1.04, 1], x: [24, 0]}, el: (start) => <NoticeBeat gridStart={start} />},
+  {
+    endBar: 6, out: 'whip', shot: {z: [1, 1.05], x: [0, -20]},
+    /* The era turns over on bar 5, the frame the bed enters: the accent going red and the music
+       arriving are one event. */
+    el: (start) => <HomeMorph gridStart={start} turnAt={bar(5) - start} />,
+  },
+  {endBar: 9, out: 'push', shot: {z: [1.04, 1], x: [24, 0]}, el: (start) => <NoticeBeat gridStart={start} />},
 
   /* ── the session ─────────────────────────────────── bed opens up at bar 17 ── */
   {
-    endBar: 11, out: 'cut', shot: {z: [1, 1.05], x: [0, -16], ease: EASE.drift},
+    endBar: 12, out: 'cut', shot: {z: [1, 1.05], x: [0, -16], ease: EASE.drift},
     el: (start) => (
       <Compare
         before={{src: 'cfr/before-session.mp4', start: 690}}
         after={{src: 'cfr/after-session.mp4', start: 890}}
         eyebrow="Your workout" title={'The screen you\ntrain on'}
         note="The exercise name used to take up half the screen. Now your last session and what to lift next show up together, the rest timer runs on its own, and one button finishes an exercise."
-        hold={bar(9) - start} sweep={30} dir="ltr" height={880}
+        hold={bar(10) - start} sweep={30} dir="ltr" height={880}
       />
     ),
   },
   {
-    endBar: 13, out: 'push',
-    el: () => (
-      <Solo
-        clip={{src: 'cfr/after-session.mp4', start: 950}}
-        eyebrow="Your workout" title="It tells you what to lift"
-        line="The weight to try next, and why. What you beat last time, right there on the row. How many reps you need for a personal record."
-        height={900} flip changes={[8]}
-      />
-    ),
+    endBar: 14, out: 'push', shot: {z: [1, 1.045], x: [0, -14], y: [6, -6], ease: EASE.drift},
+    el: (start) => {
+      // The set is logged on bar 13: the row flips to logged, "Set logged" lands and the rest timer
+      // starts running. The capture's own change is at source frame 1083, so the clip starts
+      // wherever puts that frame on the downbeat. This beat used to sit on a still screen for four
+      // seconds with no camera, and its one cue fired eight frames in, inside the push.
+      const logAt = bar(13) - start;
+      return (
+        <Solo
+          clip={{src: 'cfr/after-session.mp4', start: 1083 - logAt}}
+          eyebrow="Your workout" title="It tells you what to lift"
+          line="The weight to try next, and why. What you beat last time, right there on the row. How many reps you need for a personal record."
+          height={900} flip cues={[{at: logAt, sfx: 'confirm'}]}
+        />
+      );
+    },
   },
   {endBar: 17, out: 'whip', shot: {z: [1.03, 1], y: [-10, 0], ease: EASE.drift}, el: (start) => <WatchBeat gridStart={start} />},
 
   /* ── the record ────────────────────────────────── bed drops back at bar 25 ── */
   {
-    /* Six bars. The compare and the training-block beat are one continuous shot: the capture tours
-       down to the block rail on its own once the seam has passed. */
-    endBar: 23, out: 'cut', shot: {z: [1, 1.05], x: [0, 18], ease: EASE.drift},
+    /* Five bars, one continuous shot. The seam happens at the top, where 0.8.9's volume figure
+       reads "52...." against 0.9's "52.8k lb"; a bar after the edge has passed, the capture tours
+       down to the block rail on its own and holds there. The after clip is profiled still from
+       source 424 to 633 and moving from 633; at 0.8x, starting from 513, the tour begins on bar
+       19.5 and the beat ends on the block before the capture starts scrolling back up at 766. */
+    endBar: 22, out: 'cut', shot: {z: [1, 1.05], x: [0, 18], ease: EASE.drift},
     el: (start) => (
       <Compare
-        /* The after clip tours the page: the seam happens at the top, where 0.8.9's volume figure
-           reads "52...." against 0.9's "52.8k lb", and then it scrolls down to the block rail. 0.8x
-           because the capture only travels from the header to the block over about 130 frames and
-           then scrolls back up again; slowed, that stretch fills the whole beat. */
         before={{src: 'cfr/before-coach.mp4', start: 180}}
-        after={{src: 'cfr/after-coach.mp4', start: 424, rate: 0.93}}
+        after={{src: 'cfr/after-coach.mp4', start: 513, rate: 0.8}}
         eyebrow="Coach" title="Coach shows its work"
         note="Your week, your recovery, and where you are in a training block, all on one page. The volume figure stops getting cut off halfway through. And the block itself is new: build up, push hard, peak, then take a lighter week, started straight from the brief."
         hold={bar(18) - start} sweep={30} dir="ltr" height={880} flip
@@ -108,50 +134,60 @@ const BEATS: Beat[] = [
     ),
   },
   {
-    endBar: 26, out: 'cut', shot: {z: [1.04, 1], ease: EASE.drift},
-    el: (start) => (
-      <Compare
-        before={{src: 'cfr/before-cardio.mp4', start: 0}}
-        after={{src: 'cfr/after-cardio.mp4', start: 8}}
-        eyebrow="Cardio" title="Built around your week"
-        line="Two views instead of one long list. This week at a glance, or how you are trending over time."
-        hold={bar(24) - start} sweep={24} dir="ttb" height={880}
-      />
-    ),
+    endBar: 25, out: 'cut', shot: {z: [1.04, 1], ease: EASE.drift},
+    el: (start) => {
+      // Two views: the seam reveals 0.9's week, then on beat 4 of bar 23 the toggle goes to
+      // Progress and the pace trend takes over. The toggle is at source frame 162 of the capture.
+      const toggleAt = snap(bar(23) + 45, 4) - start;
+      return (
+        <Compare
+          before={{src: 'cfr/before-cardio.mp4', start: 0}}
+          after={{src: 'cfr/after-cardio.mp4', start: 162 - toggleAt}}
+          eyebrow="Cardio" title="Built around your week"
+          line="Two views instead of one long list. This week at a glance, or how you are trending over time."
+          hold={bar(23) - start} sweep={24} dir="ttb" height={880}
+          cues={[{at: toggleAt, sfx: 'reveal', gain: 0.5}]}
+        />
+      );
+    },
   },
   {
-    endBar: 28, out: 'pushUp',
+    /* Cut in on bar 25, the bar the bed drops back, with the chart already standing: the picture
+       and the music change on the same frame. */
+    endBar: 27, out: 'pushUp', shot: {z: [1.05, 1], y: [10, -6], ease: EASE.drift},
     el: () => (
       <Solo
-        clip={{src: 'cfr/after-cardio.mp4', start: 880}}
+        clip={{src: 'cfr/after-cardio.mp4', start: 822}}
         eyebrow="New in 0.9" title="Every week as a chart"
         line="One bar per week, back to your very first, against the 150 minutes a week the WHO recommends."
-        height={900} changes={[8]} fill={22}
+        height={900}
       />
     ),
   },
   {
-    endBar: 30, out: 'push', shot: {z: [1, 1.04], y: [8, -8]},
+    endBar: 29, out: 'push', shot: {z: [1, 1.04], y: [8, -8]},
     el: () => (
       <Solo
         clip={{src: 'cfr/after-cardio.mp4', start: 1655}}
         eyebrow="History" title="Search everything you've done"
         line="Lifting and cardio in one list. Filter by how long it took, or how hard it was."
-        height={900} flip changes={[10]}
+        height={900} flip
       />
     ),
   },
   {
-    /* before-lasttab is only still for its first 89 frames, so this seam sits early rather than on
-       the downbeat. A seam that fires while the old screen is still coasting looks broken. */
+    /* before-lasttab is only still for its first 89 frames, so the seam sits on beat 3 of the
+       first bar rather than on a downbeat: the earliest grid point that lets it complete while both
+       captures are still. It used to be at a bare frame 40, off the grid. Three bars, so the after
+       capture has time to scroll down to the month grid the copy is about (source 131 onward). */
     endBar: 32, out: 'dissolve', shot: {z: [1, 1.04], x: [0, 12], ease: EASE.drift},
-    el: () => (
+    el: (start) => (
       <Compare
         before={{src: 'cfr/before-lasttab.mp4', start: 4}}
         after={{src: 'cfr/after-profile.mp4', start: 6}}
         eyebrow="Profile" title="Easier to read"
         line="Your year used to be twelve rows of dots. Now it is a month you can actually read, and the photo gallery is open to everyone."
-        hold={40} sweep={26} dir="ltr" height={880} flip
+        hold={bar(29) + 30 - start} sweep={26} dir="ltr" height={880} flip
       />
     ),
   },
@@ -168,7 +204,7 @@ const BEATS: Beat[] = [
         clip={{src: 'cfr/after-academy.mp4', start: 40}}
         eyebrow="Academy" title={'Learn why\nyou’re doing it'}
         note="Thirty-five short reads on how training actually works. Sets and reps, what a program really is, why the order you do things in matters. All of it open from the day you install, with nothing to unlock."
-        height={900} flip changes={[10]}
+        height={900} flip
       />
     ),
   },
@@ -217,31 +253,31 @@ const BEATS: Beat[] = [
 
 /**
  * A transition of T frames overlaps the two sequences it joins by T, so a beat's length is not
- * simply the gap between downbeats. For the *visible* handover to sit on bar `endBar`, a beat has to
- * run half a transition past it and the next has to start half a transition early:
+ * simply the gap between downbeats. For the *visible* handover to sit on bar `endBar`, the
+ * transition has to straddle it: it starts floor(T/2) frames before the downbeat and the beat runs
+ * ceil(T/2) frames past it. With a hard cut both are zero and the cut lands exactly on the downbeat.
  *
- *   len[i] = bar(endBar[i]) - bar(endBar[i-1]) + T[i-1]/2 + T[i]/2
- *
- * With a hard cut both halves are zero and the cut lands exactly on the downbeat.
+ * Everything here is an integer. The previous version split T in half as a float, so every beat
+ * after a seven-frame whip started on a half frame, and every cue that beat placed by
+ * `bar(n) - start` was rounded away from the grid by Remotion.
  */
 const T = (b: Beat) => overlap(b.out ?? 'fade');
 
 const LAYOUT = BEATS.map(() => ({len: 0, start: 0}));
-{
-  let prevEnd = 0;
-  let clock = 0;
-  for (let i = 0; i < BEATS.length; i++) {
-    const end = bar(BEATS[i].endBar);
-    const tPrev = i === 0 ? 0 : T(BEATS[i - 1]);
-    const tNext = i === BEATS.length - 1 ? 0 : T(BEATS[i]);
-    LAYOUT[i].len = end - prevEnd + tPrev / 2 + tNext / 2;
-    LAYOUT[i].start = clock;
-    clock += LAYOUT[i].len - tNext;
-    prevEnd = end;
-  }
+for (let i = 0; i < BEATS.length; i++) {
+  const prev = i === 0 ? null : BEATS[i - 1];
+  LAYOUT[i].start = prev ? bar(prev.endBar) - Math.floor(T(prev) / 2) : 0;
+  const tail = i === BEATS.length - 1 ? 0 : Math.ceil(T(BEATS[i]) / 2);
+  LAYOUT[i].len = bar(BEATS[i].endBar) + tail - LAYOUT[i].start;
 }
 
 export const TOTAL = LAYOUT[LAYOUT.length - 1].start + LAYOUT[LAYOUT.length - 1].len;
+
+/** Where each handover actually lands, for the render log and the tests in tools/. */
+export const HANDOVERS = BEATS.slice(0, -1).map((b, i) => ({
+  bar: b.endBar, at: bar(b.endBar), transition: b.out ?? 'fade',
+  start: LAYOUT[i + 1].start, mid: LAYOUT[i + 1].start + T(b) / 2,
+}));
 
 /* ── the bed ─────────────────────────────────────────────────────────────── */
 
@@ -278,8 +314,11 @@ export const Release: React.FC = () => (
       {BEATS.flatMap((beat, i) => {
         const {len, start} = LAYOUT[i];
         const seq = (
-          <TransitionSeries.Sequence key={`s${i}`} durationInFrames={Math.round(len)}>
-            <Camera shot={beat.shot}>{beat.el(start)}</Camera>
+          <TransitionSeries.Sequence key={`s${i}`} durationInFrames={len}>
+            {/* No beat fades at a join — the transition is the join. Only the film fades. */}
+            <Edges.Provider value={{head: i === 0 ? 12 : 0, tail: i === BEATS.length - 1 ? 16 : 0}}>
+              <Camera shot={beat.shot}>{beat.el(start)}</Camera>
+            </Edges.Provider>
           </TransitionSeries.Sequence>
         );
         if (i === BEATS.length - 1) return [seq];

@@ -3,8 +3,25 @@ import {Audio, Sequence, staticFile} from 'remotion';
 
 /**
  * The brief: sound on the things that would actually make a sound — a tap, the watch, a timer — and
- * explicitly no whoosh under the transitions. So there is no ambience and no music bed; every cue is
- * an interaction the viewer can see happen on screen. Silence is the default state, not a gap.
+ * nothing under the transitions. Every cue is an interaction the viewer can see happen on screen,
+ * and every cue means one thing:
+ *
+ *   tap      a page or a list row landing
+ *   pop      a card settling (the arrival banner, the nine new onboarding pages)
+ *   impact   the one hit that clears the old onboarding
+ *   tick     the watch stepper
+ *   confirm  a set being logged
+ *   swoosh   the banner flying into the bell
+ *   ding     the bell
+ *   sweep    the version changing under the accent edge, and the Home morph
+ *   reveal   one element arriving: a view switching, the fifth tab, the closing line
+ *
+ * Three cues from the first cut are retired, not re-levelled. `screen` fired on nearly every beat,
+ * often eight frames into a push where nothing on screen had changed, and repeated that often it
+ * read as a noise with no referent. `fill` was a glass-xylophone run laid under the Home goal bars
+ * while the bed was still silent, which made it the loudest thing in the first ten seconds of the
+ * film; a meter filling does not need to be scored. `count` was a 20 ms tick meant for a rapidly
+ * counting number and was being used for a list landing, which `tap` already means.
  *
  * Synthesised by tools/make-sfx.sh; nothing here is licensed material.
  */
@@ -15,22 +32,21 @@ export const SFX = {
   restStart: 'sfx/rest-start.wav',
   restDone:  'sfx/rest-done.wav',
   impact:    'sfx/impact.wav',
-  count:     'sfx/count.wav',
   swoosh:    'sfx/swoosh.wav',
   ding:      'sfx/ding.wav',
   pop:       'sfx/pop.wav',
-  screen:    'sfx/screen.wav',
-  fill:      'sfx/fill.wav',
   reveal:    'sfx/reveal.wav',
   sweep:     'sfx/sweep.wav',
 } as const;
 
 export type SfxName = keyof typeof SFX;
 
-/** House levels, so a beat asks for "a tap" rather than guessing a number. */
+/** A cue placed by a beat: the frame it fires on (beat-local) and what it is. */
+export type CuePoint = {at: number; sfx: SfxName; gain?: number};
+
 /**
- * The one place the cues are balanced against each other. `tools/make-sfx.sh` normalises all seven
- * files to the same -3 dBFS peak precisely so this map is the only thing shaping the hierarchy —
+ * The one place the cues are balanced against each other. `tools/make-sfx.sh` normalises every
+ * file to the same -3 dBFS peak precisely so this map is the only thing shaping the hierarchy —
  * setting it in both places attenuated everything twice and put the film's loudest moment at
  * -14.5 dBFS, which survives headphones and nothing else.
  *
@@ -39,11 +55,11 @@ export type SfxName = keyof typeof SFX;
  * — matching them by peak is what makes them read as one palette.
  */
 const LEVEL: Record<SfxName, number> = {
-  tap: 0.8, tick: 0.62, confirm: 0.62, restStart: 0.5, restDone: 0.6, impact: 0.9, count: 0.3,
-  swoosh: 0.62, ding: 0.7, pop: 0.75,
-  // The screen change fires on nearly every beat, so it sits well under everything else; anything
-  // that repeats that often becomes noise long before it becomes texture.
-  screen: 0.4, fill: 0.5, reveal: 0.6, sweep: 0.55,
+  // impact at 0.9 summed with the bed's own downbeat kick — the hit now lands on one — peaked
+  // the finished mix at -1.35 dBFS; 0.72 holds the delivery ceiling of -2 with the hit still the
+  // loudest event in the film.
+  tap: 0.8, tick: 0.62, confirm: 0.5, restStart: 0.5, restDone: 0.6, impact: 0.72,
+  swoosh: 0.62, ding: 0.7, pop: 0.75, reveal: 0.6, sweep: 0.55,
 };
 
 /** Master trim — one place to pull the whole sound design up or down against picture. */
@@ -56,13 +72,10 @@ export const Cue: React.FC<{at: number; sfx: SfxName; gain?: number}> = ({at, sf
   </Sequence>
 );
 
-/** A run of the same cue — the counter ticking, a list landing item by item. */
-export const CueRun: React.FC<{
-  from: number; every: number; count: number; sfx: SfxName; gain?: number; decay?: number;
-}> = ({from, every, count, sfx, gain = 1, decay = 1}) => (
-  <>
-    {Array.from({length: count}, (_, i) => (
-      <Cue key={i} at={Math.round(from + i * every)} sfx={sfx} gain={gain * Math.pow(decay, i)} />
-    ))}
-  </>
-);
+/**
+ * How many frames before its cue an entrance spring has to start so the thing is visibly *there*
+ * when the sound says it landed. A Remotion spring at stiffness 140-210 (damping 200) is at 0.6-0.7
+ * five frames in and 0.8-0.9 at eight; starting it on the cue frame meant every tap sounded a
+ * sixth of a second before the page it announced had appeared.
+ */
+export const LEAD = 5;

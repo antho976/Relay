@@ -43,13 +43,18 @@ export const PACE = {
 export const XFADE = {cut: 0, quick: 7, soft: 12, pan: 14, wide: 16} as const;
 
 /**
- * The bed's grid, MEASURED from `public/music/bed.mp3` rather than assumed from the prompt: spectral
- * -flux onset envelope → autocorrelation for the period → phase locked to peak onset energy →
- * downbeat picked as the 4-phase with the most low-band energy. It came back at 120.19 BPM, not the
- * 120 that was asked for, and over 46 bars that 0.19 is a third of a second of drift — enough to put
- * the last cut audibly off the beat if the nominal figure were used instead.
+ * The bed's grid, MEASURED from `public/music/bed.mp3` rather than assumed from the prompt.
+ *
+ * Method: spectral-flux onset envelope at a 1.45 ms hop → the onset peak nearest each predicted
+ * beat → a least-squares line through 110 of them. Period 0.49991 s (120.021 BPM), first beat at
+ * 0.0082 s, residual 2.2 ms rms / 9.6 ms max. Downbeat = the phase carrying the most low-band flux.
+ *
+ * The previous figure (120.19 BPM, first downbeat 0.116 s) came from an autocorrelation with a
+ * coarser hop and put every cut in the first half of the film 2-3 frames LATE; the two grids only
+ * agreed around bar 33. At 30 fps the corrected bar is 59.99 frames, so bar n sits at frame
+ * 60·(n−1) to within rounding and the film is exactly 2700 frames.
  */
-export const BED = {firstDownbeat: 0.116, bar: 1.99667, bars: 46} as const;
+export const BED = {firstDownbeat: 0.0082, bar: 1.99964, bars: 46} as const;
 
 /** Frame of the downbeat that opens bar `n` (1-indexed). */
 export const bar = (n: number) => Math.round((BED.firstDownbeat + (n - 1) * BED.bar) * FPS);
@@ -61,8 +66,8 @@ export const bar = (n: number) => Math.round((BED.firstDownbeat + (n - 1) * BED.
  * difference between a sound design and a pile of noises. Everything audible now lands on a
  * subdivision of the same grid the cuts use.
  *
- * At this tempo a bar is 59.90 frames, a quarter 14.98, an eighth 7.49 and a sixteenth 3.74. None of
- * those are whole frames, so a run of cues has to be laid out in float and rounded per event —
+ * At this tempo a bar is 59.99 frames, a quarter 15.00, an eighth 7.50 and a sixteenth 3.75. None of
+ * those are exactly whole frames, so a run of cues has to be laid out in float and rounded per event —
  * rounding the step first would drift a sixteenth of a beat every four events.
  */
 export const BAR_F = BED.bar * FPS;
