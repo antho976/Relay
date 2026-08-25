@@ -10,7 +10,6 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import java.time.Instant
 import java.time.LocalDate
-import java.time.LocalTime
 import java.time.ZoneId
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -24,6 +23,10 @@ class BodyweightRepository @Inject constructor(
 ) {
     fun observeRecent(limit: Int = 90): Flow<List<BodyweightEntry>> = dao.observeRecent(limit)
 
+    /** Today, from the injected clock — the default for a weigh-in with no explicit date. */
+    private fun today(zone: ZoneId = ZoneId.systemDefault()): LocalDate =
+        Instant.ofEpochMilli(clock.nowMs()).atZone(zone).toLocalDate()
+
     suspend fun latestWeightLb(): Double? = dao.latest()?.weightLb
 
     /**
@@ -33,7 +36,7 @@ class BodyweightRepository @Inject constructor(
      * the current time-of-day) so a backdated entry sorts onto the right day in the trend rather than
      * jumping to "now".
      */
-    suspend fun log(weightLb: Double, date: LocalDate = LocalDate.now(), note: String?) =
+    suspend fun log(weightLb: Double, date: LocalDate = today(), note: String?) =
         record(weightLb, date, note, keepExistingNote = false)
 
     /**
@@ -44,7 +47,7 @@ class BodyweightRepository @Inject constructor(
      * about the note". Treating the second as the first is how a check-in silently erased a note
      * typed hours earlier, so the two intents get two entry points rather than one nullable.
      */
-    suspend fun logWeightOnly(weightLb: Double, date: LocalDate = LocalDate.now()) =
+    suspend fun logWeightOnly(weightLb: Double, date: LocalDate = today()) =
         record(weightLb, date, note = null, keepExistingNote = true)
 
     private suspend fun record(
@@ -53,11 +56,15 @@ class BodyweightRepository @Inject constructor(
         note: String?,
         keepExistingNote: Boolean
     ) {
+        // One reading of the injected clock decides both "is this today" and the time-of-day the
+        // backdated stamp inherits, so the default date, the comparison and the timestamp can never
+        // come from three different instants (or, under a FakeClock, from three different days).
         val now = clock.nowMs()
-        val today = LocalDate.now()
+        val zone = ZoneId.systemDefault()
+        val nowLocal = Instant.ofEpochMilli(now).atZone(zone)
         val recordedAt =
-            if (date == today) now
-            else date.atTime(LocalTime.now()).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+            if (date == nowLocal.toLocalDate()) now
+            else date.atTime(nowLocal.toLocalTime()).atZone(zone).toInstant().toEpochMilli()
         val dateKey = date.toString()
         // dao.upsert is INSERT OR REPLACE, which DELETES the conflicting row rather than updating
         // it — so the day's existing note and id only survive if we carry them forward ourselves.

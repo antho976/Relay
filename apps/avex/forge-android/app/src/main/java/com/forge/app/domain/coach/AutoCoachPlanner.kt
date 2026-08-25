@@ -1,5 +1,6 @@
 package com.forge.app.domain.coach
 
+import com.forge.app.core.time.mondayStartMs
 import com.forge.app.domain.adapt.AdaptThresholds
 import com.forge.app.domain.adapt.AdaptationSnapshot
 import com.forge.app.domain.adapt.DeloadAdvisor
@@ -267,7 +268,11 @@ object AutoCoachPlanner {
 
         // ── +1: one muscle that's earning more ────────────────────────────────
         val fresh = fatigue == null || fatigue.score < t.deloadScoreThreshold - 2
-        val weekSessions = s.sessions.count { it.startedAt >= s.nowMs - 7 * DAY_MS }
+        // The ISO week, matching WeeklyReview and the Brief. This gate used to be a rolling
+        // 7 x 24 h window, so a Monday-morning pass counted the session logged earlier THAT Monday
+        // and decided the target was met, while the Brief printed above it — reading the calendar
+        // week that had just ended — said "1 short of target". Same screen, opposite conclusions.
+        val weekSessions = s.sessions.count { it.startedAt >= mondayStartMs(s.nowMs, s.zoneId) }
         if (fresh && inputs.sessionsTarget > 0 && weekSessions >= inputs.sessionsTarget) {
             val byMuscle = slots.groupBy { it.second.muscle }
             val candidate = byMuscle.entries.mapNotNull { (muscle, muscleSlots) ->

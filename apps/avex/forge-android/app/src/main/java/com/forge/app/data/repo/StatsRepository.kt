@@ -1,6 +1,7 @@
 package com.forge.app.data.repo
 
 import com.forge.app.core.time.Clock
+import com.forge.app.core.time.mondayStartMs
 import com.forge.app.data.db.dao.CardioDao
 import com.forge.app.data.db.dao.LoggedExerciseDao
 import com.forge.app.data.db.dao.LoggedSetDao
@@ -76,6 +77,7 @@ class StatsRepository @Inject constructor(
     private val vacationDao: com.forge.app.data.db.dao.VacationDao,
     private val bodyweightRepo: BodyweightRepository,
     private val settingsRepo: com.forge.app.data.prefs.SettingsRepository,
+    private val timeSignals: com.forge.app.core.time.TimeSignals,
     private val clock: Clock
 ) {
 
@@ -96,14 +98,26 @@ class StatsRepository @Inject constructor(
         val recentGymSessions: List<com.forge.app.data.db.entities.Session> = emptyList()
     )
 
-    fun observeWeeklyStats(): Flow<WeeklyStats> {
-        // "This week" = the current ISO calendar week (Mon 00:00), so the workout/volume/cardio
-        // counts match the Mon–Sun day-dot grid and buildWeekComparison. Was a rolling 7×24h
-        // window (now − WEEK_MS), which disagreed with the dots on early weekdays.
+    /**
+     * "This week" = the current ISO calendar week (Mon 00:00), so the workout/volume/cardio counts
+     * match the Mon–Sun day-dot grid and buildWeekComparison. Was a rolling 7×24h window
+     * (now − WEEK_MS), which disagreed with the dots on early weekdays.
+     *
+     * Re-anchored on every day boundary, timezone change and clock change rather than frozen when
+     * the Flow is BUILT. The anchor used to be a `val` captured at subscription while `todayDate`
+     * was recomputed inside the combine, so the two could describe different weeks: a user on the
+     * Overview at 23:50 on a Sunday who finished a set at 00:05 saw Monday's session light Monday
+     * of LAST week's dot row and the workout count stay on last week's total, while "next up" had
+     * already rolled over. Nothing recovered until the screen was left for long enough to
+     * unsubscribe.
+     */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    fun observeWeeklyStats(): Flow<WeeklyStats> =
+        timeSignals.dayStarts().flatMapLatest { weeklyStatsForNow() }
+
+    private fun weeklyStatsForNow(): Flow<WeeklyStats> {
         val zone = ZoneId.systemDefault()
-        val weekStartMs = LocalDate.now(zone)
-            .let { it.minusDays(it.dayOfWeek.value.toLong() - 1) }
-            .atStartOfDay(zone).toInstant().toEpochMilli()
+        val weekStartMs = mondayStartMs(clock.nowMs(), zone)
         val baseFlow = combine(
             sessionDao.observeFinishedCountSince(weekStartMs),
             sessionDao.observeVolumeSince(weekStartMs),
@@ -116,13 +130,13 @@ class StatsRepository @Inject constructor(
             ) { recent, mode, schedule -> Triple(recent, mode, schedule) }
         ) { workouts, volume, cardio, totalFinished, recentModeSchedule ->
             val (recentSessions, scheduleMode, schedule) = recentModeSchedule
-            val todayDate = LocalDate.now(zone)
+            val todayDate = todayLocal(zone)
             val finishedAts = recentSessions.mapNotNull { it.finishedAt }
             // Sessions finished in the current ISO week — shared by the lit-day dots AND the
             // best-session tile so they filter the list once, not twice.
             val thisWeekSessions = recentSessions.filter { it.finishedAt != null && it.finishedAt!! >= weekStartMs }
-            // Dots use the SAME (subscription-time) week anchor as the workout/volume/cardio counts
-            // above, so the count and the lit dots can never describe different weeks within a view.
+            // Dots use the SAME week anchor as the workout/volume/cardio counts above, so the count
+            // and the lit dots can never describe different weeks within a view.
             val weekDaysTrained = thisWeekSessions
                 .map {
                     // Bucket by the same timestamp the week filter uses (finishedAt), so a session
@@ -167,10 +181,22 @@ class StatsRepository @Inject constructor(
             .flowOn(Dispatchers.Default)
     }
 
+    /**
+     * Today's local date from the injected [Clock].
+     *
+     * `Clock`'s own docstring names streaks as the reason it exists — "so time-dependent logic (PR
+     * detection, weekly windows, streaks, the rest timer) can be unit-tested with a FakeClock" —
+     * and [computeStreak] was reading `LocalDate.now()` directly, so there was no way to assert
+     * that a session at 23:59 on the 3rd and one at 00:01 on the 4th make a two-day streak without
+     * changing the device clock.
+     */
+    private fun todayLocal(zone: ZoneId): LocalDate =
+        Instant.ofEpochMilli(clock.nowMs()).atZone(zone).toLocalDate()
+
     private fun computeStreak(finishedAts: List<Long>, onVacation: (LocalDate) -> Boolean): Int {
         if (finishedAts.isEmpty()) return 0
         val zone = ZoneId.systemDefault()
-        val today = LocalDate.now(zone)
+        val today = todayLocal(zone)
         val trainingDays = finishedAts.mapTo(mutableSetOf()) {
             Instant.ofEpochMilli(it).atZone(zone).toLocalDate()
         }
@@ -216,7 +242,7 @@ class StatsRepository @Inject constructor(
      */
     suspend fun lastCompletedWeekStats(): CompletedWeekStats {
         val zone = ZoneId.systemDefault()
-        val thisWeekStart = LocalDate.now(zone).let { it.minusDays(it.dayOfWeek.value.toLong() - 1) }
+        val thisWeekStart = todayLocal(zone).let { it.minusDays(it.dayOfWeek.value.toLong() - 1) }
         val fromMs = thisWeekStart.minusWeeks(1).atStartOfDay(zone).toInstant().toEpochMilli()
         val toMs = thisWeekStart.atStartOfDay(zone).toInstant().toEpochMilli()
         val agg = sessionDao.aggregateInRange(fromMs, toMs)
@@ -484,7 +510,7 @@ class StatsRepository @Inject constructor(
      */
     suspend fun findOnThisDayMemory(): OnThisDayMemory? {
         val zone = ZoneId.systemDefault()
-        val today = LocalDate.now(zone)
+        val today = todayLocal(zone)
         for (months in listOf(12, 6, 3, 1)) {
             val target = today.minusMonths(months.toLong())
             val targetMs = target.atStartOfDay(zone).toInstant().toEpochMilli()
@@ -508,7 +534,7 @@ class StatsRepository @Inject constructor(
 
     private suspend fun buildWeekComparison(): PeriodComparison? {
         val zone = ZoneId.systemDefault()
-        val today = LocalDate.now(zone)
+        val today = todayLocal(zone)
         val thisWeekStart = today.minusDays(today.dayOfWeek.value.toLong() - 1)
         val lastWeekStart = thisWeekStart.minusWeeks(1)
         val toMs = { d: LocalDate -> d.atStartOfDay(zone).toInstant().toEpochMilli() }

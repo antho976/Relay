@@ -248,6 +248,18 @@ class ForgeWidgetReceiver : GlanceAppWidgetReceiver() {
 }
 
 /**
+ * Refresh every placed widget. Fail-soft — a widget redraw must never take down whatever asked
+ * for it (a session finish, a date change).
+ *
+ * The widget's own `updatePeriodMillis` floor is one hour, and until this existed the only in-app
+ * trigger was a program regeneration. So "WORKOUT IN PROGRESS" could sit on the home screen for an
+ * hour after the workout ended, and the streak and week dots stayed a day stale past midnight.
+ */
+suspend fun refreshForgeWidgets(context: Context) {
+    runCatching { ForgeWidget().updateAll(context) }
+}
+
+/**
  * Lets the widget (which isn't a Hilt-injected component) reach the app's singleton DB + program
  * repository, so it shares the one migration-aware [ForgeDatabase] instance the app owns.
  */

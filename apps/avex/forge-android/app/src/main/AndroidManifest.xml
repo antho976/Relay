@@ -573,6 +573,20 @@
         </provider>
 
         <!-- Today widget (#146) -->
+        <!-- Day / clock / timezone changes: re-anchor every "today" and "this week" flow, refresh
+             the widget, and re-arm the daily reminder (a 24 h periodic is elapsed time, so it
+             drifts an hour at each DST transition and never recovers on its own). Not exported —
+             these are system broadcasts, which reach a non-exported manifest receiver. -->
+        <receiver
+            android:name=".service.TimeChangeReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.DATE_CHANGED" />
+            </intent-filter>
+        </receiver>
+
         <receiver
             android:name=".widget.ForgeWidgetReceiver"
             android:exported="true">

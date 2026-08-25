@@ -45,16 +45,28 @@ data class SessionLiveDto(
 )
 
 /** Rest-timer state ([WearProtocol.PATH_TIMER_STATE]). The watch renders the countdown locally
- *  from [endAtMs] wall clock; no per-second sync. Absent DataItem = no timer. */
+ *  from [endAtMs]; no per-second sync. Absent DataItem = no timer. */
 @Serializable
 data class TimerStateDto(
     val v: Int = WearProtocol.VERSION,
-    /** Wall-clock instant the countdown reaches zero. Authoritative while running. */
+    /** Wall-clock instant the countdown reaches zero, on the PHONE's clock. Authoritative while running. */
     val endAtMs: Long,
     val totalSeconds: Int,
     val paused: Boolean = false,
     /** Remaining seconds AT PAUSE TIME (meaningful only while [paused]). */
-    val pausedRemainingSeconds: Int = 0
+    val pausedRemainingSeconds: Int = 0,
+    /**
+     * The phone's wall clock when this DataItem was published.
+     *
+     * [endAtMs] is an absolute instant on the PHONE's clock, and the watch was rendering it against
+     * its OWN — so any skew between the two was a direct error in the wrist countdown, with nothing
+     * in the payload to correct against. With this the watch can work in durations instead:
+     * `remaining = (endAtMs − publishedAtMs) − (watchNow − watchReceivedAt)`.
+     *
+     * Additive with a default, so an older phone's payload still decodes and the watch falls back
+     * to the raw absolute instant (0 = not carried).
+     */
+    val publishedAtMs: Long = 0L
 )
 
 /** Theme + units ([WearProtocol.PATH_CONFIG]) — the user's single accent, delivered so the watch

@@ -131,13 +131,26 @@ fun SetInputRow(
     val haptic = LocalHapticFeedback.current
 
     // ── Timed-hold state (GYMAP-51) — only exercised when isTimed ────────────────
-    // durationSec is the held time in seconds; it's driven by a wall-clock-anchored count-up
-    // stopwatch (so it stays accurate across a backgrounded app, like RestTimerController) and by a
-    // ±5s manual stepper. Everything re-seeds to zero on a new set (keyed on nextSetNumber).
+    // durationSec is the held time in seconds; it's driven by a clock-anchored count-up stopwatch
+    // (so it stays accurate across a backgrounded app, like RestTimerController) and by a ±5s
+    // manual stepper. Everything re-seeds to zero on a new set (keyed on nextSetNumber).
     var durationSec by rememberSaveable(nextSetNumber) { mutableStateOf(0) }
     var swRunning by rememberSaveable(nextSetNumber) { mutableStateOf(false) }
     var swAnchorMs by rememberSaveable(nextSetNumber) { mutableStateOf(0L) }
     var swBaseSec by rememberSaveable(nextSetNumber) { mutableStateOf(0) }
+    // These are rememberSaveable, so they survive PROCESS DEATH — and nothing bounded the gap
+    // between the anchor and the resumed read except the one-hour ceiling. Start a plank, take a
+    // call, let Android kill the app, reopen two hours later on the same set: the stopwatch
+    // restored as RUNNING, elapsed clamped to 3600, and the field read 60:00. One tap on LOG SET
+    // wrote a 3600-second hold, permanently, as the all-time best for that exercise. An implausible
+    // gap means the user is no longer mid-hold, so stop the clock and keep only what was really
+    // held before the app went away.
+    LaunchedEffect(Unit) {
+        if (swRunning && System.currentTimeMillis() - swAnchorMs > MAX_UNATTENDED_HOLD_MS) {
+            swRunning = false
+            durationSec = swBaseSec.coerceIn(0, MAX_HOLD_SECONDS)
+        }
+    }
     LaunchedEffect(swRunning) {
         while (swRunning) {
             val elapsed = ((System.currentTimeMillis() - swAnchorMs) / 1000L).toInt()
@@ -807,3 +820,7 @@ private fun repsNeededForPr(history: List<LoggedSet>, weightLb: Double): Int? {
 
 /** Beyond this the hint stops being a nudge. Also bounds the search for a weight that never wins. */
 private const val MAX_PR_HINT_REPS = 50
+
+/** A running hold older than this can't be a hold still in progress — the app was killed or the
+ *  clock jumped. Comfortably past any real weighted plank, and well under the 1 h field ceiling. */
+private const val MAX_UNATTENDED_HOLD_MS = 15L * 60 * 1000

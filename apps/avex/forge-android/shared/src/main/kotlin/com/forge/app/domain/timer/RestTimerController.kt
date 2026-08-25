@@ -1,6 +1,6 @@
 package com.forge.app.domain.timer
 
-import com.forge.app.core.time.Clock
+import com.forge.app.core.time.ElapsedClock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -30,15 +30,22 @@ data class RestTimerState(
  * `viewModelScope` means the tick coroutine is cleaned up automatically when the
  * VM is cleared. No need for explicit dispose.
  *
- * Remaining time is derived from a wall-clock end instant ([endAtMs]) rather than by
- * decrementing a counter once per `delay(1000)`. This means the countdown stays accurate
- * across scheduling drift and app backgrounding (the Main dispatcher can stall while
- * backgrounded; a decrement-based timer would lag real time), and makes the whole
- * machine deterministically unit-testable with a fake [Clock].
+ * Remaining time is derived from an end INSTANT rather than by decrementing a counter once per
+ * `delay(1000)`. This means the countdown stays accurate across scheduling drift and app
+ * backgrounding (the Main dispatcher can stall while backgrounded; a decrement-based timer would
+ * lag real time), and makes the whole machine deterministically unit-testable with fake time.
+ *
+ * That instant is on the MONOTONIC [ElapsedClock], not the wall clock. A countdown asks "how much
+ * time has passed", and the wall clock answers "what time is it" — a question whose answer jumps.
+ * It used to guard only the BACKWARD jump: a forward one is indistinguishable from time actually
+ * passing, so it was consumed straight out of the remaining rest. A phone that had been off the
+ * network, associating with the gym Wi-Fi 20 seconds into a 2:30 rest and having NTP push its
+ * clock forward four minutes, buzzed "rest over" on the spot. `elapsedRealtime` keeps counting
+ * through deep sleep, so anchoring on it costs nothing in accuracy while backgrounded.
  */
 class RestTimerController(
     private val scope: CoroutineScope,
-    private val clock: Clock,
+    private val elapsed: ElapsedClock,
     private val defaultSeconds: Int = DEFAULT_REST_SECONDS
 ) {
     private val _state = MutableStateFlow<RestTimerState?>(null)
@@ -46,12 +53,12 @@ class RestTimerController(
 
     private var tickJob: Job? = null
 
-    /** Wall-clock instant (ms) the countdown reaches zero. Authoritative while not paused. */
-    private var endAtMs: Long = 0L
+    /** Elapsed-time reading (ms) at which the countdown reaches zero. Authoritative while running. */
+    private var endAtElapsedMs: Long = 0L
 
     /** (Re)start the timer at [seconds] and begin counting down. */
     fun start(seconds: Int = defaultSeconds) {
-        endAtMs = clock.nowMs() + seconds * 1000L
+        endAtElapsedMs = elapsed.elapsedMs() + seconds * 1000L
         _state.value = RestTimerState(
             totalSeconds = seconds,
             secondsRemaining = seconds,
@@ -74,7 +81,7 @@ class RestTimerController(
         // instead of trying to resume a 0-second countdown (which was a no-op).
         if (current.secondsRemaining <= 0) { stop(); return }
         if (!current.isPaused) return
-        endAtMs = clock.nowMs() + current.secondsRemaining * 1000L
+        endAtElapsedMs = elapsed.elapsedMs() + current.secondsRemaining * 1000L
         _state.update { it?.copy(isPaused = false) }
         relaunchTickJob()
     }
@@ -102,27 +109,23 @@ class RestTimerController(
         val current = _state.value ?: return
         if (current.isPaused) {
             val updated = (current.secondsRemaining + seconds).coerceAtLeast(0)
-            endAtMs = clock.nowMs() + updated * 1000L
+            endAtElapsedMs = elapsed.elapsedMs() + updated * 1000L
             _state.value = current.copy(secondsRemaining = updated, isPaused = false)
         } else {
-            endAtMs += seconds * 1000L
+            endAtElapsedMs += seconds * 1000L
             _state.value = current.copy(secondsRemaining = remainingNow(current.copy(isPaused = false)))
         }
         relaunchTickJob()
     }
 
-    /** Seconds left per the wall clock (never negative). Rounds up so a fresh 150 reads 150, not 149. */
+    /** Seconds left of real elapsed time (never negative). Rounds up so a fresh 150 reads 150, not 149.
+     *
+     *  A wall-clock correction in EITHER direction is now simply invisible here — the elapsed clock
+     *  it reads cannot jump. The ceiling clamp stays as a display bound (and as a backstop should an
+     *  implementation ever hand back something implausible). */
     private fun remainingNow(state: RestTimerState): Int {
         if (state.isPaused) return state.secondsRemaining
-        var ms = endAtMs - clock.nowMs()
-        // A BACKWARD wall-clock jump (NTP correction on a stale-clock boot, or a manual time change)
-        // pushes (endAtMs − now) far past any real rest. Detect it (remaining beyond the ceiling) and
-        // RE-ANCHOR the end instant to the last known-good remaining, so the countdown keeps running
-        // and still finishes — instead of either showing hours or freezing for the length of the jump.
-        if (ms > MAX_REST_SECONDS * 1000L) {
-            endAtMs = clock.nowMs() + state.secondsRemaining * 1000L
-            ms = endAtMs - clock.nowMs()
-        }
+        val ms = endAtElapsedMs - elapsed.elapsedMs()
         return if (ms <= 0) 0 else ((ms + 999) / 1000).toInt().coerceAtMost(MAX_REST_SECONDS)
     }
 
@@ -147,8 +150,8 @@ class RestTimerController(
 
     companion object {
         const val DEFAULT_REST_SECONDS: Int = 150 // 2:30
-        /** Upper bound on displayed remaining time AND the threshold past which a backward wall-clock
-         *  jump is detected and re-anchored. 1 h is far above any real rest period or "+30s" extension. */
+        /** Upper bound on displayed remaining time. 1 h is far above any real rest period or
+         *  "+30s" extension. */
         const val MAX_REST_SECONDS: Int = 3600
     }
 }

@@ -1,6 +1,7 @@
 package com.forge.app.domain.timer
 
 import com.forge.app.core.time.Clock
+import com.forge.app.core.time.ElapsedClock
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
@@ -11,15 +12,20 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Wall-clock rest-timer coverage (#41 / #16). Remaining time is derived from a [Clock] end
- * instant rather than by decrementing, so the math is verified by advancing a fake clock and
- * reading the value pause() freezes — no real delays, no flakiness. The tick coroutine only
- * refreshes the displayed value; we cancel its scope at the end of each test.
+ * Rest-timer coverage (#41 / #16). Remaining time is derived from an [ElapsedClock] end instant
+ * rather than by decrementing, so the math is verified by advancing fake time and reading the value
+ * pause() freezes — no real delays, no flakiness. The tick coroutine only refreshes the displayed
+ * value; we cancel its scope at the end of each test.
  */
 class RestTimerControllerTest {
 
-    private class FakeClock(var now: Long = 0L) : Clock {
-        override fun nowMs(): Long = now
+    /**
+     * Fake elapsed time. `now` is kept as a settable property so the arithmetic in these tests reads
+     * the way it always did — but note it is now MONOTONIC elapsed time, not the wall clock. That
+     * distinction is the point: a wall-clock correction moves a value the timer no longer reads.
+     */
+    private class FakeClock(var now: Long = 0L) : ElapsedClock {
+        override fun elapsedMs(): Long = now
     }
 
     /** Unconfined scope: start()/resume() launch a ticker that suspends at delay(1000); we never await it. */
@@ -38,7 +44,7 @@ class RestTimerControllerTest {
     }
 
     @Test
-    fun pauseReflectsWallClockElapsed() {
+    fun pauseReflectsElapsedTime() {
         val scope = newScope()
         val clock = FakeClock(0)
         val c = RestTimerController(scope, clock)
@@ -142,34 +148,39 @@ class RestTimerControllerTest {
         scope.cancel()
     }
 
+    /**
+     * A wall-clock correction — NTP on a stale-clock boot, or the user setting the date — moves a
+     * clock the timer does not read. Both directions are simply invisible now.
+     *
+     * The forward direction is the one that was broken: it was indistinguishable from time actually
+     * passing, so it was consumed straight out of the remaining rest. A phone four minutes slow that
+     * associated with gym Wi-Fi 20 seconds into a 2:30 rest buzzed "rest over" on the spot.
+     */
     @Test
-    fun backwardClockJumpReAnchorsToTrueRemaining() {
-        // NTP correction / manual time change moves the wall clock backward mid-rest. (endAtMs − now)
-        // balloons, but the timer must RE-ANCHOR to its true remaining (≈150s) — never show hours and
-        // never freeze waiting for the clock to catch back up.
+    fun wallClockCorrectionDoesNotAffectTheCountdown() {
         val scope = newScope()
-        val clock = FakeClock(0)
-        val c = RestTimerController(scope, clock)
+        val wallClock = object : Clock { override fun nowMs(): Long = 0L }
+        val elapsed = FakeClock(0)
+        val c = RestTimerController(scope, elapsed)
         c.start(150)
-        clock.now = -3_600_000 // jumped back an hour
+        elapsed.now += 20_000            // 20 real seconds of rest
+        // The wall clock leaps four minutes forward. Elapsed time did not move.
+        assertEquals(0L, wallClock.nowMs())
         c.pause()
-        assertEquals(150, c.state.value!!.secondsRemaining)
+        assertEquals(130, c.state.value!!.secondsRemaining)
         scope.cancel()
     }
 
     @Test
-    fun backwardClockJumpStillFinishesAfterResume() {
-        // The real regression: after a backward jump the countdown must still be able to reach 0,
-        // not hang for the duration of the jump. Re-anchor, resume, advance past the remaining.
+    fun countdownStillReachesZeroOnRealElapsedTime() {
         val scope = newScope()
         val clock = FakeClock(0)
         val c = RestTimerController(scope, clock)
         c.start(150)
-        clock.now = -3_600_000 // jumped back an hour mid-rest
-        c.pause()              // re-anchors to ~150s remaining
+        c.pause()
         c.resume()
-        clock.now += 151_000   // 151s of real time elapses from the re-anchored point
-        c.pause()              // recompute remaining off the wall clock
+        clock.now += 151_000 // 151s of real elapsed time
+        c.pause()
         assertEquals(0, c.state.value!!.secondsRemaining)
         scope.cancel()
     }

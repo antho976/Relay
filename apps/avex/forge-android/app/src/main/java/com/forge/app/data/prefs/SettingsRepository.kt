@@ -1134,6 +1134,10 @@ class SettingsRepository @Inject constructor(
     suspend fun isQuietNow(): Boolean {
         val prefs = preferences.firstOrNull() ?: return false
         if (prefs[PreferenceKeys.QUIET_HOURS_ENABLED] != true) return false
-        return readQuietSchedule(prefs).isQuietAt(java.time.LocalDateTime.now())
+        // Through the injected clock, so quiet hours are testable with a FakeClock like the rest of
+        // the time-dependent logic (Clock's docstring asks for exactly this).
+        val now = java.time.Instant.ofEpochMilli(clock.nowMs())
+            .atZone(java.time.ZoneId.systemDefault()).toLocalDateTime()
+        return readQuietSchedule(prefs).isQuietAt(now)
     }
 }

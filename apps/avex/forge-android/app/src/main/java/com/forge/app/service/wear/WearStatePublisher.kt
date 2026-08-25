@@ -127,12 +127,18 @@ class WearStatePublisher @Inject constructor(
         putItem(WearProtocol.PATH_CMD_ACK, WearCodec.encode(ack))
     }
 
-    private fun RestTimerState.toDto(): TimerStateDto = TimerStateDto(
-        endAtMs = if (isPaused) 0L else clock.nowMs() + secondsRemaining * 1000L,
-        totalSeconds = totalSeconds,
-        paused = isPaused,
-        pausedRemainingSeconds = if (isPaused) secondsRemaining else 0
-    )
+    private fun RestTimerState.toDto(): TimerStateDto {
+        val now = clock.nowMs()
+        return TimerStateDto(
+            endAtMs = if (isPaused) 0L else now + secondsRemaining * 1000L,
+            totalSeconds = totalSeconds,
+            paused = isPaused,
+            pausedRemainingSeconds = if (isPaused) secondsRemaining else 0,
+            // Stamped from the SAME reading as endAtMs, so the watch can turn an absolute instant on
+            // this phone's clock into a duration and cancel the skew between the two devices.
+            publishedAtMs = now
+        )
+    }
 
     private suspend fun putItem(path: String, bytes: ByteArray) {
         runCatching {

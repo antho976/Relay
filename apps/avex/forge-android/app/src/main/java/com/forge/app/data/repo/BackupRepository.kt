@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.documentfile.provider.DocumentFile
+import com.forge.app.core.time.mondayStartMs
 import com.forge.app.data.db.ForgeDatabase
 import com.forge.app.data.db.dao.CardioDao
 import com.forge.app.data.db.dao.LoggedExerciseDao
@@ -44,10 +45,19 @@ class BackupRepository @Inject constructor(
     private val settingsRepo: SettingsRepository,
     private val photoRepo: ProgressPhotoRepository,
     private val avatarRepo: AvatarRepository,
-    private val db: ForgeDatabase
+    private val db: ForgeDatabase,
+    private val clock: com.forge.app.core.time.Clock
 ) {
 
-    private val zone = ZoneId.systemDefault()
+    /**
+     * Resolved per read, not captured once.
+     *
+     * This is a @Singleton, so a `val` snapshotted the device's zone for the whole process lifetime.
+     * Fly Auckland → London with the process alive and every export taken afterwards stamped its
+     * `date` column with NEW ZEALAND calendar days while the UI showed London ones — the file and
+     * the app disagreeing about which day each session happened on.
+     */
+    private val zone: ZoneId get() = ZoneId.systemDefault()
     private val dateFmt = DateTimeFormatter.ofPattern("yyyy-MM-dd")
 
     /** The outcome of a restore attempt — distinct reasons so the UI can explain a failure (E6). */
@@ -75,14 +85,20 @@ class BackupRepository @Inject constructor(
 
     /** Export this week's data as JSON for AI analysis (#5). Returns the file path. */
     suspend fun exportWeeklyJson(): File {
-        val weekStartMs = System.currentTimeMillis() - 7L * 24 * 3600 * 1000
+        val nowMs = clock.nowMs()
+        // The ISO week the app itself calls "this week" everywhere else, not a rolling 7 x 24 h from
+        // whenever Export was tapped — otherwise the file and the Stats screen describe different
+        // sets of sessions under the same heading.
+        val weekStartMs = mondayStartMs(nowMs, zone)
         // Window on finish time so a session that started before the boundary but finished this
         // week is still included in the export.
-        val sessions = sessionDao.finishedByFinishTimeInRange(weekStartMs, System.currentTimeMillis())
+        val sessions = sessionDao.finishedByFinishTimeInRange(weekStartMs, nowMs)
         val cardioEntries = cardioDao.since(weekStartMs)
 
         val root = JSONObject().apply {
             put("exportedAt", dateFmt.format(Instant.now().atZone(zone)))
+            // The current ISO week, so the numbers agree with everything the app calls "this week".
+            put("periodStart", dateFmt.format(java.time.Instant.ofEpochMilli(weekStartMs).atZone(zone)))
             put("periodDays", 7)
             val sessArr = JSONArray()
             sessions.forEach { s ->

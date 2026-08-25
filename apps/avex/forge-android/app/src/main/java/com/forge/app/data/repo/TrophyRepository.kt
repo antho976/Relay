@@ -112,7 +112,8 @@ class TrophyRepository @Inject constructor(
             lifetimeTonnageLb = lifetimeTonnageLb,
             firstSessionMs = firstSessionMs,
             cardioSessions = cardioSessionsD.await(),
-            cardioDistanceKm = cardioDistanceD.await() ?: 0.0
+            cardioDistanceKm = cardioDistanceD.await() ?: 0.0,
+            nowMs = clock.nowMs()
         )
     }
 

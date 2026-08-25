@@ -22,7 +22,7 @@ import com.forge.app.program.MuscleGroup
 import com.forge.app.program.ProblemArea
 import com.forge.app.program.Program
 import com.forge.app.program.ProgramGenerator
-import com.forge.app.widget.ForgeWidget
+import com.forge.app.widget.refreshForgeWidgets
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -321,7 +321,7 @@ class ProgramRepository @Inject constructor(
         }
         Program.setActive(plans)
         _revision.value += 1
-        if (refreshWidget) runCatching { ForgeWidget().updateAll(context) }
+        if (refreshWidget) refreshForgeWidgets(context)
     }
 
     /** Presentable subtitle + generic warmup for a generated day, derived from its archetype key. */

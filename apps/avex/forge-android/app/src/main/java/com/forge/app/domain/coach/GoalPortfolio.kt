@@ -1,5 +1,6 @@
 package com.forge.app.domain.coach
 
+import com.forge.app.core.time.mondayStartMs
 import com.forge.app.data.db.entities.CoachGoal
 import com.forge.app.domain.adapt.AdaptationSnapshot
 import com.forge.app.domain.adapt.bestE1rm
@@ -117,7 +118,9 @@ object GoalPortfolio {
         val muscle = MuscleGroup.entries.firstOrNull { it.code == goal.targetKey }
         val slotsForMuscle = s.program.flatMap { it.slots }.filter { muscle == null || it.muscle == muscle }
             .map { it.exerciseId }.toSet()
-        val weekStart = s.nowMs - WEEK_MS
+        // ISO week: a weekly-sets goal has to be measured over the week the user sees on Stats,
+        // not the 7 x 24 h ending at whatever moment the pass happens to run.
+        val weekStart = mondayStartMs(s.nowMs, s.zoneId)
         val sets = s.exerciseHistory
             .filterKeys { it in slotsForMuscle }
             .values.flatten()
@@ -171,7 +174,7 @@ object GoalPortfolio {
     }
 
     private fun conditioningState(goal: CoachGoal, kind: CoachGoalKind, s: AdaptationSnapshot): GoalState {
-        val weekStart = s.nowMs - WEEK_MS
+        val weekStart = mondayStartMs(s.nowMs, s.zoneId)
         val minutes = s.cardio
             .filter { it.date >= weekStart && it.restReason == null }
             .sumOf { it.durationMin }

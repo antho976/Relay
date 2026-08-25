@@ -1,6 +1,6 @@
 package com.forge.app.service.wear
 
-import com.forge.app.core.time.Clock
+import com.forge.app.core.time.ElapsedClock
 import com.forge.app.domain.timer.RestTimerController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -17,9 +17,9 @@ import javax.inject.Singleton
  * (stopSessionService) so a timer can't outlive its session.
  */
 @Singleton
-class SessionTimerHolder @Inject constructor(clock: Clock) {
+class SessionTimerHolder @Inject constructor(elapsed: ElapsedClock) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
-    val controller = RestTimerController(scope, clock)
+    val controller = RestTimerController(scope, elapsed)
 }

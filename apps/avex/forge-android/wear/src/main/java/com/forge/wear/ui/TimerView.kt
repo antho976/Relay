@@ -48,6 +48,12 @@ fun TimerView(
     val session by repo.session.collectAsStateWithLifecycle()
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
     var buzzedForEndAt by remember { mutableLongStateOf(0L) }
+    // When THIS watch first saw this timer instance. endAtMs is an absolute instant on the PHONE's
+    // clock; rendering it against the watch's own made every millisecond of skew between the two
+    // devices a millisecond of error in the countdown. With publishedAtMs the payload carries a
+    // DURATION we can measure locally instead. A phone too old to send it leaves it 0 and we fall
+    // back to the raw instant, exactly as before.
+    val receivedAtMs = remember(timer.endAtMs, timer.publishedAtMs) { System.currentTimeMillis() }
     // One undo per logged set: reset when a new set's ack arrives.
     var undoSent by remember(lastLog?.setId) { mutableStateOf(false) }
 
@@ -55,8 +61,12 @@ fun TimerView(
         while (true) { nowMs = System.currentTimeMillis(); delay(200) }
     }
 
+    val remainingMs = when {
+        timer.publishedAtMs > 0L -> (timer.endAtMs - timer.publishedAtMs) - (nowMs - receivedAtMs)
+        else -> timer.endAtMs - nowMs
+    }
     val remainingSec = if (timer.paused) timer.pausedRemainingSeconds
-    else (((timer.endAtMs - nowMs) + 999) / 1000).toInt().coerceAtLeast(0)
+    else ((remainingMs + 999) / 1000).toInt().coerceAtLeast(0)
 
     // The one strong buzz, once per timer instance (endAtMs identifies it), acked to the phone.
     LaunchedEffect(remainingSec, timer.endAtMs) {
