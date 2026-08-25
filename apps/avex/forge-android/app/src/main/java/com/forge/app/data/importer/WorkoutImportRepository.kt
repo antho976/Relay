@@ -314,7 +314,9 @@ class WorkoutImportRepository @Inject constructor(
                             LoggedSet(
                                 loggedExerciseId = loggedExerciseId,
                                 setIndex = setIndex,
-                                weightText = weightText(s.weightLb),
+                                // The source's own text when it has one (our JSON export does), so
+                                // "2 plates" survives the round trip instead of coming back "135".
+                                weightText = s.weightText ?: weightText(s.weightLb),
                                 weightLb = s.weightLb,
                                 reps = s.reps,
                                 // The source's own per-set instant when it has one; otherwise the

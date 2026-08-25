@@ -37,6 +37,17 @@ interface LoggedSetDao {
     suspend fun countForLoggedExercise(loggedExerciseId: Long): Int
 
     /**
+     * The highest set_index under one exercise entry, or null when it has no sets yet.
+     *
+     * The next index has to come from this rather than from the row COUNT. Deleting a set from the
+     * middle leaves indices 0 and 2 with a count of 2, so the next set was written as a second
+     * index 2 — and the wrist's prefill resolves `maxByOrNull { setIndex }` against that tie, so
+     * the target weight it showed could flip between two different sets.
+     */
+    @Query("SELECT MAX(set_index) FROM logged_set WHERE logged_exercise_id = :loggedExerciseId")
+    suspend fun maxSetIndex(loggedExerciseId: Long): Int?
+
+    /**
      * Per-rep-count max weight across every prior non-assisted weighted set of an exercise —
      * the Pareto frontier PR detection compares against. [com.forge.app.domain.pr.PrDetector.isPr]
      * only ever asks "max prior weight at >= N reps", so this aggregate gives identical answers

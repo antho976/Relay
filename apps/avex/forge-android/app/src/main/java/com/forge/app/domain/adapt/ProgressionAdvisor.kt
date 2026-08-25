@@ -420,15 +420,27 @@ object ProgressionAdvisor {
         // who logs the checkbox instead of an RPE gets the same "stalled while grinding" verdict.
         val window = bouts.takeLast(minOf(stall, t.plateauMinBouts))
         val highEffortCount = window.count { b -> EffortModel.read(b, t).highEffort }
-        return if (highEffortCount >= t.highEffortCountInWindow) {
-            val target = when (slot.unit) {
-                ExerciseUnit.PLATES -> (prevMax - plateLb).coerceAtLeast(plateLb)
-                else -> floorToGrid(prevMax * (1 - t.resetFraction), t.dumbbellStepLb)
-            }
+        // The reset target, floored to the grid and never below one grid step. The PLATES branch was
+        // always bounded (`coerceAtLeast(plateLb)`); the free-weight one wasn't, and floorToGrid
+        // returns 0.0 for anything at or under about 2.8 lb — so a rehab lifter stalling on 2.5 lb
+        // front raises was told, in Stats and in the Overview coach feed, to drop to 0.
+        val resetTarget = when (slot.unit) {
+            ExerciseUnit.PLATES -> (prevMax - plateLb).coerceAtLeast(plateLb)
+            else -> floorToGrid(prevMax * (1 - t.resetFraction), t.dumbbellStepLb)
+                .coerceAtLeast(t.dumbbellStepLb)
+        }
+        // Coercing can land the "reset" at or above where the lifter already is on a light load.
+        // That isn't a reset, so it falls through to the micro-load branch rather than proposing a
+        // change of nothing under a "drop and build back up" sentence.
+        return if (highEffortCount >= t.highEffortCountInWindow && resetTarget < prevMax) {
+            // The percentage is measured off the target actually prescribed, not off the threshold
+            // that motivated it: on a light load the grid makes the real cut much bigger than the
+            // configured fraction, and the reason used to quote the fraction regardless.
+            val dropPct = ((1 - resetTarget / prevMax) * 100).roundToInt()
             weightChange(
-                slot.exerciseId, slot.name, prevMax, target,
-                inputText = inputTextFor(target, slot.unit, plateLb),
-                reason = "${slot.name} stalled $stall sessions at high effort — drop ~${(t.resetFraction * 100).roundToInt()}% and build back up",
+                slot.exerciseId, slot.name, prevMax, resetTarget,
+                inputText = inputTextFor(resetTarget, slot.unit, plateLb),
+                reason = "${slot.name} stalled $stall sessions at high effort — drop ~$dropPct% and build back up",
                 confidence = confidence
             )
         } else {

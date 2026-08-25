@@ -45,5 +45,11 @@ data class TrophyStatsSnapshot(
      * reaches for `System.currentTimeMillis()` behind its callers' backs; the anniversary trophy is
      * then testable with a FakeClock like everything else the snapshot describes.
      */
-    val nowMs: Long = System.currentTimeMillis()
+    val nowMs: Long = System.currentTimeMillis(),
+    /**
+     * The zone the user's calendar days are read in. Carried for the same reason as [nowMs]: a
+     * trophy the user experiences as "a year of training" has to be counted in calendar days, and
+     * calendar days only exist in a zone.
+     */
+    val zoneId: java.time.ZoneId = java.time.ZoneId.systemDefault()
 )

@@ -66,9 +66,30 @@ class WearDataRepository private constructor(context: Context) : DataClient.OnDa
     private val _lastLog = MutableStateFlow<LastLog?>(null)
     val lastLog: StateFlow<LastLog?> = _lastLog
 
-    /** The phone speaks a newer protocol — the UI shows "update Avex on your phone". */
+    /**
+     * The phone speaks a newer protocol on a path the watch cannot work without — the UI shows
+     * "update Avex on your phone".
+     *
+     * Latched PER PATH, and cleared when a later payload on that same path decodes cleanly. It used
+     * to be one process-wide boolean that any path could set and nothing could clear, so a single
+     * newer-version `/glance/today` — a read-only tile payload the watch can simply do without —
+     * blocked session mirroring, set logging and the rest timer for the rest of the process
+     * lifetime, with `/session/live` still decoding perfectly the whole time.
+     */
+    private val newerVersionPaths = mutableSetOf<String>()
+
     private val _newerVersion = MutableStateFlow(false)
     val newerVersion: StateFlow<Boolean> = _newerVersion
+
+    /** Paths the watch genuinely cannot proceed on. `/glance/today` is deliberately not one. */
+    private fun blocksTheUi(path: String) = path != WearProtocol.PATH_GLANCE_TODAY
+
+    private fun markVersion(path: String, newer: Boolean) {
+        synchronized(newerVersionPaths) {
+            if (newer) newerVersionPaths.add(path) else newerVersionPaths.remove(path)
+            _newerVersion.value = newerVersionPaths.any { blocksTheUi(it) }
+        }
+    }
 
     fun start() {
         dataClient.addListener(this)
@@ -101,12 +122,12 @@ class WearDataRepository private constructor(context: Context) : DataClient.OnDa
 
     private fun applyItem(item: DataItem, deleted: Boolean, seeded: Boolean = false) {
         val bytes = item.data
-        val path = item.uri.path
+        val path = item.uri.path ?: return
         // Acks live at "$PATH_CMD_ACK/$commandId" — one path each, so a second command's ack can't
         // supersede an unsynced first one — hence a prefix match rather than equality. A replayed
         // ack is not an event: it answers a command from a previous run of this app.
-        if (path != null && path.startsWith(WearProtocol.PATH_CMD_ACK)) {
-            if (!deleted && !seeded) decodeInto<CmdAckDto>(bytes) { ack ->
+        if (path.startsWith(WearProtocol.PATH_CMD_ACK)) {
+            if (!deleted && !seeded) decodeInto<CmdAckDto>(bytes, WearProtocol.PATH_CMD_ACK) { ack ->
                 _lastAck.value = ack
                 // A successful log names its set — remember it locally for undo/RPE.
                 if (ack.ok && ack.setId != null) {
@@ -118,21 +139,23 @@ class WearDataRepository private constructor(context: Context) : DataClient.OnDa
         when (path) {
             WearProtocol.PATH_SESSION_LIVE ->
                 if (deleted) _session.value = null
-                else decodeInto<SessionLiveDto>(bytes) { _session.value = it }
+                else decodeInto<SessionLiveDto>(bytes, path) { _session.value = it }
             WearProtocol.PATH_TIMER_STATE ->
                 if (deleted) _timer.value = null
-                else decodeInto<TimerStateDto>(bytes) { _timer.value = it }
+                else decodeInto<TimerStateDto>(bytes, path) { _timer.value = it }
             WearProtocol.PATH_CONFIG ->
-                if (!deleted) decodeInto<ConfigDto>(bytes) { _config.value = it }
+                if (!deleted) decodeInto<ConfigDto>(bytes, path) { _config.value = it }
             WearProtocol.PATH_GLANCE_TODAY ->
-                if (!deleted) decodeInto<GlanceTodayDto>(bytes) { _glance.value = it }
+                if (!deleted) decodeInto<GlanceTodayDto>(bytes, path) { _glance.value = it }
         }
     }
 
-    private inline fun <reified T> decodeInto(bytes: ByteArray?, apply: (T) -> Unit) {
+    private inline fun <reified T> decodeInto(bytes: ByteArray?, path: String, apply: (T) -> Unit) {
         when (val result = WearCodec.decode<T>(bytes ?: return)) {
-            is WearCodec.DecodeResult.Ok -> apply(result.value)
-            is WearCodec.DecodeResult.NewerVersion -> _newerVersion.value = true
+            // A clean decode CLEARS this path's latch: the phone that was ahead of us has been
+            // downgraded, or the payload that tripped it was a one-off.
+            is WearCodec.DecodeResult.Ok -> { markVersion(path, newer = false); apply(result.value) }
+            is WearCodec.DecodeResult.NewerVersion -> markVersion(path, newer = true)
             is WearCodec.DecodeResult.Invalid -> Unit
         }
     }

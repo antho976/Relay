@@ -328,7 +328,11 @@ private fun DecisionEntry(
         // A per-row action is a drawn outlined pill, not a bare word. As muted text it sat dimmer
         // than the entry it acts on and read as a caption; accent would have been unreadable on
         // four of the five accent choices.
-        if (d.status == CoachRepository.STATUS_APPLIED && d.undoData != null) {
+        // Undo is offered only while the change is still inside its undo window (stamped at apply
+        // time). Rows applied before that stamp existed carry null and keep the old behaviour.
+        val undoable = d.status == CoachRepository.STATUS_APPLIED && d.undoData != null &&
+            (d.undoExpiresAt == null || now <= d.undoExpiresAt!!)
+        if (undoable) {
             Spacer(Modifier.height(10.dp))
             ForgeRowPill(
                 "Undo",

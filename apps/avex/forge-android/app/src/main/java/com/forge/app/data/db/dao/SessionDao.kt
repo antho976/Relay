@@ -33,6 +33,22 @@ interface SessionDao {
     @Query("SELECT * FROM session WHERE finished_at IS NOT NULL ORDER BY finished_at DESC LIMIT :limit")
     fun observeRecent(limit: Int = 10): Flow<List<Session>>
 
+    /**
+     * Every finished session's finish instant, newest first — the column alone, no rows.
+     *
+     * The day-streak walk used to read it out of `observeRecent(120)`, which terminates the walk
+     * when the WINDOW runs out rather than when a real rest gap appears: anyone training twice a
+     * day fills 120 rows inside about two months, and their streak silently stopped growing there
+     * while the Profile's trophy streak (which reads all sessions) kept counting past it. Unbounded
+     * is affordable here because it is one Long per session, not a row.
+     */
+    @Query("SELECT finished_at FROM session WHERE finished_at IS NOT NULL ORDER BY finished_at DESC")
+    fun observeFinishedAts(): Flow<List<Long>>
+
+    /** One-shot [observeFinishedAts], for the streak read that doesn't want a subscription. */
+    @Query("SELECT finished_at FROM session WHERE finished_at IS NOT NULL ORDER BY finished_at DESC")
+    suspend fun finishedAts(): List<Long>
+
     /** Used by the "Showing Up" / "Through the Door" trophy rules. */
     @Query("SELECT COUNT(*) FROM session WHERE finished_at IS NOT NULL")
     fun observeFinishedCount(): Flow<Int>
@@ -224,13 +240,25 @@ interface SessionDao {
         @androidx.room.ColumnInfo(name = "avg_sets") val avgSets: Double?
     )
 
-    /** Per-day-type: avg duration, PR rate, set count — for #134. */
+    /**
+     * Per-day-type: avg duration, PR rate, set count — for #134.
+     *
+     * The duration expression mirrors [com.forge.app.data.db.entities.Session.durationMinutes]:
+     * real ACTIVE seconds when the session recorded them, wall-clock only as the pre-feature
+     * fallback. Reading `finished_at - started_at` outright made this the one duration surface that
+     * disagreed with every other one — a session trained for 40 minutes at 18:00, resumed and
+     * finished at 22:30, averaged in as four and a half hours.
+     *
+     * `is_untracked = 0` matches [avgMaxVolumeByDayKey] and [lifetimeAggregate]: an untracked
+     * session is excluded from every other aggregate, so it can't be counted here either.
+     */
     @Query("""
         SELECT day_key, COUNT(*) AS session_count,
-               AVG((finished_at - started_at) / 60000.0) AS avg_duration_min,
+               AVG(CASE WHEN active_seconds > 0 THEN active_seconds / 60.0
+                        ELSE (finished_at - started_at) / 60000.0 END) AS avg_duration_min,
                AVG(CAST(pr_count AS FLOAT) / NULLIF(set_count, 0)) AS pr_rate,
                SUM(total_volume_lb) AS total_vol
-        FROM session WHERE finished_at IS NOT NULL
+        FROM session WHERE finished_at IS NOT NULL AND is_untracked = 0
         GROUP BY day_key
     """)
     suspend fun perDayTypeStats(): List<DayTypeStats>

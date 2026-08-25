@@ -9,12 +9,23 @@ import com.forge.app.program.UnlockRule
 
 object TrophyEvaluator {
 
-    private const val DAY_MS = 24L * 60 * 60 * 1000
-
-    /** Whole days since the first finished session (0 when there is none yet). Single source for the
-     *  anniversary trophy's match/progress/remaining math, so the day-conversion lives in one place. */
-    private fun trainingDaysElapsed(s: TrophyStatsSnapshot): Int =
-        if (s.firstSessionMs != null) ((s.nowMs - s.firstSessionMs) / DAY_MS).toInt() else 0
+    /**
+     * CALENDAR days since the first finished session (0 when there is none yet). Single source for
+     * the anniversary trophy's match/progress/remaining math, so the day-conversion lives in one
+     * place.
+     *
+     * Counted between dates, not by dividing elapsed milliseconds. A first session on 2025-06-15 at
+     * 21:00 was 364 days old at 09:00 on 2026-06-15 — the user's anniversary by any calendar — so
+     * the "One year" trophy stayed locked until nine in the evening. The same truncation is why
+     * `TrophyRepository.checkComebackKid` moved to ChronoUnit before this did.
+     */
+    private fun trainingDaysElapsed(s: TrophyStatsSnapshot): Int {
+        val first = s.firstSessionMs ?: return 0
+        return java.time.temporal.ChronoUnit.DAYS.between(
+            java.time.Instant.ofEpochMilli(first).atZone(s.zoneId).toLocalDate(),
+            java.time.Instant.ofEpochMilli(s.nowMs).atZone(s.zoneId).toLocalDate()
+        ).toInt().coerceAtLeast(0)
+    }
 
     fun unlockedByRule(snapshot: TrophyStatsSnapshot, catalogue: List<Trophy> = Trophies.all): Set<String> =
         catalogue.asSequence()

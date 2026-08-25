@@ -18,6 +18,7 @@ import androidx.health.connect.client.records.SleepSessionRecord
 import androidx.health.connect.client.records.StepsRecord
 import androidx.health.connect.client.records.TotalCaloriesBurnedRecord
 import androidx.health.connect.client.records.WeightRecord
+import androidx.health.connect.client.records.metadata.Device
 import androidx.health.connect.client.records.metadata.Metadata
 import androidx.health.connect.client.request.AggregateRequest
 import androidx.health.connect.client.request.ReadRecordsRequest
@@ -379,7 +380,8 @@ class HealthConnectManager @Inject constructor(
                         // re-finish or an orphan-session recovery added a second calorie record for
                         // the same workout, inflating the day's burn in Samsung Health or Fit with
                         // no local trace to find it by and no way to repair it.
-                        metadata = Metadata.manualEntry(
+                        metadata = Metadata.activelyRecorded(
+                            device = avexDevice(Device.TYPE_PHONE),
                             clientRecordId = clientRecordId,
                             clientRecordVersion = clientRecordVersion
                         )
@@ -558,7 +560,13 @@ class HealthConnectManager @Inject constructor(
                         endZoneOffset = null,
                         exerciseType = exerciseType,
                         title = title,
-                        metadata = Metadata.manualEntry(
+                        // ACTIVELY recorded, not manually entered: the user started and finished
+                        // this session in Avex and it was timed as it happened. Marking it
+                        // MANUALLY_ENTERED told every reader otherwise, and some (Samsung Health)
+                        // weight or display a manual entry differently. Manual entry stays where it
+                        // is true: the typed weight and body-fat values.
+                        metadata = Metadata.activelyRecorded(
+                            device = avexDevice(Device.TYPE_PHONE),
                             clientRecordId = clientRecordId,
                             clientRecordVersion = clientRecordVersion
                         )
@@ -599,7 +607,9 @@ class HealthConnectManager @Inject constructor(
                         samples = samples
                             .filter { it.timeMs in startMs..safeEnd }
                             .map { HeartRateRecord.Sample(Instant.ofEpochMilli(it.timeMs), it.bpm.toLong()) },
-                        metadata = Metadata.manualEntry(
+                        // A streamed trace off the watch — auto-recorded by the sensor, not typed.
+                        metadata = Metadata.autoRecorded(
+                            device = avexDevice(Device.TYPE_WATCH),
                             clientRecordId = clientRecordId,
                             clientRecordVersion = clientRecordVersion
                         )
@@ -626,6 +636,20 @@ class HealthConnectManager @Inject constructor(
             true
         } ?: false
     }
+
+    /**
+     * The device stamped on Avex's own auto/actively-recorded writes.
+     *
+     * Health Connect requires a Device for anything not marked manual entry, and a real
+     * manufacturer/model makes an Avex record identifiable in another app's list rather than
+     * anonymous. [type] distinguishes what did the recording: the phone for a session it timed, the
+     * watch for a heart-rate trace it streamed.
+     */
+    private fun avexDevice(type: Int) = Device(
+        type = type,
+        manufacturer = android.os.Build.MANUFACTURER,
+        model = android.os.Build.MODEL
+    )
 
     /**
      * True when [record] was written by Avex itself (W0 write-back). Session READS must skip
@@ -678,6 +702,12 @@ class HealthConnectManager @Inject constructor(
         if (!canReadHeartRate()) return@withContext emptyList()
         hcCatching {
             val range = TimeRangeFilter.between(Instant.ofEpochMilli(startMs), Instant.ofEpochMilli(endMs))
+            // take() BEFORE sortedBy, not after. Sequence.sortedBy is a stateful operation: it
+            // buffers every element into a list before emitting the first, so a cap applied after it
+            // bounded the RESULT while the full set was already in memory — which is the opposite of
+            // what the cap's own comment claims it guards against. Records arrive time-ordered per
+            // page, so the cheap cap keeps the earliest samples and the sort below only tidies the
+            // ordering across pages.
             client.readAllPages(HeartRateRecord::class, range)
                 .asSequence()
                 .flatMap { it.samples }
@@ -685,8 +715,8 @@ class HealthConnectManager @Inject constructor(
                     val bpm = s.beatsPerMinute.toInt()
                     if (bpm in MIN_BPM..MAX_BPM) HrPoint(timeMs = s.time.toEpochMilli(), bpm = bpm) else null
                 }
-                .sortedBy { it.timeMs }
                 .take(HR_SERIES_MAX_SAMPLES)
+                .sortedBy { it.timeMs }
                 .toList()
         }.orEmpty()
     }

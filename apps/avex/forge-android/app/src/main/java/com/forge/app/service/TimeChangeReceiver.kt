@@ -20,7 +20,8 @@ import javax.inject.Inject
  *
  * Three things happen here, none of them expensive:
  *  - [TimeSignals] re-emits, so every flow anchored on "today" or "this week" rebuilds.
- *  - The widget refreshes; it otherwise updates at most hourly and never on a date change.
+ *  - The widget refreshes, and its next-midnight redraw is re-armed in the new zone; it otherwise
+ *    updates at most hourly and only when the device happens to be awake.
  *  - The daily training reminder is re-armed. It is a 24-hour PERIODIC, which is elapsed time, not
  *    wall-clock time: without this an 18:00 reminder becomes 17:00 at every spring-forward and
  *    stays there for seven months.
@@ -46,6 +47,10 @@ class TimeChangeReceiver : BroadcastReceiver() {
         CoroutineScope(Dispatchers.Default).launch {
             try {
                 com.forge.app.widget.refreshForgeWidgets(context)
+                // The next-midnight widget redraw is anchored on a zone too — re-arm it here so a
+                // flight moves the rollover with the user instead of leaving it on the old zone's
+                // midnight for the life of the install.
+                runCatching { WidgetMidnightWorker.schedule(context) }
                 // Re-anchor the reminder to the wall-clock hour the user chose, in the CURRENT zone.
                 runCatching { reminderScheduler.reanchor() }
             } finally {

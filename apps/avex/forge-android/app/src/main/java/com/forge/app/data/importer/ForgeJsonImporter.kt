@@ -2,6 +2,7 @@ package com.forge.app.data.importer
 
 import com.forge.app.program.ExerciseLibrary
 import com.forge.app.program.Program
+import org.json.JSONArray
 import org.json.JSONObject
 import java.time.LocalDate
 import java.time.ZoneId
@@ -30,8 +31,10 @@ class ForgeJsonImporter : GymImporter {
         val t = text.trimStart()
         if (!t.startsWith("{")) return false
         // The key is written near the front by exportFullDataJson, but scan generously rather than
-        // depending on key order.
-        return t.contains("\"sessions\"")
+        // depending on key order. "session" (singular) is the per-session export — the file the
+        // "save this workout's data" action writes. It was unreadable by the app that wrote it:
+        // sharing it back in reported "That file isn't a recognised gym-app export."
+        return t.contains("\"sessions\"") || t.contains("\"session\"")
     }
 
     /**
@@ -50,7 +53,12 @@ class ForgeJsonImporter : GymImporter {
         } catch (e: org.json.JSONException) {
             return emptyList()
         }
-        val sessionsArr = root.optJSONArray("sessions") ?: return emptyList()
+        // Full and weekly exports nest an array under "sessions"; the per-session export nests one
+        // object under "session". Reading the singular as a one-element list means both files go
+        // through exactly the same row-building code below.
+        val sessionsArr = root.optJSONArray("sessions")
+            ?: root.optJSONObject("session")?.let { JSONArray().put(it) }
+            ?: return emptyList()
         val out = ArrayList<ImportedSession>(sessionsArr.length())
         for (i in 0 until sessionsArr.length()) {
             val s = sessionsArr.optJSONObject(i) ?: continue
@@ -88,6 +96,9 @@ class ForgeJsonImporter : GymImporter {
                     sets.add(ImportedSet(
                         weightLb = weightLb,
                         reps = reps,
+                        // Our own export carries the typed text; it is already canonical lb, so it
+                        // goes straight back into the row it came out of.
+                        weightText = set.optString("weightText").ifBlank { null },
                         rpe = rpe,
                         isWarmup = setType == "warmup",
                         durationSeconds = set.optInt("durationSeconds", 0).takeIf { it > 0 },

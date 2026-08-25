@@ -26,6 +26,16 @@ package com.forge.app.data.importer
 data class ImportedSet(
     val weightLb: Double?,
     val reps: Int,
+    /**
+     * What the user typed, verbatim ("BW", "2 plates", "45") — already canonical lb text, which is
+     * what `LoggedSet.weightText` stores and what the UI shows back. Null for a source that doesn't
+     * record it (every foreign CSV); the insert path then regenerates a bare lb number as before.
+     *
+     * Avex's own JSON export writes this field, and it used to be dropped on the way back in: a set
+     * logged as "2 plates" round-tripped as "135", so re-importing your own history silently
+     * rewrote your notation across every set of it.
+     */
+    val weightText: String? = null,
     val rpe: Double? = null,
     /** True when the source marked this as a warm-up set. Imported as a "warmup" set type. */
     val isWarmup: Boolean = false,

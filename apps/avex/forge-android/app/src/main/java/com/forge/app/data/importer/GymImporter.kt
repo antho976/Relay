@@ -74,15 +74,22 @@ object ImportParsing {
     // locale's convention FIRST — an export made on this device then parses to the date the user
     // meant, with the other order kept as a cross-locale fallback. Month-first is US + its Pacific
     // territories and the Philippines; everywhere else is day-first.
-    private val monthFirstLocale: Boolean =
-        java.util.Locale.getDefault().country in setOf("US", "PH", "FM", "MH", "PW", "GU", "AS")
-    private val ambiguousSlashFormats: List<String> =
-        if (monthFirstLocale) listOf("MM/dd/yyyy", "dd/MM/yyyy") else listOf("dd/MM/yyyy", "MM/dd/yyyy")
+    //
+    // Read on every access, not frozen at class load. As a `val` on an object this was evaluated
+    // once per PROCESS: a user who switched their phone from en-US to en-GB and imported without
+    // rebooting still had "04/05/2024" tried as MM/dd first, so the row was stored as 4 May when
+    // they — now on a day-first locale, reading a day-first export — meant 5 April. Silent,
+    // permanent, and every ambiguous date in the file.
+    private val monthFirstLocale: Boolean
+        get() = java.util.Locale.getDefault().country in setOf("US", "PH", "FM", "MH", "PW", "GU", "AS")
+    private val ambiguousSlashFormats: List<String>
+        get() = if (monthFirstLocale) listOf("MM/dd/yyyy", "dd/MM/yyyy") else listOf("dd/MM/yyyy", "MM/dd/yyyy")
 
-    private val DATE_ONLY_FORMATS = (
-        listOf("yyyy-MM-dd", "yyyy/MM/dd") + ambiguousSlashFormats +
-            listOf("d MMM yyyy", "dd MMM yyyy", "MMM d, yyyy", "MMMM d, yyyy")
-        ).map { DateTimeFormatter.ofPattern(it, java.util.Locale.ENGLISH) }
+    private val DATE_ONLY_FORMATS: List<DateTimeFormatter>
+        get() = (
+            listOf("yyyy-MM-dd", "yyyy/MM/dd") + ambiguousSlashFormats +
+                listOf("d MMM yyyy", "dd MMM yyyy", "MMM d, yyyy", "MMMM d, yyyy")
+            ).map { DateTimeFormatter.ofPattern(it, java.util.Locale.ENGLISH) }
 
     private val zone: ZoneId get() = ZoneId.systemDefault()
 

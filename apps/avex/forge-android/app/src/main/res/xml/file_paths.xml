@@ -1,5 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths>
-    <!-- Exported JSON/CSV/PDF live in filesDir root (BackupRepository / PdfExportRepository). -->
-    <files-path name="forge_exports" path="." />
+    <!--
+      Exports only — the JSON/CSV/PDF/PNG artifacts written by BackupRepository,
+      PdfExportRepository and the two card renderers, all through core/io/ExportFiles.kt.
+
+      This was rooted at filesDir itself (path="."), which put progress_photos/, the DataStore
+      preferences file, avatar.jpg and crashes/ inside the provider's addressable surface. No path
+      ever granted a URI to any of them, but the root should be the handful of files meant to leave
+      the app, not everything the app owns.
+    -->
+    <files-path name="forge_exports" path="exports/" />
 </paths>

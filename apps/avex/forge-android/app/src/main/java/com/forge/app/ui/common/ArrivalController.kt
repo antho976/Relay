@@ -8,6 +8,7 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.geometry.Offset
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.asStateFlow
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -60,15 +61,19 @@ class ArrivalController @Inject constructor() {
      */
     fun enqueue(arrivals: List<Arrival>) {
         if (arrivals.isEmpty()) return
-        val known = _queue.value.map { it.noticeId }.toSet()
-        val fresh = arrivals.filter { it.noticeId !in known }
-        if (fresh.isEmpty()) return
-        _queue.value = _queue.value + fresh
+        // update {}, not read-then-assign. This is a @Singleton reachable from any scope, and the
+        // read-modify-write form loses a banner outright when two arrivals land in the same frame
+        // from different coroutines: the dropped one is never marked announced, so it re-announces
+        // on the next launch. Callers are Main-confined today; the invariant shouldn't depend on it.
+        _queue.update { queued ->
+            val known = queued.mapTo(mutableSetOf()) { it.noticeId }
+            queued + arrivals.filter { it.noticeId !in known }
+        }
     }
 
     /** The front banner finished (flew, faded, or was tapped). Advances to the next one. */
     fun consume(noticeId: String) {
-        _queue.value = _queue.value.filterNot { it.noticeId == noticeId }
+        _queue.update { queued -> queued.filterNot { it.noticeId == noticeId } }
     }
 
     /** Drop everything pending, for a sign-out or a wipe. */

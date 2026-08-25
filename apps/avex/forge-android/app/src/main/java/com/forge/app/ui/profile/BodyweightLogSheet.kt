@@ -101,13 +101,12 @@ internal fun BodyweightLogSheet(
     var input by remember(seedLb, weightUnit, date) {
         mutableStateOf(if (stones) "" else seedLb?.let { weightInputValue(it, weightUnit) } ?: "")
     }
-    // Stone + pounds fields, seeded by splitting the stored lb (whole-lb remainder).
-    var stInput by remember(seedLb, weightUnit, date) {
-        mutableStateOf(if (stones) seedLb?.let { (it.roundToInt() / 14).toString() } ?: "" else "")
-    }
-    var lbInput by remember(seedLb, weightUnit, date) {
-        mutableStateOf(if (stones) seedLb?.let { (it.roundToInt() % 14).toString() } ?: "" else "")
-    }
+    // Stone + pounds fields, seeded by splitting the stored lb (whole-lb remainder). The seed text
+    // is kept so an UNCHANGED pair can be told from a re-typed one — see [parsed].
+    val stSeed = if (stones) seedLb?.let { (it.roundToInt() / 14).toString() } ?: "" else ""
+    val lbSeed = if (stones) seedLb?.let { (it.roundToInt() % 14).toString() } ?: "" else ""
+    var stInput by remember(seedLb, weightUnit, date) { mutableStateOf(stSeed) }
+    var lbInput by remember(seedLb, weightUnit, date) { mutableStateOf(lbSeed) }
     // Keyed on the day's entry (not just the date) so a late flow emission — or a change while the
     // sheet is open — re-seeds the note like the weight field above, rather than leaving it blank and
     // then blanking the stored note on Save.
@@ -115,8 +114,18 @@ internal fun BodyweightLogSheet(
 
     // Parsed lb — stones sums the two fields, kg/lb parse the single field; both clamp to the sane range.
     val parsed: Double? = if (stones) {
-        val lb = (stInput.toIntOrNull() ?: 0) * 14.0 + (lbInput.toIntOrNull() ?: 0)
-        if (stInput.isNotBlank() || lbInput.isNotBlank()) lb.takeIf { it in MIN_BODYWEIGHT_LB..MAX_BODYWEIGHT_LB } else null
+        if (seedLb != null && stInput == stSeed && lbInput == lbSeed) {
+            // Neither field was changed, so hand back the STORED weight at full precision rather
+            // than the whole-pound split of it. The stone/lb pair can only carry whole pounds, so
+            // re-opening a 180.4 lb weigh-in imported from Health Connect and tapping Save without
+            // editing rewrote it as 180.0 — over an import history that quantises the whole
+            // bodyweight trend and can flip the sign of a small week-over-week delta. Same rule
+            // SetRow applies to an untouched kg/stones set weight.
+            seedLb.takeIf { it in MIN_BODYWEIGHT_LB..MAX_BODYWEIGHT_LB }
+        } else {
+            val lb = (stInput.toIntOrNull() ?: 0) * 14.0 + (lbInput.toIntOrNull() ?: 0)
+            if (stInput.isNotBlank() || lbInput.isNotBlank()) lb.takeIf { it in MIN_BODYWEIGHT_LB..MAX_BODYWEIGHT_LB } else null
+        }
     } else parseSaneBodyweightLb(input, weightUnit == WeightUnit.KG)  // non-stones branch is kg or lb
     val anyInput = if (stones) stInput.isNotBlank() || lbInput.isNotBlank() else input.isNotBlank()
     val invalid = anyInput && parsed == null

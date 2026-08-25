@@ -260,8 +260,14 @@ internal fun buildTimeToPr(
         .mapNotNull { (exerciseId, dates) ->
             if (dates.size < 2) return@mapNotNull null
             val sorted = dates.sortedBy { it.sessionDate }
-            val avgMs = sorted.zipWithNext { a, b -> b.sessionDate - a.sessionDate }.average()
-            val avgDays = (avgMs / (24 * 60 * 60 * 1000)).roundToInt().coerceAtLeast(1)
+            // Averaged over CALENDAR-day gaps, not elapsed milliseconds: the number is labelled and
+            // read as a day count ("a PR every ~9 days"), and dividing elapsed ms shortens any gap
+            // that crossed a spring-forward while lengthening one that crossed a fall-back.
+            val zone = ZoneId.systemDefault()
+            fun dayOf(ms: Long) = Instant.ofEpochMilli(ms).atZone(zone).toLocalDate()
+            val avgDays = sorted
+                .zipWithNext { a, b -> ChronoUnit.DAYS.between(dayOf(a.sessionDate), dayOf(b.sessionDate)) }
+                .average().roundToInt().coerceAtLeast(1)
             val name = Program.exercise(exerciseId)?.name ?: return@mapNotNull null
             TimeToPrEntry(exerciseId = exerciseId, exerciseName = name, avgDaysBetween = avgDays, prCount = dates.size)
         }

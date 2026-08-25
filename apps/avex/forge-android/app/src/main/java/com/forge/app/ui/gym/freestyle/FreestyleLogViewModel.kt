@@ -127,8 +127,8 @@ class FreestyleLogViewModel @Inject constructor(
                     items.forEachIndexed { exIdx, ex ->
                         val loggedExerciseId =
                             workoutRepo.addExerciseToSession(sessionId, ex.libId, exIdx, swappedName = ex.customName)
-                        ex.sets.forEachIndexed { setIdx, s ->
-                            val setId = workoutRepo.logSet(loggedExerciseId, setIdx, s.weightText, s.weightLb, s.reps, s.durationSeconds)
+                        ex.sets.forEach { s ->
+                            val setId = workoutRepo.logSet(loggedExerciseId, s.weightText, s.weightLb, s.reps, s.durationSeconds)
                             // Persist the set-type tags via the existing per-field setters — only when set, so an
                             // untagged set writes exactly as before. Warm-ups still count toward volume/PRs (label
                             // only), matching the structured flow's set model (GYMAP-46).

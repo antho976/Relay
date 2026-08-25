@@ -36,7 +36,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.gym.train.state.DayListItem
-import com.forge.app.ui.theme.toAccentColor
+import com.forge.app.ui.common.parseAccentHex
 
 @Composable
 fun DayCard(
@@ -63,7 +63,11 @@ private fun NextUpCard(
     onLongPress: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
-    val accent = (item.customAccentHex ?: item.plan.accentHex).toAccentColor()
+    // parseAccentHex, not the throwing parser this used to call: the value crosses DataStore
+    // (a user-set day colour) and the program_day.accent_hex column, so a restored backup or a
+    // blank hex would have taken the whole Train tab down on composition. One parser, non-throwing
+    // — the same one ForgeTheme and ForgeWidget already use for the same kind of value.
+    val accent = parseAccentHex(item.customAccentHex ?: item.plan.accentHex)
     val surface = MaterialTheme.colorScheme.surface
 
     val bloom = remember(accent) {

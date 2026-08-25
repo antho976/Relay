@@ -209,7 +209,6 @@
 1 em-dash ui/gym/train/components/ExerciseChartSheet.kt em dash in string
 1 em-dash ui/gym/train/components/SetInputRow.kt em dash in string
 1 em-dash ui/gym/train/components/SetRow.kt em dash in string
-1 em-dash ui/theme/ColorExt.kt em dash in string
 2 em-dash ui/trophies/TrophiesComponents.kt em dash in string
 4 em-dash wear/glance/WearComplications.kt em dash in string
 2 em-dash wear/ui/SessionScreen.kt em dash in string

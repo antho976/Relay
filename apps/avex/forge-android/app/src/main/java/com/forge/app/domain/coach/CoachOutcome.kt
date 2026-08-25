@@ -8,16 +8,26 @@ package com.forge.app.domain.coach
  */
 object CoachOutcome {
 
-    private const val DAY_MS = 24L * 60 * 60 * 1000
-
     /** A short status to append to a decision row, or null when there's nothing to add (open proposal). */
-    fun label(status: String, outcome: String, appliedAtMs: Long?, nowMs: Long): String? = when (status) {
+    fun label(
+        status: String,
+        outcome: String,
+        appliedAtMs: Long?,
+        nowMs: Long,
+        zone: java.time.ZoneId = java.time.ZoneId.systemDefault()
+    ): String? = when (status) {
         "applied", "folded" -> when (outcome) {
             "ok" -> "worked"
             "failed" -> "didn't stick"
             else -> {
+                // Counted the same way OutcomeWatcher closes the window — in calendar days. The
+                // elapsed-ms form truncated, so this line said "~0 days left" for a whole week
+                // while the verdict waited on the next weekly pass.
                 val daysLeft = appliedAtMs?.let {
-                    ((OutcomeWatcher.WINDOW_DAYS * DAY_MS - (nowMs - it)) / DAY_MS).toInt()
+                    OutcomeWatcher.WINDOW_DAYS - java.time.temporal.ChronoUnit.DAYS.between(
+                        java.time.Instant.ofEpochMilli(it).atZone(zone).toLocalDate(),
+                        java.time.Instant.ofEpochMilli(nowMs).atZone(zone).toLocalDate()
+                    ).toInt()
                 }
                 if (daysLeft != null && daysLeft > 0)
                     "still watching · ~$daysLeft day${if (daysLeft == 1) "" else "s"} left"

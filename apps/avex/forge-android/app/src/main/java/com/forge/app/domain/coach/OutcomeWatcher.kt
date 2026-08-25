@@ -60,7 +60,16 @@ object OutcomeWatcher {
         val fatigue by lazy { DeloadAdvisor.fatigue(s, t) }
         return applied.mapNotNull { d ->
         val appliedAt = d.appliedAt ?: return@mapNotNull null
-        val windowClosed = s.nowMs - appliedAt >= WINDOW_DAYS * DAY_MS
+        // CALENDAR days, not 14 x 86,400,000 ms. Passes run at most once per ISO week, so a window
+        // a few minutes short of closing on the day the pass runs slips a FULL EXTRA WEEK: apply on
+        // a Monday evening, open the app the Monday-fortnight morning, and only 13 d 13 h have
+        // elapsed — no verdict until the Monday after that, 21 days later, with the row reading
+        // "still watching · ~0 days left" throughout. A spring-forward inside the window takes
+        // another hour off and widens the band of apply-times that slip.
+        val windowClosed = java.time.temporal.ChronoUnit.DAYS.between(
+            java.time.Instant.ofEpochMilli(appliedAt).atZone(s.zoneId).toLocalDate(),
+            java.time.Instant.ofEpochMilli(s.nowMs).atZone(s.zoneId).toLocalDate()
+        ) >= WINDOW_DAYS
         // Adherence before efficacy: a window the athlete wasn't there for says nothing about the
         // advice. Only judged once the window closes, so a live window still gets its real verdict.
         if (windowClosed &&
