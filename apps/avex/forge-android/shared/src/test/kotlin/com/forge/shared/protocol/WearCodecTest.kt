@@ -73,6 +73,30 @@ class WearCodecTest {
     }
 
     @Test
+    fun `an unknown enum constant falls back to the field default instead of failing the payload`() {
+        // The version rule says additive changes don't bump VERSION — and `ignoreUnknownKeys` makes
+        // that true for added FIELDS but not for added enum CONSTANTS. So a future
+        // ProtocolWeightUnit.G shipped as "additive" would have passed the version gate on an older
+        // watch, thrown inside the decoder, and been mapped to a silent drop: the wrist falling back
+        // to its idle glance mid-workout, and every republish after it dropped the same way.
+        val payload = """{"v":1,"sessionId":7,"dayTitle":"Push","exerciseName":"Bench","unit":"G"}"""
+        val result = WearCodec.decode<SessionLiveDto>(payload.encodeToByteArray())
+        assertTrue(result is WearCodec.DecodeResult.Ok)
+        assertEquals(
+            ProtocolWeightUnit.LB,
+            (result as WearCodec.DecodeResult.Ok<SessionLiveDto>).value.unit
+        )
+    }
+
+    @Test
+    fun `an ack is readable by command id even when its body is from a newer protocol`() {
+        // The phone can't decode a newer watch's command body, but it must still ack it — otherwise
+        // the wrist can't tell "update your phone" from "bluetooth dropped".
+        val newer = """{"v":99,"commandId":"c-9","sessionId":1,"reps":5,"somethingNew":true}"""
+        assertEquals("c-9", WearCodec.probeCommandId(newer.encodeToByteArray()))
+    }
+
+    @Test
     fun `a newer protocol version is dropped as NewerVersion, not a crash`() {
         val newer = WearCodec.encode(session.copy(v = WearProtocol.VERSION + 1))
         val result = WearCodec.decode<SessionLiveDto>(newer)

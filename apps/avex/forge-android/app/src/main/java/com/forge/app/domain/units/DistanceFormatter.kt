@@ -38,7 +38,16 @@ fun distanceInputValue(km: Double, useMiles: Boolean): String {
  * Tolerates a trailing unit suffix ("5 mi", "5mi", "8 km") so it round-trips [formatDistance].
  */
 fun parseToKm(input: String, useMiles: Boolean): Double? {
-    val cleaned = input.trim().lowercase().removeSuffix("mi").removeSuffix("km").trim()
+    val cleaned = input.trim().lowercase()
+    // A suffix the user typed states the unit they MEAN, and it wins over the setting. Stripping
+    // BOTH suffixes and then applying the setting's conversion meant "5 km" typed while the app was
+    // in miles stored 8.05 km — a 61 % overstatement carried into pace and the calorie estimate.
+    DISTANCE_UNIT_REGEX.matchEntire(cleaned)?.let { m ->
+        val v = m.groupValues[1].toDoubleOrNull() ?: return null
+        return if (m.groupValues[2] == "mi") v * KM_PER_MILE else v
+    }
     val numeric = cleaned.toDoubleOrNull() ?: return null
     return fromDisplayDistance(numeric, useMiles)
 }
+
+private val DISTANCE_UNIT_REGEX = Regex("""^\s*(\d+(?:\.\d+)?)\s*(mi|km)\s*$""")

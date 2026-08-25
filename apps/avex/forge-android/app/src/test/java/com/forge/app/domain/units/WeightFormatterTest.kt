@@ -90,8 +90,10 @@ class WeightFormatterTest {
 
     @Test
     fun formatVolumeKgConvertsBelowThousand() {
-        // 500 lb = 226.8 kg (the unit setting must convert volume, not just weight — #2)
-        assertEquals("226 kg", formatVolume(500.0, useKg = true))
+        // 500 lb = 226.796 kg (the unit setting must convert volume, not just weight — #2).
+        // ROUNDED, not truncated: the old "226 kg" threw away 0.8 kg, and the truncation was
+        // worst in the converted units precisely because conversion produces the fraction.
+        assertEquals("227 kg", formatVolume(500.0, useKg = true))
     }
 
     @Test

@@ -122,10 +122,18 @@ class WearHrService : Service() {
         val repo = WearDataRepository.instance(this)
         while (true) {
             delay(BATCH_INTERVAL_MS)
-            val batch = synchronized(pending) {
-                if (pending.isEmpty()) emptyList() else pending.toList().also { pending.clear() }
+            // TAKE a snapshot; don't clear yet. The buffer used to be emptied BEFORE the send was
+            // known to have worked, and the send swallows failure — so three minutes out of
+            // Bluetooth range silently lost ~36 batches, while the PENDING_CAP buffer that exists to
+            // ride out exactly that was emptied before it could help. The samples are keyed
+            // (session_id, at_ms) with IGNORE-on-conflict, so a re-send is free.
+            val batch = synchronized(pending) { pending.toList() }
+            if (batch.isEmpty()) continue
+            if (!repo.sendHrBatchAwait(sessionId, batch, totalKcal)) continue
+            synchronized(pending) {
+                // Drop only what was actually delivered; samples that arrived during the send stay.
+                repeat(batch.size) { if (pending.isNotEmpty()) pending.removeFirst() }
             }
-            if (batch.isNotEmpty()) repo.sendHrBatch(sessionId, batch, totalKcal)
         }
     }
 

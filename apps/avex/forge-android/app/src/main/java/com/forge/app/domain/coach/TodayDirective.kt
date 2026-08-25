@@ -25,8 +25,6 @@ import com.forge.app.program.MuscleGroup
  */
 object TodayDirective {
 
-    private const val DAY_MS = 24L * 60 * 60 * 1000
-
     enum class Kind {
         /** Train the named program day. */
         TRAIN,
@@ -137,8 +135,18 @@ object TodayDirective {
             }
         }
 
+        // CALENDAR days, not elapsed 24-hour blocks. The rules below read `daysSinceLast < 1` as
+        // "trained today" and the copy at the bottom says "It's been N days since your last
+        // session" — both of which an elapsed-hours count gets wrong for anyone who trains in the
+        // evening. Two users who both last trained YESTERDAY used to get opposite directives purely
+        // on 06:30 vs 20:00: the 20:00 one was told "Rest today", the 06:30 one "train what's next".
         val daysSinceLast = finished.maxOfOrNull { it.startedAt }
-            ?.let { ((s.nowMs - it) / DAY_MS).toInt() } ?: Int.MAX_VALUE
+            ?.let {
+                java.time.temporal.ChronoUnit.DAYS.between(
+                    java.time.Instant.ofEpochMilli(it).atZone(s.zoneId).toLocalDate(),
+                    java.time.Instant.ofEpochMilli(s.nowMs).atZone(s.zoneId).toLocalDate()
+                ).toInt()
+            } ?: Int.MAX_VALUE
 
         // ── Recovery spacing: trained yesterday and readiness is poor → rest ──────
         val readinessLow = (readiness?.percent ?: 0) <= -t.readinessRestThreshold

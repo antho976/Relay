@@ -101,7 +101,21 @@ class WearDataRepository private constructor(context: Context) : DataClient.OnDa
 
     private fun applyItem(item: DataItem, deleted: Boolean, seeded: Boolean = false) {
         val bytes = item.data
-        when (item.uri.path) {
+        val path = item.uri.path
+        // Acks live at "$PATH_CMD_ACK/$commandId" — one path each, so a second command's ack can't
+        // supersede an unsynced first one — hence a prefix match rather than equality. A replayed
+        // ack is not an event: it answers a command from a previous run of this app.
+        if (path != null && path.startsWith(WearProtocol.PATH_CMD_ACK)) {
+            if (!deleted && !seeded) decodeInto<CmdAckDto>(bytes) { ack ->
+                _lastAck.value = ack
+                // A successful log names its set — remember it locally for undo/RPE.
+                if (ack.ok && ack.setId != null) {
+                    _lastLog.value = LastLog(ack.setId!!, System.currentTimeMillis())
+                }
+            }
+            return
+        }
+        when (path) {
             WearProtocol.PATH_SESSION_LIVE ->
                 if (deleted) _session.value = null
                 else decodeInto<SessionLiveDto>(bytes) { _session.value = it }
@@ -112,15 +126,6 @@ class WearDataRepository private constructor(context: Context) : DataClient.OnDa
                 if (!deleted) decodeInto<ConfigDto>(bytes) { _config.value = it }
             WearProtocol.PATH_GLANCE_TODAY ->
                 if (!deleted) decodeInto<GlanceTodayDto>(bytes) { _glance.value = it }
-            // A replayed ack is not an event: it answers a command from a previous run of this app.
-            WearProtocol.PATH_CMD_ACK ->
-                if (!deleted && !seeded) decodeInto<CmdAckDto>(bytes) { ack ->
-                    _lastAck.value = ack
-                    // A successful log names its set — remember it locally for undo/RPE.
-                    if (ack.ok && ack.setId != null) {
-                        _lastLog.value = LastLog(ack.setId!!, System.currentTimeMillis())
-                    }
-                }
         }
     }
 
@@ -176,14 +181,27 @@ class WearDataRepository private constructor(context: Context) : DataClient.OnDa
         return send(WearProtocol.PATH_CMD_SET_RPE, SetRpeCommand(commandId = newId(), setId = setId, rpe = rpe))
     }
 
-    fun sendHrBatch(sessionId: Long, samples: List<com.forge.shared.protocol.HrBatchDto.Sample>, totalKcal: Double?) {
-        sendBytes(
-            WearProtocol.PATH_HR_BATCH,
-            WearCodec.encode(
-                com.forge.shared.protocol.HrBatchDto(sessionId = sessionId, samples = samples, totalKcal = totalKcal)
+    /**
+     * Deliver a batch of HR samples. Returns true only once a connected node has accepted it, so the
+     * caller can keep the samples buffered instead of dropping them into a failed send.
+     *
+     * `nowMs` rides along so the phone can measure the skew between the two devices' clocks: the
+     * samples are stamped on the WATCH's clock and used to be filtered against a PHONE-clock session
+     * start, which silently ate the first seconds of every trace whenever the watch ran behind.
+     */
+    suspend fun sendHrBatchAwait(
+        sessionId: Long,
+        samples: List<com.forge.shared.protocol.HrBatchDto.Sample>,
+        totalKcal: Double?
+    ): Boolean = sendWithRetry(
+        WearProtocol.PATH_HR_BATCH,
+        WearCodec.encode(
+            com.forge.shared.protocol.HrBatchDto(
+                sessionId = sessionId, samples = samples, totalKcal = totalKcal,
+                sentAtMs = System.currentTimeMillis()
             )
         )
-    }
+    )
 
     fun sendHapticAck(timerEndAtMs: Long) {
         sendBytes(

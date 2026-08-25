@@ -118,26 +118,15 @@ class WorkoutSessionService : Service() {
             }
 
             // Handle timer-done events: vibrate + post alert notification (#16)
+            //
+            // Each event is handled in its OWN coroutine, so the collector never parks. The grace
+            // wait below used to run inside `collect`, and the bridge's flow has a one-slot buffer
+            // whose tryEmit result is discarded — so a second timer expiring inside that 2.5 s
+            // window (a short-rest circuit, or a skipped timer restarted immediately) was dropped
+            // silently. The user was left waiting on a cue that would never come, which is the exact
+            // failure this foreground service exists to prevent.
             serviceScope.launch {
-                bridge.timerDone.collect {
-                    // N2: respect the per-type opt-out (buzz + notify when the app is backgrounded).
-                    if (restTimerAlertEnabled) {
-                        // Haptic handoff (W1, DESIGN.md §16): when the watch is reachable, IT owns
-                        // the timer-done buzz — the phone waits a short grace for the wrist's ack
-                        // and stays silent when it lands. No ack (watch app dead, BT dropped at the
-                        // boundary) → the phone buzzes late rather than nobody buzzing.
-                        val watchReachable = wearConnection.reachableWearNodeId() != null
-                        if (watchReachable) {
-                            kotlinx.coroutines.delay(HAPTIC_ACK_GRACE_MS)
-                            if (wearConnection.hapticAckedWithin(HAPTIC_ACK_WINDOW_MS, System.currentTimeMillis())) {
-                                return@collect
-                            }
-                        }
-                        // Quiet hours: still buzz (you're mid-workout and want the cue) but skip the
-                        // heads-up notification so the phone stays visually silent.
-                        if (settingsRepo.isQuietNow()) vibratePhone() else postTimerDoneNotification()
-                    }
-                }
+                bridge.timerDone.collect { serviceScope.launch { handleTimerDone() } }
             }
 
             // Refresh elapsed time in the session notification every 60 s (#48)
@@ -199,6 +188,24 @@ class WorkoutSessionService : Service() {
             .build()
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         nm.notify(NOTIF_TIMER, notification)
+    }
+
+
+    private suspend fun handleTimerDone() {
+        // N2: respect the per-type opt-out (buzz + notify when the app is backgrounded).
+        if (!restTimerAlertEnabled) return
+        // Haptic handoff (W1, DESIGN.md §16): when the watch is reachable, IT owns the timer-done
+        // buzz — the phone waits a short grace for the wrist's ack and stays silent when it lands.
+        // No ack (watch app dead, BT dropped at the boundary) → the phone buzzes late rather than
+        // nobody buzzing.
+        val watchReachable = wearConnection.reachableWearNodeId() != null
+        if (watchReachable) {
+            kotlinx.coroutines.delay(HAPTIC_ACK_GRACE_MS)
+            if (wearConnection.hapticAckedWithin(HAPTIC_ACK_WINDOW_MS, System.currentTimeMillis())) return
+        }
+        // Quiet hours: still buzz (you're mid-workout and want the cue) but skip the heads-up
+        // notification so the phone stays visually silent.
+        if (settingsRepo.isQuietNow()) vibratePhone() else postTimerDoneNotification()
     }
 
     private fun vibratePhone() {

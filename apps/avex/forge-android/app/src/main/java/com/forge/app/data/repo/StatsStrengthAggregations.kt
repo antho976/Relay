@@ -57,8 +57,9 @@ internal fun buildHallOfFame(
         .mapNotNull { (exerciseId, sets) ->
             val plan = Program.exercise(exerciseId) ?: return@mapNotNull null
             val bestSet = sets.maxByOrNull { it.weightLb!! } ?: return@mapNotNull null
+            // Rounded to one decimal, not truncated: 1.99x bodyweight used to render "1.9x".
             val rel = if (bodyweightLb != null && bodyweightLb > 0)
-                (bestSet.weightLb!! / bodyweightLb * 10).toInt() / 10.0
+                (bestSet.weightLb!! / bodyweightLb * 10).roundToInt() / 10.0
             else null
             PrRecord(
                 exerciseId = exerciseId,

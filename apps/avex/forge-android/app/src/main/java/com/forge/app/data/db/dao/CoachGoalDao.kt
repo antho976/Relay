@@ -45,6 +45,10 @@ interface CoachGoalDao {
     @Query("UPDATE coach_goal SET priority = :priority WHERE id = :id")
     suspend fun setPriority(id: Long, priority: Int)
 
+    /** Duplicate guard for the importer: a goal is identified by what it targets and when it was set. */
+    @Query("SELECT EXISTS(SELECT 1 FROM coach_goal WHERE kind = :kind AND target_key = :targetKey AND created_at = :createdAt)")
+    suspend fun existsLike(kind: String, targetKey: String, createdAt: Long): Boolean
+
     @Query("DELETE FROM coach_goal WHERE id = :id")
     suspend fun delete(id: Long)
 }

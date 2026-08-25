@@ -26,6 +26,14 @@ class PrDetectorTest {
         assertFalse(PrDetector.isPr(listOf(set(50.0, 5)), newWeightLb = null, newReps = 10))
     }
 
+    /** A typed "0" parses to 0.0, not null, so it used to sail past the null guard: with no history
+     *  it was an unconditional PR, and with history a 0 x 20 "beat" a 100 x 5. */
+    @Test
+    fun zeroWeightIsNeverAPr() {
+        assertFalse(PrDetector.isPr(emptyList(), newWeightLb = 0.0, newReps = 5))
+        assertFalse(PrDetector.isPr(listOf(set(100.0, 5)), newWeightLb = 0.0, newReps = 20))
+    }
+
     @Test
     fun nonPositiveRepsIsNeverAPr() {
         assertFalse(PrDetector.isPr(emptyList(), newWeightLb = 100.0, newReps = 0))

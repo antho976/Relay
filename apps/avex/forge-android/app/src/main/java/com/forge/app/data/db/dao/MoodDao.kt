@@ -24,4 +24,10 @@ interface MoodDao {
     /** Entries since [sinceMs], newest first — adaptation-engine recovery/readiness input. */
     @Query("SELECT * FROM mood_entry WHERE recorded_at >= :sinceMs ORDER BY recorded_at DESC")
     suspend fun since(sinceMs: Long): List<MoodEntry>
+
+    /** Wipe every mood entry. Deleting a session only SETs its mood's `session_id` NULL (deliberate,
+     *  see [com.forge.app.data.db.entities.MoodEntry]) — so "reset session data" has to clear these
+     *  explicitly or orphaned moods keep feeding readiness for workouts that no longer exist. */
+    @Query("DELETE FROM mood_entry")
+    suspend fun deleteAll()
 }

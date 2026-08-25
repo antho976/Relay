@@ -21,4 +21,7 @@ interface RestDayDao {
 
     @Query("SELECT * FROM rest_day_entry ORDER BY date_key DESC")
     fun observeAll(): Flow<List<RestDayEntry>>
+
+    @Query("DELETE FROM rest_day_entry")
+    suspend fun deleteAll()
 }

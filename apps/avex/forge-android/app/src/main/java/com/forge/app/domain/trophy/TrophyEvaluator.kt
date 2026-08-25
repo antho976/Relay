@@ -14,7 +14,7 @@ object TrophyEvaluator {
     /** Whole days since the first finished session (0 when there is none yet). Single source for the
      *  anniversary trophy's match/progress/remaining math, so the day-conversion lives in one place. */
     private fun trainingDaysElapsed(s: TrophyStatsSnapshot): Int =
-        if (s.firstSessionMs != null) ((System.currentTimeMillis() - s.firstSessionMs) / DAY_MS).toInt() else 0
+        if (s.firstSessionMs != null) ((s.nowMs - s.firstSessionMs) / DAY_MS).toInt() else 0
 
     fun unlockedByRule(snapshot: TrophyStatsSnapshot, catalogue: List<Trophy> = Trophies.all): Set<String> =
         catalogue.asSequence()

@@ -21,7 +21,20 @@ object WearProtocol {
     const val PATH_CONFIG = "/config"
     const val PATH_GLANCE_TODAY = "/glance/today"
     /** Command acknowledgements, keyed by commandId — the watch's pending→confirmed signal. */
+    /**
+     * Ack path PREFIX — each ack lands at `"$PATH_CMD_ACK/$commandId"`, never at the bare path.
+     *
+     * The Data Layer is a key-value store with latest-wins semantics per path and no guarantee that
+     * intermediate values are delivered. One shared path therefore meant a second ack put while the
+     * first was still unsynced simply superseded it: the watch matches acks by commandId, so the
+     * first command's pending state never resolved, timed out to "Not logged · reconnecting" for a
+     * set that HAD been logged, and invited the re-tap that duplicates it. A `needsConfirm` ack lost
+     * the same way left the wrist unable to complete a legitimately heavy set at all.
+     */
     const val PATH_CMD_ACK = "/cmd/ack"
+
+    /** Where one command's ack lives. */
+    fun ackPath(commandId: String): String = "$PATH_CMD_ACK/$commandId"
 
     // ── Watch → phone Messages (commands) ────────────────────────────────────
     const val PATH_CMD_LOG_SET = "/cmd/log-set"

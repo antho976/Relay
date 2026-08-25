@@ -5,7 +5,8 @@ import com.forge.app.data.db.dao.BodyMeasurementDao
 import com.forge.app.data.db.entities.BodyMeasurementEntry
 import com.forge.app.domain.measurement.BodyMeasurementType
 import kotlinx.coroutines.flow.Flow
-import java.time.LocalDate
+import java.time.Instant
+import java.time.ZoneId
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -22,14 +23,23 @@ class BodyMeasurementRepository @Inject constructor(
     /** All readings, newest first — callers group by [BodyMeasurementEntry.type]. */
     fun observeAll(): Flow<List<BodyMeasurementEntry>> = dao.observeAll()
 
-    /** Record today's value for one measurement type (replaces an existing same-day entry). */
-    suspend fun log(type: BodyMeasurementType, valueCm: Double) {
+    /**
+     * Record today's value for one measurement type (replaces an existing same-day entry).
+     *
+     * Both stamps come from ONE reading of the injected clock. They used to come from two different
+     * sources — `LocalDate.now()` and `clock.nowMs()` — which is microseconds apart in production
+     * but arbitrarily far apart under a FakeClock or any future backfill path. The entity's contract
+     * ("one entry per type per day, upserted by date") is enforced on `date_key` while every chart
+     * sorts by `recorded_at`, so the two disagreeing is a row filed under a day it didn't happen on.
+     */
+    suspend fun log(type: BodyMeasurementType, valueCm: Double, zone: ZoneId = ZoneId.systemDefault()) {
+        val now = clock.nowMs()
         dao.upsert(
             BodyMeasurementEntry(
                 type = type.key,
-                dateKey = LocalDate.now().toString(),
+                dateKey = Instant.ofEpochMilli(now).atZone(zone).toLocalDate().toString(),
                 valueCm = valueCm,
-                recordedAt = clock.nowMs()
+                recordedAt = now
             )
         )
     }

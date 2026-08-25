@@ -576,7 +576,8 @@ object DesignDoctrine {
         val body = counts(violations).entries
             .sortedWith(compareBy({ it.key.substringBefore(' ') }, { it.key }))
             .joinToString("\n") { (key, n) -> "$n $key" }
-        allowlistFile.parentFile.mkdirs()
+        // parentFile is File? — the release gate's own harness shouldn't carry a nullable deref.
+        allowlistFile.parentFile?.mkdirs()
         allowlistFile.writeText("$header\n\n$body\n")
     }
 }

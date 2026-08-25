@@ -8,6 +8,7 @@ import com.forge.app.program.MuscleGroup
 import com.forge.app.program.VolumeModel
 import java.time.Instant
 import kotlin.math.roundToInt
+import kotlin.math.abs
 
 /**
  * What the coach knows about YOU specifically (Coach v3 D) — the learning loop, closed.
@@ -25,13 +26,17 @@ import kotlin.math.roundToInt
 object PersonalProfile {
 
     private const val DAY_MS = 24L * 60 * 60 * 1000
-    private const val WEEK_MS = 7 * DAY_MS
 
     /** How far a personal weekly cap may move from the population default, as a fraction. */
     const val CAP_BAND = 0.35
 
     /** Training weeks a muscle needs before its cap is personalised at all. */
     const val MIN_WEEKS_FOR_CAP = 8
+
+    /** Minimum gap between the two tiers' average lagged e1RM change before a muscle's cap is
+     *  personalised at all. Mirrors `AdaptThresholds.insightVolumeDeltaGapLb`, which gates the
+     *  same computation on the display side. Inside the band, the population default stands. */
+    const val VOLUME_RESPONSE_GAP_LB = 1.0
 
     /** Bouts needed on a lift before its rep-range sweet spot is trusted. */
     const val MIN_BOUTS_FOR_REPS = 10
@@ -85,7 +90,9 @@ object PersonalProfile {
         s.exerciseHistory.forEach { (id, bouts) ->
             val muscle = slotMuscle[id] ?: return@forEach
             bouts.filter { it.countsForProgression && !it.skipped }.forEach { bout ->
-                val week = bout.sessionStartedAt / WEEK_MS
+                // ISO week key, so these buckets line up with every other week in the engine.
+                // Dividing epoch millis by a week put the boundary on a Thursday.
+                val week = com.forge.app.core.time.mondayStartMs(bout.sessionStartedAt, s.zoneId)
                 val e1rm = bout.bestE1rm() ?: return@forEach
                 val sets = bout.sets.count { it.durationSeconds == null && !it.isAssisted }
                 val cell = byMuscleWeek.getOrPut(muscle) { HashMap() }
@@ -106,9 +113,17 @@ object PersonalProfile {
             val low = deltas.filter { it.first <= avgSets }.map { it.second }
             if (high.size < 3 || low.size < 3) return@mapNotNull null
 
+            // A DEAD BAND, not a coin toss. This was a strict `>` with no minimum gap, so 0.001 lb
+            // between the high-volume and low-volume tiers' average lagged e1RM change decided
+            // whether the muscle's weekly ceiling was default x 1.35 or default x 0.65 — for chest,
+            // 24 sets or 12, a 2x swing recomputed on every regenerate, off inputs noisy enough that
+            // one heavy week landing in the other tier flips the sign. InsightEngine.volumeResponse
+            // runs this same computation for DISPLAY and already refuses to speak inside the band;
+            // the generation path, which actually rewrites the user's program, did not.
+            val gap = high.average() - low.average()
+            if (abs(gap) < VOLUME_RESPONSE_GAP_LB) return@mapNotNull null
             val default = VolumeModel.weeklyCap[muscle] ?: Profile.DEFAULT_CAP
-            val responsive = high.average() > low.average()
-            val target = if (responsive) default * (1 + CAP_BAND) else default * (1 - CAP_BAND)
+            val target = if (gap > 0) default * (1 + CAP_BAND) else default * (1 - CAP_BAND)
             muscle to target.roundToInt().coerceAtLeast(4)
         }.toMap()
     }

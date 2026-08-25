@@ -264,6 +264,17 @@ object PreferenceKeys {
     /** Whether the Coach feature is surfaced at all (tab + banners). Off → coach hidden until the user
      *  re-enables it in Settings. Declined during onboarding for the no-plan / make-your-own modes. */
     val COACH_ENABLED = booleanPreferencesKey("coach_enabled")
+    /** ISO week id of the most recent weekly pass that ran while the coach was switched OFF, so
+     *  turning it back on mid-week can regenerate that pass instead of serving its inert result. */
+    val COACH_OFF_PASS_WEEK = stringPreferencesKey("coach_off_pass_week")
+
+    // ─── Rest timer survival across process death ─────────────────────────────
+    /** Wall-clock instant the running rest reaches zero (0 = no timer). */
+    val REST_TIMER_END_AT = longPreferencesKey("rest_timer_end_at")
+    /** The rest's full length, so a restored timer's ring shows the right proportion. */
+    val REST_TIMER_TOTAL = intPreferencesKey("rest_timer_total")
+    /** Seconds frozen at pause (0 = the timer was running). */
+    val REST_TIMER_PAUSED_REMAINING = intPreferencesKey("rest_timer_paused_remaining")
 
     // ─── Program generation (program-unlock) ──────────────────────────────────
     /** Training days/week the program targets — drives the split template (3-day ≠ 7-day). */

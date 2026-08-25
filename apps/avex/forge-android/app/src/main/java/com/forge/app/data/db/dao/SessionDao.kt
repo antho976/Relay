@@ -49,6 +49,14 @@ interface SessionDao {
     @Query("SELECT day_key FROM session WHERE finished_at IS NOT NULL ORDER BY finished_at DESC LIMIT 1")
     suspend fun lastFinishedDayKey(): String?
 
+    /** Day keys of sessions finished since [sinceMs] — the widget's "trained today" set. */
+    @Query("SELECT day_key FROM session WHERE finished_at >= :sinceMs")
+    suspend fun finishedDayKeysSince(sinceMs: Long): List<String>
+
+    /** Finish instants since [sinceMs] — the widget's Mon–Sun dot row, without loading entities. */
+    @Query("SELECT finished_at FROM session WHERE finished_at >= :sinceMs")
+    suspend fun finishedAtsSince(sinceMs: Long): List<Long>
+
     /** Previous finished session for the same day (excludes current — used for session comparison #52). */
     @Query("""
         SELECT * FROM session

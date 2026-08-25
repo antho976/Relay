@@ -103,6 +103,15 @@ interface CoachDao {
     suspend fun appliedFailed(): List<CoachDecision>
 
     /**
+     * Retire proposals left over from earlier weeks when a new week's pass lands. A proposal from
+     * three weeks ago is not a live offer: it was minted against a program and a history that have
+     * both moved on, and leaving it proposed meant it kept appearing in the Brief and kept being
+     * counted by summaryFor ("1 proposal for this week") indefinitely.
+     */
+    @Query("UPDATE coach_decision SET status = 'skipped' WHERE status = 'proposed' AND week_id != :currentWeekId")
+    suspend fun expireProposalsBefore(currentWeekId: String)
+
+    /**
      * Still-active (applied OR folded) decisions on the same target inserted AFTER [afterId] —
      * the per-slot LIFO guard for undo: undoing an older decision while a newer one still owns the
      * overlay would silently wipe the newer change (seam fix, finding 9).

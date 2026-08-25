@@ -64,6 +64,7 @@ class OverviewViewModel @Inject constructor(
     private val programRepo: com.forge.app.data.repo.ProgramRepository,
     private val programChangeGuard: com.forge.app.ui.common.ProgramChangeGuard,
     private val healthConnectManager: com.forge.app.data.health.HealthConnectManager,
+    private val timeSignals: com.forge.app.core.time.TimeSignals,
     private val clock: Clock
 ) : ViewModel() {
 
@@ -169,7 +170,19 @@ class OverviewViewModel @Inject constructor(
                 com.forge.app.program.Program.days.isEmpty()
             )
 
-    private val weekStartMs = clock.nowMs() - 7L * 24 * 60 * 60 * 1000
+    /**
+     * Weekly cardio distance, on the SAME ISO-week boundary as every other "this week" number and
+     * re-anchored on each day / timezone / clock change.
+     *
+     * It used to be a rolling `now − 7 days` computed ONCE in the ViewModel constructor: it
+     * disagreed with the Mon–Sun dots beside it on early weekdays, and left the app open for two
+     * days and it still described the seven days ending when the screen was first opened.
+     */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    private val weeklyCardioKm: kotlinx.coroutines.flow.Flow<Double?> =
+        timeSignals.dayStarts().flatMapLatest {
+            cardioRepo.observeDistanceKmSince(com.forge.app.core.time.mondayStartMs(clock.nowMs()))
+        }
 
     /** Goals for the Home preview, recomputed whenever a goal is added/edited/removed OR one of the
      *  progress INPUTS moves: a session finishes (lift bests + weekly tallies), cardio is logged or
@@ -200,7 +213,7 @@ class OverviewViewModel @Inject constructor(
         settingsRepo.shownMilestones,
         _onThisDayMemory,
         trophyRepo.observeUnlockedIds(),
-        cardioRepo.observeDistanceKmSince(weekStartMs),
+        weeklyCardioKm,
         statsRepo.observeDayVolumeStats(),
         settingsRepo.cardioWeeklyTargetMin,
         settingsRepo.weightUnit,

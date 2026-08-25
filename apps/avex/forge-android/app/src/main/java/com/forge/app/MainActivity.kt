@@ -44,6 +44,7 @@ import com.forge.app.ui.nav.ForgeNavHost
 import com.forge.app.ui.onboarding.OnboardingScreen
 import com.forge.app.ui.security.AppLockScreen
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.theme.ForgeTheme
 import com.forge.app.ui.theme.ForgeUiSettings
@@ -297,15 +298,23 @@ class MainActivity : FragmentActivity() {
                 .getOrDefault(SettingsRepository.StartupPreferences(
                     privacyMode = false,
                     appLockEnabled = false,
+                    galleryLockEnabled = false,
                     amoledMode = false,
                     appIcon = "",
                     themedLaunchIntro = true
                 ))
         }
-        // Secure the window on the very first frame when EITHER privacy mode or the app lock is
-        // on, and seed the lock state synchronously so a locked cold start never flashes the
-        // content behind the gate (GYMAP-69).
-        applyPrivacyMode(startup.privacyMode || startup.appLockEnabled)
+        // Secure the window on the very first frame when privacy mode or EITHER lock is on, and
+        // seed the lock state synchronously so a locked cold start never flashes the content behind
+        // the gate (GYMAP-69).
+        //
+        // Any lock the user turned on implies keeping Avex out of the Recents preview and out of
+        // screenshots, as every app-lock feature does. The gallery lock was missing from that
+        // expression even though the rule was already written in the comment above: a user who
+        // wanted the app open but their physique photos protected unlocked the gallery, pressed
+        // Home, and the Recents thumbnail showed the photo grid — with screenshots and screen
+        // recording working normally on it. The lock guarded the door and left the window open.
+        applyPrivacyMode(startup.privacyMode || startup.appLockEnabled || startup.galleryLockEnabled)
         appLock.primeEnabled(startup.appLockEnabled)
         applyAdaptiveWindowBackground(startup.amoledMode)
         val introIconKey = startup.appIcon
@@ -314,7 +323,11 @@ class MainActivity : FragmentActivity() {
         lifecycleScope.launch {
             // FLAG_SECURE follows privacy mode OR the app lock — turning on a lock implies keeping the
             // app out of the recents preview / screenshots, as every app-lock feature does.
-            combine(settingsRepo.privacyMode, settingsRepo.appLockEnabled) { privacy, lock -> privacy || lock }
+            combine(
+                settingsRepo.privacyMode,
+                settingsRepo.appLockEnabled,
+                settingsRepo.galleryLockEnabled
+            ) { privacy, appLock, galleryLock -> privacy || appLock || galleryLock }
                 .collect { secure -> applyPrivacyMode(secure) }
         }
         // Keep the icon pick live so onStop can read it without blocking on DataStore (and never stale).
@@ -380,29 +393,44 @@ class MainActivity : FragmentActivity() {
                         // The app lock is provided here so both this top-level gate and the gallery
                         // gate (ForgeNavHost) share one session (GYMAP-69).
                         CompositionLocalProvider(LocalAppLock provides appLock) {
+                        // The lock state is read HERE so the nav host beneath can be hidden from the
+                        // accessibility tree while it applies. FLAG_SECURE blocks pixels; it does not
+                        // block semantics, and the gate was a sibling drawn OVER a still-composed
+                        // ForgeNavHost — so TalkBack (an ordinary configuration for a low-vision
+                        // user, not only an attacker's tool) could swipe through the locked screen
+                        // and read out the overview behind it: session names, volumes, bodyweight.
+                        // The gallery gate at ForgeNavHost never had this problem because it
+                        // REPLACES its screen rather than covering it.
+                        val locked by appLock.appLocked.collectAsState()
+                        val lockActive = onboardingDone == true && locked
                         Box(Modifier.fillMaxSize()) {
                             when (onboardingDone) {
                                 false -> OnboardingScreen(onFinished = {})
                                 true -> {
-                                    ForgeNavHost(
-                                        initialDayKey = pendingWidgetDayKey,
-                                        privacyPolicyRequest = privacyPolicyRequest
-                                    )
+                                    Box(
+                                        Modifier
+                                            .fillMaxSize()
+                                            // Keeping it composed preserves the back stack and the
+                                            // screens' state; clearing its semantics keeps it unread.
+                                            .then(if (lockActive) Modifier.clearAndSetSemantics {} else Modifier)
+                                    ) {
+                                        ForgeNavHost(
+                                            initialDayKey = pendingWidgetDayKey,
+                                            privacyPolicyRequest = privacyPolicyRequest
+                                        )
+                                    }
                                 }
                                 null -> {} // DataStore still loading; the theme's gradient shows briefly
                             }
                             // App-lock gate — an opaque overlay above the nav host (whose state is
                             // preserved underneath), below the launch intro. The prompt waits for the
                             // intro to finish. Never over onboarding (the lock is set up there).
-                            if (onboardingDone == true) {
-                                val locked by appLock.appLocked.collectAsState()
-                                if (locked) {
-                                    AppLockScreen(
-                                        subtitle = "Unlock with your fingerprint, face, or phone PIN",
-                                        promptReady = !showIntro,
-                                        onUnlocked = { appLock.markAuthenticated() }
-                                    )
-                                }
+                            if (lockActive) {
+                                AppLockScreen(
+                                    subtitle = "Unlock with your fingerprint, face, or phone PIN",
+                                    promptReady = !showIntro,
+                                    onUnlocked = { appLock.markAuthenticated() }
+                                )
                             }
                             if (showIntro) AvexIntro(iconKey = introIconKey, themed = themedIntro, onDone = { showIntro = false })
                             // The app's one Undo snackbar (§13) — hosted here so a "deleted · Undo"

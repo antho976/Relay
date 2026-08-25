@@ -51,11 +51,18 @@ interface LoggedExerciseDao {
     /**
      * The most recently logged instance of this exercise in any *other* session. Used
      * to pre-fill the weight input on the day screen from the user's last performance.
+     *
+     * Ordered by the session's `started_at`, NOT by `logged_exercise.id`. The row id is an
+     * insertion counter that only tracks chronology while every session is created live: the
+     * importer writes BACKDATED sessions with fresh, highest-yet ids, so after backfilling years of
+     * history "last time" resolved to the newest row the importer happened to write — and that
+     * stale performance fed straight into the suggested working weight.
      */
     @Query("""
-        SELECT * FROM logged_exercise
-        WHERE exercise_id = :exerciseId AND session_id != :excludeSessionId
-        ORDER BY id DESC LIMIT 1
+        SELECT le.* FROM logged_exercise le
+        INNER JOIN session s ON le.session_id = s.id
+        WHERE le.exercise_id = :exerciseId AND le.session_id != :excludeSessionId
+        ORDER BY s.started_at DESC, le.id DESC LIMIT 1
     """)
     suspend fun lastLoggedBefore(exerciseId: String, excludeSessionId: Long): LoggedExercise?
 
@@ -176,6 +183,24 @@ interface LoggedExerciseDao {
     suspend fun allForFinishedSessions(): List<LoggedExercise>
 
     /** Set superset group for an exercise (#38). */
+    /**
+     * Single-column writes, so two of these racing can't clobber each other.
+     *
+     * They used to be SELECT-then-`update(row.copy(...))` in the repository: each built a whole row
+     * from its own pre-read snapshot, so a note debounce firing while the user tapped SKIP wrote
+     * `skipped = false` straight back over the skip. The exercise silently un-skipped itself and
+     * counted against the session's honesty percentage. [setSupersetGroup] below already had the
+     * right shape.
+     */
+    @Query("UPDATE logged_exercise SET difficulty = :rating WHERE id = :id")
+    suspend fun setDifficulty(id: Long, rating: EffortRating?)
+
+    @Query("UPDATE logged_exercise SET skipped = :skipped WHERE id = :id")
+    suspend fun setSkipped(id: Long, skipped: Boolean)
+
+    @Query("UPDATE logged_exercise SET note = :note WHERE id = :id")
+    suspend fun setNote(id: Long, note: String?)
+
     @Query("UPDATE logged_exercise SET superset_group = :group WHERE id = :id")
     suspend fun setSupersetGroup(id: Long, group: String?)
 

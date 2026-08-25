@@ -728,12 +728,29 @@ class HealthConnectManager @Inject constructor(
             if (!canReadExercise()) return@withContext emptyList()
             hcCatching {
                 val range = TimeRangeFilter.between(Instant.ofEpochMilli(sinceMs), Instant.ofEpochMilli(nowMs))
-                client.readRecords(
-                    ReadRecordsRequest(
-                        ExerciseSessionRecord::class, timeRangeFilter = range,
-                        ascendingOrder = false, pageSize = limit * 2
+                // PAGE until [limit] non-self records are found, rather than filtering one fixed
+                // page. The self-written filter runs client-side, and Avex writes an
+                // ExerciseSessionRecord for every finished gym session AND every non-rest cardio
+                // entry — so it is usually the most prolific writer in its own candidate pool. With
+                // a single `limit * 2` page, an active user's nine Avex records out of twelve left
+                // three candidates, and the watch runs this feature exists to surface sat at
+                // positions 13, 15 and 18, never seen. "Recorded with your watch — import?" stopped
+                // appearing for exactly the users who train most.
+                val out = ArrayList<ExerciseSessionRecord>(limit)
+                var token: String? = null
+                var pages = 0
+                do {
+                    val resp = client.readRecords(
+                        ReadRecordsRequest(
+                            ExerciseSessionRecord::class, timeRangeFilter = range,
+                            ascendingOrder = false, pageSize = limit * 2, pageToken = token
+                        )
                     )
-                ).records.filterNot(::isSelfWritten).take(limit).map { it.toWatchWorkout(client) }
+                    resp.records.filterNot(::isSelfWritten).forEach { if (out.size < limit) out += it }
+                    token = resp.pageToken
+                    pages++
+                } while (token != null && resp.records.isNotEmpty() && out.size < limit && pages < WATCH_WORKOUT_MAX_PAGES)
+                out.map { it.toWatchWorkout(client) }
             }.orEmpty()
         }
 
@@ -952,6 +969,8 @@ class HealthConnectManager @Inject constructor(
          *  years stay well under the cap; the cap just guards against a pathological history. */
         const val HISTORY_PAGE_SIZE = 1000
         const val HISTORY_MAX_RECORDS = 5000
+        /** Pages [recentWatchWorkouts] will walk looking for non-self records before giving up. */
+        const val WATCH_WORKOUT_MAX_PAGES = 5
         /** Cap on flattened HR samples per read (W5) — ~3h at 1Hz; charts downsample far below this. */
         const val HR_SERIES_MAX_SAMPLES = 12_000
         /** RMSSD sanity ceiling (W6) — real overnight values sit ~15–150ms; 500+ is a corrupt row. */

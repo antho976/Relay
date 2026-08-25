@@ -103,6 +103,41 @@ object ProgramGenerator {
             volumeFactor = GoalProfiles.volumeFactor(experience)
         ).map { it.sum() }
 
+    /**
+     * How much of [GenerationParams.volumeBias] the weekly cap actually lets through, per muscle.
+     *
+     * `VolumeModel.allocate` folds the coach's bias in and THEN runs the per-muscle cap trim, which
+     * can take every set the bias just added — most easily when `PersonalProfile` has decided the
+     * muscle isn't responsive and dropped its ceiling, so the un-biased baseline already sits at the
+     * cap. The two never reconciled: the coach went on believing it held a +2 credit on a muscle
+     * that received nothing, which permanently spent that muscle's ±2 drift budget (the planner
+     * would never propose chest volume again) and had the Coach Lab reporting "+2 set(s) carried
+     * forward" against a program where they did not exist.
+     *
+     * Two cheap pure allocations, no RNG and no exercise selection — this is the same arithmetic
+     * [generate] runs, asked twice.
+     */
+    fun effectiveVolumeBias(params: GenerationParams): Map<MuscleGroup, Int> {
+        if (params.volumeBias.isEmpty()) return emptyMap()
+        val template = SplitTemplates.forDays(params.daysPerWeek)
+        val focus = VolumeModel.emphasisFocus(params.emphasis) + params.priorityMuscles
+        val volumeFactor = GoalProfiles.volumeFactor(params.experience) * (if (params.deload) DELOAD_FACTOR else 1.0)
+        val minSets = if (params.deload) 1 else VolumeModel.MIN_SETS
+        fun totalsPerMuscle(bias: Map<MuscleGroup, Int>): Map<MuscleGroup, Int> {
+            val sets = VolumeModel.allocate(template, focus, volumeFactor, minSets, bias, params.personalCaps)
+            val out = HashMap<MuscleGroup, Int>()
+            template.forEachIndexed { di, day ->
+                day.targets.forEachIndexed { si, slot ->
+                    out[slot.muscle] = (out[slot.muscle] ?: 0) + sets[di][si]
+                }
+            }
+            return out
+        }
+        val withBias = totalsPerMuscle(params.volumeBias)
+        val without = totalsPerMuscle(emptyMap())
+        return params.volumeBias.keys.associateWith { m -> (withBias[m] ?: 0) - (without[m] ?: 0) }
+    }
+
     fun generate(
         params: GenerationParams,
         available: Set<Equipment>,

@@ -11,7 +11,14 @@ package com.forge.app.data.importer
 class GenericCsvImporter : GymImporter {
     override val source = ImportSource.GENERIC_CSV
 
-    override fun canParse(text: String): Boolean = resolve(CsvParser.parse(text)) != null
+    /**
+     * Header-only, like every other importer's sniff. This used to parse the ENTIRE file into cells
+     * just to read its column names, throw that away, and let [parse] do it all over again — so an
+     * unrecognised 20 MB spreadsheet sitting in Downloads was fully parsed twice on every visit to
+     * the Import screen, for nothing.
+     */
+    override fun canParse(text: String): Boolean =
+        CsvParser.parseHeader(text)?.let { columnsFrom(it) } != null
 
     override fun parse(text: String, assumeKg: Boolean): List<ImportedSession> {
         // Parse the file ONCE and share the rows with column resolution — resolve() used to re-parse,
@@ -53,7 +60,12 @@ class GenericCsvImporter : GymImporter {
     /** Resolve the required columns from already-parsed rows, or null if this isn't a workout CSV. */
     private fun resolve(rows: List<List<String>>): Columns? {
         if (rows.size < 2) return null
-        val idx = ImportParsing.headerIndex(rows.first())
+        return columnsFrom(rows.first())
+    }
+
+    /** The column map derived from the header row alone — all detection ever needed. */
+    private fun columnsFrom(header: List<String>): Columns? {
+        val idx = ImportParsing.headerIndex(header)
         val date = ImportParsing.findCol(idx, "date") ?: ImportParsing.findCol(idx, "start") ?: return null
         val exercise = ImportParsing.findCol(idx, "exercise", "movement", "lift") ?: return null
         // Exclude a per-row "Bodyweight" column: it holds the user's bodyweight, not the lift load,

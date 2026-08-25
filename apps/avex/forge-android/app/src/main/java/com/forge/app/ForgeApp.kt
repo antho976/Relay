@@ -87,7 +87,20 @@ class ForgeApp : Application(), Configuration.Provider {
             if (swapStagedFile(pending, live, afterSwap = {
                     deleteOrThrow(File(live.path + "-wal"))
                     deleteOrThrow(File(live.path + "-shm"))
-                })) { pending.delete(); applied = true } else anyFailed = true
+                })) { pending.delete(); applied = true } else {
+                // The database is the ANCHOR of a restore, and the swaps below are not independent
+                // of it — the staged preferences describe the staged dataset. Carrying on after a
+                // failed DB swap replaced the live preferences (the whole program-generation config
+                // among them) with a backup's, while the live database stayed put: the user's
+                // program then described days none of their sessions matched, irreversibly, because
+                // nothing anywhere keeps a copy of the pre-restore preferences. And with the DB
+                // swap failing (a `forge.db-wal` still held by a running WorkoutSessionService is
+                // the usual cause) it would fail again on every subsequent boot.
+                //
+                // So the set applies together or not at all: leave everything staged and let the
+                // next cold start retry it as one unit, with no confirmation shown.
+                return
+            }
         }
         if (pendingPrefs.exists()) {
             // Must match preferencesDataStore(name = "forge_settings").

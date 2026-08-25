@@ -39,5 +39,11 @@ data class TrophyStatsSnapshot(
     /** Non-rest cardio sessions logged (cardio trophies). */
     val cardioSessions: Int = 0,
     /** Total cardio distance in km (cardio trophies). */
-    val cardioDistanceKm: Double = 0.0
+    val cardioDistanceKm: Double = 0.0,
+    /**
+     * When this snapshot was taken. Carried so [TrophyEvaluator] — a PURE domain object — no longer
+     * reaches for `System.currentTimeMillis()` behind its callers' backs; the anniversary trophy is
+     * then testable with a FakeClock like everything else the snapshot describes.
+     */
+    val nowMs: Long = System.currentTimeMillis()
 )

@@ -1,13 +1,13 @@
 package com.forge.app.data.repo
 
 import android.content.Context
-import androidx.glance.appwidget.updateAll
 import androidx.room.withTransaction
 import com.forge.app.data.db.ForgeDatabase
 import com.forge.app.data.db.dao.ExerciseCustomizationDao
 import com.forge.app.data.db.dao.ProgramCustomizationDao
 import com.forge.app.data.db.dao.ProgramDao
 import com.forge.app.data.db.dao.SessionDao
+import com.forge.app.data.db.entities.CoachDecision
 import com.forge.app.data.db.entities.ProgramDay
 import com.forge.app.data.db.entities.ProgramSlot
 import com.forge.app.data.prefs.SettingsRepository
@@ -22,7 +22,7 @@ import com.forge.app.program.MuscleGroup
 import com.forge.app.program.ProblemArea
 import com.forge.app.program.Program
 import com.forge.app.program.ProgramGenerator
-import com.forge.app.widget.ForgeWidget
+import com.forge.app.widget.refreshForgeWidgets
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -113,6 +113,46 @@ class ProgramRepository @Inject constructor(
         runCatching { com.forge.app.domain.coach.CoachGenBias.from(coachDao.allDecisions()) }
             .getOrDefault(com.forge.app.domain.coach.GenBias.NEUTRAL)
 
+    /**
+     * Mark the volume decisions the weekly cap wouldn't let through as NOT FOLLOWED, so they drop
+     * out of [com.forge.app.domain.coach.CoachGenBias] — and with it out of the planner's ±2 drift
+     * cap and the Coach Lab's "carried forward" line.
+     *
+     * "Not followed" is the honest verdict: the change was applied but the program never carried
+     * it, so there is nothing for the watcher to judge and nothing for generation to learn.
+     */
+    private suspend fun retireTrimmedVolumeBias(
+        intended: Map<MuscleGroup, Int>,
+        effective: Map<MuscleGroup, Int>
+    ) {
+        if (intended.isEmpty()) return
+        val trimmedByMuscle = intended.mapValues { (muscle, want) ->
+            val got = effective[muscle] ?: 0
+            // Only a shortfall in the SAME direction counts; a sign flip retires the lot.
+            val delivered = if (want > 0) got.coerceAtLeast(0) else (-got).coerceAtLeast(0)
+            (kotlin.math.abs(want) - delivered).coerceAtLeast(0)
+        }.filterValues { it > 0 }
+        if (trimmedByMuscle.isEmpty()) return
+
+        val candidates = coachDao.allDecisions()
+            .filter {
+                (it.status == CoachRepository.STATUS_APPLIED || it.status == CoachRepository.STATUS_FOLDED) &&
+                    it.type.startsWith("volume") &&
+                    it.outcome != CoachDecision.OUTCOME_NOT_FOLLOWED && it.outcome != "failed"
+            }
+            .sortedByDescending { it.id } // newest first: the most recent credit is the one that bounced
+        trimmedByMuscle.forEach { (muscle, count) ->
+            val wantUp = (intended[muscle] ?: 0) > 0
+            candidates
+                .filter {
+                    ExerciseLibrary.byId(it.targetKey)?.muscle == muscle &&
+                        (it.type == "volume_up") == wantUp
+                }
+                .take(count)
+                .forEach { coachDao.setOutcome(it.id, CoachDecision.OUTCOME_NOT_FOLLOWED) }
+        }
+    }
+
     /** Generate a fresh program from [params] + equipment/like/dislike, persist it, and load it (Phase 2). */
     suspend fun generate(
         params: GenerationParams,
@@ -127,9 +167,9 @@ class ProgramRepository @Inject constructor(
         // and prefer/avoid feed selection inside the generator; repBias is applied to the slot reps
         // below (a coach rep_shift re-binds to its exercise wherever it lands).
         val bias = coachBias()
+        val genParams = params.copy(volumeBias = bias.volumeBias, avoid = params.avoid + bias.avoid)
         val generated = ProgramGenerator.generate(
-            params.copy(volumeBias = bias.volumeBias, avoid = params.avoid + bias.avoid),
-            available, liked + bias.prefer, disliked, recent, seed
+            genParams, available, liked + bias.prefer, disliked, recent, seed
         )
         val days = ArrayList<ProgramDay>()
         val slots = ArrayList<ProgramSlot>()
@@ -147,6 +187,10 @@ class ProgramRepository @Inject constructor(
         database.withTransaction {
             dao.replaceProgram(days, slots)
             reconcileCustomizations(days)
+            // The weekly cap can shave off sets the coach's bias just added. Retire the decisions
+            // that didn't survive BEFORE folding, so the ledger stops claiming volume the program
+            // never received.
+            retireTrimmedVolumeBias(bias.volumeBias, ProgramGenerator.effectiveVolumeBias(genParams))
             coachDao.foldAllAppliedDeltas()
             discardActiveSession()
         }
@@ -321,7 +365,7 @@ class ProgramRepository @Inject constructor(
         }
         Program.setActive(plans)
         _revision.value += 1
-        if (refreshWidget) runCatching { ForgeWidget().updateAll(context) }
+        if (refreshWidget) refreshForgeWidgets(context)
     }
 
     /** Presentable subtitle + generic warmup for a generated day, derived from its archetype key. */

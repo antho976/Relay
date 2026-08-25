@@ -11,6 +11,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 import com.forge.app.domain.units.filterDecimalInput
@@ -50,10 +51,8 @@ class CheckinViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             val answered = checkinRepo.today()?.hasAnswers == true
-            _state.value = _state.value.copy(
-                visible = runCatching { checkinRepo.shouldPrompt() }.getOrDefault(false),
-                answeredToday = answered
-            )
+            val shouldPrompt = runCatching { checkinRepo.shouldPrompt() }.getOrDefault(false)
+            _state.update { it.copy(visible = shouldPrompt, answeredToday = answered) }
         }
     }
 
@@ -114,7 +113,7 @@ class CheckinViewModel @Inject constructor(
                 // Morning is weigh-in time; logging it here saves a trip to the profile.
                 s.weightText.toDoubleOrNull()?.let { bodyweightRepo.logWeightOnly(it) }
             }.onSuccess {
-                _state.value = _state.value.copy(visible = false, answeredToday = true)
+                _state.update { it.copy(visible = false, answeredToday = true) }
             }.onFailure { e ->
                 if (e is CancellationException) throw e
                 snackbar.show("Couldn't save your check-in. Try again.")
@@ -125,7 +124,7 @@ class CheckinViewModel @Inject constructor(
     fun skip() {
         viewModelScope.launch {
             runCatching { checkinRepo.skipToday() }
-                .onSuccess { _state.value = _state.value.copy(visible = false) }
+                .onSuccess { _state.update { st -> st.copy(visible = false) } }
                 .onFailure { e ->
                     if (e is CancellationException) throw e
                     snackbar.show("Couldn't skip today's check-in. Try again.")

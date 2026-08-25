@@ -29,8 +29,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.TrendingDown
-import androidx.compose.material.icons.filled.TrendingUp
+import androidx.compose.material.icons.automirrored.filled.TrendingDown
+import androidx.compose.material.icons.automirrored.filled.TrendingUp
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -59,6 +59,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.data.db.entities.LoggedSet
+import com.forge.app.domain.units.MAX_REPS_DIGITS
 import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.formatHoldLabel
 import com.forge.app.domain.units.formatWeight
@@ -195,7 +196,7 @@ fun SetRow(
             )
             OutlinedTextField(
                 value = editReps,
-                onValueChange = { if (it.all { c -> c.isDigit() }) editReps = it },
+                onValueChange = { if (it.all { c -> c.isDigit() }) editReps = it.take(MAX_REPS_DIGITS) },
                 modifier = Modifier.width(SetTable.REPS_COL_W + 24.dp),
                 label = { Text("Reps") },
                 singleLine = true,
@@ -312,7 +313,9 @@ fun SetRow(
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                     if (deltaPositive || deltaNegative) {
                         Icon(
-                            if (deltaPositive) Icons.Filled.TrendingUp else Icons.Filled.TrendingDown,
+                            // Auto-mirrored: the non-mirrored variants are deprecated and point the wrong way in RTL.
+                            if (deltaPositive) Icons.AutoMirrored.Filled.TrendingUp
+                            else Icons.AutoMirrored.Filled.TrendingDown,
                             contentDescription = null,
                             tint = deltaColor,
                             modifier = Modifier.size(13.dp)

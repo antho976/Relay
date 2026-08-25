@@ -1,5 +1,6 @@
 package com.forge.app.domain.adapt
 
+import com.forge.app.core.time.mondayStartMs
 import com.forge.app.data.db.entities.durationMinutes
 import com.forge.app.program.DayPlan
 import com.forge.app.program.Difficulty
@@ -141,7 +142,8 @@ object InsightEngine {
         slots: Map<String, ProgramSlotSnap>,
         t: AdaptThresholds
     ): Recommendation.Insight? {
-        val weekStart = s.nowMs - 7 * DAY_MS
+        // ISO week, like every other "this week" the user is shown.
+        val weekStart = mondayStartMs(s.nowMs, s.zoneId)
         val weekBouts = s.exerciseHistory.entries.flatMap { (id, bouts) ->
             val muscle = slots[id]?.muscle ?: return@flatMap emptyList()
             bouts.filter { it.sessionStartedAt >= weekStart }.map { muscle to it }

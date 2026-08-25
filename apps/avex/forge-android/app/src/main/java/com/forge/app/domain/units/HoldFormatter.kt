@@ -13,6 +13,14 @@ import java.util.Locale
 
 const val MAX_HOLD_SECONDS: Int = 3600 // 1 h — far above any real plank/hang; also the input ceiling.
 
+/**
+ * Digits a reps field accepts. The write boundary already clamps reps to `MAX_LOGGED_REPS` (999),
+ * but an unbounded field let the user type a value that never got that far: 11+ digits overflow
+ * `Int`, `toIntOrNull()` returns null, and the set is silently dropped at save with no error. Three
+ * digits is exactly the clamp, so what the field accepts is what gets stored.
+ */
+const val MAX_REPS_DIGITS: Int = 3
+
 /** Whole seconds as a stopwatch reading: 45 → "0:45", 90 → "1:30", 605 → "10:05". Negatives clamp to 0. */
 fun formatHold(totalSeconds: Int): String {
     val s = totalSeconds.coerceAtLeast(0)

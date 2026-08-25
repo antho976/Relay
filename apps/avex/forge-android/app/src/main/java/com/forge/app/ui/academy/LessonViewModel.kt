@@ -14,6 +14,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -52,9 +53,8 @@ class LessonViewModel @Inject constructor(
         if (lesson != null) {
             viewModelScope.launch {
                 runCatching { academyRepo.markOpened(lesson.id) }
-                _state.value = _state.value.copy(
-                    examples = runCatching { examples() }.getOrDefault(emptyMap())
-                )
+                val loadedExamples = runCatching { examples() }.getOrDefault(emptyMap())
+                _state.update { it.copy(examples = loadedExamples) }
             }
         }
     }
@@ -63,7 +63,7 @@ class LessonViewModel @Inject constructor(
     fun onReachedEnd() {
         val lesson = _state.value.lesson ?: return
         if (_state.value.finished) return
-        _state.value = _state.value.copy(finished = true)
+        _state.update { it.copy(finished = true) }
         viewModelScope.launch { runCatching { academyRepo.markCompleted(lesson.id) } }
     }
 

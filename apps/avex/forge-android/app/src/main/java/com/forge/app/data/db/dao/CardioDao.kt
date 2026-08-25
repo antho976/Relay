@@ -60,6 +60,10 @@ interface CardioDao {
     @Query("SELECT SUM(duration_min) FROM cardio_entry WHERE type != :excludeType")
     suspend fun totalMinutes(excludeType: String = "rest"): Int?
 
+    /** Duplicate guard for the importer: same instant, same type, same duration is the same entry. */
+    @Query("SELECT EXISTS(SELECT 1 FROM cardio_entry WHERE date = :date AND type = :type AND duration_min = :durationMin)")
+    suspend fun existsAt(date: Long, type: String, durationMin: Int): Boolean
+
     @Query("DELETE FROM cardio_entry")
     suspend fun deleteAll()
 }

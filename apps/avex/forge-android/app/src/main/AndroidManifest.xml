@@ -532,9 +532,15 @@
 
         <!-- W1: the phone's ear for wrist commands. The Data Layer wakes this even when the app
              was killed — commands still land in Room (the plan's phone-in-the-bag guarantee). -->
+        <!-- Constrained to Google Play services, the documented hardening for a
+             WearableListenerService. Without it any app on the device could bind this and replay
+             crafted /cmd messages: what sits behind it is not read-only — /cmd/log-set and
+             /cmd/undo-set write to and delete from the user's training history, and the service is
+             declared to wake the process while Avex is closed. -->
         <service
             android:name=".service.wear.WearSyncService"
-            android:exported="true">
+            android:exported="true"
+            android:permission="com.google.android.gms.permission.BIND_WEARABLE_LISTENER">
             <intent-filter>
                 <action android:name="com.google.android.gms.wearable.MESSAGE_RECEIVED" />
                 <data android:scheme="wear" android:host="*" android:pathPrefix="/cmd" />
@@ -573,6 +579,20 @@
         </provider>
 
         <!-- Today widget (#146) -->
+        <!-- Day / clock / timezone changes: re-anchor every "today" and "this week" flow, refresh
+             the widget, and re-arm the daily reminder (a 24 h periodic is elapsed time, so it
+             drifts an hour at each DST transition and never recovers on its own). Not exported —
+             these are system broadcasts, which reach a non-exported manifest receiver. -->
+        <receiver
+            android:name=".service.TimeChangeReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.DATE_CHANGED" />
+            </intent-filter>
+        </receiver>
+
         <receiver
             android:name=".widget.ForgeWidgetReceiver"
             android:exported="true">

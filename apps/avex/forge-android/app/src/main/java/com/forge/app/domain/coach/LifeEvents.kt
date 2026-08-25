@@ -59,7 +59,13 @@ object LifeEvents {
         val layoff: Layoff?,
         val soreMuscles: Set<MuscleGroup>,
         val restrictedMuscles: Set<MuscleGroup>,
-        val restrictedExerciseIds: Set<String>
+        val restrictedExerciseIds: Set<String>,
+        /**
+         * Instants at which illness was signalled (a check-in ticked "sick", or a rest day logged
+         * with reason "sick"). [sick] answers "is the athlete unwell NOW"; this answers "was the
+         * athlete unwell THEN", which is what a decision's outcome window needs.
+         */
+        val sickAtMs: List<Long> = emptyList()
     ) {
         /** True when the coach should hold back rather than push: illness or a fresh return. */
         val easeOff: Boolean get() = sick || layoff?.returning == true || layoff?.away == true
@@ -102,6 +108,14 @@ object LifeEvents {
         // one flag, so illness can never be counted twice (M6).
         val sickFromCardio = cardio
             .any { it.restReason == "sick" && nowMs - it.date <= SICK_WINDOW_DAYS * DAY_MS }
+        // Every illness signal we were given, WITH ITS TIMESTAMP — not just the recent ones. The
+        // "is the athlete unwell now" flags above are a `nowMs` question; judging a decision's
+        // 14-day window is a "was the athlete unwell during it" question, and answering the second
+        // with the first is what voided fortnights of real evidence (see suppressesVerdict).
+        val sickAtMs = (
+            checkins.filter { it.sick }.map { it.recordedAt } +
+                cardio.filter { it.restReason == "sick" }.map { it.date }
+            ).sorted()
 
         val sore = checkins
             .filter { nowMs - it.recordedAt <= SORENESS_WINDOW_HOURS * 60L * 60 * 1000 }
@@ -121,7 +135,8 @@ object LifeEvents {
             restrictedExerciseIds = active
                 .filter { it.scope == InjuryRestriction.SCOPE_EXERCISE }
                 .map { it.targetKey }
-                .toSet()
+                .toSet(),
+            sickAtMs = sickAtMs
         )
     }
 
@@ -177,7 +192,18 @@ object LifeEvents {
      * home (plan M2): recorded, watched, but never counted against the coach.
      */
     fun suppressesVerdict(appliedAtMs: Long, windowEndMs: Long, state: State): Boolean {
-        if (state.sick) return true
+        // Scoped to the decision's own window, like the layoff test directly below it.
+        //
+        // This was `if (state.sick) return true` — a CURRENT condition (a sick check-in within the
+        // last three days) applied as though it covered a 14-day window that had already been
+        // lived. A user who applied three changes on a Monday, trained the whole fortnight, then
+        // caught a cold on the Sunday had all three windows written to the durable `outcome` column
+        // as "not_followed" on the Monday pass. TrustLedger reads that column, so someone unlucky
+        // enough to be ill on a Monday never accumulated any trust at all.
+        val sickInWindow = state.sickAtMs.any { at ->
+            at <= windowEndMs && at + SICK_WINDOW_DAYS * DAY_MS >= appliedAtMs
+        }
+        if (sickInWindow) return true
         val layoff = state.layoff ?: return false
         // The window overlaps the gap when the decision predates the gap's end and the window
         // outlives its start.

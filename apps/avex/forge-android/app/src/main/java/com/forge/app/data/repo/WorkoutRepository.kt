@@ -84,8 +84,20 @@ class WorkoutRepository @Inject constructor(
     private val settingsRepo: SettingsRepository,
     private val programRepository: ProgramRepository,
     private val wearHrIngest: com.forge.app.service.wear.WearHrIngest,
-    private val database: com.forge.app.data.db.ForgeDatabase
+    private val database: com.forge.app.data.db.ForgeDatabase,
+    @dagger.hilt.android.qualifiers.ApplicationContext private val appContext: android.content.Context
 ) {
+
+    /**
+     * Redraw the home-screen widget after a change to what it claims.
+     *
+     * The widget renders the active session, the streak and the week's dots — all session-derived —
+     * yet the only refresh was a program regeneration plus the system's periodic pass, whose floor
+     * is 30 minutes and which Doze defers indefinitely. So "WORKOUT IN PROGRESS · Tap to resume"
+     * could sit on the home screen for an hour after the workout ended, and the streak stayed a
+     * workout behind all day. These four moments are the ones that change the answer.
+     */
+    private suspend fun refreshWidget() = com.forge.app.widget.refreshForgeWidgets(appContext)
 
     /**
      * The window an applied deload governs: it pauses rotation, tags the sessions logged inside it,
@@ -139,6 +151,7 @@ class WorkoutRepository @Inject constructor(
             sessionType = sessionType
         )
         val id = sessionDao.insert(session)
+        refreshWidget()
         return StartedSession(session.copy(id = id), created = true)
     }
 
@@ -316,6 +329,7 @@ class WorkoutRepository @Inject constructor(
         )
         maybeRotateProgram()
         writeFinishMirrors(session, endMs = now, activeSeconds = activeSeconds)
+        refreshWidget()
         return activeSeconds
     }
 
@@ -504,6 +518,7 @@ class WorkoutRepository @Inject constructor(
     suspend fun discardSession(sessionId: Long) {
         val session = sessionDao.get(sessionId) ?: return
         sessionDao.delete(session) // CASCADE removes LoggedExercises and their LoggedSets
+        refreshWidget()
     }
 
     /** What [resolveOrphanSession] did, so the UI can surface it once. */
@@ -552,6 +567,7 @@ class WorkoutRepository @Inject constructor(
         // session was abandoned, and `now` would write a multi-day workout into Samsung Health.
         val hcEndMs = sets.maxOfOrNull { it.completedAt } ?: (active.startedAt + activeSeconds * 1000L)
         writeFinishMirrors(active, endMs = hcEndMs, activeSeconds = activeSeconds)
+        refreshWidget()
         return OrphanResolution(finishedToHistory = true)
     }
 
@@ -591,20 +607,16 @@ class WorkoutRepository @Inject constructor(
     suspend fun updateExercise(loggedExercise: LoggedExercise) =
         loggedExerciseDao.update(loggedExercise)
 
-    suspend fun setRating(loggedExerciseId: Long, rating: EffortRating) {
-        val ex = loggedExerciseDao.get(loggedExerciseId) ?: return
-        loggedExerciseDao.update(ex.copy(difficulty = rating))
-    }
+    // Targeted single-column writes rather than read-modify-write of the whole row: see the DAO's
+    // note — a note commit racing a SKIP tap used to silently un-skip the exercise.
+    suspend fun setRating(loggedExerciseId: Long, rating: EffortRating) =
+        loggedExerciseDao.setDifficulty(loggedExerciseId, rating)
 
-    suspend fun setSkipped(loggedExerciseId: Long, skipped: Boolean) {
-        val ex = loggedExerciseDao.get(loggedExerciseId) ?: return
-        loggedExerciseDao.update(ex.copy(skipped = skipped))
-    }
+    suspend fun setSkipped(loggedExerciseId: Long, skipped: Boolean) =
+        loggedExerciseDao.setSkipped(loggedExerciseId, skipped)
 
-    suspend fun setNote(loggedExerciseId: Long, note: String?) {
-        val ex = loggedExerciseDao.get(loggedExerciseId) ?: return
-        loggedExerciseDao.update(ex.copy(note = note))
-    }
+    suspend fun setNote(loggedExerciseId: Long, note: String?) =
+        loggedExerciseDao.setNote(loggedExerciseId, note)
 
     /**
      * Apply a session swap to a logged exercise, preserving every other column (superset group, etc.).
