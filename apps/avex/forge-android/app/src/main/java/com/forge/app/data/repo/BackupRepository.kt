@@ -206,6 +206,17 @@ class BackupRepository @Inject constructor(
                                     put("rpe", set.rpe ?: 0)
                                     put("completedAt", set.completedAt)
                                     put("difficultyTag", set.difficultyTag ?: "")
+                                    // These change what the set MEANS, so an export without them is
+                                    // not the same training history: a timed hold's reps is not a
+                                    // count, and an assisted set is not PR-eligible. Re-importing an
+                                    // export that omitted them turned a 90 s weighted plank into a
+                                    // 90-rep 45 lb set at the top of the Hall of Fame.
+                                    put("durationSeconds", set.durationSeconds ?: 0)
+                                    put("isAssisted", set.isAssisted)
+                                    put("isAmrap", set.isAmrap)
+                                    put("toFailure", set.toFailure)
+                                    put("setType", set.setType ?: "")
+                                    put("dropAnnotation", set.dropAnnotation ?: "")
                                 })
                             }
                             put("sets", setArr)

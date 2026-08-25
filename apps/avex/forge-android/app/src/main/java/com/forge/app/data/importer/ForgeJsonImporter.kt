@@ -49,7 +49,20 @@ class ForgeJsonImporter : GymImporter {
                     val weightLb = set.optDouble("weightLb", 0.0).takeIf { it > 0.0 }
                     val reps = set.optInt("reps", 0)
                     val rpe = set.optDouble("rpe", 0.0).takeIf { it in 1.0..10.0 }
-                    sets.add(ImportedSet(weightLb = weightLb, reps = reps, rpe = rpe))
+                    // Read back everything that changes what the set means. Older exports simply
+                    // don't carry these keys and fall through to the same defaults as before.
+                    val setType = set.optString("setType").ifBlank { null }
+                    sets.add(ImportedSet(
+                        weightLb = weightLb,
+                        reps = reps,
+                        rpe = rpe,
+                        isWarmup = setType == "warmup",
+                        durationSeconds = set.optInt("durationSeconds", 0).takeIf { it > 0 },
+                        isAssisted = set.optBoolean("isAssisted", false),
+                        isAmrap = set.optBoolean("isAmrap", false),
+                        toFailure = set.optBoolean("toFailure", false),
+                        setType = setType
+                    ))
                 }
                 if (sets.isNotEmpty()) {
                     exercises.add(ImportedExercise(

@@ -131,9 +131,12 @@ class WorkoutImportRepository @Inject constructor(
                 val totalSets = session.exercises.sumOf { it.sets.size }
                 if (totalSets == 0) continue
 
-                // Denormalised volume from lb weights, matching how a real finished session is stamped.
+                // Denormalised volume from lb weights, matching how a real finished session is
+                // stamped — including VolumeCalculator's exclusion of timed holds, whose reps is a
+                // duration, not a count.
                 val volumeLb = session.exercises.sumOf { ex ->
-                    ex.sets.sumOf { (it.weightLb ?: 0.0) * it.reps }
+                    ex.sets.filter { it.durationSeconds == null }
+                        .sumOf { (it.weightLb ?: 0.0) * it.reps }
                 }
 
                 // Duplicate guard (#GYMAP-17): a workout already logged at this start time WITH THE
@@ -204,7 +207,15 @@ class WorkoutImportRepository @Inject constructor(
                                 weightLb = s.weightLb,
                                 reps = s.reps,
                                 completedAt = finishedAt,
-                                rpe = s.rpe
+                                rpe = s.rpe,
+                                // Carried through rather than left at the entity defaults: a timed
+                                // hold whose durationSeconds went missing reads as a rep set, and an
+                                // assisted set that came back as unassisted becomes PR-eligible.
+                                durationSeconds = s.durationSeconds,
+                                isAssisted = s.isAssisted,
+                                isAmrap = s.isAmrap,
+                                toFailure = s.toFailure,
+                                setType = s.setType ?: if (s.isWarmup) "warmup" else null
                             )
                         }
                     )
