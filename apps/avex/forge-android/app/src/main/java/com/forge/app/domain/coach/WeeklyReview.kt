@@ -6,6 +6,9 @@ import com.forge.app.domain.adapt.DeloadAdvisor
 import com.forge.app.domain.adapt.ProgressionAdvisor
 import com.forge.app.domain.cardio.CardioType
 import com.forge.app.domain.session.SessionType
+import java.time.Instant
+import java.time.ZoneId
+import java.time.temporal.ChronoUnit
 import kotlin.math.roundToInt
 
 /** The "Last week" half of the Week Brief — numbers a coach would open with. */
@@ -39,9 +42,10 @@ data class WeeklyReviewData(
 }
 
 /**
- * Pure assembler for the Week Brief's review section (auto-coach Phase 1). "Last week" is
- * the 7 days before [weekStartMs] (the Monday the Brief is published); the prior week is
- * the 7 days before that.
+ * Pure assembler for the Week Brief's review section (auto-coach Phase 1). "Last week" is the
+ * calendar week before [weekStartMs] (the Monday the Brief is published); the prior week is the
+ * calendar week before that. Calendar, not 7 x 24 h: a week containing a DST transition is not 168
+ * hours long, and every boundary here has to land on a local midnight.
  */
 object WeeklyReview {
 
@@ -54,10 +58,19 @@ object WeeklyReview {
         hasDeloadShadow: Boolean,
         /** The live training block (Coach v3 C), when one is running. */
         block: com.forge.app.data.db.entities.TrainingBlock? = null,
+        /** The zone [weekStartMs] is a local midnight in — the week boundaries are calendar dates. */
+        zone: ZoneId = ZoneId.systemDefault(),
         t: AdaptThresholds = AdaptThresholds()
     ): WeeklyReviewData {
-        val lastWeekStart = weekStartMs - 7 * DAY_MS
-        val priorWeekStart = weekStartMs - 14 * DAY_MS
+        // Calendar weeks, not 7 x 24 h. weekStartMs is this Monday 00:00 local, but a week spanning a
+        // DST transition is 23 or 25 hours x 7, so subtracting fixed days landed the earlier
+        // boundaries an hour off a local midnight. Spring forward pushed "last week" back into Sunday
+        // 23:00, double-counting a late Sunday session across two Briefs; fall back pushed it forward
+        // into Monday 01:00, so a 00:20 session fell into neither window and vanished from both the
+        // session count and the volume baseline.
+        val weekStartDate = Instant.ofEpochMilli(weekStartMs).atZone(zone).toLocalDate()
+        val lastWeekStart = weekStartDate.minusWeeks(1).atStartOfDay(zone).toInstant().toEpochMilli()
+        val priorWeekStart = weekStartDate.minusWeeks(2).atStartOfDay(zone).toInstant().toEpochMilli()
 
         val lastWeek = s.sessions.filter { it.startedAt in lastWeekStart until weekStartMs }
         val priorWeek = s.sessions.filter { it.startedAt in priorWeekStart until lastWeekStart }
@@ -116,7 +129,7 @@ object WeeklyReview {
             // A REAL block (Coach v3 C) speaks for itself; the inferred phase copy is only the
             // fallback for users who never started one, and pure guesswork gets last say.
             else -> block?.let { BlockPlanner.describe(it) }
-                ?: mesocycleFocus(s, weekStartMs, t)
+                ?: mesocycleFocus(s, weekStartDate, zone, t)
                 ?: quietFocus(lastWeek.size, sessionsTarget, prs, lastVol, priorVol)
         }
 
@@ -162,14 +175,22 @@ object WeeklyReview {
      * peak → "ease off soon". Returns null where there isn't enough of a block to name a phase (below
      * the deload data gate, or week 0 of a fresh block); the caller falls back to [quietFocus].
      */
-    private fun mesocycleFocus(s: AdaptationSnapshot, weekStartMs: Long, t: AdaptThresholds): String? {
+    private fun mesocycleFocus(
+        s: AdaptationSnapshot,
+        weekStartDate: java.time.LocalDate,
+        zone: ZoneId,
+        t: AdaptThresholds
+    ): String? {
         if (s.sessions.size < t.deloadMinSessions) return null
         val anchor = listOfNotNull(
             s.sessions.lastOrNull { it.sessionType == SessionType.DELOAD.key || it.deloadMarkedHere }?.startedAt,
             s.prefs.lastDeloadAppliedMs,
             s.sessions.firstOrNull()?.startedAt
         ).maxOrNull() ?: return null
-        val weeksIn = ((weekStartMs - anchor) / (7 * DAY_MS)).toInt()
+        // Whole calendar weeks between the anchor's date and this week's Monday. The millis division
+        // truncated, so a DST week could drop one and make the mesocycle line disappear for a week.
+        val anchorDate = Instant.ofEpochMilli(anchor).atZone(zone).toLocalDate()
+        val weeksIn = ChronoUnit.WEEKS.between(anchorDate, weekStartDate).toInt()
         val meso = t.mesocycleWeeks
         return when {
             weeksIn < 1 -> null
