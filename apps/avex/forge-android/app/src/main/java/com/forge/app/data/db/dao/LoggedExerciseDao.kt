@@ -29,6 +29,21 @@ interface LoggedExerciseDao {
     @Query("SELECT * FROM logged_exercise WHERE session_id = :sessionId ORDER BY order_index")
     suspend fun forSession(sessionId: Long): List<LoggedExercise>
 
+    /**
+     * This session's row for one program SLOT, matching [LoggedExercise.effectiveSlotId]
+     * (`slot_id` when swapped, else `exercise_id`).
+     *
+     * The day screen needs a source of truth for "does this slot already have a row" that is not
+     * the UI state, which only refreshes after a write completes. There is no unique index on
+     * (session_id, slot) to lean on, so this read is what makes creation idempotent.
+     */
+    @Query("""
+        SELECT * FROM logged_exercise
+        WHERE session_id = :sessionId AND COALESCE(slot_id, exercise_id) = :slotId
+        ORDER BY id LIMIT 1
+    """)
+    suspend fun forSessionSlot(sessionId: Long, slotId: String): LoggedExercise?
+
     /** Reactive [forSession] — drives the watch's /session/live mirror (W1) off Room invalidation. */
     @Query("SELECT * FROM logged_exercise WHERE session_id = :sessionId ORDER BY order_index")
     fun observeForSession(sessionId: Long): Flow<List<LoggedExercise>>

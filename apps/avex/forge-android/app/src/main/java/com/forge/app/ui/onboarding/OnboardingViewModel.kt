@@ -114,7 +114,7 @@ class OnboardingViewModel @Inject constructor(
         // Stop the resume-draft autosaver before the completion write removes the draft.
         draftWritesEnabled = false
         viewModelScope.launch {
-            bodyweightLb?.let { bodyweightRepo.log(it) }
+            bodyweightLb?.let { bodyweightRepo.logWeightOnly(it) }
             settingsRepo.setPlateWeightLb(plateWeightLb)
             settingsRepo.setUserSex(sex)
             settingsRepo.setFreestyleMode(planMode == PLAN_FREESTYLE)

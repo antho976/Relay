@@ -31,6 +31,9 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.debounce
 
 @HiltViewModel
 class DayViewModel @Inject constructor(
@@ -93,6 +96,9 @@ class DayViewModel @Inject constructor(
      *  the main dispatcher (event handling). */
     internal val swapsInFlight = mutableSetOf<String>()
 
+    /** Serialises lazy logged_exercise creation — see [ensureLoggedExercise]. */
+    internal val loggedExerciseMutex = kotlinx.coroutines.sync.Mutex()
+
     internal val _state = MutableStateFlow(
         DayUiState(dayPlan = dayPlan, displayName = dayPlan.defaultName)
     )
@@ -130,6 +136,40 @@ class DayViewModel @Inject constructor(
                 return@launch
             }
             beginSessionForThisDay()
+        }
+        // The wrist writes sets straight into Room through SetLogUseCase — it never goes through
+        // this ViewModel. WatchSessionMirror observes Room so the WATCH stays current, but the
+        // phone screen only ever rebuilt from its own actions. So a set logged on the wrist was
+        // invisible here, and the next setIndex was computed from a list that did not contain it.
+        //
+        // Compare counts rather than refreshing on every emission: a set logged on the phone has
+        // already refreshed this screen, so equal counts mean there is nothing new to pull in.
+        // That comparison is also what stops this becoming a refresh feedback loop.
+        viewModelScope.launch {
+            var lastSessionId: Long? = null
+            var job: Job? = null
+            _state.collect { s ->
+                val sid = s.sessionId
+                if (sid == lastSessionId) return@collect
+                lastSessionId = sid
+                job?.cancel()
+                job = if (sid == null) null else viewModelScope.launch {
+                    workoutRepo.observeSetsForSession(sid)
+                        .map { it.size }
+                        .distinctUntilChanged()
+                        // Debounced so a LOCAL log does not land here. Logging on the phone writes
+                        // to Room and then refreshes just that card via the fast single-exercise
+                        // path; without the delay this observer would see the write first and fire
+                        // a full rebuild of every card on every set, undoing that optimisation.
+                        // A wrist-written set has no such follow-up, so it is still unreconciled
+                        // when the delay expires and gets the refresh it needs.
+                        .debounce(1_500)
+                        .collect { dbCount ->
+                            val uiCount = _state.value.exercises.sumOf { it.loggedSets.size }
+                            if (dbCount != uiCount) refreshExercises()
+                        }
+                }
+            }
         }
         viewModelScope.launch {
             val dbWarmup = warmupRepo.customWarmupForDay(dayKey)

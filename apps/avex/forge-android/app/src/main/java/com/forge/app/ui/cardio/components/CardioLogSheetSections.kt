@@ -238,12 +238,30 @@ internal fun LazyListScope.cardioSaveActionsItem(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun CardioDatePickerDialog(dateMs: Long, onPicked: (Long) -> Unit, onDismiss: () -> Unit) {
+    val zone = ZoneId.systemDefault()
     val maxDateMs = remember { System.currentTimeMillis() }
+    // Material3 canonicalises DatePickerState to UTC midnight — combineDay below already reads the
+    // RESULT back that way. The seed did not: it passed a local instant straight in, so for anyone
+    // west of UTC the picker opened highlighting the PREVIOUS day. Since the result was converted
+    // correctly, opening the picker and tapping OK without touching anything silently moved the
+    // entry back a day. BodyweightLogSheet's picker already converts here; this one did not.
+    val seedUtcMs = remember(dateMs) {
+        Instant.ofEpochMilli(dateMs).atZone(zone).toLocalDate()
+            .atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+    }
+    // "Today" has to be measured as a calendar DAY in the user's own zone. Comparing a UTC-midnight
+    // candidate against a local `now` meant users east of UTC could not select today until their
+    // offset had elapsed (09:00 in Tokyo, midday in Auckland), while users west could select
+    // tomorrow — the very thing this guard exists to prevent.
+    val maxDayUtcMs = remember(maxDateMs) {
+        Instant.ofEpochMilli(maxDateMs).atZone(zone).toLocalDate()
+            .atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+    }
     val dpState = rememberDatePickerState(
-        initialSelectedDateMillis = dateMs,
-        selectableDates = remember(maxDateMs) {
+        initialSelectedDateMillis = seedUtcMs,
+        selectableDates = remember(maxDayUtcMs, maxDateMs) {
             object : SelectableDates {
-                override fun isSelectableDate(utcTimeMillis: Long) = utcTimeMillis <= maxDateMs
+                override fun isSelectableDate(utcTimeMillis: Long) = utcTimeMillis <= maxDayUtcMs
                 override fun isSelectableYear(year: Int) =
                     year <= Instant.ofEpochMilli(maxDateMs).atZone(ZoneId.systemDefault()).year
             }

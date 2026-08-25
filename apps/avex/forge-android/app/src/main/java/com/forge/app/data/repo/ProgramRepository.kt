@@ -200,6 +200,23 @@ class ProgramRepository @Inject constructor(
      * emphasis, problem areas, priority muscles, pinned). Used by automatic rotation, so a rotated
      * program reflects the same inputs a manual re-roll would — including avoiding flagged injuries.
      */
+    /**
+     * Return the program to full volume once a deload week has run its course, keeping the same
+     * exercises.
+     *
+     * Deliberately NOT [rerollAll]: that passes the current picks as `recent` so the generator
+     * anti-repeats them, which would charge the user a whole new program as the price of ending a
+     * deload. Here `recent` is empty and the params are unchanged, so the generator is free to
+     * re-select what they were already doing — at full volume, because [currentParams] leaves
+     * `deload` unset and [generate] clears the deload marker for any non-deload regenerate.
+     */
+    suspend fun restoreAfterDeload() {
+        generate(
+            currentParams(), currentEquipment(),
+            settings.likedExercises.first(), settings.dislikedExercises.first()
+        )
+    }
+
     suspend fun rerollAll() {
         val recent = Program.days.flatMap { it.exercises }.map { it.id }.toSet()
         generate(

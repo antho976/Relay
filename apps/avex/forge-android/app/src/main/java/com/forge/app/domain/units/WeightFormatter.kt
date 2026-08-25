@@ -132,7 +132,9 @@ private fun parseStonesToLb(s: String): Double? {
  * [formatWeight]/[weightInputValue] output.
  */
 fun parseToLb(input: String, unit: WeightUnit): Double? {
-    val cleaned = input.trim().lowercase()
+    // See [normalizeDecimalInput] — a comma-locale keyboard produces "82,5", which toDoubleOrNull
+    // rejects. Normalise before any of the unit branches touch it.
+    val cleaned = normalizeDecimalInput(input).lowercase()
     return when (unit) {
         WeightUnit.KG -> cleaned.removeSuffix("kg").trim().toDoubleOrNull()?.let { it / KG_PER_LB }
         WeightUnit.LB -> cleaned.removeSuffix("lb").trim().toDoubleOrNull()

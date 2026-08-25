@@ -9,6 +9,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.sync.withLock
 
 // Exercise-state refresh/derivation, set lookups, and session-service lifecycle —
 // extracted from DayViewModel as extension functions, matching the Day*Handlers /
@@ -57,6 +58,7 @@ internal suspend fun DayViewModel.refreshExercises() {
     // deriving the day one exercise at a time (the dominant cost of opening the screen).
     val plateLb = settingsRepo.plateWeightLb.first()
     val dbMaxLb = settingsRepo.maxDbWeightLb.first()
+    val weightUnit = settingsRepo.weightUnit.first()
     val built = coroutineScope {
         allPlans.mapIndexed { index, plan ->
             async {
@@ -67,6 +69,7 @@ internal suspend fun DayViewModel.refreshExercises() {
                     expandedOverride = previousExpandedById[plan.id],
                     plateLb = plateLb,
                     dbMaxLb = dbMaxLb,
+                    weightUnit = weightUnit,
                     bonusSets = previousBonusById[plan.id] ?: 0,
                     finishedEarly = previousFinishedEarlyById[plan.id] ?: false
                 )
@@ -116,11 +119,27 @@ internal suspend fun DayViewModel.refreshExercise(exerciseId: String) {
         expandedOverride = existing.isExpanded,
         plateLb = settingsRepo.plateWeightLb.first(),
         dbMaxLb = settingsRepo.maxDbWeightLb.first(),
+        weightUnit = settingsRepo.weightUnit.first(),
         bonusSets = existing.bonusSets,
         finishedEarly = existing.finishedEarly
     )
-    val newList = current.toMutableList().also { it[idx] = rebuilt }
-    _state.update { it.copy(isLoading = false, exercises = annotateNextExerciseDeltas(newList)) }
+    // Splice into the list as it is AT WRITE TIME, not into `current` — which was snapshotted
+    // before roughly seven suspending DB reads above. Rebuilding from the stale snapshot published
+    // it back wholesale, so a set logged on a DIFFERENT exercise while those reads were in flight
+    // (superset alternation is the everyday case) was erased from state: still in the database,
+    // gone from the screen, and gone from the totals the finish path used to read off this list.
+    //
+    // _state.update retries its block on contention, so re-finding the index inside it is what
+    // makes the splice safe rather than merely narrower.
+    _state.update { s ->
+        val list = s.exercises.toMutableList()
+        val at = list.indexOfFirst { it.plan.id == exerciseId }
+        if (at < 0) s
+        else {
+            list[at] = rebuilt
+            s.copy(isLoading = false, exercises = annotateNextExerciseDeltas(list))
+        }
+    }
 }
 
 /** Resolve the exercise that owns [setId] and rebuild just it (per-set edits). */
@@ -132,24 +151,45 @@ internal suspend fun DayViewModel.refreshExerciseForSet(setId: Long) {
 internal fun DayViewModel.findExerciseIdForSet(setId: Long): String? =
     _state.value.exercises.firstOrNull { ex -> ex.loggedSets.any { it.id == setId } }?.plan?.id
 
-internal suspend fun DayViewModel.ensureLoggedExercise(exerciseId: String): Long? {
-    val sessionId = _state.value.sessionId ?: return null
-    val currentUi = _state.value.exercises.firstOrNull { it.plan.id == exerciseId } ?: return null
-    // Log under the REAL exercise (the swapped one when a persistent swap is active), stashing the
-    // slot id so the slot stays mapped (#11). `exerciseId` here is the slot (plan.id).
-    val effective = currentUi.effectiveExerciseId.ifBlank { exerciseId }
-    return currentUi.loggedExerciseId
-        ?: workoutRepo.addExerciseToSession(
-            sessionId = sessionId,
-            exerciseId = effective,
-            // Order index from the rendered list, not the static day plan (which is -1 for
-            // custom/cross-day exercises that aren't in dayPlan.exercises).
-            orderIndex = _state.value.exercises.indexOfFirst { it.plan.id == exerciseId },
-            swappedName = currentUi.sessionSwapName ?: currentUi.persistentSwapName,
-            swappedUnit = currentUi.sessionSwapUnit ?: currentUi.persistentSwapUnit,
-            slotId = exerciseId.takeIf { it != effective }
-        )
-}
+/**
+ * The slot's logged_exercise row id, creating it lazily on first use.
+ *
+ * Serialised, and with a DATABASE check before inserting. Both matter, for different reasons:
+ *
+ * `loggedExerciseId` comes from UI state, which only refreshes after a write completes. Two rapid
+ * LOG SET taps (or a superset alternating between two cards) both read null and both INSERT,
+ * leaving two rows for one slot. refreshExercises then keeps whichever has more sets, and the sets
+ * on the other row become invisible — still in the database, absent from the screen and from the
+ * session's totals. logged_exercise has no unique index on (session, slot) to catch it.
+ *
+ * The mutex alone would not fix that: the second caller would wait, then still read a stale null
+ * from UI state. So inside the lock we ask Room, not the UI. And the second caller must WAIT rather
+ * than bail out — returning null there would drop the user's set, which is worse than the race.
+ *
+ * DaySwapHandlers guards its own paths with `swapsInFlight` for the same underlying bug; this is
+ * the set-logging half, which never had a guard.
+ */
+internal suspend fun DayViewModel.ensureLoggedExercise(exerciseId: String): Long? =
+    loggedExerciseMutex.withLock {
+        val sessionId = _state.value.sessionId ?: return@withLock null
+        val currentUi = _state.value.exercises.firstOrNull { it.plan.id == exerciseId }
+            ?: return@withLock null
+        // Log under the REAL exercise (the swapped one when a persistent swap is active), stashing the
+        // slot id so the slot stays mapped (#11). `exerciseId` here is the slot (plan.id).
+        val effective = currentUi.effectiveExerciseId.ifBlank { exerciseId }
+        currentUi.loggedExerciseId
+            ?: workoutRepo.loggedExerciseForSlot(sessionId, exerciseId)
+            ?: workoutRepo.addExerciseToSession(
+                sessionId = sessionId,
+                exerciseId = effective,
+                // Order index from the rendered list, not the static day plan (which is -1 for
+                // custom/cross-day exercises that aren't in dayPlan.exercises).
+                orderIndex = _state.value.exercises.indexOfFirst { it.plan.id == exerciseId },
+                swappedName = currentUi.sessionSwapName ?: currentUi.persistentSwapName,
+                swappedUnit = currentUi.sessionSwapUnit ?: currentUi.persistentSwapUnit,
+                slotId = exerciseId.takeIf { it != effective }
+            )
+    }
 
 internal fun DayViewModel.findSet(setId: Long) =
     _state.value.exercises.flatMap { it.loggedSets }.firstOrNull { it.id == setId }

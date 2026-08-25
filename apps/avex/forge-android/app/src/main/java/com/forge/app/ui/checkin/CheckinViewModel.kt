@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import javax.inject.Inject
+import com.forge.app.domain.units.filterDecimalInput
 
 /**
  * The morning check-in (Coach v3 B1). Four taps, all optional, always skippable.
@@ -77,7 +78,7 @@ class CheckinViewModel @Inject constructor(
     fun setStress(v: Int) = update { it.copy(stress = v) }
     fun setMotivation(v: Int) = update { it.copy(motivation = v) }
     fun setSick(v: Boolean) = update { it.copy(sick = v) }
-    fun setWeightText(v: String) = update { it.copy(weightText = v.filter { ch -> ch.isDigit() || ch == '.' }) }
+    fun setWeightText(v: String) = update { it.copy(weightText = filterDecimalInput(v)) }
 
     fun toggleMuscle(muscle: MuscleGroup) = update { s ->
         s.copy(soreMuscles = if (muscle in s.soreMuscles) s.soreMuscles - muscle else s.soreMuscles + muscle)
@@ -97,7 +98,7 @@ class CheckinViewModel @Inject constructor(
                     soreMuscles = if (s.askWhichMuscles) s.soreMuscles else emptySet()
                 )
                 // Morning is weigh-in time; logging it here saves a trip to the profile.
-                s.weightText.toDoubleOrNull()?.let { bodyweightRepo.log(it) }
+                s.weightText.toDoubleOrNull()?.let { bodyweightRepo.logWeightOnly(it) }
             }
             _state.value = _state.value.copy(visible = false, answeredToday = true)
         }

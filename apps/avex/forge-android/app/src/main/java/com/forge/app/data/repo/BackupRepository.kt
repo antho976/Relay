@@ -420,13 +420,30 @@ class BackupRepository @Inject constructor(
      */
     suspend fun autoBackup(folderUri: Uri? = null): File = withContext(Dispatchers.IO) {
         val file = File(context.filesDir, AUTO_BACKUP_NAME)
+        val tmp = File(context.filesDir, AUTO_BACKUP_TMP_NAME)
         val snap = snapshotDatabase()
         try {
-            file.outputStream().use { out -> writeBackupZip(out, snap) }
+            // Write to a temp file and rename over the slot, rather than truncating the slot and
+            // writing into it. `File.outputStream()` truncates on open, so the old behaviour
+            // destroyed the previous good backup the instant it started writing — and a failure
+            // part-way (ENOSPC is the likely one, since a full disk is exactly when a backup is
+            // attempted and fails) left a truncated, unrestorable zip. autoBackupSavedAtMs() reads
+            // this file's mtime, so the user was then shown a fresh "last backed up" date for a
+            // backup that could not be restored. rename(2) within a directory is atomic, so the
+            // slot now only ever holds a complete zip.
+            tmp.delete()
+            tmp.outputStream().use { out -> writeBackupZip(out, snap) }
+            if (!tmp.renameTo(file)) {
+                // Same-directory rename should not fail on Android. If it somehow does, keep the
+                // previous backup instead of truncating it for a copy we cannot guarantee; the
+                // worker retries, and records a failure the user can see once retries run out.
+                throw java.io.IOException("could not replace $AUTO_BACKUP_NAME")
+            }
             // Also mirror into a user-picked folder so the backup survives an uninstall (GYMAP-67). A
             // folder write must not fail the whole backup — the internal copy already succeeded.
             if (folderUri != null) runCatching { writeZipToFolder(folderUri, snap) }
         } finally {
+            tmp.delete()
             snap.delete()
         }
         // Drop the stale lossy JSON slot from earlier builds so it can't mislead a future restore.
@@ -439,10 +456,25 @@ class BackupRepository @Inject constructor(
     /** Write the full backup zip into a user-granted SAF tree, overwriting the prior slot (GYMAP-67). */
     private fun writeZipToFolder(folderUri: Uri, snap: File) {
         val tree = DocumentFile.fromTreeUri(context, folderUri) ?: return
-        // Keep exactly one current backup in the folder — replace the previous one.
+        // Write the replacement under a temp name FIRST, then retire the old one. Deleting the
+        // previous backup before creating its replacement (the old order) meant any failure below
+        // left the folder with NO backup: createFile returning null on a revoked grant,
+        // openOutputStream returning null, or the volume filling mid-write. The caller wraps this
+        // in runCatching and clears the "backup failed" marker regardless, so the user was told
+        // the backup succeeded while their off-device copy had just been deleted.
+        tree.findFile(FOLDER_TMP_NAME)?.delete()
+        val tmp = tree.createFile("application/zip", FOLDER_TMP_NAME) ?: return
+        val wrote = runCatching {
+            val out = context.contentResolver.openOutputStream(tmp.uri) ?: return@runCatching false
+            out.use { writeBackupZip(it, snap) }
+            true
+        }.getOrDefault(false)
+        if (!wrote) { tmp.delete(); return }
+        // The replacement is complete on disk: only now retire the previous backup and take its
+        // name. If the rename fails the data is still present under the temp name, so leave it
+        // rather than deleting the only copy in this folder.
         tree.findFile(AUTO_BACKUP_NAME)?.delete()
-        val doc = tree.createFile("application/zip", AUTO_BACKUP_NAME) ?: return
-        context.contentResolver.openOutputStream(doc.uri)?.use { out -> writeBackupZip(out, snap) }
+        tmp.renameTo(AUTO_BACKUP_NAME)
     }
 
     /** Take a persistable read+write grant on the picked backup folder and remember it (GYMAP-67). */
@@ -668,6 +700,9 @@ class BackupRepository @Inject constructor(
      */
     private suspend fun restoreFromIncoming(incoming: File): RestoreOutcome = withContext(Dispatchers.IO) {
         val temps = mutableListOf(incoming) // cache-dir temp files to clean up before returning
+        // Set true only once EVERY staged component has landed. The finally below uses it to discard
+        // a half-written pending set, which would otherwise be applied at the next cold start.
+        var stagedOk = false
         var photoStage: File? = null        // extracted progress photos, staged only after validation
         var avatarStage: File? = null       // extracted avatar temp (in temps), applied after validation
         try {
@@ -737,11 +772,11 @@ class BackupRepository @Inject constructor(
             // Don't close Room and swap the file here — that races with any flow still reading the DB
             // until the process is killed. Stage the files instead; ForgeApp.applyPendingRestore swaps
             // them in at next boot, before Room/DataStore open. The caller restarts the app on success.
-            val pendingDb = File(context.filesDir, "pending_restore.db")
+            val pendingDb = File(context.filesDir, PENDING_DB_NAME)
             if (pendingDb.exists()) pendingDb.delete()
             dbFile.copyTo(pendingDb, overwrite = true)
 
-            val pendingPrefs = File(context.filesDir, "pending_restore_prefs.pb")
+            val pendingPrefs = File(context.filesDir, PENDING_PREFS_NAME)
             if (pendingPrefs.exists()) pendingPrefs.delete()
             prefsFile?.copyTo(pendingPrefs, overwrite = true)
 
@@ -774,6 +809,9 @@ class BackupRepository @Inject constructor(
             // if present, still counts toward [hasAnyBackup].
             runCatching { File(context.filesDir, MANUAL_BACKUP_MARKER).delete() }
 
+            // Every staged component landed. Only now is the pending set complete, and only now may
+            // ForgeApp.applyPendingRestore swap it in at boot.
+            stagedOk = true
             return@withContext RestoreOutcome.SUCCESS
         } catch (e: java.util.zip.ZipException) {
             // A truncated or malformed ZIP (e.g. a backup that got corrupted in an email / cloud
@@ -785,7 +823,28 @@ class BackupRepository @Inject constructor(
         } finally {
             temps.forEach { it.delete() }
             photoStage?.deleteRecursively()
+            // A restore that did not reach SUCCESS must leave NOTHING staged. `temps` only covers
+            // cacheDir scratch files — the pending_restore.* set lives in filesDir and used to
+            // survive a failure. ForgeApp.applyPendingRestore checks only that those files EXIST,
+            // so a half-written set was swapped over the live database at the next cold start,
+            // silently discarding everything logged since the failed attempt.
+            if (!stagedOk) clearPendingRestore()
         }
+    }
+
+    /**
+     * Remove every staged component of a pending restore.
+     *
+     * Called when [restoreFromIncoming] ends in anything other than SUCCESS. Clearing a previously
+     * staged (successful but not-yet-rebooted) restore is deliberate: the user's most recent
+     * instruction was the attempt that just failed, so applying the older one at the next boot —
+     * after being told the restore failed — is the confusing outcome this guards against.
+     */
+    private fun clearPendingRestore() {
+        runCatching { File(context.filesDir, PENDING_DB_NAME).delete() }
+        runCatching { File(context.filesDir, PENDING_PREFS_NAME).delete() }
+        runCatching { File(context.filesDir, PENDING_PHOTOS_DIR).deleteRecursively() }
+        runCatching { File(context.filesDir, PENDING_AVATAR_NAME).delete() }
     }
 
     /**
@@ -893,12 +952,20 @@ class BackupRepository @Inject constructor(
         private const val PHOTOS_PREFIX = "progress_photos/"
         /** The weekly auto-backup slot, written by [autoBackup] and read by [restoreFromAutoBackup] (#86). */
         private const val AUTO_BACKUP_NAME = "forge_auto_backup.zip"
+        /** Temp slots written before replacing [AUTO_BACKUP_NAME], so a failed write never destroys
+         *  the previous good backup. Internal storage and the user-picked SAF folder each need one. */
+        private const val AUTO_BACKUP_TMP_NAME = "forge_auto_backup.zip.tmp"
+        private const val FOLDER_TMP_NAME = "forge_auto_backup.zip.part"
         /** Marker written when the auto-backup worker gives up (storage full / corrupt) — see [recordAutoBackupFailure]. */
         private const val AUTO_BACKUP_FAILED_MARKER = "auto_backup_failed"
         /** Marker written after a successful user-initiated backup ([backupToUri]) — see [hasAnyBackup]. */
         private const val MANUAL_BACKUP_MARKER = "manual_backup_done"
         /** Staged restored photos; ForgeApp.applyPendingRestore swaps this over progress_photos/ at boot. */
         private const val PENDING_PHOTOS_DIR = "pending_restore_photos"
+        // Staged-restore filenames. Must stay in sync with ForgeApp.applyPendingRestore, which
+        // reads the same four paths out of filesDir at boot.
+        private const val PENDING_DB_NAME = "pending_restore.db"
+        private const val PENDING_PREFS_NAME = "pending_restore_prefs.pb"
         /** Backup-ZIP entry for the profile avatar — derived from AvatarRepository so a rename can't desync. */
         private const val ZIP_AVATAR_ENTRY = AvatarRepository.FILE_NAME
         private const val PENDING_AVATAR_NAME = "pending_restore_avatar.jpg"

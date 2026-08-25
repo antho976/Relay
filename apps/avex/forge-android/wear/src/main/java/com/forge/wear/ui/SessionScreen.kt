@@ -68,6 +68,14 @@ fun SetView(
 
     // Pending command lifecycle: LOG → pending until the matching ack (or a quiet timeout line).
     var pendingId by remember { mutableStateOf<String?>(null) }
+    // A command that timed out without an ack. It may still have landed, so a re-tap must RESEND
+    // it under the same id rather than mint a new one — the phone's deduper keys on the id, and a
+    // fresh UUID is a second set. Held with the exact payload it was sent for: if the user adjusts
+    // the weight or reps before tapping again, that is a different set and earns a new id.
+    // Keyed on seedKey: if the mirror advances to the next set, the command DID land, so any
+    // remembered retry is stale and must not be reused against a different set.
+    var timedOutId by remember(seedKey) { mutableStateOf<String?>(null) }
+    var timedOutPayload by remember(seedKey) { mutableStateOf<String?>(null) }
     var statusLine by remember { mutableStateOf<String?>(null) }
     var confirmJump by remember(seedKey) { mutableStateOf(false) }
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -80,17 +88,25 @@ fun SetView(
         val ack: CmdAckDto = lastAck ?: return@LaunchedEffect
         if (ack.commandId != pendingId) return@LaunchedEffect
         pendingId = null
+        // Resolved either way, so there is nothing left to resend under this id.
+        timedOutId = null
+        timedOutPayload = null
         when {
             ack.ok -> statusLine = null
             ack.needsConfirm -> { confirmJump = true; statusLine = "Big jump, tap to confirm" }
             else -> statusLine = ack.reason ?: "Not logged"
         }
     }
-    // Pending timeout → quiet reconnect line (the command may still land; dedup makes retry safe).
+    // Pending timeout → quiet reconnect line. The command may still land, which is why the id is
+    // kept above: retry is only safe because the resend carries it, not because a retry is harmless.
     LaunchedEffect(pendingId) {
         if (pendingId == null) return@LaunchedEffect
         delay(4_000)
-        if (pendingId != null) { statusLine = "Not logged · reconnecting"; pendingId = null }
+        if (pendingId != null) {
+            statusLine = "Not logged · reconnecting"
+            timedOutId = pendingId
+            pendingId = null
+        }
     }
 
     val focus = remember { FocusRequester() }
@@ -217,13 +233,22 @@ fun SetView(
                     filled = true,
                     onClick = {
                         statusLine = null
+                        val text = weightValue?.let { formatAdjusted(it) } ?: session.targetWeightText
+                        val payload = "$text|$reps|$confirmJump"
+                        // Same set, tapped again after a timeout → resend the SAME command id so
+                        // the phone can recognise it as a replay. Anything edited since makes it a
+                        // genuinely different set, which gets a fresh id.
+                        val reuseId = timedOutId?.takeIf { timedOutPayload == payload }
                         pendingId = repo.sendLogSet(
                             sessionId = session.sessionId,
                             exerciseId = session.exerciseId,
-                            weightText = weightValue?.let { formatAdjusted(it) } ?: session.targetWeightText,
+                            weightText = text,
                             reps = reps,
-                            confirmedJump = confirmJump
+                            confirmedJump = confirmJump,
+                            commandId = reuseId
                         )
+                        timedOutId = null
+                        timedOutPayload = payload
                         confirmJump = false
                     }
                 )

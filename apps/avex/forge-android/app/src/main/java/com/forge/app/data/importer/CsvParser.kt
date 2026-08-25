@@ -52,9 +52,23 @@ object CsvParser {
                     c == '"' -> inQuotes = false
                     else -> cell.append(c)
                 }
-                c == '"' -> inQuotes = true
+                // A quote only OPENS a quoted field at the start of a field (RFC 4180). Treating
+                // any quote as an opener meant one unescaped quote mid-cell — a note like
+                // `paused 2" off chest` — flipped the parser into quote mode and swallowed every
+                // following delimiter and newline into that one cell. With no closing quote, the
+                // whole remainder of the file became a single cell: every later row silently
+                // dropped, while the import summary reported a successful small import.
+                c == '"' && cell.isEmpty() -> inQuotes = true
                 c == delimiter -> { row.add(cell.toString()); cell.clear() }
-                c == '\r' -> { /* swallow; the paired \n ends the row */ }
+                c == '\r' -> {
+                    // CR-LF: let the LF terminate the row. A LONE CR is a row terminator too
+                    // (classic-Mac line endings, and some exporters still emit them); swallowing it
+                    // unconditionally collapsed such a file into one row, which then imported empty.
+                    if (i + 1 >= n || text[i + 1] != '\n') {
+                        row.add(cell.toString()); cell.clear()
+                        rows.add(row); row = mutableListOf()
+                    }
+                }
                 c == '\n' -> {
                     row.add(cell.toString()); cell.clear()
                     rows.add(row); row = mutableListOf()

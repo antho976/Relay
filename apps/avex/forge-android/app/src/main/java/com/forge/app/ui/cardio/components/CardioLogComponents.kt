@@ -40,6 +40,7 @@ import com.forge.app.domain.cardio.CardioActivity
 import com.forge.app.domain.cardio.CardioType
 import com.forge.app.ui.common.bounceClick
 import com.forge.app.ui.common.clickableLabeled
+import com.forge.app.domain.units.filterDecimalInput
 
 /**
  * The compact sheet header — the entry's date and start time as small outlined capsules that ARE the
@@ -368,13 +369,7 @@ internal fun PillChip(
 internal fun plainDecimalInput(v: Double): String =
     if (v % 1.0 == 0.0) v.toInt().toString() else v.toString()
 
-internal fun sanitizeDecimal(input: String): String {
-    val filtered = input.filter { it.isDigit() || it == '.' }
-    val firstDot = filtered.indexOf('.')
-    val collapsed = if (firstDot == -1) filtered
-    else filtered.substring(0, firstDot + 1) + filtered.substring(firstDot + 1).replace(".", "")
-    return collapsed.take(6)
-}
+internal fun sanitizeDecimal(input: String): String = filterDecimalInput(input).take(6)
 
 /** Keep digits and a single colon, capped at "HH:MM" width, for the duration field (GYMAP-41). */
 internal fun sanitizeDuration(input: String): String {

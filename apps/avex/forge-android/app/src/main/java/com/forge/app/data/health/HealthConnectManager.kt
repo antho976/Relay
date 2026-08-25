@@ -355,7 +355,13 @@ class HealthConnectManager @Inject constructor(
      * permission / a provider error all return false without throwing, so a failed mirror never breaks
      * the local finish. The span is clamped to be strictly positive — HC rejects a zero/negative range.
      */
-    suspend fun writeActiveCalories(kcal: Double, startMs: Long, endMs: Long): Boolean = withContext(Dispatchers.IO) {
+    suspend fun writeActiveCalories(
+        kcal: Double,
+        startMs: Long,
+        endMs: Long,
+        clientRecordId: String,
+        clientRecordVersion: Long
+    ): Boolean = withContext(Dispatchers.IO) {
         val client = clientOrNull() ?: return@withContext false
         if (!canWriteActiveCalories()) return@withContext false
         val safeEnd = maxOf(endMs, startMs + 1)
@@ -368,7 +374,15 @@ class HealthConnectManager @Inject constructor(
                         endTime = Instant.ofEpochMilli(safeEnd),
                         endZoneOffset = null,
                         energy = Energy.kilocalories(kcal),
-                        metadata = Metadata.manualEntry()
+                        // Keyed like the session and HR mirrors, which are upserts on (our package,
+                        // clientRecordId). This one carried no key, so every pass INSERTED: a
+                        // re-finish or an orphan-session recovery added a second calorie record for
+                        // the same workout, inflating the day's burn in Samsung Health or Fit with
+                        // no local trace to find it by and no way to repair it.
+                        metadata = Metadata.manualEntry(
+                            clientRecordId = clientRecordId,
+                            clientRecordVersion = clientRecordVersion
+                        )
                     )
                 )
             )
@@ -438,8 +452,7 @@ class HealthConnectManager @Inject constructor(
         hcCatching {
             val zone = java.time.ZoneId.systemDefault()
             val range = TimeRangeFilter.between(Instant.ofEpochMilli(startMs), Instant.ofEpochMilli(endMs))
-            client.readRecords(ReadRecordsRequest(StepsRecord::class, timeRangeFilter = range))
-                .records
+            client.readAllPages(StepsRecord::class, range)
                 .groupBy { Instant.ofEpochMilli(it.startTime.toEpochMilli()).atZone(zone).toLocalDate() }
                 .map { (day, recs) ->
                     DailySteps(
@@ -449,6 +462,36 @@ class HealthConnectManager @Inject constructor(
                 }
                 .sortedBy { it.dayStartMs }
         }.orEmpty()
+    }
+
+    /**
+     * Read EVERY record of [type] in [range], following Health Connect's page tokens.
+     *
+     * `readRecords(...).records` returns only the FIRST page — 1000 records by default, ordered
+     * ascending. High-frequency record types blow past that easily: a watch writing steps or heart
+     * rate every few minutes fills 1000 rows well inside a two-week window, so the reads that
+     * matter were silently truncated to their OLDEST page. Today's data was the part that fell off
+     * the end, which is why a step read over a fortnight could report zero steps today and hand the
+     * coach a phantom sedentary athlete.
+     *
+     * Bounded by [HISTORY_MAX_RECORDS], and it stops on an empty page even if a token lingers —
+     * without that a provider returning a non-null continuation token with no records loops
+     * forever. Both guards are lifted from readWeightHistory, which already got this right.
+     */
+    private suspend fun <T : Record> HealthConnectClient.readAllPages(
+        type: KClass<T>,
+        range: TimeRangeFilter
+    ): List<T> {
+        val out = mutableListOf<T>()
+        var token: String? = null
+        do {
+            val resp = readRecords(
+                ReadRecordsRequest(type, timeRangeFilter = range, pageSize = HISTORY_PAGE_SIZE, pageToken = token)
+            )
+            out += resp.records
+            token = resp.pageToken
+        } while (token != null && resp.records.isNotEmpty() && out.size < HISTORY_MAX_RECORDS)
+        return out
     }
 
     /** Minutes this sleep session spent in [stageType], per the provider's stage list (0 = absent). */
@@ -472,8 +515,8 @@ class HealthConnectManager @Inject constructor(
         if (!canReadSteps()) return@withContext CardioWearableDay()
         hcCatching {
             val range = TimeRangeFilter.between(Instant.ofEpochMilli(dayStartMs), Instant.ofEpochMilli(dayEndMs))
-            val samples = client.readRecords(ReadRecordsRequest(StepsRecord::class, timeRangeFilter = range))
-                .records.map { StepSample(startMs = it.startTime.toEpochMilli(), count = it.count) }
+            val samples = client.readAllPages(StepsRecord::class, range)
+                .map { StepSample(startMs = it.startTime.toEpochMilli(), count = it.count) }
             CardioWearableDay(hourlySteps = bucketStepsByHour(samples, java.time.ZoneId.systemDefault()))
         } ?: CardioWearableDay()
     }
@@ -635,8 +678,8 @@ class HealthConnectManager @Inject constructor(
         if (!canReadHeartRate()) return@withContext emptyList()
         hcCatching {
             val range = TimeRangeFilter.between(Instant.ofEpochMilli(startMs), Instant.ofEpochMilli(endMs))
-            client.readRecords(ReadRecordsRequest(HeartRateRecord::class, timeRangeFilter = range))
-                .records.asSequence()
+            client.readAllPages(HeartRateRecord::class, range)
+                .asSequence()
                 .flatMap { it.samples }
                 .mapNotNull { s ->
                     val bpm = s.beatsPerMinute.toInt()
@@ -707,7 +750,12 @@ class HealthConnectManager @Inject constructor(
             client.aggregate(
                 AggregateRequest(
                     metrics = metrics,
-                    timeRangeFilter = TimeRangeFilter.between(startTime, endTime)
+                    timeRangeFilter = TimeRangeFilter.between(startTime, endTime),
+                    // Only the app that wrote THIS session. Without the filter the aggregate sums
+                    // every provider that covered the window, so a user running Samsung Health and
+                    // Google Fit side by side saw one 5 km run reported as nearly 10 km — and that
+                    // inflated figure is what the import card offers and then writes back.
+                    dataOriginFilter = setOf(metadata.dataOrigin)
                 )
             )
         }

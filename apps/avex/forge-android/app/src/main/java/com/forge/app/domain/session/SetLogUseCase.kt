@@ -16,6 +16,7 @@ import com.forge.shared.protocol.LogSetCommand
 import kotlinx.coroutines.flow.first
 import javax.inject.Inject
 import javax.inject.Singleton
+import com.forge.app.domain.units.toStoredWeightText
 
 /**
  * The watch's entry into the ONE set-write path (W2). Resolves session context from Room + the
@@ -112,7 +113,18 @@ class SetLogUseCase @Inject constructor(
         // ── Resolve weight + reps (echoed from the wrist, prefilled when absent) ──
         val plateLb = settingsRepo.plateWeightLb.first()
         val isBodyweight = effectivePlan.unit == ExerciseUnit.BODYWEIGHT
-        val weightText = cmd.weightText
+        // cmd.weightText comes from the WRIST, in the user's DISPLAY unit — that is what the watch
+        // renders and steps. Every other source below is a STORED weightText, which is already lb.
+        // Mixing the two is how a kg user's wrist entry of "60 KG" was stored as 60 lb: convert the
+        // wrist value to lb here, and leave the stored fallbacks alone.
+        //
+        // PLATES is exempt: its text is a plate count, which carries no unit, and running it through
+        // a kg conversion would be the same bug in reverse.
+        val weightUnit = settingsRepo.weightUnit.first()
+        val fromWrist = cmd.weightText?.let {
+            if (effectivePlan.unit == ExerciseUnit.PLATES) it else toStoredWeightText(it, weightUnit)
+        }
+        val weightText = fromWrist
             ?: sessionPrefill(row?.id, setsByLogged)
             ?: workoutRepo.lastPerformanceSets(effectiveId).lastOrNull()?.weightText
             ?: if (isBodyweight) "BW" else return Result(false, "no target yet, pick a weight")

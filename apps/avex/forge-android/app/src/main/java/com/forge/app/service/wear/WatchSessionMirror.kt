@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import javax.inject.Inject
 import javax.inject.Singleton
+import com.forge.app.domain.units.weightInputValue
 
 /** :app's WeightUnit as it travels over the wear protocol. */
 fun WeightUnit.toProtocol(): ProtocolWeightUnit = when (this) {
@@ -112,7 +113,7 @@ class WatchSessionMirror @Inject constructor(
         val targetWeightText = current?.let { (_, row, _) ->
             row?.let { setsByLoggedExercise[it.id]?.maxByOrNull { s -> s.setIndex }?.weightText }
                 ?: effectiveId?.let { id -> lastPerformanceWeightText(id) }
-        }
+        }?.let { stored -> toWristWeightText(stored, unit, isPlates) }
         // The most recent set in the session just went PR — the wrist's gold moment (also carried
         // on the log ack; this covers phone-logged PRs while the wrist mirrors).
         val lastSetWasPr = sets.maxByOrNull { it.completedAt }?.let { lastSet ->
@@ -142,6 +143,21 @@ class WatchSessionMirror @Inject constructor(
             isPlates = isPlates,
             isBodyweight = effectivePlan?.unit == ExerciseUnit.BODYWEIGHT
         )
+    }
+
+    /**
+     * Stored weight text is POUNDS (see [com.forge.app.data.db.entities.LoggedSet]), but the DTO's
+     * `unit` and `weightStep` below are the user's DISPLAY unit. Sending the stored text unconverted
+     * put all three out of agreement: the wrist rendered "220.5" under a "KG" label for a 100 kg
+     * lift, and each 2.5 detent added 2.5 kg worth of step to a pound number.
+     *
+     * PLATES is exempt — its text is a plate COUNT and `weightStep` is already a plate step, so it
+     * carries no unit to convert. Non-numeric notation ("BW", "2 plates") passes through unchanged.
+     */
+    private fun toWristWeightText(stored: String, unit: WeightUnit, isPlates: Boolean): String {
+        if (isPlates) return stored
+        val lb = stored.trim().toDoubleOrNull() ?: return stored
+        return weightInputValue(lb, unit)
     }
 
     /** The weight text of the most recent historical performance of [exerciseId] (prefill rule). */

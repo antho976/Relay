@@ -73,15 +73,23 @@ import com.forge.app.ui.theme.ForgeLastGreen
 import com.forge.app.ui.theme.ForgeMotion
 import com.forge.app.ui.theme.ForgePrGold
 import com.forge.app.ui.theme.LocalForgeSettings
+import java.util.Locale
 
 
 /** Weight deltas at or below this (lb) are treated as "matched" — absorbs kg/plate rounding noise so a
  *  sub-pound float difference doesn't render a phantom signed delta + trend arrow (#11). */
 private const val WEIGHT_DELTA_EPS_LB = 0.5
 
-/** Plate count display: whole counts drop the decimal ("3"), halves keep one ("2.5"). */
+/**
+ * Plate count display: whole counts drop the decimal ("3"), halves keep one ("2.5").
+ *
+ * Locale.US is deliberate rather than incidental: this string SEEDS the plate input field, so it
+ * is read back by WeightParser. The bare `"%.1f".format(...)` this replaces used the device locale
+ * and produced "2,5" on a comma-decimal device, which parsed to null and logged a weightless set.
+ * WeightFormatter formats every stored weight text the same way for the same reason.
+ */
 internal fun formatPlateCount(plates: Double): String =
-    if (plates % 1.0 == 0.0) plates.toInt().toString() else "%.1f".format(plates)
+    if (plates % 1.0 == 0.0) plates.toInt().toString() else String.format(Locale.US, "%.1f", plates)
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable

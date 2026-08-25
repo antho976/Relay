@@ -66,6 +66,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.data.db.entities.LoggedSet
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.domain.units.parseToLb
+import com.forge.app.domain.units.toStoredWeightText
 import com.forge.app.domain.units.weightInputValue
 import com.forge.app.domain.units.formatHold
 import com.forge.app.domain.units.parseHold
@@ -320,11 +321,18 @@ fun FreestyleLogScreen(
         val payload = items.mapNotNull { ex ->
             val sets = ex.sets.mapNotNull { s ->
                 val weightLb = if (ex.bodyweight) null else parseToLb(s.weight, weightUnit)
+                // weightText is stored ALWAYS IN LB (see toStoredWeightText, whose whole reason for
+                // existing is that "unit handling can never diverge between" the log and edit paths).
+                // This path used to store s.weight raw, i.e. in the DISPLAY unit — so a kg user
+                // logging 100 kg wrote the text "100". SetLogUseCase reads stored weightText back
+                // out of the database and re-parses it with WeightParser as POUNDS, so the watch
+                // then prefilled and logged 100 lb for that lift.
+                val storedWeightText = if (ex.bodyweight) "" else toStoredWeightText(s.weight, weightUnit)
                 if (ex.timed) {
                     // Timed hold: valid when the hold time parses to > 0; reps is 0 and ignored.
                     val dur = parseHold(s.hold)?.takeIf { it > 0 } ?: return@mapNotNull null
                     FreestyleSetInput(
-                        weightText = if (ex.bodyweight) "" else s.weight.trim(),
+                        weightText = storedWeightText,
                         weightLb = weightLb,
                         reps = 0,
                         durationSeconds = dur,
@@ -336,7 +344,7 @@ fun FreestyleLogScreen(
                 } else {
                     val reps = s.reps.toIntOrNull()?.takeIf { it > 0 } ?: return@mapNotNull null
                     FreestyleSetInput(
-                        weightText = if (ex.bodyweight) "" else s.weight.trim(),
+                        weightText = storedWeightText,
                         weightLb = weightLb,
                         reps = reps,
                         setType = s.setType,

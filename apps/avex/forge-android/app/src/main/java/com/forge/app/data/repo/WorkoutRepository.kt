@@ -94,6 +94,11 @@ class WorkoutRepository @Inject constructor(
 
     fun observeActiveSession(): Flow<Session?> = sessionDao.observeActiveSession()
 
+    /** Every set in a session, reactive off Room invalidation — the live day screen watches this
+     *  so a set written by another surface (the wrist) shows up without a manual refresh. */
+    fun observeSetsForSession(sessionId: Long): Flow<List<LoggedSet>> =
+        loggedSetDao.observeAllForSession(sessionId)
+
     /** The current in-progress session, if any. Does NOT create one (unlike [startOrResumeSession]). */
     suspend fun activeSession(): Session? = sessionDao.getActiveSession()
 
@@ -256,7 +261,20 @@ class WorkoutRepository @Inject constructor(
      * segment and stamps total ACTIVE seconds (summed across sittings); returns it so the
      * caller can show the real duration. Falls back to wall-clock when no segments exist.
      */
-    suspend fun finishSession(sessionId: Long, totalVolumeLb: Double, prCount: Int, setCount: Int): Int {
+    /**
+     * Close the session and stamp its denormalised totals.
+     *
+     * The totals are derived HERE, from the database, rather than taken as parameters. Callers used
+     * to compute them from `_state.value.exercises` — the day screen's in-memory list — and those
+     * three columns drive history, Stats and the Profile's lifetime figures permanently. Any set
+     * missing from that list at the moment Finish was tapped (logged on the watch, lost to one of
+     * the refresh races, or written by a concurrent coroutine) was erased from the user's totals
+     * even though its row was sitting in `logged_set` the whole time.
+     *
+     * [resolveOrphanSession] already derived them this way. Now there is one way to do it, and no
+     * way for a caller to pass a number that disagrees with the rows.
+     */
+    suspend fun finishSession(sessionId: Long): Int {
         val now = clock.nowMs()
         sessionSegmentDao.closeOpen(sessionId, now)
         // Soft-fail instead of crashing if the row vanished (e.g. a concurrent program regenerate
@@ -265,12 +283,14 @@ class WorkoutRepository @Inject constructor(
         val segMs = closedSegmentMs(sessionId)
         val activeSeconds = if (segMs > 0) (segMs / 1000L).toInt()
             else ((now - session.startedAt) / 1000L).toInt().coerceAtLeast(0)
+        val sets = loggedSetDao.allForSession(sessionId)
+        val prCount = loggedExerciseDao.forSession(sessionId).count { it.wasPr }
         sessionDao.update(
             session.copy(
                 finishedAt = now,
-                totalVolumeLb = totalVolumeLb,
+                totalVolumeLb = VolumeCalculator.sessionVolumeLb(sets),
                 prCount = prCount,
-                setCount = setCount,
+                setCount = sets.size,
                 activeSeconds = activeSeconds
             )
         )
@@ -309,7 +329,15 @@ class WorkoutRepository @Inject constructor(
             // division dropped up to ~1 min per session and skipped sessions under a full minute entirely.
             ActiveCalorieEstimator.estimate(activeSeconds / 60.0, weightLb, session.intensity) ?: return
         }
-        health.writeActiveCalories(kcal, session.startedAt, finishedAtMs)
+        health.writeActiveCalories(
+            kcal = kcal,
+            startMs = session.startedAt,
+            endMs = finishedAtMs,
+            // Same key shape as the session and HR mirrors above, so a re-finish updates the
+            // record rather than adding another.
+            clientRecordId = "avex-session-kcal-${session.id}",
+            clientRecordVersion = finishedAtMs
+        )
     }
 
     /**
@@ -398,12 +426,27 @@ class WorkoutRepository @Inject constructor(
         // stays hidden behind the freestyle home (the manual Settings paths flip freestyle off, but
         // this background path can't ask). Skip entirely.
         if (settingsRepo.freestyleMode.first()) return
+
+        val deloadStart = settingsRepo.deloadWeekStartMs.first()
+        val sinceDeload = if (deloadStart > 0) clock.nowMs() - deloadStart else -1L
+        // A deload WEEK has to end. applyDeloadWeek regenerates at reduced volume and stamps the
+        // start, but nothing ever restored full volume: the only exits were a manual Settings
+        // regenerate or auto-rotation, and rotationCadence defaults to "never". So for a default
+        // user the recovery week quietly became their permanent program — and once the marker
+        // aged past the window, nothing on screen said they were deloading either.
+        //
+        // This sits ABOVE the rotation gate deliberately: that gate is precisely the one most
+        // users never pass. A negative sinceDeload (the clock moved backwards) matches neither
+        // branch and leaves the program alone.
+        if (deloadStart > 0 && sinceDeload >= DELOAD_WEEK_MS) {
+            programRepository.restoreAfterDeload()
+            return
+        }
         if (settingsRepo.rotationCadence.first() != "every_n") return
         // Pause auto-rotation inside the deload week — a rotation regenerates a full-volume program
         // and would silently wipe the recovery week mid-deload (seam fix #18). The counter is left
         // untouched, so rotation resumes on the next finish after the deload ends.
-        val deloadStart = settingsRepo.deloadWeekStartMs.first()
-        if (deloadStart > 0 && clock.nowMs() - deloadStart in 0 until DELOAD_WEEK_MS) return
+        if (deloadStart > 0 && sinceDeload in 0 until DELOAD_WEEK_MS) return
         val n = settingsRepo.rotationEveryN.first().coerceAtLeast(1)
         val next = settingsRepo.rotationCounter.first() + 1
         if (next < n) {
@@ -523,6 +566,10 @@ class WorkoutRepository @Inject constructor(
             slotId = slotId
         )
     )
+
+    /** This session's existing row for a program slot, or null. See [LoggedExerciseDao.forSessionSlot]. */
+    suspend fun loggedExerciseForSlot(sessionId: Long, slotId: String): Long? =
+        loggedExerciseDao.forSessionSlot(sessionId, slotId)?.id
 
     suspend fun updateExercise(loggedExercise: LoggedExercise) =
         loggedExerciseDao.update(loggedExercise)

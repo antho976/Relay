@@ -37,6 +37,7 @@ import java.time.temporal.IsoFields
 import java.time.temporal.TemporalAdjusters
 import javax.inject.Inject
 import javax.inject.Singleton
+import com.forge.app.program.Program
 
 /** The one-line "new report ready" banner shown on Overview until the brief is seen. */
 data class CoachBanner(val weekId: String, val text: String)
@@ -498,8 +499,25 @@ class CoachRepository @Inject constructor(
                 coachDao.markApplied(id, clock.nowMs(), prev ?: NONE)
             }
             "volume_up", "volume_down" -> {
-                val newSets = d.payload?.toIntOrNull() ?: return
+                // payload is an ABSOLUTE set count, minted while Monday's pass ran. Anything that
+                // moves the slot between the pass and this tap — a regenerate, a reroll, a deload
+                // week — makes that number describe a program that no longer exists. Applying it
+                // verbatim then adds sets back during a deload, or silently drops sets the user
+                // gained in between, while the Brief row still reads "3 → 4".
+                //
+                // The decision means one set, up or down; its type already says which. Re-derive
+                // that against the slot as it stands NOW instead of trusting the stale absolute.
                 val prev = programCustomizationRepo.overrideFor(d.dayKey, d.targetKey)?.setsOverride ?: 0
+                // setsOverride 0 means "use the plan's own count", so the plan is the anchor when
+                // no override is present. With neither, the slot has left the program entirely and
+                // there is nothing coherent to adjust.
+                val planSets = Program.dayOrNull(d.dayKey)?.exercises?.firstOrNull { it.id == d.targetKey }?.sets
+                val current = if (prev > 0) prev else planSets ?: return
+                val delta = if (d.type == "volume_up") 1 else -1
+                val newSets = (current + delta).coerceIn(1, AutoCoachPlanner.MAX_SLOT_SETS)
+                // Re-deriving can land on the count the slot already has (the program moved to meet
+                // the decision, or the bound clamped it). Writing it is still correct — the overlay
+                // records the coach's intent for the slot — but there is nothing to undo back to.
                 programCustomizationRepo.setSetsOverride(d.dayKey, d.targetKey, newSets, source = OverlaySource.COACH)
                 coachDao.markApplied(id, clock.nowMs(), prev.toString())
             }
@@ -582,17 +600,33 @@ class CoachRepository @Inject constructor(
                     }
                 }
             }
+            // Both branches below KEEP source = COACH rather than flipping it to USER.
+            //
+            // program_customization holds ONE row per (day, exercise) carrying repRangeOverride,
+            // setsOverride, removed and orderOverride, with a single `source` column for all of
+            // them. Writing USER here therefore relabelled the whole row, not the field being
+            // undone: a coach rep-range override sitting on the same slot stayed applied but was
+            // now tagged as the user's, and the coach-lock scan below (`source == USER && (…)`)
+            // then treated the slot as user-owned and never touched it again. Undoing one coach
+            // decision permanently locked the coach out of a slot it owned.
+            //
+            // COACH is also the honest tag. Both branches only run when the row is already
+            // coach-owned, and the coach can only have written it because the slot was NOT
+            // user-locked — so the value being restored is the coach's own prior state or none at
+            // all, never a user edit. The user rejecting a proposal is recorded where it belongs,
+            // in the decision ledger (markReverted, which TrustLadder's revert cap reads), rather
+            // than by falsifying authorship of the overlay row.
             "rep_shift" -> {
                 if (programCustomizationRepo.overrideFor(d.dayKey, d.targetKey)?.source == OverlaySource.COACH) {
                     if (d.undoData == null || d.undoData == NONE)
                         programCustomizationRepo.clearRepRange(d.dayKey, d.targetKey)
-                    else programCustomizationRepo.setRepRange(d.dayKey, d.targetKey, d.undoData, source = OverlaySource.USER)
+                    else programCustomizationRepo.setRepRange(d.dayKey, d.targetKey, d.undoData, source = OverlaySource.COACH)
                 }
             }
             "volume_up", "volume_down" -> {
                 if (programCustomizationRepo.overrideFor(d.dayKey, d.targetKey)?.source == OverlaySource.COACH)
                     programCustomizationRepo.setSetsOverride(
-                        d.dayKey, d.targetKey, d.undoData?.toIntOrNull() ?: 0, source = OverlaySource.USER
+                        d.dayKey, d.targetKey, d.undoData?.toIntOrNull() ?: 0, source = OverlaySource.COACH
                     )
             }
             else -> return // deload / revert aren't mechanically undoable
