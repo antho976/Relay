@@ -256,7 +256,20 @@ class WorkoutRepository @Inject constructor(
      * segment and stamps total ACTIVE seconds (summed across sittings); returns it so the
      * caller can show the real duration. Falls back to wall-clock when no segments exist.
      */
-    suspend fun finishSession(sessionId: Long, totalVolumeLb: Double, prCount: Int, setCount: Int): Int {
+    /**
+     * Close the session and stamp its denormalised totals.
+     *
+     * The totals are derived HERE, from the database, rather than taken as parameters. Callers used
+     * to compute them from `_state.value.exercises` — the day screen's in-memory list — and those
+     * three columns drive history, Stats and the Profile's lifetime figures permanently. Any set
+     * missing from that list at the moment Finish was tapped (logged on the watch, lost to one of
+     * the refresh races, or written by a concurrent coroutine) was erased from the user's totals
+     * even though its row was sitting in `logged_set` the whole time.
+     *
+     * [resolveOrphanSession] already derived them this way. Now there is one way to do it, and no
+     * way for a caller to pass a number that disagrees with the rows.
+     */
+    suspend fun finishSession(sessionId: Long): Int {
         val now = clock.nowMs()
         sessionSegmentDao.closeOpen(sessionId, now)
         // Soft-fail instead of crashing if the row vanished (e.g. a concurrent program regenerate
@@ -265,12 +278,14 @@ class WorkoutRepository @Inject constructor(
         val segMs = closedSegmentMs(sessionId)
         val activeSeconds = if (segMs > 0) (segMs / 1000L).toInt()
             else ((now - session.startedAt) / 1000L).toInt().coerceAtLeast(0)
+        val sets = loggedSetDao.allForSession(sessionId)
+        val prCount = loggedExerciseDao.forSession(sessionId).count { it.wasPr }
         sessionDao.update(
             session.copy(
                 finishedAt = now,
-                totalVolumeLb = totalVolumeLb,
+                totalVolumeLb = VolumeCalculator.sessionVolumeLb(sets),
                 prCount = prCount,
-                setCount = setCount,
+                setCount = sets.size,
                 activeSeconds = activeSeconds
             )
         )

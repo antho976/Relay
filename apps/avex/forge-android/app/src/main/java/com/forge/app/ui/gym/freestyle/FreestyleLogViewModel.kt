@@ -98,9 +98,6 @@ class FreestyleLogViewModel @Inject constructor(
     fun save(items: List<FreestyleExerciseInput>, startedAtMs: Long, onSaved: () -> Unit) {
         viewModelScope.launch {
             val sessionId = workoutRepo.createFreestyleSession(startedAtMs)
-            var totalVolumeLb = 0.0
-            var setCount = 0
-            var prCount = 0
             items.forEachIndexed { exIdx, ex ->
                 val loggedExerciseId =
                     workoutRepo.addExerciseToSession(sessionId, ex.libId, exIdx, swappedName = ex.customName)
@@ -113,14 +110,12 @@ class FreestyleLogViewModel @Inject constructor(
                     if (s.isAmrap) workoutRepo.setAmrap(setId, true)
                     if (s.toFailure) workoutRepo.setToFailure(setId, true)
                     if (s.rpe != null) workoutRepo.setRpe(setId, s.rpe)
-                    totalVolumeLb += (s.weightLb ?: 0.0) * s.reps
-                    setCount++
                 }
                 // Flag wasPr the same way the live day screen does, so a PR logged after the fact still
                 // counts toward the lifetime PR total + the PRs list (not just the raw max-weight stats).
-                if (workoutRepo.flagPrForLoggedExercise(loggedExerciseId, ex.libId)) prCount++
+                workoutRepo.flagPrForLoggedExercise(loggedExerciseId, ex.libId)
             }
-            workoutRepo.finishSession(sessionId, totalVolumeLb, prCount = prCount, setCount = setCount)
+            workoutRepo.finishSession(sessionId)
             // The log is now a real finished session — drop its resume draft so it can't be re-offered.
             settingsRepo.clearFreestyleDraft()
             onSaved()
