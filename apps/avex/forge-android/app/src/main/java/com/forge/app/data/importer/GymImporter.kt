@@ -1,5 +1,6 @@
 package com.forge.app.data.importer
 
+import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -32,8 +33,25 @@ object ImportParsing {
     /** Round to 0.1 to avoid float dust from kg→lb conversion showing as "20.000001 lb". */
     fun roundWeight(lb: Double): Double = Math.round(lb * 10.0) / 10.0
 
+    /**
+     * Zone-carrying formats, tried FIRST and read as an instant.
+     *
+     * The old list matched `"yyyy-MM-dd'T'HH:mm:ss'Z'"` — with the Z QUOTED, so it was a literal
+     * character rather than the UTC designator. "2026-08-25T10:00:00Z" therefore parsed as 10:00
+     * wall time and was then re-zoned into the device's zone, shifting every imported session by
+     * the full local offset and, for anyone far enough east or west, onto the wrong calendar day
+     * and the wrong ISO week. An explicit "+02:00" matched nothing at all, so those rows were
+     * dropped as unparseable.
+     */
+    private val INSTANT_FORMATS = listOf(
+        DateTimeFormatter.ISO_INSTANT,
+        DateTimeFormatter.ISO_OFFSET_DATE_TIME,
+        DateTimeFormatter.ISO_ZONED_DATE_TIME
+    )
+
+    // Zone-LESS formats. These genuinely carry no offset, so local time is the right reading.
     private val DATE_TIME_FORMATS = listOf(
-        "yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd'T'HH:mm:ss'Z'",
+        "yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd'T'HH:mm:ss",
         "yyyy-MM-dd HH:mm", "yyyy/MM/dd HH:mm:ss",
         "d MMM yyyy, HH:mm", "dd MMM yyyy, HH:mm", "d MMM yyyy HH:mm", "dd MMM yyyy HH:mm",
         "MMM d yyyy, HH:mm", "EEE, dd MMM yyyy HH:mm:ss"
@@ -59,6 +77,12 @@ object ImportParsing {
     fun parseEpochMillis(raw: String): Long? {
         val s = raw.trim()
         if (s.isBlank()) return null
+        // A string that states its own zone or offset is an instant, and must not be re-zoned.
+        for (fmt in INSTANT_FORMATS) {
+            try {
+                return Instant.from(fmt.parse(s)).toEpochMilli()
+            } catch (_: Exception) { /* try next */ }
+        }
         for (fmt in DATE_TIME_FORMATS) {
             try {
                 return LocalDateTime.parse(s, fmt).atZone(zone).toInstant().toEpochMilli()
