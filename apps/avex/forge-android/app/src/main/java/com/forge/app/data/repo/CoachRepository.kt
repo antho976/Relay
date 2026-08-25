@@ -582,17 +582,33 @@ class CoachRepository @Inject constructor(
                     }
                 }
             }
+            // Both branches below KEEP source = COACH rather than flipping it to USER.
+            //
+            // program_customization holds ONE row per (day, exercise) carrying repRangeOverride,
+            // setsOverride, removed and orderOverride, with a single `source` column for all of
+            // them. Writing USER here therefore relabelled the whole row, not the field being
+            // undone: a coach rep-range override sitting on the same slot stayed applied but was
+            // now tagged as the user's, and the coach-lock scan below (`source == USER && (…)`)
+            // then treated the slot as user-owned and never touched it again. Undoing one coach
+            // decision permanently locked the coach out of a slot it owned.
+            //
+            // COACH is also the honest tag. Both branches only run when the row is already
+            // coach-owned, and the coach can only have written it because the slot was NOT
+            // user-locked — so the value being restored is the coach's own prior state or none at
+            // all, never a user edit. The user rejecting a proposal is recorded where it belongs,
+            // in the decision ledger (markReverted, which TrustLadder's revert cap reads), rather
+            // than by falsifying authorship of the overlay row.
             "rep_shift" -> {
                 if (programCustomizationRepo.overrideFor(d.dayKey, d.targetKey)?.source == OverlaySource.COACH) {
                     if (d.undoData == null || d.undoData == NONE)
                         programCustomizationRepo.clearRepRange(d.dayKey, d.targetKey)
-                    else programCustomizationRepo.setRepRange(d.dayKey, d.targetKey, d.undoData, source = OverlaySource.USER)
+                    else programCustomizationRepo.setRepRange(d.dayKey, d.targetKey, d.undoData, source = OverlaySource.COACH)
                 }
             }
             "volume_up", "volume_down" -> {
                 if (programCustomizationRepo.overrideFor(d.dayKey, d.targetKey)?.source == OverlaySource.COACH)
                     programCustomizationRepo.setSetsOverride(
-                        d.dayKey, d.targetKey, d.undoData?.toIntOrNull() ?: 0, source = OverlaySource.USER
+                        d.dayKey, d.targetKey, d.undoData?.toIntOrNull() ?: 0, source = OverlaySource.COACH
                     )
             }
             else -> return // deload / revert aren't mechanically undoable
