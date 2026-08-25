@@ -5,7 +5,7 @@ import {Clip, Device, FocusMove, Media, Seam, SeamDir} from './Device';
 import {Center, Plate, Split} from './Layout';
 import {Cue, CueRun} from './Sound';
 import {Body, Counter, EraTag, Eyebrow, Line, Tag, Title, useEdgeFade, useRise} from './Type';
-import {ACCENT, MONO, MUTED, ON_BG, SERIF} from './theme';
+import {ACCENT, EIGHTH, MONO, MUTED, ON_BG, QUARTER, SERIF, run} from './theme';
 
 /* ── openers ─────────────────────────────────────────────────────────────── */
 
@@ -85,8 +85,8 @@ export const Compare: React.FC<{
   return (
     <AbsoluteFill style={{opacity: o}}>
       <Plate>
-        <Cue at={Math.max(0, start - 1)} sfx="sweep" />
-        <Cue at={start + sweep - 3} sfx="screen" />
+        <Cue at={start} sfx="sweep" />
+        <Cue at={start + sweep} sfx="screen" />
         <Camera shot={shot}>
           <AbsoluteFill>
             <Split
@@ -175,23 +175,23 @@ export const Solo: React.FC<{
  * The small things, named. Some changes are real but too small to shoot — a chip's proportions, a
  * renamed section, a filter — and a list is more honest than zooming on a detail nobody can read.
  */
-export const ListCard: React.FC<{eyebrow: string; title: string; items: string[]}> = ({
-  eyebrow, title, items,
-}) => {
+export const ListCard: React.FC<{
+  eyebrow: string; title: string; items: string[]; gridStart?: number;
+}> = ({eyebrow, title, items, gridStart = 0}) => {
   const {durationInFrames} = useVideoConfig();
   const o = useEdgeFade(durationInFrames, 12);
+  // One per eighth note. The rise and the tick share a frame, so the list settles in time.
+  const beats = run(gridStart + QUARTER * 2, items.length, EIGHTH).map((f) => f - gridStart);
   return (
     <AbsoluteFill style={{opacity: o}}>
       <Plate>
-        {/* one tick per item, quiet and decaying — eight of these should read as a list settling,
-            not as a drum roll */}
-        <CueRun from={12} every={2.5} count={items.length} sfx="count" gain={0.9} decay={0.94} />
+        {beats.map((f, i) => <Cue key={i} at={f} sfx="count" gain={0.95 * Math.pow(0.96, i)} />)}
         <div style={{display: 'flex', flexDirection: 'column', gap: 32, width: 1500}}>
           <Eyebrow delay={0}>{eyebrow}</Eyebrow>
           <Title delay={4} size={76}>{title}</Title>
           <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 92, rowGap: 30, marginTop: 14}}>
             {items.map((it, i) => (
-              <ListItem key={i} n={i} v={it} />
+              <ListItem key={i} n={i} v={it} at={beats[i]} />
             ))}
           </div>
         </div>
@@ -200,8 +200,8 @@ export const ListCard: React.FC<{eyebrow: string; title: string; items: string[]
   );
 };
 
-const ListItem: React.FC<{n: number; v: string}> = ({n, v}) => {
-  const r = useRise(10 + n * 2.5, 10);
+const ListItem: React.FC<{n: number; v: string; at: number}> = ({n, v, at}) => {
+  const r = useRise(at, 10);
   return (
     <div
       style={{

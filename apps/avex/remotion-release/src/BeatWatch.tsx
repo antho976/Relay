@@ -4,9 +4,9 @@ import {WatchPr, WatchRest, WatchRpe, WatchSet} from './ui/Watch';
 import {C} from './ui/tokens';
 import {EASE} from './Camera';
 import {Plate, Split} from './Layout';
-import {CueRun} from './Sound';
+import {Cue} from './Sound';
 import {Body, Eyebrow, Title, useEdgeFade, useRise} from './Type';
-import {ACCENT, MONO, MUTED, ON_BG, SERIF} from './theme';
+import {ACCENT, EIGHTH, MONO, MUTED, ON_BG, SERIF, run} from './theme';
 
 /**
  * Wear OS. The only genuinely new *surface* in 0.9 — neither `wear/` nor `shared/` existed at
@@ -26,7 +26,7 @@ const STEPS: Step[] = [
   {n: '04', label: 'Say how hard it felt, or skip it'},
 ];
 
-export const WatchBeat: React.FC = () => {
+export const WatchBeat: React.FC<{gridStart?: number}> = ({gridStart = 0}) => {
   const frame = useCurrentFrame();
   const {fps, durationInFrames} = useVideoConfig();
   const o = useEdgeFade(durationInFrames, 10);
@@ -35,11 +35,10 @@ export const WatchBeat: React.FC = () => {
   const at = (f: number) => Math.round(durationInFrames * f);
   const P = {set: 0, log: at(0.34), pr: at(0.38), rest: at(0.48), rpe: at(0.76)};
 
-  // The ± stepper walking 150 → 155, one tick per step.
-  const stepP = interpolate(frame, [at(0.1), at(0.3)], [0, 1], {
-    extrapolateLeft: 'clamp', extrapolateRight: 'clamp',
-  });
-  const weight = 150 + Math.round(stepP * 5);
+  // The stepper walks 150 → 155 on eighth notes, and the picture is driven BY the cue frames rather
+  // than the other way round, so the number changing and the tick are the same instant.
+  const ticks = run(gridStart + at(0.14), 5, EIGHTH).map((f) => f - gridStart);
+  const weight = 150 + ticks.filter((f) => frame >= f).length;
 
   const enter = (f: number) => spring({frame: frame - f, fps, config: {damping: 200, stiffness: 110}});
   const ePr = enter(P.pr) * (1 - enter(P.rest));
@@ -65,7 +64,7 @@ export const WatchBeat: React.FC = () => {
       <Plate>
         {/* The stepper walking the weight up is the one sound on this beat that reads as the watch
             rather than as stock UI, so it is the one that stays. The confirm/rest chimes are cut. */}
-        <CueRun from={at(0.11)} every={(at(0.3) - at(0.1)) / 5} count={5} sfx="tick" gain={0.95} />
+        {ticks.map((f, i) => <Cue key={i} at={f} sfx="tick" gain={0.95} />)}
 
         <Split
           copyWidth={700}

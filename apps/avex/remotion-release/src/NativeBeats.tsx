@@ -8,20 +8,23 @@ import {Body, Eyebrow, Title, useEdgeFade} from './Type';
 import {Plate} from './Layout';
 import {Cue} from './Sound';
 import {Device} from './Device';
-import {SHOT_AR} from './theme';
+import {SHOT_AR, snap} from './theme';
 
 const MONO = '"JetBrains Mono", ui-monospace, monospace';
 
 /** Home, morphing 0.8.9 → 0.9 in place. No cut, so every change lands on one clock. */
-export const HomeMorph: React.FC = () => {
+export const HomeMorph: React.FC<{gridStart?: number}> = ({gridStart = 0}) => {
   const frame = useCurrentFrame();
   const {fps, durationInFrames} = useVideoConfig();
   const o = useEdgeFade(durationInFrames, 14);
   // Relative to the beat, not absolute: the bar grid re-times beats and a hard-coded frame 55 would
   // put the morph anywhere from mid-beat to past the end.
-  const at = (f: number) => Math.round(durationInFrames * f);
-  const t = spring({frame: frame - at(0.34), fps, config: {damping: 200, stiffness: 34}});
-  const fill = interpolate(frame, [at(0.08), at(0.42)], [0, 1], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'});
+  // Both events on beats: the bars start filling on one, the era turns over on another.
+  const at = (f: number) => snap(gridStart + durationInFrames * f, 4) - gridStart;
+  const FILL = at(0.10);
+  const TURN = at(0.36);
+  const t = spring({frame: frame - TURN, fps, config: {damping: 200, stiffness: 34}});
+  const fill = interpolate(frame, [FILL, TURN], [0, 1], {extrapolateLeft: 'clamp', extrapolateRight: 'clamp'});
 
   return (
     <AbsoluteFill style={{opacity: o}}>
@@ -35,8 +38,8 @@ export const HomeMorph: React.FC = () => {
               beside it instead of buried three taps deep. The goal bars turned red. And the last tab
               stopped being you.
             </Body>
-            <Cue at={at(0.10)} sfx="fill" gain={0.7} />
-            <Cue at={at(0.34)} sfx="screen" gain={0.8} />
+            <Cue at={FILL} sfx="fill" gain={0.7} />
+            <Cue at={TURN} sfx="screen" gain={0.85} />
             <div style={{display: 'flex', gap: 18, marginTop: 10, alignItems: 'center'}}>
               <Era label="0.8.9" on={1 - t} />
               <div style={{width: 200, height: 3, borderRadius: 999, background: C.outline, position: 'relative'}}>

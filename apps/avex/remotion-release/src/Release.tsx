@@ -59,12 +59,12 @@ const BEATS: Beat[] = [
   },
 
   /* ── the day ────────────────────────────────────────────── bed enters, bar 5 ── */
-  {endBar: 6, out: 'whip', shot: {z: [1, 1.05], x: [0, -20]}, el: () => <HomeMorph />},
-  {endBar: 8, out: 'push', shot: {z: [1.04, 1], x: [24, 0]}, el: () => <NoticeBeat />},
+  {endBar: 6, out: 'whip', shot: {z: [1, 1.05], x: [0, -20]}, el: (start) => <HomeMorph gridStart={start} />},
+  {endBar: 8, out: 'push', shot: {z: [1.04, 1], x: [24, 0]}, el: (start) => <NoticeBeat gridStart={start} />},
 
   /* ── the session ─────────────────────────────────── bed opens up at bar 17 ── */
   {
-    endBar: 12, out: 'cut', shot: {z: [1, 1.05], x: [0, -16], ease: EASE.drift},
+    endBar: 11, out: 'cut', shot: {z: [1, 1.05], x: [0, -16], ease: EASE.drift},
     el: (start) => (
       <Compare
         before={{src: 'cfr/before-session.mp4', start: 690}}
@@ -76,7 +76,7 @@ const BEATS: Beat[] = [
     ),
   },
   {
-    endBar: 14, out: 'push',
+    endBar: 13, out: 'push',
     el: () => (
       <Solo
         clip={{src: 'cfr/after-session.mp4', start: 950}}
@@ -86,14 +86,13 @@ const BEATS: Beat[] = [
       />
     ),
   },
-  {endBar: 18, out: 'whip', shot: {z: [1.03, 1], y: [-10, 0], ease: EASE.drift}, el: () => <WatchBeat />},
+  {endBar: 17, out: 'whip', shot: {z: [1.03, 1], y: [-10, 0], ease: EASE.drift}, el: (start) => <WatchBeat gridStart={start} />},
 
   /* ── the record ────────────────────────────────── bed drops back at bar 25 ── */
   {
-    /* Seven bars. Coach was the biggest rebuild in the release and was getting four seconds; the
-       compare and the training-block beat are now one continuous shot, and the capture scrolls down
-       to the block rail on its own once the seam has passed. */
-    endBar: 25, out: 'cut', shot: {z: [1, 1.05], x: [0, 18], ease: EASE.drift},
+    /* Six bars. The compare and the training-block beat are one continuous shot: the capture tours
+       down to the block rail on its own once the seam has passed. */
+    endBar: 23, out: 'cut', shot: {z: [1, 1.05], x: [0, 18], ease: EASE.drift},
     el: (start) => (
       <Compare
         /* The after clip tours the page: the seam happens at the top, where 0.8.9's volume figure
@@ -101,33 +100,44 @@ const BEATS: Beat[] = [
            because the capture only travels from the header to the block over about 130 frames and
            then scrolls back up again; slowed, that stretch fills the whole beat. */
         before={{src: 'cfr/before-coach.mp4', start: 180}}
-        after={{src: 'cfr/after-coach.mp4', start: 424, rate: 0.8}}
+        after={{src: 'cfr/after-coach.mp4', start: 424, rate: 0.93}}
         eyebrow="Coach" title="Coach shows its work"
         note="Your week, your recovery, and where you are in a training block, all on one page. The volume figure stops getting cut off halfway through. And the block itself is new: build up, push hard, peak, then take a lighter week, started straight from the brief."
-        hold={bar(19) - start} sweep={30} dir="ltr" height={880} flip
+        hold={bar(18) - start} sweep={30} dir="ltr" height={880} flip
       />
     ),
   },
   {
-    endBar: 28, out: 'cut', shot: {z: [1.04, 1], ease: EASE.drift},
+    endBar: 26, out: 'cut', shot: {z: [1.04, 1], ease: EASE.drift},
     el: (start) => (
       <Compare
         before={{src: 'cfr/before-cardio.mp4', start: 0}}
         after={{src: 'cfr/after-cardio.mp4', start: 8}}
         eyebrow="Cardio" title="Built around your week"
         line="Two views instead of one long list. This week at a glance, or how you are trending over time."
-        hold={bar(26) - start} sweep={24} dir="ttb" height={880}
+        hold={bar(24) - start} sweep={24} dir="ttb" height={880}
       />
     ),
   },
   {
-    endBar: 30, out: 'pushUp',
+    endBar: 28, out: 'pushUp',
     el: () => (
       <Solo
         clip={{src: 'cfr/after-cardio.mp4', start: 880}}
         eyebrow="New in 0.9" title="Every week as a chart"
         line="One bar per week, back to your very first, against the 150 minutes a week the WHO recommends."
         height={900} changes={[8]} fill={22}
+      />
+    ),
+  },
+  {
+    endBar: 30, out: 'push', shot: {z: [1, 1.04], y: [8, -8]},
+    el: () => (
+      <Solo
+        clip={{src: 'cfr/after-cardio.mp4', start: 1655}}
+        eyebrow="History" title="Search everything you've done"
+        line="Lifting and cardio in one list. Filter by how long it took, or how hard it was."
+        height={900} flip changes={[10]}
       />
     ),
   },
@@ -164,9 +174,14 @@ const BEATS: Beat[] = [
   },
   {
     endBar: 41, out: 'dissolve',
-    el: () => (
+    el: (start) => (
       <OnboardingBeat
         before={ONBOARDING_0_8_9} after={ONBOARDING_0_9}
+        gridStart={start}
+        /* The hit is the loudest single event in the film, so it goes on a downbeat rather than
+           wherever the fifteen pages happen to finish landing. Bar 39 leaves two beats of stillness
+           after the last page, which is what makes the hit land. */
+        phase={{bam: bar(39) - start}}
         eyebrow="Setting up"
         title="Fifteen questions down to nine"
         line="It used to ask fifteen things before showing you anything. Now it asks what shapes your plan, and the rest waits until the end."
@@ -175,8 +190,9 @@ const BEATS: Beat[] = [
   },
   {
     endBar: 44, out: 'dissolve',
-    el: () => (
+    el: (start) => (
       <ListCard
+        gridStart={start}
         eyebrow="Also in 0.9" title="Smaller things"
         items={[
           'Recovery is now called Wearable, with all three watch options on one row',
@@ -193,7 +209,7 @@ const BEATS: Beat[] = [
   },
   {
     endBar: 46, shot: {z: [1, 1.035]},
-    el: (start) => <Card eyebrow="Avex" title="0.9" sub="out now" subAt={bar(45) - start} />,
+    el: (start) => <Card eyebrow="Avex" title="0.9" sub="tomorrow" subAt={bar(45) - start} />,
   },
 ];
 

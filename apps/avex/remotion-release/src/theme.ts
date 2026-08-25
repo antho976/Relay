@@ -53,3 +53,37 @@ export const BED = {firstDownbeat: 0.116, bar: 1.99667, bars: 46} as const;
 
 /** Frame of the downbeat that opens bar `n` (1-indexed). */
 export const bar = (n: number) => Math.round((BED.firstDownbeat + (n - 1) * BED.bar) * FPS);
+
+/* ── the sound grid ──────────────────────────────────────────────────────── */
+
+/**
+ * Cues used to fire wherever their picture happened to be, which against a 120 BPM bed is the
+ * difference between a sound design and a pile of noises. Everything audible now lands on a
+ * subdivision of the same grid the cuts use.
+ *
+ * At this tempo a bar is 59.90 frames, a quarter 14.98, an eighth 7.49 and a sixteenth 3.74. None of
+ * those are whole frames, so a run of cues has to be laid out in float and rounded per event —
+ * rounding the step first would drift a sixteenth of a beat every four events.
+ */
+export const BAR_F = BED.bar * FPS;
+export const QUARTER = BAR_F / 4;
+export const EIGHTH = BAR_F / 8;
+export const SIXTEENTH = BAR_F / 16;
+
+const FIRST_F = BED.firstDownbeat * FPS;
+
+/** Snap an absolute frame to the nearest grid point. `div` is subdivisions per bar. */
+export const snap = (f: number, div = 8) => {
+  const step = BAR_F / div;
+  return Math.round(FIRST_F + Math.round((f - FIRST_F) / step) * step);
+};
+
+/**
+ * A run of `count` events at `step` frames apart, beginning at the grid point at or after `from`.
+ * Returned as absolute frames. Used for the onboarding pages landing, the watch stepper and the
+ * list settling, all of which were previously spaced by whatever looked right.
+ */
+export const run = (from: number, count: number, step: number, div = 16): number[] => {
+  const first = snap(from, div);
+  return Array.from({length: count}, (_, i) => Math.round(first + i * step));
+};

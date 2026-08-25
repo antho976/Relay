@@ -393,19 +393,33 @@ fromsrc reveal reveal.mp3 0.000 0.500 0.003 0.080
 # ---------------------------------------------------------------------------
 # 14. sweep.wav — the accent edge that transforms the app, ~900 ms.
 #
-#     The film's signature move, so this one is shaped rather than just
-#     trimmed. The take is a crystalline shimmer travelling across glass and
-#     its ENVELOPE is right out of the box — it builds from -23 dBFS, peaks at
-#     ~300 ms, holds, then passes and decays away, which is what "something
-#     travelling over a surface" should do. Its SPECTRUM was wrong: 68.7% of
-#     the energy sat above 4 kHz, i.e. airy, and the brief said physical.
-#     A -9 dB high shelf at 4.5 kHz plus an 11 kHz lowpass moves it to
-#     69.6% / 24.1% between the 1-4 kHz and >4 kHz bands — still bright, but
-#     now with a metallic body under the brightness instead of just air.
-#     Two darker takes were tried and rejected: one measured 97.8% below
-#     200 Hz, the other had no content above 1 kHz at all.
+#     REPLACED. The first version of this cue was a "crystalline shimmer
+#     across glass" take with 24.1% of its energy above 4 kHz and its peak
+#     held for 320 ms. The director's verdict was that it sounded like an
+#     electric cutter cutting metal, and acoustically that is exactly what
+#     those two numbers describe: bright inharmonic content that sustains
+#     does not read as an event happening, it reads as a tool running.
+#
+#     This take is a thick soft pillow pressed slowly and released — chosen
+#     because it was the only candidate of ten that had a real ARC (it builds
+#     to a peak at ~320 ms and falls away) rather than a flat wash. Flat
+#     textures were rejected on principle: a cloth-wipe take measured lovely
+#     and warm but held its peak for 480 ms, which is the same "tool running"
+#     failure in a friendlier material.
+#
+#     The only processing is a highpass. The raw take is 98% below 200 Hz —
+#     so low it is nearly inaudible on a laptop or phone, most of its energy
+#     living under the speaker's rolloff. A 4-pole highpass at 220 Hz moves
+#     it to 56% below 200 Hz / 44% in 200-1000 Hz: still low-weighted and
+#     warm, but now with real presence in the band every device can actually
+#     reproduce. Nothing is boosted; sub-bass nobody can hear is removed so
+#     the -3 dBFS normalisation is spent on the audible part instead.
+#
+#     Measured, delivered: 0.0% above 4 kHz (limit 5%), 100% below 1 kHz
+#     (floor 55%), peak held 40 ms (limit 120 ms). There is no energy at all
+#     above 1 kHz, so this cue cannot read as metallic under any playback.
 # ---------------------------------------------------------------------------
-fromsrc sweep sweep.mp3 0.000 0.900 0.005 0.120 \
-  "treble=gain=-9:frequency=4500:width_type=q:width=0.7,lowpass=frequency=11000:poles=2"
+fromsrc sweep sweep.mp3 0.000 0.900 0.010 0.100 \
+  "highpass=frequency=220:poles=2,highpass=frequency=220:poles=2"
 
 echo "make-sfx: done — $(ls -1 "$OUT_DIR"/*.wav | wc -l) files in $OUT_DIR"

@@ -8,7 +8,7 @@ import {EASE} from './Camera';
 import {Plate, Split} from './Layout';
 import {Cue} from './Sound';
 import {Body, Eyebrow, Title, useEdgeFade} from './Type';
-import {ACCENT, MONO, MUTED, ON_BG, SERIF, SHOT_AR} from './theme';
+import {ACCENT, MONO, MUTED, ON_BG, QUARTER, SERIF, SHOT_AR, snap} from './theme';
 
 /**
  * The bell. `ui/notifications/` did not exist at 0.8.9 — Home opened with up to four stacked banner
@@ -26,15 +26,17 @@ const PHONE_W = PHONE_H / SHOT_AR;
 const SCALE = PHONE_W / 384;      // dp → px at this phone size
 const BELL = {x: 34 * SCALE + 10, y: 34 * SCALE + 10 * SCALE + 13 * SCALE};
 
-export const NoticeBeat: React.FC = () => {
+export const NoticeBeat: React.FC<{gridStart?: number}> = ({gridStart = 0}) => {
   const frame = useCurrentFrame();
   const {fps, durationInFrames} = useVideoConfig();
   const o = useEdgeFade(durationInFrames, 10);
 
-  const at = (f: number) => Math.round(durationInFrames * f);
-  const IN = at(0.18);
-  const FLY = at(0.58);
-  const LAND = FLY + 14;
+  // Three events, three grid points: the banner arrives on a beat, leaves two beats later, and lands
+  // on the beat after that. The flight length is whatever the grid leaves it, not a fixed 14 frames.
+  const g = (f: number) => snap(gridStart + f, 4) - gridStart;
+  const IN = g(durationInFrames * 0.16);
+  const FLY = g(durationInFrames * 0.56);
+  const LAND = g(FLY + QUARTER);
 
   const drop = spring({frame: frame - IN, fps, config: {damping: 200, stiffness: 90}});
   const fly = interpolate(frame, [FLY, LAND], [0, 1], {

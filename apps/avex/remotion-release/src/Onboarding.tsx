@@ -2,9 +2,9 @@ import React from 'react';
 import {AbsoluteFill, interpolate, spring, useCurrentFrame, useVideoConfig} from 'remotion';
 import {EASE} from './Camera';
 import {Plate} from './Layout';
-import {Cue, CueRun} from './Sound';
+import {Cue} from './Sound';
 import {Eyebrow, Line, Title, useEdgeFade, useRise} from './Type';
-import {ACCENT, ACCENT_OLD, BG, MONO, MUTED, ON_BG, OUTLINE, SERIF, SURFACE_V} from './theme';
+import {ACCENT, ACCENT_OLD, BG, EIGHTH, MONO, MUTED, ON_BG, OUTLINE, QUARTER, SERIF, SIXTEENTH, SURFACE_V, run, snap} from './theme';
 
 /**
  * The onboarding beat. The brief: lay the whole old flow down page by page, then one hard hit, and
@@ -294,18 +294,20 @@ export const OnboardingBeat: React.FC<{
   eyebrow?: string; title?: string; line?: string;
   cols?: [number, number];
   phase?: Partial<Phase>;
-}> = ({before, after, eyebrow = 'Onboarding', title, line, cols, phase}) => {
+  /** absolute first frame of the beat, so the pages can land on the music */
+  gridStart?: number;
+}> = ({before, after, eyebrow = 'Onboarding', title, line, cols, phase, gridStart = 0}) => {
   const frame = useCurrentFrame();
   const {fps, durationInFrames} = useVideoConfig();
   const o = useEdgeFade(durationInFrames, 10);
 
-  const P: Phase = {
-    layIn: 6, per: 2.2, hold: 10, bam: 0, bloom: 0, bloomPer: 3.2,
-    ...phase,
-  };
-  const layEnd = P.layIn + before.length * P.per + 14;   // last card still needs its spring
-  const bam = P.bam || layEnd + P.hold;
-  const bloom = P.bloom || bam + 7;
+  // Absolute grid points, converted back to beat-local. The cards ARE the rhythm here, so they are
+  // laid out from the grid and the springs follow them, not the other way round.
+  const lay = run(gridStart + (phase?.layIn ?? QUARTER), before.length, SIXTEENTH).map((f) => f - gridStart);
+  const bam = phase?.bam ?? Math.round(snap(gridStart + lay[lay.length - 1] + QUARTER * 2, 4) - gridStart);
+  const bloomRun = run(gridStart + bam + QUARTER, after.length, EIGHTH).map((f) => f - gridStart);
+  const P: Phase = {layIn: lay[0], per: SIXTEENTH, hold: 0, bam, bloom: bloomRun[0], bloomPer: EIGHTH};
+  const bloom = bloomRun[0];
 
   // Two rows for both, but the block visibly narrows: fifteen small pages span ~1140px, nine
   // larger ones span ~850. The shrink is the point, so it has to be legible as a shape.
@@ -329,11 +331,12 @@ export const OnboardingBeat: React.FC<{
   return (
     <AbsoluteFill style={{opacity: o}}>
       <Plate>
-        {/* every page landing is a real tap; they decay so seventeen of them do not become a drum roll */}
-        <CueRun from={P.layIn + 6} every={P.per} count={before.length} sfx="tap" gain={0.5} decay={0.965} />
+        {/* Fifteen pages on sixteenths, the hit on a downbeat, nine pages back on eighths. The taps
+            decay so fifteen of them read as a flow rather than a drum roll. */}
+        {lay.map((f, i) => <Cue key={i} at={f} sfx="tap" gain={0.55 * Math.pow(0.968, i)} />)}
         <Cue at={bam} sfx="impact" />
-        <CueRun from={bloom + 4} every={P.bloomPer} count={after.length} sfx="tick" gain={0.6} decay={0.97} />
-        <Cue at={Math.round(bloom + 4 + after.length * P.bloomPer)} sfx="ding" gain={0.75} />
+        {bloomRun.map((f, i) => <Cue key={i} at={f} sfx="pop" gain={0.6 * Math.pow(0.97, i)} />)}
+        <Cue at={Math.round(snap(gridStart + bloomRun[bloomRun.length - 1] + EIGHTH, 4) - gridStart)} sfx="ding" gain={0.75} />
 
         <div style={{display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 30, width: 1560, marginTop: 52}}>
           <div style={{display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', width: '100%'}}>
@@ -352,13 +355,13 @@ export const OnboardingBeat: React.FC<{
             {showBefore ? (
               <Grid
                 pages={before} cols={beforeCols} w={132} accent={ACCENT_OLD} era="old"
-                enterAt={P.layIn} per={P.per} exitAt={bam} exit={hit}
+                enterAt={lay[0]} per={SIXTEENTH} exitAt={bam} exit={hit}
               />
             ) : null}
             {showAfter ? (
               <Grid
                 pages={after} cols={afterCols} w={158} accent={ACCENT} era="new"
-                enterAt={bloom} per={P.bloomPer} bloom
+                enterAt={bloom} per={EIGHTH} bloom
               />
             ) : null}
 
