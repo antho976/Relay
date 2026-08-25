@@ -320,11 +320,18 @@ internal fun BodyLogDatePickerDialog(
 ) {
     val cs = MaterialTheme.colorScheme
     val maxDateMs = remember { System.currentTimeMillis() }
+    val maxDayUtcMs = remember(maxDateMs) {
+        Instant.ofEpochMilli(maxDateMs).atZone(ZoneId.systemDefault()).toLocalDate()
+            .atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
+    }
     val dpState = rememberDatePickerState(
         initialSelectedDateMillis = date.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli(),
         selectableDates = remember(maxDateMs) {
             object : SelectableDates {
-                override fun isSelectableDate(utcTimeMillis: Long) = utcTimeMillis <= maxDateMs
+                // Compare calendar DAYS in the user's zone. A UTC-midnight candidate against a
+                // local `now` locked users east of UTC out of today until their offset elapsed,
+                // and let users west of it pick tomorrow.
+                override fun isSelectableDate(utcTimeMillis: Long) = utcTimeMillis <= maxDayUtcMs
                 override fun isSelectableYear(year: Int) =
                     year <= Instant.ofEpochMilli(maxDateMs).atZone(ZoneId.systemDefault()).year
             }
