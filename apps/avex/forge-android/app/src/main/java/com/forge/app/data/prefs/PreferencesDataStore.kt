@@ -264,6 +264,9 @@ object PreferenceKeys {
     /** Whether the Coach feature is surfaced at all (tab + banners). Off → coach hidden until the user
      *  re-enables it in Settings. Declined during onboarding for the no-plan / make-your-own modes. */
     val COACH_ENABLED = booleanPreferencesKey("coach_enabled")
+    /** ISO week id of the most recent weekly pass that ran while the coach was switched OFF, so
+     *  turning it back on mid-week can regenerate that pass instead of serving its inert result. */
+    val COACH_OFF_PASS_WEEK = stringPreferencesKey("coach_off_pass_week")
 
     // ─── Program generation (program-unlock) ──────────────────────────────────
     /** Training days/week the program targets — drives the split template (3-day ≠ 7-day). */

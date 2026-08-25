@@ -177,12 +177,21 @@ class CoachRepository @Inject constructor(
         val weekId = weekId(today)
         val coachOff = !settings.coachEnabled.first()
 
-        // A pass already ran this ISO week — normally we're done (the week runs once). The exception:
-        // a pass recorded as inert SHADOW while the coach was OFF has no actionable proposals, so if
-        // the coach is now ON we clear it and regenerate a real proposal pass — otherwise re-enabling
-        // mid-week would leave the user with an empty read-only brief until the next ISO week.
+        // A pass already ran this ISO week — normally we're done (the week runs once). Two exceptions.
+        //
+        // 1. The pass was recorded while the coach was OFF and the coach is now ON. Re-enabling
+        //    mid-week must not serve an inert result for the rest of the week. Matching on
+        //    STATUS_SHADOW alone missed most of them: only the planner's PROPOSE branch writes
+        //    shadow — a HOLD reached while the coach was off is written STATUS_HOLD, and so is a
+        //    vacation pass, so "All 5 tracked lifts are progressing" from Monday was cached until
+        //    the following Monday however much the history changed in between. The week id of the
+        //    last off-pass is recorded below so the two cases can be told apart.
+        // 2. The pass ERRORED. An error is not a result; it should be retried, not cached for a week.
+        val offPassWeekId = settings.coachOffPassWeekId.first()
         coachDao.pass(weekId)?.let { existing ->
-            if (existing.status != STATUS_SHADOW || coachOff) return@withLock existing
+            val recordedWhileOff = existing.status == STATUS_SHADOW || offPassWeekId == weekId
+            val regenerate = (recordedWhileOff && !coachOff) || existing.status == STATUS_ERROR
+            if (!regenerate) return@withLock existing
             coachDao.clearPass(weekId)
         }
 
@@ -245,6 +254,11 @@ class CoachRepository @Inject constructor(
         // concurrent caller that lost the race no-ops (no crash, no doubled decisions) and reads the
         // winner's row below instead.
         val won = coachDao.insertPassWithDecisions(pass, decisions)
+        // A new week's pass supersedes every proposal left un-tapped in an earlier one.
+        if (won) runCatching { coachDao.expireProposalsBefore(weekId) }
+        // Remember that THIS week's pass ran with the coach off, whatever status it landed on, so
+        // turning the coach back on mid-week can regenerate it rather than serve the inert result.
+        if (won && coachOff) runCatching { settings.setCoachOffPassWeekId(weekId) }
         // A switched-off coach records but never acts — shadow decisions aren't proposals, so there is
         // nothing to auto-apply (and autoApplyEarnedTypes only touches STATUS_PROPOSED rows anyway).
         val autoApplyTooSoon = previousPassRanAt != null &&
@@ -477,6 +491,17 @@ class CoachRepository @Inject constructor(
     /** One-tap apply for a proposed decision; records the before-state for undo. */
     suspend fun applyDecision(id: Long) = lifecycleMutex.withLock { applyDecisionLocked(id) }
 
+    /**
+     * Retire a decision that can never be applied, rather than leaving it `proposed`.
+     *
+     * Every branch below used to bail with a bare `return` on a payload that no longer resolves —
+     * a swap naming a library id an app update retired, a decision restored from a backup taken on
+     * another build. The row stayed proposed, so it came back in the Brief every week, "Apply all"
+     * stepped over it, and tapping Apply did nothing at all with no error. There was no way to
+     * clear it from the UI.
+     */
+    private suspend fun retireUnresolvable(id: Long) = coachDao.setStatus(id, STATUS_SKIPPED)
+
     private suspend fun applyDecisionLocked(id: Long) {
         val d = coachDao.decision(id) ?: return
         if (d.status != STATUS_PROPOSED) return
@@ -488,11 +513,19 @@ class CoachRepository @Inject constructor(
             "deload" -> {
                 // The one non-delta apply: the existing deload regeneration (not undoable —
                 // regenerating again is the way back; its reconcile also clears overlay rows).
+                //
+                // A deload has TWO entry points — this decision and the Overview "deload.suggest"
+                // card, which calls applyDeloadWeek directly — and neither used to know about the
+                // other. Apply on Overview on Tuesday, then Apply in the Brief on Wednesday, and the
+                // program was regenerated a second time from a fresh seed (different exercise picks),
+                // the in-progress workout discarded again, and the deload window pushed out a day.
+                // A deload already running means this proposal has been served; retire it.
+                if (deloadAlreadyRunning()) { coachDao.setStatus(id, STATUS_SKIPPED); return }
                 adaptationRepository.applyDeloadWeek()
                 coachDao.markApplied(id, clock.nowMs(), null)
             }
             "swap" -> {
-                val def = d.payload?.let { ExerciseLibrary.byId(it) } ?: return
+                val def = d.payload?.let { ExerciseLibrary.byId(it) } ?: return retireUnresolvable(id)
                 // Capture the before-state if the row carries a swap OR a bare unit override — a
                 // unit-only row (blank name, non-blank unit) was previously recorded as "nothing" and
                 // its unit destroyed on undo (seam fix, finding 11). undo splits "name|unit" back, so a
@@ -506,7 +539,7 @@ class CoachRepository @Inject constructor(
                 coachDao.markApplied(id, clock.nowMs(), prev?.let { encodeSwapUndo(it.swappedName, it.swappedUnit, it.swappedExerciseId) } ?: NONE)
             }
             "rep_shift" -> {
-                val to = d.payload ?: return
+                val to = d.payload ?: return retireUnresolvable(id)
                 val prev = programCustomizationRepo.overrideFor(d.dayKey, d.targetKey)?.repRangeOverride
                 programCustomizationRepo.setRepRange(d.dayKey, d.targetKey, to, source = OverlaySource.COACH)
                 coachDao.markApplied(id, clock.nowMs(), prev ?: NONE)
@@ -525,7 +558,7 @@ class CoachRepository @Inject constructor(
                 // no override is present. With neither, the slot has left the program entirely and
                 // there is nothing coherent to adjust.
                 val planSets = Program.dayOrNull(d.dayKey)?.exercises?.firstOrNull { it.id == d.targetKey }?.sets
-                val current = if (prev > 0) prev else planSets ?: return
+                val current = if (prev > 0) prev else planSets ?: return retireUnresolvable(id)
                 val delta = if (d.type == "volume_up") 1 else -1
                 val newSets = (current + delta).coerceIn(1, AutoCoachPlanner.MAX_SLOT_SETS)
                 // Re-deriving can land on the count the slot already has (the program moved to meet
@@ -535,12 +568,35 @@ class CoachRepository @Inject constructor(
                 coachDao.markApplied(id, clock.nowMs(), prev.toString())
             }
             "revert" -> {
-                val originalId = d.payload?.toLongOrNull() ?: return
-                undoDecisionLocked(originalId)
-                coachDao.markApplied(id, clock.nowMs(), null)
+                val originalId = d.payload?.toLongOrNull() ?: return retireUnresolvable(id)
+                // A refused undo is a PERMANENT refusal, not a retry.
+                //
+                // undoDecisionLocked returns without touching the original when it is no longer
+                // applied, or when the per-slot LIFO guard sees a newer decision owning the slot.
+                // The revert used to mark itself applied regardless — leaving the original
+                // applied+failed, which is exactly what appliedFailed() feeds to the watcher's
+                // revert derivation. So the same revert was re-proposed at the top of every pass
+                // forever, ahead of every real adjustment and inside a change budget of one or two.
+                // Tapping it did nothing, and the watcher's 14-day catch-all then scored it as a
+                // WIN for the revert type.
+                if (undoDecisionLocked(originalId)) {
+                    coachDao.markApplied(id, clock.nowMs(), null)
+                } else {
+                    coachDao.setStatus(id, STATUS_SKIPPED)
+                    // Retire the original too, so it stops re-deriving a revert nobody can run.
+                    // 'folded' is the existing terminal status that still feeds the bias.
+                    coachDao.setStatus(originalId, STATUS_FOLDED)
+                }
             }
-            else -> return
+            else -> return retireUnresolvable(id)
         }
+    }
+
+    /** True when a deload week applied through EITHER entry point is still governing today. */
+    private suspend fun deloadAlreadyRunning(): Boolean {
+        val startedAt = settings.deloadWeekStartMs.first()
+        if (startedAt <= 0L) return false
+        return clock.nowMs() < com.forge.app.core.time.deloadWeekEndMs(startedAt)
     }
 
     /** Apply every still-proposed decision of [weekId], in order. */
@@ -585,13 +641,16 @@ class CoachRepository @Inject constructor(
         }
     }
 
-    private suspend fun undoDecisionLocked(id: Long) {
-        val d = coachDao.decision(id) ?: return
-        if (d.status != STATUS_APPLIED) return
+    /** @return true when the undo actually ran; false when it was refused (already retired, or a
+     *  newer decision owns the slot). Callers that need to know — the revert path — must not treat
+     *  a refusal as success. */
+    private suspend fun undoDecisionLocked(id: Long): Boolean {
+        val d = coachDao.decision(id) ?: return false
+        if (d.status != STATUS_APPLIED) return false
         // Per-slot LIFO: if a newer still-active coach decision owns this slot's overlay, refuse —
         // restoring the older before-state would silently wipe the newer change, and the watcher's
         // own revert pipeline reverts newest-first so the chain unwinds cleanly (seam fix, finding 9).
-        if (newerCoachDecisionOwnsSlot(d)) return
+        if (newerCoachDecisionOwnsSlot(d)) return false
         when (d.type) {
             "swap" -> {
                 if (customizationRepo.getSwap(d.targetKey)?.source == OverlaySource.COACH) {
@@ -642,9 +701,10 @@ class CoachRepository @Inject constructor(
                         d.dayKey, d.targetKey, d.undoData?.toIntOrNull() ?: 0, source = OverlaySource.COACH
                     )
             }
-            else -> return // deload / revert aren't mechanically undoable
+            else -> return false // deload / revert aren't mechanically undoable
         }
         coachDao.markReverted(id)
+        return true
     }
 
     // ─── Brief assembly ────────────────────────────────────────────────────────

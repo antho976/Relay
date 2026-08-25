@@ -976,6 +976,12 @@ class SettingsRepository @Inject constructor(
     suspend fun setCoachEnabled(v: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.COACH_ENABLED] = v }
 
+    /** ISO week id of the last weekly coach pass recorded while the coach was OFF (empty = none). */
+    val coachOffPassWeekId: Flow<String> = preferences
+        .map { it[PreferenceKeys.COACH_OFF_PASS_WEEK] ?: "" }
+    suspend fun setCoachOffPassWeekId(weekId: String) =
+        context.forgePreferences.edit { it[PreferenceKeys.COACH_OFF_PASS_WEEK] = weekId }
+
     /** Training experience drives generation volume + difficulty filter (program-unlock Phase 4 / Phase 2). */
     val programExperience: Flow<String> = preferences
         .map { it[PreferenceKeys.PROGRAM_EXPERIENCE] ?: "intermediate" }
