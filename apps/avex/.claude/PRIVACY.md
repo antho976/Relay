@@ -1,77 +1,84 @@
-# Forge — Privacy Policy
+# Avex Privacy Policy
 
-_Last updated: June 16, 2026_
+_Last updated: August 24, 2026_
 
-Forge is an offline, single-user gym and fitness tracker. The short version: **your data
-never leaves your phone unless you explicitly share it.** Forge has no servers, no accounts,
-and no internet access.
+Avex is an offline, single-user fitness tracker. It has no account, servers, analytics,
+advertising, or `INTERNET` permission. Your data stays on your devices unless you export or
+share it.
 
-## The app cannot send your data anywhere
+## Data stored on your device
 
-Forge does **not** request the `INTERNET` permission. The operating system therefore prevents
-the app from making any network connection at all. There is:
+Avex stores workouts, sets, cardio, programs, goals, notes, moods, trophies, personal records,
+body measurements, settings, coach history, Academy progress, crash logs, your profile, avatar,
+and progress photos in private app storage.
 
-- **No account or sign-in** — nothing to register, nothing stored about you off-device.
-- **No analytics, telemetry, crash reporting, advertising, or tracking** of any kind.
-- **No cloud sync or backend.** There is no Forge server to send data to.
+## Health Connect
 
-## What Forge stores, and where
+If you grant access, Avex may read:
 
-Everything you create stays in Forge's private storage on your device:
+- Sleep
+- Resting heart rate
+- Weight
+- Steps
+- Exercise sessions
+- Heart rate
+- Distance
+- Total calories
+- Heart-rate variability
+- Lean body mass
 
-- Workouts, sets, cardio, bodyweight, moods, goals, trophies, and personal records.
-- Your settings, profile name, avatar, and progress photos.
+These readings support recovery, cardio, body, and training-history features.
 
-This data is held in the app's private app-storage sandbox. Uninstalling the app removes it.
-You can also wipe everything from **Settings → Reset**.
+Avex may write:
 
-## Health Connect (optional)
+- Weight
+- Active calories
+- Exercise sessions
+- Heart rate
 
-If you choose to connect Health Connect, Forge can:
+Writing happens only when you enable the matching feature. Health Connect access is optional and
+granular. You can revoke it in Health Connect at any time, and Avex continues to work without it.
+Health Connect data is processed only on your device.
 
-- **Read** your sleep and resting heart rate to inform the coach's recovery suggestions.
-- **Read** your latest bodyweight (e.g. from a smart scale) so your trend stays current.
-- **Write** your Forge weigh-ins back to Health Connect — only if you turn that on.
+## Other permissions
 
-This all happens **on your device**, over Android's on-device Health Connect interface — it is
-not a network connection, and Forge still has no internet access. Health Connect access is:
+- **Camera:** used only when you take a progress photo.
+- **Biometrics:** protects the app or photo gallery through Android's system prompt. Avex does not
+  receive or store biometric data.
+- **Notifications and vibration:** supports optional reminders, recaps, and rest-timer alerts.
+- **Foreground services:** keeps active workout timers reliable and supports watch heart-rate
+  capture during a workout.
+- **Wear body sensors:** reads heart rate only during a workout session when you grant access.
+- **Photo picker:** lets you select an avatar or progress photo without broad photo-library access.
+- **Health Connect:** provides the optional reads and writes listed above.
 
-- **Opt-in** — nothing is read or written until you connect it and grant permission.
-- **Granular** — recovery (sleep + heart rate) and bodyweight are separate grants.
-- **Revocable** — you can withdraw access any time from the Health Connect app, and Forge keeps
-  working without it.
+None of these permissions gives Avex network access.
 
-Forge never transmits Health Connect data anywhere; it is used only inside the app.
+## Sharing
 
-## When data leaves your device — only by your action
+Avex does not sell or share your data. Exports, backups, PDFs, images, and support files leave the
+app only when you choose a destination through Android. Files you share are then governed by that
+destination's privacy practices.
 
-Some features hand data to *you* to share at your discretion:
+Phone and watch data can move between your paired devices through Google's on-device Wear OS Data
+Layer. Avex does not send that data to an Avex or Quiet Software server.
 
-- **Backup / export** (whole-database backup, JSON/CSV exports, PDF, share cards) — these create
-  files or images that you then choose where to send (e.g. saving to Drive, messaging a friend).
-- **Progress photos and your avatar** — stored locally; they only leave the device if you share
-  a card or file that includes them.
+## Retention and deletion
 
-Once you share a file, it goes wherever you send it and is governed by that destination's
-privacy practices, not Forge's.
-
-## Other permissions, and why
-
-- **Notifications** — optional training reminders and the weekly recap (off by default).
-- **Foreground service / vibrate** — to keep the rest timer reliable during a workout.
-
-None of these involve the network or transmit any data.
+Data remains on your device until you delete it, reset Avex, clear app storage, or uninstall. You
+can delete individual records in the app, erase all Avex data from Settings, and delete exported
+files from the destination where you saved them. Health Connect records are managed separately in
+Health Connect, including records Avex wrote there.
 
 ## Children
 
-Forge is a personal fitness tool and is not directed at children. It collects no personal
-information and contacts no one.
+Avex is a personal fitness tool and is not directed at children.
 
-## Changes to this policy
+## Changes
 
-If this policy changes, the updated version will appear in this file with a new "Last updated"
-date.
+Material policy changes will update the date shown here, in the in-app policy, and in the public
+policy used for the Google Play listing.
 
 ## Contact
 
-Questions about privacy in Forge? Reach the developer at `<your-contact-email>`.
+Questions about this policy can be sent to `anthonybacon419@gmail.com`.

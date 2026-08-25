@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -24,7 +25,6 @@ import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.forge.app.ui.theme.MonoSectionAnchor
 import java.time.DayOfWeek
 import java.time.LocalDate
@@ -192,7 +192,7 @@ internal fun ProfileActivityYear(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text("ACTIVITY", style = MonoSectionAnchor, color = muted)
-            Text("$year", style = MaterialTheme.typography.labelSmall, color = muted, maxLines = 1)
+            Text("$year", style = MaterialTheme.typography.labelSmall, color = muted)
         }
         Spacer(Modifier.height(14.dp))
         bands.forEachIndexed { i, band ->
@@ -222,9 +222,13 @@ internal fun ProfileActivityYear(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.Bottom
         ) {
-            Row(verticalAlignment = Alignment.Bottom) {
+            FlowRow(
+                modifier = Modifier.weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(20.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                itemVerticalAlignment = Alignment.Bottom
+            ) {
                 YearReading("$activeDays", "ACTIVE DAYS", onBg, muted)
-                Spacer(Modifier.width(20.dp))
                 YearReading("$sessions", if (sessions == 1) "SESSION" else "SESSIONS", onBg, muted)
             }
             RampLegend(empty, hue, muted)
@@ -253,12 +257,9 @@ private fun MonthLabels(band: HalfYear, slots: Int, muted: Color) {
             if (span <= 0) return@forEachIndexed
             Text(
                 YearMonth.of(2000, band.firstMonth + i).month
-                    .getDisplayName(TextStyle.SHORT, Locale.getDefault()).uppercase(),
+                    .getDisplayName(TextStyle.NARROW, Locale.getDefault()).uppercase(),
                 style = MaterialTheme.typography.labelSmall,
                 color = muted,
-                fontSize = 9.sp,
-                letterSpacing = 0.sp,
-                maxLines = 1,
                 modifier = Modifier.weight(span.toFloat())
             )
         }
@@ -325,15 +326,12 @@ private fun YearBand(
 @Composable
 private fun YearReading(figure: String, noun: String, onBg: Color, muted: Color) {
     Row(verticalAlignment = Alignment.Bottom) {
-        Text(figure, style = MaterialTheme.typography.headlineSmall, color = onBg, maxLines = 1)
+        Text(figure, style = MaterialTheme.typography.headlineSmall, color = onBg)
         Spacer(Modifier.width(5.dp))
         Text(
             noun,
             style = MaterialTheme.typography.labelSmall,
-            color = muted,
-            fontSize = 9.sp,
-            maxLines = 1,
-            modifier = Modifier.height(18.dp)
+            color = muted
         )
     }
 }
@@ -346,7 +344,7 @@ private fun YearReading(figure: String, noun: String, onBg: Color, muted: Color)
 @Composable
 private fun RampLegend(empty: Color, hue: Color, muted: Color, modifier: Modifier = Modifier) {
     Row(modifier, verticalAlignment = Alignment.CenterVertically) {
-        Text("LESS", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 8.sp)
+        Text("LESS", style = MaterialTheme.typography.labelSmall, color = muted)
         Spacer(Modifier.width(6.dp))
         Box(Modifier.size(SWATCH).clip(SWATCH_SHAPE).background(empty))
         LIT_RUNGS.forEach { rung ->
@@ -354,6 +352,6 @@ private fun RampLegend(empty: Color, hue: Color, muted: Color, modifier: Modifie
             Box(Modifier.size(SWATCH).clip(SWATCH_SHAPE).background(lerp(empty, hue, rung)))
         }
         Spacer(Modifier.width(6.dp))
-        Text("MORE", style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 8.sp)
+        Text("MORE", style = MaterialTheme.typography.labelSmall, color = muted)
     }
 }

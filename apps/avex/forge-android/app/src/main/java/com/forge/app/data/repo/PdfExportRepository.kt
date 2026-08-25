@@ -75,7 +75,7 @@ class PdfExportRepository @Inject constructor(
         val margin = 50f
 
         // Header
-        canvas.drawText("FORGE — Session Report", margin, y, titlePaint)
+        canvas.drawText("AVEX · Session Report", margin, y, titlePaint)
         y += 30f
         canvas.drawText("$dayName · $dateStr · $timeStr", margin, y, bodyPaint)
         y += 16f
@@ -190,7 +190,7 @@ class PdfExportRepository @Inject constructor(
         doc.finishPage(page)
         // Fixed filename (overwrite) so exported PDFs don't accumulate in filesDir (#84); the file
         // is shared out immediately, so there's nothing to keep per session.
-        val file = File(context.filesDir, "forge_session.pdf")
+        val file = File(context.filesDir, "avex_session.pdf")
         file.outputStream().use { doc.writeTo(it) }
         doc.close()
         return file

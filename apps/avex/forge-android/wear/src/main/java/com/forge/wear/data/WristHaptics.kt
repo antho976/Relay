@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import android.os.Build
 
 /**
  * The wrist's three haptic moments (DESIGN.md §16) — timer-done strong buzz, set-logged tick,
@@ -11,8 +12,12 @@ import android.os.VibratorManager
  */
 class WristHaptics(context: Context) {
 
-    private val vibrator: Vibrator =
+    @Suppress("DEPRECATION")
+    private val vibrator: Vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         (context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as VibratorManager).defaultVibrator
+    } else {
+        context.getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+    }
 
     /** The one strong buzz: rest is over. */
     fun timerDone() {

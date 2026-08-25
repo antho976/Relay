@@ -17,7 +17,7 @@ android {
     defaultConfig {
         // Baseline-profile generation + cold-start Macrobenchmark need API 28+ (AOT control).
         minSdk = 28
-        targetSdk = 35
+        targetSdk = 36
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

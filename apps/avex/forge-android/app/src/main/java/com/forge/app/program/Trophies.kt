@@ -381,7 +381,7 @@ object Trophies {
             unlock = UnlockRule.TotalSessionsAtLeast(250), tier = TrophyTier.HARD
         ),
         Trophy(
-            id = "streak_7", name = "Seven-Day Forge", description = "Trained 7 consecutive days",
+            id = "streak_7", name = "Seven Days Running", description = "Trained 7 consecutive days",
             category = TrophyCategory.CONSISTENCY, icon = TrophyIcon.FLAME,
             unlock = UnlockRule.MaxStreakAtLeast(7), tier = TrophyTier.MEDIUM
         ),
@@ -459,7 +459,7 @@ object Trophies {
             unlock = UnlockRule.LifetimeTonnageAtLeast(500_000.0), tier = TrophyTier.MEDIUM
         ),
         Trophy(
-            id = "tonnage_1m", name = "Million Pound Forge",
+            id = "tonnage_1m", name = "Million Pound Club",
             description = "Lifted 1,000,000+ lb lifetime",
             category = TrophyCategory.STRENGTH, icon = TrophyIcon.CROWN,
             unlock = UnlockRule.LifetimeTonnageAtLeast(1_000_000.0), tier = TrophyTier.HARD

@@ -6,6 +6,7 @@ import androidx.glance.ExperimentalGlanceApi
 import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
 import androidx.glance.GlanceTheme
+import androidx.glance.color.ColorProvider
 import androidx.glance.action.actionParametersOf
 import androidx.glance.action.actionStartActivity
 import androidx.glance.action.clickable
@@ -21,7 +22,6 @@ import androidx.glance.layout.padding
 import androidx.glance.text.FontWeight
 import androidx.glance.text.Text
 import androidx.glance.text.TextStyle
-import androidx.glance.unit.ColorProvider
 import com.forge.app.MainActivity
 import com.forge.app.data.db.dao.SessionDao
 import com.forge.app.data.prefs.SettingsRepository
@@ -34,6 +34,8 @@ import dagger.hilt.android.EntryPointAccessors
 import dagger.hilt.components.SingletonComponent
 import kotlinx.coroutines.flow.first
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
 import com.forge.app.ui.theme.AccentRed
 import com.forge.app.ui.theme.PearlBackground
 import com.forge.app.ui.theme.PearlMuted
@@ -147,8 +149,8 @@ class ForgeWidget : GlanceAppWidget() {
                 Column(
                     modifier = GlanceModifier
                         .fillMaxSize()
-                        .background(ColorProvider(bgArgb))
-                        .padding(horizontal = 12, vertical = 8)
+                        .background(ColorProvider(Color(bgArgb), Color(bgArgb)))
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
                         // Item 1: whole-widget tap target — launches MainActivity with EXTRA_START_DAY_KEY
                         // (the next-up day, or the active session's day). MainActivity reads it and the
                         // nav host opens that day on top of Overview (so Back returns home).
@@ -156,10 +158,10 @@ class ForgeWidget : GlanceAppWidget() {
                     verticalAlignment = Alignment.Top
                 ) {
                     Text(
-                        "FORGE",
+                        "AVEX",
                         style = TextStyle(
                             fontWeight = FontWeight.Bold,
-                            color = ColorProvider(accentArgb)
+                            color = ColorProvider(Color(accentArgb), Color(accentArgb))
                         )
                     )
                     if (activeSession != null) {
@@ -168,7 +170,7 @@ class ForgeWidget : GlanceAppWidget() {
                             "WORKOUT IN PROGRESS",
                             style = TextStyle(
                                 fontWeight = FontWeight.Bold,
-                                color = ColorProvider(accentArgb)
+                                color = ColorProvider(Color(accentArgb), Color(accentArgb))
                             )
                         )
                         val label = activeDayPlan?.defaultName?.uppercase() ?: activeSession.dayKey.uppercase()
@@ -176,29 +178,29 @@ class ForgeWidget : GlanceAppWidget() {
                             label,
                             style = TextStyle(
                                 fontWeight = FontWeight.Bold,
-                                color = ColorProvider(onBgArgb)
+                                color = ColorProvider(Color(onBgArgb), Color(onBgArgb))
                             )
                         )
                         Text(
                             "Tap to resume",
-                            style = TextStyle(color = ColorProvider(mutedArgb))
+                            style = TextStyle(color = ColorProvider(Color(mutedArgb), Color(mutedArgb)))
                         )
                     } else if (nextDayPlan != null) {
                         Text(
                             nextDayPlan.defaultName.uppercase(),
                             style = TextStyle(
                                 fontWeight = FontWeight.Bold,
-                                color = ColorProvider(onBgArgb)
+                                color = ColorProvider(Color(onBgArgb), Color(onBgArgb))
                             )
                         )
                         Text(
                             "${nextDayPlan.exercises.size} exercises · ${nextDayPlan.word}",
-                            style = TextStyle(color = ColorProvider(mutedArgb))
+                            style = TextStyle(color = ColorProvider(Color(mutedArgb), Color(mutedArgb)))
                         )
                         nextDayPlan.exercises.take(3).forEach { ex ->
                             Text(
                                 "· ${ex.name}",
-                                style = TextStyle(color = ColorProvider(mutedArgb))
+                                style = TextStyle(color = ColorProvider(Color(mutedArgb), Color(mutedArgb)))
                             )
                         }
                     } else {
@@ -214,20 +216,26 @@ class ForgeWidget : GlanceAppWidget() {
                             head,
                             style = TextStyle(
                                 fontWeight = FontWeight.Bold,
-                                color = ColorProvider(onBgArgb)
+                                color = ColorProvider(Color(onBgArgb), Color(onBgArgb))
                             )
                         )
-                        Text(sub, style = TextStyle(color = ColorProvider(mutedArgb)))
+                        Text(sub, style = TextStyle(color = ColorProvider(Color(mutedArgb), Color(mutedArgb))))
                     }
                     // Streak + this-week dots (Cat 21) — once there's any finished session to count.
                     if (finished.isNotEmpty()) {
                         if (streak >= 1) {
                             Text(
                                 "$streak-day streak",
-                                style = TextStyle(fontWeight = FontWeight.Bold, color = ColorProvider(accentArgb))
+                                style = TextStyle(
+                                    fontWeight = FontWeight.Bold,
+                                    color = ColorProvider(Color(accentArgb), Color(accentArgb))
+                                )
                             )
                         }
-                        Text(weekDots, style = TextStyle(color = ColorProvider(mutedArgb)))
+                        Text(
+                            weekDots,
+                            style = TextStyle(color = ColorProvider(Color(mutedArgb), Color(mutedArgb)))
+                        )
                     }
                 }
             }

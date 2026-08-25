@@ -1,65 +1,78 @@
-# Releasing & Sharing Forge
+# Releasing Avex to Google Play
 
-A practical pre-flight checklist for cutting a build and sharing it with someone else.
-Forge ships **free, offline, and sideloaded** — there is no Play Store track or billing —
-so "release" here means "a signed APK a stranger can install and use on their own data."
+Avex ships as a phone app with a Wear OS companion under `com.quietsoftware.avex`. Work through
+this list from an updated `main`. A compiled unsigned bundle is not a releasable artifact.
 
-Work top-to-bottom. Anything still open lives in `.claude/roadmap-2026-06-18.md`
-(Cat 12 Release, Cat 10 De-personalization, Cat 14 Code Health).
+## 1. Version and notes
 
----
+- [ ] Set the intended `versionName` in both `app/build.gradle.kts` and `wear/build.gradle.kts`.
+- [ ] Increase the phone `versionCode`; keep Wear at phone code plus 100,000 unless Play history
+      requires a different unused code.
+- [ ] Add the release to `ui/settings/Changelog.kt`, `.claude/CHANGELOG.md`, and the matching Play
+      notes under `docs/`.
+- [ ] Confirm phone `targetSdk` meets the current Play deadline.
 
-## 1. Version & changelog
-- [ ] Bump `versionCode` + `versionName` in the app `build.gradle`.
-- [ ] Add the release entry to `CHANGELOG.md` **first** (newest at top): a plain-English
-      "What's new (user-facing)" bullet or two, plus a short "Developer history" note.
-- [ ] Commit as `Version x.y.z` (matches the existing tag convention).
+## 2. Local release gate
 
-## 2. Build is green
-- [ ] Full JVM unit suite passes (`testDebugUnitTest`).
-- [ ] Debug build compiles.
-- [ ] Release build compiles **and** passes `lintVitalRelease` — CI's `assembleRelease`
-      runs it, and release-only lint errors (e.g. `FullBackupContent`) fail the build
-      even when tests and the debug build are green.
-- [ ] R8 / minify is on and the **obfuscated release APK** has been smoke-tested
-      (not just the debug APK).
+```fish
+cd forge-android
+set -lx ANDROID_HOME /home/anthony/Android/Sdk
+set -lx ANDROID_SDK_ROOT /home/anthony/Android/Sdk
+./gradlew :app:testDebugUnitTest :shared:test :wear:testDebugUnitTest \
+  :app:verifyRoborazziDebug :app:lintRelease :wear:lintRelease --no-daemon
+```
 
-## 3. Signing & identity
-- [ ] Release keystore exists and is referenced by a `signingConfig` (not the debug key).
-- [ ] Keystore + passwords are stored somewhere safe and **out of git**.
-- [ ] `applicationId` is no longer `com.forge.app` placeholder if shipping to others
-      (Cat 10 P0) — or consciously accept it for a private share.
-- [ ] Real launcher icon in place (no placeholder) (Cat 12 P0).
+- [ ] All tests pass.
+- [ ] Roborazzi comparisons pass after reviewing any intended pixel changes at 100% and 200% font.
+- [ ] Phone and Wear release lint report zero errors.
+- [ ] GitHub Actions is green on the exact commit being released.
 
-## 4. Multi-user / de-personalization
-- [ ] No first-person / owner-specific copy in the seeded program or onboarding
-      ("Antho" refs, the frozen MWM-989 pool) — a new user starts clean.
-- [ ] A brand-new user opening the app sees welcome/empty states, not a wall of zeros.
-- [ ] Onboarding produces a sensible generated program from the user's own inputs.
+## 3. Upload signing
 
-## 5. Data safety
-- [ ] Room schema is migration-locked (no destructive fallback); migrations run clean.
-- [ ] Whole-DB backup **and** restore both work on-device.
-- [ ] Confirm the schema export + migration test run clean in CI.
+- [ ] Copy `keystore.properties.example` to `keystore.properties` and point it at the registered
+      Play upload key. Never generate a replacement key when an upload key already exists.
+- [ ] Keep the keystore and passwords outside git and in a second recoverable backup.
+- [ ] Build both signed bundles:
 
-## 6. On-device smoke test (do this every time)
-- [ ] One structured end-to-end session on a real device (Cat 14 P0): log a workout,
-      hit a PR, finish, check Stats / rank / coach update, then back up and restore.
-- [ ] Notifications behave (training reminder + weekly recap respect their opt-in/hour).
-- [ ] No crash on cold start, on first-run (no data), and after a restore.
+```fish
+./gradlew :app:bundleRelease :wear:bundleRelease --no-daemon
+```
 
-## 7. Distribution
-- [ ] Produce the artifact: signed **APK** for sideload, and/or an **AAB** variant.
-- [ ] Clean sideload path that doesn't collide with the debug `applicationId` suffix.
-- [ ] (Optional) GitHub Actions release workflow builds + attaches the signed APK.
-- [ ] Tell the recipient how to enable "install unknown apps" for their installer.
+- [ ] Confirm both tasks report a release signing config and verify the artifacts before upload:
 
-## 8. Hand-off notes for the recipient
-- [ ] Everything is offline and on-device; their data never leaves the phone.
-- [ ] Backup/restore is the "moving to a new phone" path — point them at it in Settings.
-- [ ] Where to find: the coach, Stats, units toggle, and the gestures guide (Settings).
+```fish
+jarsigner -verify -verbose -certs app/build/outputs/bundle/release/app-release.aab
+jarsigner -verify -verbose -certs wear/build/outputs/bundle/release/wear-release.aab
+```
 
----
+## 4. Privacy and Play declarations
 
-_Keep this list honest: if a box isn't actually ticked, say so in the share message
-rather than implying it's done._
+- [ ] Publish `.claude/PRIVACY.md` at the privacy URL used by the Play listing.
+- [ ] Confirm both Health Connect privacy actions open the same in-app policy.
+- [ ] Make Play Data Safety and Health Apps declarations match the permissions in the final manifest.
+- [ ] Confirm the policy, listing, and app agree on Health Connect, camera, biometrics,
+      notifications, foreground services, Wear sensors, sharing, retention, and deletion.
+
+## 5. Upgrade and device validation
+
+- [ ] Upgrade the exact current Play build without uninstalling and confirm retained data migrates.
+- [ ] Run migration instrumentation tests, including the oldest supported schema.
+- [ ] Smoke-test phone API 26 and a current Android version.
+- [ ] Smoke-test Wear API 30 and a current Wear version.
+- [ ] Log and finish a workout, create a PR, run the rest timer, receive notifications, and update
+      the widget.
+- [ ] Export, restore, and import both Avex-named and legacy Forge-named files.
+- [ ] Verify Health Connect rationale, reads, writes, revocation, and no-grant behavior.
+- [ ] Verify pairing, heart-rate capture, tiles, complications, and disconnected watch behavior.
+- [ ] Check normal and 200% phone font scale, enlarged Wear text, dark theme, and AMOLED.
+
+Room uses destructive fallback for schemas 1 through 11. Do not release until Play install history
+proves those versions are no longer supported, or replace that fallback with a tested migration path.
+
+## 6. Play upload
+
+- [ ] Upload the signed phone and Wear AABs to the intended track.
+- [ ] Add the matching release notes and review the device catalog exclusions.
+- [ ] Refresh phone, watch, and large-font screenshots when the visible product changed.
+- [ ] Complete Play's automated checks and resolve every blocking warning before rollout.
+- [ ] Install the Play-delivered build from the test track and repeat the critical smoke path.

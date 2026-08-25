@@ -12,7 +12,7 @@ object CsvParser {
 
     /** Parse [text] into rows of cells, auto-detecting the delimiter from the header line. */
     fun parse(text: String): List<List<String>> {
-        val clean = text.removePrefix("﻿") // strip a UTF-8 BOM some apps prepend
+        val clean = text.removePrefix("\uFEFF") // strip a UTF-8 BOM some apps prepend
         if (clean.isBlank()) return emptyList()
         val delimiter = detectDelimiter(clean)
         return parseWith(clean, delimiter)

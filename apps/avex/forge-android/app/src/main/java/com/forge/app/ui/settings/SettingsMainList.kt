@@ -210,7 +210,7 @@ private fun pageSection(page: SettingsPage): String = when (page) {
     SettingsPage.Program, SettingsPage.Session, SettingsPage.ExercisePrefs, SettingsPage.CardioActivities -> "Training"
     SettingsPage.Coach, SettingsPage.Recovery, SettingsPage.Vacation -> "Coach"
     SettingsPage.Backup, SettingsPage.Storage -> "Data"
-    SettingsPage.WhatsNew, SettingsPage.About -> "About"
+    SettingsPage.WhatsNew, SettingsPage.PrivacyPolicy, SettingsPage.About -> "About"
 }
 
 /** The leading glyph for a page's results — the same family the nav rows use. */
@@ -229,6 +229,7 @@ private fun pageGlyph(page: SettingsPage): ImageVector? = when (page) {
     SettingsPage.Backup -> SettingsIcons.Backup
     SettingsPage.Storage -> SettingsIcons.Storage
     SettingsPage.WhatsNew -> SettingsIcons.WhatsNew
+    SettingsPage.PrivacyPolicy -> null
     SettingsPage.About -> null
 }
 
@@ -340,6 +341,7 @@ internal fun rowSubtitle(page: SettingsPage, s: SettingsUiState): String = when 
     SettingsPage.Storage -> "Space used · clear cache"
     // The live app version — the built VERSION_NAME, so the row reads current at a glance.
     SettingsPage.WhatsNew -> "Version ${com.forge.app.BuildConfig.VERSION_NAME}"
+    SettingsPage.PrivacyPolicy -> "Offline use · permissions · deletion"
     SettingsPage.About -> "Version · privacy · what's stored"
 }
 

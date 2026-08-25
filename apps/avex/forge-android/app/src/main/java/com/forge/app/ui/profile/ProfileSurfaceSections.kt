@@ -32,7 +32,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.data.db.entities.BodyFatEntry
@@ -151,8 +150,7 @@ internal fun ProfileAllTime(
         Text(
             "LIFETIME VOLUME · ${compactCount(totalSets)} SETS",
             style = MaterialTheme.typography.labelSmall,
-            color = muted,
-            fontSize = 9.sp
+            color = muted
         )
         // Under two sessions there is no curve, and one point drawn flat would read as broken (§12).
         if (displaySeries.size >= 2) {
@@ -232,7 +230,6 @@ private fun AllTimeTally(
                 label,
                 style = MaterialTheme.typography.labelSmall,
                 color = muted,
-                fontSize = 9.sp,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
@@ -256,7 +253,7 @@ private fun AllTimeTally(
             // Home's MOVEMENT line already uses (accent fill, outline track) and the one Stats'
             // week bars use — the accent marks the reading you are being asked to act on.
             ComparisonBar("THIS WK", thisWeek, thisWeek.toFloat() / peak, accent, onBg, muted)
-            ComparisonBar("LAST WK", lastWeek, lastWeek.toFloat() / peak, muted.copy(alpha = 0.4f), onBg, muted)
+            ComparisonBar("LAST WK", lastWeek, lastWeek.toFloat() / peak, muted.copy(alpha = 0.35f), onBg, muted)
         }
     }
 }
@@ -276,7 +273,6 @@ private fun ComparisonBar(
             label,
             style = MaterialTheme.typography.labelSmall,
             color = muted,
-            fontSize = 9.sp,
             maxLines = 1,
             modifier = Modifier.width(50.dp)
         )
@@ -285,7 +281,7 @@ private fun ComparisonBar(
                 .weight(1f)
                 .height(4.dp)
                 .clip(RoundedCornerShape(50))
-                .background(muted.copy(alpha = 0.18f))
+                .background(muted.copy(alpha = 0.15f))
         ) {
             val f = fraction.coerceIn(0f, 1f)
             if (f > 0f) {
@@ -444,7 +440,6 @@ private fun BodyMetricRow(metric: BodyMetric, accent: Color, onBg: Color, muted:
                             it,
                             style = MaterialTheme.typography.labelSmall,
                             color = muted,
-                            fontSize = 9.sp,
                             modifier = Modifier.padding(bottom = 2.dp)
                         )
                     }
@@ -457,7 +452,6 @@ private fun BodyMetricRow(metric: BodyMetric, accent: Color, onBg: Color, muted:
                         // Direction only: gaining or losing weight is not a verdict, so this stays
                         // on the muted rung rather than reaching for positive/negative (§11).
                         color = muted,
-                        fontSize = 9.sp,
                         maxLines = 1
                     )
                 }

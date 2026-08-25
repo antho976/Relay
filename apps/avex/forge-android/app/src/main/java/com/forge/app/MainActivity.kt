@@ -78,6 +78,7 @@ class MainActivity : FragmentActivity() {
      * this recomposes the nav host so it opens the day, instead of the tap silently doing nothing.
      */
     private var pendingWidgetDayKey by mutableStateOf<String?>(null)
+    private var privacyPolicyRequest by mutableStateOf(0)
 
     /** Emits volume-down presses for the "log same as last set" shortcut (#151). */
     var onVolumeDown: (() -> Unit)? = null
@@ -119,6 +120,7 @@ class MainActivity : FragmentActivity() {
         // singleTask reuse: a widget tap arrives here, not in onCreate — pick up the day so the nav
         // host opens it (the deep-link would otherwise be dropped and the tap do nothing).
         intent.getStringExtra(com.forge.app.widget.EXTRA_START_DAY_KEY)?.let { pendingWidgetDayKey = it }
+        if (opensHealthConnectPrivacyPolicy(intent.action)) privacyPolicyRequest++
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
@@ -239,6 +241,7 @@ class MainActivity : FragmentActivity() {
         // the nav host, which opens it on top of Overview so Back returns home.
         if (savedInstanceState == null)
             pendingWidgetDayKey = intent?.getStringExtra(com.forge.app.widget.EXTRA_START_DAY_KEY)
+        if (savedInstanceState == null && opensHealthConnectPrivacyPolicy(intent?.action)) privacyPolicyRequest++
 
         // A cold-start share/open of an export file (#GYMAP-17) — import it once, not again on a
         // config-change recreate (the queued notice carries the result across rotation).
@@ -360,7 +363,10 @@ class MainActivity : FragmentActivity() {
                             when (onboardingDone) {
                                 false -> OnboardingScreen(onFinished = {})
                                 true -> {
-                                    ForgeNavHost(initialDayKey = pendingWidgetDayKey)
+                                    ForgeNavHost(
+                                        initialDayKey = pendingWidgetDayKey,
+                                        privacyPolicyRequest = privacyPolicyRequest
+                                    )
                                 }
                                 null -> {} // DataStore still loading; the theme's gradient shows briefly
                             }
@@ -393,3 +399,7 @@ class MainActivity : FragmentActivity() {
         }
     }
 }
+
+internal fun opensHealthConnectPrivacyPolicy(action: String?): Boolean =
+    action == "androidx.health.connect.action.SHOW_PERMISSIONS_RATIONALE" ||
+        action == "android.intent.action.VIEW_PERMISSION_USAGE"

@@ -8,6 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.IBinder
+import android.os.Build
 import android.os.SystemClock
 import androidx.health.services.client.ExerciseUpdateCallback
 import androidx.health.services.client.HealthServices
@@ -70,7 +71,11 @@ class WearHrService : Service() {
             .setContentTitle("Heart rate")
             .setContentText("Streaming during your session")
             .build()
-        startForeground(NOTIF_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_HEALTH)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(NOTIF_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_HEALTH)
+        } else {
+            startForeground(NOTIF_ID, notification)
+        }
     }
 
     private suspend fun runExercise() {

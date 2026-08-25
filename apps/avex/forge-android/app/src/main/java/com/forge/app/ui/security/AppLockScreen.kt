@@ -1,6 +1,7 @@
 package com.forge.app.ui.security
 
 import androidx.biometric.BiometricPrompt
+import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -22,7 +23,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.fragment.app.FragmentActivity
@@ -56,7 +56,7 @@ fun AppLockScreen(
     onUnlocked: () -> Unit,
     onCancel: (() -> Unit)? = null,
 ) {
-    val activity = LocalContext.current as? FragmentActivity
+    val activity = LocalActivity.current as? FragmentActivity
     val amoled = LocalForgeSettings.current.amoledMode
     val (gradTop, gradBottom) = forgeBackgroundGradient(amoled)
 

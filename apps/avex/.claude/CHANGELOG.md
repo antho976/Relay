@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to **Forge** are recorded here.
+All notable changes to **Avex** are recorded here.
 
 > **Note:** All versions through **0.8.5** were reconstructed after the fact from
 > git history — no notes were written at release time — so their entries are
@@ -10,6 +10,14 @@ All notable changes to **Forge** are recorded here.
 ---
 
 ## What's new (user-facing)
+### 0.8.9
+- **Wear OS companion.** Log sets from the watch, capture workout heart rate, and use Avex tiles and complications without an account or server.
+- **Academy and library.** Browse the rebuilt offline learning hub and read the complete lesson catalog without unlock gates.
+- **Profile activity.** Monthly activity, streaks, body trends, progress photos, and shareable rank cards now live in one profile.
+- **Onboarding.** The setup path builds the training plan first and moves optional preferences to the end.
+- **Settings and notifications.** The settings structure, notification feed, wearable setup, note templates, and icon surfaces now use the finished Avex design.
+- **Release hardening.** Health Connect privacy routing, minimum-SDK compatibility, exports, widget branding, lint, and release metadata were corrected for the Play build.
+
 ### 0.8
 - **Auto-Coach.** Once a week a "Coach Brief" reviews how your week went (volume, PRs, fatigue, stalled lifts) and proposes specific changes — deload weeks, exercise swaps with named replacements, rep-range shifts, and ±1 set per muscle. Apply, skip, or undo each one with a tap. If you keep accepting a kind of change a few weeks running, it earns "autopilot" and starts applying itself — except deloads, which always ask first. A "NEW BRIEF" banner shows up on the home screen when a pass is ready.
 - **New "You" hub** (account icon on the home screen): a 30-rank forge ladder across six tiers — Ember → Iron → Steel → Tempered → Forged → Damascus — with XP earned from every workout, set, PR and pound moved; an offline **Standing** estimate ("Top X% of lifters by consistency" — nothing leaves your phone); a **Signature** card (top lift · most-logged day · usual hour); progress photos; your trophy case with near-misses; and month/year recaps. No account needed.

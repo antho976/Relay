@@ -39,7 +39,8 @@ import com.forge.app.ui.common.clickableLabeled
 internal fun AboutPage(
     modifier: Modifier = Modifier,
     viewModel: SettingsViewModel? = null,
-    onOpenExport: () -> Unit = {}
+    onOpenExport: () -> Unit = {},
+    onOpenPrivacyPolicy: () -> Unit = {}
 ) {
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val context = LocalContext.current
@@ -89,6 +90,7 @@ internal fun AboutPage(
         PrivacyClaim("No account, no sign-in", "Everything lives in a private database on this phone.")
         PrivacyClaim("No servers, analytics or tracking", "Nothing is collected, because nothing is sent.")
         PrivacyClaim("Your data moves only when you move it", "Exports and backups go where you point them, through Android's own picker.")
+        SettingsActionLink("Read the full privacy policy →", onOpenPrivacyPolicy)
         SettingsActionLink("Export or back up your data →", onOpenExport)
 
         SettingsSectionHeader("Gestures & shortcuts")

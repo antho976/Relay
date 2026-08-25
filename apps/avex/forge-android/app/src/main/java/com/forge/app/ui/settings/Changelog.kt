@@ -25,6 +25,18 @@ internal data class ReleaseNote(val version: String, val date: String, val notes
 
 internal val CHANGELOG: List<ReleaseNote> = listOf(
     ReleaseNote(
+        version = "0.8.9",
+        date = "Aug 2026",
+        notes = listOf(
+            ChangeNote(ChangeKind.New, "Train from the Wear OS companion with live heart rate, tiles and complications"),
+            ChangeNote(ChangeKind.New, "Browse the rebuilt Academy and read the full training library offline"),
+            ChangeNote(ChangeKind.New, "See monthly activity, streaks and body trends together on your profile"),
+            ChangeNote(ChangeKind.Improved, "Onboarding now builds your plan first and keeps optional settings for the end"),
+            ChangeNote(ChangeKind.Improved, "Settings, notifications and app icons now use the finished Avex design"),
+            ChangeNote(ChangeKind.Fixed, "Health Connect privacy details now open directly inside Avex"),
+        )
+    ),
+    ReleaseNote(
         version = "0.8.8",
         date = "Jul 2026",
         notes = listOf(

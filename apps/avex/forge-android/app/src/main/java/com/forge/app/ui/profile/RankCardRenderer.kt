@@ -88,7 +88,7 @@ object RankCardRenderer {
             textSize = 52f; letterSpacing = 0.12f; typeface = Typeface.create(Typeface.SERIF, Typeface.ITALIC)
         })
 
-        val file = File(context.filesDir, "forge_rank_card.png")
+        val file = File(context.filesDir, "avex_rank_card.png")
         FileOutputStream(file).use { bmp.compress(Bitmap.CompressFormat.PNG, 100, it) }
         FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
         } finally {
