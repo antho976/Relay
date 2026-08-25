@@ -18,6 +18,12 @@ import androidx.fragment.app.FragmentActivity
  */
 object BiometricAuthenticator {
 
+    enum class Availability {
+        AVAILABLE,
+        NO_CREDENTIAL,
+        UNAVAILABLE,
+    }
+
     /**
      * Which authenticators the prompt accepts. `BIOMETRIC_STRONG or DEVICE_CREDENTIAL` is the clean
      * combination on API 30+; the pairing is rejected on API 28–29, where the library wants
@@ -27,13 +33,18 @@ object BiometricAuthenticator {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) BIOMETRIC_STRONG or DEVICE_CREDENTIAL
         else BIOMETRIC_WEAK or DEVICE_CREDENTIAL
 
-    /**
-     * True when the device has *some* credential we can prompt against — a biometric OR a device
-     * PIN/pattern/password. When false the lock cannot function (the user has no screen lock), so
-     * callers fail OPEN rather than trap the user out of their own data.
-     */
+    /** True when the device has a credential the system can prompt against. */
     fun canAuthenticate(context: Context): Boolean =
-        BiometricManager.from(context).canAuthenticate(authenticators()) == BiometricManager.BIOMETRIC_SUCCESS
+        availability(context) == Availability.AVAILABLE
+
+    fun availability(context: Context): Availability =
+        availabilityForStatus(BiometricManager.from(context).canAuthenticate(authenticators()))
+
+    internal fun availabilityForStatus(status: Int): Availability = when (status) {
+        BiometricManager.BIOMETRIC_SUCCESS -> Availability.AVAILABLE
+        BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED -> Availability.NO_CREDENTIAL
+        else -> Availability.UNAVAILABLE
+    }
 
     /**
      * Show the system unlock sheet. [onSuccess] fires on the main thread after a valid credential;
@@ -66,11 +77,4 @@ object BiometricAuthenticator {
             .build()
         prompt.authenticate(info)
     }
-
-    /** True for error codes that mean "this device can't prompt right now" — callers fail open. */
-    fun isNoCredentialError(code: Int): Boolean =
-        code == BiometricPrompt.ERROR_NO_DEVICE_CREDENTIAL ||
-            code == BiometricPrompt.ERROR_NO_BIOMETRICS ||
-            code == BiometricPrompt.ERROR_HW_NOT_PRESENT ||
-            code == BiometricPrompt.ERROR_HW_UNAVAILABLE
 }

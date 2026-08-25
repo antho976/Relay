@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.Features
+import com.forge.app.security.LocalAppLock
 import com.forge.app.ui.common.ConfettiOverlay
 import com.forge.app.ui.common.statsEntrance
 import com.forge.app.ui.experiment.SectionAnchor
@@ -183,6 +184,7 @@ fun ProfileScreen(
     viewModel: ProfileViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val galleryLocked by LocalAppLock.current.galleryLocked.collectAsStateWithLifecycle()
     val showRankUpCelebration by viewModel.showRankUpCelebration.collectAsStateWithLifecycle()
     val bodyweight by viewModel.bodyweight.collectAsStateWithLifecycle()
     val bodyweightGoalLb by viewModel.bodyweightGoalLb.collectAsStateWithLifecycle()
@@ -406,9 +408,11 @@ fun ProfileScreen(
                 Spacer(Modifier.height(34.dp))
                 Column(Modifier.fillMaxWidth().statsEntrance(4)) {
                     GalleryStrip(
-                        state.photos, viewModel::fileFor,
+                        photos = if (galleryLocked) emptyList() else state.photos,
+                        fileFor = viewModel::fileFor,
                         onOpenGallery = onOpenPhotoGallery,
-                        muted = muted
+                        muted = muted,
+                        locked = galleryLocked,
                     )
                 }
 

@@ -60,13 +60,14 @@ class AppLockManager @Inject constructor(
     }
 
     /**
-     * Seed the enabled flag synchronously on the first frame (before the async DataStore collector
-     * emits) so a locked cold start never flashes content underneath the gate. Idempotent and safe to
+     * Seed both enabled flags synchronously on the first frame (before the async DataStore collectors
+     * emit) so a locked cold start never flashes content underneath either gate. Idempotent and safe to
      * call on every Activity `onCreate`; it never touches [sessionValid], so it can't clear a valid
      * session on a rotation-triggered recreate.
      */
-    fun primeEnabled(enabled: Boolean) {
-        appLockEnabled = enabled
+    fun primeEnabled(appEnabled: Boolean, galleryEnabled: Boolean) {
+        appLockEnabled = appEnabled
+        galleryLockEnabled = galleryEnabled
         recompute()
     }
 
