@@ -668,6 +668,9 @@ class BackupRepository @Inject constructor(
      */
     private suspend fun restoreFromIncoming(incoming: File): RestoreOutcome = withContext(Dispatchers.IO) {
         val temps = mutableListOf(incoming) // cache-dir temp files to clean up before returning
+        // Set true only once EVERY staged component has landed. The finally below uses it to discard
+        // a half-written pending set, which would otherwise be applied at the next cold start.
+        var stagedOk = false
         var photoStage: File? = null        // extracted progress photos, staged only after validation
         var avatarStage: File? = null       // extracted avatar temp (in temps), applied after validation
         try {
@@ -737,11 +740,11 @@ class BackupRepository @Inject constructor(
             // Don't close Room and swap the file here — that races with any flow still reading the DB
             // until the process is killed. Stage the files instead; ForgeApp.applyPendingRestore swaps
             // them in at next boot, before Room/DataStore open. The caller restarts the app on success.
-            val pendingDb = File(context.filesDir, "pending_restore.db")
+            val pendingDb = File(context.filesDir, PENDING_DB_NAME)
             if (pendingDb.exists()) pendingDb.delete()
             dbFile.copyTo(pendingDb, overwrite = true)
 
-            val pendingPrefs = File(context.filesDir, "pending_restore_prefs.pb")
+            val pendingPrefs = File(context.filesDir, PENDING_PREFS_NAME)
             if (pendingPrefs.exists()) pendingPrefs.delete()
             prefsFile?.copyTo(pendingPrefs, overwrite = true)
 
@@ -774,6 +777,9 @@ class BackupRepository @Inject constructor(
             // if present, still counts toward [hasAnyBackup].
             runCatching { File(context.filesDir, MANUAL_BACKUP_MARKER).delete() }
 
+            // Every staged component landed. Only now is the pending set complete, and only now may
+            // ForgeApp.applyPendingRestore swap it in at boot.
+            stagedOk = true
             return@withContext RestoreOutcome.SUCCESS
         } catch (e: java.util.zip.ZipException) {
             // A truncated or malformed ZIP (e.g. a backup that got corrupted in an email / cloud
@@ -785,7 +791,28 @@ class BackupRepository @Inject constructor(
         } finally {
             temps.forEach { it.delete() }
             photoStage?.deleteRecursively()
+            // A restore that did not reach SUCCESS must leave NOTHING staged. `temps` only covers
+            // cacheDir scratch files — the pending_restore.* set lives in filesDir and used to
+            // survive a failure. ForgeApp.applyPendingRestore checks only that those files EXIST,
+            // so a half-written set was swapped over the live database at the next cold start,
+            // silently discarding everything logged since the failed attempt.
+            if (!stagedOk) clearPendingRestore()
         }
+    }
+
+    /**
+     * Remove every staged component of a pending restore.
+     *
+     * Called when [restoreFromIncoming] ends in anything other than SUCCESS. Clearing a previously
+     * staged (successful but not-yet-rebooted) restore is deliberate: the user's most recent
+     * instruction was the attempt that just failed, so applying the older one at the next boot —
+     * after being told the restore failed — is the confusing outcome this guards against.
+     */
+    private fun clearPendingRestore() {
+        runCatching { File(context.filesDir, PENDING_DB_NAME).delete() }
+        runCatching { File(context.filesDir, PENDING_PREFS_NAME).delete() }
+        runCatching { File(context.filesDir, PENDING_PHOTOS_DIR).deleteRecursively() }
+        runCatching { File(context.filesDir, PENDING_AVATAR_NAME).delete() }
     }
 
     /**
@@ -899,6 +926,10 @@ class BackupRepository @Inject constructor(
         private const val MANUAL_BACKUP_MARKER = "manual_backup_done"
         /** Staged restored photos; ForgeApp.applyPendingRestore swaps this over progress_photos/ at boot. */
         private const val PENDING_PHOTOS_DIR = "pending_restore_photos"
+        // Staged-restore filenames. Must stay in sync with ForgeApp.applyPendingRestore, which
+        // reads the same four paths out of filesDir at boot.
+        private const val PENDING_DB_NAME = "pending_restore.db"
+        private const val PENDING_PREFS_NAME = "pending_restore_prefs.pb"
         /** Backup-ZIP entry for the profile avatar — derived from AvatarRepository so a rename can't desync. */
         private const val ZIP_AVATAR_ENTRY = AvatarRepository.FILE_NAME
         private const val PENDING_AVATAR_NAME = "pending_restore_avatar.jpg"

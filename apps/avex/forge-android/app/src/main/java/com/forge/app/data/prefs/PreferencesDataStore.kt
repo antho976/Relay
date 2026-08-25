@@ -2,7 +2,9 @@ package com.forge.app.data.prefs
 
 import android.content.Context
 import androidx.datastore.core.DataStore
+import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.emptyPreferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.doublePreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
@@ -15,8 +17,23 @@ import androidx.datastore.preferences.preferencesDataStore
  * Single DataStore instance for app-wide preferences. Property delegate is the
  * recommended way to declare a DataStore — it manages the file path, schema migration,
  * and prevents accidentally creating multiple stores for the same file.
+ *
+ * The corruption handler is not optional here. Without it a damaged preferences file throws
+ * `CorruptionException` on EVERY read, and because MainActivity resolves five of these flows with
+ * `runBlocking` in `onCreate`, that surfaces as an unrecoverable crash-on-launch loop: the app
+ * cannot start, so the user can never reach the setting that would fix it. Their only recourse is
+ * clearing app data, which destroys the database too.
+ *
+ * A restore makes that reachable rather than theoretical — it stages a preferences blob taken from
+ * a backup file and swaps it into place at boot, so any damage in that file becomes damage here.
+ *
+ * Resetting to defaults loses preferences, which is recoverable (they are re-enterable, and the
+ * training data in Room is untouched). A launch loop is not.
  */
-val Context.forgePreferences: DataStore<Preferences> by preferencesDataStore(name = "forge_settings")
+val Context.forgePreferences: DataStore<Preferences> by preferencesDataStore(
+    name = "forge_settings",
+    corruptionHandler = ReplaceFileCorruptionHandler { emptyPreferences() }
+)
 
 /** Centralised keys so misspellings are caught at compile time. */
 object PreferenceKeys {
