@@ -35,11 +35,11 @@ kotlinx-serialization = "1.7.3"
 
 # Wear OS (W1–W4: watch app, tiles, complications, live HR)
 wear-compose = "1.4.1"
-play-services-wearable = "20.0.1"
-wear-tiles = "1.6.2"
-protolayout = "1.4.2"
-watchface-complications = "1.3.0"
-wear-ongoing = "1.1.0"
+play-services-wearable = "19.0.0"
+wear-tiles = "1.4.1"
+protolayout = "1.2.1"
+watchface-complications = "1.2.1"
+wear-ongoing = "1.0.0"
 health-services = "1.0.0"
 concurrent-futures = "1.2.0"
 
