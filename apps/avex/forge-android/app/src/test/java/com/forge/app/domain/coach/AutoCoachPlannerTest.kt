@@ -91,6 +91,20 @@ class AutoCoachPlannerTest {
 
     private fun beginner(target: Int = 0) = CoachPassInputs("beginner", sessionsTarget = target)
 
+    /**
+     * [baseSessions] plus one session inside the CURRENT ISO week — what the volume_up adherence
+     * gate actually counts.
+     *
+     * That gate reads "sessions since Monday 00:00", matching WeeklyReview and the Brief, rather
+     * than a rolling 7 x 24 h window. Epoch day 60 — this class's "now" — is itself a MONDAY at
+     * 00:00 UTC, so every session in [baseSessions] (days 34-55) belongs to an earlier week and
+     * this week reads zero however well the athlete trained. Without a session on the right side
+     * of that boundary the gate can never open, and a test asserting SHADOW is really asserting
+     * "the week is empty".
+     */
+    private fun sessionsMeetingThisWeeksTarget(): List<Session> =
+        baseSessions() + session(id = 99, startDay = 60)
+
     // ── Hold semantics ─────────────────────────────────────────────────────────
 
     @Test
@@ -167,7 +181,11 @@ class AutoCoachPlannerTest {
     @Test
     fun volumeUp_whenMuscleProgressingFreshAndAdherent() {
         val r = AutoCoachPlanner.evaluate(
-            snapshot(mapOf("ua1" to progressingBouts(8))), beginner(target = 1)
+            snapshot(
+                mapOf("ua1" to progressingBouts(8)),
+                sessions = sessionsMeetingThisWeeksTarget()
+            ),
+            beginner(target = 1)
         )
         assertEquals(CoachPassStatus.SHADOW, r.status)
         val d = r.decisions.single()
@@ -195,7 +213,10 @@ class AutoCoachPlannerTest {
         // the laggard (BACK), not the muscle already winning.
         val history = mapOf("ua1" to progressing(5.0), "ub1" to progressing(1.0))
         val slots = listOf(slot("ua1"), slot("ub1", muscle = MuscleGroup.BACK))
-        val r = AutoCoachPlanner.evaluate(snapshot(history, slots = slots), beginner(target = 1))
+        val r = AutoCoachPlanner.evaluate(
+            snapshot(history, sessions = sessionsMeetingThisWeeksTarget(), slots = slots),
+            beginner(target = 1)
+        )
         assertEquals(CoachPassStatus.SHADOW, r.status)
         val d = r.decisions.single { it.type == "volume_up" }
         assertEquals("ub1", d.targetKey)
@@ -203,8 +224,14 @@ class AutoCoachPlannerTest {
 
     @Test
     fun volumeUp_blockedByDriftCap() {
+        // Adherence deliberately SATISFIED, so the only thing left to block the extra set is the
+        // drift cap. Without the in-week session this asserted HOLD for the wrong reason — an empty
+        // week holds on its own, and the cap could have been deleted with the test still green.
         val r = AutoCoachPlanner.evaluate(
-            snapshot(mapOf("ua1" to progressingBouts(8))),
+            snapshot(
+                mapOf("ua1" to progressingBouts(8)),
+                sessions = sessionsMeetingThisWeeksTarget()
+            ),
             CoachPassInputs("beginner", sessionsTarget = 1, volumeNetByMuscle = mapOf(MuscleGroup.CHEST to 2))
         )
         assertEquals(CoachPassStatus.HOLD, r.status)
@@ -212,8 +239,13 @@ class AutoCoachPlannerTest {
 
     @Test
     fun volumeUp_blockedWhileMuscleInOutcomeWindow() {
+        // Adherence satisfied here too — see [volumeUp_blockedByDriftCap] — so the muscle lock is
+        // the only thing under test.
         val r = AutoCoachPlanner.evaluate(
-            snapshot(mapOf("ua1" to progressingBouts(8))),
+            snapshot(
+                mapOf("ua1" to progressingBouts(8)),
+                sessions = sessionsMeetingThisWeeksTarget()
+            ),
             CoachPassInputs("beginner", sessionsTarget = 1, volumeLockedMuscles = setOf(MuscleGroup.CHEST))
         )
         assertEquals(CoachPassStatus.HOLD, r.status)

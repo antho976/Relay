@@ -1,3 +1,5 @@
+import java.time.Duration
+import org.gradle.testing.jacoco.plugins.JacocoTaskExtension
 import java.util.Properties
 
 plugins {
@@ -8,6 +10,11 @@ plugins {
     alias(libs.plugins.hilt)
     alias(libs.plugins.androidx.baselineprofile)
     alias(libs.plugins.roborazzi)
+    // Gradle's built-in JaCoCo. Coverage here is a MEASUREMENT, not a gate: no threshold is
+    // enforced, because a number that fails the build teaches people to write tests that touch
+    // lines rather than tests that check behaviour. It exists so "are we covered?" has an answer
+    // that is not somebody counting files per package.
+    jacoco
 }
 
 // Release signing — reads credentials from forge-android/keystore.properties (gitignored).
@@ -113,6 +120,24 @@ android {
         // Roborazzi renders real Compose through Robolectric, which needs packaged resources.
         unitTests.isIncludeAndroidResources = true
         unitTests.all {
+            // A ceiling for the WHOLE task, as the backstop under runTest's per-test timeout. A
+            // Robolectric test that wedges outside a coroutine (a native lock, a stuck file handle)
+            // has nothing else to stop it, and the next thing that notices is the CI job timing out
+            // an hour later with a log that ends mid-test.
+            it.timeout.set(Duration.ofMinutes(20))
+
+            // Without this, coverage silently omits every Robolectric test in the suite — which is
+            // most of the data layer. Robolectric loads the classes under test through its own
+            // sandbox classloader, and those classes arrive at JaCoCo with no code-source location;
+            // JaCoCo skips such classes by default, so SettingsRepository read 0 of 325 lines while
+            // nine tests were exercising it. A coverage number that quietly excludes a whole
+            // category of test is worse than no number, because it gets believed.
+            it.extensions.configure(JacocoTaskExtension::class.java) {
+                isIncludeNoLocationClasses = true
+                // JDK internals arrive the same way and are not ours to measure.
+                excludes = listOf("jdk.internal.*")
+            }
+
             // Forward -Dforge.regen to the test JVM so RegenerateAllowlist can rewrite the frozen
             // design-doctrine baseline on demand (DesignDoctrineTest). Defaults to off, so a normal
             // CI run can never rewrite the baseline it is supposed to be enforcing.
@@ -125,6 +150,16 @@ android {
             // all the way to a release without one of them firing.
             it.inputs.files(rootProject.fileTree("../.claude"))
                 .withPropertyName("designDoctrine")
+                .withPathSensitivity(PathSensitivity.RELATIVE)
+
+            // The goldens themselves, for exactly the same reason — and this half was MISSING even
+            // though the comment above always claimed both. src/test/screenshots/ is not a resources
+            // directory, so nothing put it on the task's inputs, and replacing a golden PNG with a
+            // completely different image left :app:verifyRoborazziDebug UP-TO-DATE. The gate that
+            // exists to catch clipping and overlap regressions would simply not have run, and a
+            // skipped comparison reports as a pass.
+            it.inputs.files(project.fileTree("src/test/screenshots"))
+                .withPropertyName("screenshotGoldens")
                 .withPathSensitivity(PathSensitivity.RELATIVE)
 
             // Print the full assertion message on failure. DesignDoctrineTest's messages name the
@@ -143,6 +178,52 @@ android {
             }
         }
     }
+}
+
+/**
+ * `./gradlew -p forge-android :app:coverageReport` — HTML at
+ * app/build/reports/jacoco/coverageReport/html/index.html, XML beside it for CI.
+ *
+ * Deliberately scoped to what a unit test could plausibly cover. Generated code (Hilt components,
+ * Room DAO implementations, Compose lambdas, R, BuildConfig) is excluded: it is written by a
+ * processor, it is verified by the fact that the app compiles and runs, and leaving it in produces
+ * a number that moves when a build tool changes rather than when the test suite does.
+ *
+ * Compose UI is excluded for the same reason in reverse — it IS covered, by the 41 Roborazzi
+ * goldens, and those record pixels rather than executed lines, so counting them here would
+ * understate coverage while adding thousands of untestable lambda classes to the denominator.
+ */
+val coverageReport = tasks.register<JacocoReport>("coverageReport") {
+    group = "verification"
+    description = "JaCoCo coverage for the JVM unit tests (:app)."
+    dependsOn("testDebugUnitTest")
+
+    reports {
+        html.required.set(true)
+        xml.required.set(true)
+        csv.required.set(false)
+    }
+
+    val generated = listOf(
+        "**/R.class", "**/R$*.class", "**/BuildConfig.*", "**/Manifest*.*",
+        // Hilt / Dagger / KSP output
+        "**/*_Factory*.*", "**/*_MembersInjector*.*", "**/*_HiltModules*.*",
+        "**/Hilt_*.*", "**/*_Impl*.*", "**/DaggerForgeApp*.*", "**/*_Provide*Factory*.*",
+        // Compose compiler output: ComposableSingletons holders and lambda classes
+        "**/ComposableSingletons*.*", "**/*ComposableSingletons*",
+        "**/*\$\$inlined\$*.*",
+        // Screens and composables — covered by the Roborazzi goldens, not by line execution
+        "**/ui/**/*Screen*.*", "**/ui/theme/**",
+    )
+
+    classDirectories.setFrom(
+        files(
+            fileTree(layout.buildDirectory.dir("tmp/kotlin-classes/debug")) { exclude(generated) },
+            fileTree(layout.buildDirectory.dir("intermediates/javac/debug/classes")) { exclude(generated) }
+        )
+    )
+    sourceDirectories.setFrom(files("src/main/java", "$rootDir/shared/src/main/kotlin"))
+    executionData.setFrom(fileTree(layout.buildDirectory) { include("**/testDebugUnitTest.exec") })
 }
 
 // Room schema export directory (required because we set exportSchema = true)
@@ -233,6 +314,10 @@ dependencies {
 
     // Test
     testImplementation(libs.junit)
+    // runTest, not runBlocking, for anything suspending: it carries a per-test timeout, so a test
+    // that deadlocks on IO fails in seconds NAMING ITSELF, instead of hanging until the CI job's
+    // own timeout kills the whole task with no idea which test was stuck.
+    testImplementation(libs.kotlinx.coroutines.test)
     // Screenshot testing of the archetype recipes (DESIGN §14: the app must survive 200% font).
     testImplementation(libs.robolectric)
     testImplementation(libs.roborazzi)

@@ -1,64 +1,204 @@
 name: CI
 
-# Builds Avex and runs the JVM unit-test suite on every push/PR to main.
-# Activates automatically once this repo has a GitHub remote — no setup needed.
+# Everything that must be true before Avex is allowed to ship.
 #
-# Notes for this project specifically:
-#  • The Gradle project lives in forge-android/ (not the repo root) → `-p forge-android`.
-#  • The Gradle wrapper IS committed (forge-android/gradle/wrapper), so CI runs ./gradlew —
-#    the same Gradle version contributors use, with no chance of the two drifting.
-#  • Release builds carry no signing secrets in CI. assembleRelease is unsigned in the build job;
-#    the instrumented job re-builds it under -PforgeCiSmokeSigning (debug key, CI-only) so the
-#    minified APK can actually be installed and launched — R8 finishing is not R8 working.
+# Three jobs, cheapest first, each gating the next:
+#
+#   guard        ~30s   Wrapper checksum, no committed signing material, no committed build output.
+#   verify       ~15m   The whole JVM gate: unit tests (all modules), screenshot goldens, Android
+#                       Lint, and both APK variants including a real R8 release.
+#   instrumented ~20m   The two things only a device can answer: the Room migration chain, and
+#                       whether the minified APK actually launches.
+#
+# Notes specific to this project:
+#  • The Gradle project lives in forge-android/, not the repo root  ->  `-p forge-android`.
+#  • The wrapper IS committed, so CI runs ./gradlew — the exact Gradle contributors run, with no
+#    chance of the two drifting. `guard` verifies its checksum before anything executes it.
+#  • gradle/gradle-daemon-jvm.properties pins the daemon to Java 21. Setting up 21 here is not
+#    cosmetic: with a 17 launcher, Gradle downloads an entire JDK from foojay.io on EVERY run —
+#    a minute of wall clock and a third-party host in the critical path of the build.
+#  • Release builds carry no signing secrets here; that is release.yml's job, and only on a tag.
+#    `verify` builds the release UNSIGNED to exercise R8. `instrumented` re-signs it with the debug
+#    key (-PforgeCiSmokeSigning) purely so it can be installed, because "R8 finished" and "R8
+#    produced something that runs" are different claims.
+#
+# Deliberately ONE job for all the JVM work rather than a fan-out of test/lint/assemble jobs. They
+# all depend on the same expensive :app compile (KSP + Hilt + Compose), so splitting them roughly
+# triples the compute to save wall clock. Split it the day latency costs more than minutes — the
+# steps are already independent of one another.
 
 on:
   push:
     branches: [main]
+    # NB: .claude/** is deliberately absent from this list. The design-doctrine parity suite reads
+    # .claude/DESIGN.md, so a doc-only edit there can absolutely turn the build red.
+    paths-ignore:
+      - "docs/**"
+      - "backups/**"
+      - ".design-backups/**"
+      - "remotion-*/**"
+      - "**/*.png"
+      - "**/*.jpg"
+      - "**/*.mp4"
+      - "PRODUCT.md"
+      - "README.md"
   pull_request:
     branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "backups/**"
+      - ".design-backups/**"
+      - "remotion-*/**"
+      - "**/*.png"
+      - "**/*.jpg"
+      - "**/*.mp4"
+      - "PRODUCT.md"
+      - "README.md"
+  merge_group:
+  workflow_dispatch:
+  # Callable so release.yml gates a tag on this exact pipeline rather than on a copy that drifts.
+  workflow_call:
 
-# A newer push to the same branch cancels the older in-flight run.
+# Read-only, with no exceptions anywhere in this file. That is load-bearing: release.yml CALLS this
+# workflow, and a called workflow may not hold permissions the caller lacks — so the moment one job
+# here wanted contents:write, every release would have to grant it too. Anything needing write lives
+# in its own workflow (see dependency-graph.yml).
+permissions:
+  contents: read
+
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  # Supersede an outdated PR run, but never cancel main or a merge queue: those results are what
+  # "main is green" gets claimed from, and a cancelled run reads as a failed one.
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  build:
+  guard:
+    name: Guard
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: Validate Gradle wrapper checksum
+        # The wrapper jar is a committed BINARY that every later step executes. Without this, a
+        # tampered wrapper reaching main would run with access to the release secrets one workflow
+        # over, and nothing else in the pipeline would notice.
+        uses: gradle/actions/wrapper-validation@v4
+
+      - name: No signing material in the tree
+        # keystore.properties and *.jks are gitignored, but gitignore only stops the accident
+        # nobody forced: `git add -f` defeats it silently. The Avex upload key cannot be rotated
+        # without breaking the update path for every existing install, so this is worth a job.
+        run: |
+          found=$(git ls-files -- '*.jks' '*.keystore' '*.p12' \
+                    'keystore.properties' '**/keystore.properties' \
+                    'google-play-service-account*.json' | grep -v '\.example$' || true)
+          if [ -n "$found" ]; then
+            echo "::error::Signing material is committed to the repository:"
+            echo "$found"
+            echo "Remove it, rotate the credential, and purge it from history."
+            exit 1
+          fi
+          echo "No keystores, no service accounts."
+
+      - name: No build output in the tree
+        # A committed build/ directory makes CI results depend on whatever was on someone's laptop.
+        run: |
+          found=$(git ls-files | grep -E '(^|/)(build|\.gradle)/' || true)
+          if [ -n "$found" ]; then
+            echo "::error::Build output is committed:"
+            echo "$found"
+            exit 1
+          fi
+          echo "Clean."
+
+  verify:
+    name: Verify (JVM)
+    needs: guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          # Matches gradle/gradle-daemon-jvm.properties (toolchainVersion=21). The modules still
+          # COMPILE to 17 bytecode via their own jvmTarget — this only picks the JVM Gradle runs on.
+          java-version: "21"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
+        with:
+          # Only main writes the shared dependency/build cache, so a PR cannot poison what every
+          # other branch then restores.
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+          add-job-summary: on-failure
+
+      - name: Install the Android platform this build compiles against
+        # compileSdk 36 is newer than the runner image is guaranteed to carry. Installing it turns
+        # "the hosted image happened to have it" into a stated dependency, and keeps the failure
+        # legible on the day it does not.
+        run: |
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$sdkmanager" --licenses > /dev/null 2>&1 || true
+          "$sdkmanager" "platforms;android-36" > /dev/null
 
       - name: Cache Robolectric runtime jars
         # Robolectric fetches its android-all jars at TEST time into ~/.m2, outside Gradle's
         # dependency resolution — so setup-gradle's cache does not cover them. Without this, every
-        # CI run re-downloads a few hundred MB and inherits Maven Central's bad days as flaky tests.
+        # run re-downloads a few hundred MB and inherits Maven Central's bad days as flaky tests.
         uses: actions/cache@v4
         with:
           path: ~/.m2/repository/org/robolectric
           key: robolectric-${{ runner.os }}-${{ hashFiles('forge-android/gradle/libs.versions.toml') }}
           restore-keys: robolectric-${{ runner.os }}-
 
-      - name: Unit tests
-        # testDebugUnitTest covers the Android modules (:app + :wear); :shared is a pure Kotlin/JVM
-        # library whose task is `test` — without it the protocol + rest-timer suites would silently
-        # never run in CI (W1).
-        run: ./forge-android/gradlew -p forge-android testDebugUnitTest :shared:test --no-daemon
+      - name: Unit tests + screenshot goldens
+        # ONE invocation, not three, and with --continue: these tasks share the expensive :app
+        # compile, and running them together means a red doctrine rule cannot hide a broken golden,
+        # nor a broken golden a failing domain test. Reporting only whichever failed first makes one
+        # CI round-trip per bug the normal cost of a bad push.
+        #
+        # The steps AFTER this one are a deliberate fail-fast chain rather than more --continue:
+        # lint and assemble are separate task graphs, so running them on an already-red branch buys
+        # information at full price. Inside one graph, finish; between graphs, stop.
+        #
+        #  • testDebugUnitTest covers :app and :wear; :shared is a pure Kotlin/JVM library whose
+        #    task is `test` — without naming it, the protocol and rest-timer suites silently never
+        #    run here.
+        #  • verifyRoborazziDebug renders the archetype recipes at 100% and 200% font scale, on
+        #    Pearl and AMOLED, with and without accent, and diffs them against the goldens in
+        #    app/src/test/screenshots/. It catches what no static rule can: clipping, overlap and
+        #    spacing regressions. Re-record deliberately with :app:recordRoborazziDebug, and LOOK
+        #    at the diff.
+        #  • coverageReport reuses the very same test run to produce a JaCoCo report. It is a
+        #    MEASUREMENT, never a gate — no threshold is enforced, because a coverage number that
+        #    fails a build teaches people to write tests that touch lines rather than tests that
+        #    check behaviour.
+        run: >
+          ./forge-android/gradlew -p forge-android --continue
+          testDebugUnitTest :shared:test :app:verifyRoborazziDebug :app:coverageReport
 
-      - name: Screenshot goldens (design doctrine §14)
-        # Renders the six archetype recipes at 100% and 200% font scale, on Pearl and AMOLED, with
-        # and without accent, and diffs them against the committed goldens in
-        # app/src/test/screenshots/. Catches what no static rule can: clipping, overlap and spacing
-        # regressions. Re-record deliberately with :app:recordRoborazziDebug and LOOK at the diff.
-        run: ./forge-android/gradlew -p forge-android :app:verifyRoborazziDebug --no-daemon
+      - name: Test summary
+        # A CI failure should be readable from the run page. Without this, the only record of WHICH
+        # of a thousand tests failed is a zip you have to download and open.
+        if: always()
+        run: python3 .github/scripts/test_summary.py >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload test + coverage reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: |
+            forge-android/*/build/reports/tests/**
+            forge-android/*/build/test-results/**
+            forge-android/app/build/reports/jacoco/**
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Upload screenshot diffs
         if: failure()
@@ -67,50 +207,66 @@ jobs:
           name: roborazzi-diffs
           path: forge-android/app/build/outputs/roborazzi/**
           if-no-files-found: ignore
+          retention-days: 14
 
-      - name: Assemble debug APKs (phone + wear)
-        run: ./forge-android/gradlew -p forge-android assembleDebug --no-daemon
+      - name: Android Lint (release variant, phone + wear)
+        # The release variant specifically: lint-vital rules only run there, and those are the ones
+        # that fail a Play upload rather than merely annoying a reviewer.
+        run: ./forge-android/gradlew -p forge-android --continue :app:lintRelease :wear:lintRelease
 
-      - name: Release lint (phone + wear)
-        run: ./forge-android/gradlew -p forge-android :app:lintRelease :wear:lintRelease --no-daemon
+      - name: Upload lint reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-reports
+          path: forge-android/*/build/reports/lint-results-*.html
+          if-no-files-found: ignore
+          retention-days: 14
 
-      - name: Assemble release (unsigned, exercises R8)
-        run: ./forge-android/gradlew -p forge-android assembleRelease --no-daemon
+      - name: Assemble debug + release
+        # assembleRelease is UNSIGNED here (this workflow holds no secrets) and exists to exercise
+        # R8: shrinking, obfuscation, and the keep rules that stop Room/DataStore enum round-trips
+        # from being renamed out from under the database.
+        run: ./forge-android/gradlew -p forge-android assembleDebug assembleRelease
 
-      - name: Upload debug APK
+      - name: Upload debug APKs
         uses: actions/upload-artifact@v4
         with:
           name: avex-debug-apk
           path: |
             forge-android/app/build/outputs/apk/debug/*.apk
             forge-android/wear/build/outputs/apk/debug/*.apk
-          if-no-files-found: warn
+          # error, not warn: this runs only after assembleDebug succeeded, so a missing APK means
+          # the output path moved and the artifact quietly stopped being published.
+          if-no-files-found: error
+          retention-days: 14
 
   instrumented:
-    # Everything above runs on the JVM. Two things can only be verified on a device, and both guard
-    # the release direction specifically:
-    #
-    #  • MigrationTest is the ONLY androidTest in the repo and the only automated guard on the
-    #    12 → 36 migration chain that DatabaseModule deliberately refuses to destructively fall back
-    #    from. It never ran in CI, so the single test standing between a wrong migration and "every
-    #    existing user crashes on launch while a fresh install works fine" was manual-only.
-    #  • assembleRelease proves R8 FINISHED, not that what it produced runs. Every R8-only defect —
-    #    an empty keep-rule file, an enum name that survives on one side of the wire and not the
-    #    other — is invisible until the minified APK is actually launched.
-    #
-    # Separate job so the fast feedback above is never blocked behind an emulator boot.
+    name: Instrumented (emulator)
+    # Gated on verify: an emulator boot is the most expensive thing in this pipeline, and there is
+    # nothing to learn from running it against a branch whose unit tests are already red.
+    needs: verify
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: "21"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: true
+
+      - name: Install the Android platform this build compiles against
+        run: |
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$sdkmanager" --licenses > /dev/null 2>&1 || true
+          "$sdkmanager" "platforms;android-36" > /dev/null
 
       - name: Enable KVM
         run: |
@@ -119,27 +275,67 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
 
+      - name: Build everything the emulator will need
+        # Done BEFORE the emulator exists. R8 on this app takes minutes, and every one of them
+        # spent with a booted emulator idling is a minute of the job's timeout burned for nothing.
+        # -PforgeCiSmokeSigning signs the minified APK with the DEBUG key; it is opt-in and refuses
+        # to apply when a real keystore is configured, so a genuine release can never pick it up.
+        run: >
+          ./forge-android/gradlew -p forge-android
+          :app:assembleDebugAndroidTest :app:assembleDebug
+          :app:assembleRelease -PforgeCiSmokeSigning
+
+      - name: Cache the AVD snapshot
+        # Booting a cold system image is ~4 minutes, every run, forever; a cached snapshot makes it
+        # seconds. Keyed on the image so a bump invalidates it rather than silently testing the old
+        # API level.
+        uses: actions/cache@v4
+        id: avd-cache
+        with:
+          path: |
+            ~/.android/avd/*
+            ~/.android/adb*
+          key: avd-34-google_apis-x86_64
+
+      - name: Create the AVD snapshot
+        if: steps.avd-cache.outputs.cache-hit != 'true'
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          force-avd-creation: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: false
+          script: echo "AVD snapshot created."
+
       - name: Room migration test + release smoke launch
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 34
           target: google_apis
           arch: x86_64
+          force-avd-creation: false
+          emulator-options: -no-snapshot-save -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
-          script: |
-            ./forge-android/gradlew -p forge-android :app:connectedDebugAndroidTest --no-daemon
-            # Sign the minified APK with the debug key (CI-only flag), install it, and assert it
-            # reaches its first frame rather than dying in R8-shaped ways.
-            ./forge-android/gradlew -p forge-android :app:assembleRelease -PforgeCiSmokeSigning --no-daemon
-            adb install -r forge-android/app/build/outputs/apk/release/*.apk
-            adb shell am start -W -n com.forge.app/.MainActivity
-            sleep 5
-            adb shell pidof com.forge.app > /dev/null || (adb logcat -d -t 500 && exit 1)
+          script: .github/scripts/instrumented.sh
 
       - name: Upload instrumented test report
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: connected-test-report
-          path: forge-android/app/build/reports/androidTests/**
+          path: |
+            forge-android/app/build/reports/androidTests/**
+            forge-android/app/build/outputs/androidTest-results/**
           if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload logcat from the smoke launch
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-logcat
+          path: smoke-logcat.txt
+          if-no-files-found: ignore
+          retention-days: 14

@@ -220,8 +220,70 @@ class OutcomeWatcherTest {
     }
 
     @Test
-    fun illnessMakesAnOpenWindowUnjudgeable() {
-        val life = LifeEvents.State.NONE.copy(sick = true)
+    fun illnessInsideTheWindowMakesItUnjudgeable() {
+        // Applied on day 40, so the window is days 40-54. A sick day at 45 sits inside it: those
+        // sessions were lived unwell, and judging the change on them would teach the coach from the
+        // illness rather than from the change.
+        val life = LifeEvents.State.NONE.copy(sick = true, sickAtMs = listOf(45 * day))
+        val verdict = OutcomeWatcher.evaluate(
+            listOf(decision(appliedAtDay = 40)), snapshot(), life = life
+        ).single()
+        assertEquals(CoachDecision.OUTCOME_NOT_FOLLOWED, verdict.outcome)
+    }
+
+    @Test
+    fun illnessAfterTheWindowClosedStillGetsARealVerdict() {
+        // The regression this scoping exists for: `sick` is a CURRENT flag (a sick check-in in the
+        // last three days), and reading it as though it covered a fortnight already lived meant a
+        // user who trained the whole window and then caught a cold had every decision in it written
+        // to the durable outcome column as "not_followed". TrustLedger reads that column, so being
+        // ill on the wrong day cost the coach every unit of trust the fortnight had earned.
+        val life = LifeEvents.State.NONE.copy(sick = true, sickAtMs = listOf(59 * day))
+        val verdict = OutcomeWatcher.evaluate(
+            listOf(decision(appliedAtDay = 40)), snapshot(), life = life
+        ).single()
+        assertEquals("ok", verdict.outcome)
+    }
+
+    @Test
+    fun theSickWindowReachesExactlyThreeDaysAndNoFurther() {
+        // The BOUNDARY, not a value near it. Mutation testing showed that widening
+        // SICK_WINDOW_DAYS from 3 to 4, and flipping the overlap comparison from >= to >, both left
+        // the suite green — the existing cases sat two days inside and five days outside the edge,
+        // so nothing pinned where the edge actually is. A window that silently grows suppresses
+        // verdicts that should have counted, and TrustLedger reads those verdicts.
+        fun verdictWithSickDay(dayIndex: Int) = OutcomeWatcher.evaluate(
+            listOf(decision(appliedAtDay = 40)),
+            snapshot(),
+            life = LifeEvents.State.NONE.copy(sick = true, sickAtMs = listOf(dayIndex * day))
+        ).single().outcome
+
+        // Applied day 40. A sick day carries LifeEvents.SICK_WINDOW_DAYS forward, so day 37 is the
+        // last one that still reaches the window's first moment.
+        assertEquals(
+            "3 days before the window start is the last day that still reaches it",
+            CoachDecision.OUTCOME_NOT_FOLLOWED, verdictWithSickDay(37)
+        )
+        assertEquals(
+            "4 days before must NOT reach it",
+            "ok", verdictWithSickDay(36)
+        )
+        // ...and at the far end, the window closes on day 54 (40 + WINDOW_DAYS).
+        assertEquals(
+            "a sick day on the window's last day still suppresses",
+            CoachDecision.OUTCOME_NOT_FOLLOWED, verdictWithSickDay(54)
+        )
+        assertEquals(
+            "the day after the window closes does not",
+            "ok", verdictWithSickDay(55)
+        )
+    }
+
+    @Test
+    fun illnessJustBeforeTheWindowStillReachesIntoIt() {
+        // A sick day carries SICK_WINDOW_DAYS forward, so falling ill two days before applying a
+        // change still covers the start of its window — you don't recover the moment you tap Apply.
+        val life = LifeEvents.State.NONE.copy(sick = true, sickAtMs = listOf(38 * day))
         val verdict = OutcomeWatcher.evaluate(
             listOf(decision(appliedAtDay = 40)), snapshot(), life = life
         ).single()
@@ -237,7 +299,7 @@ class OutcomeWatcherTest {
     @Test
     fun aLiveWindowIsNeverPrejudged() {
         // Suppression only applies once the window closes — an in-flight change stays pending.
-        val life = LifeEvents.State.NONE.copy(sick = true)
+        val life = LifeEvents.State.NONE.copy(sick = true, sickAtMs = listOf(59 * day))
         assertTrue(
             OutcomeWatcher.evaluate(listOf(decision(appliedAtDay = 58)), snapshot(), life = life).isEmpty()
         )

@@ -1,0 +1,59 @@
+name: Dependency graph
+
+# Publishes the resolved Gradle dependency graph for main.
+#
+# GitHub builds a repository's dependency graph by reading manifests it understands. It cannot read
+# a Kotlin-DSL Gradle build, so without this job Avex's graph is EMPTY — which means Dependabot's
+# SECURITY alerts have nothing to match a CVE against and stay silent forever. That silence looks
+# exactly like "no vulnerable dependencies", which is the worst possible failure mode for a security
+# feature.
+#
+# Separate from ci.yml on purpose: this needs contents:write to submit the snapshot, and ci.yml is
+# called as a reusable workflow by release.yml. A called workflow cannot hold permissions its caller
+# lacks, so a single write-scoped job inside CI would force every release to grant write to the
+# whole verification pipeline. Kept apart, CI stays strictly read-only.
+#
+# main only, and only when the dependency declarations actually change — the graph describes what
+# ships, and re-submitting an unchanged one costs minutes for no new information.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "forge-android/gradle/libs.versions.toml"
+      - "forge-android/**/build.gradle.kts"
+      - "forge-android/settings.gradle.kts"
+      - ".github/workflows/dependency-graph.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dependency-graph
+  cancel-in-progress: true
+
+jobs:
+  submit:
+    name: Submit
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install the Android platform this build compiles against
+        run: |
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$sdkmanager" --licenses > /dev/null 2>&1 || true
+          "$sdkmanager" "platforms;android-36" > /dev/null
+
+      - name: Resolve and submit
+        uses: gradle/actions/dependency-submission@v4
+        with:
+          build-root-directory: forge-android

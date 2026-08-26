@@ -25,6 +25,17 @@ class GoalPortfolioTest {
     private val week = 7 * day
     private val now = 200 * day
 
+    /**
+     * A mid-week "now" for the two WEEK-SCOPED goals (MUSCLE_VOLUME, CONDITIONING).
+     *
+     * Those two measure the ISO week the user sees on Stats — Monday 00:00 to now — not a rolling
+     * 7 x 24 h window. Epoch day 200 lands on a MONDAY at 00:00 UTC, so with [now] as the clock
+     * "this week" is zero seconds long and every fixture row falls into LAST week: the tests read
+     * 0 while claiming to prove what this week counts. Anchoring them three days later gives the
+     * week somewhere to put data, and makes the Monday boundary the thing under test.
+     */
+    private val midWeek = now + 3 * day
+
     private fun goal(
         kind: CoachGoalKind,
         target: Double? = null,
@@ -42,8 +53,13 @@ class GoalPortfolioTest {
         weightLb = weight, reps = reps, completedAt = 0
     )
 
-    private fun bout(atDaysAgo: Int, weight: Double, sessionType: String = "normal") = ExerciseBout(
-        sessionStartedAt = now - atDaysAgo * day, effort = null, hitFullTarget = true,
+    private fun bout(
+        atDaysAgo: Int,
+        weight: Double,
+        sessionType: String = "normal",
+        from: Long = now
+    ) = ExerciseBout(
+        sessionStartedAt = from - atDaysAgo * day, effort = null, hitFullTarget = true,
         skipped = false, swappedName = null, sets = listOf(set(weight)), sessionType = sessionType
     )
 
@@ -57,9 +73,10 @@ class GoalPortfolioTest {
         sessions: List<Session> = emptyList(),
         cardio: List<CardioEntry> = emptyList(),
         bodyweight: List<BodyweightEntry> = emptyList(),
-        slots: List<ProgramSlotSnap> = listOf(slot("bench"))
+        slots: List<ProgramSlotSnap> = listOf(slot("bench")),
+        nowMs: Long = now
     ) = AdaptationSnapshot(
-        nowMs = now,
+        nowMs = nowMs,
         program = listOf(ProgramDaySnap("upper", "Upper", slots)),
         sessions = sessions,
         exerciseHistory = history,
@@ -138,15 +155,16 @@ class GoalPortfolioTest {
 
     @Test
     fun conditioningGoal_countsThisWeeksActiveMinutesOnly() {
+        // Clock is Thursday; the week under test runs from Monday 00:00. See [midWeek].
         val cardio = listOf(
-            CardioEntry(1, date = now - 2 * day, type = "run", durationMin = 40),
-            CardioEntry(2, date = now - 3 * day, type = "walk", durationMin = 30),
-            // A rest row and an old row must not count.
-            CardioEntry(3, date = now - day, type = "rest", durationMin = 0, restReason = "sore"),
-            CardioEntry(4, date = now - 20 * day, type = "run", durationMin = 60)
+            CardioEntry(1, date = midWeek - 2 * day, type = "run", durationMin = 40),    // Tuesday
+            CardioEntry(2, date = midWeek - 3 * day, type = "walk", durationMin = 30),   // Monday 00:00
+            // A rest row and a row from before Monday must not count.
+            CardioEntry(3, date = midWeek - day, type = "rest", durationMin = 0, restReason = "sore"),
+            CardioEntry(4, date = midWeek - 4 * day, type = "run", durationMin = 60)     // last Sunday
         )
         val g = goal(CoachGoalKind.CONDITIONING, target = 150.0)
-        val state = GoalPortfolio.evaluate(listOf(g), snapshot(cardio = cardio)).single()
+        val state = GoalPortfolio.evaluate(listOf(g), snapshot(cardio = cardio, nowMs = midWeek)).single()
         assertEquals(70.0, state.current!!, 0.01)
         assertEquals(false, state.onTrack)
         assertTrue(state.reading.contains("70 of 150 min"))
@@ -178,13 +196,17 @@ class GoalPortfolioTest {
 
     @Test
     fun muscleVolumeGoal_countsThisWeeksSetsOnTheMuscle() {
+        // Clock is Thursday; the week under test runs from Monday 00:00. See [midWeek].
         val bouts = listOf(
-            bout(atDaysAgo = 2, weight = 100.0).copy(sets = List(4) { set(100.0) }),
-            bout(atDaysAgo = 5, weight = 100.0).copy(sets = List(3) { set(100.0) }),
-            bout(atDaysAgo = 20, weight = 100.0).copy(sets = List(9) { set(100.0) })
+            bout(atDaysAgo = 2, weight = 100.0, from = midWeek).copy(sets = List(4) { set(100.0) }),
+            bout(atDaysAgo = 3, weight = 100.0, from = midWeek).copy(sets = List(3) { set(100.0) }),
+            // Before Monday — the whole point of the week boundary.
+            bout(atDaysAgo = 4, weight = 100.0, from = midWeek).copy(sets = List(9) { set(100.0) })
         )
         val g = goal(CoachGoalKind.MUSCLE_VOLUME, target = 12.0, targetKey = MuscleGroup.CHEST.code)
-        val state = GoalPortfolio.evaluate(listOf(g), snapshot(history = mapOf("bench" to bouts))).single()
+        val state = GoalPortfolio
+            .evaluate(listOf(g), snapshot(history = mapOf("bench" to bouts), nowMs = midWeek))
+            .single()
         assertEquals(7.0, state.current!!, 0.01)
         assertTrue(state.reading.contains("7 of 12 sets"))
     }

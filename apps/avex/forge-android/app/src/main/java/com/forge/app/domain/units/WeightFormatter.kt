@@ -30,12 +30,26 @@ enum class WeightUnit(val label: String) {
     }
 }
 
-private fun trimDecimal(v: Double): String =
-    if (v % 1.0 == 0.0) "${v.toInt()}" else String.format(Locale.US, "%.1f", v)
+/**
+ * A formatting-safe weight: anything non-finite becomes 0.
+ *
+ * NaN and infinities reach these formatters from stored data — a corrupt session row, an aggregate
+ * that divided by a zero denominator — and every path below ends in `roundToInt()` or `toInt()`,
+ * which THROW on NaN ("Cannot round NaN value"). So one bad row did not render as a wrong number:
+ * it crashed the Profile and session-detail surfaces outright. StandingEngine already reads a NaN
+ * metric as the bottom anchor rather than the best; this is the same decision one layer down, where
+ * the crash actually lives.
+ */
+private fun Double.finiteOrZero(): Double = if (isFinite()) this else 0.0
+
+private fun trimDecimal(raw: Double): String {
+    val v = raw.finiteOrZero()
+    return if (v % 1.0 == 0.0) "${v.toInt()}" else String.format(Locale.US, "%.1f", v)
+}
 
 /** A non-negative lb value as a stone+lb compound: "12 st 4 lb" / "12 st" / "8 lb" (rounded to lb). */
 private fun formatStoneLb(lb: Double): String {
-    val totalLb = lb.roundToInt()
+    val totalLb = lb.finiteOrZero().roundToInt()
     val st = totalLb / 14
     val rem = totalLb % 14
     return when {
@@ -46,13 +60,16 @@ private fun formatStoneLb(lb: Double): String {
 }
 
 /** Converts a stored lb value to the display unit and formats it WITH a unit suffix (e.g. "20 kg"). */
-fun formatWeight(lb: Double, unit: WeightUnit): String = when (unit) {
-    WeightUnit.KG -> {
-        val kg = lb * KG_PER_LB
-        if (kg % 1.0 == 0.0) "${kg.toInt()} kg" else String.format(Locale.US, "%.1f kg", kg)
+fun formatWeight(lb: Double, unit: WeightUnit): String {
+    val v = lb.finiteOrZero()
+    return when (unit) {
+        WeightUnit.KG -> {
+            val kg = v * KG_PER_LB
+            if (kg % 1.0 == 0.0) "${kg.toInt()} kg" else String.format(Locale.US, "%.1f kg", kg)
+        }
+        WeightUnit.ST -> formatStoneLb(v)
+        WeightUnit.LB -> if (v % 1.0 == 0.0) "${v.toInt()} lb" else String.format(Locale.US, "%.1f lb", v)
     }
-    WeightUnit.ST -> formatStoneLb(lb)
-    WeightUnit.LB -> if (lb % 1.0 == 0.0) "${lb.toInt()} lb" else String.format(Locale.US, "%.1f lb", lb)
 }
 
 /**
@@ -62,7 +79,7 @@ fun formatWeight(lb: Double, unit: WeightUnit): String = when (unit) {
  * per-set weights.
  */
 fun formatVolume(volumeLb: Double, unit: WeightUnit): String {
-    val v = toDisplayWeight(volumeLb, unit)
+    val v = toDisplayWeight(volumeLb, unit).finiteOrZero()
     val u = unit.label
     // roundToInt, not toInt: truncation runs AFTER the kg/st conversion, so it bit hardest in the
     // unit that needs it least — a 500 lb session is 226.796 kg and used to read "226 kg".
@@ -75,7 +92,7 @@ fun formatVolume(volumeLb: Double, unit: WeightUnit): String {
  * volume labels. Decimal in every unit, like [formatVolume].
  */
 fun formatVolumeCompact(volumeLb: Double, unit: WeightUnit, withUnit: Boolean = true): String {
-    val v = toDisplayWeight(volumeLb, unit)
+    val v = toDisplayWeight(volumeLb, unit).finiteOrZero()
     val suffix = if (withUnit) " ${unit.label}" else ""
     return if (v >= 1000)
         "${String.format(Locale.US, "%.1f", v / 1000).trimEnd('0').trimEnd('.')}k$suffix"
@@ -174,7 +191,7 @@ fun toStoredWeightText(input: String, unit: WeightUnit): String {
     val trimmed = input.trim()
     if (unit == WeightUnit.LB) return trimmed
     val lb = parseToLb(trimmed, unit) ?: return trimmed
-    return if (lb % 1.0 == 0.0) "${lb.toInt()}" else String.format(Locale.US, "%.1f", lb)
+    return trimDecimal(lb)
 }
 
 fun unitLabel(unit: WeightUnit): String = unit.label

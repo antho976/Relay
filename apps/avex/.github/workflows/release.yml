@@ -1,0 +1,236 @@
+name: Release
+
+# The CD half: turn a version tag into signed, verified, downloadable artifacts.
+#
+#   git tag v0.9 && git push origin v0.9
+#
+# What happens then:
+#   1. The ENTIRE ci.yml pipeline runs against the tag — unit tests, goldens, lint, R8, the Room
+#      migration test and the release smoke launch. Called, not copied, so a release can never be
+#      gated on a weaker check than a pull request is.
+#   2. The tag is matched against the versionName in both modules, and the wear/phone versionCode
+#      offset is checked, before a single byte is built.
+#   3. The upload key is materialised from secrets, the AAB (for Play) and both APKs (phone + wear)
+#      are built, and each is verified to be genuinely signed.
+#   4. A GitHub Release is created as a DRAFT with those artifacts and generated notes.
+#
+# The release is a DRAFT on purpose: publishing is the outward-facing, hard-to-retract half, and a
+# tag push should not be able to announce a version by itself. Review the draft, then publish. To
+# make it publish automatically, drop `--draft` from the `gh release create` call below.
+#
+# Required repository secrets. With any of them missing the job fails LOUDLY at the top rather than
+# quietly shipping an unsigned build:
+#   RELEASE_KEYSTORE_BASE64    base64 of the Avex upload .jks  (base64 -w0 avex-upload.jks)
+#   RELEASE_KEYSTORE_PASSWORD  the store password
+#   RELEASE_KEY_ALIAS          the key alias (e.g. avex-upload)
+#   RELEASE_KEY_PASSWORD       the key password
+#
+# Play Store upload is deliberately NOT wired up here: it needs a Google service-account JSON that
+# this project does not have, and a publishing step nobody can run is a step nobody maintains. When
+# that credential exists, add one job after `release` that runs bundletool/the Play Developer API
+# against app-release.aab — the artifact it needs is already produced and verified below.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build (e.g. v0.9)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  # Never cancel a release in flight — a half-run release job leaves a tag with no artifacts and a
+  # decoded keystore on a runner.
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Full CI gate
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  release:
+    name: Sign and publish
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      # The only place in this repo where a workflow may write. Scoped to this job, not the file.
+      contents: write
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Check the tag against both modules' versions
+        run: python3 .github/scripts/release_version_check.py "$TAG"
+
+      - name: Require the signing secrets
+        # Checked before the expensive build, and before anything is written to disk. Without this
+        # the build silently falls back to an UNSIGNED release (that fallback is correct for CI and
+        # for a fresh clone — it is catastrophic here) and the first sign of trouble would be Play
+        # rejecting the upload, or worse, a "release" nobody can install.
+        env:
+          KEYSTORE: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: |
+          missing=""
+          [ -n "$KEYSTORE" ]       || missing="$missing RELEASE_KEYSTORE_BASE64"
+          [ -n "$STORE_PASSWORD" ] || missing="$missing RELEASE_KEYSTORE_PASSWORD"
+          [ -n "$KEY_ALIAS" ]      || missing="$missing RELEASE_KEY_ALIAS"
+          [ -n "$KEY_PASSWORD" ]   || missing="$missing RELEASE_KEY_PASSWORD"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secret(s):$missing"
+            echo "Set them under Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+          echo "All four signing secrets are present."
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: true
+
+      - name: Install the Android platform this build compiles against
+        run: |
+          sdkmanager="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$sdkmanager" --licenses > /dev/null 2>&1 || true
+          "$sdkmanager" "platforms;android-36" > /dev/null
+
+      - name: Materialise the upload key
+        # RUNNER_TEMP, not the workspace: nothing under the checkout can then be swept into an
+        # artifact upload by a path glob. storeFile is absolute because app/build.gradle.kts
+        # resolves it with file(), which is relative to the MODULE directory, not the repo root.
+        env:
+          KEYSTORE: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.RELEASE_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: |
+          keystore="$RUNNER_TEMP/avex-upload.jks"
+          printf '%s' "$KEYSTORE" | base64 -d > "$keystore"
+          chmod 600 "$keystore"
+          # A truncated or mis-pasted secret produces a file that decodes but is not a keystore.
+          # Finding that out here beats finding it out from a signing error 12 minutes later.
+          keytool -list -keystore "$keystore" -storepass "$STORE_PASSWORD" -alias "$KEY_ALIAS" > /dev/null
+          {
+            echo "storeFile=$keystore"
+            echo "storePassword=$STORE_PASSWORD"
+            echo "keyAlias=$KEY_ALIAS"
+            echo "keyPassword=$KEY_PASSWORD"
+          } > forge-android/keystore.properties
+          chmod 600 forge-android/keystore.properties
+          echo "Upload key ready."
+
+      - name: Build the signed AAB and APKs
+        # bundleRelease is what Play takes; the APKs are what a human can sideload to check a
+        # release candidate on a real device without going through a track.
+        run: >
+          ./forge-android/gradlew -p forge-android
+          :app:bundleRelease :app:assembleRelease :wear:assembleRelease
+
+      - name: Verify every artifact is actually signed
+        # The build signs the release ONLY when all four keystore properties are readable. If any
+        # step above degraded, this is the difference between catching it here and publishing an
+        # unsigned artifact under a version tag.
+        run: |
+          set -euo pipefail
+          apksigner=$(find "$ANDROID_HOME/build-tools" -maxdepth 2 -name apksigner | sort -V | tail -1)
+          apks=$(find forge-android/app/build/outputs/apk/release \
+                      forge-android/wear/build/outputs/apk/release -name '*.apk')
+          if [ -z "$apks" ]; then
+            echo "::error::No release APKs were produced."
+            exit 1
+          fi
+          for apk in $apks; do
+            echo "== $apk"
+            case "$apk" in
+              # A file still named *-unsigned means the signing config did not apply to that module.
+              *unsigned*) echo "::error::$apk is unsigned."; exit 1 ;;
+            esac
+            "$apksigner" verify --verbose --print-certs "$apk"
+          done
+          aab=$(find forge-android/app/build/outputs/bundle/release -name '*.aab' -print -quit)
+          echo "== $aab"
+          # An AAB is a signed jar, so jarsigner is the right verifier; apksigner cannot read one.
+          # Deliberately NOT -strict: an upload key is self-signed, and -strict treats an
+          # unvalidated certificate chain as a failure — it would reject every correct release.
+          # Grepping for the verdict line is what actually distinguishes signed from unsigned.
+          jarsigner -verify "$aab" | tee /dev/stderr | grep -q "jar verified"
+
+      - name: Collect the artifacts
+        run: |
+          mkdir -p release-artifacts
+          cp forge-android/app/build/outputs/bundle/release/*.aab release-artifacts/
+          for apk in forge-android/app/build/outputs/apk/release/*.apk; do
+            cp "$apk" "release-artifacts/avex-phone-$TAG.apk"
+          done
+          for apk in forge-android/wear/build/outputs/apk/release/*.apk; do
+            cp "$apk" "release-artifacts/avex-wear-$TAG.apk"
+          done
+          # The mapping file is the only way to read a stack trace from a minified build. Losing it
+          # means every crash report for this version is permanently unreadable.
+          cp forge-android/app/build/outputs/mapping/release/mapping.txt \
+             "release-artifacts/mapping-$TAG.txt" 2>/dev/null || true
+          ls -la release-artifacts
+
+      - name: Upload artifacts to the run
+        uses: actions/upload-artifact@v4
+        with:
+          name: avex-release-${{ env.TAG }}
+          path: release-artifacts/**
+          if-no-files-found: error
+          # Longer than CI's 14 days: this is the build that shipped.
+          retention-days: 90
+
+      - name: Create the draft GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Idempotent: re-running a release (a flaked upload, a re-dispatch) must refresh the
+          # artifacts on the existing draft rather than failing with "release already exists" and
+          # leaving a half-populated one behind.
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "Release $TAG already exists — replacing its artifacts."
+            gh release upload "$TAG" release-artifacts/* --clobber
+          else
+            gh release create "$TAG" \
+              --title "Avex $TAG" \
+              --generate-notes \
+              --draft \
+              --verify-tag \
+              release-artifacts/*
+          fi
+          {
+            echo "### Release $TAG"
+            echo
+            echo "Draft created with the signed AAB, both APKs and the R8 mapping file."
+            echo "Review it and press Publish — a tag push deliberately does not announce a version."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Destroy the upload key
+        # Runs even when something above failed. The runner is ephemeral, but "the VM goes away
+        # eventually" is not a key-handling policy.
+        if: always()
+        run: |
+          shred -u "$RUNNER_TEMP/avex-upload.jks" 2>/dev/null || true
+          shred -u forge-android/keystore.properties 2>/dev/null || true
+          echo "Signing material removed."

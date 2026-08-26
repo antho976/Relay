@@ -6,7 +6,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.forge.app.core.time.Clock
 import com.forge.app.data.prefs.SettingsRepository
 import java.io.File
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Rule
@@ -22,7 +22,7 @@ class AvatarRepositoryTest {
     val temporaryFolder = TemporaryFolder()
 
     @Test
-    fun failedReplacementKeepsPreviousAvatar() = runBlocking {
+    fun failedReplacementKeepsPreviousAvatar() = runTest {
         val base: Context = ApplicationProvider.getApplicationContext()
         val context = object : ContextWrapper(base) {
             override fun getFilesDir(): File = temporaryFolder.root
