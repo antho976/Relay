@@ -78,13 +78,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Validate Gradle wrapper checksum
         # The wrapper jar is a committed BINARY that every later step executes. Without this, a
         # tampered wrapper reaching main would run with access to the release secrets one workflow
         # over, and nothing else in the pipeline would notice.
-        uses: gradle/actions/wrapper-validation@v4
+        uses: gradle/actions/wrapper-validation@v6
 
       - name: No signing material in the tree
         # keystore.properties and *.jks are gitignored, but gitignore only stops the accident
@@ -119,10 +119,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           # Matches gradle/gradle-daemon-jvm.properties (toolchainVersion=21). The modules still
@@ -130,7 +130,7 @@ jobs:
           java-version: "21"
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
         with:
           # Only main writes the shared dependency/build cache, so a PR cannot poison what every
           # other branch then restores.
@@ -150,7 +150,7 @@ jobs:
         # Robolectric fetches its android-all jars at TEST time into ~/.m2, outside Gradle's
         # dependency resolution — so setup-gradle's cache does not cover them. Without this, every
         # run re-downloads a few hundred MB and inherits Maven Central's bad days as flaky tests.
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.m2/repository/org/robolectric
           key: robolectric-${{ runner.os }}-${{ hashFiles('forge-android/gradle/libs.versions.toml') }}
@@ -190,7 +190,7 @@ jobs:
 
       - name: Upload test + coverage reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: test-reports
           path: |
@@ -202,7 +202,7 @@ jobs:
 
       - name: Upload screenshot diffs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: roborazzi-diffs
           path: forge-android/app/build/outputs/roborazzi/**
@@ -216,7 +216,7 @@ jobs:
 
       - name: Upload lint reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: lint-reports
           path: forge-android/*/build/reports/lint-results-*.html
@@ -230,7 +230,7 @@ jobs:
         run: ./forge-android/gradlew -p forge-android assembleDebug assembleRelease
 
       - name: Upload debug APKs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: avex-debug-apk
           path: |
@@ -249,16 +249,16 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "21"
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
         with:
           cache-read-only: true
 
@@ -289,7 +289,7 @@ jobs:
         # Booting a cold system image is ~4 minutes, every run, forever; a cached snapshot makes it
         # seconds. Keyed on the image so a bump invalidates it rather than silently testing the old
         # API level.
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         id: avd-cache
         with:
           path: |
@@ -322,7 +322,7 @@ jobs:
 
       - name: Upload instrumented test report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: connected-test-report
           path: |
@@ -333,7 +333,7 @@ jobs:
 
       - name: Upload logcat from the smoke launch
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: smoke-logcat
           path: smoke-logcat.txt
