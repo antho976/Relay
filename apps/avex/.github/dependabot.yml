@@ -1,0 +1,57 @@
+# Dependency updates, grouped so they arrive as a few reviewable PRs rather than thirty.
+#
+# Gradle updates are grouped by ecosystem because these libraries only make sense in versioned
+# sets: bumping one Compose artifact past the BOM, or kotlin without ksp, produces a build that
+# fails in a way that reads as Dependabot being broken rather than the split being wrong.
+#
+# CI runs on every one of these PRs, which is the point — an update whose test suite goes red is
+# information, and an update nobody can evaluate is just noise.
+
+version: 2
+updates:
+  - package-ecosystem: gradle
+    directory: /forge-android
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      # AGP and Kotlin move together with KSP and the Compose compiler plugin; a mismatched pair is
+      # the single most common way this build stops configuring.
+      kotlin-and-agp:
+        patterns:
+          - "com.android.*"
+          - "org.jetbrains.kotlin*"
+          - "com.google.devtools.ksp*"
+      compose:
+        patterns:
+          - "androidx.compose*"
+          - "androidx.activity:activity-compose"
+          - "androidx.navigation:navigation-compose"
+      androidx:
+        patterns:
+          - "androidx.*"
+        exclude-patterns:
+          - "androidx.compose*"
+          - "androidx.wear*"
+          - "androidx.health*"
+      wear:
+        patterns:
+          - "androidx.wear*"
+          - "com.google.android.gms:play-services-wearable"
+      testing:
+        patterns:
+          - "junit:junit"
+          - "org.robolectric:*"
+          - "io.github.takahirom.roborazzi*"
+          - "androidx.test*"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns:
+          - "*"

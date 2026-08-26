@@ -145,4 +145,46 @@ class WeightFormatterTest {
         assertEquals("6 lb", formatWeightDelta(6.0, WeightUnit.ST))          // under a stone, no "+"
         assertEquals("-8 lb", formatWeightDelta(-8.0, WeightUnit.ST))        // loss keeps the sign
     }
+
+    // ── Non-finite input ───────────────────────────────────────────────────────────────────────
+    //
+    // Every formatter here ends in roundToInt()/toInt(), and both THROW on NaN. A NaN is reachable
+    // from stored data (a corrupt row, an aggregate over an empty denominator), so an unguarded
+    // formatter turns one bad row into a crashed Profile screen rather than a wrong number. These
+    // pin "renders as zero" for each unit and each entry point, so the guard cannot be dropped by a
+    // later refactor without a red test.
+
+    @Test
+    fun nanWeightRendersAsZeroInEveryUnit() {
+        assertEquals("0 lb", formatWeight(Double.NaN, WeightUnit.LB))
+        assertEquals("0 kg", formatWeight(Double.NaN, WeightUnit.KG))
+        assertEquals("0 lb", formatWeight(Double.NaN, WeightUnit.ST))        // 0 st → the "N lb" form
+    }
+
+    @Test
+    fun nanVolumeRendersAsZeroRatherThanCrashing() {
+        assertEquals("0 lb", formatVolume(Double.NaN, WeightUnit.LB))
+        assertEquals("0 lb", formatVolumeCompact(Double.NaN, WeightUnit.LB))
+        assertEquals("0", formatVolumeCompact(Double.NaN, WeightUnit.LB, withUnit = false))
+        assertEquals("0 kg", formatVolumeCompact(Double.NaN, WeightUnit.KG))
+    }
+
+    @Test
+    fun infiniteWeightIsTreatedTheSameAsNan() {
+        // An infinity comes from the same place a NaN does (a divide by zero), and toInt() on it
+        // silently yields Int.MAX_VALUE — a plausible-looking "2147483647 lb" is worse than a zero.
+        assertEquals("0 lb", formatWeight(Double.POSITIVE_INFINITY, WeightUnit.LB))
+        assertEquals("0 lb", formatVolume(Double.NEGATIVE_INFINITY, WeightUnit.LB))
+        assertEquals("0 lb", formatWeightDelta(Double.NaN, WeightUnit.LB))
+        assertEquals("0 lb", formatWeightDelta(Double.NaN, WeightUnit.ST))
+    }
+
+    @Test
+    fun nanSeedsAnEditableFieldWithZeroNotTheTextNan() {
+        // weightInputValue seeds a text field the user then submits; "NaN" would round-trip through
+        // parseToLb as null and log a weightless set.
+        assertEquals("0", weightInputValue(Double.NaN, WeightUnit.LB))
+        assertEquals("0", weightInputValue(Double.NaN, WeightUnit.KG))
+        assertNull(parseToLb("NaN", WeightUnit.LB))
+    }
 }

@@ -159,12 +159,7 @@
 1 alpha ui/trophies/components/TrophyIconBadge.kt 0.30
 1 alpha ui/trophies/components/TrophyIconBadge.kt 0.55
 1 alpha wear/ui/WearComponents.kt 0.55
-6 bang data/db/dao/CardioDao.kt ! in string
-2 bang data/db/dao/CoachDao.kt ! in string
-1 bang domain/coach/AutoCoachPlanner.kt ! in string
-1 bang service/WeeklyRecapWorker.kt ! in string
-1 bang ui/gym/freestyle/ExerciseBrowserScreen.kt ! in string
-1 bang ui/gym/train/DayScreen.kt ! in string
+1 bang ui/gym/train/DayScreen.kt ! in string  # announceForAccessibility("New personal record!") — the ONLY real §11 bang left in the tree now that != / !! no longer count. Screen-reader copy, so fixing it is a spoken-voice decision, not a mechanical one.
 3 divider ui/cardio/components/CardioLogComponents.kt Divider(
 1 divider ui/common/Editorial.kt Divider(
 1 divider ui/gym/freestyle/FreestyleLogScreen.kt Divider(

@@ -74,10 +74,15 @@ object DesignDoctrine {
      * simply never been banked. The rest of the drop is the recorded ceiling catching up with what
      * the file actually summed to.
      *
+     * 771 -> 760 (2026-08-25) when §11's bang rule stopped counting operators. Eleven of the twelve
+     * frozen `bang` entries were SQL `WHERE x != :y` clauses and `${x!!.name}` templates — nothing
+     * a user can read. Only DayScreen's spoken personal-record announcement was ever a real
+     * exclamation mark, and it had sat in the allowlist indistinguishable from the eleven.
+     *
      * Lower this as debt is paid down; raising it is a reviewable decision, not a convenience.
      * `design/AUDIT.md` has the per-rule breakdown and the recommended order of paydown.
      */
-    const val ALLOWLIST_BASELINE = 771
+    const val ALLOWLIST_BASELINE = 760
 
     data class Violation(val rule: String, val path: String, val token: String, val line: Int) {
         /**
@@ -271,6 +276,19 @@ object DesignDoctrine {
         }
         return out
     }
+
+    /**
+     * A string with every `!` that is an OPERATOR removed — SQL/Kotlin `!=`, `!==`, and the `!!`
+     * inside a `${…}` template.
+     *
+     * §11 bans the exclamation mark as PUNCTUATION. Matching a bare `!` also matched eleven SQL
+     * `WHERE type != :x` clauses and three `${x!!.name}` templates, none of which any user can
+     * read — and the cost was not just noise: the one genuine violation in the codebase
+     * (DayScreen's spoken personal-record announcement) sat in the allowlist indistinguishable
+     * from them, which is exactly how a ratchet stops ratcheting.
+     */
+    private fun withoutOperators(s: String): String =
+        s.replace("!==", "").replace("!=", "").replace("!!", "")
 
     // ── Patterns ───────────────────────────────────────────────────────────────────────────────
 
@@ -480,7 +498,9 @@ object DesignDoctrine {
                     if (Scope.COPY in root.scopes) {
                         // §11 — banned in any rendered string.
                         stringLiterals(code).forEach { s ->
-                            if (s.contains('!')) out += Violation("bang", path, "! in string", n)
+                            if (withoutOperators(s).contains('!')) {
+                                out += Violation("bang", path, "! in string", n)
+                            }
                             if (s.contains('—')) out += Violation("em-dash", path, "em dash in string", n)
                             HYPE.find(s)?.let {
                                 out += Violation("hype", path, "\"${it.value}\"", n)

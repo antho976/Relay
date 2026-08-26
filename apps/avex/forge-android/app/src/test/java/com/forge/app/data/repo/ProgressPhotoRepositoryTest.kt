@@ -8,7 +8,7 @@ import com.forge.app.data.db.entities.BodyweightEntry
 import java.io.File
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -25,7 +25,7 @@ class ProgressPhotoRepositoryTest {
     val temporaryFolder = TemporaryFolder()
 
     @Test
-    fun corruptIndexCannotBeRewrittenAsAnEmptyLibrary() = runBlocking {
+    fun corruptIndexCannotBeRewrittenAsAnEmptyLibrary() = runTest {
         val base: Context = ApplicationProvider.getApplicationContext()
         val context = object : ContextWrapper(base) {
             override fun getFilesDir(): File = temporaryFolder.root
@@ -45,6 +45,7 @@ class ProgressPhotoRepositoryTest {
         override suspend fun upsert(entry: BodyweightEntry): Long = 0L
         override fun observeRecent(limit: Int): Flow<List<BodyweightEntry>> = flowOf(emptyList())
         override suspend fun latest(): BodyweightEntry? = null
+        override suspend fun byDateKey(dateKey: String): BodyweightEntry? = null
         override suspend fun all(): List<BodyweightEntry> = emptyList()
         override suspend fun since(sinceMs: Long): List<BodyweightEntry> = emptyList()
         override suspend fun delete(id: Long) = Unit

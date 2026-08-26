@@ -62,8 +62,9 @@ class BodyweightRepository @Inject constructor(
         val now = clock.nowMs()
         val zone = ZoneId.systemDefault()
         val nowLocal = Instant.ofEpochMilli(now).atZone(zone)
+        val todayLocal = nowLocal.toLocalDate()
         val recordedAt =
-            if (date == nowLocal.toLocalDate()) now
+            if (date == todayLocal) now
             else date.atTime(nowLocal.toLocalTime()).atZone(zone).toInstant().toEpochMilli()
         val dateKey = date.toString()
         // dao.upsert is INSERT OR REPLACE, which DELETES the conflicting row rather than updating
@@ -83,7 +84,7 @@ class BodyweightRepository @Inject constructor(
         // granted write access. Gated on all three so onboarding (neither set) never writes, a mirror
         // failure can't break the local save above (the DB stays the single source of truth), and a
         // backdated value never lands in HC at the wrong instant (HC keeps its own history).
-        if (date == today && settings.hcWriteBodyweight.first() && health.canWriteWeight()) {
+        if (date == todayLocal && settings.hcWriteBodyweight.first() && health.canWriteWeight()) {
             health.writeWeight(weightLb, now)
         }
     }

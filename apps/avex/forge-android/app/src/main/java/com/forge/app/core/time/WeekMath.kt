@@ -34,10 +34,11 @@ fun monthStartMs(nowMs: Long, zone: ZoneId = ZoneId.systemDefault()): Long =
  * deciding the next deload. Whether history was corrupted came down to what time of day the user
  * happened to tap a button.
  *
- * Applied Monday to Wednesday, the window is that ISO week. Applied Thursday to Sunday — where an
- * ISO week alone would leave a "deload week" of three days or fewer — it runs to the end of the
- * following week, so the reduced program always governs at least four days and every boundary
- * still lands on a Monday midnight.
+ * Applied Monday to THURSDAY, the window is that ISO week — Thursday still leaves four days, which
+ * is the floor. Applied Friday to Sunday, where an ISO week alone would leave three days or fewer,
+ * it runs to the end of the following week. Either way the reduced program governs at least four
+ * days and every boundary lands on a Monday midnight. (This paragraph said "Thursday to Sunday"
+ * until WeekMathTest pinned the branch and showed the code had always split at Friday.)
  */
 fun deloadWeekStartMs(appliedMs: Long, zone: ZoneId = ZoneId.systemDefault()): Long =
     mondayStartMs(appliedMs, zone)

@@ -58,25 +58,22 @@ fun TimerView(
         while (true) { nowMs = System.currentTimeMillis(); delay(200) }
     }
 
-    val remainingMs = when {
-        timer.publishedAtMs > 0L -> (timer.endAtMs - timer.publishedAtMs) - (nowMs - receivedAtMs)
-        else -> timer.endAtMs - nowMs
-    }
-    val remainingSec = if (timer.paused) timer.pausedRemainingSeconds
-    else ((remainingMs + 999) / 1000).toInt().coerceAtLeast(0)
+    // The arithmetic lives in [RestCountdown] — see its KDoc for the clock-skew rule. Kept out of
+    // this composable so it can be tested without an emulator.
+    val remainingSec = RestCountdown.remainingSeconds(timer, nowMs, receivedAtMs)
 
     // The rest-done buzz is NOT fired here — see WearRoot. This composable is unmounted the moment
     // the phone republishes the timer as paused-at-zero, which usually beats the local tick to
     // zero, so a buzz owned by this lifetime was a race the wrist mostly lost.
 
-    val progress = if (timer.totalSeconds <= 0) 0f else remainingSec.toFloat() / timer.totalSeconds
+    val progress = RestCountdown.ringProgress(remainingSec, timer.totalSeconds)
 
     Box(modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         TimerRing(progress = progress, modifier = Modifier.fillMaxSize().padding(6.dp))
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text("REST", style = WearType.labelSmall, color = colors.muted)
             Spacer(Modifier.height(2.dp))
-            Text(formatMmSs(remainingSec), style = WearType.figure, color = colors.onBg)
+            Text(RestCountdown.formatMmSs(remainingSec), style = WearType.figure, color = colors.onBg)
             Spacer(Modifier.height(10.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 WristCapsule(label = "+30", onClick = { repo.sendTimerCommand(TimerCommand.Action.ADD_30) })
@@ -115,6 +112,3 @@ fun TimerView(
         }
     }
 }
-
-private fun formatMmSs(totalSeconds: Int): String =
-    "%d:%02d".format(totalSeconds / 60, totalSeconds % 60)

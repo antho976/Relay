@@ -193,4 +193,72 @@ class RestTimerControllerTest {
         assertNull(c.state.value)
         scope.cancel()
     }
+    // ── restore(): the process-death path ───────────────────────────────────────────────────────
+    //
+    // restore() had NO test at all, which mutation testing made visible: relaxing its guard from
+    // `<= 0` to `< 0` left the whole suite green. That guard is what stops a stale "0 seconds left"
+    // record — written the moment a timer expired, just before the process was killed — from
+    // rebuilding itself as a live timer on next launch and immediately firing the rest-done buzz.
+
+    @Test
+    fun restoreRebuildsARunningTimerFromWhatWasLeft() {
+        val scope = newScope()
+        val clock = FakeClock(0)
+        val c = RestTimerController(scope, clock)
+
+        c.restore(totalSeconds = 150, remainingSeconds = 40, paused = false)
+
+        val s = c.state.value!!
+        assertEquals(150, s.totalSeconds)
+        assertEquals(40, s.secondsRemaining)
+        assertFalse(s.isPaused)
+        scope.cancel()
+    }
+
+    @Test
+    fun restoreKeepsAPausedTimerFrozen() {
+        val scope = newScope()
+        val clock = FakeClock(0)
+        val c = RestTimerController(scope, clock)
+
+        c.restore(totalSeconds = 150, remainingSeconds = 40, paused = true)
+        clock.now += 30_000
+
+        assertEquals("a paused restore must not drain", 40, c.state.value!!.secondsRemaining)
+        assertTrue(c.state.value!!.isPaused)
+        scope.cancel()
+    }
+
+    @Test
+    fun restoreRefusesATimerWithNothingLeftToRun() {
+        // The boundary the mutation slipped past. Zero is not "a timer with no time left" — it is
+        // an expired record, and restoring it would show a live 0:00 countdown and buzz on the
+        // first tick, for a rest that finished before the app was killed.
+        val scope = newScope()
+        val c = RestTimerController(scope, FakeClock(0))
+
+        c.restore(totalSeconds = 150, remainingSeconds = 0, paused = false)
+        assertNull("zero remaining must not restore", c.state.value)
+
+        c.restore(totalSeconds = 0, remainingSeconds = 40, paused = false)
+        assertNull("zero total must not restore either", c.state.value)
+
+        c.restore(totalSeconds = -5, remainingSeconds = -5, paused = false)
+        assertNull("and neither must a negative record", c.state.value)
+        scope.cancel()
+    }
+
+    @Test
+    fun aRestoredRemainderNeverExceedsItsTotal() {
+        // Guards the progress ring: remaining > total reads as past-full.
+        val scope = newScope()
+        val c = RestTimerController(scope, FakeClock(0))
+
+        c.restore(totalSeconds = 60, remainingSeconds = 90, paused = true)
+
+        val s = c.state.value!!
+        assertTrue("total must absorb the larger remainder", s.totalSeconds >= s.secondsRemaining)
+        scope.cancel()
+    }
+
 }

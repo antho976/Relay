@@ -5,7 +5,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.forge.app.core.time.Clock
 import com.forge.app.data.repo.NoticeKind
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -38,7 +38,7 @@ class NotificationPrefsTest {
     }
 
     @Test
-    fun wearableInviteDismissalIsReversible() = runBlocking {
+    fun wearableInviteDismissalIsReversible() = runTest {
         assertFalse("starts undismissed", repo.cardioWearableHintDismissed.first())
 
         repo.setCardioWearableHintDismissed(true)
@@ -50,7 +50,7 @@ class NotificationPrefsTest {
     }
 
     @Test
-    fun notificationInviteDismissalIsReversible() = runBlocking {
+    fun notificationInviteDismissalIsReversible() = runTest {
         repo.setNotifPermAsked(true)
         assertTrue(repo.notifPermAsked.first())
 
@@ -59,7 +59,7 @@ class NotificationPrefsTest {
     }
 
     @Test
-    fun clearingAMilestoneNeverLetsItFireAgain() = runBlocking {
+    fun clearingAMilestoneNeverLetsItFireAgain() = runTest {
         repo.markMilestoneShown("sessions_100")
         assertTrue("firing queues it unread", "sessions_100" in repo.unreadMilestones.first())
         assertTrue("and marks it fired", "sessions_100" in repo.shownMilestones.first())
@@ -76,7 +76,7 @@ class NotificationPrefsTest {
     }
 
     @Test
-    fun systemNoticeRoundTripsAndSupersedesItsOwnId() = runBlocking {
+    fun systemNoticeRoundTripsAndSupersedesItsOwnId() = runTest {
         repo.addSystemNotice("import", "Brought in 12 sessions.")
         assertEquals(listOf("Brought in 12 sessions."), repo.systemNotices.first().map { it.text })
 
@@ -103,7 +103,7 @@ class NotificationPrefsTest {
     }
 
     @Test
-    fun everyNoticeKindDefaultsOnAndTogglesBothWays() = runBlocking {
+    fun everyNoticeKindDefaultsOnAndTogglesBothWays() = runTest {
         assertTrue("no kind is disabled out of the box", repo.disabledNoticeKinds.first().isEmpty())
 
         NoticeKind.entries.forEach { kind ->
@@ -119,7 +119,7 @@ class NotificationPrefsTest {
      * resetting the Notifications section is the only way back. It has to actually cover them.
      */
     @Test
-    fun resettingNotificationsRestoresEverySwitchOnThatPage() = runBlocking {
+    fun resettingNotificationsRestoresEverySwitchOnThatPage() = runTest {
         repo.setCardioWearableHintDismissed(true)
         repo.setNotifPermAsked(true)
         repo.setNoticeKindEnabled(NoticeKind.MILESTONE.key, enabled = false)
@@ -134,7 +134,7 @@ class NotificationPrefsTest {
     // ── Academy: dismissal and announcement are separate records ───────────────
 
     @Test
-    fun lessonNoticeDismissalIsReversible() = runBlocking {
+    fun lessonNoticeDismissalIsReversible() = runTest {
         assertTrue("nothing dismissed to start", repo.dismissedLessonNotices.first().isEmpty())
 
         repo.setLessonNoticeDismissed("coach.strength_on_a_cut", dismissed = true)
@@ -154,7 +154,7 @@ class NotificationPrefsTest {
      * whole arrival mechanism exists to avoid.
      */
     @Test
-    fun announcingIsOneWayAndIndependentOfDismissal() = runBlocking {
+    fun announcingIsOneWayAndIndependentOfDismissal() = runTest {
         assertTrue("nothing announced to start", repo.announcedLessonNotices.first().isEmpty())
 
         repo.markLessonNoticesAnnounced(setOf("fundamentals.warmups", "engine.intervals"))
@@ -181,7 +181,7 @@ class NotificationPrefsTest {
     }
 
     @Test
-    fun announcingNothingIsANoOp() = runBlocking {
+    fun announcingNothingIsANoOp() = runTest {
         repo.markLessonNoticesAnnounced(emptySet())
         assertTrue(repo.announcedLessonNotices.first().isEmpty())
     }

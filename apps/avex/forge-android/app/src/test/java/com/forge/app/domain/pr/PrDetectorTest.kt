@@ -7,14 +7,44 @@ import org.junit.Test
 
 class PrDetectorTest {
 
-    private fun set(weightLb: Double?, reps: Int) = LoggedSet(
+    private fun set(weightLb: Double?, reps: Int, assisted: Boolean = false) = LoggedSet(
         loggedExerciseId = 1L,
         setIndex = 0,
         weightText = weightLb?.toString() ?: "BW",
         weightLb = weightLb,
         reps = reps,
-        completedAt = 0L
+        completedAt = 0L,
+        isAssisted = assisted
     )
+
+    /**
+     * Assisted history must not raise the bar a real PR has to clear.
+     *
+     * Found by mutation testing: deleting `!it.isAssisted` from the filter left the whole suite
+     * green. The DAO-level equivalent was covered, so the app agreed with itself about the stored
+     * maximum while THIS check — the one that decides whether the gold PR moment fires — did not
+     * care. The two must exclude the same sets or the app contradicts itself: a lift the PR engine
+     * refuses to recognise cannot also be the thing blocking recognition.
+     */
+    @Test
+    fun assistedHistoryDoesNotBlockARealPr() {
+        val assistedHeavier = listOf(set(200.0, 5, assisted = true))
+        assertTrue(
+            "an unassisted 150 is still a PR when the only heavier set was assisted",
+            PrDetector.isPr(assistedHeavier, newWeightLb = 150.0, newReps = 5)
+        )
+    }
+
+    @Test
+    fun anAssistedSetIsNotTheThingBeingBeaten() {
+        // Mixed history: the real best is 140 unassisted; the 200 was machine-assisted.
+        val history = listOf(set(140.0, 5), set(200.0, 5, assisted = true))
+        assertTrue(PrDetector.isPr(history, newWeightLb = 145.0, newReps = 5))
+        assertFalse(
+            "and the unassisted best is still enforced",
+            PrDetector.isPr(history, newWeightLb = 139.0, newReps = 5)
+        )
+    }
 
     @Test
     fun emptyHistoryIsAPrForAnyWeightedSet() {

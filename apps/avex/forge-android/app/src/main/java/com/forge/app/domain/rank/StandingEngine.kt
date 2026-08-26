@@ -92,5 +92,10 @@ object StandingEngine {
         return anchors.last().second
     }
 
-    private fun fmt1(d: Double): String = if (d % 1.0 == 0.0) d.toInt().toString() else "%.1f".format(d)
+    // Same reason as [pct]'s NaN guard: a corrupt sessions-per-week would otherwise render the
+    // literal string "NaN×/wk" on the Profile screen.
+    private fun fmt1(raw: Double): String {
+        val d = if (raw.isFinite()) raw else 0.0
+        return if (d % 1.0 == 0.0) d.toInt().toString() else "%.1f".format(d)
+    }
 }
