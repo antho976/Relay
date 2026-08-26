@@ -1,21 +1,21 @@
 [versions]
 # Core toolchain
-agp = "9.3.2"
-kotlin = "2.4.10"
-ksp = "2.3.11"
+agp = "9.2.1"
+kotlin = "2.2.10"
+ksp = "2.3.2"
 
 # Compose
-compose-bom = "2026.08.00"
-activity-compose = "1.13.0"
+compose-bom = "2025.04.01"
+activity-compose = "1.10.1"
 lifecycle = "2.9.0"
 navigation-compose = "2.8.9"
 
 # Hilt + DI
 hilt = "2.56.2"
-hilt-navigation-compose = "1.4.0"
+hilt-navigation-compose = "1.2.0"
 
 # Persistence
-room = "2.8.4"
+room = "2.7.2"
 datastore = "1.1.1"
 
 # Health Connect (on-device recovery signals — sleep, resting HR — for the coach)
@@ -28,43 +28,43 @@ camerax = "1.4.2"
 biometric = "1.1.0"
 
 # Async
-coroutines = "1.11.0"
+coroutines = "1.9.0"
 
 # Serialization (W1 — the wear Data Layer protocol DTOs in :shared)
-kotlinx-serialization = "1.11.0"
+kotlinx-serialization = "1.7.3"
 
 # Wear OS (W1–W4: watch app, tiles, complications, live HR)
 wear-compose = "1.4.1"
-play-services-wearable = "20.0.1"
-wear-tiles = "1.6.2"
-protolayout = "1.4.2"
-watchface-complications = "1.3.0"
-wear-ongoing = "1.1.0"
+play-services-wearable = "19.0.0"
+wear-tiles = "1.4.1"
+protolayout = "1.2.1"
+watchface-complications = "1.2.1"
+wear-ongoing = "1.0.0"
 health-services = "1.0.0"
 concurrent-futures = "1.2.0"
 
 # WorkManager
 work = "2.10.1"
-hilt-work = "1.4.0"
+hilt-work = "1.2.0"
 
 # Test
 junit = "4.13.2"
 # Screenshot testing (Roborazzi runs on the JVM via Robolectric, so no emulator and no AGP coupling).
-roborazzi = "1.72.0"
+roborazzi = "1.70.0"
 robolectric = "4.16.1"
-androidx-test-junit = "1.3.0"
-espresso = "3.7.0"
+androidx-test-junit = "1.2.1"
+espresso = "3.6.1"
 
 # Startup performance (Baseline Profile + Macrobenchmark — P2)
 profileinstaller = "1.4.1"
 benchmark = "1.4.1"
-uiautomator = "2.4.0"
+uiautomator = "2.3.0"
 
 [libraries]
 # Core AndroidX
-androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version = "1.19.0" }
-androidx-core-splashscreen = { group = "androidx.core", name = "core-splashscreen", version = "1.2.0" }
-androidx-exifinterface = { group = "androidx.exifinterface", name = "exifinterface", version = "1.4.2" }
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version = "1.15.0" }
+androidx-core-splashscreen = { group = "androidx.core", name = "core-splashscreen", version = "1.0.1" }
+androidx-exifinterface = { group = "androidx.exifinterface", name = "exifinterface", version = "1.4.1" }
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activity-compose" }
 androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycle" }
 androidx-lifecycle-viewmodel-compose = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-compose", version.ref = "lifecycle" }
