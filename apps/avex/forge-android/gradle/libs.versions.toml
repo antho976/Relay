@@ -1,8 +1,8 @@
 [versions]
 # Core toolchain
-agp = "9.3.2"
-kotlin = "2.4.10"
-ksp = "2.3.11"
+agp = "9.2.1"
+kotlin = "2.2.10"
+ksp = "2.3.2"
 
 # Compose
 compose-bom = "2026.08.00"
@@ -28,10 +28,10 @@ camerax = "1.4.2"
 biometric = "1.1.0"
 
 # Async
-coroutines = "1.11.0"
+coroutines = "1.9.0"
 
 # Serialization (W1 — the wear Data Layer protocol DTOs in :shared)
-kotlinx-serialization = "1.11.0"
+kotlinx-serialization = "1.7.3"
 
 # Wear OS (W1–W4: watch app, tiles, complications, live HR)
 wear-compose = "1.4.1"
