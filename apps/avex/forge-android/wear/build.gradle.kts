@@ -29,7 +29,7 @@ android {
         // the end of August 2026, and a listing is only as current as its least-current APK — a
         // wear APK left at 35 would block the whole release.
         targetSdk = 36
-        versionCode = 100_090
+        versionCode = 100_091
         versionName = "0.9"
     }
 
