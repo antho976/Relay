@@ -1,5 +1,6 @@
 package com.forge.app.ui.security
 
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.biometric.BiometricPrompt
 import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.background
@@ -130,11 +131,12 @@ fun AppLockScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(Brush.verticalGradient(listOf(gradTop, gradBottom)))
-            // Swallow taps so nothing behind the opaque gate is reachable.
-            .clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null
-            ) {}
+            // Swallow taps so nothing behind the opaque gate is reachable — WITHOUT becoming a
+            // control. `clickable` adds a click action to the semantics tree, so the gate announced
+            // itself as an unnamed button wrapping the whole screen, sitting between TalkBack and
+            // the one thing on it that matters. pointerInput consumes the same events and says
+            // nothing about itself, which is the truth: it is a barrier, not a button.
+            .pointerInput(Unit) { awaitPointerEventScope { while (true) { awaitPointerEvent() } } }
             .padding(horizontal = 24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center

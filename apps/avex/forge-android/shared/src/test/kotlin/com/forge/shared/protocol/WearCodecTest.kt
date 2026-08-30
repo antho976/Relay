@@ -126,4 +126,45 @@ class WearCodecTest {
         val timerBytes = WearCodec.encode(TimerStateDto(endAtMs = 1L, totalSeconds = 60))
         assertTrue(WearCodec.decode<LogSetCommand>(timerBytes) is WearCodec.DecodeResult.Invalid)
     }
+
+    // ── CmdAckDto.kind (finding 24) ───────────────────────────────────────────
+
+    @Test
+    fun `an ack from a phone that predates kind decodes with a blank kind`() {
+        // The exact wire shape an older phone writes: every field it knows, and no `kind`. It must
+        // still decode — the additive-field rule is what lets the two apps update independently —
+        // and the blank is what tells the wrist to fall back to its own record of what it sent.
+        val legacy = """{"v":1,"commandId":"c-1","ok":true,"pr":false,"needsConfirm":false,"setId":77,"atMs":5}"""
+        val decoded = WearCodec.decode<CmdAckDto>(legacy.encodeToByteArray())
+        assertTrue(decoded is WearCodec.DecodeResult.Ok)
+        val ack = (decoded as WearCodec.DecodeResult.Ok).value
+        assertEquals("", ack.kind)
+        assertEquals(77L, ack.setId!!)
+    }
+
+    @Test
+    fun `kind survives a round trip and distinguishes a log from a rating`() {
+        // Both acks are ok and both carry a setId; only `kind` separates "a set was just logged"
+        // from "the set you already know about was rated".
+        val logged = CmdAckDto(commandId = "c-1", ok = true, setId = 77, atMs = 5, kind = CmdAckDto.KIND_LOG_SET)
+        val rated = CmdAckDto(commandId = "c-2", ok = true, setId = 77, atMs = 6, kind = CmdAckDto.KIND_SET_RPE)
+
+        val backLogged = (WearCodec.decode<CmdAckDto>(WearCodec.encode(logged)) as WearCodec.DecodeResult.Ok).value
+        val backRated = (WearCodec.decode<CmdAckDto>(WearCodec.encode(rated)) as WearCodec.DecodeResult.Ok).value
+
+        assertEquals(CmdAckDto.KIND_LOG_SET, backLogged.kind)
+        assertEquals(CmdAckDto.KIND_SET_RPE, backRated.kind)
+        assertEquals(backLogged.setId, backRated.setId)
+    }
+
+    @Test
+    fun `an ack carrying a field this build has never heard of still decodes`() {
+        // The reverse direction: a future phone's ack reaching today's wrist. Unknown keys are
+        // ignored, which is the whole reason an additive field does not bump the protocol version —
+        // so `kind` reaching an older watch is a no-op there rather than a dropped payload.
+        val future = """{"v":1,"commandId":"c-3","ok":true,"atMs":9,"kind":"log-set","somethingNew":"x"}"""
+        val decoded = WearCodec.decode<CmdAckDto>(future.encodeToByteArray())
+        assertTrue(decoded is WearCodec.DecodeResult.Ok)
+        assertEquals(CmdAckDto.KIND_LOG_SET, (decoded as WearCodec.DecodeResult.Ok).value.kind)
+    }
 }

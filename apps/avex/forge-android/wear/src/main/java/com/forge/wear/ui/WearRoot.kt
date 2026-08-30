@@ -55,7 +55,10 @@ fun WearRoot(repo: WearDataRepository, haptics: WristHaptics) {
         val ack = lastAck ?: return@LaunchedEffect
         if (ack.commandId == consumedAckId) return@LaunchedEffect
         consumedAckId = ack.commandId
-        if (ack.ok && ack.setId != null && !ack.needsConfirm) {
+        // repo.isNewlyLoggedSet, not merely "ok with a setId": an RPE ack carries the id of the set
+        // it RATED, and every rating therefore replayed the set-logged tick for a set the user had
+        // finished minutes earlier.
+        if (ack.ok && ack.setId != null && !ack.needsConfirm && repo.isNewlyLoggedSet(ack)) {
             if (ack.pr) {
                 haptics.pr()
                 try { prWash = true; delay(1_200) } finally { prWash = false }

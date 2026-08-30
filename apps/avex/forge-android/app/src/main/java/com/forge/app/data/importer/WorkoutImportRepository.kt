@@ -212,13 +212,22 @@ class WorkoutImportRepository @Inject constructor(
                 // Duplicate guard (#GYMAP-17): a workout already logged at this start time WITH THE
                 // SAME CONTENT is a re-import of the same data — skip it so scanning/importing twice
                 // doesn't double-count. A different workout at the same instant takes the next slot.
+                //
+                // The content test is a per-exercise fingerprint, not set count plus total volume.
+                // Those two agree for workouts that share nothing but arithmetic — Bench 3×10×100
+                // and Row 3×10×100 are three sets and 3,000 lb either way — and a great many sources
+                // record a DATE rather than a time, so every workout they carry starts at midnight
+                // and every one of them is a candidate against every other. The second of two
+                // legitimately different midnight workouts was reported as a duplicate and dropped,
+                // silently, on an import path whose whole promise is that it does not lose anything.
+                val incomingPrint = fingerprintOf(session, matchCache)
                 var nth = startNonce.getOrDefault(session.startedAtMs, 0)
                 var startedAt = session.startedAtMs + nth * 1000L
                 var duplicate = false
                 while (nth < MAX_START_NUDGES) {
-                    val stored = sessionDao.contentAtStart(startedAt)
-                    if (stored.isEmpty()) break
-                    if (stored.any { it.setCount == totalSets && sameVolume(it.totalVolumeLb, volumeLb) }) {
+                    val storedIds = sessionDao.idsAtStart(startedAt)
+                    if (storedIds.isEmpty()) break
+                    if (storedIds.any { storedFingerprint(it) == incomingPrint }) {
                         duplicate = true
                         break
                     }
@@ -456,6 +465,37 @@ class WorkoutImportRepository @Inject constructor(
     }
 
     /** A stable id for an unmatched exercise so its sets group together across imported sessions. */
+    /**
+     * What one imported session actually contains: each exercise's resolved catalogue id followed by
+     * its sets in order, as reps and weight.
+     *
+     * Resolved through the SAME [matchCache] the insert below uses, so the id compared here is the
+     * id that would be written — an unmatched name folds to its synthetic id on both sides. Weights
+     * are rounded to a thousandth of a pound: a re-import carries bit-identical values, and no real
+     * source distinguishes finer than that.
+     */
+    private fun fingerprintOf(
+        session: ImportedSession,
+        matchCache: HashMap<String, String?>
+    ): String = session.exercises.joinToString("|") { ex ->
+        val matched = ex.catalogueId ?: matchCache.getOrPut(ex.name) { ExerciseNameMatcher.match(ex.name) }
+        val id = matched ?: syntheticId(ex.name)
+        id + ":" + ex.sets.joinToString(",") { setPrint(it.reps, it.weightLb) }
+    }
+
+    /** [fingerprintOf] for a session already in the database. */
+    private suspend fun storedFingerprint(sessionId: Long): String {
+        val setsByExercise = loggedSetDao.allForSession(sessionId).groupBy { it.loggedExerciseId }
+        return loggedExerciseDao.forSession(sessionId).joinToString("|") { le ->
+            le.exerciseId + ":" + setsByExercise[le.id].orEmpty()
+                .sortedBy { it.setIndex }
+                .joinToString(",") { setPrint(it.reps, it.weightLb) }
+        }
+    }
+
+    private fun setPrint(reps: Int, weightLb: Double?): String =
+        "$reps@" + (weightLb?.let { String.format(java.util.Locale.US, "%.3f", it) } ?: "bw")
+
     private fun syntheticId(name: String): String {
         val slug = name.trim().lowercase()
             .map { if (it.isLetterOrDigit()) it else '-' }
@@ -552,8 +592,6 @@ class WorkoutImportRepository @Inject constructor(
 
         /** Two denormalised volumes describe the same work — tolerant of the 0.1 lb rounding the
          *  importer applies, and treating a missing volume as "unknown, not equal". */
-        private fun sameVolume(stored: Double?, incoming: Double): Boolean =
-            stored != null && kotlin.math.abs(stored - incoming) < 0.5
     }
 }
 

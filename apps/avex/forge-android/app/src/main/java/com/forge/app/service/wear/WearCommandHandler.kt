@@ -37,7 +37,8 @@ class WearCommandHandler @Inject constructor(
                 pr = result.wasPr,
                 needsConfirm = result.needsConfirm,
                 setId = result.setId,
-                atMs = clock.nowMs()
+                atMs = clock.nowMs(),
+                kind = CmdAckDto.KIND_LOG_SET
             )
         )
     }
@@ -56,7 +57,11 @@ class WearCommandHandler @Inject constructor(
                 ok = result.ok,
                 reason = result.reason,
                 setId = result.setId,
-                atMs = clock.nowMs()
+                atMs = clock.nowMs(),
+                // Named explicitly: this ack's setId is the set that was RATED, not one just
+                // logged. Without the kind the wrist could only see "an ok ack with a setId" and
+                // re-armed its undo/rate row on the strength of it.
+                kind = CmdAckDto.KIND_SET_RPE
             )
         )
     }
@@ -99,7 +104,8 @@ class WearCommandHandler @Inject constructor(
                 commandId = cmd.commandId,
                 ok = result.ok,
                 reason = result.reason,
-                atMs = clock.nowMs()
+                atMs = clock.nowMs(),
+                kind = CmdAckDto.KIND_UNDO_SET
             )
         )
     }

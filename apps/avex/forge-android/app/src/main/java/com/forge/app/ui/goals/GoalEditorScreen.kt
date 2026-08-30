@@ -356,7 +356,12 @@ private fun HomePinRow(pinned: Boolean, onToggle: () -> Unit) {
             )
         }
         Spacer(Modifier.width(16.dp))
-        ForgeSwitch(checked = pinned, onCheckedChange = { onToggle() })
+        // onCheckedChange = null: the ROW owns the action and the label ("Show on Home" /
+        // "Remove from Home"). A switch with its own handler inside a clickable row is a second
+        // actionable node with no label of its own, so TalkBack read the row and then an unnamed
+        // switch that does the same thing — and a user who found only the switch never heard which
+        // way it was about to go.
+        ForgeSwitch(checked = pinned, onCheckedChange = null)
     }
 }
 

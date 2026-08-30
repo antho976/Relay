@@ -695,8 +695,13 @@ class BackupRepository @Inject constructor(
         }
     }
 
-    /** Stream [input] into [dest], returning false (and stopping) once it exceeds [maxBytes] (E3). */
-    private fun copyAtMost(input: java.io.InputStream, dest: File, maxBytes: Long): Boolean {
+    /**
+     * Stream [input] into [dest], stopping once it exceeds [maxBytes] (E3).
+     *
+     * Returns the number of bytes written, or -1 when the cap was hit. The count is what lets the
+     * caller enforce an ARCHIVE-wide budget on top of the per-entry one — see [ExtractionBudget].
+     */
+    private fun copyAtMost(input: java.io.InputStream, dest: File, maxBytes: Long): Long {
         var total = 0L
         dest.outputStream().use { out ->
             val buf = ByteArray(64 * 1024)
@@ -704,11 +709,11 @@ class BackupRepository @Inject constructor(
                 val n = input.read(buf)
                 if (n < 0) break
                 total += n
-                if (total > maxBytes) return false
+                if (total > maxBytes) return -1L
                 out.write(buf, 0, n)
             }
         }
-        return true
+        return total
     }
 
     /**
@@ -721,7 +726,7 @@ class BackupRepository @Inject constructor(
         if (incoming.exists()) incoming.delete()
         val copied = try {
             context.contentResolver.openInputStream(uri)?.use { input ->
-                copyAtMost(input, incoming, MAX_RESTORE_BYTES)
+                copyAtMost(input, incoming, MAX_RESTORE_BYTES) >= 0
             } ?: return@withContext RestoreOutcome.IO_ERROR
         } catch (e: java.io.IOException) {
             // A read/write failure mid-copy (unreadable source, disk full) must not leave the partial
@@ -745,7 +750,7 @@ class BackupRepository @Inject constructor(
         if (incoming.exists()) incoming.delete()
         // Cap + clean up like restoreFromUri (E3): a corrupt/oversized slot can't fill the cache here either.
         val copied = try {
-            auto.inputStream().use { copyAtMost(it, incoming, MAX_RESTORE_BYTES) }
+            auto.inputStream().use { copyAtMost(it, incoming, MAX_RESTORE_BYTES) >= 0 }
         } catch (e: java.io.IOException) {
             incoming.delete()
             return@withContext RestoreOutcome.IO_ERROR
@@ -783,43 +788,58 @@ class BackupRepository @Inject constructor(
                 // the device. An entry over its cap fails the whole restore rather than being
                 // silently truncated into a "valid-looking" half file.
                 var oversized = false
+                // One budget for the WHOLE archive, on top of the per-entry caps below. See
+                // [ExtractionBudget] for why the per-entry cap alone bounds nothing that matters.
+                val budget = ExtractionBudget(MAX_RESTORE_TOTAL_BYTES, MAX_RESTORE_PHOTOS)
                 java.util.zip.ZipInputStream(incoming.inputStream()).use { zin ->
                     var entry = zin.nextEntry
                     while (entry != null && !oversized) {
                         val name = entry.name
                         when {
                             name == ZIP_DB_ENTRY -> {
-                                if (copyAtMost(zin, exDb, MAX_RESTORE_ENTRY_BYTES)) sawDb = true
-                                else oversized = true
+                                val written = copyAtMost(zin, exDb, MAX_RESTORE_ENTRY_BYTES)
+                                if (budget.spend(written)) sawDb = true else oversized = true
                             }
                             name == ZIP_PREFS_ENTRY -> {
                                 val exPrefs = File(context.cacheDir, "forge_restore_prefs_${System.currentTimeMillis()}.pb")
                                     .also { it.delete(); temps.add(it) }
-                                if (copyAtMost(zin, exPrefs, MAX_RESTORE_PREFS_BYTES)) prefsFile = exPrefs
-                                else oversized = true
+                                val written = copyAtMost(zin, exPrefs, MAX_RESTORE_PREFS_BYTES)
+                                if (budget.spend(written)) prefsFile = exPrefs else oversized = true
                             }
                             name.startsWith(PHOTOS_PREFIX) -> {
                                 val photoName = name.removePrefix(PHOTOS_PREFIX)
                                 // Flat basename only — zip-slip guard against path-traversal entries.
                                 if (photoName.isNotBlank() && !photoName.contains('/') && !photoName.contains('\\')) {
-                                    val stage = photoStage ?: File(
-                                        context.cacheDir, "forge_restore_photos_${System.currentTimeMillis()}"
-                                    ).also { it.deleteRecursively(); it.mkdirs(); photoStage = it }
-                                    if (!copyAtMost(zin, File(stage, photoName), MAX_RESTORE_MEDIA_BYTES)) oversized = true
+                                    if (!budget.countPhoto()) {
+                                        oversized = true
+                                    } else {
+                                        val stage = photoStage ?: File(
+                                            context.cacheDir, "forge_restore_photos_${System.currentTimeMillis()}"
+                                        ).also { it.deleteRecursively(); it.mkdirs(); photoStage = it }
+                                        val written = copyAtMost(zin, File(stage, photoName), MAX_RESTORE_MEDIA_BYTES)
+                                        if (!budget.spend(written)) oversized = true
+                                    }
                                 }
                             }
                             name == ZIP_AVATAR_ENTRY -> {
                                 val a = File(context.cacheDir, "forge_restore_avatar_${System.currentTimeMillis()}.jpg")
                                     .also { it.delete(); temps.add(it) }
-                                if (copyAtMost(zin, a, MAX_RESTORE_MEDIA_BYTES)) avatarStage = a
-                                else oversized = true
+                                val written = copyAtMost(zin, a, MAX_RESTORE_MEDIA_BYTES)
+                                if (budget.spend(written)) avatarStage = a else oversized = true
                             }
                         }
                         zin.closeEntry()
                         entry = zin.nextEntry
                     }
                 }
-                if (oversized) return@withContext RestoreOutcome.TOO_LARGE
+                if (oversized) {
+                    // Nothing half-extracted survives the refusal — the staged photo directory is
+                    // the only component that can already hold hundreds of megabytes at this point,
+                    // and `temps` covers the rest in the finally below.
+                    photoStage?.deleteRecursively()
+                    photoStage = null
+                    return@withContext RestoreOutcome.TOO_LARGE
+                }
                 if (!sawDb) return@withContext RestoreOutcome.NOT_A_BACKUP
                 dbFile = exDb
             }
@@ -1149,9 +1169,55 @@ class BackupRepository @Inject constructor(
         /** Cap on the extracted preferences blob — a few KB of protobuf in practice. */
         private const val MAX_RESTORE_PREFS_BYTES = 8L * 1024 * 1024 // 8 MiB
 
+        /**
+         * Everything ONE restore may write to disk, across every entry. Generous next to any real
+         * library — a thousand full-resolution photos is a few gigabytes — and finite, which is the
+         * property the per-entry caps did not have between them.
+         */
+        private const val MAX_RESTORE_TOTAL_BYTES = 2L * 1024 * 1024 * 1024 // 2 GiB
+
+        /** How many progress photos one archive may carry. Well past a decade of weekly shots. */
+        private const val MAX_RESTORE_PHOTOS = 5_000
+
         /** Cache scratch this class creates, all timestamp-named. Swept by [sweepStaleTemps]. */
         private val TEMP_PREFIXES = listOf("forge_snapshot_", "forge_restore_")
         /** Nothing this old can still belong to a running backup or restore. */
         private const val TEMP_STALE_MS = 6L * 60 * 60 * 1000 // 6 hours
     }
+}
+
+/**
+ * What one restore is allowed to write to disk in total, and how many photos it may carry.
+ *
+ * The per-entry cap alone bounds nothing that matters. Every recognised photo could expand to
+ * `MAX_RESTORE_MEDIA_BYTES` and there was no limit on how many of them an archive held, so a small,
+ * highly compressible ZIP full of distinct photo entries could write tens of gigabytes
+ * into internal storage before anything objected — and the objection, when it came, would be the
+ * device running out of space mid-restore, with the live database's room gone with it.
+ *
+ * Two numbers because they fail differently: the byte budget stops a compression bomb, and the count
+ * stops an archive of many small entries whose real cost is inodes and time. Top-level and internal
+ * so the rule can be tested without a ZIP, a Context or a database.
+ */
+internal class ExtractionBudget(private val maxTotalBytes: Long, private val maxPhotos: Int) {
+    private var totalBytes = 0L
+    private var photos = 0
+
+    /** Bytes written so far across every entry. */
+    val bytesSpent: Long get() = totalBytes
+
+    /**
+     * Record [bytes] written and report whether the archive is still within budget.
+     *
+     * A negative [bytes] is `copyAtMost`'s "this entry alone blew its own cap" — false either way,
+     * and it deliberately does not add to the total, which would be meaningless.
+     */
+    fun spend(bytes: Long): Boolean {
+        if (bytes < 0) return false
+        totalBytes += bytes
+        return totalBytes <= maxTotalBytes
+    }
+
+    /** Record one more photo entry; false once too many have been seen. */
+    fun countPhoto(): Boolean = ++photos <= maxPhotos
 }

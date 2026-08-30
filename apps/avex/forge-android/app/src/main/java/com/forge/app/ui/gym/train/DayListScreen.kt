@@ -1,5 +1,9 @@
 package com.forge.app.ui.gym.train
 
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -295,22 +299,43 @@ private fun DayColorPickerDialog(
         title = { Text("Accent color — $dayName") },
         text = {
             androidx.compose.foundation.layout.FlowRow(
-                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp),
-                verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(8.dp)
+                modifier = androidx.compose.ui.Modifier.selectableGroup(),
+                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp),
+                verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(4.dp)
             ) {
                 PRESET_COLORS.forEach { (hex, label) ->
                     val color = androidx.compose.ui.graphics.Color(android.graphics.Color.parseColor(hex))
+                    val selected = currentHex == hex
+                    // The swatch is a labelled, selectable control, not a coloured square.
+                    //
+                    // The names were already in PRESET_COLORS and never reached anyone: a bare
+                    // `clickable` Box announces "button" with no label, so TalkBack read nine
+                    // identical unnamed buttons and the ring marking the current one is a purely
+                    // visual cue. `selectableGroup` + `Role.RadioButton` + `selected` says what this
+                    // set of controls IS — one choice among nine — and the swatch is now a 48 dp
+                    // target with a 40 dp paint, meeting the minimum without changing the design.
                     androidx.compose.foundation.layout.Box(
                         modifier = androidx.compose.ui.Modifier
-                            .size(40.dp)
-                            .clip(androidx.compose.foundation.shape.CircleShape)
-                            .background(color)
-                            .let { m ->
-                                if (currentHex == hex) m.border(3.dp, androidx.compose.material3.MaterialTheme.colorScheme.onSurface,
-                                    androidx.compose.foundation.shape.CircleShape) else m
-                            }
-                            .clickable { onPick(hex) }
-                    )
+                            .size(48.dp)
+                            .semantics { contentDescription = label }
+                            .selectable(
+                                selected = selected,
+                                role = androidx.compose.ui.semantics.Role.RadioButton,
+                                onClick = { onPick(hex) }
+                            ),
+                        contentAlignment = androidx.compose.ui.Alignment.Center
+                    ) {
+                        androidx.compose.foundation.layout.Box(
+                            modifier = androidx.compose.ui.Modifier
+                                .size(40.dp)
+                                .clip(androidx.compose.foundation.shape.CircleShape)
+                                .background(color)
+                                .let { m ->
+                                    if (selected) m.border(3.dp, androidx.compose.material3.MaterialTheme.colorScheme.onSurface,
+                                        androidx.compose.foundation.shape.CircleShape) else m
+                                }
+                        )
+                    }
                 }
             }
         },

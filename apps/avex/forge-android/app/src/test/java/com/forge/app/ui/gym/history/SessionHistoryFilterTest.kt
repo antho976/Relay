@@ -118,4 +118,58 @@ class SessionHistoryFilterTest {
         // Cardio carries no tags, so a tag filter leaves only the matching workout.
         assertEquals(listOf("w1"), out.map { it.key })
     }
+
+    // ── The high-volume boundary (finding 54) ─────────────────────────────────
+
+    @Test
+    fun highVolumeIncludesASessionAtExactlyTheThreshold() {
+        // HIGH_VOLUME_LB's own doc says "at/above this many lb", and the chip's LABEL is rendered
+        // from the same constant — so a session at exactly 3,000 lb was excluded by the filter that
+        // named it, and no fixture in this suite sat on the boundary to notice.
+        val out = buildFilteredHistory(
+            workouts = listOf(
+                session(1, volumeLb = HIGH_VOLUME_LB),
+                session(2, volumeLb = HIGH_VOLUME_LB - 0.5),
+                session(3, volumeLb = HIGH_VOLUME_LB + 0.5)
+            ),
+            cardio = emptyList(),
+            exerciseNamesBySession = emptyMap(),
+            filters = HistoryFilters(volume = SessionHistoryFilter.HIGH_VOLUME)
+        )
+        assertEquals(listOf(3L, 1L), out.workoutIds().sortedDescending())
+    }
+
+    // ── Custom cardio names in search (finding 50) ────────────────────────────
+
+    @Test
+    fun searchingForACustomActivityFindsIt() {
+        // Filtering resolved through CardioType.fromCode, which folds every custom activity to
+        // "Other" — so searching for the name printed on the row matched nothing, while searching
+        // "other" matched all of them. Rendering has always used the custom-aware resolver.
+        val custom = com.forge.app.domain.cardio.CustomCardioType(code = "custom_padel1", name = "Padel")
+        val entries = listOf(cardio(1, date = 10L, type = "custom_padel1"))
+
+        val hit = buildFilteredHistory(
+            workouts = emptyList(), cardio = entries, exerciseNamesBySession = emptyMap(),
+            filters = HistoryFilters(query = "padel"), customCardioTypes = listOf(custom)
+        )
+        assertEquals(1, hit.size)
+
+        val miss = buildFilteredHistory(
+            workouts = emptyList(), cardio = entries, exerciseNamesBySession = emptyMap(),
+            filters = HistoryFilters(query = "swim"), customCardioTypes = listOf(custom)
+        )
+        assertTrue(miss.isEmpty())
+    }
+
+    @Test
+    fun aBuiltinActivityStillMatchesItsOwnName() {
+        val out = buildFilteredHistory(
+            workouts = emptyList(),
+            cardio = listOf(cardio(1, date = 10L, type = "run")),
+            exerciseNamesBySession = emptyMap(),
+            filters = HistoryFilters(query = "run")
+        )
+        assertEquals(1, out.size)
+    }
 }

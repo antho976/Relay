@@ -1,5 +1,6 @@
 package com.forge.app.ui.cardio
 
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -80,7 +81,14 @@ fun CardioScreen(
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
     androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
-            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) viewModel.refreshConnection()
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                viewModel.refreshConnection()
+                // …and re-anchor "this week". A retained ViewModel keeps the Monday it was built
+                // with, while the labels and day cells below are drawn from a fresh LocalDate — so a
+                // phone left on this tab over Sunday night showed the new week's dates above the old
+                // week's totals.
+                viewModel.refreshWeekAnchor()
+            }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
@@ -110,6 +118,16 @@ fun CardioScreen(
     val sessionEntry = state.sessionDetailId?.let { id -> state.entries.firstOrNull { it.id == id } }
     LaunchedEffect(state.sessionDetailId, sessionEntry) {
         if (state.sessionDetailId != null && sessionEntry == null) viewModel.closeSessionDetail()
+    }
+
+    // System Back closes what is on top, in the same order the `when` below renders it.
+    //
+    // Both of these are full-screen contents swapped in by state rather than nav destinations, so
+    // the back stack does not know they exist: Back popped the whole Cardio route — or left the app
+    // from the tab root — while a half-typed log sheet was on screen. Every other overlay in this
+    // app closes on Back; these were the ones that took the screen with them.
+    BackHandler(enabled = state.sheetOpen || sessionEntry != null) {
+        if (state.sheetOpen) viewModel.closeSheet() else viewModel.closeSessionDetail()
     }
 
     when {

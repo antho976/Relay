@@ -78,8 +78,14 @@ class RecapViewModel @Inject constructor(
             val exFreq = loggedExerciseDao.frequencySince(monthStart)
             val topEx = exFreq.maxByOrNull { it.sessionCount }?.let { Program.exerciseDisplayName(it.exerciseId) }
             val avgDur = monthSessions.mapNotNull { it.durationMinutes() }.average().toInt()
-            val bestDay = monthSessions.groupBy { it.dayKey }
-                .maxByOrNull { (_, sessions) -> sessions.sumOf { it.prCount } }
+            val monthPrs = monthSessions.sumOf { it.prCount }
+            // Only when there WERE records. maxByOrNull over a sum of zeros still returns a group —
+            // the first one — so a month with no PRs at all named a "best day for records", picked
+            // by nothing but map iteration order, and presented it as a finding about the user.
+            val bestDay = monthSessions
+                .takeIf { monthPrs > 0 }
+                ?.groupBy { it.dayKey }
+                ?.maxByOrNull { (_, sessions) -> sessions.sumOf { it.prCount } }
                 // dayDisplayName resolves freestyle ("Open workout") and survives a day removed from the
                 // plan; the raw Program.days lookup returned null for both and silently dropped the row.
                 ?.key?.let { key -> Program.dayDisplayName(key) }
@@ -87,7 +93,7 @@ class RecapViewModel @Inject constructor(
                 month = now,
                 sessionCount = monthSessions.size,
                 totalVolumeLb = monthSessions.sumOf { it.totalVolumeLb ?: 0.0 },
-                totalPrs = monthSessions.sumOf { it.prCount },
+                totalPrs = monthPrs,
                 totalSets = monthSessions.sumOf { it.setCount },
                 topExercise = topEx,
                 avgDurationMin = avgDur,

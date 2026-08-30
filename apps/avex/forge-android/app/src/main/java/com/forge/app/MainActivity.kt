@@ -1,5 +1,6 @@
 package com.forge.app
 
+import com.forge.app.security.ProtectionSentinel
 import android.content.Intent
 import android.database.ContentObserver
 import android.net.Uri
@@ -318,16 +319,36 @@ class MainActivity : FragmentActivity() {
         // it is now a single file read instead of five with the main thread parked on each.
         // Defaults rather than a crash if the read fails anyway: this runs before setContent, so an
         // exception here is an uncaught crash on EVERY launch with no way back into the app.
+        //
+        // The fallback used to say every protection was OFF, which made a transient read failure
+        // indistinguishable from a user who wants none: FLAG_SECURE was cleared, AppLockManager was
+        // primed unlocked, and a locked gallery rendered behind no gate. Protections now come from
+        // ProtectionSentinel, which remembers what the user last actually chose in a separate file —
+        // and, having never seen one, secures the window without priming a lock nobody asked for.
         val startup = runBlocking {
             runCatching { settingsRepo.startupPreferences() }
-                .getOrDefault(SettingsRepository.StartupPreferences(
-                    privacyMode = false,
-                    appLockEnabled = false,
-                    galleryLockEnabled = false,
-                    amoledMode = false,
-                    appIcon = "",
-                    themedLaunchIntro = true
-                ))
+                .onSuccess { ok ->
+                    ProtectionSentinel.remember(
+                        this@MainActivity,
+                        ProtectionSentinel.Protections(
+                            privacyMode = ok.privacyMode,
+                            appLockEnabled = ok.appLockEnabled,
+                            galleryLockEnabled = ok.galleryLockEnabled
+                        )
+                    )
+                }
+                .getOrElse {
+                    val known = ProtectionSentinel.fallback(this@MainActivity)
+                    SettingsRepository.StartupPreferences(
+                        privacyMode = known.privacyMode,
+                        appLockEnabled = known.appLockEnabled,
+                        galleryLockEnabled = known.galleryLockEnabled,
+                        // The rest are cosmetic: a wrong theme for one frame is not a privacy event.
+                        amoledMode = false,
+                        appIcon = "",
+                        themedLaunchIntro = true
+                    )
+                }
         }
         // Secure the window on the very first frame when privacy mode or EITHER lock is on, and
         // seed the lock state synchronously so a locked cold start never flashes the content behind
@@ -352,8 +373,17 @@ class MainActivity : FragmentActivity() {
                 settingsRepo.privacyMode,
                 settingsRepo.appLockEnabled,
                 settingsRepo.galleryLockEnabled
-            ) { privacy, appLock, galleryLock -> privacy || appLock || galleryLock }
-                .collect { secure -> applyPrivacyMode(secure) }
+            ) { privacy, appLock, galleryLock ->
+                Triple(privacy, appLock, galleryLock)
+            }.collect { (privacy, appLock, galleryLock) ->
+                // Keep the sentinel current, so the next failed startup read falls back to what the
+                // user chose most recently rather than to what they chose at some earlier launch.
+                ProtectionSentinel.remember(
+                    this@MainActivity,
+                    ProtectionSentinel.Protections(privacy, appLock, galleryLock)
+                )
+                applyPrivacyMode(privacy || appLock || galleryLock)
+            }
         }
         // Keep the icon pick live so onStop can read it without blocking on DataStore (and never stale).
         lifecycleScope.launch {

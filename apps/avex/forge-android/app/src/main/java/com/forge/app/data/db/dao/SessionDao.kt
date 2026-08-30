@@ -23,6 +23,38 @@ interface SessionDao {
     @Query("SELECT * FROM session WHERE id = :id")
     suspend fun get(id: Long): Session?
 
+    /**
+     * Stamp [finishedAt] on a session that is still open, and report whether THIS call was the one
+     * that did it (1) or found it already finished (0).
+     *
+     * The finish path used to read the row, check `finishedAt == null`, and then write a whole
+     * Session built from that read. Two callers — a double-tapped FINISH, a finish racing the
+     * orphan-recovery pass, a wrist command arriving as the phone finishes — could both pass the
+     * check and both proceed to stamp the session, rotate the program, refresh state and mirror the
+     * workout to Health Connect. The full-row write had a second failure mode of its own: it
+     * carried every column from a snapshot taken before the check, so an is_untracked, session_type
+     * or intensity change made in between was silently reverted.
+     *
+     * Both are the same fix. The winner is decided by SQLite, and only the winner does the rest.
+     */
+    @Query("UPDATE session SET finished_at = :finishedAt WHERE id = :id AND finished_at IS NULL")
+    suspend fun finishIfUnfinished(id: Long, finishedAt: Long): Int
+
+    /** The finish summary, written after [finishIfUnfinished] has named a winner. */
+    @Query("""
+        UPDATE session
+        SET total_volume_lb = :totalVolumeLb, pr_count = :prCount,
+            set_count = :setCount, active_seconds = :activeSeconds
+        WHERE id = :id
+    """)
+    suspend fun setFinishTotals(
+        id: Long,
+        totalVolumeLb: Double,
+        prCount: Int,
+        setCount: Int,
+        activeSeconds: Int
+    )
+
     /** Returns the in-progress session if one exists. App logic limits this to at most one. */
     @Query("SELECT * FROM session WHERE finished_at IS NULL ORDER BY started_at DESC LIMIT 1")
     suspend fun getActiveSession(): Session?
@@ -42,35 +74,57 @@ interface SessionDao {
      * while the Profile's trophy streak (which reads all sessions) kept counting past it. Unbounded
      * is affordable here because it is one Long per session, not a row.
      */
-    @Query("SELECT finished_at FROM session WHERE finished_at IS NOT NULL ORDER BY finished_at DESC")
+    @Query("""
+        SELECT finished_at FROM session
+        WHERE finished_at IS NOT NULL AND is_untracked = 0
+        ORDER BY finished_at DESC
+    """)
     fun observeFinishedAts(): Flow<List<Long>>
 
     /** One-shot [observeFinishedAts], for the streak read that doesn't want a subscription. */
-    @Query("SELECT finished_at FROM session WHERE finished_at IS NOT NULL ORDER BY finished_at DESC")
+    @Query("""
+        SELECT finished_at FROM session
+        WHERE finished_at IS NOT NULL AND is_untracked = 0
+        ORDER BY finished_at DESC
+    """)
     suspend fun finishedAts(): List<Long>
 
-    /** Used by the "Showing Up" / "Through the Door" trophy rules. */
-    @Query("SELECT COUNT(*) FROM session WHERE finished_at IS NOT NULL")
+    /** Sessions that count toward progression — the Stats/Overview "workouts logged" figure. */
+    @Query("SELECT COUNT(*) FROM session WHERE finished_at IS NOT NULL AND is_untracked = 0")
     fun observeFinishedCount(): Flow<Int>
 
     /** Used by the "Full Week" trophy (all 4 days trained). */
-    @Query("SELECT DISTINCT day_key FROM session WHERE finished_at IS NOT NULL")
+    @Query("SELECT DISTINCT day_key FROM session WHERE finished_at IS NOT NULL AND is_untracked = 0")
     suspend fun distinctDayKeysTrained(): List<String>
 
-    /** For the deload banner — sessions completed since the user last marked deload. */
+    /**
+     * EVERY finished session, untracked included — the "does this install hold any training data"
+     * question, which backup warnings and the demo-data gate ask. Deliberately NOT the progression
+     * count: someone whose only history is untracked still has history worth backing up, and must
+     * not have demo data seeded over it.
+     */
     @Query("SELECT COUNT(*) FROM session WHERE finished_at IS NOT NULL")
     suspend fun finishedCount(): Int
+
+    /** [finishedCount] restricted to sessions that count toward progression. */
+    @Query("SELECT COUNT(*) FROM session WHERE finished_at IS NOT NULL AND is_untracked = 0")
+    suspend fun trackedFinishedCount(): Int
 
     /** Day key of the most recently finished session — the training reminder's "next up" anchor. */
     @Query("SELECT day_key FROM session WHERE finished_at IS NOT NULL ORDER BY finished_at DESC LIMIT 1")
     suspend fun lastFinishedDayKey(): String?
 
-    /** Day keys of sessions finished since [sinceMs] — the widget's "trained today" set. */
-    @Query("SELECT day_key FROM session WHERE finished_at >= :sinceMs")
+    /**
+     * Day keys of sessions finished since [sinceMs] — the widget's "trained today" set, which feeds
+     * `WeeklySchedule.resolveNextUp`. Tracked only, matching what DirectiveRepository already
+     * filters for in Kotlin: an untracked session is excluded from suggestions by contract, and the
+     * widget and the app disagreeing about what is next up is worse than either answer.
+     */
+    @Query("SELECT day_key FROM session WHERE finished_at >= :sinceMs AND is_untracked = 0")
     suspend fun finishedDayKeysSince(sinceMs: Long): List<String>
 
     /** Finish instants since [sinceMs] — the widget's Mon–Sun dot row, without loading entities. */
-    @Query("SELECT finished_at FROM session WHERE finished_at >= :sinceMs")
+    @Query("SELECT finished_at FROM session WHERE finished_at >= :sinceMs AND is_untracked = 0")
     suspend fun finishedAtsSince(sinceMs: Long): List<Long>
 
     /** Previous finished session for the same day (excludes current — used for session comparison #52). */
@@ -94,10 +148,16 @@ interface SessionDao {
      * the week-comparison strip; only finished sessions are counted. The AI-export query
      * below intentionally windows on finished_at instead — see its doc.
      */
-    @Query("SELECT COUNT(*) FROM session WHERE finished_at IS NOT NULL AND started_at >= :sinceEpochMs")
+    @Query("""
+        SELECT COUNT(*) FROM session
+        WHERE finished_at IS NOT NULL AND is_untracked = 0 AND started_at >= :sinceEpochMs
+    """)
     fun observeFinishedCountSince(sinceEpochMs: Long): Flow<Int>
 
-    @Query("SELECT SUM(total_volume_lb) FROM session WHERE finished_at IS NOT NULL AND started_at >= :sinceEpochMs")
+    @Query("""
+        SELECT SUM(total_volume_lb) FROM session
+        WHERE finished_at IS NOT NULL AND is_untracked = 0 AND started_at >= :sinceEpochMs
+    """)
     fun observeVolumeSince(sinceEpochMs: Long): Flow<Double?>
 
     /** Earliest finished session timestamp — used for the "first full month" milestone (#56). */
@@ -142,14 +202,12 @@ interface SessionDao {
     @Query("SELECT COUNT(*) FROM session WHERE started_at = :startedAt")
     suspend fun countAtStart(startedAt: Long): Int
 
-    /** The set count and volume of every session already starting at this exact epoch — the import
-     *  duplicate guard's content fingerprint. A stored session at the same instant is only a
-     *  duplicate when it holds the same work; a DIFFERENT workout that merely collides on a
-     *  date-only midnight is nudged forward instead of being dropped. */
-    @Query("SELECT set_count AS setCount, total_volume_lb AS totalVolumeLb FROM session WHERE started_at = :startedAt")
-    suspend fun contentAtStart(startedAt: Long): List<SessionContent>
-
-    data class SessionContent(val setCount: Int, val totalVolumeLb: Double?)
+    /** Every session already starting at this exact epoch — the import duplicate guard's candidates.
+     *  A stored session at the same instant is only a duplicate when it holds the same work; a
+     *  DIFFERENT workout that merely collides on a date-only midnight is nudged forward instead of
+     *  being dropped, so the comparison itself lives in the importer, which can read the sets. */
+    @Query("SELECT id FROM session WHERE started_at = :startedAt")
+    suspend fun idsAtStart(startedAt: Long): List<Long>
 
     /** Deletes all sessions (CASCADE removes LoggedExercise, LoggedSet, MoodEntry). For reset (#119). */
     @Query("DELETE FROM session")
@@ -192,7 +250,8 @@ interface SessionDao {
                SUM(pr_count) AS total_prs,
                SUM(set_count) AS total_sets
         FROM session
-        WHERE finished_at IS NOT NULL AND started_at >= :fromMs AND started_at < :toMs
+        WHERE finished_at IS NOT NULL AND is_untracked = 0
+          AND started_at >= :fromMs AND started_at < :toMs
     """)
     suspend fun aggregateInRange(fromMs: Long, toMs: Long): WindowAggregate
 
@@ -206,7 +265,7 @@ interface SessionDao {
     /** All finished sessions with volume + deload flag ordered oldest-first — for #126 volume/deload trend. */
     @Query("""
         SELECT id, day_key, started_at, total_volume_lb, deload_marked_here
-        FROM session WHERE finished_at IS NOT NULL ORDER BY started_at ASC
+        FROM session WHERE finished_at IS NOT NULL AND is_untracked = 0 ORDER BY started_at ASC
     """)
     suspend fun allFinishedVolumeDeload(): List<SessionVolumeDeloadRow>
 

@@ -127,27 +127,69 @@ class WearDataRepository private constructor(context: Context) : DataClient.OnDa
         // supersede an unsynced first one — hence a prefix match rather than equality. A replayed
         // ack is not an event: it answers a command from a previous run of this app.
         if (path.startsWith(WearProtocol.PATH_CMD_ACK)) {
-            if (!deleted && !seeded) decodeInto<CmdAckDto>(bytes, WearProtocol.PATH_CMD_ACK) { ack ->
+            // A DELETED item says nothing about what protocol the phone speaks, so it must not
+            // leave this path latched as newer — see [clearLatchOnDelete].
+            if (deleted) return clearLatchOnDelete(WearProtocol.PATH_CMD_ACK)
+            if (!seeded) decodeInto<CmdAckDto>(bytes, WearProtocol.PATH_CMD_ACK) { ack ->
                 _lastAck.value = ack
-                // A successful log names its set — remember it locally for undo/RPE.
-                if (ack.ok && ack.setId != null) {
+                // A successful LOG names its set — remember it locally for undo/RPE.
+                //
+                // "A successful ack with a setId" is not the same statement: an RPE ack carries the
+                // id of the set that was just RATED, so saving a rating re-armed this very row. The
+                // undo/rate prompt reopened for a set the user had just finished rating, and
+                // WearRoot's set-logged haptic fired for it a second time. The ack now says which
+                // command it answers; an older phone leaves that blank, and the fallback is the
+                // wrist's own record of the ids it sent RPE for.
+                if (ack.ok && ack.setId != null && isNewlyLoggedSet(ack)) {
                     _lastLog.value = LastLog(ack.setId!!, System.currentTimeMillis())
                 }
             }
             return
         }
+        // Same rule for every state path: deletion clears the latch. Without this, an incompatible
+        // payload latched "update Avex on your phone" and the DELETE that followed cleared the
+        // session and timer state while leaving the latch set — so the watch sat on the update
+        // screen until some later payload happened to decode cleanly on that same path, which for
+        // a path whose item had just been removed could be indefinitely.
+        if (deleted) return clearLatchOnDelete(path)
         when (path) {
-            WearProtocol.PATH_SESSION_LIVE ->
-                if (deleted) _session.value = null
-                else decodeInto<SessionLiveDto>(bytes, path) { _session.value = it }
-            WearProtocol.PATH_TIMER_STATE ->
-                if (deleted) _timer.value = null
-                else decodeInto<TimerStateDto>(bytes, path) { _timer.value = it }
-            WearProtocol.PATH_CONFIG ->
-                if (!deleted) decodeInto<ConfigDto>(bytes, path) { _config.value = it }
-            WearProtocol.PATH_GLANCE_TODAY ->
-                if (!deleted) decodeInto<GlanceTodayDto>(bytes, path) { _glance.value = it }
+            WearProtocol.PATH_SESSION_LIVE -> decodeInto<SessionLiveDto>(bytes, path) { _session.value = it }
+            WearProtocol.PATH_TIMER_STATE -> decodeInto<TimerStateDto>(bytes, path) { dto ->
+                _timer.value = dto
+                // Both clocks in one payload: the phone's at publish, ours now. The complication
+                // renders the countdown without ever seeing an arrival time, so it needs this.
+                if (dto.publishedAtMs > 0L) {
+                    WearClockSkew.record(appContext, dto.publishedAtMs, System.currentTimeMillis())
+                }
+            }
+            WearProtocol.PATH_CONFIG -> decodeInto<ConfigDto>(bytes, path) { _config.value = it }
+            WearProtocol.PATH_GLANCE_TODAY -> decodeInto<GlanceTodayDto>(bytes, path) { _glance.value = it }
         }
+    }
+
+    /** Clear [path]'s state and its version latch. */
+    private fun clearLatchOnDelete(path: String) {
+        when (path) {
+            WearProtocol.PATH_SESSION_LIVE -> _session.value = null
+            WearProtocol.PATH_TIMER_STATE -> _timer.value = null
+        }
+        markVersion(path, newer = false)
+    }
+
+    /**
+     * Whether [ack] announces a set that was just logged, as opposed to one that was rated.
+     *
+     * Public because WearRoot asks the same question for the set-logged haptic: an RPE ack used to
+     * fire the wrist's "set logged" tick a second time, minutes after the set.
+     *
+     * Prefers what the phone said. A phone predating [CmdAckDto.KIND_LOG_SET] says nothing, and the
+     * fallback is what this process sent: an ack answering one of our own RPE commands is never a
+     * new log, whatever else it carries.
+     */
+    fun isNewlyLoggedSet(ack: CmdAckDto): Boolean = when {
+        ack.kind == CmdAckDto.KIND_LOG_SET -> true
+        ack.kind.isNotEmpty() -> false
+        else -> !isOwnRpeCommand(ack.commandId)
     }
 
     private inline fun <reified T> decodeInto(bytes: ByteArray?, path: String, apply: (T) -> Unit) {
@@ -201,8 +243,27 @@ class WearDataRepository private constructor(context: Context) : DataClient.OnDa
 
     fun sendSetRpe(setId: Long, rpe: Double): String {
         _lastLog.value = _lastLog.value?.takeIf { it.setId == setId }?.copy(rpeSent = true)
-        return send(WearProtocol.PATH_CMD_SET_RPE, SetRpeCommand(commandId = newId(), setId = setId, rpe = rpe))
+        val commandId = newId()
+        rememberRpeCommand(commandId)
+        return send(WearProtocol.PATH_CMD_SET_RPE, SetRpeCommand(commandId = commandId, setId = setId, rpe = rpe))
     }
+
+    /**
+     * Command ids this process sent as RPE ratings — the fallback identity for acks from a phone
+     * too old to name the command it is answering. A handful is plenty: an ack that has not arrived
+     * within the next few commands is not going to re-arm anything the user still recognises.
+     */
+    private val rpeCommandIds = ArrayDeque<String>()
+
+    private fun rememberRpeCommand(commandId: String) {
+        synchronized(rpeCommandIds) {
+            rpeCommandIds.addLast(commandId)
+            while (rpeCommandIds.size > RPE_COMMAND_MEMORY) rpeCommandIds.removeFirst()
+        }
+    }
+
+    private fun isOwnRpeCommand(commandId: String): Boolean =
+        synchronized(rpeCommandIds) { commandId in rpeCommandIds }
 
     /**
      * Deliver a batch of HR samples. Returns true only once a connected node has accepted it, so the
@@ -302,6 +363,9 @@ class WearDataRepository private constructor(context: Context) : DataClient.OnDa
     private fun newId(): String = UUID.randomUUID().toString()
 
     companion object {
+        /** How many recently sent RPE command ids the wrist keeps, for pre-[CmdAckDto.kind] phones. */
+        private const val RPE_COMMAND_MEMORY = 16
+
         /** Total delivery attempts, including the first. Backoff runs 1s, 2s, 4s, 8s. */
         private const val SEND_ATTEMPTS = 5
         private const val SEND_RETRY_INITIAL_MS = 1_000L

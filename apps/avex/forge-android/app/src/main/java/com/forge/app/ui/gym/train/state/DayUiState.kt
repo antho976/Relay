@@ -127,8 +127,26 @@ data class DayUiState(
      */
     val dislikeSwapPrompt: DislikeSwapPrompt? = null
 ) {
+    /**
+     * Anything in this session the user AUTHORED and would lose on a silent discard.
+     *
+     * Logged sets are the obvious half and were the only half. Everything else the session screen
+     * lets you write — the journal, an exercise note, an effort rating, a deliberate skip — is
+     * stored against the session and CASCADE-deleted with it, so backing out of a workout you had
+     * annotated but not yet logged a set into deleted all of it with no prompt at all. Writing a
+     * note about why the gym was too busy to train, then leaving, is exactly that shape.
+     *
+     * A skip counts because it is a statement, not an absence: the user said "not today" about that
+     * exercise, and the honesty percentage is computed from it.
+     */
     val hasUnsavedWork: Boolean
-        get() = exercises.any { it.loggedSets.isNotEmpty() }
+        get() = exercises.any { it.loggedSets.isNotEmpty() } || hasAuthoredMetadata
+
+    /** The authored-but-not-logged half of [hasUnsavedWork]; see its doc. */
+    val hasAuthoredMetadata: Boolean
+        get() = sessionJournal.isNotBlank() || exercises.any {
+            !it.note.isNullOrBlank() || it.difficulty != null || it.skipped
+        }
 
     val canSkipWarmup: Boolean
         get() = !isWarmupComplete

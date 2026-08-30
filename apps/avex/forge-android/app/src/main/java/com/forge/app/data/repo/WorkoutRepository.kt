@@ -295,7 +295,10 @@ class WorkoutRepository @Inject constructor(
             if (!s.isAssisted && PrDetector.isPr(running, s.weightLb, s.reps, s.durationSeconds)) wasPr = true
             running.add(s)
         }
-        if (wasPr) loggedExerciseDao.get(loggedExerciseId)?.let { loggedExerciseDao.update(it.copy(wasPr = true)) }
+        // One column, not a whole row rebuilt from a read taken before this pass ran: a rating, a
+        // note or a skip landing while the recalculation was in flight used to be overwritten by
+        // that stale snapshot. Only written when true, as before — this pass never clears the flag.
+        if (wasPr) loggedExerciseDao.setWasPr(loggedExerciseId, true)
         return wasPr
     }
 
@@ -320,12 +323,17 @@ class WorkoutRepository @Inject constructor(
      */
     suspend fun finishSession(sessionId: Long): Int {
         val now = clock.nowMs()
-        // Already finished — a double-tapped FINISH, or a finish racing an orphan recovery. Report
-        // the duration that was stamped and do nothing else: re-running would re-stamp finished_at,
-        // count a second session toward the program rotation and mirror the session's calories to
-        // Health Connect a second time.
-        sessionDao.get(sessionId)?.let { existing ->
-            if (existing.finishedAt != null) return existing.activeSeconds
+        // ONE writer finishes a session, and SQLite decides which. A read, a `finishedAt == null`
+        // check and a write are three steps with two gaps in them, and a double-tapped FINISH, a
+        // finish racing the orphan-recovery pass, or a wrist command arriving as the phone finishes
+        // could both pass the check: the session was stamped twice, counted twice toward the
+        // program rotation, and mirrored to Health Connect twice. The conditional UPDATE collapses
+        // the check and the write into one statement, and its affected-row count names the winner.
+        //
+        // Note the ordering: nothing before this line has any effect, so a loser leaves no trace.
+        if (sessionDao.finishIfUnfinished(sessionId, now) == 0) {
+            // Already finished — report the duration that was stamped and do nothing else.
+            return sessionDao.get(sessionId)?.activeSeconds ?: 0
         }
         sessionSegmentDao.closeOpen(sessionId, now)
         // Soft-fail instead of crashing if the row vanished (e.g. a concurrent program regenerate
@@ -336,14 +344,16 @@ class WorkoutRepository @Inject constructor(
             else ((now - session.startedAt) / 1000L).toInt().coerceAtLeast(0)
         val sets = loggedSetDao.allForSession(sessionId)
         val prCount = loggedExerciseDao.forSession(sessionId).count { it.wasPr }
-        sessionDao.update(
-            session.copy(
-                finishedAt = now,
-                totalVolumeLb = VolumeCalculator.sessionVolumeLb(sets),
-                prCount = prCount,
-                setCount = sets.size,
-                activeSeconds = activeSeconds
-            )
+        // Targeted columns rather than a full-row write built from a snapshot taken before the
+        // finish. The whole-entity write carried is_untracked, session_type, intensity, tags and
+        // journal from that older read, so marking a session untracked (or tagging it, or writing a
+        // journal entry) from the finish sheet was silently reverted by the finish itself.
+        sessionDao.setFinishTotals(
+            id = sessionId,
+            totalVolumeLb = VolumeCalculator.sessionVolumeLb(sets),
+            prCount = prCount,
+            setCount = sets.size,
+            activeSeconds = activeSeconds
         )
         maybeRotateProgram()
         writeFinishMirrors(session, endMs = now, activeSeconds = activeSeconds)
@@ -622,6 +632,38 @@ class WorkoutRepository @Inject constructor(
     suspend fun loggedExerciseForSlot(sessionId: Long, slotId: String): Long? =
         loggedExerciseDao.forSessionSlot(sessionId, slotId)?.id
 
+    /**
+     * The row for one program slot in one session, creating it if it does not exist yet — as ONE
+     * transaction, so two writers cannot both find nothing and both insert.
+     *
+     * Every caller previously did the read and the insert as separate steps: the day screen's
+     * `ensureLoggedExercise`, the wrist's `SetLogUseCase.logFromWatch`, the swap paths. The wrist
+     * writes through this same process, so "the phone logs a set while a wrist command is in
+     * flight" is two coroutines in one Room instance, and the gap between the read and the insert
+     * is where the slot forks: two logged_exercise rows for one slot, each holding half the sets.
+     * The day screen renders the first, so the other half of the workout is simply not there — and
+     * it is not lost either, which is worse, because it still counts toward volume and progression.
+     *
+     * Room serialises transactions on its single writer connection, so the read and the insert are
+     * indivisible with respect to every other writer in the process.
+     */
+    suspend fun ensureLoggedExerciseForSlot(
+        sessionId: Long,
+        slotId: String,
+        exerciseId: String,
+        orderIndex: Int,
+        swappedName: String? = null,
+        swappedUnit: String? = null
+    ): Long = com.forge.app.data.db.SessionWrites.ensureSlotRow(
+        db = database,
+        sessionId = sessionId,
+        slotId = slotId,
+        exerciseId = exerciseId,
+        orderIndex = orderIndex,
+        swappedName = swappedName,
+        swappedUnit = swappedUnit
+    )
+
     suspend fun updateExercise(loggedExercise: LoggedExercise) =
         loggedExerciseDao.update(loggedExercise)
 
@@ -678,11 +720,18 @@ class WorkoutRepository @Inject constructor(
      * performed work and is left untouched.
      */
     suspend fun revertSwapToSlotIfEmpty(loggedExerciseId: Long) {
-        val ex = loggedExerciseDao.get(loggedExerciseId) ?: return
-        if (loggedSetDao.countForLoggedExercise(loggedExerciseId) > 0) return
-        loggedExerciseDao.update(
-            ex.copy(exerciseId = ex.effectiveSlotId, slotId = null, swappedName = null, swappedUnit = null)
-        )
+        // The same transaction the forward path (setSessionSwap) already uses, for the same reason
+        // and in the opposite direction. Read, count, write was three steps: a set inserted by the
+        // wrist after the count came back zero was silently re-attributed when the stale row was
+        // written back under the slot's exercise id — the set stayed in the database, under a lift
+        // the user never performed, and the one they did perform lost it.
+        database.withTransaction {
+            val ex = loggedExerciseDao.get(loggedExerciseId) ?: return@withTransaction
+            if (loggedSetDao.countForLoggedExercise(loggedExerciseId) > 0) return@withTransaction
+            loggedExerciseDao.update(
+                ex.copy(exerciseId = ex.effectiveSlotId, slotId = null, swappedName = null, swappedUnit = null)
+            )
+        }
     }
 
     suspend fun lastLoggedExerciseBefore(exerciseId: String, excludeSessionId: Long): LoggedExercise? =
@@ -701,6 +750,14 @@ class WorkoutRepository @Inject constructor(
      * a set is deleted from the middle: indices 0 and 2 with a count of 2 wrote a second index 2,
      * and the wrist's prefill (`maxByOrNull { setIndex }`) then picked arbitrarily between the two,
      * so the target weight it showed flipped between different sets. One funnel, one rule.
+     *
+     * The allocation and the insert are ONE transaction, because a funnel is not the same as an
+     * atom: `MAX(set_index) + 1` followed by a separate insert has a gap in it, and two writers
+     * reaching that gap together both read the same maximum and both write it. This app has more
+     * than one writer whenever a watch is paired — the wrist's commands are handled by
+     * WearSyncService inside this same process, against this same Room instance — and one lifter
+     * double-tapping LOG SET is enough on its own. Room serialises transactions on its single
+     * writer connection, so the read and the insert are indivisible with respect to both.
      */
     suspend fun logSet(
         loggedExerciseId: Long,
@@ -708,12 +765,14 @@ class WorkoutRepository @Inject constructor(
         weightLb: Double?,
         reps: Int,
         durationSeconds: Int? = null
-    ): Long = loggedSetDao.insert(
+    ): Long = com.forge.app.data.db.SessionWrites.insertSetWithNextIndex(
+        database,
         run {
             val safeLb = sanitizeWeightLb(weightLb)
             LoggedSet(
                 loggedExerciseId = loggedExerciseId,
-                setIndex = (loggedSetDao.maxSetIndex(loggedExerciseId) ?: -1) + 1,
+                // Replaced inside the transaction; see SessionWrites.insertSetWithNextIndex.
+                setIndex = 0,
                 // A clamped weight takes the text with it. Leaving the typed "1000000000" beside a
                 // stored 2000 would show the user a number the database does not hold, and every
                 // later edit would re-parse the text back to the absurd value.
@@ -722,8 +781,9 @@ class WorkoutRepository @Inject constructor(
                 weightLb = safeLb,
                 reps = sanitizeReps(reps),
                 completedAt = clock.nowMs(),
-                // Timed holds (GYMAP-51): a held duration in whole seconds. null for a normal rep set;
-                // when present, `reps` is not a meaningful count and the set is skipped by weight×reps stats.
+                // Timed holds (GYMAP-51): a held duration in whole seconds. null for a normal rep
+                // set; when present, `reps` is not a meaningful count and the set is skipped by
+                // weight×reps stats.
                 durationSeconds = durationSeconds?.coerceIn(0, MAX_HOLD_SECONDS)
             )
         }

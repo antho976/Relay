@@ -42,6 +42,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.shareIn
@@ -60,6 +61,7 @@ import javax.inject.Inject
  * behaviour: if the user keeps the app open for a week the window won't slide, but
  * that's fine for a personal app.
  */
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 @HiltViewModel
 class CardioViewModel @Inject constructor(
     private val cardioRepo: CardioRepository,
@@ -72,16 +74,36 @@ class CardioViewModel @Inject constructor(
 ) : ViewModel() {
 
     private val transient = MutableStateFlow(TransientState())
+
+    /** The in-flight [saveEntry] write, if any — the double-tap guard. */
+    private var saveJob: kotlinx.coroutines.Job? = null
     // Which Health Connect grants Avex actually holds — re-checked on init and on every resume (the
     // user may grant them in the HC app and return). Drives the banner's auto-hide and the "connected
     // but no data yet" steps placeholder. A one-shot read, not a flow: HC has no permission-change
     // observable, so we poll it at the moments it can change (resume) rather than continuously.
     private val connection = MutableStateFlow(WearableConnection())
-    // Start of the current ISO week (Monday) — matches the "this week" label and the Mon–Sun bars
-    // (was a rolling now-minus-7-days window). Captured once at construction.
-    private val weekStartMs: Long = com.forge.app.core.time.mondayStartMs(clock.nowMs())
+    /**
+     * Start of the current ISO week (Monday) — the anchor for the "this week" label, the Mon–Sun
+     * bars and every weekly total on this screen.
+     *
+     * A StateFlow, not a `val` captured at construction. A ViewModel outlives the screen it belongs
+     * to, and a phone left on the Cardio tab over a Sunday night kept a Monday from the week before:
+     * the label and the day cells are drawn from a FRESH `LocalDate.now()`, so the screen showed the
+     * new week's dates over the old week's minutes, distance and streak — with no reload in sight,
+     * because nothing in the pipeline had changed.
+     */
+    private val weekStart = MutableStateFlow(com.forge.app.core.time.mondayStartMs(clock.nowMs()))
 
     init { refreshConnection() }
+
+    /**
+     * Re-anchor the week if the calendar has moved on. Called from the same ON_RESUME the connection
+     * refresh uses, which is when a screen that was open across midnight comes back into view.
+     */
+    fun refreshWeekAnchor() {
+        val current = com.forge.app.core.time.mondayStartMs(clock.nowMs())
+        if (current != weekStart.value) weekStart.value = current
+    }
 
     /** Re-read whether the steps / exercise grants are held (call on resume — grants change in the HC app).
      *  Also refreshes today's step total for the hero line (GYMAP-64) so it tracks steps taken while away. */
@@ -125,11 +147,14 @@ class CardioViewModel @Inject constructor(
     // here off the DB flow and on Dispatchers.Default — NOT in the combine with `transient` below,
     // so toggling the sheet (a pure UI event) never re-runs the full-history streak/day passes, and
     // none of it runs on the main thread.
-    private val derivedFlow = combine(
-        entriesFlow,
-        cardioRepo.observeMinutesSince(weekStartMs),
-        cardioRepo.observeSince(weekStartMs)
-    ) { all, weekMin, weekEntries ->
+    private val derivedFlow = weekStart.flatMapLatest { weekStartMs ->
+        combine(
+            entriesFlow,
+            cardioRepo.observeMinutesSince(weekStartMs),
+            cardioRepo.observeSince(weekStartMs)
+        ) { all, weekMin, weekEntries -> Triple(all, weekMin, weekEntries) to weekStartMs }
+    }.map { (parts, weekStartMs) ->
+        val (all, weekMin, weekEntries) = parts
         val zone = ZoneId.systemDefault()
         CardioDerived(
             all = all,
@@ -352,7 +377,12 @@ class CardioViewModel @Inject constructor(
     ) {
         // id 0 = a PREFILL (watch import, W5): the sheet showed it via `editing`, but saving inserts.
         val editingId = transient.value.editing?.id?.takeIf { it != 0L }
-        viewModelScope.launch {
+        // One save at a time, mirroring FreestyleLogViewModel's saveJob. Save stays ENABLED through
+        // the write and the sheet only closes at the end of it, so a firm double tap launched two
+        // coroutines that each read `editing` as null and each INSERTED — two identical sessions in
+        // the history, and two toward every cardio goal and trophy counting them.
+        if (saveJob?.isActive == true) return
+        saveJob = viewModelScope.launch {
             val entry = CardioEntry(
                 id = editingId ?: 0,
                 date = dateMs,

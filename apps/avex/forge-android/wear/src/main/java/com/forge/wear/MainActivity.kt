@@ -1,6 +1,7 @@
 package com.forge.wear
 
 import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -12,19 +13,31 @@ import com.forge.wear.ui.WearRoot
 
 class MainActivity : ComponentActivity() {
 
+    /**
+     * The callback used to be empty, which quietly made the whole ask decorative: the current
+     * session is applied by [WearApp] the moment the repository emits it, which is before the
+     * system dialog resolves. Granting notifications therefore did not post the OngoingActivity
+     * chip, and granting the sensor permission did not start HR — both waited for the phone to
+     * publish a different session, or for the app to be restarted.
+     */
     private val permissions =
-        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { /* both optional */ }
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
+            // Whatever the user decided, re-apply the session under the permissions we now hold.
+            // Nothing here is required: a refusal simply leaves the works-without state in place.
+            if (granted.values.any { it }) {
+                WearApp.applySession(this, WearDataRepository.instance(this).session.value)
+            }
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        // One ask, both optional: the OngoingActivity chip rides a notification, and live HR (W3)
-        // needs the body sensor. Denying either leaves a permanent works-without state.
+        // One ask, all optional: the OngoingActivity chip rides a notification, live HR (W3) needs
+        // the api-level-appropriate heart-rate permission, and the exercise's calorie metric needs
+        // activity recognition. Denying any of them leaves a permanent works-without state.
         val wanted = buildList {
-            if (checkSelfPermission(Manifest.permission.BODY_SENSORS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-                add(Manifest.permission.BODY_SENSORS)
-            }
+            addAll(WearHealthPermissions.missing(this@MainActivity))
             if (Build.VERSION.SDK_INT >= 33 &&
-                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
+                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
             ) {
                 add(Manifest.permission.POST_NOTIFICATIONS)
             }

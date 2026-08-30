@@ -239,121 +239,131 @@ internal fun DayViewModel.logSet(
 ) {
     // A timed-hold set (GYMAP-51) carries a duration and reps = 0; a rep set needs reps > 0.
     if (reps <= 0 && durationSeconds == null) return
+    // One write per exercise at a time. Checked BEFORE the launch, on the main dispatcher, so two
+    // taps arriving in the same frame cannot both get past it.
+    if (!logSetsInFlight.add(exerciseId)) return
     viewModelScope.launch {
-        val sessionId = _state.value.sessionId ?: return@launch
-        val currentUi = _state.value.exercises.firstOrNull { it.plan.id == exerciseId } ?: return@launch
-        // Plan comes from the rendered exercise, so custom/cross-day exercises log correctly
-        // (the static dayPlan.exercises doesn't contain them).
-        val plan = currentUi.plan
-        // The real exercise this slot logs under — the swapped exercise when swapped (#11).
-        val effectiveExerciseId = currentUi.effectiveExerciseId.ifBlank { exerciseId }
-        // ONE resolution of the unit for this whole write, and it is the effective one.
-        //
-        // The card has always DISPLAYED currentUi.effectiveUnit while everything downstream of the
-        // tap — parsing, the plate-jump warning, the suggestion outcome's unit code — read the
-        // static plan's. The two disagree exactly when a swap crosses unit families, which is when
-        // it matters: a BODYWEIGHT slot swapped for a weighted movement showed a weight field and
-        // stored weightLb = null, and a weighted slot swapped for a PLATES machine read the typed
-        // plate count as pounds. Both land in volume, e1RM and personal bests silently.
-        val unit = currentUi.effectiveUnit
+        try {
+            val sessionId = _state.value.sessionId ?: return@launch
+            val currentUi = _state.value.exercises.firstOrNull { it.plan.id == exerciseId } ?: return@launch
+            // Plan comes from the rendered exercise, so custom/cross-day exercises log correctly
+            // (the static dayPlan.exercises doesn't contain them).
+            val plan = currentUi.plan
+            // The real exercise this slot logs under — the swapped exercise when swapped (#11).
+            val effectiveExerciseId = currentUi.effectiveExerciseId.ifBlank { exerciseId }
+            // ONE resolution of the unit for this whole write, and it is the effective one.
+            //
+            // The card has always DISPLAYED currentUi.effectiveUnit while everything downstream of
+            // the tap — parsing, the plate-jump warning, the suggestion outcome's unit code — read
+            // the static plan's. The two disagree exactly when a swap crosses unit families, which
+            // is when it matters: a BODYWEIGHT slot swapped for a weighted movement showed a weight
+            // field and stored weightLb = null, and a weighted slot swapped for a PLATES machine
+            // read the typed plate count as pounds. Both land in volume, e1RM and personal bests
+            // silently.
+            val unit = currentUi.effectiveUnit
 
-        val plateLb = settingsRepo.plateWeightLb.first()
-        val newWeightLb = WeightParser.parse(weightText, unit, plateLb)
-        // Compare against the all-time max from the frontier (never contains dummy display
-        // rows) so the warning still means "well above anything you've ever done".
-        val lastWeightLb = currentUi.priorFrontier
-            .mapNotNull { it.weightLb }
-            .maxOrNull()
-        if (!skipJumpCheck && newWeightLb != null && lastWeightLb != null && lastWeightLb > 0) {
-            val isPlates = unit == ExerciseUnit.PLATES
-            // Plate machines step one plate at a time, so a single-plate bump reads as a huge % but
-            // is normal progression — only flag a 2+ plate jump. Free weights keep the 20% rule (#1/#10).
-            val bigJump = if (isPlates) (newWeightLb - lastWeightLb) / plateLb >= 1.5
-            else newWeightLb > lastWeightLb * 1.20
-            if (bigJump) {
-                val weightUnit = settingsRepo.weightUnit.first()
-                val lastLabel = if (isPlates) formatPlates(lastWeightLb, plateLb) else formatWeight(lastWeightLb, weightUnit)
-                val newLabel = if (isPlates) formatPlates(newWeightLb, plateLb) else formatWeight(newWeightLb, weightUnit)
-                val percent = ((newWeightLb / lastWeightLb - 1) * 100).toInt()
-                _state.update {
-                    it.copy(pendingWeightJumpWarning = WeightJumpWarning(exerciseId, weightText, reps, lastLabel, newLabel, percent))
+            val plateLb = settingsRepo.plateWeightLb.first()
+            val newWeightLb = WeightParser.parse(weightText, unit, plateLb)
+            // Compare against the all-time max from the frontier (never contains dummy display
+            // rows) so the warning still means "well above anything you've ever done".
+            val lastWeightLb = currentUi.priorFrontier
+                .mapNotNull { it.weightLb }
+                .maxOrNull()
+            if (!skipJumpCheck && newWeightLb != null && lastWeightLb != null && lastWeightLb > 0) {
+                val isPlates = unit == ExerciseUnit.PLATES
+                // Plate machines step one plate at a time, so a single-plate bump reads as a huge % but
+                // is normal progression — only flag a 2+ plate jump. Free weights keep the 20% rule (#1/#10).
+                val bigJump = if (isPlates) (newWeightLb - lastWeightLb) / plateLb >= 1.5
+                else newWeightLb > lastWeightLb * 1.20
+                if (bigJump) {
+                    val weightUnit = settingsRepo.weightUnit.first()
+                    val lastLabel = if (isPlates) formatPlates(lastWeightLb, plateLb) else formatWeight(lastWeightLb, weightUnit)
+                    val newLabel = if (isPlates) formatPlates(newWeightLb, plateLb) else formatWeight(newWeightLb, weightUnit)
+                    val percent = ((newWeightLb / lastWeightLb - 1) * 100).toInt()
+                    _state.update {
+                        it.copy(pendingWeightJumpWarning = WeightJumpWarning(exerciseId, weightText, reps, lastLabel, newLabel, percent))
+                    }
+                    return@launch
                 }
-                return@launch
             }
-        }
 
-        // This set ends the previous rest interval (#82) — stamp the moment now, but write the
-        // event only after the timer is already on screen so the insert never delays the bubble.
-        val restEndedAtMs = clock.nowMs()
+            // This set ends the previous rest interval (#82) — stamp the moment now, but write the
+            // event only after the timer is already on screen so the insert never delays the bubble.
+            val restEndedAtMs = clock.nowMs()
 
-        // Start the rest timer before the DB write so the bubble + countdown appear the
-        // instant you tap — not after the insert and per-exercise rebuild round-trip.
-        // Rest follows the exercise actually performed (#11): a swapped slot uses the swapped exercise's
-        // movement profile (compound/isolation + rep heaviness), so a cross-type swap rests correctly and
-        // the realized-rest sample (keyed below by effectiveExerciseId) tunes the matching role. Falls back
-        // to the slot plan when the id can't be resolved.
-        val restPlan = com.forge.app.program.Program.exercise(effectiveExerciseId) ?: plan
-        val rest = computeRestPrescription(restPlan, currentUi.difficulty, currentUi.restTimerOverrideSeconds)
-        restTimer.start(rest.seconds)
-        // Push the started timer into UI state synchronously so it's visible before refreshExercise
-        // re-renders — don't wait for the collector coroutine to forward the first emission.
-        _state.update { it.copy(restTimer = restTimer.state.value, restTimerReason = rest.reason) }
+            // Start the rest timer before the DB write so the bubble + countdown appear the
+            // instant you tap — not after the insert and per-exercise rebuild round-trip.
+            // Rest follows the exercise actually performed (#11): a swapped slot uses the swapped exercise's
+            // movement profile (compound/isolation + rep heaviness), so a cross-type swap rests correctly and
+            // the realized-rest sample (keyed below by effectiveExerciseId) tunes the matching role. Falls back
+            // to the slot plan when the id can't be resolved.
+            val restPlan = com.forge.app.program.Program.exercise(effectiveExerciseId) ?: plan
+            val rest = computeRestPrescription(restPlan, currentUi.difficulty, currentUi.restTimerOverrideSeconds)
+            restTimer.start(rest.seconds)
+            // Push the started timer into UI state synchronously so it's visible before refreshExercise
+            // re-renders — don't wait for the collector coroutine to forward the first emission.
+            _state.update { it.copy(restTimer = restTimer.state.value, restTimerReason = rest.reason) }
 
-        closeOpenRestEvent(sessionId, restEndedAtMs)
-        openRestEvent = OpenRestEvent(
-            // Key the rest sample on the performed exercise (#11) so RestAdvisor.samples re-derives the
-            // role from the swapped exercise's plan, matching the prescription above — not the slot's.
-            exerciseId = effectiveExerciseId,
-            setIndex = currentUi.loggedSets.size,
-            plannedSeconds = rest.seconds,
-            startedAtMs = restEndedAtMs
-        )
-
-        // Was an inline copy of ensureLoggedExercise's body, and the copy had no guard: two rapid
-        // taps both read a stale null from UI state and both inserted a row for the same slot.
-        val leId = ensureLoggedExercise(exerciseId) ?: return@launch
-
-        workoutRepo.logSet(
-            loggedExerciseId = leId,
-            weightText = weightText,
-            weightLb = newWeightLb,
-            reps = reps,
-            durationSeconds = durationSeconds
-        )
-
-        // First set of this exercise while a suggestion chip was showing → record suggestion vs
-        // reality for the coach's step calibration (auto-coach Phase 2). Write-only, no reads.
-        val suggestedLb = currentUi.suggestedTargetLb
-        if (currentUi.loggedSets.isEmpty() && newWeightLb != null && suggestedLb != null) {
-            workoutRepo.recordSuggestionOutcome(
+            closeOpenRestEvent(sessionId, restEndedAtMs)
+            openRestEvent = OpenRestEvent(
+                // Key the rest sample on the performed exercise (#11) so RestAdvisor.samples re-derives the
+                // role from the swapped exercise's plan, matching the prescription above — not the slot's.
                 exerciseId = effectiveExerciseId,
-                unitCode = unit.code,
-                suggestedLb = suggestedLb,
-                takenLb = newWeightLb,
-                reps = reps,
-                rangeText = plan.reps
+                setIndex = currentUi.loggedSets.size,
+                plannedSeconds = rest.seconds,
+                startedAtMs = restEndedAtMs
             )
-        }
-        refreshExercise(exerciseId)
 
-        val updatedEx = _state.value.exercises.firstOrNull { it.plan.id == exerciseId }
-        if (updatedEx != null && updatedEx.loggedSets.size >= updatedEx.targetSets) {
-            _state.update { s ->
-                s.copy(exercises = s.exercises.map {
-                    if (it.plan.id == exerciseId) it.copy(isExpanded = false) else it
-                })
-            }
-        }
+            // Was an inline copy of ensureLoggedExercise's body, and the copy had no guard: two rapid
+            // taps both read a stale null from UI state and both inserted a row for the same slot.
+            val leId = ensureLoggedExercise(exerciseId) ?: return@launch
 
-        val newSetId = _state.value.exercises
-            .firstOrNull { it.plan.id == exerciseId }?.loggedSets?.lastOrNull()?.id
-        if (newSetId != null) {
-            _state.update { it.copy(undoableSetId = newSetId) }
-            undoClearJob?.cancel()
-            undoClearJob = viewModelScope.launch {
-                delay(5_000)
-                _state.update { it.copy(undoableSetId = null) }
+            workoutRepo.logSet(
+                loggedExerciseId = leId,
+                weightText = weightText,
+                weightLb = newWeightLb,
+                reps = reps,
+                durationSeconds = durationSeconds
+            )
+
+            // First set of this exercise while a suggestion chip was showing → record suggestion vs
+            // reality for the coach's step calibration (auto-coach Phase 2). Write-only, no reads.
+            val suggestedLb = currentUi.suggestedTargetLb
+            if (currentUi.loggedSets.isEmpty() && newWeightLb != null && suggestedLb != null) {
+                workoutRepo.recordSuggestionOutcome(
+                    exerciseId = effectiveExerciseId,
+                    unitCode = unit.code,
+                    suggestedLb = suggestedLb,
+                    takenLb = newWeightLb,
+                    reps = reps,
+                    rangeText = plan.reps
+                )
             }
+            refreshExercise(exerciseId)
+
+            val updatedEx = _state.value.exercises.firstOrNull { it.plan.id == exerciseId }
+            if (updatedEx != null && updatedEx.loggedSets.size >= updatedEx.targetSets) {
+                _state.update { s ->
+                    s.copy(exercises = s.exercises.map {
+                        if (it.plan.id == exerciseId) it.copy(isExpanded = false) else it
+                    })
+                }
+            }
+
+            val newSetId = _state.value.exercises
+                .firstOrNull { it.plan.id == exerciseId }?.loggedSets?.lastOrNull()?.id
+            if (newSetId != null) {
+                _state.update { it.copy(undoableSetId = newSetId) }
+                undoClearJob?.cancel()
+                undoClearJob = viewModelScope.launch {
+                    delay(5_000)
+                    _state.update { it.copy(undoableSetId = null) }
+                }
+            }
+        } finally {
+            // Every exit releases, including the weight-jump warning's early return and a
+            // cancellation when the screen goes away mid-write.
+            logSetsInFlight.remove(exerciseId)
         }
     }
 }

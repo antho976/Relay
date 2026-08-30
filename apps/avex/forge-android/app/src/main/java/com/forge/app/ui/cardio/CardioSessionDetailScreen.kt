@@ -1,5 +1,6 @@
 package com.forge.app.ui.cardio
 
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -50,6 +51,10 @@ fun CardioSessionDetailScreen(
     }
 
     val entry = state.entry ?: return  // still loading, or already gone (handled above)
+
+    // Editing is a state flip within this route, not a destination, so Back left the whole session
+    // behind rather than the edit form over it — discarding whatever had been typed with no prompt.
+    BackHandler(enabled = state.editing) { viewModel.closeEdit() }
 
     if (state.editing) {
         CardioLogSheet(

@@ -52,6 +52,14 @@ def collect() -> tuple[dict[str, list[int]], list[tuple[str, str, str]]]:
             except ET.ParseError:
                 # A truncated XML means the test JVM died mid-write — worth saying so rather than
                 # reporting a smaller, cheerier number.
+                #
+                # It also has to COUNT. This used to append the detail line without touching the
+                # totals, so a run whose test JVM crashed printed the headline "Tests — passed" with
+                # the broken suite listed underneath it: the two halves of the same summary
+                # contradicting each other, and the reassuring half on top. An unreadable result is
+                # the strongest possible statement that the suite's verdict is unknown, so it is
+                # counted as a failure of the module it belongs to.
+                totals.setdefault(module_of(path), [0, 0, 0])[1] += 1
                 failures.append((module_of(path), os.path.basename(path),
                                  "Unreadable result file — the test JVM likely crashed."))
                 continue
@@ -158,7 +166,12 @@ def main() -> int:
     for line in coverage_section():
         print(line)
 
-    return 0
+    # Non-zero when anything failed. The Gradle step above this one already fails the job on a
+    # normal test failure, so in practice this fires for the case Gradle CANNOT see: a result file
+    # it wrote and then could not finish, from a JVM that died with an exit code Gradle read as
+    # success. The summary step runs `if: always()`, so this is the last chance for a crashed test
+    # JVM to be something other than a green run.
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
