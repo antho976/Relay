@@ -4,7 +4,8 @@ name: CI
 #
 # Three jobs, cheapest first, each gating the next:
 #
-#   guard        ~30s   Wrapper checksum, no committed signing material, no committed build output.
+#   guard        ~30s   Wrapper checksum, no committed signing material, no committed build
+#                       output or tooling artifacts, and test_summary.py's own self check.
 #   verify       ~15m   The whole JVM gate: unit tests (all modules), screenshot goldens, Android
 #                       Lint, and both APK variants including a real R8 release.
 #   instrumented ~20m   The two things only a device can answer: the Room migration chain, and
@@ -36,10 +37,16 @@ on:
       - "docs/**"
       - "backups/**"
       - ".design-backups/**"
+      - ".impeccable/**"
       - "remotion-*/**"
-      - "**/*.png"
-      - "**/*.jpg"
-      - "**/*.mp4"
+      # Repository-root marketing images only. `*` does not match `/`, so this is the top level and
+      # nothing else — deliberately NOT `**/*.png`, which used to be here and which also matched the
+      # 44 Roborazzi goldens and all 137 tracked images under forge-android/. A pull request that
+      # changed only goldens therefore ran no CI whatsoever, and merged green on the strength of no
+      # check having run: precisely the change :app:verifyRoborazziDebug exists to police.
+      - "*.png"
+      - "*.jpg"
+      - "*.mp4"
       - "PRODUCT.md"
       - "README.md"
   pull_request:
@@ -48,10 +55,16 @@ on:
       - "docs/**"
       - "backups/**"
       - ".design-backups/**"
+      - ".impeccable/**"
       - "remotion-*/**"
-      - "**/*.png"
-      - "**/*.jpg"
-      - "**/*.mp4"
+      # Repository-root marketing images only. `*` does not match `/`, so this is the top level and
+      # nothing else — deliberately NOT `**/*.png`, which used to be here and which also matched the
+      # 44 Roborazzi goldens and all 137 tracked images under forge-android/. A pull request that
+      # changed only goldens therefore ran no CI whatsoever, and merged green on the strength of no
+      # check having run: precisely the change :app:verifyRoborazziDebug exists to police.
+      - "*.png"
+      - "*.jpg"
+      - "*.mp4"
       - "PRODUCT.md"
       - "README.md"
   merge_group:
@@ -104,14 +117,26 @@ jobs:
 
       - name: No build output in the tree
         # A committed build/ directory makes CI results depend on whatever was on someone's laptop.
+        #
+        # .kotlin/ is here for a related but distinct reason: it is where the Kotlin compiler drops
+        # crash logs, and four of them (~70 KB, containing absolute paths from two developer
+        # machines) were tracked in forge-android/ under a .gitignore rule that already excluded
+        # **/.kotlin/. gitignore only ever stops the NEXT one; nothing was enforcing the rule
+        # against files already added, so they survived every review and every green run.
         run: |
-          found=$(git ls-files | grep -E '(^|/)(build|\.gradle)/' || true)
+          found=$(git ls-files | grep -E '(^|/)(build|\.gradle|\.kotlin)/' || true)
           if [ -n "$found" ]; then
-            echo "::error::Build output is committed:"
+            echo "::error::Build output or tooling artifacts are committed:"
             echo "$found"
             exit 1
           fi
           echo "Clean."
+
+      - name: Test-summary self check
+        # test_summary.py is the only thing that turns a thousand XML files into a readable verdict,
+        # and it used to report "Tests — passed" over a suite whose result file it could not parse.
+        # A reporter that can lie about a failure needs its own test, and this one costs a second.
+        run: python3 .github/scripts/test_summary_test.py
 
   verify:
     name: Verify (JVM)
@@ -185,6 +210,13 @@ jobs:
       - name: Test summary
         # A CI failure should be readable from the run page. Without this, the only record of WHICH
         # of a thousand tests failed is a zip you have to download and open.
+        #
+        # It is also a gate, not only a report: the script exits non-zero when anything failed,
+        # which for a normal test failure merely agrees with the Gradle step above, and for an
+        # unreadable result file is the ONLY thing that notices. A test JVM that dies mid-write
+        # leaves a truncated TEST-*.xml behind and can still hand Gradle an exit code it reads as
+        # success; before this, that combination produced a green run and a summary headed
+        # "Tests — passed".
         if: always()
         run: python3 .github/scripts/test_summary.py >> "$GITHUB_STEP_SUMMARY"
 
