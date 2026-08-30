@@ -156,13 +156,17 @@ class SetLogUseCase @Inject constructor(
         )
         timerHolder.controller.start(rest.seconds)
 
-        val leId = row?.id ?: workoutRepo.addExerciseToSession(
+        // Read-and-create in one transaction, the same funnel the day screen uses. Separate steps
+        // here and separate steps there meant the wrist and the phone could each find no row for
+        // this slot and each insert one, splitting the exercise's sets across two rows of which the
+        // day screen renders only the first.
+        val leId = row?.id ?: workoutRepo.ensureLoggedExerciseForSlot(
             sessionId = session.id,
+            slotId = slotPlan.id,
             exerciseId = effectiveId,
             orderIndex = currentIdx,
             swappedName = swap?.swappedName?.takeIf { it.isNotBlank() },
-            swappedUnit = swap?.swappedUnit?.takeIf { it.isNotBlank() },
-            slotId = slotPlan.id.takeIf { it != effectiveId }
+            swappedUnit = swap?.swappedUnit?.takeIf { it.isNotBlank() }
         )
         val setId = workoutRepo.logSet(
             loggedExerciseId = leId,

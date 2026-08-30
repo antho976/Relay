@@ -57,36 +57,88 @@ interface LoggedExerciseDao {
      * importer writes BACKDATED sessions with fresh, highest-yet ids, so after backfilling years of
      * history "last time" resolved to the newest row the importer happened to write — and that
      * stale performance fed straight into the suggested working weight.
+     *
+     * Three predicates decide what qualifies as "last time", and all three are about the same
+     * thing: the prescribed load for the next session is a SUGGESTION, and untracked sessions are
+     * excluded from suggestions by contract ([com.forge.app.data.db.entities.Session.isUntracked]).
+     *
+     *  - `is_untracked = 0` — a session at a friend's gym on unfamiliar equipment must not become
+     *    the anchor for the next prescribed weight.
+     *  - `finished_at IS NOT NULL` — a session still in progress is not a past performance.
+     *  - `EXISTS (a set)` — a swap or a skip creates a logged_exercise row eagerly, with no sets
+     *    under it. A newer EMPTY row outranked the real work below it, so the card read "First
+     *    time" for a lift with years of history and the wrist prefilled from nothing.
      */
     @Query("""
         SELECT le.* FROM logged_exercise le
         INNER JOIN session s ON le.session_id = s.id
         WHERE le.exercise_id = :exerciseId AND le.session_id != :excludeSessionId
+          AND s.finished_at IS NOT NULL
+          AND s.is_untracked = 0
+          AND EXISTS (SELECT 1 FROM logged_set ls WHERE ls.logged_exercise_id = le.id)
         ORDER BY s.started_at DESC, le.id DESC LIMIT 1
     """)
     suspend fun lastLoggedBefore(exerciseId: String, excludeSessionId: Long): LoggedExercise?
 
-    /** Trophy counts. */
-    @Query("SELECT COUNT(*) FROM logged_exercise WHERE was_pr = 1")
+    /**
+     * Trophy and lifetime counts.
+     *
+     * All of these join `session` for the same reason: they are permanent progression counters, and
+     * `Session.isUntracked` promises that an untracked session is "excluded from streak, trophies,
+     * suggestions". Counting the bare `logged_exercise` table meant a workout the user explicitly
+     * marked as not counting still unlocked trophies, raised the lifetime PR total and inflated the
+     * ratings histogram — on the very screens that hide untracked rows, so the number and the list
+     * it was supposedly counting disagreed with each other. The `finished_at` half keeps the LIVE
+     * session out for the same reason every maximum in LoggedSetDao does.
+     */
+    @Query("""
+        SELECT COUNT(*) FROM logged_exercise le
+        INNER JOIN session s ON le.session_id = s.id
+        WHERE le.was_pr = 1 AND s.finished_at IS NOT NULL AND s.is_untracked = 0
+    """)
     fun observePrCount(): Flow<Int>
 
-    @Query("SELECT COUNT(*) FROM logged_exercise WHERE was_pr = 1")
+    @Query("""
+        SELECT COUNT(*) FROM logged_exercise le
+        INNER JOIN session s ON le.session_id = s.id
+        WHERE le.was_pr = 1 AND s.finished_at IS NOT NULL AND s.is_untracked = 0
+    """)
     suspend fun prCount(): Int
 
-    @Query("SELECT COUNT(*) FROM logged_exercise WHERE difficulty = :rating")
+    @Query("""
+        SELECT COUNT(*) FROM logged_exercise le
+        INNER JOIN session s ON le.session_id = s.id
+        WHERE le.difficulty = :rating AND s.finished_at IS NOT NULL AND s.is_untracked = 0
+    """)
     suspend fun countWithRating(rating: EffortRating): Int
 
-    @Query("SELECT COUNT(*) FROM logged_exercise WHERE hit_full_target = 1")
+    @Query("""
+        SELECT COUNT(*) FROM logged_exercise le
+        INNER JOIN session s ON le.session_id = s.id
+        WHERE le.hit_full_target = 1 AND s.finished_at IS NOT NULL AND s.is_untracked = 0
+    """)
     suspend fun fullTargetCount(): Int
 
-    @Query("SELECT COUNT(*) FROM logged_exercise WHERE swapped_name IS NOT NULL")
+    @Query("""
+        SELECT COUNT(*) FROM logged_exercise le
+        INNER JOIN session s ON le.session_id = s.id
+        WHERE le.swapped_name IS NOT NULL AND s.finished_at IS NOT NULL AND s.is_untracked = 0
+    """)
     suspend fun swapCount(): Int
 
     /** Total logged exercises ever — the "totalSessions" stat in the prototype counts these, not Sessions. */
-    @Query("SELECT COUNT(*) FROM logged_exercise")
+    @Query("""
+        SELECT COUNT(*) FROM logged_exercise le
+        INNER JOIN session s ON le.session_id = s.id
+        WHERE s.finished_at IS NOT NULL AND s.is_untracked = 0
+    """)
     suspend fun totalLogged(): Int
 
-    @Query("SELECT COUNT(*) FROM logged_exercise")
+    @Query("""
+        SELECT COUNT(*) FROM logged_exercise le
+        INNER JOIN session s ON le.session_id = s.id
+        WHERE s.finished_at IS NOT NULL AND s.is_untracked = 0
+    """)
     fun observeTotalLogged(): Flow<Int>
 
     /** For the frequency heatmap. One row per LoggedExercise; aggregated to per-day counts in Kotlin. */
@@ -203,6 +255,17 @@ interface LoggedExerciseDao {
 
     @Query("UPDATE logged_exercise SET superset_group = :group WHERE id = :id")
     suspend fun setSupersetGroup(id: Long, group: String?)
+
+    /**
+     * The PR flag, on its own.
+     *
+     * The asynchronous PR recalculation used to write a whole LoggedExercise built from its own
+     * earlier read, purely to set this one boolean — the exact shape the note-vs-skip race above
+     * was fixed for. A rating, a note or a skip landing while the recalculation was in flight was
+     * overwritten by the stale snapshot it started from.
+     */
+    @Query("UPDATE logged_exercise SET was_pr = :wasPr WHERE id = :id")
+    suspend fun setWasPr(id: Long, wasPr: Boolean)
 
     /** Full-text search across all exercise notes (#60). */
     @Query("""

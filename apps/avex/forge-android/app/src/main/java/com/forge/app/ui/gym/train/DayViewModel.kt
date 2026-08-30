@@ -99,6 +99,18 @@ class DayViewModel @Inject constructor(
     /** Serialises lazy logged_exercise creation — see [ensureLoggedExercise]. */
     internal val loggedExerciseMutex = kotlinx.coroutines.sync.Mutex()
 
+    /**
+     * Exercises with a LOG SET write in flight — the UI half of the double-tap guard.
+     *
+     * The write path is now atomic in the database, so a second tap can no longer fork a slot or
+     * duplicate a set index. It would still log a SECOND SET, which is what the user asked for
+     * literally and never means: the CTA stays enabled through a write that takes several round
+     * trips (rest prescription, row creation, insert, PR pass, rebuild), and a firm double tap on a
+     * button that has not visibly changed lands twice. Mirrors `swapsInFlight` above and the
+     * finishJob / exportJob guards elsewhere. Touched only on the main dispatcher.
+     */
+    internal val logSetsInFlight = mutableSetOf<String>()
+
     internal val _state = MutableStateFlow(
         DayUiState(dayPlan = dayPlan, displayName = dayPlan.defaultName)
     )

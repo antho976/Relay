@@ -70,8 +70,9 @@ class TrophyRepository @Inject constructor(
         val brutalD = async { loggedExerciseDao.countWithRating(EffortRating.BRUTAL) }
         val swapsD = async { loggedExerciseDao.swapCount() }
         val fullTargetD = async { loggedExerciseDao.fullTargetCount() }
-        // finishedSessions + distinctDayKeysTrained are derived from `allSessions` below — both DAO
-        // queries scan the same `finished_at IS NOT NULL` rows we already load, so no extra read.
+        // finishedSessions + distinctDayKeysTrained are derived from the loaded session list below —
+        // both DAO queries scan the same `finished_at IS NOT NULL` rows we already have, so no
+        // extra read.
         val maxBenchD = async { loggedSetDao.maxWeightAcrossExercises(TrophyExercises.BENCH_EXERCISE_IDS) }
         val maxSquatD = async { loggedSetDao.maxWeightAcrossExercises(TrophyExercises.SQUAT_EXERCISE_IDS) }
         val maxSessVolD = async { loggedSetDao.maxSessionVolume() }
@@ -83,7 +84,13 @@ class TrophyRepository @Inject constructor(
         val allSessions = allSessionsD.await()
         val zone = ZoneId.systemDefault()
         val onVacation = com.forge.app.domain.vacation.VacationCalendar.onVacation(vacationD.await())
-        // Lifetime tonnage + first session derived from the already-loaded session list — no extra query.
+        // TRACKED sessions are the input to every trophy figure below, not just the two that
+        // already used them. `Session.isUntracked` says an untracked session is "excluded from
+        // streak, trophies, suggestions"; tonnage and first-session honoured that while the streak,
+        // the session count, the distinct-days count, the early-bird / night-owl / Sunday tallies
+        // and the duration extremes were all computed from the full list. A workout the user
+        // explicitly marked as not counting unlocked permanent trophies — and every screen that
+        // shows those sessions hides it, so the trophy could not be traced back to anything.
         val trackedSessions = allSessions.filter { !it.isUntracked }
         val lifetimeTonnageLb = trackedSessions.sumOf { it.totalVolumeLb ?: 0.0 }
         val firstSessionMs = trackedSessions.minOfOrNull { it.startedAt }
@@ -93,21 +100,21 @@ class TrophyRepository @Inject constructor(
             brutalRatings = brutalD.await(),
             swapsUsed = swapsD.await(),
             fullTargetHits = fullTargetD.await(),
-            finishedSessions = allSessions.size,
-            distinctDayKeysTrained = allSessions.mapTo(mutableSetOf()) { it.dayKey }.size,
+            finishedSessions = trackedSessions.size,
+            distinctDayKeysTrained = trackedSessions.mapTo(mutableSetOf()) { it.dayKey }.size,
             maxBenchLb = maxBenchD.await() ?: 0.0,
             maxSquatLb = maxSquatD.await() ?: 0.0,
             maxSessionVolumeLb = maxSessVolD.await() ?: 0.0,
-            maxStreakEver = computeMaxStreak(allSessions, zone, onVacation),
-            earlyBirdSessions = countSessionsBefore(allSessions, zone, hour = 7),
-            nightOwlSessions = countSessionsAfter(allSessions, zone, hour = 21),
-            sundaysTrainedCount = countSundays(allSessions, zone),
-            maxSessionDurationMinutes = maxDurationMinutes(allSessions),
-            minFinishedSessionDurationMinutes = minDurationMinutes(allSessions),
+            maxStreakEver = computeMaxStreak(trackedSessions, zone, onVacation),
+            earlyBirdSessions = countSessionsBefore(trackedSessions, zone, hour = 7),
+            nightOwlSessions = countSessionsAfter(trackedSessions, zone, hour = 21),
+            sundaysTrainedCount = countSundays(trackedSessions, zone),
+            maxSessionDurationMinutes = maxDurationMinutes(trackedSessions),
+            minFinishedSessionDurationMinutes = minDurationMinutes(trackedSessions),
             maxSingleExerciseReps = maxRepsD.await() ?: 0,
-            comebackKidEarned = checkComebackKid(allSessions, zone),
-            consistencyKingEarned = checkConsistencyKing(allSessions, zone),
-            varietyPackEarned = checkVarietyPack(allSessions, zone),
+            comebackKidEarned = checkComebackKid(trackedSessions, zone),
+            consistencyKingEarned = checkConsistencyKing(trackedSessions, zone),
+            varietyPackEarned = checkVarietyPack(trackedSessions, zone),
             exerciseGoalsAchieved = goalsD.await(),
             lifetimeTonnageLb = lifetimeTonnageLb,
             firstSessionMs = firstSessionMs,
