@@ -4,6 +4,11 @@ Everything from the 99-finding audit and the follow-up re-audit that is **not** 
 work, with the reason and what it would take to finish. Written so nobody has to re-derive it from
 PR descriptions.
 
+A third pass (H1, H5, H6, M3, M5, M7, M8) closed seven findings a re-audit found still open — some
+fixed in the wrong place, some fixed on one path of two. None of them are listed here as open, and
+the two rows they touch are annotated. **H2, H4 and M2 are unchanged**, and for the same reason as
+before: they need a compiler this environment does not have, or a device.
+
 Three categories, and the distinction matters:
 
 - **Blocked** — I could not do it safely in the environment I had, not a judgement about whether it
@@ -149,9 +154,9 @@ Finding **98** (about 60 MiB of tracked media, no LFS) is advisory and unchanged
 | # | Fixed | Still open |
 |---|---|---|
 | H3 | The finish commits as one transaction, so a crash leaves either "not finished" or "finished and complete". | Process death **between the commit and the side effects** still skips the Health Connect mirrors for that session. Converging it needs durable per-session outbox state — a column, so a migration. Rotation and the widget are self-correcting; the mirrors are not. |
-| H5 | Every progression, reminder, milestone, comparison and prefill consumer is tracked-only. | `StatsViewModel.openDay()` stays inclusive **deliberately** — it is a history list. The heatmap above it is tracked, so the two can differ; that is a presentation question, not a data one. |
+| H5 | Every progression, reminder, milestone, comparison and prefill consumer is tracked-only. `SessionDao.lastFinishedDayKey()` — the last inclusive input to `resolveNextUp`, missed in the first pass — was filtered in the third. | `StatsViewModel.openDay()` stays inclusive **deliberately** — it is a history list. The heatmap above it is tracked, so the two can differ; that is a presentation question, not a data one. |
 | M9 | A custom move's unit and hold times survive into a reused template, so a bodyweight movement no longer returns as weighted and a hold no longer returns as reps. | **Muscle is not recoverable.** No logged row stores it — it exists only in the draft that created the move. It defaults, now explicitly rather than by accident. Fixing it properly means a column. |
-| 38 | The structural-minimum half (M8): the planner no longer works toward a cap its own slot count makes unreachable. | `PersonalProfile` documents caps as "clamped within ±35%" and the code *snaps* to a band edge — every qualifying muscle moves the full 35%, with no proportionality to evidence strength. Whether the doc or the code is wrong is a product decision that changes prescriptions for everyone with eight weeks of history on a muscle. |
+| 38 | The structural-minimum half (M8): the planner no longer works toward a cap its own slot count makes unreachable, and — since the third pass — neither does the number the Coach screen prints, which is where the unreachable cap was actually visible. | `PersonalProfile` documents caps as "clamped within ±35%" and the code *snaps* to a band edge — every qualifying muscle moves the full 35%, with no proportionality to evidence strength. Whether the doc or the code is wrong is a product decision that changes prescriptions for everyone with eight weeks of history on a muscle. |
 
 ---
 
@@ -164,3 +169,9 @@ and it caught what that method misses — a removed declaration with one survivi
 
 That is the honest reliability bound on this work, and it is the reason the Room migrations are not
 in it.
+
+The third pass is the evidence for the other half of that bound: a re-audit of merged work found
+seven fixes that compiled, passed their tests, and did not fully close the finding. A structural
+check proves a file parses; it cannot tell you that `startupPreferences()` was the second reader of
+a preference whose flow you fixed, or that the cap you clamped is also printed on a screen. Reading
+every call site is what catches those, and it is worth budgeting for on anything merged from here.
