@@ -41,8 +41,9 @@ data class StepCalibration(
  *  - FASTER: at least half the samples took MORE than suggested, and those heavier picks
  *    succeeded (hit the rep-range floor) at least [FAST_SUCCESS_SHARE] of the time. The user's
  *    behavior is the evidence the step is too small.
- *  - CONSOLIDATE: among samples that took the suggestion as-is, at least [CONSOLIDATE_FAIL_SHARE]
- *    failed the range floor — jumps aren't sticking, hold before the next one.
+ *  - CONSOLIDATE: at least half the samples took the suggestion as-is, and at least
+ *    [CONSOLIDATE_FAIL_SHARE] of those failed the range floor — jumps aren't sticking, hold before
+ *    the next one.
  */
 object SuggestionCalibrator {
 
@@ -52,6 +53,18 @@ object SuggestionCalibrator {
     private const val FAST_OVERRIDE_SHARE = 0.5
     private const val FAST_SUCCESS_SHARE = 0.6
     private const val CONSOLIDATE_FAIL_SHARE = 0.5
+
+    /**
+     * CONSOLIDATE needs the group to actually be a group that took the advice — a lift where two
+     * samples in nine followed the suggestion says nothing about whether the suggestion sticks.
+     *
+     * This gate was written `asIs.size >= group.size / 2`, in INTEGER arithmetic: at nine samples
+     * `group.size / 2` is 4, so four of nine — 44% — passed a check meant to read "at least half",
+     * and did so for every odd group size. The FASTER gate directly above computes its share as a
+     * Double against a named constant; this one now matches it, so the two sibling rules can no
+     * longer round in different directions.
+     */
+    private const val CONSOLIDATE_MIN_ASIS_SHARE = 0.5
 
     fun calibrate(outcomes: List<SuggestionOutcome>): StepCalibration {
         if (outcomes.isEmpty()) return StepCalibration.NEUTRAL
@@ -74,7 +87,7 @@ object SuggestionCalibrator {
             heavier.count { succeeded(it) }.toDouble() / heavier.size >= FAST_SUCCESS_SHARE
         ) return StepMode.FASTER
 
-        if (asIs.size >= group.size / 2 &&
+        if (asIs.size.toDouble() / group.size >= CONSOLIDATE_MIN_ASIS_SHARE &&
             asIs.count { !succeeded(it) }.toDouble() / asIs.size >= CONSOLIDATE_FAIL_SHARE
         ) return StepMode.CONSOLIDATE
 

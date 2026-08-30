@@ -102,7 +102,17 @@ object ReadinessAdvisor {
         }
 
         // ── Acute load: an unusually heavy session yesterday ──────────────────────
-        val yesterday = finished.lastOrNull { it.startedAt in (nowMs - 36 * HOUR_MS)..(nowMs - 12 * HOUR_MS) }
+        // The CALENDAR day before today, in the caller's zone — the same reading `daysSince` above
+        // is built from. This was a fixed 12-36 h window, which is not yesterday from any hour of
+        // the day: an 07:00 session checked at 20:00 is 37 h back and was missed entirely, a 22:00
+        // session checked at 06:00 is 8 h back and was missed too, and an 11:00 session checked at
+        // 23:00 the SAME day is 12 h back — so today's session was deducted for and labelled
+        // "heavy session yesterday". Evening lifters got the deduction least often and morning
+        // lifters got it against the wrong day.
+        val yesterdayDate = today.minusDays(1)
+        val yesterday = finished.lastOrNull {
+            Instant.ofEpochMilli(it.startedAt).atZone(zoneId).toLocalDate() == yesterdayDate
+        }
         if (yesterday != null) {
             val volumes = finished.takeLast(8).mapNotNull { it.totalVolumeLb }.filter { it > 0 }
             val median = median(volumes)
@@ -204,7 +214,7 @@ object ReadinessAdvisor {
         }
 
         // ── Off-gym movement (Health Connect steps) ───────────────────────────────
-        yesterdaySteps(health, nowMs)?.let { steps ->
+        yesterdaySteps(health, nowMs, zoneId)?.let { steps ->
             if (steps >= t.readinessHighStepDay) {
                 percent -= 1
                 parts += "long day on your feet"
@@ -291,12 +301,23 @@ object ReadinessAdvisor {
         return (today - baseline).toInt()
     }
 
-    /** Yesterday's step count, when steps are being synced. */
-    private fun yesterdaySteps(health: HealthSnap, nowMs: Long): Int? =
-        health.dailySteps
-            .filter { nowMs - it.dayStartMs in 0..(2 * DAY_MS) }
+    /**
+     * Yesterday's step count, when steps are being synced.
+     *
+     * The window was `nowMs - dayStartMs in 0..2 days` followed by `maxByOrNull { dayStartMs }`,
+     * which admitted TODAY's bucket and then picked it, because today's is always the latest. So
+     * "long day on your feet" was reading the day in progress: at 07:00 it saw a few hundred steps
+     * and never fired, and when it did fire it was deducting for a day the athlete had not finished
+     * living, to advise them about training in it. Yesterday is a calendar day, so ask for the
+     * calendar day.
+     */
+    private fun yesterdaySteps(health: HealthSnap, nowMs: Long, zoneId: ZoneId): Int? {
+        val yesterday = Instant.ofEpochMilli(nowMs).atZone(zoneId).toLocalDate().minusDays(1)
+        return health.dailySteps
+            .filter { Instant.ofEpochMilli(it.dayStartMs).atZone(zoneId).toLocalDate() == yesterday }
             .maxByOrNull { it.dayStartMs }
             ?.steps
+    }
 
     private fun median(values: List<Double>): Double? {
         if (values.isEmpty()) return null

@@ -135,11 +135,16 @@ object TodayDirective {
             }
         }
 
-        // CALENDAR days, not elapsed 24-hour blocks. The rules below read `daysSinceLast < 1` as
-        // "trained today" and the copy at the bottom says "It's been N days since your last
-        // session" — both of which an elapsed-hours count gets wrong for anyone who trains in the
-        // evening. Two users who both last trained YESTERDAY used to get opposite directives purely
-        // on 06:30 vs 20:00: the 20:00 one was told "Rest today", the 06:30 one "train what's next".
+        // CALENDAR days, not elapsed 24-hour blocks. The rules below key off recency and the copy
+        // at the bottom says "It's been N days since your last session" — both of which an
+        // elapsed-hours count gets wrong for anyone who trains in the evening. Two users who both
+        // last trained YESTERDAY used to get opposite directives purely on 06:30 vs 20:00: the
+        // 20:00 one was told "Rest today", the 06:30 one "train what's next".
+        //
+        // 0 means trained TODAY, which the early return above has already answered — so the two
+        // recency rules below are about YESTERDAY, and read `<= 1` rather than `< 1`. They were
+        // written as `< 1`, which is exactly the case that can no longer arrive here, so neither
+        // had fired in production since the `trainedToday` return was added.
         val daysSinceLast = finished.maxOfOrNull { it.startedAt }
             ?.let {
                 java.time.temporal.ChronoUnit.DAYS.between(
@@ -150,7 +155,7 @@ object TodayDirective {
 
         // ── Recovery spacing: trained yesterday and readiness is poor → rest ──────
         val readinessLow = (readiness?.percent ?: 0) <= -t.readinessRestThreshold
-        if (daysSinceLast < 1 && readinessLow) {
+        if (daysSinceLast <= 1 && readinessLow) {
             return Directive(
                 kind = Kind.CARDIO,
                 headline = "Take it easy today",
@@ -163,7 +168,7 @@ object TodayDirective {
         }
 
         // ── The weekly budget: hitting the target early doesn't mean training daily ─
-        if (weeklyTarget != null && sessionsThisWeek >= weeklyTarget && daysSinceLast < 1) {
+        if (weeklyTarget != null && sessionsThisWeek >= weeklyTarget && daysSinceLast <= 1) {
             return Directive(
                 kind = Kind.REST,
                 headline = "Rest today",

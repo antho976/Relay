@@ -10,6 +10,7 @@ import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import com.forge.app.Features
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.data.repo.CoachRepository
 import com.forge.app.data.repo.StatsRepository
@@ -132,8 +133,16 @@ class WeeklyRecapWorker @AssistedInject constructor(
                 if (stats.cardioMinutes > 0) append(" · ${stats.cardioMinutes} min cardio")
                 if (streakDays > 0 && !isStreakMilestone) append(" · $streakDays-day streak")
                 // Retention hooks: the closest trophy you're chasing, and a memory from this date.
-                trophyRepo.observeNearMisses().firstOrNull()?.firstOrNull()?.let { nmiss ->
-                    append(" · Almost: ${nmiss.trophyName} (${nmiss.progress}/${nmiss.target})")
+                //
+                // The trophy line is gated on the same flag as every trophy surface in the app.
+                // Without the gate this notification was the ONLY place a trophy still reached the
+                // user while `SHOW_GAMIFICATION` was off: it advertised "Almost: <trophy>" for a
+                // system with no screen to open, no case to browse and no tile on the Overview.
+                // Push is the worst possible place to be the last survivor of a parked feature.
+                if (Features.SHOW_GAMIFICATION) {
+                    trophyRepo.observeNearMisses().firstOrNull()?.firstOrNull()?.let { nmiss ->
+                        append(" · Almost: ${nmiss.trophyName} (${nmiss.progress}/${nmiss.target})")
+                    }
                 }
                 runCatching { statsRepo.findOnThisDayMemory() }.getOrNull()?.let { mem ->
                     val ago = if (mem.monthsAgo % 12 == 0) "${mem.monthsAgo / 12}yr" else "${mem.monthsAgo}mo"
