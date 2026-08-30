@@ -4,13 +4,20 @@ import com.forge.app.domain.units.WeightUnit
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 
 /**
  * A freestyle draft stores what was TYPED, in the display unit, as raw text — which is meaningless
  * on its own. Draft "100" while the app is set to pounds, change the setting to kilograms, resume,
  * and the same "100" was saved as 100 kg: a 220 lb set, in the history and in every aggregate built
  * on it, from a number the user never changed.
+ *
+ * Robolectric because the draft round-trips through `org.json`, which the Android unit-test stub
+ * jar leaves unimplemented — a plain JVM test gets "Method put in org.json.JSONObject not mocked"
+ * rather than an answer about the draft.
  */
+@RunWith(RobolectricTestRunner::class)
 class FreestyleDraftUnitTest {
 
     private fun draft(unit: WeightUnit?, weight: String = "100") = FreestyleDraft(
