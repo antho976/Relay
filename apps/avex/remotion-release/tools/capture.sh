@@ -13,6 +13,7 @@ NAME="${1:?usage: capture.sh <name> [seconds]}"
 SECS="${2:-20}"
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="$DIR/public/cfr/$NAME.mp4"
+mkdir -p "$(dirname "$OUT")"
 
 # The existing captures are all 1080x2400; matching that keeps one set of focus offsets valid.
 adb shell wm size | grep -q '1080x2400' || echo "note: device is not at 1080x2400 — run: adb shell wm size 1080x2400"
@@ -28,5 +29,9 @@ rm -f /tmp/_cap.mp4
 FRAMES=$(ffprobe -v error -count_frames -select_streams v:0 -show_entries stream=nb_read_frames -of csv=p=0 "$OUT")
 echo "$OUT — $FRAMES frames at 30fps ($(echo "scale=1; $FRAMES/30" | bc)s)"
 echo "contact sheet:"
+# out/ is gitignored, so it does not exist in a fresh clone — and ffmpeg does not create the
+# directory it is asked to write into. The script ran the whole capture, the transcode and the
+# frame count, and then failed on its last line with an ffmpeg error about the output path.
+mkdir -p "$DIR/out"
 ffmpeg -v error -y -i "$OUT" -vf "select='not(mod(n,$((FRAMES/6))))',scale=200:444,tile=6x1" -frames:v 1 "$DIR/out/$NAME-sheet.png"
 echo "  $DIR/out/$NAME-sheet.png"

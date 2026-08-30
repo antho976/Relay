@@ -28,7 +28,7 @@ class StartupBenchmark {
     fun startupBaselineProfile() = startup(CompilationMode.Partial(BaselineProfileMode.Require))
 
     private fun startup(mode: CompilationMode) = rule.measureRepeated(
-        packageName = "com.forge.app",
+        packageName = APP_PACKAGE,
         metrics = listOf(StartupTimingMetric()),
         iterations = 5,
         startupMode = StartupMode.COLD,

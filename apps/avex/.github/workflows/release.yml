@@ -53,6 +53,13 @@ jobs:
   verify:
     name: Full CI gate
     uses: ./.github/workflows/ci.yml
+    # The TAG, explicitly. Without this the called workflow checks out the caller's ref — which on a
+    # workflow_dispatch is the branch the dispatch was made from, not the tag named in the input —
+    # so a manual release tested main and signed something else entirely, with two green jobs
+    # asserting it had been checked. Repeated rather than shared with the `release` job's env,
+    # because job-level env is not visible in a `with:` block.
+    with:
+      ref: ${{ inputs.tag || github.ref_name }}
     permissions:
       contents: read
 
@@ -185,10 +192,21 @@ jobs:
           for apk in forge-android/wear/build/outputs/apk/release/*.apk; do
             cp "$apk" "release-artifacts/avex-wear-$TAG.apk"
           done
-          # The mapping file is the only way to read a stack trace from a minified build. Losing it
-          # means every crash report for this version is permanently unreadable.
-          cp forge-android/app/build/outputs/mapping/release/mapping.txt \
-             "release-artifacts/mapping-$TAG.txt" 2>/dev/null || true
+          # The mapping file is the only way to read a stack trace from a minified build: losing it
+          # means every crash report for this version is permanently unreadable, and it cannot be
+          # regenerated later because R8 is not deterministic across toolchain versions.
+          #
+          # This used to end in `2>/dev/null || true`, which says the opposite of the sentence above
+          # it — the one artifact described as irreplaceable was the one artifact whose absence was
+          # swallowed. A release with no mapping is not a release; it fails here, before the draft
+          # exists, where the fix is to look at why R8 produced nothing.
+          mapping=forge-android/app/build/outputs/mapping/release/mapping.txt
+          if [ ! -s "$mapping" ]; then
+            echo "::error::No R8 mapping at $mapping — every crash report for $TAG would be unreadable."
+            ls -la forge-android/app/build/outputs/mapping/release/ || true
+            exit 1
+          fi
+          cp "$mapping" "release-artifacts/mapping-$TAG.txt"
           ls -la release-artifacts
 
       - name: Upload artifacts to the run
