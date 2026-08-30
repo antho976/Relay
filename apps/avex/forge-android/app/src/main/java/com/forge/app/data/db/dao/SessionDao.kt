@@ -142,14 +142,12 @@ interface SessionDao {
     @Query("SELECT COUNT(*) FROM session WHERE started_at = :startedAt")
     suspend fun countAtStart(startedAt: Long): Int
 
-    /** The set count and volume of every session already starting at this exact epoch — the import
-     *  duplicate guard's content fingerprint. A stored session at the same instant is only a
-     *  duplicate when it holds the same work; a DIFFERENT workout that merely collides on a
-     *  date-only midnight is nudged forward instead of being dropped. */
-    @Query("SELECT set_count AS setCount, total_volume_lb AS totalVolumeLb FROM session WHERE started_at = :startedAt")
-    suspend fun contentAtStart(startedAt: Long): List<SessionContent>
-
-    data class SessionContent(val setCount: Int, val totalVolumeLb: Double?)
+    /** Every session already starting at this exact epoch — the import duplicate guard's candidates.
+     *  A stored session at the same instant is only a duplicate when it holds the same work; a
+     *  DIFFERENT workout that merely collides on a date-only midnight is nudged forward instead of
+     *  being dropped, so the comparison itself lives in the importer, which can read the sets. */
+    @Query("SELECT id FROM session WHERE started_at = :startedAt")
+    suspend fun idsAtStart(startedAt: Long): List<Long>
 
     /** Deletes all sessions (CASCADE removes LoggedExercise, LoggedSet, MoodEntry). For reset (#119). */
     @Query("DELETE FROM session")

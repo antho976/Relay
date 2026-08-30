@@ -60,9 +60,30 @@
         <package android:name="com.google.android.apps.healthdata" />
     </queries>
 
+    <!--
+        Android Auto Backup is OFF, and that is a privacy decision rather than a technical one.
+
+        Settings → About states four claims the user can check against this manifest, and the first
+        is "No Internet permission — Avex physically cannot upload anything." The absence of INTERNET
+        stops the APP from uploading; it does nothing about Android's own backup transport, which
+        copies forge.db, SharedPreferences and the DataStore to the user's Google Drive on a schedule
+        nobody in this app chose and with no in-app prompt. The fourth claim — "your data moves only
+        when you move it" — was false in exactly the same way, as was the privacy policy's "your data
+        stays on your devices unless you export or share it".
+
+        A false privacy claim is worse than a missing convenience, and Avex has the convenience
+        covered: BackupRepository writes a complete archive (database, preferences, photos, avatar)
+        wherever the user points Android's picker, which IS them moving it.
+
+        The cost is real and worth stating: this also disables Android 12+ device-to-device transfer,
+        which data_extraction_rules.xml deliberately used to carry the progress photos a new phone
+        would otherwise lose. Moving to a new phone now means taking a backup and restoring it. Both
+        rules files are kept, and both attributes stay wired, so re-enabling is one word here — but
+        it is a decision about what the About screen is allowed to say, not a config tweak.
+    -->
     <application
         android:name=".ForgeApp"
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:enableOnBackInvokedCallback="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"

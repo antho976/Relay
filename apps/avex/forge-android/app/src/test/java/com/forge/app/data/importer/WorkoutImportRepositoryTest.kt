@@ -186,6 +186,48 @@ class WorkoutImportRepositoryTest {
         assertEquals(2, storedSessionCount())
     }
 
+    @Test
+    fun twoDifferentLiftsWithIdenticalArithmeticAreNotTheSameWorkout() = runTest {
+        // Set count and total volume are a fingerprint of the NUMBERS, not of the work. Bench 3×10
+        // at 100 and Row 3×10 at 100 are three sets and 3,000 lb either way — so the second was
+        // waved off as a duplicate and dropped, silently, on the one path whose entire promise is
+        // that it merges rather than loses. Date-only sources make this the common case, not a
+        // contrived one: every workout they carry starts at the same midnight.
+        repo.import(
+            fitNotesFile(
+                "bench.csv",
+                row("2026-01-05", "Bench Press", 100, 10),
+                row("2026-01-05", "Bench Press", 100, 10),
+                row("2026-01-05", "Bench Press", 100, 10)
+            )
+        )
+        val barbellRow = repo.import(
+            fitNotesFile(
+                "row.csv",
+                row("2026-01-05", "Barbell Row", 100, 10),
+                row("2026-01-05", "Barbell Row", 100, 10),
+                row("2026-01-05", "Barbell Row", 100, 10)
+            )
+        ) as ImportResult.Success
+
+        assertEquals("a different lift is a different workout", 0, barbellRow.duplicatesSkipped)
+        assertEquals(1, barbellRow.sessions)
+        assertEquals(2, storedSessionCount())
+    }
+
+    @Test
+    fun theSameWorkoutIsStillRecognisedWhenTheNumbersAreIdenticalToAnothers() = runTest {
+        // The other side of the same coin: tightening the fingerprint must not stop it matching.
+        val uri = fitNotesFile("bench.csv", row("2026-01-05", "Bench Press", 100, 10))
+        repo.import(uri)
+        repo.import(fitNotesFile("row.csv", row("2026-01-05", "Barbell Row", 100, 10)))
+
+        val again = repo.import(uri)
+
+        assertTrue("got $again", again is ImportResult.NothingToImport)
+        assertEquals("still two sessions, not three", 2, storedSessionCount())
+    }
+
     // ── Merge, never replace ────────────────────────────────────────────────────────────────────
 
     @Test

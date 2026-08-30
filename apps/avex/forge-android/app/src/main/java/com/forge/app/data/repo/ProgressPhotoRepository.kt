@@ -97,7 +97,40 @@ class ProgressPhotoRepository @Inject constructor(
         runCatching { readIndex().sortedByDescending { it.takenAtMs } }.getOrDefault(emptyList())
     }
 
-    fun fileFor(photo: ProgressPhoto): File = File(dir, photo.fileName)
+    /**
+     * The file backing [photo], or null when its recorded name is not one this app could have
+     * written. See [safeFile] — every filesystem operation on an index-supplied name goes through it.
+     */
+    fun fileForOrNull(photo: ProgressPhoto): File? = safeFile(photo.fileName)
+
+    /** [fileForOrNull] for callers that only render — a non-existent file reads as a missing image. */
+    fun fileFor(photo: ProgressPhoto): File = safeFile(photo.fileName) ?: File(dir, UNSAFE_PLACEHOLDER)
+
+    /**
+     * Resolve an index-supplied file name to a real file inside [dir], or null if it is not one.
+     *
+     * The ZIP restore validates ENTRY names — flat basenames only, no separators — and then trusts
+     * `progress_photos/index.json`, which is one of those entries and is metadata the app reads back
+     * as instructions. An index whose `file` reads `../../databases/forge.db` produced a
+     * "photo" whose backing file was the live database: it appeared in the gallery, and the Delete
+     * action deleted it. Any app-private file the attacker could name was reachable that way.
+     *
+     * Two independent checks, because either alone is a single point of failure:
+     *
+     *  1. The NAME must be one this app writes — `pp_<id>.jpg`, from [add] / [addCaptured]. That
+     *     excludes every separator and traversal sequence by construction, and `index.json` and
+     *     `albums.json` with them.
+     *  2. The RESOLVED path's canonical parent must be [dir] itself. Cheap, and it holds even if the
+     *     name rule is ever loosened — a symlink or an encoding trick that survives (1) does not
+     *     survive being resolved and compared.
+     */
+    private fun safeFile(fileName: String): File? {
+        if (!PHOTO_FILE_NAME.matches(fileName)) return null
+        return runCatching {
+            val candidate = File(dir, fileName).canonicalFile
+            candidate.takeIf { it.parentFile == dir.canonicalFile }
+        }.getOrNull()
+    }
 
     /**
      * Import a picked image into app storage, copying its bytes as-is (EXIF orientation preserved). The
@@ -114,10 +147,15 @@ class ProgressPhotoRepository @Inject constructor(
     ): ProgressPhoto? = withContext(Dispatchers.IO) {
         val fileName = "pp_${UUID.randomUUID().toString().take(12)}.jpg"
         val dest = File(dir, fileName)
+        // BOUNDED. `copyTo` reads until the stream ends, and the stream belongs to a content
+        // provider chosen by the user from the system picker — a huge file, or a provider that never
+        // terminates, wrote until internal storage was full, taking the database's room with it. A
+        // photo over the cap is refused with its partial file removed rather than truncated into
+        // something that looks like a valid image.
         val ok = runCatching {
             context.contentResolver.openInputStream(source)?.use { input ->
-                dest.outputStream().use { input.copyTo(it) }
-            } != null
+                dest.outputStream().use { output -> copyAtMost(input, output, MAX_PHOTO_BYTES) }
+            } ?: false
         }.getOrDefault(false)
         if (!ok || dest.length() == 0L) { dest.delete(); return@withContext null }
         val takenAt = exifTakenAtMs(dest) ?: takenAtMsOverride ?: System.currentTimeMillis()
@@ -162,11 +200,26 @@ class ProgressPhotoRepository @Inject constructor(
         return photo
     }
 
+    /**
+     * Delete a photo: its BYTES first, then its metadata.
+     *
+     * The old order removed the index entry, then called `File.delete()` and ignored the result. A
+     * failed delete — or a process death between the two — left the image on disk with nothing
+     * pointing at it: gone from the gallery, still in app-private storage, and still swept into
+     * every future backup archive, because [BackupRepository] zips the whole folder rather than the
+     * indexed subset. "Deleted" has to mean the bytes are gone, so the bytes go first and the index
+     * entry is only dropped once they are verified absent.
+     */
     suspend fun delete(photo: ProgressPhoto) = withContext(Dispatchers.IO) {
         runCatching {
             writeMutex.withLock {
+                val file = safeFile(photo.fileName)
+                // An unsafe or already-absent file leaves nothing to delete — drop the entry so a
+                // hostile or stale index row cannot become permanently undeletable.
+                if (file != null && file.exists() && !file.delete() && file.exists()) {
+                    return@withLock
+                }
                 writeIndex(readIndex().filterNot { it.fileName == photo.fileName })
-                File(dir, photo.fileName).delete()
                 bump()
             }
         }
@@ -306,6 +359,24 @@ class ProgressPhotoRepository @Inject constructor(
             ?.takeIf { it in EXIF_MIN_MS..(System.currentTimeMillis() + EXIF_CLOCK_SLACK_MS) }
     }.getOrNull()
 
+    /**
+     * Copy [input] into [output], stopping and reporting false once [maxBytes] is exceeded.
+     *
+     * Mirrors [BackupRepository]'s `copyAtMost`, deliberately rather than sharing it: this one
+     * writes to a stream the caller owns, and the two callers' cleanup differs.
+     */
+    private fun copyAtMost(input: java.io.InputStream, output: java.io.OutputStream, maxBytes: Long): Boolean {
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        var total = 0L
+        while (true) {
+            val read = input.read(buffer)
+            if (read < 0) return true
+            total += read
+            if (total > maxBytes) return false
+            output.write(buffer, 0, read)
+        }
+    }
+
     private fun readIndex(): List<ProgressPhoto> {
         if (!indexFile.existsAtomically()) return emptyList()
         val arr = JSONArray(indexFile.readTextAtomically())
@@ -314,8 +385,12 @@ class ProgressPhotoRepository @Inject constructor(
             val name = o.getString("file").trim().ifBlank {
                 throw IllegalStateException("Progress photo index contains a blank file name")
             }
+            // A name this app could not have written is not a photo, whatever it points at. Dropped
+            // rather than thrown: an index carrying one entry of hostile metadata should cost the
+            // user that entry, not their whole library.
+            val file = safeFile(name) ?: return@mapNotNull null
             // Drop dangling index entries whose file was removed out-of-band.
-            if (!File(dir, name).exists()) return@mapNotNull null
+            if (!file.exists()) return@mapNotNull null
             // Fields absent in older indexes read as their defaults, so pre-revamp data loads cleanly.
             ProgressPhoto(
                 name,
@@ -376,5 +451,27 @@ class ProgressPhotoRepository @Inject constructor(
         // the EXIF value is treated as corrupt and the import falls back to override/now.
         const val EXIF_MIN_MS = 946_684_800_000L
         const val EXIF_CLOCK_SLACK_MS = 24L * 60 * 60 * 1000
+
+        /**
+         * The only shape a progress-photo file name may take: exactly what [add] and [addCaptured]
+         * write, `pp_` + a UUID fragment + `.jpg`.
+         *
+         * Anchored, and the character class admits no separator, no dot beyond the extension and no
+         * traversal sequence — so "is this a name we wrote" and "is this inside our folder" are the
+         * same question, and it is answered before the string ever reaches the filesystem.
+         */
+        val PHOTO_FILE_NAME = Regex("""^pp_[0-9a-fA-F-]{1,64}\.jpg$""")
+
+        /**
+         * A name that matches nothing on disk, handed to render-only callers in place of an unsafe
+         * one. They already treat a missing file as a missing image.
+         */
+        const val UNSAFE_PLACEHOLDER = "pp_unsafe_entry.jpg"
+
+        /**
+         * Ceiling for one imported photo. Comfortably past any phone camera's full-resolution
+         * output — a 200 MP shot is a few tens of MB — and far below what it takes to fill a device.
+         */
+        const val MAX_PHOTO_BYTES = 64L * 1024 * 1024
     }
 }

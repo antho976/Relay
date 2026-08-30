@@ -163,8 +163,17 @@ class SampleDataSeeder @Inject constructor(
 
             // One bodyweight log per seeded week, drifting up to the user's own current weight
             // (~0.4 lb/week). Skipped entirely when the user has no logged bodyweight to anchor on.
+            //
+            // And never over a day the user has already weighed in on. `upsert` is INSERT OR
+            // REPLACE, which DELETES the conflicting row — so demo data written blindly across eight
+            // Wednesdays destroyed a real reading and its note on each of them. The seeder's own
+            // gate ("no finished sessions") does not protect a bodyweight-only user, which is
+            // exactly who reaches for demo data: they have months of weigh-ins and no workouts.
+            // Skipping an occupied date matches the importer's merge behaviour — real data wins.
             val bwDate = weekStart.plusDays(2)
-            if (anchorBwLb != null && !bwDate.isAfter(today)) {
+            if (anchorBwLb != null && !bwDate.isAfter(today) &&
+                bodyweightDao.byDateKey(bwDate.toString()) == null
+            ) {
                 val bwMs = bwDate.atTime(8, 0).atZone(zone).toInstant().toEpochMilli()
                 bodyweightDao.upsert(BodyweightEntry(
                     dateKey = bwDate.toString(),

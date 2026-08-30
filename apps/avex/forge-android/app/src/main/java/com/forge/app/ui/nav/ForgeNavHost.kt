@@ -417,7 +417,25 @@ fun ForgeNavHost(initialDayKey: String? = null, privacyPolicyRequest: Int = 0) {
             }
         }
         composable(Routes.PROGRESS_CAMERA) {
-            ProgressCameraScreen(onBack = { nav.popBackStack() })
+            // The same gate as MIRROR_TEST, for the same photos. The camera screen shows the
+            // previous shot as a translucent pose-alignment ghost, so it displays private imagery
+            // whether or not anything has been captured — and it was reachable with the gallery
+            // locked in two ways: the lock expiring while this route was already on the back stack
+            // (backgrounding the app is exactly what starts that timer), and a return to it from
+            // anywhere the route can be pushed. A gate on the gallery that leaves the camera open
+            // is a gate on one of two doors into the same room.
+            val appLock = LocalAppLock.current
+            val galleryLocked by appLock.galleryLocked.collectAsStateWithLifecycle()
+            if (galleryLocked) {
+                AppLockScreen(
+                    subtitle = "Unlock your progress photos",
+                    promptReady = true,
+                    onUnlocked = { appLock.markAuthenticated() },
+                    onCancel = { nav.popBackStack() }
+                )
+            } else {
+                ProgressCameraScreen(onBack = { nav.popBackStack() })
+            }
         }
         composable(Routes.BODY_MEASUREMENTS) {
             BodyMeasurementsScreen(onBack = { nav.popBackStack() })
