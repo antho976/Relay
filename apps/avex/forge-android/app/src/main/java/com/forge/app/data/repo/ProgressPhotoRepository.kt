@@ -158,6 +158,7 @@ class ProgressPhotoRepository @Inject constructor(
             } ?: false
         }.getOrDefault(false)
         if (!ok || dest.length() == 0L) { dest.delete(); return@withContext null }
+        if (!isDecodableImage(dest)) { dest.delete(); return@withContext null }
         val takenAt = exifTakenAtMs(dest) ?: takenAtMsOverride ?: System.currentTimeMillis()
         runCatching { index(fileName, takenAt, note, album, pose, muscles) }
             .getOrElse { dest.delete(); null }
@@ -172,9 +173,17 @@ class ProgressPhotoRepository @Inject constructor(
             if (!temp.exists() || temp.length() == 0L) return@withContext null
             val fileName = "pp_${UUID.randomUUID().toString().take(12)}.jpg"
             val dest = File(dir, fileName)
-            val ok = runCatching { temp.copyTo(dest, overwrite = true); true }.getOrDefault(false)
+            // Bounded like [add], even though this source is the app's own camera temp file rather
+            // than a provider the user picked: the asymmetry was the only thing making one of these
+            // two paths safe and the other trusting.
+            val ok = runCatching {
+                temp.inputStream().use { input ->
+                    dest.outputStream().use { output -> copyAtMost(input, output, MAX_PHOTO_BYTES) }
+                }
+            }.getOrDefault(false)
             temp.delete()
             if (!ok || dest.length() == 0L) { dest.delete(); return@withContext null }
+            if (!isDecodableImage(dest)) { dest.delete(); return@withContext null }
             runCatching { index(fileName, System.currentTimeMillis(), "", album, pose, emptyList()) }
                 .getOrElse { dest.delete(); null }
         }
@@ -347,6 +356,24 @@ class ProgressPhotoRepository @Inject constructor(
      * placeholders must fail to parse; SimpleDateFormat isn't thread-safe), then a plausibility
      * window so corrupt EXIF can't file a photo in 1970 or the future.
      */
+    /**
+     * Does this file actually contain a decodable image?
+     *
+     * The copy was bounded and the partial output cleaned up, but ANY non-empty byte stream was
+     * then indexed as `pp_*.jpg`: a text file, an archive, a truncated download, a provider that
+     * returned an error page. The gallery got a permanent entry that renders as a grey box, the
+     * backup carried it, and nothing anywhere said what had gone wrong.
+     *
+     * `inJustDecodeBounds` reads the header only — no pixels are allocated, so this stays cheap
+     * enough to run on a 64 MiB file. A real image reports positive bounds; everything else does
+     * not, including a JPEG truncated before its header is complete.
+     */
+    private fun isDecodableImage(file: File): Boolean = runCatching {
+        val opts = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        android.graphics.BitmapFactory.decodeFile(file.path, opts)
+        opts.outWidth > 0 && opts.outHeight > 0
+    }.getOrDefault(false)
+
     private fun exifTakenAtMs(file: File): Long? = runCatching {
         val exif = ExifInterface(file)
         val raw = exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL)

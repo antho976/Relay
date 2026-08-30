@@ -27,7 +27,12 @@ data class FreestyleTemplateSummary(
 )
 
 /** One drafted set from a template: the load performed (null = bodyweight) and reps. */
-data class FreestyleTemplateSet(val weightLb: Double?, val reps: Int)
+data class FreestyleTemplateSet(
+    val weightLb: Double?,
+    val reps: Int,
+    /** Held seconds for a timed set (GYMAP-51); null for a rep set. */
+    val durationSeconds: Int? = null
+)
 
 /**
  * One exercise from a template: a library id + the sets performed that session.
@@ -41,7 +46,16 @@ data class FreestyleTemplateSet(val weightLb: Double?, val reps: Int)
 data class FreestyleTemplateExercise(
     val libId: String,
     val sets: List<FreestyleTemplateSet>,
-    val customName: String? = null
+    val customName: String? = null,
+    /**
+     * [com.forge.app.program.ExerciseUnit.code] as it was logged, for a custom move.
+     *
+     * A library move re-derives its unit from its catalogue entry; a custom one has no entry, and
+     * the rebuild assumed a weighted rep exercise. So a custom BODYWEIGHT movement came back with a
+     * weight field, and a custom timed hold came back as a rep set — reusing a past workout quietly
+     * changed what the movement was.
+     */
+    val unitCode: String? = null
 )
 
 /**
@@ -93,17 +107,30 @@ class FreestyleTemplateViewModel @Inject constructor(
         // A custom move stores its name on the row (swappedName), because there is no library entry
         // to look it up in. Carried through so the logger can rebuild it.
         val customNames = LinkedHashMap<String, String>()
+        val unitCodes = LinkedHashMap<String, String>()
         exercises.forEach { le ->
             val sets = loggedSetDao.forLoggedExercise(le.id)
                 .sortedBy { it.setIndex }
-                .map { FreestyleTemplateSet(weightLb = it.weightLb, reps = it.reps) }
+                .map {
+                    FreestyleTemplateSet(
+                        weightLb = it.weightLb,
+                        reps = it.reps,
+                        durationSeconds = it.durationSeconds
+                    )
+                }
             byLib.getOrPut(le.exerciseId) { mutableListOf() }.addAll(sets)
             if (isCustomExerciseId(le.exerciseId)) {
                 le.swappedName?.takeIf { it.isNotBlank() }?.let { customNames[le.exerciseId] = it }
+                // The unit is on the row for exactly this reason; the rebuild was ignoring it.
+                le.swappedUnit?.takeIf { it.isNotBlank() }?.let { unitCodes[le.exerciseId] = it }
             }
         }
         return byLib.map { (libId, sets) ->
-            FreestyleTemplateExercise(libId, sets, customName = customNames[libId])
+            FreestyleTemplateExercise(
+                libId, sets,
+                customName = customNames[libId],
+                unitCode = unitCodes[libId]
+            )
         }
     }
 }

@@ -57,9 +57,9 @@ import javax.inject.Inject
  *   - "minutes this week" (excludes rest entries, per CardioDao default)
  *   - transient sheet/dialog state
  *
- * Weekly-window start is captured once at construction. Matches the StatsRepository
- * behaviour: if the user keeps the app open for a week the window won't slide, but
- * that's fine for a personal app.
+ * The weekly window follows the calendar: it is re-anchored on every local day boundary and on any
+ * clock or timezone change, so a screen left open across a Sunday night shows the new week's dates
+ * over the new week's numbers.
  */
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 @HiltViewModel
@@ -70,7 +70,8 @@ class CardioViewModel @Inject constructor(
     private val extendedGoalRepo: ExtendedGoalRepository,
     private val healthConnectManager: HealthConnectManager,
     private val snackbar: SnackbarController,
-    private val clock: Clock
+    private val clock: Clock,
+    private val timeSignals: com.forge.app.core.time.TimeSignals
 ) : ViewModel() {
 
     private val transient = MutableStateFlow(TransientState())
@@ -91,14 +92,29 @@ class CardioViewModel @Inject constructor(
      * the label and the day cells are drawn from a FRESH `LocalDate.now()`, so the screen showed the
      * new week's dates over the old week's minutes, distance and streak — with no reload in sight,
      * because nothing in the pipeline had changed.
+     *
+     * Driven by [TimeSignals.dayStarts] rather than only by ON_RESUME. Refreshing on resume fixes
+     * leaving and coming back, and does nothing at all for the screen that is STILL OPEN when the
+     * date turns over — which is the case the bug was reported for: nothing resumes, so nothing
+     * re-anchors, and the mismatch persists for as long as the phone stays on the tab.
+     * `dayStarts()` emits immediately, at each local midnight, and on any clock or timezone change,
+     * which is the same signal `StatsRepository` already uses for exactly this.
      */
     private val weekStart = MutableStateFlow(com.forge.app.core.time.mondayStartMs(clock.nowMs()))
 
-    init { refreshConnection() }
+    init {
+        refreshConnection()
+        viewModelScope.launch {
+            timeSignals.dayStarts().collect { refreshWeekAnchor() }
+        }
+    }
 
     /**
-     * Re-anchor the week if the calendar has moved on. Called from the same ON_RESUME the connection
-     * refresh uses, which is when a screen that was open across midnight comes back into view.
+     * Re-anchor the week if the calendar has moved on.
+     *
+     * Still called from ON_RESUME as well as from the day-boundary signal above: a device that
+     * dozed through midnight can come back before the tick lands, and re-anchoring twice to the
+     * same Monday costs nothing (a [MutableStateFlow] drops an equal value).
      */
     fun refreshWeekAnchor() {
         val current = com.forge.app.core.time.mondayStartMs(clock.nowMs())

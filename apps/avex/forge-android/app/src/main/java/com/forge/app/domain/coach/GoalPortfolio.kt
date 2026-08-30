@@ -70,15 +70,49 @@ object GoalPortfolio {
      * Conflicts among the active goals. Pure pair scan — the set is tiny (a portfolio of 8 would be
      * a lot), so an O(n²) walk is the honest implementation.
      */
-    fun conflicts(goals: List<CoachGoal>): List<GoalConflict> {
+    /**
+     * @param s the snapshot, so a bodyweight goal's DIRECTION can be read from its target against
+     *   the athlete's current weight. Optional only so existing tests can omit it; without it the
+     *   direction falls back to the stored phase, and an unknown direction claims no conflict.
+     */
+    fun conflicts(goals: List<CoachGoal>, s: AdaptationSnapshot? = null): List<GoalConflict> {
         val active = goals.filter { it.isActive }
         val out = mutableListOf<GoalConflict>()
         for (i in active.indices) {
             for (j in i + 1 until active.size) {
-                conflict(active[i], active[j])?.let { out += it }
+                conflict(active[i], active[j], s)?.let { out += it }
             }
         }
         return out
+    }
+
+    /**
+     * Is this bodyweight goal a CUT? Null when the direction cannot be established.
+     *
+     * Both conflicts below are about an ENERGY DEFICIT: losing weight competes with adding to a max,
+     * and building a muscle "needs a surplus more than it needs volume alone". Neither is true of a
+     * bulk — a bulk is synergistic with both — yet the branches returned unconditionally, and the
+     * `cut` variable computed one line above them was never read. So someone gaining weight to add
+     * muscle was told their two goals fight, in cutting language, on the strength of a check that
+     * had been written and then not wired up.
+     *
+     * The stored phase wins when present, because it is what the user picked. Otherwise the target
+     * against the current smoothed weight answers it, with the same tolerance the goal is declared
+     * met at — inside that band the goal is maintenance, not a cut.
+     */
+    private fun isCut(goal: CoachGoal, s: AdaptationSnapshot?): Boolean? {
+        when {
+            goal.note.contains(WeightPhase.CUT.code) -> return true
+            goal.note.contains(WeightPhase.BULK.code) -> return false
+            goal.note.contains(WeightPhase.MAINTAIN.code) -> return false
+        }
+        val target = goal.targetValue ?: return null
+        val current = s?.bodyweight
+            ?.sortedBy { it.recordedAt }
+            ?.let { WeightPhase.smoothedLatest(it) }
+            ?: return null
+        if (abs(current - target) <= WEIGHT_TREND_LB) return false
+        return target < current
     }
 
     // ── Per-kind readings ──────────────────────────────────────────────────────
@@ -225,17 +259,19 @@ object GoalPortfolio {
 
     // ── Conflict matrix ────────────────────────────────────────────────────────
 
-    private fun conflict(a: CoachGoal, b: CoachGoal): GoalConflict? {
+    private fun conflict(a: CoachGoal, b: CoachGoal, s: AdaptationSnapshot? = null): GoalConflict? {
         val ka = CoachGoalKind.fromCode(a.kind) ?: return null
         val kb = CoachGoalKind.fromCode(b.kind) ?: return null
 
         // Losing weight while chasing a maximal strength target draws on one recovery + energy
         // budget. Compatible enough to hold strength; not compatible with adding to it fast.
-        val cut = listOf(a to ka, b to kb).firstOrNull { (g, k) -> k == CoachGoalKind.BODYWEIGHT && g.note.contains(WeightPhase.CUT.code) }
         if (ka == CoachGoalKind.BODYWEIGHT && kb == CoachGoalKind.LIFT_1RM ||
             kb == CoachGoalKind.BODYWEIGHT && ka == CoachGoalKind.LIFT_1RM
         ) {
             val (weightGoal, liftGoal) = if (ka == CoachGoalKind.BODYWEIGHT) a to b else b to a
+            // Only a deficit conflicts. A bulk feeds a max; an unknown direction is not grounds to
+            // tell someone their goals fight.
+            if (isCut(weightGoal, s) != true) return null
             return GoalConflict(
                 first = weightGoal, second = liftGoal,
                 explanation = "Losing weight and adding to a max draw on the same recovery budget.",
@@ -246,6 +282,9 @@ object GoalPortfolio {
             kb == CoachGoalKind.BODYWEIGHT && ka == CoachGoalKind.MUSCLE_VOLUME
         ) {
             val (weightGoal, volumeGoal) = if (ka == CoachGoalKind.BODYWEIGHT) a to b else b to a
+            // "Needs a surplus" is an argument against a CUT. Gaining weight to build a muscle is
+            // the plan, not a conflict with it.
+            if (isCut(weightGoal, s) != true) return null
             return GoalConflict(
                 first = weightGoal, second = volumeGoal,
                 explanation = "Building a muscle needs a surplus more than it needs volume alone.",
@@ -275,7 +314,6 @@ object GoalPortfolio {
                 lessonId = null
             )
         }
-        if (cut != null) return null
         return null
     }
 

@@ -77,7 +77,9 @@ class CoachGoalRepository @Inject constructor(
 
     /** Conflicting pairs among the active goals, each with the coach's sequencing proposal. */
     suspend fun conflicts(): List<GoalPortfolio.GoalConflict> =
-        GoalPortfolio.conflicts(coachGoalDao.active())
+        // With the snapshot, so a bodyweight goal's direction comes from its target against the
+        // athlete's actual weight rather than only from whatever the note happens to say.
+        GoalPortfolio.conflicts(coachGoalDao.active(), adaptationRepository.snapshotOrEmpty())
 
     /**
      * Goals that reached their target since the last check. The lifecycle moment the plan asks

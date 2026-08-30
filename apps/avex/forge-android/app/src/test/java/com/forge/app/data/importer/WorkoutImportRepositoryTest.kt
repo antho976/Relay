@@ -77,6 +77,21 @@ class WorkoutImportRepositoryTest {
     private fun row(date: String, exercise: String, weightLb: Int, reps: Int) =
         "$date,$exercise,Barbell,$weightLb,lbs,$reps,,,,"
 
+    /** Strong groups by (Date, Workout Name), so one file can carry several workouts on one date. */
+    private fun strongFile(name: String, vararg rows: String): Uri {
+        val file = temporaryFolder.newFile(name)
+        file.writeText(
+            buildString {
+                appendLine("Date,Workout Name,Duration,Exercise Name,Set Order,Weight,Weight Unit,Reps")
+                rows.forEach { appendLine(it) }
+            }
+        )
+        return Uri.fromFile(file)
+    }
+
+    private fun strongRow(date: String, workout: String, exercise: String, weightLb: Int, reps: Int) =
+        "$date,$workout,60m,$exercise,1,$weightLb,lbs,$reps"
+
     private suspend fun storedSessionCount(): Int = db.sessionDao().allFinished().size
 
     private suspend fun storedSetCount(): Int =
@@ -226,6 +241,62 @@ class WorkoutImportRepositoryTest {
 
         assertTrue("got $again", again is ImportResult.NothingToImport)
         assertEquals("still two sessions, not three", 2, storedSessionCount())
+    }
+
+    /**
+     * The same two workouts, re-imported in the OPPOSITE order.
+     *
+     * Strong groups rows into workouts by (Date, Workout Name), so ONE file can hold two distinct
+     * sessions that both start at the same midnight — a date-only export has no time to separate
+     * them with. The second takes the next free slot a second later.
+     *
+     * The slot search used to begin at a per-run counter and only move forward. On the reversed
+     * pass "Evening" matched itself at +1s and pushed the counter to +2s; "Morning" then began its
+     * search at +2s, never looked at the midnight slot where it was already stored, and was
+     * inserted a second time.
+     *
+     * Re-running an import is the one thing this path promises changes nothing, and the order of
+     * rows in a file is not something a user controls — two exports of the same data can differ.
+     */
+    @Test
+    fun reImportingTheSameDayInTheOppositeOrderAddsNothing() = runTest {
+        repo.import(
+            strongFile(
+                "forwards.csv",
+                strongRow("2026-01-05", "Morning", "Bench Press", 100, 10),
+                strongRow("2026-01-05", "Evening", "Barbell Row", 90, 8)
+            )
+        )
+        assertEquals("two workouts on one date", 2, storedSessionCount())
+
+        val again = repo.import(
+            strongFile(
+                "backwards.csv",
+                strongRow("2026-01-05", "Evening", "Barbell Row", 90, 8),
+                strongRow("2026-01-05", "Morning", "Bench Press", 100, 10)
+            )
+        )
+
+        assertTrue("got $again", again is ImportResult.NothingToImport)
+        assertEquals("both were already stored", 2, storedSessionCount())
+    }
+
+    @Test
+    fun aGenuinelyNewWorkoutOnAnAlreadyCrowdedDayStillLands() = runTest {
+        // The guard must stay loose in the other direction: scanning every occupied slot is for
+        // finding a match, not for refusing anything that collides on a date-only midnight.
+        repo.import(
+            strongFile(
+                "existing.csv",
+                strongRow("2026-01-05", "Morning", "Bench Press", 100, 10),
+                strongRow("2026-01-05", "Evening", "Barbell Row", 90, 8)
+            )
+        )
+        assertEquals(2, storedSessionCount())
+
+        repo.import(strongFile("third.csv", strongRow("2026-01-05", "Night", "Squat", 200, 5)))
+
+        assertEquals("the new workout takes the next free slot", 3, storedSessionCount())
     }
 
     // ── Merge, never replace ────────────────────────────────────────────────────────────────────

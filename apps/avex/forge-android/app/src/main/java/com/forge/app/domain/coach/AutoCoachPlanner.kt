@@ -269,11 +269,23 @@ object AutoCoachPlanner {
 
         // ── +1: one muscle that's earning more ────────────────────────────────
         val fresh = fatigue == null || fatigue.score < t.deloadScoreThreshold - 2
-        // The ISO week, matching WeeklyReview and the Brief. This gate used to be a rolling
-        // 7 x 24 h window, so a Monday-morning pass counted the session logged earlier THAT Monday
-        // and decided the target was met, while the Brief printed above it — reading the calendar
-        // week that had just ended — said "1 short of target". Same screen, opposite conclusions.
-        val weekSessions = s.sessions.count { it.startedAt >= mondayStartMs(s.nowMs, s.zoneId) }
+        // The week that ENDED, not the one in progress.
+        //
+        // Moving this off a rolling 7 x 24 h window onto the ISO week fixed the boundary and left
+        // the window pointing at the wrong week: it counted from THIS Monday onward, so the
+        // question "did last week hit the target" — which is what the reason string below actually
+        // claims, and what the Brief above it reports — was answered with the two days of the
+        // current week. On a Monday pass that is usually zero, and the decision was cached.
+        //
+        // The previous Monday is derived by stepping back one millisecond from this one rather
+        // than subtracting 7 x 24 h, so a DST week of 23 or 25 hours still lands on a Monday.
+        val thisMonday = mondayStartMs(s.nowMs, s.zoneId)
+        val lastMonday = mondayStartMs(thisMonday - 1, s.zoneId)
+        // Finished and tracked, like every other progression count — this one was totting up
+        // abandoned sessions and ones the user had explicitly excluded from their record.
+        val weekSessions = s.sessions.count {
+            it.finishedAt != null && !it.isUntracked && it.startedAt >= lastMonday && it.startedAt < thisMonday
+        }
         if (fresh && inputs.sessionsTarget > 0 && weekSessions >= inputs.sessionsTarget) {
             val byMuscle = slots.groupBy { it.second.muscle }
             val candidate = byMuscle.entries.mapNotNull { (muscle, muscleSlots) ->

@@ -326,4 +326,3 @@
 4 unlabelled-clickable ui/gym/train/components/RestTimerBubble.kt .clickable(
 1 unlabelled-clickable ui/gym/train/components/SetInputRow.kt .clickable(
 3 unlabelled-clickable ui/overview/components/OverviewTiles.kt .clickable(
-1 unlabelled-clickable ui/settings/AccentColorPicker.kt .clickable(
