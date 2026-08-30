@@ -71,6 +71,16 @@ on:
   workflow_dispatch:
   # Callable so release.yml gates a tag on this exact pipeline rather than on a copy that drifts.
   workflow_call:
+    inputs:
+      ref:
+        # WHICH commit to test. A called workflow otherwise checks out the CALLER's ref, which for
+        # release.yml's workflow_dispatch is the branch the dispatch was made from — usually main —
+        # while the signing job checks out the selected tag. The release then tested one tree and
+        # signed another, and both jobs went green saying so. Empty on a push or a merge queue,
+        # where github.ref is already the thing under test.
+        description: "Git ref to check out. Defaults to the caller's ref."
+        required: false
+        type: string
 
 # Read-only, with no exceptions anywhere in this file. That is load-bearing: release.yml CALLS this
 # workflow, and a called workflow may not hold permissions the caller lacks — so the moment one job
@@ -92,6 +102,9 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
+        with:
+          # See the `ref` input above: on anything but a release call this is github.ref.
+          ref: ${{ inputs.ref || github.ref }}
 
       - name: Validate Gradle wrapper checksum
         # The wrapper jar is a committed BINARY that every later step executes. Without this, a
@@ -145,6 +158,9 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
+        with:
+          # See the `ref` input above: on anything but a release call this is github.ref.
+          ref: ${{ inputs.ref || github.ref }}
 
       - name: Set up JDK 21
         uses: actions/setup-java@v5
@@ -282,6 +298,9 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
+        with:
+          # See the `ref` input above: on anything but a release call this is github.ref.
+          ref: ${{ inputs.ref || github.ref }}
 
       - name: Set up JDK 21
         uses: actions/setup-java@v5

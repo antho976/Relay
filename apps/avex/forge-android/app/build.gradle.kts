@@ -53,7 +53,12 @@ android {
         // machine still builds (the release just stays unsigned).
         if (hasReleaseKeystore) {
             create("release") {
-                storeFile = file(keystoreProperties.getProperty("storeFile"))
+                // rootProject.file, not file(...). `file(...)` is MODULE-relative, so one
+                // documented path could not be right for both modules at once: the example says
+                // storeFile is relative to forge-android/, which made it resolve under app/ here and
+                // wear/ next door — and a wrong path fails configuration for EVERY build type,
+                // debug included, because signingConfigs is evaluated at configuration time.
+                storeFile = rootProject.file(keystoreProperties.getProperty("storeFile"))
                 storePassword = keystoreProperties.getProperty("storePassword")
                 keyAlias = keystoreProperties.getProperty("keyAlias")
                 keyPassword = keystoreProperties.getProperty("keyPassword")

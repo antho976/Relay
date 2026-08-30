@@ -20,7 +20,7 @@ class BaselineProfileGenerator {
     val rule = BaselineProfileRule()
 
     @Test
-    fun generate() = rule.collect(packageName = "com.forge.app") {
+    fun generate() = rule.collect(packageName = APP_PACKAGE) {
         pressHome()
         startActivityAndWait()
         // Let the Overview settle so first-frame composition/draw paths are captured.
