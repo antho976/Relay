@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.forge.app.core.time.Clock
 import com.forge.app.data.repo.NoticeKind
+import com.forge.app.ui.DesignDoctrine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -123,12 +124,77 @@ class NotificationPrefsTest {
         repo.setCardioWearableHintDismissed(true)
         repo.setNotifPermAsked(true)
         repo.setNoticeKindEnabled(NoticeKind.MILESTONE.key, enabled = false)
+        repo.setTrainingReminderEnabled(true)
+        repo.setWeeklyRecapEnabled(false)
+        repo.setRestTimerAlertEnabled(false)
+        repo.setQuietHoursEnabled(true)
 
         repo.resetSection(SettingsSection.NOTIFICATIONS)
 
         assertFalse("the watch invite comes back", repo.cardioWearableHintDismissed.first())
         assertFalse("the notifications invite comes back", repo.notifPermAsked.first())
         assertTrue("every kind is on again", repo.disabledNoticeKinds.first().isEmpty())
+        // Each of these goes back to its DEFAULT, which is not the same as "on": training reminders
+        // and quiet hours default off, the other two default on.
+        assertFalse("training reminders go back off", repo.trainingReminderEnabled.first())
+        assertTrue("weekly recap comes back on", repo.weeklyRecapEnabled.first())
+        assertTrue("rest timer alerts come back on", repo.restTimerAlertEnabled.first())
+        assertFalse("quiet hours goes back off", repo.quietHoursEnabled.first())
+    }
+
+    /**
+     * The case above is an enumeration, and an enumeration goes stale in silence.
+     *
+     * It was named "every switch on that page" while checking three of them, and two toggles —
+     * weekly recap and rest timer alerts — were added to the page without ever being added to the
+     * section. Resetting left them exactly as they were, and the test that would have caught it was
+     * green because its name was the only place the word "every" appeared.
+     *
+     * So derive the list instead of writing it down: read `NotificationsPage`'s own source, take
+     * every `state.x` it renders, and require each one to be accounted for here AND covered by the
+     * section. Add a toggle to that page and this fails until both are true.
+     */
+    @Test
+    fun everyToggleOnTheNotificationsPageIsCoveredByItsSectionReset() {
+        val source = DesignDoctrine.appSource("ui/settings/SettingsSubPages.kt")
+        assertTrue("SettingsSubPages.kt not found at ${source.path}", source.isFile)
+        val text = source.readText()
+
+        val start = text.indexOf("internal fun NotificationsPage(")
+        assertTrue("NotificationsPage not found — did it move or get renamed?", start >= 0)
+        val after = text.indexOf("\n@Composable", start)
+        val body = if (after < 0) text.substring(start) else text.substring(start, after)
+
+        val rendered = Regex("""\bstate\.([A-Za-z][A-Za-z0-9]*)""").findAll(body)
+            .map { it.groupValues[1] }.toSortedSet()
+        assertTrue("no state fields found — the scan is broken, not the page", rendered.isNotEmpty())
+
+        // Each control on the page and the preference key behind it. `trainingReminderHour` is the
+        // reminder's companion picker rather than a switch of its own; it still has to reset.
+        val backingKey = mapOf(
+            "trainingReminderEnabled" to PreferenceKeys.TRAINING_REMINDER_ENABLED,
+            "trainingReminderHour" to PreferenceKeys.TRAINING_REMINDER_HOUR,
+            "weeklyRecapEnabled" to PreferenceKeys.WEEKLY_RECAP_ENABLED,
+            "restTimerAlertEnabled" to PreferenceKeys.REST_TIMER_ALERT_ENABLED,
+            "quietHoursEnabled" to PreferenceKeys.QUIET_HOURS_ENABLED,
+            "disabledNoticeKinds" to PreferenceKeys.DISABLED_NOTICE_KINDS,
+        )
+
+        val unaccounted = rendered - backingKey.keys
+        assertTrue(
+            "\n\nNotificationsPage renders these, and this test does not know what preference " +
+                "they are stored under: $unaccounted\nAdd each to `backingKey` above, and to " +
+                "SettingsSection.NOTIFICATIONS, so \"Reset this section\" keeps its promise.\n",
+            unaccounted.isEmpty()
+        )
+
+        val notInSection = rendered.mapNotNull { backingKey[it] }
+            .filterNot { it in SettingsSection.NOTIFICATIONS.keys }
+        assertTrue(
+            "\n\nThese are switches on the Notifications page that resetting the section leaves " +
+                "untouched: $notInSection\n",
+            notInSection.isEmpty()
+        )
     }
 
     // ── Academy: dismissal and announcement are separate records ───────────────

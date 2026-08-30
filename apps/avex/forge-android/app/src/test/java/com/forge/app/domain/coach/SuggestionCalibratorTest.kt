@@ -93,6 +93,43 @@ class SuggestionCalibratorTest {
         assertEquals(StepMode.CONSOLIDATE, c.modeFor("ua1", "db"))
     }
 
+    /**
+     * Nine samples, four of them taken as-is and failing. Four of nine is 44%, not "at least half".
+     *
+     * The gate was `asIs.size >= group.size / 2` in INTEGER arithmetic, so on every odd group size
+     * it rounded the requirement DOWN — at nine samples it asked for four. The FASTER gate directly
+     * above it computes the same kind of share as a Double, so the two sibling rules disagreed about
+     * what half means, and CONSOLIDATE fired on evidence it was written to reject.
+     */
+    @Test
+    fun consolidateNeedsAnActualHalf_notAnIntegerDividedOne() {
+        val asIsFailing = takenAndFailing(4, exerciseId = "odd")
+        // Five LIGHTER picks — neither an as-is sample nor a heavier override, so FASTER (which is
+        // evaluated first, and correctly) has nothing to fire on and CONSOLIDATE is the rule on trial.
+        val lighter = (0 until 5).map {
+            outcome(exerciseId = "odd", suggested = 25.0, taken = 20.0, reps = 10, at = (100 + it).toLong())
+        }
+        val group = asIsFailing + lighter
+        assertEquals(9, group.size)
+        assertEquals(
+            StepMode.NEUTRAL,
+            SuggestionCalibrator.calibrate(group).modeFor("odd", "db")
+        )
+    }
+
+    /** Five of nine IS at least half, so the same shape one sample over the line does fire. */
+    @Test
+    fun consolidateFiresOnceHalfTheGroupTookTheSuggestion() {
+        val asIsFailing = takenAndFailing(5, exerciseId = "odd2")
+        val lighter = (0 until 4).map {
+            outcome(exerciseId = "odd2", suggested = 25.0, taken = 20.0, reps = 10, at = (100 + it).toLong())
+        }
+        assertEquals(
+            StepMode.CONSOLIDATE,
+            SuggestionCalibrator.calibrate(asIsFailing + lighter).modeFor("odd2", "db")
+        )
+    }
+
     @Test
     fun calibrateIsDeterministic() {
         val data = heavierAndSucceeding(10) + takenAndFailing(8, exerciseId = "ua2")

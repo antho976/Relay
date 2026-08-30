@@ -148,8 +148,14 @@ object GoalPortfolio {
         return GoalState(
             goal = goal, kind = kind, current = current, target = target, perWeek = perWeek,
             etaWeeks = eta,
+            // A bodyweight goal is the only goal you can be AT: reached, and holding. `movingToward`
+            // answers one question — is the slope pointing at the target — and at the target it fell
+            // to the `else` branch and demanded a POSITIVE slope. So an athlete who hit their goal
+            // weight and maintained it read as off track, and for a cut the only reading that
+            // counted as on track was putting the weight back on. `reached` uses the same tolerance
+            // the goal is declared met at, so "met" and "on track" can never contradict each other.
             onTrack = if (current == null || target == null || perWeek == null) null
-            else movingToward(current, target, perWeek),
+            else reached || movingToward(current, target, perWeek),
             reachedNow = reached,
             reading = when {
                 current == null -> "no weigh-ins yet"
@@ -315,6 +321,7 @@ object GoalPortfolio {
         return perWeek > 0
     }
 
+    /** Direction only — whether the goal is already MET is the caller's question, not this one's. */
     private fun movingToward(current: Double, target: Double, perWeek: Double): Boolean =
         if (target < current) perWeek < 0 else perWeek > 0
 

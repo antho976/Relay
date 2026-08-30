@@ -194,6 +194,44 @@ class GoalPortfolioTest {
         assertEquals(false, state.onTrack)
     }
 
+    /**
+     * The state a bodyweight goal exists to reach: AT the target, holding steady.
+     *
+     * `onTrack` asked only `movingToward`, whose two branches are "target below you, so lose" and
+     * everything else, "so gain". At the target the second branch won and demanded a POSITIVE
+     * slope — so an athlete who hit their goal weight and maintained it was told they were off
+     * track, and the only reading that counted as on track for a cut was putting the weight back
+     * on. `reachedNow` said yes on the same data, so the card contradicted itself in two fields.
+     */
+    @Test
+    fun bodyweightGoal_holdingAtTheTargetIsOnTrack() {
+        // Ten weigh-ins flat at 180, target 180.
+        val entries = (0 until 10).map { i ->
+            BodyweightEntry(dateKey = "d$i", weightLb = 180.0, recordedAt = now - (9 - i) * 3 * day)
+        }
+        val g = goal(CoachGoalKind.BODYWEIGHT, target = 180.0)
+        val state = GoalPortfolio.evaluate(listOf(g), snapshot(bodyweight = entries)).single()
+        assertTrue("reached", state.reachedNow)
+        assertEquals("and therefore on track", true, state.onTrack)
+    }
+
+    /**
+     * Inside the tolerance on the high side, creeping up a touch. `reachedNow` says met and
+     * `movingToward` says wrong-way, so the two fields contradicted each other on one screen for
+     * anything sitting within 1.5 lb of its target — which is where a bodyweight goal spends most
+     * of its life once it has been hit.
+     */
+    @Test
+    fun bodyweightGoal_reachedButDriftingInsideTheToleranceIsStillOnTrack() {
+        val entries = (0 until 10).map { i ->
+            BodyweightEntry(dateKey = "d$i", weightLb = 180.4 + i * 0.1, recordedAt = now - (9 - i) * 3 * day)
+        }
+        val g = goal(CoachGoalKind.BODYWEIGHT, target = 180.0)
+        val state = GoalPortfolio.evaluate(listOf(g), snapshot(bodyweight = entries)).single()
+        assertTrue("within the trend tolerance of the target", state.reachedNow)
+        assertEquals("met and on track cannot disagree", true, state.onTrack)
+    }
+
     @Test
     fun muscleVolumeGoal_countsThisWeeksSetsOnTheMuscle() {
         // Clock is Thursday; the week under test runs from Monday 00:00. See [midWeek].

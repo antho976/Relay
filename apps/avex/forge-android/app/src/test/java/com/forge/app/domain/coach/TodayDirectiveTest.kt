@@ -48,12 +48,21 @@ class TodayDirectiveTest {
     private fun readiness(percent: Int, reason: String = "slept badly") =
         Recommendation.ReadinessScale(percent, reason, Confidence.MEDIUM)
 
+    /**
+     * `trainedToday` is DERIVED from the snapshot, never passed in.
+     *
+     * It used to be a parameter defaulting to `false`, which let a case hand `compute` a session
+     * started today while also swearing nothing had been trained today. `DirectiveRepository` reads
+     * both from the same finished, tracked sessions, so that pairing cannot occur in production —
+     * and two rules stayed green for months while being unreachable there. A test that can only
+     * pass on an input the app cannot produce is not covering the branch; it is hiding that the
+     * branch is dead. Want a session logged today? Add `session(0)`.
+     */
     private fun compute(
         s: AdaptationSnapshot = snapshot(),
         readiness: Recommendation.ReadinessScale? = null,
         life: LifeEvents.State = LifeEvents.State.NONE,
         nextUp: String? = "push",
-        trainedToday: Boolean = false,
         weekdayMode: Boolean = true,
         sessionsThisWeek: Int = 1,
         weeklyTarget: Int? = null,
@@ -61,9 +70,15 @@ class TodayDirectiveTest {
     ) = TodayDirective.compute(
         s = s, readiness = readiness, life = life, nextUpDayKey = nextUp,
         dayName = { if (it == "push") "Push day" else it },
-        trainedToday = trainedToday, weekdayMode = weekdayMode,
+        trainedToday = TodayDirective.trainedToday(s), weekdayMode = weekdayMode,
         sessionsThisWeek = sessionsThisWeek, weeklyTarget = weeklyTarget, freestyle = freestyle
     )
+
+    /** A snapshot whose most recent session was logged today. */
+    private fun trainedTodaySnapshot() = snapshot(sessions = listOf(session(0), session(3), session(5)))
+
+    /** A snapshot whose most recent session was logged yesterday — the recency rules' actual case. */
+    private fun trainedYesterdaySnapshot() = snapshot(sessions = listOf(session(1), session(3), session(5)))
 
     // ── The promise: never blank ───────────────────────────────────────────────
 
@@ -73,7 +88,7 @@ class TodayDirectiveTest {
             compute(),
             compute(freestyle = true, nextUp = null),
             compute(s = snapshot(sessions = emptyList())),
-            compute(trainedToday = true),
+            compute(s = trainedTodaySnapshot()),
             compute(life = LifeEvents.State.NONE.copy(sick = true)),
             compute(nextUp = null),
             compute(readiness = readiness(-5))
@@ -140,27 +155,68 @@ class TodayDirectiveTest {
 
     @Test
     fun trainedTodayClosesTheDay() {
-        val d = compute(trainedToday = true)
+        val d = compute(s = trainedTodaySnapshot())
         assertEquals(TodayDirective.Kind.REST, d.kind)
         assertTrue(d.reason.contains("trained"))
     }
 
+    /**
+     * YESTERDAY, not today. Today is already answered by "Done for today" two rules earlier, so a
+     * case built on `session(0)` proves nothing about this branch — which is how it went unnoticed
+     * that the branch read `< 1` and could therefore never run.
+     */
     @Test
     fun lowReadinessTheDayAfterTraining_suggestsMovingInstead() {
-        val d = compute(s = snapshot(sessions = listOf(session(0), session(3), session(5))), readiness = readiness(-4))
+        val d = compute(s = trainedYesterdaySnapshot(), readiness = readiness(-4))
         assertEquals(TodayDirective.Kind.CARDIO, d.kind)
         assertTrue(d.secondary!!.contains("walk"))
         assertEquals(TodayDirective.LESSON_READINESS, d.lessonId)
     }
 
+    /** Low readiness two days out is spacing the athlete has already taken; it trains. */
+    @Test
+    fun lowReadinessAfterTwoDaysOffStillTrains() {
+        val d = compute(s = snapshot(sessions = listOf(session(2), session(4), session(6))), readiness = readiness(-4))
+        assertEquals(TodayDirective.Kind.TRAIN, d.kind)
+    }
+
     @Test
     fun hittingYourOwnWeeklyTargetEarnsARestDay() {
         val d = compute(
-            s = snapshot(sessions = listOf(session(0), session(2), session(4))),
+            s = snapshot(sessions = listOf(session(1), session(2), session(4))),
             sessionsThisWeek = 4, weeklyTarget = 4
         )
         assertEquals(TodayDirective.Kind.REST, d.kind)
         assertTrue(d.reason.contains("4 sessions"))
+    }
+
+    /** The budget rule is about not training on back-to-back days, not a hard weekly stop. */
+    @Test
+    fun hittingTheWeeklyTargetDoesNotBlockTrainingAfterARestDay() {
+        val d = compute(
+            s = snapshot(sessions = listOf(session(2), session(3), session(5))),
+            sessionsThisWeek = 4, weeklyTarget = 4
+        )
+        assertEquals(TodayDirective.Kind.TRAIN, d.kind)
+    }
+
+    /**
+     * The guard against the class of bug finding 15 was: a rule that can never fire.
+     *
+     * `trainedToday` and `daysSinceLast` are read from the same sessions, so `daysSinceLast == 0`
+     * implies `trainedToday`, and any rule gated on `daysSinceLast < 1` below that early return is
+     * unreachable. Assert the equivalence rather than the rules, so it holds for rules added later.
+     */
+    @Test
+    fun trainedTodayAndZeroDaysSinceLastAreTheSameState() {
+        listOf(0, 1, 2, 5).forEach { daysAgo ->
+            val s = snapshot(sessions = listOf(session(daysAgo), session(daysAgo + 2), session(daysAgo + 4)))
+            assertEquals(
+                "a session $daysAgo day(s) ago: trainedToday must agree with daysSinceLast == 0",
+                daysAgo == 0,
+                TodayDirective.trainedToday(s)
+            )
+        }
     }
 
     @Test

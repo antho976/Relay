@@ -91,6 +91,77 @@ class ReadinessAdvisorTest {
         assertTrue(r.reason.contains("heavy session yesterday"))
     }
 
+    // ── "Yesterday" is a calendar day, not a fixed span of hours ──────────────
+    //
+    // `now` is midnight UTC on day 30, so these pin an explicit hour of the day. Both cases were
+    // decided by a fixed 12-36 h window, which lines up with "yesterday" from exactly one hour of
+    // the morning and drifts from every other one.
+
+    /** 20:00 today. Yesterday's 07:00 session is 37 h back — outside any 36 h window. */
+    private val evening = now + 20 * hour
+
+    @Test
+    fun aHeavySessionYesterdayMorningIsStillSeenFromTheEvening() {
+        val s = listOf(
+            session(1, now - 9 * day), session(2, now - 6 * day), session(3, now - 3 * day),
+            // Yesterday at 07:00 — 37 h before 20:00 today.
+            session(4, now - 17 * hour, volume = 2000.0)
+        )
+        val r = ReadinessAdvisor.evaluate(s, emptyList(), evening)
+        assertNotNull("a morning session yesterday is still yesterday at 20:00", r)
+        assertEquals(-2, r!!.percent)
+        assertTrue(r.reason.contains("heavy session yesterday"))
+    }
+
+    @Test
+    fun aHeavySessionEarlierTodayIsNotCalledYesterday() {
+        val s = listOf(
+            session(1, now - 9 * day), session(2, now - 6 * day), session(3, now - 3 * day),
+            // 08:00 TODAY — 12 h before 20:00, which the old window read as yesterday.
+            session(4, now + 8 * hour, volume = 2000.0)
+        )
+        // A check-in anchors the read so this asserts on the reason rather than on silence.
+        val sleptBadly = com.forge.app.data.db.entities.CheckinEntry(
+            dateKey = "today", sleepQuality = 1, soreness = null, stress = null,
+            motivation = null, recordedAt = evening - 2 * hour
+        )
+        val r = ReadinessAdvisor.evaluate(s, emptyList(), evening, checkins = listOf(sleptBadly))
+        assertNotNull(r)
+        assertTrue("the check-in still speaks", r!!.reason.contains("slept badly"))
+        assertTrue(
+            "today's session must not be deducted for as yesterday's",
+            !r.reason.contains("heavy session yesterday")
+        )
+        assertEquals("only the check-in's -2, not a second -2 for today", -2, r.percent)
+    }
+
+    // ── Off-gym movement reads YESTERDAY's steps, not the day in progress ─────
+
+    private fun steps(dayStartMs: Long, count: Int) = HealthSnap(
+        dailySteps = listOf(DailySteps(dayStartMs = dayStartMs, steps = count))
+    )
+
+    @Test
+    fun aLongDayOnYourFeetYesterdayCountsAgainstToday() {
+        val r = ReadinessAdvisor.evaluate(
+            sessions(1), emptyList(), now, health = steps(now - day, 20_000)
+        )
+        assertNotNull(r)
+        assertEquals(-1, r!!.percent)
+        assertTrue(r.reason.contains("long day on your feet"))
+    }
+
+    @Test
+    fun todaysStepsSoFarAreNotYesterdaysTotal() {
+        // The bucket for the day in progress. It was admitted by the window and then always won the
+        // `maxByOrNull`, because today's bucket is by definition the latest one there is — so this
+        // read the day the athlete is being advised about, using it as evidence about that same day.
+        val r = ReadinessAdvisor.evaluate(
+            sessions(1), emptyList(), now + 20 * hour, health = steps(now, 20_000)
+        )
+        assertNull("today's step count is not yesterday's evidence", r)
+    }
+
     // ── Vacation-aware spacing (#135) ──────────────────────────────────────────
 
     private fun date(ms: Long) = LocalDate.ofInstant(Instant.ofEpochMilli(ms), ZoneOffset.UTC)

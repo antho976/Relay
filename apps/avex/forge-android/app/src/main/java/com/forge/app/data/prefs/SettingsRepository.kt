@@ -53,6 +53,11 @@ enum class SettingsSection(val keys: List<Preferences.Key<*>>) {
             PreferenceKeys.QUIET_HOURS_ENABLED, PreferenceKeys.QUIET_HOURS_START, PreferenceKeys.QUIET_HOURS_END,
             PreferenceKeys.QUIET_HOURS_SCHEDULE,
             PreferenceKeys.TRAINING_REMINDER_ENABLED, PreferenceKeys.TRAINING_REMINDER_HOUR,
+            // The other two switches in the "On your phone" group. They were missing, so "Reset
+            // this section" left them exactly as they were while the row above it promised to
+            // restore the page — a reset that silently does less than it says is worse than no
+            // reset, because the user stops looking for the switch they already "reset".
+            PreferenceKeys.WEEKLY_RECAP_ENABLED, PreferenceKeys.REST_TIMER_ALERT_ENABLED,
             // The notifications feed (2026-07-27). Clearing these is the ONLY way back for the two
             // one-shot invites: both are dismissed for good, and neither had an un-dismiss before —
             // the old cardio banner's × was a one-way door too. Resetting the section now restores

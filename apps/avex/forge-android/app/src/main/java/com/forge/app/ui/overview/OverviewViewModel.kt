@@ -91,14 +91,22 @@ class OverviewViewModel @Inject constructor(
      * Volume per ISO week for the last [VOLUME_WEEKS] weeks including the current one, oldest →
      * newest. Weeks with no session bucket to an honest 0.0 rather than being dropped, so the
      * sparkline's x-axis stays even and a quiet week reads as a dip instead of disappearing.
+     *
+     * Bucketed by `started_at` — the day you trained — which is the convention `SessionDao` states
+     * for every weekly aggregation and which the hero figure above this curve is queried with
+     * (`observeVolumeSince`). This bucketed by `finished_at` instead, so a session begun 23:30
+     * Sunday and racked 00:40 Monday landed in one week for the figure and the next for the curve
+     * drawn under it: the card then computed its delta between a numerator and a denominator from
+     * two different conventions, which is exactly what reading both off one series was meant to
+     * prevent. `finished_at` still gates the filter — an unfinished session has no volume to plot.
      */
     private fun weeklyVolumeSeries(sessions: List<com.forge.app.data.db.entities.Session>): List<Double> {
         val zone = java.time.ZoneId.systemDefault()
         val thisMonday = java.time.LocalDate.now(zone).let { it.minusDays(it.dayOfWeek.value - 1L) }
         val buckets = DoubleArray(VOLUME_WEEKS)
         sessions.forEach { s ->
-            val at = s.finishedAt ?: return@forEach
-            val day = java.time.Instant.ofEpochMilli(at).atZone(zone).toLocalDate()
+            if (s.finishedAt == null) return@forEach
+            val day = java.time.Instant.ofEpochMilli(s.startedAt).atZone(zone).toLocalDate()
             val monday = day.minusDays(day.dayOfWeek.value - 1L)
             val weeksBack = java.time.temporal.ChronoUnit.WEEKS.between(monday, thisMonday).toInt()
             if (weeksBack in 0 until VOLUME_WEEKS) {
