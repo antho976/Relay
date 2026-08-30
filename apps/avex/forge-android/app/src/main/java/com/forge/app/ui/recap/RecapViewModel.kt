@@ -70,8 +70,10 @@ class RecapViewModel @Inject constructor(
 
         // Exclude untracked sessions (#110) so the count/volume agree with frequencySince (which now
         // filters them) — otherwise "most trained" and the session count describe different populations.
-        val monthSessions = sessionDao.finishedInRange(monthStart, monthEnd).filter { !it.isUntracked }
-        val yearSessions = sessionDao.finishedInRange(yearStart, yearEnd).filter { !it.isUntracked }
+        // The tracked-only query rather than the inclusive one filtered afterwards: the same rule
+        // stated once, in the place every other consumer reads it from.
+        val monthSessions = sessionDao.finishedInRangeTracked(monthStart, monthEnd)
+        val yearSessions = sessionDao.finishedInRangeTracked(yearStart, yearEnd)
 
         // Month recap
         val monthRecap = if (monthSessions.isNotEmpty()) {

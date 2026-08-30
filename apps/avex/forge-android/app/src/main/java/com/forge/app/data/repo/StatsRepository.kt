@@ -116,7 +116,10 @@ class StatsRepository @Inject constructor(
 
     /** The four session/preference signals the weekly fan-out folds together in one inner combine. */
     private data class RecentSignals(
+        /** Tracked only — dots, best session, trained-today keys, next-up. */
         val recent: List<com.forge.app.data.db.entities.Session>,
+        /** Inclusive — the Overview's "recent workouts" list, which is history. */
+        val recentForHistory: List<com.forge.app.data.db.entities.Session>,
         val scheduleMode: String,
         val schedule: List<String>,
         val allFinishedAts: List<Long>
@@ -131,15 +134,22 @@ class StatsRepository @Inject constructor(
             cardioDao.observeMinutesSince(weekStartMs, excludeType = "rest"),
             sessionDao.observeFinishedCount(),
             combine(
-                sessionDao.observeRecent(120),
+                // TRACKED, because everything derived from it below is a signal: the lit week dots
+                // (which sat above a workout count that was already tracked-only, so a week with
+                // one untracked session lit three dots over the words "2 workouts"), the
+                // best-session tile, today's trained keys and next-up resolution.
+                sessionDao.observeRecentTracked(120),
+                // Inclusive, because the Overview's recent list is history and an untracked
+                // session is still a workout that happened.
+                sessionDao.observeRecent(5),
                 settingsRepo.scheduleMode,
                 settingsRepo.weeklySchedule,
                 // The streak reads EVERY finished instant, not the 120-row window the rest of this
                 // fan-out uses: the walk stops at the end of the window rather than at a real rest
                 // gap, so a twice-a-day lifter's streak froze at whatever fitted in 120 rows.
                 sessionDao.observeFinishedAts()
-            ) { recent, mode, schedule, allFinishedAts ->
-                RecentSignals(recent, mode, schedule, allFinishedAts)
+            ) { recent, recentForHistory, mode, schedule, allFinishedAts ->
+                RecentSignals(recent, recentForHistory, mode, schedule, allFinishedAts)
             }
         ) { workouts, volume, cardio, totalFinished, signals ->
             val recentSessions = signals.recent
@@ -182,7 +192,7 @@ class StatsRepository @Inject constructor(
                 bestSessionThisWeekLb = bestSessionThisWeekLb,
                 weekDaysTrained = weekDaysTrained,
                 nextUpDayKey = nextUpDayKey,
-                recentGymSessions = recentSessions.filter { it.finishedAt != null }.take(5)
+                recentGymSessions = signals.recentForHistory.filter { it.finishedAt != null }.take(5)
             ) to finishedAts
         }
         return baseFlow

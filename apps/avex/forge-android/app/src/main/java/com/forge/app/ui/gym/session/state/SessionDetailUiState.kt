@@ -36,7 +36,9 @@ data class SetDetail(
     /** Held time in seconds for a timed-hold set (GYMAP-51); null = a normal rep set. */
     val durationSeconds: Int? = null
 ) {
-    val volumeLb: Double get() = (weightLb ?: 0.0) * reps
+    /** Zero for a timed hold: its [reps] is a duration, not a count. */
+    val volumeLb: Double get() =
+        com.forge.app.domain.volume.VolumeCalculator.setVolumeLb(weightLb, reps, durationSeconds)
 
     fun metricValue(metric: SessionMetric): Double = when (metric) {
         SessionMetric.WEIGHT -> weightLb ?: 0.0

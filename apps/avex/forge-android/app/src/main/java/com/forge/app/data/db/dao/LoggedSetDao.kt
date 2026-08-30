@@ -167,11 +167,17 @@ interface LoggedSetDao {
     /**
      * Longest hold ever for a timed-hold exercise (GYMAP-51) — the counterpart to [maxWeightForExercise]
      * for holds, driving the "best 0:45" prefill/ghost hint. Null if the exercise has no timed set.
+     *
+     * Joined to `session` like every other "best ever" query. Without it this was the one personal
+     * best that counted untracked work — and unfinished work: a hold logged in the session you are
+     * standing in the middle of became the target it prefilled against.
      */
     @Query("""
-        SELECT MAX(s.duration_seconds) FROM logged_set s
-        INNER JOIN logged_exercise le ON s.logged_exercise_id = le.id
-        WHERE le.exercise_id = :exerciseId AND s.duration_seconds IS NOT NULL
+        SELECT MAX(ls.duration_seconds) FROM logged_set ls
+        INNER JOIN logged_exercise le ON ls.logged_exercise_id = le.id
+        INNER JOIN session s ON le.session_id = s.id
+        WHERE le.exercise_id = :exerciseId AND ls.duration_seconds IS NOT NULL
+          AND s.finished_at IS NOT NULL AND s.is_untracked = 0
     """)
     suspend fun bestHoldSecondsForExercise(exerciseId: String): Int?
 
@@ -305,9 +311,12 @@ interface LoggedSetDao {
     suspend fun setRpe(id: Long, rpe: Double?)
 
     /**
-     * Per-session aggregates for one exercise across finished sessions, newest first.
+     * Per-session aggregates for one exercise across finished TRACKED sessions, newest first.
      * Used by the day-screen last-session strip + sparkline. Excludes the current
      * in-progress session by relying on session.finished_at IS NOT NULL.
+     *
+     * This is what "last time" and the trend line compare against, so it answers the same question
+     * as every other progression query and has to exclude the same sessions.
      */
     @Query("""
         SELECT s.started_at AS started_at,
@@ -318,6 +327,7 @@ interface LoggedSetDao {
         INNER JOIN logged_exercise le ON ls.logged_exercise_id = le.id
         INNER JOIN session s ON le.session_id = s.id
         WHERE le.exercise_id = :exerciseId AND s.finished_at IS NOT NULL
+          AND s.is_untracked = 0
           AND ls.duration_seconds IS NULL
         GROUP BY s.id
         ORDER BY s.started_at DESC

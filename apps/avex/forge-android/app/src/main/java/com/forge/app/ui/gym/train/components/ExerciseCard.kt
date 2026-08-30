@@ -18,6 +18,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
+import com.forge.app.domain.volume.volumeLb
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -259,11 +260,11 @@ fun ExerciseCard(
                 // Per-set volume is derived three ways below; memoize so the rest-timer's
                 // per-second ticks (which recompose this card) don't re-walk the set list.
                 val currentVolumes = remember(state.loggedSets) {
-                    state.loggedSets.map { (it.weightLb ?: 0.0) * it.reps }
+                    state.loggedSets.map { it.volumeLb() }
                 }
                 val currentVolumeLb = remember(currentVolumes) { currentVolumes.sum() }
                 val priorVolumes = remember(state.priorSets) {
-                    state.priorSets.map { (it.weightLb ?: 0.0) * it.reps }
+                    state.priorSets.map { it.volumeLb() }
                 }
 
                 // Live current-session readout + per-set volume comparison (current vs last).
