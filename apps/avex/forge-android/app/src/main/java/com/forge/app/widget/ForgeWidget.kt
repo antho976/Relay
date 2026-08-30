@@ -146,8 +146,12 @@ class ForgeWidget : GlanceAppWidget() {
         val finishedDates = entryPoint.sessionDao().finishedAtsSince(mondayMs)
             .mapTo(HashSet()) { java.time.Instant.ofEpochMilli(it).atZone(zone).toLocalDate() }
         val streak = entryPoint.statsRepository().currentStreakDays()
+        // "Has this user ever trained" — a zero-state question, so it counts untracked work too.
+        // It used to borrow `lastFinishedDayKey()`, which now answers the different question of what
+        // to train NEXT and excludes untracked sessions; sharing one query across both would have
+        // made an untracked-only history render as a brand-new install.
         val hasAnyFinished = streak >= 1 || finishedDates.isNotEmpty() ||
-            entryPoint.sessionDao().lastFinishedDayKey() != null
+            entryPoint.sessionDao().hasAnyFinishedSession()
         val weekDots = (0..6).joinToString(" ") { off ->
             if (monday.plusDays(off.toLong()) in finishedDates) "●" else "○"
         }

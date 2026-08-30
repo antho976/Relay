@@ -872,9 +872,18 @@ class SettingsRepository @Inject constructor(
         // failure back so the first frame can be drawn from what the user actually chose.
         if (prefs.readFailed) throw PreferencesUnavailableException()
         return StartupPreferences(
-            privacyMode = prefs[PreferenceKeys.PRIVACY_MODE] ?: false,
-            appLockEnabled = prefs[PreferenceKeys.APP_LOCK_ENABLED] ?: false,
-            galleryLockEnabled = prefs[PreferenceKeys.GALLERY_LOCK_ENABLED] ?: false,
+            // Through [protection], exactly like the flows. Reading `prefs[KEY] ?: false` here left
+            // the corruption case wide open: the handler replaces an unparseable file with a
+            // SUCCESSFUL empty store, so `readFailed` is false and the throw above does not fire,
+            // and every protection came back off. `MainActivity` then took its `onSuccess` branch
+            // and wrote those three falses into the sentinel — destroying the only surviving record
+            // of what the user had chosen, on the one path that exists to consult it.
+            //
+            // The flows were fixed and this one-shot read was not, so the first frame after a
+            // corruption recovery was drawn unprotected and the recovery then made itself permanent.
+            privacyMode = protection(prefs, PreferenceKeys.PRIVACY_MODE) { it.privacyMode },
+            appLockEnabled = protection(prefs, PreferenceKeys.APP_LOCK_ENABLED) { it.appLockEnabled },
+            galleryLockEnabled = protection(prefs, PreferenceKeys.GALLERY_LOCK_ENABLED) { it.galleryLockEnabled },
             amoledMode = prefs[PreferenceKeys.AMOLED_MODE] ?: false,
             appIcon = prefs[PreferenceKeys.APP_ICON] ?: "",
             themedLaunchIntro = prefs[PreferenceKeys.THEMED_LAUNCH_INTRO] ?: true

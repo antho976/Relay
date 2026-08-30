@@ -364,14 +364,29 @@ class ProgressPhotoRepository @Inject constructor(
      * returned an error page. The gallery got a permanent entry that renders as a grey box, the
      * backup carried it, and nothing anywhere said what had gone wrong.
      *
-     * `inJustDecodeBounds` reads the header only — no pixels are allocated, so this stays cheap
-     * enough to run on a 64 MiB file. A real image reports positive bounds; everything else does
-     * not, including a JPEG truncated before its header is complete.
+     * Two checks, because the cheap one is not sufficient on its own.
+     *
+     * `inJustDecodeBounds` reads the HEADER: it proves the file begins like an image and reports its
+     * dimensions, without allocating pixels. But a download cut off after its header still has a
+     * valid header, so bounds alone accepted a truncated file — the gallery got an entry that
+     * renders as a grey box and the backup carried it, which is exactly the outcome the check was
+     * added to prevent.
+     *
+     * So the pixels are decoded too, downsampled hard. `inSampleSize = 8` allocates 1/64 of the
+     * bitmap — a few hundred KB even for a large photo — and returns null when the compressed data
+     * runs out before the image does. `recycle()` because this runs once per import and there is no
+     * reason to leave it to the collector.
      */
     private fun isDecodableImage(file: File): Boolean = runCatching {
-        val opts = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        android.graphics.BitmapFactory.decodeFile(file.path, opts)
-        opts.outWidth > 0 && opts.outHeight > 0
+        val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        android.graphics.BitmapFactory.decodeFile(file.path, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@runCatching false
+
+        val pixels = android.graphics.BitmapFactory.Options().apply { inSampleSize = 8 }
+        val bitmap = android.graphics.BitmapFactory.decodeFile(file.path, pixels)
+            ?: return@runCatching false
+        bitmap.recycle()
+        true
     }.getOrDefault(false)
 
     private fun exifTakenAtMs(file: File): Long? = runCatching {

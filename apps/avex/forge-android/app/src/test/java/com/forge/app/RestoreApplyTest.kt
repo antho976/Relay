@@ -181,6 +181,108 @@ class RestoreApplyTest {
         assertFalse(File(liveDb.path + "-shm").exists())
     }
 
+    // ── Interruption between commits ──────────────────────────────────────────
+
+    private fun journal() = File(filesDir, "pending_restore_journal")
+    private fun stagedPrefs() = File(filesDir, "datastore/forge_settings.preferences_pb.restoring")
+
+    /**
+     * Phase 2 is a sequence of renames, and a process death between two of them used to be
+     * unrecoverable: the database was live, the preferences were not, and the next boot saw neither
+     * a pending file (staging had renamed it away) nor any record that a restore was half-applied.
+     * The staged preferences sat under a `.restoring` name nothing reads, and the mixed state was
+     * permanent.
+     *
+     * Simulated exactly as a crash leaves it: the database committed, the journal still naming what
+     * has not.
+     */
+    @Test
+    fun `a boot interrupted between commits is finished by the next one`() {
+        setUpDirs()
+        write(liveDb, "restored-db")                       // the database already landed
+        write(livePrefs(), "live-prefs")                   // the preferences did not
+        write(stagedPrefs(), "restored-prefs")             // ...but they are staged
+        write(journal(), "prefs")                          // and the journal says so
+
+        assertTrue("the resumed restore completes", RestoreApply.apply(filesDir, liveDb))
+
+        assertEquals("restored-prefs", livePrefs().readText())
+        assertFalse("the journal is spent", journal().exists())
+        assertFalse("and nothing is left staged", stagedPrefs().exists())
+    }
+
+    @Test
+    fun `a resumed boot with nothing else pending reports the restore complete`() {
+        setUpDirs()
+        write(liveDb, "restored-db")
+        write(stagedPrefs(), "restored-prefs")
+        write(journal(), "prefs")
+
+        // No pending_restore_* files at all: this boot's only work is finishing the last one's.
+        assertTrue(RestoreApply.apply(filesDir, liveDb))
+    }
+
+    /**
+     * A crash during STAGING, before any journal existed. Staging renames the pending file away, so
+     * without recovery the restore is not delayed — it is gone: the next boot looks for
+     * `pending_restore.db` and finds nothing, while the bytes sit under a name nothing reads.
+     *
+     * Recovery and application happen on the SAME boot, because the sweep runs ahead of the
+     * `pending_restore.db` existence check rather than after it. So putting the file back is not a
+     * deferral — by the time this pass asks what there is to restore, the answer already includes
+     * the recovered file, and the boot proceeds exactly as if the crash had never happened.
+     */
+    @Test
+    fun `a file stranded by a crash during staging is put back and retried`() {
+        setUpDirs()
+        write(liveDb, "live-db")
+        // Exactly what a crash mid-staging leaves: staged bytes, no pending file, no journal.
+        write(File(liveDb.path + ".restoring"), "restored-db")
+
+        assertTrue("the stranded restore is recovered, not lost", RestoreApply.apply(filesDir, liveDb))
+        assertEquals("restored-db", liveDb.readText())
+        // And it leaves the same clean slate a normal restore does — no second `.restoring` orphan
+        // for the next boot to sweep, no pending file, no journal.
+        assertFalse("nothing left staged", File(liveDb.path + ".restoring").exists())
+        assertFalse("no pending file left behind", File(filesDir, "pending_restore.db").exists())
+        assertFalse("and no journal", journal().exists())
+    }
+
+    /**
+     * A journalled staged file belongs to the RESUME, and the resume must reach it first.
+     *
+     * The two recovery mechanisms both look at `.restoring` files, so their order decides which one
+     * claims a given file. Run the sweep first and it returns this file to a pending name; the
+     * resume then finds nothing staged, leaves `prefs` in the journal, and reports failure — and the
+     * staging pass that follows re-applies it as a NEW restore with no database in it, so the boot
+     * ends with the preferences correct and the restore reported as failed. The user is told their
+     * restore did not work while looking at the restored data.
+     *
+     * The return value is what pins the order: the file lands either way, but only the resume can
+     * report the interrupted restore as complete.
+     */
+    @Test
+    fun `a journalled file is claimed by the resume, not the orphan sweep`() {
+        setUpDirs()
+        write(liveDb, "restored-db")
+        write(stagedPrefs(), "restored-prefs")
+        write(journal(), "prefs")
+
+        assertTrue("the resume owns it, so the restore reports complete", RestoreApply.apply(filesDir, liveDb))
+
+        assertEquals("committed, not unstaged", "restored-prefs", livePrefs().readText())
+        assertFalse("and not returned to a pending name", File(filesDir, "pending_restore_prefs.pb").exists())
+    }
+
+    @Test
+    fun `a complete restore leaves no journal behind`() {
+        setUpDirs()
+        stageEverything()
+
+        assertTrue(RestoreApply.apply(filesDir, liveDb))
+        assertFalse(journal().exists())
+    }
+
     // ── The primitives that carry the guarantee ───────────────────────────────
 
     @Test

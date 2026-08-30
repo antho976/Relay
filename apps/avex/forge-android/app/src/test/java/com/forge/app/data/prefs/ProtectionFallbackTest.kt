@@ -198,6 +198,60 @@ class ProtectionFallbackTest {
         assertFalse(startup.galleryLockEnabled)
     }
 
+    /**
+     * The gap the first fix left: the FLOWS were routed through the sentinel and this one-shot read
+     * was not.
+     *
+     * The corruption handler replaces an unparseable file with a SUCCESSFUL empty store, so
+     * `readFailed` is false, `startupPreferences()` did not throw, and every protection came back
+     * off. `MainActivity` took its `onSuccess` branch and wrote those three falses into the
+     * sentinel — destroying the only surviving record of what the user chose, on the one path that
+     * exists to consult it. The first frame was drawn unprotected and the damage was then permanent.
+     */
+    @Test
+    fun theStartupReadSurvivesAWipedStore() = runTest {
+        repo.setPrivacyMode(true)
+        repo.setGalleryLockEnabled(true)
+        ProtectionSentinel.remember(
+            context,
+            ProtectionSentinel.Protections(
+                privacyMode = true, appLockEnabled = false, galleryLockEnabled = true
+            )
+        )
+
+        context.forgePreferences.edit { it.clear() }
+
+        val startup = repo.startupPreferences()
+        assertTrue("the first frame must still be secured", startup.privacyMode)
+        assertTrue("and the gallery still gated", startup.galleryLockEnabled)
+        assertFalse("without priming a lock they never enabled", startup.appLockEnabled)
+    }
+
+    /**
+     * And the write-back has to be harmless. `MainActivity` records every successful startup read
+     * into the sentinel; if that read reported the wiped store's defaults, the record it was about
+     * to fall back to would be overwritten with them.
+     */
+    @Test
+    fun recordingTheStartupReadCannotDestroyTheRecordItCameFrom() = runTest {
+        val chosen = ProtectionSentinel.Protections(
+            privacyMode = true, appLockEnabled = false, galleryLockEnabled = true
+        )
+        ProtectionSentinel.remember(context, chosen)
+        context.forgePreferences.edit { it.clear() }
+
+        val startup = repo.startupPreferences()
+        // Exactly what MainActivity does on the success path.
+        ProtectionSentinel.remember(
+            context,
+            ProtectionSentinel.Protections(
+                startup.privacyMode, startup.appLockEnabled, startup.galleryLockEnabled
+            )
+        )
+
+        assertEquals("the record must be unchanged", chosen, ProtectionSentinel.lastKnown(context))
+    }
+
     @Test
     fun rememberRoundTripsThroughItsOwnFile() {
         val p = ProtectionSentinel.Protections(
