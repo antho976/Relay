@@ -1,5 +1,6 @@
 package com.forge.app.ui.checkin
 
+import com.forge.app.domain.units.unitLabel
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -119,7 +120,10 @@ fun CheckinSheet(viewModel: CheckinViewModel = hiltViewModel()) {
                 OutlinedTextField(
                     value = state.weightText,
                     onValueChange = viewModel::setWeightText,
-                    label = { Text("Weight") },
+                    // The unit is in the label because the field cannot infer it: the value goes
+                    // straight into the bodyweight trend, and a kg user typing 80 into a box that
+                    // said only "Weight" logged 80 lb.
+                    label = { Text("Weight (${unitLabel(state.weightUnit)})") },
                     placeholder = { Text("optional") },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),

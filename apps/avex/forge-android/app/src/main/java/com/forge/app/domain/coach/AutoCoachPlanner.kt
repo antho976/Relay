@@ -1,5 +1,6 @@
 package com.forge.app.domain.coach
 
+import com.forge.app.domain.adapt.isWorkingStrengthSet
 import com.forge.app.core.time.mondayStartMs
 import com.forge.app.domain.adapt.AdaptThresholds
 import com.forge.app.domain.adapt.AdaptationSnapshot
@@ -305,7 +306,7 @@ object AutoCoachPlanner {
     /** Lifts with enough non-skipped, weighted history to be judged — the ladder's own gate. */
     private fun trackedLiftIds(s: AdaptationSnapshot, t: AdaptThresholds): Set<String> =
         s.exerciseHistory.filter { (_, bouts) ->
-            bouts.count { b -> !b.skipped && b.sets.any { it.weightLb != null && !it.isAssisted } } > t.plateauMinBouts
+            bouts.count { b -> !b.skipped && b.sets.any { it.isWorkingStrengthSet() } } > t.plateauMinBouts
         }.keys
 
     private fun trackedLiftCount(s: AdaptationSnapshot, t: AdaptThresholds): Int = trackedLiftIds(s, t).size

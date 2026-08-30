@@ -1,5 +1,6 @@
 package com.forge.app.data.repo
 
+import com.forge.app.domain.adapt.isWorkingStrengthSet
 import com.forge.app.core.time.Clock
 import com.forge.app.data.db.dao.CoachDao
 import com.forge.app.data.db.dao.ExerciseCustomizationDao
@@ -819,7 +820,7 @@ class CoachRepository @Inject constructor(
         val tracked = s.exerciseHistory.mapNotNull { (slotId, bouts) ->
             val nonSkipped = bouts.count { !it.skipped }
             if (nonSkipped == 0) return@mapNotNull null
-            val weighted = bouts.count { b -> !b.skipped && b.sets.any { it.weightLb != null && !it.isAssisted } }
+            val weighted = bouts.count { b -> !b.skipped && b.sets.any { it.isWorkingStrengthSet() } }
             val name = ExerciseLibrary.byId(slotId)?.name
                 ?: bouts.lastOrNull { !it.swappedName.isNullOrBlank() }?.swappedName
                 ?: slotId

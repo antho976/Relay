@@ -125,10 +125,16 @@ private data class FsExercise(
     val sets: List<FsSet> = listOf(FsSet())
 )
 
-/** Snapshot the current log into a resumable draft (raw typed text is preserved verbatim). */
-private fun draftFrom(items: List<FsExercise>, openedAtMs: Long): FreestyleDraft =
+/** Snapshot the current log into a resumable draft (raw typed text is preserved verbatim, stamped
+ *  with the unit it was typed in — see [FreestyleDraft.unitLabel]). */
+private fun draftFrom(
+    items: List<FsExercise>,
+    openedAtMs: Long,
+    weightUnit: com.forge.app.domain.units.WeightUnit
+): FreestyleDraft =
     FreestyleDraft(
         openedAtMs = openedAtMs,
+        unitLabel = weightUnit.label,
         exercises = items.map { ex ->
             FreestyleDraftExercise(
                 libId = ex.libId,
@@ -144,10 +150,25 @@ private fun draftFrom(items: List<FsExercise>, openedAtMs: Long): FreestyleDraft
 
 /** Rebuild the in-memory log from a draft, re-deriving name/muscle/bodyweight from the library and
  *  dropping any exercise whose library id no longer exists. A custom move carries its own identity
- *  in the draft (nothing to re-derive), so it restores from those fields instead. */
-private fun draftToItems(draft: FreestyleDraft): List<FsExercise> =
-    draft.exercises.mapNotNull { de ->
-        val sets = de.sets.map { FsSet(it.weight, it.reps, it.setType, it.isAmrap, it.toFailure, it.rpe, it.hold) }
+ *  in the draft (nothing to re-derive), so it restores from those fields instead.
+ *
+ *  Weight text is re-expressed in [weightUnit] when the draft was typed in a different one. The
+ *  draft stores raw display-unit text, so without this a "100" drafted in lb came back as 100 kg
+ *  after a unit change and was saved as 220 lb. */
+private fun draftToItems(
+    draft: FreestyleDraft,
+    weightUnit: com.forge.app.domain.units.WeightUnit
+): List<FsExercise> {
+    return draft.exercises.mapNotNull { de ->
+        val sets = de.sets
+            .map {
+                // Re-expressed in the CURRENT unit, using the one the draft was typed in — the
+                // rule lives on the draft so it is testable without a Composable.
+                FsSet(
+                    draft.weightTextIn(it.weight, weightUnit),
+                    it.reps, it.setType, it.isAmrap, it.toFailure, it.rpe, it.hold
+                )
+            }
             .ifEmpty { listOf(FsSet()) }
         if (isCustomExerciseId(de.libId)) {
             // A pre-v3 custom can't exist (the schema bump discards those drafts), but a hand-edited
@@ -172,6 +193,7 @@ private fun draftToItems(draft: FreestyleDraft): List<FsExercise> =
             sets = sets
         )
     }
+}
 
 /** Map a picked past-session template into the logger's in-memory shape (GYMAP-48): sets pre-filled
  *  from that session and converted to the display unit, name/muscle/bodyweight re-derived from the
@@ -307,7 +329,7 @@ fun FreestyleLogScreen(
     // flipping it cancels any in-flight delay.
     var leaving by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
-        viewModel.loadDraft()?.takeIf { draftToItems(it).isNotEmpty() }?.let { pendingDraft = it }
+        viewModel.loadDraft()?.takeIf { draftToItems(it, weightUnit).isNotEmpty() }?.let { pendingDraft = it }
         draftChecked = true
     }
     LaunchedEffect(items, openedAtMs, pendingDraft, draftChecked, leaving) {
@@ -316,7 +338,7 @@ fun FreestyleLogScreen(
         if (leaving || !draftChecked || pendingDraft != null) return@LaunchedEffect
         if (items.isEmpty()) { viewModel.clearDraft(); return@LaunchedEffect }
         delay(600)   // debounce: only persist once a burst of edits settles
-        viewModel.saveDraft(draftFrom(items, openedAtMs))
+        viewModel.saveDraft(draftFrom(items, openedAtMs, weightUnit))
     }
 
     fun updateExercise(i: Int, transform: (FsExercise) -> FsExercise) {
@@ -327,7 +349,7 @@ fun FreestyleLogScreen(
     fun leave() {
         leaving = true
         if (draftChecked && pendingDraft == null && items.isNotEmpty()) {
-            viewModel.saveDraft(draftFrom(items, openedAtMs))
+            viewModel.saveDraft(draftFrom(items, openedAtMs, weightUnit))
         }
         onBack()
     }
@@ -438,9 +460,9 @@ fun FreestyleLogScreen(
                     if (draft != null) {
                         // An unsaved log is waiting — offer resume before anything else (items is empty here).
                         FsResumePrompt(
-                            exerciseCount = draftToItems(draft).size,
+                            exerciseCount = draftToItems(draft, weightUnit).size,
                             onResume = {
-                                items = draftToItems(draft)
+                                items = draftToItems(draft, weightUnit)
                                 // Rewind to the original open time so a quick navigate-away keeps the
                                 // duration honest — but only within a sane window. Past it (an app-kill
                                 // gap of hours/days) the original time is meaningless, so start fresh

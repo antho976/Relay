@@ -268,13 +268,18 @@ internal fun DayContent(state: DayUiState, onEvent: (DayUiEvent) -> Unit) {
                                 onLogSet = { weight, reps, durationSeconds ->
                                     // Plate exercises enter a plate COUNT (not a display-unit weight),
                                     // so skip the kg→lb conversion — WeightParser turns the count into lb.
-                                    val stored = if (ex.plan.unit == ExerciseUnit.PLATES) weight else toStoredWeightText(weight, weightUnit)
+                                    // effectiveUnit, not plan.unit: the field the user just typed into
+                                    // was rendered from the effective unit, so a slot swapped ONTO a
+                                    // plate machine had its plate count run through the kg→lb
+                                    // conversion, and one swapped OFF a plate machine had its kg value
+                                    // stored raw.
+                                    val stored = if (ex.effectiveUnit == ExerciseUnit.PLATES) weight else toStoredWeightText(weight, weightUnit)
                                     onEvent(DayUiEvent.LogSet(id, stored, reps, durationSeconds))
                                 },
                                 onDeleteSet = { setId -> onEvent(DayUiEvent.DeleteSet(setId)) },
                                 // Same unit handling as logging — plate counts pass through, free weights convert.
                                 onEditSet = { setId, w, r ->
-                                    val stored = if (ex.plan.unit == ExerciseUnit.PLATES) w else toStoredWeightText(w, weightUnit)
+                                    val stored = if (ex.effectiveUnit == ExerciseUnit.PLATES) w else toStoredWeightText(w, weightUnit)
                                     onEvent(DayUiEvent.EditSet(setId, stored, r))
                                 },
                                 onLogSameAsLast = { setId -> onEvent(DayUiEvent.LogSameAsLast(id, setId)) },

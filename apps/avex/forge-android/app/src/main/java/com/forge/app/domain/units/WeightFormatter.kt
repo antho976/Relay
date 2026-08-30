@@ -189,6 +189,13 @@ private val EXPLICIT_UNIT_REGEX =
  */
 fun toStoredWeightText(input: String, unit: WeightUnit): String {
     val trimmed = input.trim()
+    // A typed suffix states the unit the user MEANT, and it wins over the display setting —
+    // including in lb mode, which returned below before any parse happened. "20 kg" typed while the
+    // app was set to pounds therefore passed through verbatim to WeightParser, which knows nothing
+    // about kg: the set was stored with no weight at all, and neither the field nor the row said so.
+    explicitUnitToLb(normalizeDecimalInput(trimmed).lowercase())?.let { return trimDecimal(it) }
+    // A bare number in lb mode is ALREADY the stored form. Passing it through unchanged keeps the
+    // precision the user typed rather than rounding it to the nearest tenth on the way past.
     if (unit == WeightUnit.LB) return trimmed
     val lb = parseToLb(trimmed, unit) ?: return trimmed
     return trimDecimal(lb)

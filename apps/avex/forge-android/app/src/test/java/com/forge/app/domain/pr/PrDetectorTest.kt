@@ -95,4 +95,41 @@ class PrDetectorTest {
         val history = listOf(set(null, 10), set(80.0, 10))
         assertTrue(PrDetector.isPr(history, newWeightLb = 85.0, newReps = 10))
     }
+
+    // ── Timed holds (finding 14) ──────────────────────────────────────────────
+
+    private fun hold(weightLb: Double?, seconds: Int) = LoggedSet(
+        loggedExerciseId = 1L, setIndex = 0, weightText = weightLb?.toString() ?: "BW",
+        weightLb = weightLb, reps = seconds, completedAt = 0L, durationSeconds = seconds
+    )
+
+    @Test
+    fun aTimedHoldIsNeverItselfAPr() {
+        // Its `reps` column is a hold length. Nothing in a normal history reaches ninety "reps", so
+        // the comparison set came back empty and every weighted plank flagged gold.
+        assertFalse(
+            "a 90-second weighted plank is not a rep-range record",
+            PrDetector.isPr(emptyList(), newWeightLb = 45.0, newReps = 90, newDurationSeconds = 90)
+        )
+    }
+
+    @Test
+    fun timedHistoryDoesNotBlockARealPr() {
+        // The other direction, and the one that lasts: a 90-second hold sat in history as a 90-rep
+        // set at 45 lb, so a genuine 20-rep set at 40 lb was measured against it and refused.
+        val history = listOf(hold(45.0, 90))
+        assertTrue(
+            "a real 20-rep set is a PR when the only 'heavier' entry is a hold",
+            PrDetector.isPr(history, newWeightLb = 40.0, newReps = 20)
+        )
+    }
+
+    @Test
+    fun aRepSetOnATimedExerciseStillCompetesNormally() {
+        // Only the duration decides. A set with no duration is a rep set even on a movement that is
+        // usually held, and it is judged against the other rep sets exactly as before.
+        val history = listOf(set(50.0, 10))
+        assertFalse(PrDetector.isPr(history, newWeightLb = 45.0, newReps = 10))
+        assertTrue(PrDetector.isPr(history, newWeightLb = 55.0, newReps = 10))
+    }
 }

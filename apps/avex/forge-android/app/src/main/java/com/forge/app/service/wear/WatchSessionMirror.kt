@@ -131,7 +131,8 @@ class WatchSessionMirror @Inject constructor(
                     ?.filter { it.id != lastSet.id && it.completedAt <= lastSet.completedAt }
                     .orEmpty(),
                 newWeightLb = lastSet.weightLb,
-                newReps = lastSet.reps
+                newReps = lastSet.reps,
+                newDurationSeconds = lastSet.durationSeconds
             )
         } ?: false
 

@@ -2,8 +2,11 @@ package com.forge.app.ui.checkin
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.data.repo.BodyweightRepository
 import com.forge.app.data.repo.CheckinRepository
+import com.forge.app.domain.units.WeightUnit
+import com.forge.app.ui.onboarding.parseSaneBodyweightLb
 import com.forge.app.program.MuscleGroup
 import com.forge.app.ui.common.SnackbarController
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -26,6 +29,7 @@ import com.forge.app.domain.units.filterDecimalInput
 class CheckinViewModel @Inject constructor(
     private val checkinRepo: CheckinRepository,
     private val bodyweightRepo: BodyweightRepository,
+    private val settingsRepo: SettingsRepository,
     private val snackbar: SnackbarController
 ) : ViewModel() {
 
@@ -38,6 +42,12 @@ class CheckinViewModel @Inject constructor(
         val sick: Boolean = false,
         val soreMuscles: Set<MuscleGroup> = emptySet(),
         val weightText: String = "",
+        /**
+         * The unit the weight field is in. The field used to say only "Weight" and hand its number
+         * straight to `logWeightOnly(weightLb)`, so a kg user typing 80 logged 80 POUNDS — a 44 kg
+         * reading on their trend line, and a relative-strength denominator wrong by a factor of two.
+         */
+        val weightUnit: WeightUnit = WeightUnit.LB,
         /** Already answered today — the manual entry point says "update" rather than "log". */
         val answeredToday: Boolean = false
     ) {
@@ -54,6 +64,10 @@ class CheckinViewModel @Inject constructor(
             val shouldPrompt = runCatching { checkinRepo.shouldPrompt() }.getOrDefault(false)
             _state.update { it.copy(visible = shouldPrompt, answeredToday = answered) }
         }
+        // Live, so the field's label follows a unit change made while the app is open.
+        viewModelScope.launch {
+            settingsRepo.weightUnit.collect { unit -> _state.update { it.copy(weightUnit = unit) } }
+        }
     }
 
     /** Open it by hand — the coach surfaces this once daily prompting has backed off. */
@@ -62,6 +76,8 @@ class CheckinViewModel @Inject constructor(
             val today = checkinRepo.today()
             _state.value = UiState(
                 visible = true,
+                // open() rebuilds the whole state, so carry the unit rather than resetting to lb.
+                weightUnit = _state.value.weightUnit,
                 sleepQuality = today?.sleepQuality,
                 soreness = today?.soreness,
                 stress = today?.stress,
@@ -111,7 +127,14 @@ class CheckinViewModel @Inject constructor(
                     soreMuscles = if (s.askWhichMuscles) s.soreMuscles else emptySet()
                 )
                 // Morning is weigh-in time; logging it here saves a trip to the profile.
-                s.weightText.toDoubleOrNull()?.let { bodyweightRepo.logWeightOnly(it) }
+                //
+                // Through the same parse the profile's weigh-in sheet and onboarding use, in the
+                // user's display unit and bounded to a plausible adult weight. toDoubleOrNull()
+                // meant this field was pounds no matter what the rest of the app was set to, and
+                // accepted any number at all — a mis-typed "8" logged an 8 lb bodyweight straight
+                // into the strength-standards denominator.
+                parseSaneBodyweightLb(s.weightText, s.weightUnit)
+                    ?.let { bodyweightRepo.logWeightOnly(it) }
             }.onSuccess {
                 _state.update { it.copy(visible = false, answeredToday = true) }
             }.onFailure { e ->

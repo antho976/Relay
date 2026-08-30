@@ -39,6 +39,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.forge.app.domain.units.fromDisplayWeight
+import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.parseToLb
 import com.forge.app.program.Equipment
 import com.forge.app.program.ProgramGenerator
@@ -112,10 +113,14 @@ internal const val MAX_BODYWEIGHT_LB = 1000.0
 /** Parse a typed bodyweight (in the user's display unit) to a sane lb value, or null if blank,
  *  unparseable, or outside the plausible human range. Uses the shared [parseToLb] converter so the
  *  kg→lb factor can never drift from the rest of the app. Pure + testable. */
-internal fun parseSaneBodyweightLb(input: String, useKg: Boolean): Double? {
-    val lb = parseToLb(input, useKg) ?: return null
+internal fun parseSaneBodyweightLb(input: String, unit: WeightUnit): Double? {
+    val lb = parseToLb(input, unit) ?: return null
     return if (lb in MIN_BODYWEIGHT_LB..MAX_BODYWEIGHT_LB) lb else null
 }
+
+/** Boolean-unit bridge, matching [parseToLb]'s own legacy overload. Stones has no boolean. */
+internal fun parseSaneBodyweightLb(input: String, useKg: Boolean): Double? =
+    parseSaneBodyweightLb(input, if (useKg) WeightUnit.KG else WeightUnit.LB)
 
 /**
  * @param onFinished invoked with the chosen plan mode ([PLAN_GENERATED] / [PLAN_CUSTOM] /

@@ -43,7 +43,11 @@ internal fun DayViewModel.handleExerciseEvent(event: DayUiEvent) {
             // which aren't in the static dayPlan.exercises).
             val plan = exerciseUi.plan
             val set = exerciseUi.loggedSets.firstOrNull { it.id == event.setId } ?: return@launch
-            val lb = WeightParser.parse(event.weightText, plan.unit, settingsRepo.plateWeightLb.first())
+            // effectiveUnit, not plan.unit: the card renders and accepts input in the SWAPPED
+            // exercise's unit, so parsing the edit in the slot's original unit reads a plate count
+            // as pounds — or, on a bodyweight slot swapped for a weighted movement, discards the
+            // number entirely and rewrites the set as weightless.
+            val lb = WeightParser.parse(event.weightText, exerciseUi.effectiveUnit, settingsRepo.plateWeightLb.first())
             workoutRepo.updateSet(set.copy(weightText = event.weightText, weightLb = lb, reps = event.reps))
             refreshExercise(exerciseUi.plan.id)
         }
@@ -247,16 +251,26 @@ internal fun DayViewModel.logSet(
             val plan = currentUi.plan
             // The real exercise this slot logs under — the swapped exercise when swapped (#11).
             val effectiveExerciseId = currentUi.effectiveExerciseId.ifBlank { exerciseId }
+            // ONE resolution of the unit for this whole write, and it is the effective one.
+            //
+            // The card has always DISPLAYED currentUi.effectiveUnit while everything downstream of
+            // the tap — parsing, the plate-jump warning, the suggestion outcome's unit code — read
+            // the static plan's. The two disagree exactly when a swap crosses unit families, which
+            // is when it matters: a BODYWEIGHT slot swapped for a weighted movement showed a weight
+            // field and stored weightLb = null, and a weighted slot swapped for a PLATES machine
+            // read the typed plate count as pounds. Both land in volume, e1RM and personal bests
+            // silently.
+            val unit = currentUi.effectiveUnit
 
             val plateLb = settingsRepo.plateWeightLb.first()
-            val newWeightLb = WeightParser.parse(weightText, plan.unit, plateLb)
+            val newWeightLb = WeightParser.parse(weightText, unit, plateLb)
             // Compare against the all-time max from the frontier (never contains dummy display
             // rows) so the warning still means "well above anything you've ever done".
             val lastWeightLb = currentUi.priorFrontier
                 .mapNotNull { it.weightLb }
                 .maxOrNull()
             if (!skipJumpCheck && newWeightLb != null && lastWeightLb != null && lastWeightLb > 0) {
-                val isPlates = plan.unit == ExerciseUnit.PLATES
+                val isPlates = unit == ExerciseUnit.PLATES
                 // Plate machines step one plate at a time, so a single-plate bump reads as a huge % but
                 // is normal progression — only flag a 2+ plate jump. Free weights keep the 20% rule (#1/#10).
                 val bigJump = if (isPlates) (newWeightLb - lastWeightLb) / plateLb >= 1.5
@@ -318,7 +332,7 @@ internal fun DayViewModel.logSet(
             if (currentUi.loggedSets.isEmpty() && newWeightLb != null && suggestedLb != null) {
                 workoutRepo.recordSuggestionOutcome(
                     exerciseId = effectiveExerciseId,
-                    unitCode = plan.unit.code,
+                    unitCode = unit.code,
                     suggestedLb = suggestedLb,
                     takenLb = newWeightLb,
                     reps = reps,
