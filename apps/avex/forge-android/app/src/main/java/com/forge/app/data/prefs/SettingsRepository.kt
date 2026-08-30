@@ -5,6 +5,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import com.forge.app.core.time.Clock
+import com.forge.app.security.ProtectionSentinel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
@@ -91,7 +92,64 @@ class SettingsRepository @Inject constructor(
      * defaults is recoverable in a way that a launch loop is not.
      */
     private val allPreferences: Flow<Preferences> = context.forgePreferences.data
-        .catch { e -> if (e is IOException) emit(emptyPreferences()) else throw e }
+        .catch { e -> if (e is IOException) emit(READ_FAILED) else throw e }
+
+    /**
+     * The object emitted in place of a failed read.
+     *
+     * Degrading to defaults is right for the ~100 cosmetic settings above — a wrong accent for one
+     * frame beats a launch loop — but it was WRONG for the three that carry protection, and the
+     * bug was that nothing downstream could tell the two apart. `emptyPreferences()` says "privacy
+     * off, app lock off, gallery lock off" in exactly the same words a user who wants none of them
+     * says it, so a briefly unreadable file cleared FLAG_SECURE, primed the lock as unlocked and
+     * put the photo grid on screen behind no gate. [ProtectionSentinel] was added to cover that and
+     * could never fire, because there was no failure left to observe: the catch above had already
+     * turned it into a success.
+     *
+     * So the failure is now IN BAND. This is an ordinary empty [Preferences] for every reader that
+     * does not care — the marker key is private and nothing persists it — and [readFailed] lets the
+     * few readers that do care ask.
+     */
+    private companion object {
+        /** Never written to disk. Present only on the in-memory object substituted for a bad read. */
+        private val READ_FAILED_MARKER =
+            androidx.datastore.preferences.core.booleanPreferencesKey("__avex_read_failed")
+
+        private val READ_FAILED: Preferences =
+            androidx.datastore.preferences.core.mutablePreferencesOf(READ_FAILED_MARKER to true)
+    }
+
+    /** True when this snapshot is the substitute for a storage failure rather than a real read. */
+    private val Preferences.readFailed: Boolean get() = this[READ_FAILED_MARKER] == true
+
+    /**
+     * Thrown by [startupPreferences] when the settings file could not be read.
+     *
+     * The caller decides what to do about it — [MainActivity] applies [ProtectionSentinel.fallback]
+     * — which it can only do if the failure reaches it. It previously did not.
+     */
+    class PreferencesUnavailableException : java.io.IOException("Settings could not be read")
+
+    /**
+     * One protection setting, resolved so that neither a failed read nor a wiped file can silently
+     * report it as off.
+     *
+     * Three cases, and they are genuinely different:
+     *  - **stored value present** — the user chose it. Always wins, including an explicit `false`.
+     *  - **read failed** — [ProtectionSentinel.fallback]: what they last chose, or, with nothing
+     *    ever recorded, privacy on and neither lock primed.
+     *  - **key absent on a successful read** — either a fresh install or a store the corruption
+     *    handler just reset to empty. The sentinel distinguishes them: a remembered value means
+     *    this user had settings and the store lost them, so honour the remembered one; no record
+     *    means a fresh install, which really does default off.
+     */
+    private fun protection(
+        prefs: Preferences,
+        key: Preferences.Key<Boolean>,
+        pick: (ProtectionSentinel.Protections) -> Boolean
+    ): Boolean = prefs[key]
+        ?: if (prefs.readFailed) pick(ProtectionSentinel.fallback(context))
+        else ProtectionSentinel.lastKnown(context)?.let(pick) ?: false
 
     /**
      * Every derived preference flow in this class goes through here, never through `map` on the raw
@@ -809,6 +867,10 @@ class SettingsRepository @Inject constructor(
      */
     suspend fun startupPreferences(): StartupPreferences {
         val prefs = allPreferences.first()
+        // The caller's `runCatching` had nothing to catch, because the catch on `allPreferences`
+        // above had already converted the failure into a successful read of every default. Hand the
+        // failure back so the first frame can be drawn from what the user actually chose.
+        if (prefs.readFailed) throw PreferencesUnavailableException()
         return StartupPreferences(
             privacyMode = prefs[PreferenceKeys.PRIVACY_MODE] ?: false,
             appLockEnabled = prefs[PreferenceKeys.APP_LOCK_ENABLED] ?: false,
@@ -829,17 +891,47 @@ class SettingsRepository @Inject constructor(
         val themedLaunchIntro: Boolean
     )
 
-    val privacyMode: Flow<Boolean> = pref { it[PreferenceKeys.PRIVACY_MODE] ?: false }
+    val privacyMode: Flow<Boolean> =
+        pref { protection(it, PreferenceKeys.PRIVACY_MODE) { p -> p.privacyMode } }
     suspend fun setPrivacyMode(v: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.PRIVACY_MODE] = v }
 
     // ─── App & gallery lock (GYMAP-69) ────────────────────────────────────────
 
-    val appLockEnabled: Flow<Boolean> = pref { it[PreferenceKeys.APP_LOCK_ENABLED] ?: false }
+    val appLockEnabled: Flow<Boolean> =
+        pref { protection(it, PreferenceKeys.APP_LOCK_ENABLED) { p -> p.appLockEnabled } }
     suspend fun setAppLockEnabled(v: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.APP_LOCK_ENABLED] = v }
 
-    val galleryLockEnabled: Flow<Boolean> = pref { it[PreferenceKeys.GALLERY_LOCK_ENABLED] ?: false }
+    val galleryLockEnabled: Flow<Boolean> =
+        pref { protection(it, PreferenceKeys.GALLERY_LOCK_ENABLED) { p -> p.galleryLockEnabled } }
+
+    /**
+     * The three protections together, plus whether they came from a real read.
+     *
+     * [MainActivity] records every successful read into [ProtectionSentinel] so the next failed one
+     * falls back to the latest choice. It must not record a FAILED read: the values there are the
+     * sentinel's own fallback, and writing them back would quietly promote "privacy on because we
+     * could not tell" into "the user asked for privacy on" — and, worse, overwrite the real record
+     * it was supposed to preserve. The individual flows above deliberately hide which case they are
+     * in; this one does not, because this is the caller that has to know.
+     */
+    val protections: Flow<ProtectionState> = pref { prefs ->
+        ProtectionState(
+            privacyMode = protection(prefs, PreferenceKeys.PRIVACY_MODE) { it.privacyMode },
+            appLockEnabled = protection(prefs, PreferenceKeys.APP_LOCK_ENABLED) { it.appLockEnabled },
+            galleryLockEnabled = protection(prefs, PreferenceKeys.GALLERY_LOCK_ENABLED) { it.galleryLockEnabled },
+            fromFailedRead = prefs.readFailed
+        )
+    }
+
+    data class ProtectionState(
+        val privacyMode: Boolean,
+        val appLockEnabled: Boolean,
+        val galleryLockEnabled: Boolean,
+        /** True when these are the sentinel's fallback, not a value read from the settings file. */
+        val fromFailedRead: Boolean
+    )
     suspend fun setGalleryLockEnabled(v: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.GALLERY_LOCK_ENABLED] = v }
 
@@ -1038,6 +1130,11 @@ class SettingsRepository @Inject constructor(
     /** Clears all user preferences (not session/trophy data). Used by factory reset. */
     suspend fun resetAll() {
         context.forgePreferences.edit { it.clear() }
+        // The sentinel is a second copy of the three protection settings, and the protection flows
+        // fall back to it when a key is absent. A deliberate wipe and a store that lost its contents
+        // both end up with no keys, so leaving the record here would restore every protection on the
+        // next read and make the reset look broken.
+        ProtectionSentinel.forget(context)
     }
 
     /**
@@ -1067,6 +1164,9 @@ class SettingsRepository @Inject constructor(
             freestyle?.let { prefs[PreferenceKeys.FREESTYLE_MODE] = it }
             swapDislikePrompt?.let { prefs[PreferenceKeys.SWAP_DISLIKE_PROMPT_ENABLED] = it }
         }
+        // Privacy mode and the two locks are NOT in the preserved set above, so this resets them to
+        // defaults — which only holds if the sentinel forgets them too. See [resetAll].
+        ProtectionSentinel.forget(context)
     }
 
     /**
