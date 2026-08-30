@@ -38,6 +38,18 @@ class ProgramBuilderViewModel @Inject constructor(
     var saving by mutableStateOf(false)
         private set
 
+    /**
+     * The initial load has finished (or was never needed). Editing and Save wait on it.
+     *
+     * `loadIfNeeded` set a flag and launched, so the screen rendered an EMPTY builder while the rows
+     * were still coming back from Room. Two things followed from that. An edit made in the gap was
+     * overwritten wholesale when `days = loadDays()` landed — the user's change simply vanished, and
+     * the plan they were looking at was replaced by the one on disk. And Save was enabled over that
+     * same empty list, which does not save nothing: it writes an empty program over the real one.
+     */
+    var loadComplete by mutableStateOf(false)
+        private set
+
     /** Currently "go with the flow" — saving a plan switches to follow-a-plan, so the screen confirms
      *  first (see [save], which performs the flip). */
     val freestyleMode: StateFlow<Boolean> =
@@ -47,6 +59,15 @@ class ProgramBuilderViewModel @Inject constructor(
 
     /** Inverse of the last destructive remove — re-inserts just that item at its original slot, so a
      *  snackbar Undo never rolls back edits made in between (§13: undo over confirm). */
+    /**
+     * Inverse of the LAST destructive remove — newest wins, and the caller is told when it has
+     * replaced one, so the earlier snackbar can be dismissed rather than left on screen offering an
+     * Undo that no longer means what it says.
+     *
+     * Remove A, remove B before A's snackbar times out, tap Undo on A's snackbar: one global closure
+     * had already been overwritten, so B came back and A stayed gone. Two removals and one action,
+     * and the action undid the wrong one.
+     */
     private var undoRemoval: (() -> Unit)? = null
 
     private fun uid() = UUID.randomUUID().toString().take(8)
@@ -55,15 +76,26 @@ class ProgramBuilderViewModel @Inject constructor(
     fun loadIfNeeded(blank: Boolean) {
         if (loaded) return
         loaded = true
-        if (blank) { days = emptyList(); return }
-        viewModelScope.launch { days = loadDays() }
+        if (blank) { days = emptyList(); loadComplete = true; return }
+        viewModelScope.launch {
+            val rows = loadDays()
+            // `dirty` cannot be true yet — the screen gates editing on loadComplete — but the check
+            // states the rule rather than relying on the gate one layer up: a late snapshot never
+            // overwrites edits the user has already made.
+            if (!dirty) days = rows
+            loadComplete = true
+        }
     }
 
     /** Drop unsaved edits and reload the persisted program — Back out of a pen-edit into view mode. */
     fun discardEdits() {
         dirty = false
         undoRemoval = null
-        viewModelScope.launch { days = loadDays() }
+        loadComplete = false
+        viewModelScope.launch {
+            days = loadDays()
+            loadComplete = true
+        }
     }
 
     private suspend fun loadDays(): List<BuilderDay> =
@@ -101,8 +133,17 @@ class ProgramBuilderViewModel @Inject constructor(
         val removed = days[index]
         mutate { it.filterNot { d -> d.uid == dayUid } }
         // Undo re-inserts only this day at its old slot, so edits made while the snackbar showed survive.
-        undoRemoval = { mutate { list -> list.toMutableList().apply { add(index.coerceAtMost(size), removed) } } }
+        stageUndo { mutate { list -> list.toMutableList().apply { add(index.coerceAtMost(size), removed) } } }
     }
+
+    /**
+     * Stage [inverse] as the one thing Undo will do — newest wins.
+     *
+     * The screen dismisses the snackbar for any earlier removal at the same moment (see
+     * `removedWithUndo`), so there is never a visible Undo whose action belongs to a different
+     * removal than the message beside it.
+     */
+    private fun stageUndo(inverse: () -> Unit) { undoRemoval = inverse }
 
     /** Insert a copy of the day (fresh uids/key, "Name 2") right after the original. */
     fun duplicateDay(dayUid: String) = mutate { list ->
@@ -137,7 +178,7 @@ class ProgramBuilderViewModel @Inject constructor(
         val removed = day.exercises[index]
         mutateDay(dayUid) { it.copy(exercises = it.exercises.filterNot { e -> e.uid == exUid }) }
         // Undo re-inserts only this exercise at its old slot, leaving any later edits intact.
-        undoRemoval = {
+        stageUndo {
             mutateDay(dayUid) { d ->
                 d.copy(exercises = d.exercises.toMutableList().apply { add(index.coerceAtMost(size), removed) })
             }

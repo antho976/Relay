@@ -89,31 +89,46 @@ fun ForgeNavHost(initialDayKey: String? = null, privacyPolicyRequest: Int = 0) {
     )
     LaunchedEffect(Unit) { appeared = true }
 
+    // "I'll make my own" lands on Home, which shows the "No plan yet · Build a plan" state (its program
+    // was cleared in onboarding), rather than jumping straight into the builder.
+    // A deep screen (e.g. PRs → "open cardio") can request a hub tab: set this and pop back to the
+    // hub, which animates to the page then clears it via onPendingConsumed.
+    var pendingHubPage by remember { mutableStateOf<BottomTab?>(null) }
+
+    // The page the hub STARTS on. Only ever read once, when the hub is first composed — which is why
+    // it cannot carry a warm launch on its own; see the effect below.
+    val initialHubPage = if (initialDayKey?.startsWith("cardio") == true) BottomTab.CARDIO else BottomTab.HOME
+
     // Widget deep-link: a gym day opens on top of the hub (Back returns home). A cardio day instead
-    // selects the hub's Cardio page via initialHubPage below — there's no separate cardio destination.
+    // selects the hub's Cardio page.
     // Re-fires whenever the key changes — a fresh launch, or a widget tap routed through onNewIntent
     // while the app is already running (launchMode=singleTask); a config-change recreate supplies null.
+    //
+    // The cardio half used to ride ONLY on `initialHubPage`, which the hub reads once to seed its
+    // pager. That is exactly the case a cold launch covers and a warm one does not: with the app
+    // already running the hub is long since composed, so tapping the cardio widget landed the user
+    // on whatever page they were already looking at, with nothing to say the tap had been received.
+    // Routed through pendingHubPage instead — the same mechanism every in-app "open cardio" uses.
     LaunchedEffect(initialDayKey) {
         val key = initialDayKey ?: return@LaunchedEffect
-        if (key in com.forge.app.program.Program.dayKeys) nav.navigate(Routes.gymDay(key))
+        when {
+            key in com.forge.app.program.Program.dayKeys -> nav.navigate(Routes.gymDay(key))
+            key.startsWith("cardio") -> {
+                nav.popBackStack(Routes.OVERVIEW, false)
+                pendingHubPage = BottomTab.CARDIO
+            }
+        }
     }
     LaunchedEffect(privacyPolicyRequest) {
         if (privacyPolicyRequest > 0) {
             nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.PrivacyPolicy.name))
         }
     }
-    val initialHubPage = if (initialDayKey?.startsWith("cardio") == true) BottomTab.CARDIO.ordinal else BottomTab.HOME.ordinal
-
-    // "I'll make my own" lands on Home, which shows the "No plan yet · Build a plan" state (its program
-    // was cleared in onboarding), rather than jumping straight into the builder.
-    // A deep screen (e.g. PRs → "open cardio") can request a hub tab: set this and pop back to the
-    // hub, which animates to the page then clears it via onPendingConsumed.
-    var pendingHubPage by remember { mutableStateOf<Int?>(null) }
 
     // Long-pressing the notifications bell anywhere returns Home in one gesture: pop every deep route
     // back to the hub and select Home. No-op-safe when already on the hub (popBackStack returns false).
     val goHome: () -> Unit = {
-        pendingHubPage = BottomTab.HOME.ordinal
+        pendingHubPage = BottomTab.HOME
         nav.popBackStack(Routes.OVERVIEW, false)
     }
 
@@ -186,8 +201,8 @@ fun ForgeNavHost(initialDayKey: String? = null, privacyPolicyRequest: Int = 0) {
             // The swipeable home: Overview · Cardio · Stats · Profile as pager pages under the bar.
             HubScreen(
                 nav = nav,
-                initialPage = initialHubPage,
-                pendingPage = pendingHubPage,
+                initialTab = initialHubPage,
+                pendingTab = pendingHubPage,
                 onPendingConsumed = { pendingHubPage = null },
                 // Counted from the same feed the bell reads, so a kind switched off in Settings
                 // drops out of both at once and they can never disagree.
@@ -299,12 +314,12 @@ fun ForgeNavHost(initialDayKey: String? = null, privacyPolicyRequest: Int = 0) {
                 onResumeSession = { dayKey ->
                     nav.popBackStack()
                     if (dayKey.startsWith("cardio")) {
-                        pendingHubPage = BottomTab.CARDIO.ordinal
+                        pendingHubPage = BottomTab.CARDIO
                     } else {
                         nav.navigate(Routes.gymDay(dayKey))
                     }
                 },
-                onOpenCoachBrief = { nav.popBackStack(); pendingHubPage = BottomTab.COACH.ordinal },
+                onOpenCoachBrief = { nav.popBackStack(); pendingHubPage = BottomTab.COACH },
                 onConnectWearable = {
                     nav.popBackStack()
                     nav.navigate(Routes.settings(com.forge.app.ui.settings.SettingsPage.Recovery.name))

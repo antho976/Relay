@@ -178,7 +178,15 @@ internal fun GalleryViewerPager(
             editingFile = current.fileName
             noteInput = noteOverride[current.fileName] ?: current.note
             titleInput = titleOverride[current.fileName] ?: current.title
-            weightInput = (weightOverride[current.fileName] ?: current.weightLb)?.let { weightInputValue(it, weightUnit) } ?: ""
+            // containsKey, not elvis: `weightOverride[file] ?: current.weightLb` cannot tell "no
+            // override" from "an override of null", and clearing the field stores exactly the second.
+            // Swiping away and back therefore restored the snapshot the user had just deleted, and
+            // the next commit compared against it and wrote it back to the database.
+            weightInput = if (weightOverride.containsKey(current.fileName)) {
+                weightOverride[current.fileName]?.let { weightInputValue(it, weightUnit) } ?: ""
+            } else {
+                current.weightLb?.let { weightInputValue(it, weightUnit) } ?: ""
+            }
         }
     }
 

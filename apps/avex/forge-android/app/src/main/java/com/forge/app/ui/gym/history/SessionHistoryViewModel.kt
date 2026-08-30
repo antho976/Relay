@@ -51,7 +51,8 @@ data class SessionHistoryUiState(
 class SessionHistoryViewModel @Inject constructor(
     private val sessionDao: SessionDao,
     private val loggedExerciseDao: LoggedExerciseDao,
-    private val cardioRepo: CardioRepository
+    private val cardioRepo: CardioRepository,
+    private val settingsRepo: com.forge.app.data.prefs.SettingsRepository
 ) : ViewModel() {
 
     private val filters = MutableStateFlow(HistoryFilters())
@@ -62,14 +63,17 @@ class SessionHistoryViewModel @Inject constructor(
         val workouts: List<Session> = emptyList(),
         val cardio: List<CardioEntry> = emptyList(),
         val namesBySession: Map<Long, List<String>> = emptyMap(),
-        val availableTags: List<String> = emptyList()
+        val availableTags: List<String> = emptyList(),
+        /** The user's own cardio activities — search must match the name the row prints. */
+        val customCardioTypes: List<com.forge.app.domain.cardio.CustomCardioType> = emptyList()
     )
 
     private val dataFlow = combine(
         sessionDao.observeAllFinishedSessions(),
         loggedExerciseDao.observeSessionExerciseIds(),
-        cardioRepo.observeAll()
-    ) { sessions, exerciseRows, cardioEntries ->
+        cardioRepo.observeAll(),
+        settingsRepo.customCardioTypes
+    ) { sessions, exerciseRows, cardioEntries, customTypes ->
         val namesBySession = exerciseRows
             .groupBy { it.sessionId }
             .mapValues { (_, rows) -> rows.map { Program.exerciseDisplayName(it.exerciseId, it.swappedName) } }
@@ -77,12 +81,15 @@ class SessionHistoryViewModel @Inject constructor(
             workouts = sessions,
             cardio = cardioEntries.filter { it.type != CardioType.REST.code },
             namesBySession = namesBySession,
-            availableTags = availableTagsOf(sessions)
+            availableTags = availableTagsOf(sessions),
+            customCardioTypes = customTypes
         )
     }.flowOn(Dispatchers.Default)
 
     val state: StateFlow<SessionHistoryUiState> = combine(dataFlow, filters) { data, f ->
-        val items = buildFilteredHistory(data.workouts, data.cardio, data.namesBySession, f)
+        val items = buildFilteredHistory(
+            data.workouts, data.cardio, data.namesBySession, f, data.customCardioTypes
+        )
         SessionHistoryUiState(
             days = groupByDay(items) { historyDayLabel(it) },
             summary = summarize(items),

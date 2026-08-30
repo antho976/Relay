@@ -29,8 +29,20 @@ data class FreestyleTemplateSummary(
 /** One drafted set from a template: the load performed (null = bodyweight) and reps. */
 data class FreestyleTemplateSet(val weightLb: Double?, val reps: Int)
 
-/** One exercise from a template: a library id + the sets performed that session. */
-data class FreestyleTemplateExercise(val libId: String, val sets: List<FreestyleTemplateSet>)
+/**
+ * One exercise from a template: a library id + the sets performed that session.
+ *
+ * [customName] is set for a user-created move, which has no [ExerciseLibrary] row to re-derive a
+ * name from. Without it the conversion back into the logger resolved every id through the library
+ * and `mapNotNull` dropped whatever it could not find — so a workout built from custom exercises
+ * produced a template that silently omitted them, and one built ENTIRELY from them produced an
+ * empty template that looked like a bug in the picker.
+ */
+data class FreestyleTemplateExercise(
+    val libId: String,
+    val sets: List<FreestyleTemplateSet>,
+    val customName: String? = null
+)
 
 /**
  * Backs the freestyle "start from a past workout" picker (GYMAP-48). Lists every finished session as a
@@ -78,12 +90,20 @@ class FreestyleTemplateViewModel @Inject constructor(
     suspend fun loadTemplate(sessionId: Long): List<FreestyleTemplateExercise> {
         val exercises = loggedExerciseDao.forSession(sessionId).filter { !it.skipped }
         val byLib = LinkedHashMap<String, MutableList<FreestyleTemplateSet>>()
+        // A custom move stores its name on the row (swappedName), because there is no library entry
+        // to look it up in. Carried through so the logger can rebuild it.
+        val customNames = LinkedHashMap<String, String>()
         exercises.forEach { le ->
             val sets = loggedSetDao.forLoggedExercise(le.id)
                 .sortedBy { it.setIndex }
                 .map { FreestyleTemplateSet(weightLb = it.weightLb, reps = it.reps) }
             byLib.getOrPut(le.exerciseId) { mutableListOf() }.addAll(sets)
+            if (isCustomExerciseId(le.exerciseId)) {
+                le.swappedName?.takeIf { it.isNotBlank() }?.let { customNames[le.exerciseId] = it }
+            }
         }
-        return byLib.map { (libId, sets) -> FreestyleTemplateExercise(libId, sets) }
+        return byLib.map { (libId, sets) ->
+            FreestyleTemplateExercise(libId, sets, customName = customNames[libId])
+        }
     }
 }

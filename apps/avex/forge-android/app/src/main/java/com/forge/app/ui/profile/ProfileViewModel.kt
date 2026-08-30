@@ -1,5 +1,7 @@
 package com.forge.app.ui.profile
 
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.NonCancellable
 import android.net.Uri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -252,10 +254,21 @@ class ProfileViewModel @Inject constructor(
     /** Called by the UI after the one-shot celebration has played so it never replays on recompose. */
     fun clearRankUpCelebration() { _showRankUpCelebration.value = false }
 
-    /** Inline rename from the profile header — persists to prefs and reflects immediately. */
+    /**
+     * Inline rename from the profile header — persists to prefs and reflects immediately.
+     *
+     * The write is shielded from cancellation, exactly as SettingsViewModel's `write` and
+     * GoalsViewModel's writes are, and for the same reason: this ViewModel is nav-scoped, and the
+     * gesture that commits a rename is usually followed straight away by the gesture that leaves the
+     * screen. `DataStore.edit` suspends across an actor hop, a file write, an fsync and a rename, so
+     * a back pressed on the same breath as Done cancelled the write mid-flight — and the header had
+     * already shown the new name, so nothing said it had not been kept.
+     *
+     * The UI patch stays cancellable: it only updates state that is going away.
+     */
     fun setUserName(name: String) = viewModelScope.launch {
         val trimmed = name.trim()
-        settingsRepo.setUserName(trimmed)
+        withContext(NonCancellable) { settingsRepo.setUserName(trimmed) }
         _state.update { it.copy(name = trimmed) }
     }
 

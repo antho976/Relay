@@ -74,6 +74,14 @@ fun NotesSearchScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp)
                 )
+                // "Searching" and "no matches" are different answers, and the screen used to give
+                // the second one while the first was true — under the new query, over the previous
+                // query's results, for the whole debounce window.
+                state.searching -> InlineEmptyHint(
+                    text = "Searching…",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 4.dp)
+                )
                 state.results.isEmpty() -> InlineEmptyHint(
                     text = "No notes match. Try another term.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,

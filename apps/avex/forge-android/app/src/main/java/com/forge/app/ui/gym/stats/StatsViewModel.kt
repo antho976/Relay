@@ -78,8 +78,21 @@ class StatsViewModel @Inject constructor(
     private val _dayDetail = MutableStateFlow<StatsDayDetail?>(null)
     val dayDetail: StateFlow<StatsDayDetail?> = _dayDetail.asStateFlow()
 
-    /** Load everything logged on [date] (gym sessions + cardio, newest first) and open the day sheet. */
-    fun openDay(date: LocalDate) = viewModelScope.launch {
+    /** The in-flight [openDay] load, cancelled by the next tap. */
+    private var dayDetailJob: kotlinx.coroutines.Job? = null
+
+    /**
+     * Load everything logged on [date] (gym sessions + cardio, newest first) and open the day sheet.
+     *
+     * Each tap CANCELS the previous load. Every heatmap tap used to launch its own uncancelled pair
+     * of queries and publish whatever it found, so two taps in quick succession raced: the slower —
+     * and therefore usually the EARLIER — request wrote last, and the sheet showed a different day
+     * from the cell the user had just pressed. A day with a lot logged in it is the slow one, which
+     * makes the wrong answer the interesting-looking one.
+     */
+    fun openDay(date: LocalDate) {
+        dayDetailJob?.cancel()
+        dayDetailJob = viewModelScope.launch {
         runCatching {
             val zone = ZoneId.systemDefault()
             val fromMs = date.atStartOfDay(zone).toInstant().toEpochMilli()
@@ -89,10 +102,18 @@ class StatsViewModel @Inject constructor(
             // and filtering one day out of it.
             val cardio = cardioRepo.entriesInRange(fromMs, toMs).map { HistoryItem.Cardio(it) }
             StatsDayDetail(date, (workouts + cardio).sortedByDescending { it.dateMs })
-        }.getOrNull()?.let { _dayDetail.value = it }
+        }.getOrElse { e ->
+            // runCatching swallows CancellationException too, and a cancelled load publishing its
+            // half-finished result is the very thing the cancel exists to prevent.
+            if (e is kotlinx.coroutines.CancellationException) throw e else null
+        }?.let { _dayDetail.value = it }
+        }
     }
 
-    fun closeDay() { _dayDetail.value = null }
+    fun closeDay() {
+        dayDetailJob?.cancel()
+        _dayDetail.value = null
+    }
 
     val state: StateFlow<StatsUiState> = combine(
         statsRepo.observeGymStats(),
