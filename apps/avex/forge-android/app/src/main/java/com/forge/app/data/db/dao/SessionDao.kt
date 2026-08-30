@@ -62,8 +62,32 @@ interface SessionDao {
     @Query("SELECT * FROM session WHERE finished_at IS NULL ORDER BY started_at DESC LIMIT 1")
     fun observeActiveSession(): Flow<Session?>
 
+    /**
+     * Recent finished sessions, INCLUSIVE of untracked ones — for history lists, which is what an
+     * untracked session still belongs in. Anything that feeds a schedule, a comparison or a
+     * progression signal wants [observeRecentTracked] instead.
+     */
     @Query("SELECT * FROM session WHERE finished_at IS NOT NULL ORDER BY finished_at DESC LIMIT :limit")
     fun observeRecent(limit: Int = 10): Flow<List<Session>>
+
+    /**
+     * The same window, tracked only.
+     *
+     * The inclusive flow was driving the lit week dots, the best-session tile, today's trained keys
+     * and next-up resolution — while the workout COUNT and volume beside them were already
+     * tracked-only. So a week with one untracked session lit three dots above the words "2
+     * workouts", and a session the user had explicitly excluded from their record still consumed
+     * today's schedule slot and decided what came next.
+     *
+     * A DAO variant rather than an in-memory filter, so the window is 120 TRACKED rows: filtering
+     * after the fact would silently shorten it for anyone with a run of untracked sessions.
+     */
+    @Query("""
+        SELECT * FROM session
+        WHERE finished_at IS NOT NULL AND is_untracked = 0
+        ORDER BY finished_at DESC LIMIT :limit
+    """)
+    fun observeRecentTracked(limit: Int = 10): Flow<List<Session>>
 
     /**
      * Every finished session's finish instant, newest first — the column alone, no rows.
@@ -130,7 +154,8 @@ interface SessionDao {
     /** Previous finished session for the same day (excludes current — used for session comparison #52). */
     @Query("""
         SELECT * FROM session
-        WHERE day_key = :dayKey AND finished_at IS NOT NULL AND id != :excludeSessionId
+        WHERE day_key = :dayKey AND finished_at IS NOT NULL AND is_untracked = 0
+          AND id != :excludeSessionId
         ORDER BY finished_at DESC LIMIT 1
     """)
     suspend fun previousFinishedForDay(dayKey: String, excludeSessionId: Long): Session?
@@ -138,7 +163,8 @@ interface SessionDao {
     /** Best (highest) volume ever recorded for a given day, excluding the current session (#53). */
     @Query("""
         SELECT MAX(total_volume_lb) FROM session
-        WHERE day_key = :dayKey AND finished_at IS NOT NULL AND id != :excludeSessionId
+        WHERE day_key = :dayKey AND finished_at IS NOT NULL AND is_untracked = 0
+          AND id != :excludeSessionId
     """)
     suspend fun maxVolumeForDay(dayKey: String, excludeSessionId: Long): Double?
 
@@ -160,18 +186,30 @@ interface SessionDao {
     """)
     fun observeVolumeSince(sinceEpochMs: Long): Flow<Double?>
 
-    /** Earliest finished session timestamp — used for the "first full month" milestone (#56). */
-    @Query("SELECT MIN(started_at) FROM session WHERE finished_at IS NOT NULL")
+    /**
+     * Earliest finished TRACKED session — the "first full month" milestone (#56).
+     *
+     * A milestone is an achievement, and an untracked session is one the user asked not to count.
+     * It also decided when the month started, so an excluded workout could award the milestone a
+     * month early.
+     */
+    @Query("SELECT MIN(started_at) FROM session WHERE finished_at IS NOT NULL AND is_untracked = 0")
     fun observeFirstFinishedSessionStartedAt(): Flow<Long?>
 
     /**
-     * Nearest finished session whose start falls within [fromMs]–[toMs].
+     * Nearest finished TRACKED session whose start falls within [fromMs]–[toMs].
      * Orders by proximity to [targetMs] so the closest day to the anniversary is returned.
      * Used for the "On this day" memory card (#106).
+     *
+     * Tracked only, because this is not the history screen: the memory is delivered as an
+     * engagement hook on the Overview and inside the weekly recap notification, alongside numbers
+     * that already exclude untracked work. A session someone deliberately kept out of their record
+     * resurfacing a year later as "on this day" is the same category error as counting it.
      */
     @Query("""
         SELECT * FROM session
-        WHERE finished_at IS NOT NULL AND started_at BETWEEN :fromMs AND :toMs
+        WHERE finished_at IS NOT NULL AND is_untracked = 0
+          AND started_at BETWEEN :fromMs AND :toMs
         ORDER BY ABS(started_at - :targetMs) ASC
         LIMIT 1
     """)
@@ -181,9 +219,28 @@ interface SessionDao {
     @Query("SELECT * FROM session WHERE finished_at IS NOT NULL ORDER BY started_at ASC")
     suspend fun allFinished(): List<Session>
 
-    /** Sessions finished within a calendar month [fromMs, toMs). Used by the monthly calendar (#54). */
+    /**
+     * Sessions finished within [fromMs, toMs), INCLUSIVE of untracked ones. Used by the monthly
+     * calendar (#54), which is a history surface. Signals want [finishedInRangeTracked].
+     */
     @Query("SELECT * FROM session WHERE finished_at IS NOT NULL AND started_at >= :fromMs AND started_at < :toMs ORDER BY started_at ASC")
     suspend fun finishedInRange(fromMs: Long, toMs: Long): List<Session>
+
+    /**
+     * The same range, tracked only.
+     *
+     * The training reminder read the inclusive one, so a workout the user excluded from their
+     * record still suppressed that day's nudge and fed the schedule resolution behind it. The
+     * year-in-review read it too and filtered in memory afterwards, which is the same query stated
+     * twice — once here and once at the call site.
+     */
+    @Query("""
+        SELECT * FROM session
+        WHERE finished_at IS NOT NULL AND is_untracked = 0
+          AND started_at >= :fromMs AND started_at < :toMs
+        ORDER BY started_at ASC
+    """)
+    suspend fun finishedInRangeTracked(fromMs: Long, toMs: Long): List<Session>
 
     /**
      * Sessions whose *finish* time falls in [fromMs, toMs) — used by the weekly AI export so a
@@ -341,7 +398,7 @@ interface SessionDao {
     @Query("""
         SELECT DISTINCT s.started_at FROM logged_exercise le
         INNER JOIN session s ON le.session_id = s.id
-        WHERE le.was_pr = 1 AND s.finished_at IS NOT NULL
+        WHERE le.was_pr = 1 AND s.finished_at IS NOT NULL AND s.is_untracked = 0
     """)
     suspend fun prSessionStartTimes(): List<Long>
 }

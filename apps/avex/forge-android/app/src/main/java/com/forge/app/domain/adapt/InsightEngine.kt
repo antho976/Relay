@@ -156,7 +156,7 @@ object InsightEngine {
         if (totalSets < t.insightBalanceMinWeekSets) return null
         val volumeByMuscle = weekBouts
             .groupBy({ it.first }, { it.second })
-            .mapValues { (_, bouts) -> bouts.sumOf { b -> b.sets.sumOf { (it.weightLb ?: 0.0) * it.reps } } }
+            .mapValues { (_, bouts) -> bouts.sumOf { b -> com.forge.app.domain.volume.VolumeCalculator.sessionVolumeLb(b.sets) } }
         val total = volumeByMuscle.values.sum()
         if (total <= 0) return null
         val dominant = volumeByMuscle.maxByOrNull { it.value } ?: return null

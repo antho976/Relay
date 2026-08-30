@@ -235,4 +235,117 @@ class TrackedSessionContractTest {
         logSession(untracked = true, exerciseId = "bench")
         assertNull(exercises.lastLoggedBefore("bench", excludeSessionId = -1L))
     }
+
+    // ── The consumers the first pass left inclusive ───────────────────────────
+    //
+    // Each of these was reported as fixed while the query behind an adjacent surface still counted
+    // untracked work, so the contract held in the places it was tested and nowhere else. The point
+    // of listing them here is that "tracked" stops being a property of twelve named queries and
+    // becomes a property of the answer.
+
+    @Test
+    fun `the recent-sessions signal window is tracked`() = runTest {
+        logSession(untracked = false, startedAt = 1_000_000L)
+        logSession(untracked = true, startedAt = 2_000_000L)
+
+        val tracked = sessions.observeRecentTracked(50).first()
+        assertEquals(1, tracked.size)
+        assertEquals(1_000_000L, tracked.single().startedAt)
+    }
+
+    @Test
+    fun `the recent-sessions history window still shows everything`() = runTest {
+        logSession(untracked = false, startedAt = 1_000_000L)
+        logSession(untracked = true, startedAt = 2_000_000L)
+
+        // An untracked session is still a workout that happened; history is where it belongs.
+        assertEquals(2, sessions.observeRecent(50).first().size)
+    }
+
+    @Test
+    fun `the previous session for a day comparison is tracked`() = runTest {
+        val old = logSession(untracked = false, startedAt = 1_000_000L, dayKey = "upper-a")
+        logSession(untracked = true, startedAt = 2_000_000L, dayKey = "upper-a")
+        val current = logSession(untracked = false, startedAt = 3_000_000L, dayKey = "upper-a")
+
+        val prev = sessions.previousFinishedForDay("upper-a", excludeSessionId = current)
+        assertEquals("an excluded session must not be what you are compared against", old, prev!!.id)
+    }
+
+    @Test
+    fun `the best volume for a day is tracked`() = runTest {
+        logSession(untracked = false, startedAt = 1_000_000L, dayKey = "upper-a", volumeLb = 500.0)
+        logSession(untracked = true, startedAt = 2_000_000L, dayKey = "upper-a", volumeLb = 9_000.0)
+        val current = logSession(untracked = false, startedAt = 3_000_000L, dayKey = "upper-a")
+
+        assertEquals(500.0, sessions.maxVolumeForDay("upper-a", excludeSessionId = current)!!, 0.001)
+    }
+
+    @Test
+    fun `the first-session milestone clock starts at the first tracked session`() = runTest {
+        logSession(untracked = true, startedAt = 1_000_000L)
+        logSession(untracked = false, startedAt = 5_000_000L)
+
+        assertEquals(
+            "an excluded workout must not start the month early",
+            5_000_000L,
+            sessions.observeFirstFinishedSessionStartedAt().first()
+        )
+    }
+
+    @Test
+    fun `an on-this-day memory is tracked`() = runTest {
+        logSession(untracked = true, startedAt = 2_000_000L)
+        val memory = sessions.sessionNearDate(targetMs = 2_000_000L, fromMs = 0L, toMs = 9_000_000L)
+        assertNull("a session kept out of the record must not resurface as a memory", memory)
+    }
+
+    @Test
+    fun `PR session times are tracked`() = runTest {
+        logSession(untracked = true, startedAt = 2_000_000L, wasPr = true)
+        assertTrue(sessions.prSessionStartTimes().isEmpty())
+
+        logSession(untracked = false, startedAt = 3_000_000L, wasPr = true)
+        assertEquals(listOf(3_000_000L), sessions.prSessionStartTimes())
+    }
+
+    @Test
+    fun `the reminder and recap range is tracked while the calendar range is not`() = runTest {
+        logSession(untracked = false, startedAt = 1_000_000L)
+        logSession(untracked = true, startedAt = 2_000_000L)
+
+        assertEquals(1, sessions.finishedInRangeTracked(0L, 9_000_000L).size)
+        assertEquals("the month calendar is history", 2, sessions.finishedInRange(0L, 9_000_000L).size)
+    }
+
+    @Test
+    fun `the best hold prefill ignores untracked and unfinished holds`() = runTest {
+        // A long hold in a session the user excluded.
+        val untracked = sessions.insert(session(startedAt = 1_000_000L, finishedAt = 1_100_000L, untracked = true))
+        val untrackedEx = exercises.insert(loggedExercise(sessionId = untracked, exerciseId = "plank"))
+        sets.insert(loggedSet(loggedExerciseId = untrackedEx, weightLb = null, reps = 0, durationSeconds = 300))
+
+        // A longer one in the session still in progress — the one you are standing in the middle of.
+        val open = sessions.insert(session(startedAt = 8_000_000L, finishedAt = null))
+        val openEx = exercises.insert(loggedExercise(sessionId = open, exerciseId = "plank"))
+        sets.insert(loggedSet(loggedExerciseId = openEx, weightLb = null, reps = 0, durationSeconds = 600))
+
+        assertNull("neither is a personal best", sets.bestHoldSecondsForExercise("plank"))
+
+        val real = sessions.insert(session(startedAt = 2_000_000L, finishedAt = 2_100_000L))
+        val realEx = exercises.insert(loggedExercise(sessionId = real, exerciseId = "plank"))
+        sets.insert(loggedSet(loggedExerciseId = realEx, weightLb = null, reps = 0, durationSeconds = 45))
+
+        assertEquals(45, sets.bestHoldSecondsForExercise("plank"))
+    }
+
+    @Test
+    fun `the day-screen last-session strip is tracked`() = runTest {
+        logSession(untracked = false, startedAt = 1_000_000L, exerciseId = "bench")
+        logSession(untracked = true, startedAt = 2_000_000L, exerciseId = "bench")
+
+        val rows = sets.sessionAggregatesForExercise("bench", limit = 8)
+        assertEquals(1, rows.size)
+        assertEquals(1_000_000L, rows.single().sessionStartedAt)
+    }
 }

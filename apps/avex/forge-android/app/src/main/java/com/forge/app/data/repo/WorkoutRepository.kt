@@ -664,8 +664,17 @@ class WorkoutRepository @Inject constructor(
         swappedUnit = swappedUnit
     )
 
-    suspend fun updateExercise(loggedExercise: LoggedExercise) =
-        loggedExerciseDao.update(loggedExercise)
+    /**
+     * The PR flag, on its own — including clearing it.
+     *
+     * The day-screen rebuild set this through `updateExercise(logged.copy(wasPr = ...))`, a whole
+     * row written from a snapshot the rebuild had read earlier. It runs asynchronously, so a
+     * rating, a note, a skip, a swap or a target change made while it was in flight was silently
+     * reverted by that stale copy — the same defect the targeted setters below were introduced for,
+     * still live on the main training path.
+     */
+    suspend fun setWasPr(loggedExerciseId: Long, wasPr: Boolean) =
+        loggedExerciseDao.setWasPr(loggedExerciseId, wasPr)
 
     // Targeted single-column writes rather than read-modify-write of the whole row: see the DAO's
     // note — a note commit racing a SKIP tap used to silently un-skip the exercise.

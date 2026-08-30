@@ -2,6 +2,7 @@ package com.forge.app.ui.gym.train
 
 import com.forge.app.data.db.entities.LoggedExercise
 import com.forge.app.data.db.entities.LoggedSet
+import com.forge.app.domain.volume.VolumeCalculator
 import com.forge.app.data.db.types.EffortRating
 import com.forge.app.domain.adapt.IntensityIntent
 import com.forge.app.domain.adapt.ProgressionAdvisor
@@ -111,8 +112,11 @@ internal suspend fun DayViewModel.buildExerciseUi(
         .maxWithOrNull(compareBy({ it.weightLb ?: Double.NEGATIVE_INFINITY }, { it.reps }, { it.setIndex }))
         ?.id
 
+    // One column, not a whole row rebuilt from a snapshot this pass read earlier. The rebuild is
+    // asynchronous, so a rating, note, skip, swap or target change landing while it was in flight
+    // was reverted by the stale copy this used to write back.
     if (logged != null && logged.wasPr != wasPr) {
-        workoutRepo.updateExercise(logged.copy(wasPr = wasPr))
+        workoutRepo.setWasPr(logged.id, wasPr)
     }
 
     // Double-progression suggestion (#12/#13) — pure rules in the adaptation engine; the
@@ -144,8 +148,10 @@ internal suspend fun DayViewModel.buildExerciseUi(
     val allTimePbText = pbSet?.let { "${displayWeight(it)} × ${it.reps}" }
     val goalWeightLb = goalDeferred.await()
 
-    val currentVolume = sets.sumOf { (it.weightLb ?: 0.0) * it.reps }
-    val prevVolume = prevSets.sumOf { (it.weightLb ?: 0.0) * it.reps }
+    // Through the canonical helper: a timed hold's reps is a duration, so open-coding this made a
+    // 90-second plank outweigh the whole rest of the session in the "vs last time" verdict.
+    val currentVolume = VolumeCalculator.sessionVolumeLb(sets)
+    val prevVolume = VolumeCalculator.sessionVolumeLb(prevSets)
     val vsLastStatus = when {
         sets.isEmpty() || prevSets.isEmpty() -> null
         currentVolume > prevVolume * 1.05 -> VsLastStatus.BEATING

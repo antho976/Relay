@@ -50,7 +50,10 @@ class TrainingReminderWorker @AssistedInject constructor(
         val today = LocalDate.now(zone)
         val dayStart = today.atStartOfDay(zone).toInstant().toEpochMilli()
         val dayEnd = today.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
-        val finishedToday = sessionDao.finishedInRange(dayStart, dayEnd)
+        // TRACKED: an untracked workout still suppressed the day's nudge and fed the schedule
+        // resolution below it, so excluding a session from your record also silently cancelled the
+        // reminder to actually train.
+        val finishedToday = sessionDao.finishedInRangeTracked(dayStart, dayEnd)
 
         // Freestyle ("go with the flow"): there's no plan to name a day from — skip the resolution so we
         // never announce a phantom day (a stale seed plan could still resolve one). The reminder stays,

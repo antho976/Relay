@@ -77,7 +77,10 @@ class DayListViewModel @Inject constructor(
     val state: StateFlow<DayListUiState> = combine(
         customizationRepo.observeAllDayNames(),
         workoutRepo.observeActiveSession(),
-        sessionDao.observeRecent(50),
+        // TRACKED: all three things derived from this — each day's last-trained date, today's
+        // trained keys, and the next-up resolution — are schedule signals. A session the user
+        // excluded from their record was still consuming today's slot and deciding what came next.
+        sessionDao.observeRecentTracked(50),
         settingsRepo.observeAllDayColors(),
         combine(
             programRepository.revision,
