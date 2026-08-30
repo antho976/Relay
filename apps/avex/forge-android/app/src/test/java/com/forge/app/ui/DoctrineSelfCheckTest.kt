@@ -153,7 +153,10 @@ class DoctrineSelfCheckTest {
                 .filterNot { File(recipeDir, "$it.kt").isFile }
                 .forEach { broken += "$where routes to recipe $it.kt, which does not exist" }
 
-            Regex("""design/([A-Z]+\.md)""").findAll(text).map { it.groupValues[1] }.toSortedSet()
+            // The `design/` here is a DIRECTORY, so require a boundary before it. Unanchored, this
+            // also matched the `design/SKILL.md` inside the path `.claude/skills/forge-design/
+            // SKILL.md` and then went looking for a satellite by that name.
+            Regex("""(?<![\w-])design/([A-Z]+\.md)""").findAll(text).map { it.groupValues[1] }.toSortedSet()
                 .filterNot { DesignDoctrine.satellite(it).isFile }
                 .forEach { broken += "$where routes to satellite design/$it, which does not exist" }
 
