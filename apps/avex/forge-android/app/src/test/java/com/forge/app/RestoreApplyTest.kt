@@ -283,6 +283,135 @@ class RestoreApplyTest {
         assertFalse(journal().exists())
     }
 
+    // ── A journal entry that outlives its staged file ─────────────────────────
+
+    /**
+     * The gap the first journal left: a crash between a component's RENAME and the journal being
+     * shortened. The entry survives naming a `.restoring` file that no longer exists, because it
+     * has become the live file.
+     *
+     * Treating "nothing staged" as a failure made that permanent. Every later boot found nothing to
+     * commit, kept the entry, reported the restore unfinished — and, because a journal still
+     * existed, skipped the orphan sweep as well, so any genuinely stranded file stayed stranded too.
+     * The component had actually landed; the only thing missing was the record saying so.
+     */
+    @Test
+    fun `a journal entry whose file already landed is retired, not retried forever`() {
+        setUpDirs()
+        write(liveDb, "restored-db")
+        write(livePrefs(), "restored-prefs")   // the rename happened
+        write(journal(), "prefs")              // the shortening did not
+        // The snapshot the commit took, also left behind by the crash.
+        write(File(filesDir, "datastore/forge_settings.preferences_pb.prerestore"), "live-prefs")
+
+        assertTrue("the interrupted restore is complete, and is reported so", RestoreApply.apply(filesDir, liveDb))
+
+        assertFalse("the journal must not survive a boot that resolved it", journal().exists())
+        assertEquals("and the committed file is left alone", "restored-prefs", livePrefs().readText())
+        assertFalse(
+            "the snapshot is finished business once the set is whole",
+            File(filesDir, "datastore/forge_settings.preferences_pb.prerestore").exists()
+        )
+    }
+
+    @Test
+    fun `an unrecognised journal entry cannot keep the journal alive`() {
+        setUpDirs()
+        write(liveDb, "live-db")
+        write(journal(), "something-a-later-version-wrote")
+
+        assertTrue(RestoreApply.apply(filesDir, liveDb))
+        assertFalse(journal().exists())
+    }
+
+    // ── The journal itself failing ────────────────────────────────────────────
+
+    /**
+     * A journal that cannot be written means the renames about to happen have no crash recovery,
+     * which is the entire reason phase 2 has one. The first version swallowed the write failure and
+     * committed anyway — restoring precisely the unrecoverable mixed state the journal exists to
+     * prevent, and doing it silently.
+     *
+     * Blocked by making the scratch file the journal is written through a directory: `writeText`
+     * cannot open it, on any machine, without depending on permissions.
+     */
+    @Test
+    fun `a restore that cannot be journalled is not committed at all`() {
+        setUpDirs()
+        stageEverything()
+        File(filesDir, "pending_restore_journal.tmp").mkdirs()
+
+        assertFalse("an unjournalled commit is not a restore", RestoreApply.apply(filesDir, liveDb))
+
+        assertEquals("live-db", liveDb.readText())
+        assertEquals("live-prefs", livePrefs().readText())
+        assertEquals("live-avatar", liveAvatar().readText())
+        assertEquals("live-photo", File(livePhotos(), "pp_old.jpg").readText())
+
+        // And the set is queued whole, so clearing the blockage lets the next boot finish it.
+        assertEquals("restored-db", File(filesDir, "pending_restore.db").readText())
+        assertEquals("restored-prefs", File(filesDir, "pending_restore_prefs.pb").readText())
+        assertEquals("restored-avatar", File(filesDir, "pending_restore_avatar.jpg").readText())
+        assertTrue(File(filesDir, "pending_restore_photos").isDirectory)
+    }
+
+    /**
+     * A journal that exists but cannot be READ names components that are mid-commit, and there is no
+     * way to tell which. Sweeping would strand them and staging a new set would interleave two
+     * restores, so the only safe move is to touch nothing and let a later boot try again.
+     */
+    @Test
+    fun `an unreadable journal stops the boot from touching anything`() {
+        setUpDirs()
+        stageEverything()
+        journal().mkdirs()
+
+        assertFalse(RestoreApply.apply(filesDir, liveDb))
+
+        assertEquals("live-db", liveDb.readText())
+        assertEquals("live-prefs", livePrefs().readText())
+        assertEquals("the pending set is left exactly where it was", "restored-db", File(filesDir, "pending_restore.db").readText())
+    }
+
+    // ── A commit that fails mid-set ───────────────────────────────────────────
+
+    /**
+     * The half of atomicity a journal does not provide.
+     *
+     * Deferring a failed component to the next boot is the ORIGINAL defect in new clothing: the app
+     * comes up on a restored database with pre-restore preferences, and the staged ones land later,
+     * over whatever the user changed in between. So a commit that fails takes the whole set back
+     * out — every component that already landed included — and the boot runs entirely on pre-restore
+     * data, exactly as if the restore had never been attempted.
+     *
+     * The database is made to fail AFTER its rename, at the WAL cleanup, so the test exercises the
+     * case where a component is genuinely live by the time the set is abandoned. A non-empty
+     * directory where the `-wal` file goes cannot be deleted on any platform.
+     */
+    @Test
+    fun `a commit that fails after another already landed takes the whole set back out`() {
+        setUpDirs()
+        stageEverything()
+        write(File(liveDb.path + "-wal", "occupied"), "cannot be deleted")
+
+        assertFalse("a rolled-back restore is not a success", RestoreApply.apply(filesDir, liveDb))
+
+        assertEquals("the database that DID swap is put back", "live-db", liveDb.readText())
+        assertEquals("live-prefs", livePrefs().readText())
+        assertEquals("live-avatar", liveAvatar().readText())
+        assertEquals("live-photo", File(livePhotos(), "pp_old.jpg").readText())
+
+        // Deferred, not discarded: the user asked for this restore, so the whole set is queued.
+        assertEquals("restored-db", File(filesDir, "pending_restore.db").readText())
+        assertEquals("restored-prefs", File(filesDir, "pending_restore_prefs.pb").readText())
+        assertEquals("restored-avatar", File(filesDir, "pending_restore_avatar.jpg").readText())
+        assertTrue(File(filesDir, "pending_restore_photos").isDirectory)
+
+        assertFalse("no journal outlives the rollback", journal().exists())
+        assertFalse("and no snapshot", File(liveDb.path + ".prerestore").exists())
+        assertFalse("and nothing left staged", File(liveDb.path + ".restoring").exists())
+    }
+
     // ── The primitives that carry the guarantee ───────────────────────────────
 
     @Test

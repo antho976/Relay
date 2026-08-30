@@ -70,6 +70,11 @@ class ForgeApp : Application(), Configuration.Provider {
             // runs at boot before any UI exists, and the staging path restarts the process silently
             // otherwise. Only written for a fully clean restore so we never claim "successfully" on
             // a partial one.
+            //
+            // Carrying on when this returns false is safe BECAUSE of what RestoreApply guarantees:
+            // it never returns having left a mixture. Either the whole set is live, or none of it
+            // is and the set is queued to retry — so the boot below always runs on one coherent
+            // dataset, and the user is told nothing rather than told something untrue.
             runCatching { File(filesDir, RESTORE_DONE_FLAG).writeText("1") }
         }
     }

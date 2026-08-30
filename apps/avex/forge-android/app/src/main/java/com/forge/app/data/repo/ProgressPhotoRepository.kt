@@ -2,7 +2,9 @@ package com.forge.app.data.repo
 
 import android.content.Context
 import android.net.Uri
+import androidx.annotation.RequiresApi
 import androidx.exifinterface.media.ExifInterface
+import com.forge.app.core.io.ImageIntegrity
 import com.forge.app.core.io.existsAtomically
 import com.forge.app.core.io.readTextAtomically
 import com.forge.app.core.io.writeTextAtomically
@@ -364,28 +366,59 @@ class ProgressPhotoRepository @Inject constructor(
      * returned an error page. The gallery got a permanent entry that renders as a grey box, the
      * backup carried it, and nothing anywhere said what had gone wrong.
      *
-     * Two checks, because the cheap one is not sufficient on its own.
+     * Two checks, and NEITHER of them is a pixel decode, because a pixel decode does not answer the
+     * question.
      *
-     * `inJustDecodeBounds` reads the HEADER: it proves the file begins like an image and reports its
-     * dimensions, without allocating pixels. But a download cut off after its header still has a
-     * valid header, so bounds alone accepted a truncated file — the gallery got an entry that
-     * renders as a grey box and the backup carried it, which is exactly the outcome the check was
-     * added to prevent.
+     * The previous attempt at truncation assumed that decoding the pixels would fail where reading
+     * the header had not. It does not: Android treats Skia's `kIncompleteInput` as success
+     * alongside `kSuccess`, and Skia fills the rows that never arrived. `decodeFile` hands back a
+     * real `Bitmap` for a file cut off half way — the photo down to the cut, then grey — so the
+     * check passed and the grey-box entry was indexed anyway. The decode cost a downsampled bitmap
+     * per import and bought nothing.
      *
-     * So the pixels are decoded too, downsampled hard. `inSampleSize = 8` allocates 1/64 of the
-     * bitmap — a few hundred KB even for a large photo — and returns null when the compressed data
-     * runs out before the image does. `recycle()` because this runs once per import and there is no
-     * reason to leave it to the collector.
+     * What is left is the header and the container:
+     *
+     *  - `inJustDecodeBounds` proves the file BEGINS like an image and has real dimensions, which
+     *    is what rejects a text file, an archive, or a provider's error page.
+     *  - [ImageIntegrity.looksComplete] proves it ENDS where its own container says it should —
+     *    JPEG's EOI marker, PNG's IEND, the RIFF length, the ISO-BMFF box chain. That is the check
+     *    a truncated file fails, and it reads a few hundred bytes rather than decoding anything.
+     *
+     * On API 28+ `ImageDecoder` is asked as well, because it is the one platform decoder that
+     * refuses incomplete input rather than papering over it — a file whose container is intact but
+     * whose compressed data is damaged inside gets caught there. It cannot be the only check: this
+     * app supports API 26, where `ImageDecoder` does not exist.
      */
     private fun isDecodableImage(file: File): Boolean = runCatching {
         val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
         android.graphics.BitmapFactory.decodeFile(file.path, bounds)
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@runCatching false
+        if (!ImageIntegrity.looksComplete(file)) return@runCatching false
+        decodesWholeOrUnknown(file)
+    }.getOrDefault(false)
 
-        val pixels = android.graphics.BitmapFactory.Options().apply { inSampleSize = 8 }
-        val bitmap = android.graphics.BitmapFactory.decodeFile(file.path, pixels)
-            ?: return@runCatching false
-        bitmap.recycle()
+    /**
+     * `ImageDecoder`'s verdict on API 28+, or true below it.
+     *
+     * Left at its default `OnPartialImageListener` — absent — which is what makes it throw
+     * `DecodeException` on incomplete input instead of returning the partial image. Setting one to
+     * return true would restore exactly the behaviour this is here to avoid.
+     *
+     * True on API 26–27 is not a hole: [ImageIntegrity.looksComplete] has already run there and is
+     * what catches truncation. This adds the interior-corruption case on the versions that can
+     * answer it, rather than gating imports on an API level.
+     */
+    private fun decodesWholeOrUnknown(file: File): Boolean =
+        if (android.os.Build.VERSION.SDK_INT >= 28) decodesWhole(file) else true
+
+    @RequiresApi(28)
+    private fun decodesWhole(file: File): Boolean = runCatching {
+        val source = android.graphics.ImageDecoder.createSource(file)
+        android.graphics.ImageDecoder.decodeBitmap(source) { decoder, _, _ ->
+            // Sampled down purely to keep the allocation small; the decode still reads every byte,
+            // which is the part that matters here.
+            decoder.setTargetSampleSize(8)
+        }.recycle()
         true
     }.getOrDefault(false)
 
