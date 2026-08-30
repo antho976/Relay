@@ -717,19 +717,6 @@ class BackupRepository @Inject constructor(
     }
 
     /**
-     * What one restore is allowed to write to disk in total, and how many photos it may carry.
-     *
-     * The per-entry cap alone bounds nothing that matters. Every recognised photo could expand to
-     * 64 MiB and there was no limit on how many of them an archive held, so a small, highly
-     * compressible ZIP full of distinct `progress_photos/*` entries could write tens of gigabytes
-     * into internal storage before anything objected — and the objection, when it came, would be
-     * the device running out of space mid-restore, with the live database's room gone with it.
-     *
-     * Two numbers because they fail differently: the byte budget stops a compression bomb, and the
-     * count stops an archive of many small entries whose real cost is inodes and time.
-     */
-
-    /**
      * Replace the live database with the backup at [uri]. Validates it's a real Avex DB
      * first; only then stages the swap. Returns a [RestoreOutcome] — on SUCCESS the caller
      * MUST restart the app afterward (the file is swapped at next boot).
@@ -1204,7 +1191,7 @@ class BackupRepository @Inject constructor(
  *
  * The per-entry cap alone bounds nothing that matters. Every recognised photo could expand to
  * `MAX_RESTORE_MEDIA_BYTES` and there was no limit on how many of them an archive held, so a small,
- * highly compressible ZIP full of distinct `progress_photos/*` entries could write tens of gigabytes
+ * highly compressible ZIP full of distinct photo entries could write tens of gigabytes
  * into internal storage before anything objected — and the objection, when it came, would be the
  * device running out of space mid-restore, with the live database's room gone with it.
  *

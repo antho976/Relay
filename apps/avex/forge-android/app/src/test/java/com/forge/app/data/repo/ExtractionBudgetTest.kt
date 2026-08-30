@@ -9,7 +9,7 @@ import org.junit.Test
  * The archive-wide restore budget.
  *
  * The per-entry cap bounded each photo at 64 MiB and nothing bounded how many photos an archive
- * held, so a small, highly compressible ZIP full of distinct `progress_photos/*` entries could write
+ * held, so a small, highly compressible ZIP full of distinct photo entries could write
  * tens of gigabytes into internal storage before anything noticed — and what noticed, eventually,
  * was the device running out of space in the middle of a restore.
  */
