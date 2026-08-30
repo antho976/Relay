@@ -65,122 +65,13 @@ class ForgeApp : Application(), Configuration.Provider {
      * is first read (it's lazily created on first access, which happens after this).
      */
     private fun applyPendingRestore() {
-        val pending = File(filesDir, "pending_restore.db")
-        val pendingPrefs = File(filesDir, "pending_restore_prefs.pb")
-        val pendingPhotos = File(filesDir, "pending_restore_photos")
-        val pendingAvatar = File(filesDir, "pending_restore_avatar.jpg")
-        if (!pending.exists() && !pendingPrefs.exists() && !pendingPhotos.exists() && !pendingAvatar.exists()) return
-        // Captured before the prefs swap deletes it: a restore that carries prefs but no avatar must
-        // end with NO live avatar (see the avatar block below), so the restored avatarDefaultId pref
-        // can't be left pointing at nothing while a previously-seeded cover lingers (a file/pref desync).
-        val restoringPrefs = pendingPrefs.exists()
-        // A backup always contains the DB, so a successful DB swap is the signal that "a restore landed";
-        // MainActivity reads the flag below to confirm it to the user on this launch. We only confirm
-        // "restored successfully" when EVERY staged component swapped — a failed sub-swap (kept for a
-        // retry on the next boot) must not be reported as a clean restore.
-        var applied = false
-        var anyFailed = false
-        if (pending.exists()) {
-            // DB swap also drops stale WAL/-shm sidecars so SQLite can't replay old frames over the
-            // restored file. deleteOrThrow makes a surviving sidecar a failed swap (staged file kept).
-            val live = getDatabasePath("forge.db")
-            if (swapStagedFile(pending, live, afterSwap = {
-                    deleteOrThrow(File(live.path + "-wal"))
-                    deleteOrThrow(File(live.path + "-shm"))
-                })) { pending.delete(); applied = true } else {
-                // The database is the ANCHOR of a restore, and the swaps below are not independent
-                // of it — the staged preferences describe the staged dataset. Carrying on after a
-                // failed DB swap replaced the live preferences (the whole program-generation config
-                // among them) with a backup's, while the live database stayed put: the user's
-                // program then described days none of their sessions matched, irreversibly, because
-                // nothing anywhere keeps a copy of the pre-restore preferences. And with the DB
-                // swap failing (a `forge.db-wal` still held by a running WorkoutSessionService is
-                // the usual cause) it would fail again on every subsequent boot.
-                //
-                // So the set applies together or not at all: leave everything staged and let the
-                // next cold start retry it as one unit, with no confirmation shown.
-                return
-            }
+        if (RestoreApply.apply(filesDir, getDatabasePath("forge.db"))) {
+            // One-shot flag so MainActivity can confirm the restore landed on this launch — the swap
+            // runs at boot before any UI exists, and the staging path restarts the process silently
+            // otherwise. Only written for a fully clean restore so we never claim "successfully" on
+            // a partial one.
+            runCatching { File(filesDir, RESTORE_DONE_FLAG).writeText("1") }
         }
-        if (pendingPrefs.exists()) {
-            // Must match preferencesDataStore(name = "forge_settings").
-            if (swapStagedFile(pendingPrefs, File(filesDir, "datastore/forge_settings.preferences_pb"))) pendingPrefs.delete()
-            else anyFailed = true
-        }
-        if (pendingPhotos.isDirectory) {
-            val swapped = runCatching {
-                // Must match ProgressPhotoRepository's "progress_photos" folder. Swap via rename: move
-                // the current folder aside first, slot the restored one in, then drop the old copy — and
-                // if the slot-in fails, move the original back. renameTo within filesDir is atomic, so
-                // there's no window where the user is left with neither folder.
-                val livePhotos = File(filesDir, "progress_photos")
-                val oldPhotos = File(filesDir, "progress_photos.old")
-                if (oldPhotos.exists()) oldPhotos.deleteRecursively()
-                val hadLive = livePhotos.exists()
-                if (hadLive && !livePhotos.renameTo(oldPhotos)) error("Could not move current photos aside")
-                if (!pendingPhotos.renameTo(livePhotos)) {
-                    if (hadLive) oldPhotos.renameTo(livePhotos) // roll back to the originals
-                    error("Could not move restored photos into place")
-                }
-                oldPhotos.deleteRecursively()
-            }.isSuccess
-            // Only discard the staged folder once it's actually in place; otherwise keep it for retry.
-            if (swapped) pendingPhotos.deleteRecursively() else anyFailed = true
-        }
-        if (pendingAvatar.exists()) {
-            // Must match AvatarRepository.FILE_NAME.
-            if (swapStagedFile(pendingAvatar, File(filesDir, "avatar.jpg"))) pendingAvatar.delete()
-            else anyFailed = true
-        } else if (restoringPrefs && !anyFailed) {
-            // The restore replaced the prefs but carried no avatar → the restored state has none. Clear
-            // any live avatar so a previously-seeded default cover can't outlive the (now blank)
-            // avatarDefaultId — otherwise the cover shows but the picker rings nothing. The one-time
-            // seed re-runs cleanly on next Profile open. Gated on a clean prefs swap (!anyFailed).
-            runCatching { File(filesDir, "avatar.jpg").delete() }
-        }
-        // One-shot flag so MainActivity can confirm the restore landed on this launch — the swap runs at
-        // boot before any UI exists, and the staging path restarts the process silently otherwise. Only
-        // written for a fully clean restore so we never claim "successfully" on a partial one.
-        if (applied && !anyFailed) runCatching { File(filesDir, RESTORE_DONE_FLAG).writeText("1") }
-    }
-
-    /**
-     * Swap [pending] into place at [live] via a temp-in-the-same-dir + atomic rename. A direct
-     * copyTo(live, overwrite=true) truncates and streams — if it dies mid-copy (disk full, process
-     * killed) the live file is left partial/corrupt with the original gone. Rename on one filesystem
-     * is atomic: a failed swap leaves the intact original untouched and the next boot retries from
-     * [pending]. Returns true once [live] is the restored file; [afterSwap] runs only on success.
-     *
-     * The staging step MOVES rather than copies. This runs in Application.onCreate, on the main
-     * thread, before any UI exists, and it copied a multi-megabyte forge.db byte-for-byte — seconds
-     * of frozen screen on a mid-range device with a long history, and a plausible ANR at the one
-     * moment a user is least willing to force-stop the app. filesDir and databases/ are the same
-     * filesystem, so the move is O(1); a device where it isn't falls back to the copy.
-     *
-     * Retry semantics are preserved on both failure paths: a failed final rename puts the file back
-     * where the next boot looks for it, and a failed [afterSwap] re-stages from the now-live file.
-     */
-    private fun swapStagedFile(pending: File, live: File, afterSwap: () -> Unit = {}): Boolean = runCatching {
-        live.parentFile?.mkdirs()
-        val staged = File(live.parentFile, "${live.name}.restoring")
-        if (staged.exists()) staged.delete()
-        val moved = pending.renameTo(staged)
-        if (!moved) pending.copyTo(staged, overwrite = true)
-        if (!staged.renameTo(live)) {
-            if (!moved || !staged.renameTo(pending)) staged.delete()
-            error("Could not move ${live.name} into place")
-        }
-        runCatching { afterSwap() }.onFailure { e ->
-            // live IS the restored file now, but the post-swap cleanup (dropping stale WAL sidecars)
-            // didn't finish, so the swap counts as failed. Put a staged copy back for the next boot.
-            if (moved) runCatching { live.copyTo(pending, overwrite = true) }
-            throw e
-        }
-    }.isSuccess
-
-    /** Delete [f]; throw if it survives so the enclosing runCatching treats the swap as failed. */
-    private fun deleteOrThrow(f: File) {
-        if (f.exists() && !f.delete() && f.exists()) error("Could not delete ${f.name}")
     }
 
     /**
