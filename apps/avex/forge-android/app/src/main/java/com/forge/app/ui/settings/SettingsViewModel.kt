@@ -470,21 +470,35 @@ class SettingsViewModel @Inject constructor(
         if (cadence == "every_n") settingsRepo.setRotationEveryN(n)
         settingsRepo.setRotationCounter(0)
     }
+    /**
+     * Re-roll every day's exercises, guarded exactly like [generateProgram] and [generateDeloadWeek].
+     *
+     * It was the one program-changing action in Settings that skipped [programChangeGuard], and it
+     * is not a lighter operation than the two beside it: `ProgramRepository.reroll` discards the
+     * active session inside its own transaction, cascading its logged sets away with it. A tap
+     * mid-workout removed the workout permanently, from a row that sits between two actions that do
+     * prompt — with no dialog, no undo, and a success message about fresh exercises.
+     *
+     * The whole operation is inside the guard, status message included, so nothing runs and nothing
+     * is announced until the user has either confirmed or had nothing to lose.
+     */
     fun rerollProgram() = viewModelScope.launch {
         // Re-rolling produces a concrete plan, so a "go with the flow" user is now following one —
         // flip freestyle off, else the fresh plan stays hidden behind the freestyle home.
         val wasFreestyle = settingsRepo.freestyleMode.first()
-        programRepository.reroll(
-            buildParams(settingsRepo.daysPerWeek.first()),
-            currentEquipment(),
-            settingsRepo.likedExercises.first(),
-            settingsRepo.dislikedExercises.first()
-        )
-        if (wasFreestyle) settingsRepo.setFreestyleMode(false)
-        _statusMessage.value = if (wasFreestyle)
-            "Re-rolled. You're now following a plan. Open Gym to see it."
-        else
-            "Re-rolled. Same split, fresh exercises. Open Gym to see it."
+        programChangeGuard.run {
+            programRepository.reroll(
+                buildParams(settingsRepo.daysPerWeek.first()),
+                currentEquipment(),
+                settingsRepo.likedExercises.first(),
+                settingsRepo.dislikedExercises.first()
+            )
+            if (wasFreestyle) settingsRepo.setFreestyleMode(false)
+            _statusMessage.value = if (wasFreestyle)
+                "Re-rolled. You're now following a plan. Open Gym to see it."
+            else
+                "Re-rolled. Same split, fresh exercises. Open Gym to see it."
+        }
     }
 
     // Goal/experience/problem-areas/priority/pins are staged config — applied when the user taps
