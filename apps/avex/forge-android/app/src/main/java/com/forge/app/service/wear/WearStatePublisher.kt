@@ -9,11 +9,13 @@ import com.forge.app.domain.timer.RestTimerState
 import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.formatVolumeCompact
 import com.forge.app.program.Program
+import com.forge.shared.protocol.CmdAckDto
 import com.forge.shared.protocol.ConfigDto
 import com.forge.shared.protocol.GlanceTodayDto
 import com.forge.shared.protocol.TimerStateDto
 import com.forge.shared.protocol.WearCodec
 import com.forge.shared.protocol.WearProtocol
+import com.google.android.gms.wearable.DataClient
 import com.google.android.gms.wearable.PutDataRequest
 import com.google.android.gms.wearable.Wearable
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -47,6 +49,16 @@ class WearStatePublisher @Inject constructor(
 ) {
     private val dataClient by lazy { Wearable.getDataClient(context) }
 
+    /**
+     * `endAtMs` of the running timer as last published to the wrist, or 0 when none is running.
+     *
+     * [com.forge.app.service.WorkoutSessionService] compares the wrist's haptic ack against this so
+     * an ack for a finished rest cannot silence the next one.
+     */
+    @Volatile
+    var lastPublishedTimerEndAtMs: Long = 0L
+        private set
+
     fun start(scope: CoroutineScope) {
         scope.launch {
             mirror.sessionLive.distinctUntilChanged().collect { dto ->
@@ -78,6 +90,10 @@ class WearStatePublisher @Inject constructor(
                 }
                 if (structural) {
                     last = dto
+                    // The identity the wrist will quote back in its haptic ack. Held here because
+                    // this is the only place that knows what was actually PUBLISHED — the
+                    // controller's own state is recomputed every tick and would not match.
+                    lastPublishedTimerEndAtMs = if (dto == null || dto.paused) 0L else dto.endAtMs
                     if (dto == null) deleteItem(WearProtocol.PATH_TIMER_STATE)
                     else putItem(WearProtocol.PATH_TIMER_STATE, WearCodec.encode(dto))
                 }
@@ -134,19 +150,57 @@ class WearStatePublisher @Inject constructor(
      * once [ACK_HISTORY] newer ones exist — long past any plausible sync delay, and never the item
      * just written.
      */
-    suspend fun publishAck(ack: com.forge.shared.protocol.CmdAckDto) {
+    suspend fun publishAck(ack: CmdAckDto) {
         val path = WearProtocol.ackPath(ack.commandId)
         putItem(path, WearCodec.encode(ack))
-        val stale = synchronized(recentAckPaths) {
-            recentAckPaths.remove(path)
-            recentAckPaths.addLast(path)
-            if (recentAckPaths.size > ACK_HISTORY) recentAckPaths.removeFirst() else null
-        }
-        stale?.let { deleteItem(it) }
+        pruneAcks(keep = path)
     }
 
-    /** Ack paths written recently, oldest first — the bound on live ack DataItems. */
-    private val recentAckPaths = ArrayDeque<String>()
+    /**
+     * Delete every ack DataItem beyond the newest [ACK_HISTORY], reading the live set rather than a
+     * list of what THIS process wrote.
+     *
+     * The bound used to be an in-memory queue of recently written paths, which meant it only ever
+     * bounded one process lifetime. DataItems outlive the process by design — that is why acks live
+     * on the Data Layer at all — so every restart began remembering nothing and the items from
+     * previous runs were never deleted by anyone. They accumulate one per wrist command, for the
+     * life of the install, and the watch's tiles and complications each read the FULL item set on
+     * every render (WearGlanceStore has no path-scoped query), so the cost lands on the surface
+     * that has to be fastest.
+     *
+     * Ordered by the ack's own [CmdAckDto.atMs] rather than the item's
+     * URI, which carries no time. An item that cannot be decoded sorts oldest: it is unreadable to
+     * the watch too, so it has nothing to lose by going first.
+     */
+    private suspend fun pruneAcks(keep: String) {
+        runCatching {
+            val prefix = android.net.Uri.Builder()
+                .scheme(PutDataRequest.WEAR_URI_SCHEME)
+                .path(WearProtocol.PATH_CMD_ACK)
+                .build()
+            val buffer = dataClient.getDataItems(prefix, DataClient.FILTER_PREFIX).await()
+            val stale = try {
+                buffer
+                    .map { it.freeze() }
+                    .filter { it.uri.path != keep }
+                    .sortedByDescending { ackTimeOf(it.data) }
+                    .drop(ACK_HISTORY - 1) // -1: `keep` was just written and holds one of the slots.
+                    .mapNotNull { it.uri.path }
+            } finally {
+                buffer.release()
+            }
+            stale.forEach { deleteItem(it) }
+        }
+    }
+
+    /** When an ack DataItem's payload says it was written, or [Long.MIN_VALUE] if it can't say. */
+    private fun ackTimeOf(bytes: ByteArray?): Long {
+        if (bytes == null) return Long.MIN_VALUE
+        return when (val decoded = WearCodec.decode<CmdAckDto>(bytes)) {
+            is WearCodec.DecodeResult.Ok -> decoded.value.atMs
+            else -> Long.MIN_VALUE
+        }
+    }
 
     private fun RestTimerState.toDto(): TimerStateDto {
         val now = clock.nowMs()

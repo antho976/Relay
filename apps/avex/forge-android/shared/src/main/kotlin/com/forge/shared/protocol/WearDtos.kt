@@ -206,8 +206,32 @@ data class CmdAckDto(
     val needsConfirm: Boolean = false,
     /** The logged set's row id on a successful log — the wrist's RPE command targets it. */
     val setId: Long? = null,
-    val atMs: Long
-)
+    val atMs: Long,
+    /**
+     * Which command this answers — one of the `KIND_*` constants below.
+     *
+     * The wrist reads [setId] as "a set was just logged, offer undo and a rating for it". An RPE ack
+     * carries the id of the set that was just RATED, so saving a rating re-armed that same row: the
+     * undo/rate prompt reopened and the set-logged haptic fired for a set logged minutes earlier.
+     * Two different events cannot be told apart by a field they both legitimately fill, so the ack
+     * says which it is.
+     *
+     * Additive with an empty default, which is what an older phone's ack decodes to; the watch
+     * falls back to its own record of what it sent, so an un-upgraded phone is no worse off.
+     */
+    val kind: String = ""
+) {
+    companion object {
+        /** Answering `/cmd/log-set`: [setId] names a NEWLY logged set. */
+        const val KIND_LOG_SET = "log-set"
+        /** Answering `/cmd/set-rpe`: [setId] names the set that was rated, already known to the wrist. */
+        const val KIND_SET_RPE = "set-rpe"
+        /** Answering `/cmd/undo-set`. */
+        const val KIND_UNDO_SET = "undo-set"
+        /** Answering `/cmd/timer`. */
+        const val KIND_TIMER = "timer"
+    }
+}
 
 /** The watch felt the timer-done buzz ([WearProtocol.PATH_HAPTIC_ACK]) — phone stays silent. */
 @Serializable

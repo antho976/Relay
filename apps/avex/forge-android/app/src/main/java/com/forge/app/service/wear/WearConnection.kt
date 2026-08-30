@@ -36,12 +36,36 @@ class WearConnection @Inject constructor(
     // BT drop at the boundary degrades to a LATE phone buzz, never silence.
 
     @Volatile private var lastHapticAckAtMs: Long = 0L
+    @Volatile private var lastHapticAckTimerEndAtMs: Long = 0L
 
-    fun recordHapticAck(atMs: Long) {
-        if (atMs > lastHapticAckAtMs) lastHapticAckAtMs = atMs
+    /**
+     * Record that the wrist buzzed for the timer whose published `endAtMs` is [timerEndAtMs].
+     *
+     * The identity matters as much as the time. Recency alone was the whole test, over an
+     * eight-second window sized for Bluetooth lag — so an ack for a rest that had just ended
+     * silenced the phone for ANY timer starting within those eight seconds. Skipping a finished
+     * rest and immediately starting the next set is exactly that sequence, and the outcome was
+     * silence on both devices: the wrist had already buzzed for the old timer and would not buzz
+     * again, and the phone believed it had.
+     */
+    fun recordHapticAck(timerEndAtMs: Long, atMs: Long) {
+        if (atMs > lastHapticAckAtMs) {
+            lastHapticAckAtMs = atMs
+            lastHapticAckTimerEndAtMs = timerEndAtMs
+        }
     }
 
-    /** True when the watch confirmed a timer-done buzz within [windowMs] of [nowMs]. */
-    fun hapticAckedWithin(windowMs: Long, nowMs: Long): Boolean =
-        nowMs - lastHapticAckAtMs <= windowMs
+    /**
+     * True when the watch confirmed a buzz for the timer published as [timerEndAtMs], within
+     * [windowMs] of [nowMs].
+     *
+     * A zero [timerEndAtMs] on either side means "no identity available" — an ack from a watch
+     * build that predates the field, or a phone that has not published a running timer — and never
+     * matches. That degrades to the documented safe direction: the phone buzzes late rather than
+     * nobody buzzing.
+     */
+    fun hapticAckedFor(timerEndAtMs: Long, windowMs: Long, nowMs: Long): Boolean =
+        timerEndAtMs != 0L &&
+            timerEndAtMs == lastHapticAckTimerEndAtMs &&
+            nowMs - lastHapticAckAtMs <= windowMs
 }

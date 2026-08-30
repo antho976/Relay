@@ -39,7 +39,13 @@ class WearSyncService : WearableListenerService() {
         when (event.path) {
             WearProtocol.PATH_HAPTIC_ACK -> {
                 val ack = WearCodec.decode<HapticAckDto>(event.data)
-                if (ack is WearCodec.DecodeResult.Ok) wearConnection.recordHapticAck(clock.nowMs())
+                // The ack names WHICH timer buzzed. Recording only the arrival time threw that away
+                // and left an eight-second window in which any ack silenced any timer — so a rest
+                // that ended, was acked, and was immediately followed by a new short rest could see
+                // the new one's phone-side buzz suppressed by the previous one's ack.
+                if (ack is WearCodec.DecodeResult.Ok) {
+                    wearConnection.recordHapticAck(ack.value.timerEndAtMs, clock.nowMs())
+                }
             }
             WearProtocol.PATH_CMD_TIMER -> runBlocking {
                 when (val cmd = WearCodec.decode<TimerCommand>(event.data)) {
@@ -62,6 +68,11 @@ class WearSyncService : WearableListenerService() {
             TimerCommand.Action.ADD_30 -> timerHolder.controller.addSeconds(30)
             TimerCommand.Action.START -> timerHolder.controller.start()
         }
-        publisher.publishAck(CmdAckDto(commandId = cmd.commandId, ok = true, atMs = clock.nowMs()))
+        publisher.publishAck(
+            CmdAckDto(
+                commandId = cmd.commandId, ok = true, atMs = clock.nowMs(),
+                kind = CmdAckDto.KIND_TIMER
+            )
+        )
     }
 }
