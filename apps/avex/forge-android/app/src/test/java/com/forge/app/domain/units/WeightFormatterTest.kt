@@ -187,4 +187,42 @@ class WeightFormatterTest {
         assertEquals("0", weightInputValue(Double.NaN, WeightUnit.KG))
         assertNull(parseToLb("NaN", WeightUnit.LB))
     }
+
+    // ── A typed suffix wins over the display setting (finding 37) ─────────────
+
+    @Test
+    fun typedKgIsHonouredWhileTheAppIsSetToPounds() {
+        // toStoredWeightText returned before parsing anything in lb mode, so "20 kg" reached
+        // WeightParser verbatim — and WeightParser has no kg branch. It returned null, and the set
+        // was written with no weight at all: no volume, no e1RM, no PR, and nothing on screen to
+        // say the number had been dropped.
+        assertEquals("44.1", toStoredWeightText("20 kg", WeightUnit.LB))
+        assertEquals("44.1", toStoredWeightText("20kg", WeightUnit.LB))
+    }
+
+    @Test
+    fun typedStonesIsHonouredWhileTheAppIsSetToPounds() {
+        assertEquals("168", toStoredWeightText("12 st", WeightUnit.LB))
+    }
+
+    @Test
+    fun aTypedPoundSuffixInPoundModeIsJustTheNumber() {
+        assertEquals("135", toStoredWeightText("135 lb", WeightUnit.LB))
+    }
+
+    @Test
+    fun abarePoundValueKeepsThePrecisionItWasTypedWith() {
+        // The common case, and the reason lb mode is not simply routed through the converter: a
+        // bare number is ALREADY the stored form, and round-tripping it would round it.
+        assertEquals("137.25", toStoredWeightText("137.25", WeightUnit.LB))
+        assertEquals("135", toStoredWeightText("135", WeightUnit.LB))
+    }
+
+    @Test
+    fun plateCountsAndBodyweightStillPassThroughUntouched() {
+        // Neither is a display-unit weight; WeightParser interprets them downstream.
+        assertEquals("2 plates", toStoredWeightText("2 plates", WeightUnit.LB))
+        assertEquals("3", toStoredWeightText("3", WeightUnit.LB))
+        assertEquals("BW", toStoredWeightText("BW", WeightUnit.LB))
+    }
 }

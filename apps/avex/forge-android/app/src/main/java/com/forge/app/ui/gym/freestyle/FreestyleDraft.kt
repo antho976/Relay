@@ -1,5 +1,8 @@
 package com.forge.app.ui.gym.freestyle
 
+import com.forge.app.domain.units.WeightUnit
+import com.forge.app.domain.units.parseToLb
+import com.forge.app.domain.units.weightInputValue
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -40,11 +43,24 @@ internal data class FreestyleDraftExercise(
  */
 internal data class FreestyleDraft(
     val openedAtMs: Long,
-    val exercises: List<FreestyleDraftExercise>
+    val exercises: List<FreestyleDraftExercise>,
+    /**
+     * The display unit the weight text was typed in ([com.forge.app.domain.units.WeightUnit.label]),
+     * or null for a draft written before this was recorded.
+     *
+     * The sets are stored as raw display-unit text, which is meaningless without knowing which unit
+     * that was: draft "100" while set to lb, switch the app to kg, resume, and the same "100" was
+     * saved as 100 kg — a 220 lb set, in the history and every aggregate built on it. Null restores
+     * verbatim, which is the old behaviour and the only honest answer for a draft that never said.
+     */
+    val unitLabel: String? = null
 ) {
     fun toJson(): String = JSONObject().apply {
         put("schema", SCHEMA)
         put("openedAtMs", openedAtMs)
+        // Additive and optional, like the per-set tags: an older build ignores "u", and a draft
+        // without it reads back as null. No schema bump, so an in-progress log survives the upgrade.
+        unitLabel?.let { put("u", it) }
         put("exercises", JSONArray(exercises.map { ex ->
             JSONObject().apply {
                 put("libId", ex.libId)
@@ -68,6 +84,21 @@ internal data class FreestyleDraft(
             }
         }))
     }.toString()
+
+    /**
+     * [text] — a raw weight as typed into this draft — expressed in [current].
+     *
+     * Unchanged when the draft never recorded its unit (an older blob), when the unit has not
+     * changed, or when the text is not a number ("BW", blank). Otherwise converted through the
+     * shared lb round-trip, so the number the user sees on resume means what it did when they typed
+     * it rather than what the setting happens to say now.
+     */
+    fun weightTextIn(text: String, current: WeightUnit): String {
+        val typedIn = unitLabel?.let { label -> WeightUnit.entries.firstOrNull { it.label == label } }
+        if (typedIn == null || typedIn == current || text.isBlank()) return text
+        val lb = parseToLb(text, typedIn) ?: return text
+        return weightInputValue(lb, current)
+    }
 
     companion object {
         /** Bump if the shape changes so a draft written by an older build is discarded, not misread.
@@ -106,7 +137,11 @@ internal data class FreestyleDraft(
                     }
                 )
             }
-            FreestyleDraft(openedAtMs = o.getLong("openedAtMs"), exercises = exercises)
+            FreestyleDraft(
+                openedAtMs = o.getLong("openedAtMs"),
+                exercises = exercises,
+                unitLabel = o.optString("u").ifBlank { null }
+            )
         }.getOrNull()
     }
 }

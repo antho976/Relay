@@ -25,13 +25,47 @@ object E1rm {
         if (reps <= 1) e1rmLb else e1rmLb / (1 + reps / 30.0)
 }
 
+// ── The working-strength contract ──────────────────────────────────────────────
+
+/**
+ * Whether a weight × reps number may be computed from this set at all.
+ *
+ * Three conditions, and the third is the one that was missing everywhere:
+ *
+ *  - **A numeric weight.** "BW" and an unparseable entry carry no load.
+ *  - **Not assisted.** Bands or a spotter took part of the load ([LoggedSet.isAssisted]).
+ *  - **Not a timed hold.** [LoggedSet.durationSeconds] is the app's own statement that `reps` is
+ *    not a rep count — see the entity's contract, which says such a set "is excluded from every
+ *    weight × reps aggregate (volume, e1RM, PR) so it can't pollute strength stats". The DAO layer
+ *    honours that in SQL. The Kotlin side did not: a 90-second weighted plank stores
+ *    `reps = 90`, and Epley reads that as ninety repetitions — turning a 45 lb hold into an
+ *    estimated 180 lb single, which then outranks every real set of the same exercise for as long
+ *    as it stays in the window.
+ *
+ * Every strength consumer routes through here so the definition cannot drift between them again.
+ */
+fun LoggedSet.isWorkingStrengthSet(): Boolean =
+    weightLb != null && !isAssisted && durationSeconds == null
+
+/** The working sets of a bout, by [isWorkingStrengthSet]. */
+fun List<LoggedSet>.workingStrengthSets(): List<LoggedSet> = filter { it.isWorkingStrengthSet() }
+
+/**
+ * Whether this set's `reps` is a rep COUNT — the weaker claim, for consumers that read reps without
+ * caring about load.
+ *
+ * A set of push-ups has no weight and is still ten repetitions; a timed hold has a weight and is
+ * not a repetition of anything. So this drops assisted sets and holds, and keeps bodyweight work.
+ */
+fun LoggedSet.isRepSet(): Boolean = !isAssisted && durationSeconds == null
+
 // ── Shared "best working e1RM" helpers ─────────────────────────────────────────
-// One definition of "the heaviest estimated 1RM across the weighted, non-assisted (working) sets",
-// reused by ProgressionAdvisor, AutoCoachPlanner, OutcomeWatcher and the InsightEngine so a formula
-// change lives in one place. Returns null when no working set qualifies.
+// One definition of "the heaviest estimated 1RM across the working sets", reused by
+// ProgressionAdvisor, AutoCoachPlanner, OutcomeWatcher and the InsightEngine so a formula change
+// lives in one place. Returns null when no working set qualifies.
 
 fun bestWorkingE1rm(sets: List<LoggedSet>): Double? =
-    sets.filter { it.weightLb != null && !it.isAssisted }
+    sets.workingStrengthSets()
         .maxOfOrNull { E1rm.epley(it.weightLb!!, it.reps) }
 
 /** Best working e1RM in a single bout. */

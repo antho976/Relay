@@ -63,6 +63,8 @@ import com.forge.app.domain.units.WeightUnit
 import com.forge.app.service.wear.toProtocol
 import com.forge.app.domain.units.formatHold
 import com.forge.app.domain.units.formatWeight
+import com.forge.app.domain.parser.WeightParser
+import com.forge.app.program.ExerciseUnit
 import com.forge.app.domain.units.parseToLb
 import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.domain.units.unitLabel
@@ -250,10 +252,15 @@ fun SetInputRow(
         else reps.toIntOrNull()?.let { it > 0 } == true && (isBodyweight || weight.isNotBlank())
     }
 
-    val prRepsHint = remember(weight, priorSets, weightUnit) {
-        // The field holds a value in the display unit; convert to lb for the PR comparison.
-        val weightLb = parseToLb(weight, weightUnit) ?: return@remember null
-        repsNeededForPr(priorSets, weightLb)
+    val prRepsHint = remember(weight, priorSets, weightUnit, isPlates, plateLb) {
+        // A PLATES field holds a plate COUNT, not a display-unit weight — so parseToLb read "3" as
+        // three pounds, which is under every prior set, and the hint claimed a PR was one rep away
+        // on every set of every plate machine. The table layout hides the hint for plates; the
+        // big-number layout does not, which is where it was visible. Converted through the same
+        // helper the write path uses, so the two can never disagree about what "3" means.
+        val weightLb = if (isPlates) WeightParser.parse(weight, ExerciseUnit.PLATES, plateLb)
+        else parseToLb(weight, weightUnit)
+        weightLb?.let { repsNeededForPr(priorSets, it) }
     }
 
     val onBg = MaterialTheme.colorScheme.onBackground

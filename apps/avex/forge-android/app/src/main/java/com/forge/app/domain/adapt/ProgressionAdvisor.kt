@@ -26,12 +26,31 @@ enum class IntensityIntent {
 /** Numeric rep range parsed from a plan's display string ("8-10" → 8..10, "15" → 15..15). */
 data class RepRange(val min: Int, val max: Int) {
     companion object {
-        /** Null when the text holds no digits (pure-AMRAP/timed entries stay suggestion-free). */
+        /**
+         * A rep range, or null for anything that is not one — AMRAP text and timed holds stay
+         * suggestion-free.
+         *
+         * Matches the WHOLE string rather than scraping digits out of it. Scraping is what made the
+         * doc comment above untrue: a plank's `defaultReps` is a time string, and "30-60s" scraped
+         * to 30..60 REPS. The advisor then told a lifter holding a plank for 60 seconds to add a
+         * rep, and the calibrator counted their hold length as a rep count.
+         */
         fun parse(text: String): RepRange? {
-            val nums = Regex("\\d+").findAll(text).map { it.value.toInt() }.toList()
-            if (nums.isEmpty()) return null
-            return RepRange(nums.min(), nums.max())
+            val m = REP_RANGE_REGEX.matchEntire(text.trim()) ?: return null
+            val first = m.groupValues[1].toIntOrNull() ?: return null
+            val second = m.groupValues[2].toIntOrNull() ?: first
+            return RepRange(minOf(first, second), maxOf(first, second))
         }
+
+        /**
+         * "12", "8-10", and the per-side forms the library actually uses ("10/leg", "12-15/leg").
+         *
+         * Nothing else: not a time suffix ("30-60s"), not "AMRAP", not "3 x 10". Anything that is
+         * not unambiguously a rep count returns null, and null means the advisor stays quiet —
+         * which is the right answer for a movement it cannot describe.
+         */
+        private val REP_RANGE_REGEX =
+            Regex("""^(\d{1,3})(?:\s*-\s*(\d{1,3}))?(?:\s*/\s*[a-z]+)?$""", RegexOption.IGNORE_CASE)
     }
 }
 

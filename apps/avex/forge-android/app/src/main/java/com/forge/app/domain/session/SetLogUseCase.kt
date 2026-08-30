@@ -9,6 +9,7 @@ import com.forge.app.data.repo.CustomizationRepository
 import com.forge.app.data.repo.WorkoutRepository
 import com.forge.app.domain.adapt.RestAdvisor
 import com.forge.app.domain.parser.WeightParser
+import com.forge.app.program.ExerciseLibrary
 import com.forge.app.program.ExerciseUnit
 import com.forge.app.program.Program
 import com.forge.app.service.wear.SessionTimerHolder
@@ -108,6 +109,16 @@ class SetLogUseCase @Inject constructor(
             ?: swap?.swappedExerciseId?.takeIf { it.isNotBlank() }
             ?: slotPlan.id
         val effectivePlan = Program.exercise(effectiveId) ?: slotPlan
+
+        // A timed hold cannot be logged from the wrist, because the protocol has no duration field
+        // to log it WITH. LogSetCommand carries only weight and reps, so a plank prescribed as
+        // "30-60s" was written as reps = 30 with durationSeconds = null — a rep set as far as
+        // everything downstream is concerned, feeding volume, e1RM and PR detection with a number
+        // that is a count of seconds. Refusing says so on the wrist instead, and the phone can log
+        // the hold properly. Removing this needs a duration on the wire, not a change here.
+        if (ExerciseLibrary.byId(effectiveId)?.timed == true) {
+            return Result(false, "log timed holds on the phone")
+        }
 
         // ── Resolve weight + reps (echoed from the wrist, prefilled when absent) ──
         val plateLb = settingsRepo.plateWeightLb.first()

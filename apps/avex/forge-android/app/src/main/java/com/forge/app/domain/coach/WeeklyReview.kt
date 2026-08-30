@@ -1,5 +1,7 @@
 package com.forge.app.domain.coach
 
+import com.forge.app.domain.adapt.isWorkingStrengthSet
+import com.forge.app.domain.adapt.workingStrengthSets
 import com.forge.app.domain.adapt.AdaptThresholds
 import com.forge.app.domain.adapt.AdaptationSnapshot
 import com.forge.app.domain.adapt.DeloadAdvisor
@@ -82,7 +84,7 @@ object WeeklyReview {
             var count = 0
             bouts.sortedBy { it.sessionStartedAt }.forEach { b ->
                 if (b.skipped) return@forEach
-                val top = b.sets.filter { !it.isAssisted }.mapNotNull { it.weightLb }.maxOrNull()
+                val top = b.sets.workingStrengthSets().mapNotNull { it.weightLb }.maxOrNull()
                     ?: return@forEach
                 val prior = best
                 if (prior != null && top > prior && b.sessionStartedAt in lastWeekStart until weekStartMs) count++
@@ -93,7 +95,7 @@ object WeeklyReview {
 
         val stalled = ProgressionAdvisor.evaluate(s, t).map { it.id }.distinct().size
         val tracked = s.exerciseHistory.count { (_, bouts) ->
-            bouts.count { b -> !b.skipped && b.sets.any { it.weightLb != null && !it.isAssisted } } > t.plateauMinBouts
+            bouts.count { b -> !b.skipped && b.sets.any { it.isWorkingStrengthSet() } } > t.plateauMinBouts
         }
 
         val fatigue = DeloadAdvisor.fatigue(s, t)

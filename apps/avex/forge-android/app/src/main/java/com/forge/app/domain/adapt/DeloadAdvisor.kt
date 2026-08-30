@@ -160,7 +160,10 @@ object DeloadAdvisor {
 
         // ── Intra-session rep drop-off ─────────────────────────────────────────────
         val dropoffs = windowBouts.mapNotNull { bout ->
-            val sets = bout.sets.filter { !it.isAssisted }
+            // Rep sets only. A timed hold's `reps` is a duration in disguise, so a plank in the
+            // middle of a bout read as a colossal rep drop-off and fed the deload score. Bodyweight
+            // sets stay: their reps are real, and rep fade is exactly what this is measuring.
+            val sets = bout.sets.filter { it.isRepSet() }
             if (sets.size < 3) return@mapNotNull null
             val first = sets.first().reps
             if (first <= 0) return@mapNotNull null
@@ -336,8 +339,7 @@ object DeloadAdvisor {
         return checks
     }
 
-    private fun bestE1rm(bouts: List<ExerciseBout>): Double? = bouts
-        .flatMap { it.sets }
-        .filter { it.weightLb != null && !it.isAssisted }
-        .maxOfOrNull { E1rm.epley(it.weightLb!!, it.reps) }
+    // The canonical helper, not a private copy of the same three lines: the copy is how the timed-
+    // hold exclusion came to be missing here while the DAO layer enforced it.
+    private fun bestE1rm(bouts: List<ExerciseBout>): Double? = bestWorkingE1rm(bouts.flatMap { it.sets })
 }

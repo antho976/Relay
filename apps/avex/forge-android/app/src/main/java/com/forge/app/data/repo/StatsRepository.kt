@@ -380,7 +380,9 @@ class StatsRepository @Inject constructor(
         }
 
         // Muscle split: fold each exercise's WORKING-set count (assisted sets excluded, matching the
-        // "working sets" label) onto the muscle its library entry maps to.
+        // "working sets" label) onto the muscle its library entry maps to. Deliberately NOT the
+        // strength predicate: a set of push-ups and a plank are both real work for the muscle that
+        // did them, even though neither yields a weight × reps number.
         val muscleSplit = buildSessionMuscleSplit(
             exercises
                 .filterNot { it.skipped }

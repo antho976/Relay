@@ -1,5 +1,7 @@
 package com.forge.app.domain.coach
 
+import com.forge.app.domain.adapt.workingStrengthSets
+import com.forge.app.domain.adapt.isWorkingStrengthSet
 import com.forge.app.domain.adapt.AdaptThresholds
 import com.forge.app.domain.adapt.AdaptationSnapshot
 import com.forge.app.domain.adapt.EffortModel
@@ -98,7 +100,7 @@ object PreSessionBrief {
         val sore = slot.muscle in life.soreMuscles
         val bouts = TodayDirective.trainingBouts(s, slot.exerciseId)
         val lastWorking = bouts.lastOrNull()?.sets
-            ?.filter { it.weightLb != null && !it.isAssisted && it.setType != EffortModel.SET_TYPE_WARMUP }
+            ?.filter { it.isWorkingStrengthSet() && it.setType != EffortModel.SET_TYPE_WARMUP }
             ?.mapNotNull { it.weightLb }
             ?.maxOrNull()
 
@@ -155,7 +157,7 @@ object PreSessionBrief {
             .map { it.exerciseId }
         val weights = sameMuscleIds.flatMap { id ->
             TodayDirective.trainingBouts(s, id).takeLast(3).flatMap { bout ->
-                bout.sets.filter { !it.isAssisted }.mapNotNull { it.weightLb }
+                bout.sets.workingStrengthSets().mapNotNull { it.weightLb }
             }
         }
         if (weights.isEmpty()) return null

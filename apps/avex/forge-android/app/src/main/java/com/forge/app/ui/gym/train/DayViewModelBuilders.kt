@@ -302,7 +302,12 @@ internal fun computePrFlags(
     val prIds = mutableSetOf<Long>()
     for (set in currentSets.sortedBy { it.setIndex }) {
         // An assisted set is never itself a PR (and assisted history is excluded inside isPr).
-        if (!set.isAssisted && PrDetector.isPr(running, set.weightLb, set.reps)) prIds.add(set.id)
+        // The duration goes in too: a timed hold's `reps` is a hold length, and without saying so
+        // every weighted plank painted itself gold and then sat in `running` as a rep count no
+        // real set could reach.
+        if (!set.isAssisted && PrDetector.isPr(running, set.weightLb, set.reps, set.durationSeconds)) {
+            prIds.add(set.id)
+        }
         running.add(set)
     }
     return prIds to prIds.isNotEmpty()

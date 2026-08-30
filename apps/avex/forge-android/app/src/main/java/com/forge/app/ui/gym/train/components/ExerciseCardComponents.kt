@@ -144,7 +144,9 @@ internal fun CollapsedRow(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            val machine = state.plan.unit == ExerciseUnit.PLATES
+            // Swap-aware, like the name beside it: the demo search should describe the movement the
+            // card is actually showing, not the one the slot started as.
+            val machine = state.effectiveUnit == ExerciseUnit.PLATES
             // 18dp glyphs but a 44dp touch target (a11y minimum) — the icon centers inside a larger box.
             Box(
                 modifier = Modifier.size(44.dp)

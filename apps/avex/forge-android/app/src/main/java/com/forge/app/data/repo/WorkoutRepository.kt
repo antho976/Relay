@@ -292,7 +292,7 @@ class WorkoutRepository @Inject constructor(
         }.toMutableList()
         var wasPr = false
         setsFor(loggedExerciseId).sortedBy { it.setIndex }.forEach { s ->
-            if (!s.isAssisted && PrDetector.isPr(running, s.weightLb, s.reps)) wasPr = true
+            if (!s.isAssisted && PrDetector.isPr(running, s.weightLb, s.reps, s.durationSeconds)) wasPr = true
             running.add(s)
         }
         if (wasPr) loggedExerciseDao.get(loggedExerciseId)?.let { loggedExerciseDao.update(it.copy(wasPr = true)) }
