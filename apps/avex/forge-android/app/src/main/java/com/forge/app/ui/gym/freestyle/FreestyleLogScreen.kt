@@ -4,6 +4,7 @@
 )
 package com.forge.app.ui.gym.freestyle
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -177,7 +178,27 @@ private fun draftToItems(draft: FreestyleDraft): List<FsExercise> =
  *  library, and any move no longer in the library dropped — mirrors [draftToItems]. */
 private fun List<FreestyleTemplateExercise>.toItems(weightUnit: com.forge.app.domain.units.WeightUnit): List<FsExercise> =
     mapNotNull { te ->
-        val def = ExerciseLibrary.byId(te.libId) ?: return@mapNotNull null
+        // A custom move has no library row to re-derive from — it carries its own name, exactly as
+        // a resumed draft does. Resolving every id through ExerciseLibrary and letting mapNotNull
+        // drop the misses meant a template built from custom exercises came back missing them, and
+        // one built entirely from them came back empty, which reads as the picker being broken.
+        val def = ExerciseLibrary.byId(te.libId)
+        if (def == null) {
+            val name = te.customName?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            return@mapNotNull FsExercise(
+                libId = te.libId,
+                name = name,
+                muscle = MuscleGroup.entries.first(),
+                bodyweight = false,
+                custom = true,
+                sets = te.sets.map { s ->
+                    FsSet(
+                        weight = s.weightLb?.let { weightInputValue(it, weightUnit) } ?: "",
+                        reps = s.reps.toString()
+                    )
+                }.ifEmpty { listOf(FsSet()) }
+            )
+        }
         val bodyweight = def.unit == ExerciseUnit.BODYWEIGHT
         FsExercise(
             libId = def.id,
@@ -310,6 +331,19 @@ fun FreestyleLogScreen(
         }
         onBack()
     }
+
+    // System Back leaves the same way the toolbar arrow does.
+    //
+    // The autosave is debounced 600 ms and `leave()` is what flushes it, so a back gesture inside
+    // that window — which is where a back gesture almost always is, since the last thing anyone does
+    // before leaving is type — popped the route with the newest edits unwritten. The draft then
+    // resumed to a state one edit behind the one the user actually left, silently.
+    //
+    // The two overlays compose AFTER this and register their own handlers, and the dispatcher is
+    // last-in-first-out, so they already win while they are up. Stated in `enabled` as well rather
+    // than relying on that ordering: the ordering is a property of where this line sits, and this is
+    // a property of what the screen is doing.
+    BackHandler(enabled = !showBrowser && !showTemplates) { leave() }
 
     val totalVolumeLb = items.sumOf { ex -> ex.sets.sumOf { ex.setVolumeLb(it, weightUnit) } }
     // A set counts as logged when it has reps (rep set) OR a parseable hold time (timed set, GYMAP-51).

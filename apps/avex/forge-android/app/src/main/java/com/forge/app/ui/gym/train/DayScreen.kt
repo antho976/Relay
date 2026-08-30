@@ -247,10 +247,14 @@ fun DayScreen(
             title = { Text(exercise?.effectiveName ?: exId) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    // "Set rest timer" is gone rather than wired: its action was
+                    // DismissQuickActions, i.e. a menu row whose entire effect was to close the
+                    // menu, sitting between two rows that do something. The exercise card already
+                    // exposes the timer setter directly, so the row was a second, non-working route
+                    // to a control one tap away — and the menu is shorter without it.
                     listOf(
                         "Toggle skip" to { viewModel.onEvent(DayUiEvent.ToggleSkipped(exId)) },
-                        "Open swap picker" to { viewModel.onEvent(DayUiEvent.OpenSwapPicker(exId)) },
-                        "Set rest timer" to { viewModel.onEvent(DayUiEvent.DismissQuickActions) }
+                        "Open swap picker" to { viewModel.onEvent(DayUiEvent.OpenSwapPicker(exId)) }
                     ).forEach { (label, action) ->
                         TextButton(onClick = { action(); viewModel.onEvent(DayUiEvent.DismissQuickActions) },
                             modifier = Modifier.fillMaxWidth()) { Text(label, modifier = Modifier.fillMaxWidth()) }

@@ -93,8 +93,14 @@ fun ProgramBuilderScreen(
     val scope = rememberCoroutineScope()
 
     // §13 undo over confirm: destructive removes get a short Undo window instead of a dialog.
+    //
+    // The previous snackbar is dismissed first. The ViewModel keeps ONE staged inverse, newest wins,
+    // so leaving an older snackbar up meant offering an Undo whose action belonged to a different
+    // removal than its own message: remove A, remove B, tap Undo on A's snackbar, and B came back
+    // while A stayed gone.
     fun removedWithUndo(message: String) {
         scope.launch {
+            snackbarHostState.currentSnackbarData?.dismiss()
             val r = snackbarHostState.showSnackbar(message, actionLabel = "Undo", duration = SnackbarDuration.Short)
             if (r == SnackbarResult.ActionPerformed) viewModel.undoRemove()
         }
@@ -157,7 +163,12 @@ fun ProgramBuilderScreen(
                 title = {},
                 navigationIcon = { IconButton(onClick = { attemptClose() }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back") } },
                 actions = {
-                    if (viewing) IconButton(onClick = { viewing = false }) { Icon(Icons.Filled.Edit, "Edit program") }
+                    if (viewing) {
+                        IconButton(
+                            onClick = { viewing = false },
+                            enabled = viewModel.loadComplete
+                        ) { Icon(Icons.Filled.Edit, "Edit program") }
+                    }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
             )
@@ -167,7 +178,11 @@ fun ProgramBuilderScreen(
             // §3: the page-level one-shot actions group at the END — one row, not a stacked wall,
             // so edit mode costs the plan as little height as possible.
             AnimatedVisibility(
-                visible = !viewing,
+                // …and not until the program has actually loaded. Editing and Save were live over an
+                // EMPTY list while loadDays() was still in flight: an edit made in that window was
+                // overwritten wholesale by the late result, and Save over the empty list does not
+                // save nothing — it writes an empty program over the real one.
+                visible = !viewing && viewModel.loadComplete,
                 enter = fadeIn(ForgeMotion.enterTween()),
                 exit = fadeOut(ForgeMotion.exitTween())
             ) {
@@ -179,7 +194,9 @@ fun ProgramBuilderScreen(
                     ForgePrimaryCapsule(
                         "Save",
                         onClick = { attemptSave() },
-                        enabled = !viewModel.saving,
+                        // Stated here too, not only via the bar's visibility: a Save that fires over
+                        // a not-yet-loaded list writes an empty program over the real one.
+                        enabled = !viewModel.saving && viewModel.loadComplete,
                         modifier = Modifier.weight(1f)
                     )
                 }

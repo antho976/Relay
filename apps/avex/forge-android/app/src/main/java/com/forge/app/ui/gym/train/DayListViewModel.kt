@@ -1,5 +1,6 @@
 package com.forge.app.ui.gym.train
 
+import kotlinx.coroutines.flow.distinctUntilChanged
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.forge.app.data.db.dao.SessionDao
@@ -46,17 +47,30 @@ class DayListViewModel @Inject constructor(
     )
 
     init {
+        // COLLECT the rest settings, don't sample them once.
+        //
+        // This ViewModel is scoped to the day-list destination and survives the round trip into
+        // Settings and back, so a `first()` read taken at construction was the answer for the rest
+        // of its life: change "Compound rest" from 150 s to 180 s, come back, and every day still
+        // showed the estimate built from 150 — a number the settings screen had just told the user
+        // was no longer true. The tuning pass is re-run with the new bases, because the samples are
+        // interpreted relative to them.
         viewModelScope.launch {
-            val cBase = settingsRepo.restCompoundSeconds.first()
-            val iBase = settingsRepo.restIsolationSeconds.first()
-            val tuning = com.forge.app.domain.adapt.RestAdvisor.tuning(
-                com.forge.app.domain.adapt.RestAdvisor.samples(
-                    workoutRepo.recentRestEvents(),
-                    compoundBase = cBase,
-                    isolationBase = iBase
-                ) { Program.exercise(it) }
-            )
-            restConfig.value = RestConfig(tuning, cBase, iBase)
+            combine(
+                settingsRepo.restCompoundSeconds,
+                settingsRepo.restIsolationSeconds
+            ) { cBase, iBase -> cBase to iBase }
+                .distinctUntilChanged()
+                .collect { (cBase, iBase) ->
+                    val tuning = com.forge.app.domain.adapt.RestAdvisor.tuning(
+                        com.forge.app.domain.adapt.RestAdvisor.samples(
+                            workoutRepo.recentRestEvents(),
+                            compoundBase = cBase,
+                            isolationBase = iBase
+                        ) { Program.exercise(it) }
+                    )
+                    restConfig.value = RestConfig(tuning, cBase, iBase)
+                }
         }
     }
 

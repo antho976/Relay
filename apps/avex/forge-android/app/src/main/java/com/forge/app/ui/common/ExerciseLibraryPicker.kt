@@ -111,7 +111,13 @@ fun ExerciseLibraryPicker(
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             if (!singleSelect) {
-                                Checkbox(checked = checked, onCheckedChange = { picked = if (it) picked + def.id else picked - def.id })
+                                // onCheckedChange = null: the ROW carries the action (and the label
+                                // it is announced with). A Checkbox with its own handler inside a
+                                // clickable row is a second actionable node saying nothing, so
+                                // TalkBack offered two ways to toggle one exercise, one of them
+                                // unnamed — and the checkbox's own tap toggled without the row's
+                                // single-select rules ever running. Passive here, and still drawn.
+                                Checkbox(checked = checked, onCheckedChange = null)
                             }
                             Icon(
                                 ExerciseIcons.forEquipment(def.equipment),

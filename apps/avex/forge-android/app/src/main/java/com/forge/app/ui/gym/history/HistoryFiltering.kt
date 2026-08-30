@@ -3,7 +3,8 @@ package com.forge.app.ui.gym.history
 import com.forge.app.data.db.entities.CardioEntry
 import com.forge.app.data.db.entities.Session
 import com.forge.app.data.db.entities.durationMinutes
-import com.forge.app.domain.cardio.CardioType
+import com.forge.app.domain.cardio.CardioActivity
+import com.forge.app.domain.cardio.CustomCardioType
 import com.forge.app.program.Program
 
 enum class SessionHistoryFilter { SHORT, LONG, HIGH_VOLUME }
@@ -80,12 +81,14 @@ internal fun buildFilteredHistory(
     workouts: List<Session>,
     cardio: List<CardioEntry>,
     exerciseNamesBySession: Map<Long, List<String>>,
-    filters: HistoryFilters
+    filters: HistoryFilters,
+    /** The user's own cardio activities, so search matches the name the row actually shows. */
+    customCardioTypes: List<CustomCardioType> = emptyList()
 ): List<HistoryItem> {
     val needle = filters.query.trim().lowercase()
     val gym = workouts.filter { matchesWorkout(it, needle, filters, exerciseNamesBySession) }
         .map { HistoryItem.Workout(it) }
-    val card = cardio.filter { matchesCardio(it, needle, filters) }
+    val card = cardio.filter { matchesCardio(it, needle, filters, customCardioTypes) }
         .map { HistoryItem.Cardio(it) }
     return (gym + card).sortedByDescending { it.dateMs }
 }
@@ -115,17 +118,29 @@ private fun matchesWorkout(
         }
     }
     f.volume?.let { v ->
-        if (v == SessionHistoryFilter.HIGH_VOLUME && !(s.totalVolumeLb != null && s.totalVolumeLb > HIGH_VOLUME_LB)) return false
+        // >=, not >. HIGH_VOLUME_LB's own doc says "at/above this many lb", and the chip label is
+        // rendered from the same constant — so a session at exactly 3,000 lb was excluded by the
+        // filter that named it.
+        if (v == SessionHistoryFilter.HIGH_VOLUME && !(s.totalVolumeLb != null && s.totalVolumeLb >= HIGH_VOLUME_LB)) return false
     }
     return true
 }
 
-private fun matchesCardio(e: CardioEntry, needle: String, f: HistoryFilters): Boolean {
+private fun matchesCardio(
+    e: CardioEntry,
+    needle: String,
+    f: HistoryFilters,
+    customTypes: List<CustomCardioType>
+): Boolean {
     // Cardio carries no tags or volume → it drops out when a tag or high-volume filter is on.
     if (f.tag != null) return false
     if (f.volume == SessionHistoryFilter.HIGH_VOLUME) return false
     if (needle.isNotEmpty()) {
-        val hay = (CardioType.fromCode(e.type).displayName + " " + (e.note ?: "") + " cardio").lowercase()
+        // CardioActivity.resolve, the same resolver the ROW uses — CardioType.fromCode folds every
+        // custom activity to "Other", so searching for the name printed on screen ("Padel", "Hyrox")
+        // matched nothing at all, while searching "other" matched all of them.
+        val name = CardioActivity.resolve(e.type, customTypes).displayName
+        val hay = (name + " " + (e.note ?: "") + " cardio").lowercase()
         if (!hay.contains(needle)) return false
     }
     f.duration?.let { d ->

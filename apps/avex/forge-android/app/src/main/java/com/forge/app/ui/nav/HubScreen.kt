@@ -46,8 +46,8 @@ import kotlinx.coroutines.launch
 @Composable
 fun HubScreen(
     nav: NavHostController,
-    initialPage: Int = BottomTab.HOME.ordinal,
-    pendingPage: Int? = null,
+    initialTab: BottomTab = BottomTab.HOME,
+    pendingTab: BottomTab? = null,
     onPendingConsumed: () -> Unit = {},
     /** Unread lessons, badged on the Academy tab. See `ForgeBottomBar`'s `badges` for why. */
     academyUnread: Int = 0,
@@ -63,9 +63,14 @@ fun HubScreen(
     }
     // Re-create the pager when the tab set changes (coach toggled), so a settled currentPage can't be
     // left pointing past the now-shorter list — which would otherwise strand the user on a stale page.
+    // Resolved by IDENTITY, not by ordinal. `tabs` DROPS Coach when the coach is off, so an ordinal
+    // is an index into a list that may be one shorter than the enum — and which entry it lands on
+    // then depends on where Coach happens to sit in the declaration order. Today HOME and CARDIO
+    // survive that by luck; the next reorder of the enum silently sends a widget tap to a different
+    // page. indexOf answers the question actually being asked.
     val pagerState = key(showCoach) {
         rememberPagerState(
-            initialPage = initialPage.coerceIn(0, tabs.lastIndex),
+            initialPage = tabs.indexOf(initialTab).coerceAtLeast(0),
             pageCount = { tabs.size }
         )
     }
@@ -81,11 +86,13 @@ fun HubScreen(
     val homeIndex = tabs.indexOf(BottomTab.HOME)
 
     // External tab requests (deep screen → tab, or a cardio widget launch).
-    LaunchedEffect(pendingPage) {
-        if (pendingPage != null) {
-            pagerState.animateScrollToPage(pendingPage.coerceIn(0, tabs.lastIndex), animationSpec = pageSpec)
-            onPendingConsumed()
-        }
+    LaunchedEffect(pendingTab, tabs) {
+        val tab = pendingTab ?: return@LaunchedEffect
+        val index = tabs.indexOf(tab)
+        // A tab that is not currently shown (Coach, for a freestyle user) has nowhere to go —
+        // consume the request rather than leaving it pending forever.
+        if (index >= 0) pagerState.animateScrollToPage(index, animationSpec = pageSpec)
+        onPendingConsumed()
     }
 
     // Back from any non-Home hub returns to Home; on Home it falls through to the system (exit).

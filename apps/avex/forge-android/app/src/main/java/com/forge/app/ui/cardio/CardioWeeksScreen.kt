@@ -1,5 +1,6 @@
 package com.forge.app.ui.cardio
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -71,6 +72,10 @@ fun CardioWeeksScreen(
 
     // A tapped bar opens its own page — the same one back arrow, one level down (§4.6).
     val openWeek = state.openWeekStartMs
+    // ...and system Back climbs that level exactly as the arrow does, including the distinction the
+    // arrow already makes: entered ON a week, Back leaves; entered on the chart, Back returns to it.
+    // Without this the gesture skipped the level entirely and popped the route from a week page.
+    BackHandler(enabled = openWeek != null && !viewModel.arrivedOnWeek) { viewModel.closeWeek() }
     if (openWeek != null) {
         CardioWeekDetail(
             weekStartMs = openWeek,
