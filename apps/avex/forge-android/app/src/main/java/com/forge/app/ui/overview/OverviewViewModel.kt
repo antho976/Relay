@@ -390,7 +390,10 @@ class OverviewViewModel @Inject constructor(
         _coach.value = recs
         // CD-1: only nudge "still learning" when there's nothing actionable AND the weekly pass
         // hasn't activated yet (below MIN_SESSIONS). Cheap finished-count query, off the hot path.
-        val logged = sessionDao.finishedCount()
+        // TRACKED sessions: this gates the coach, and an untracked session is excluded from
+        // suggestions by contract. The seed gate above deliberately stays inclusive — that one asks
+        // "does this install hold any history", which untracked history certainly is.
+        val logged = sessionDao.trackedFinishedCount()
         _coachLearning.value = if (recs.isEmpty() && logged < AutoCoachPlanner.MIN_SESSIONS)
             CoachLearningHint(logged, AutoCoachPlanner.MIN_SESSIONS - logged) else null
         // Tier 3: when the coach is active but quiet, surface building fatigue (System 5 sub-threshold).

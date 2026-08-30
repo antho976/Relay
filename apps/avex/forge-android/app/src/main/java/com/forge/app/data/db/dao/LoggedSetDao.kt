@@ -47,6 +47,7 @@ interface LoggedSetDao {
     @Query("SELECT MAX(set_index) FROM logged_set WHERE logged_exercise_id = :loggedExerciseId")
     suspend fun maxSetIndex(loggedExerciseId: Long): Int?
 
+
     /**
      * Per-rep-count max weight across every prior non-assisted weighted set of an exercise —
      * the Pareto frontier PR detection compares against. [com.forge.app.domain.pr.PrDetector.isPr]
@@ -114,12 +115,22 @@ interface LoggedSetDao {
      * True when the exercise has ANY prior set (incl. bodyweight/assisted) outside
      * [excludeLoggedExerciseId] — the "first-ever time" gate for PR flagging, which the
      * weighted-only frontier can't answer on its own.
+     *
+     * Joined to `session` with the SAME untracked filter as [repMaxFrontierForExercise], because
+     * the two are read together and the gate is only meaningful relative to the frontier it guards.
+     * They disagreed: with nothing but untracked history for a lift, this said "you have history"
+     * while the frontier — which excludes untracked sessions — came back empty, and an empty
+     * frontier means anything beats it. The first tracked set of that lift was flagged as a
+     * personal record it had not set, at a weight the user had already exceeded.
      */
     @Query("""
         SELECT EXISTS(
             SELECT 1 FROM logged_set s
             INNER JOIN logged_exercise le ON s.logged_exercise_id = le.id
-            WHERE le.exercise_id = :exerciseId AND s.logged_exercise_id != :excludeLoggedExerciseId
+            INNER JOIN session sess ON le.session_id = sess.id
+            WHERE le.exercise_id = :exerciseId
+              AND s.logged_exercise_id != :excludeLoggedExerciseId
+              AND sess.is_untracked = 0
         )
     """)
     suspend fun hasHistoryForExercise(exerciseId: String, excludeLoggedExerciseId: Long): Boolean

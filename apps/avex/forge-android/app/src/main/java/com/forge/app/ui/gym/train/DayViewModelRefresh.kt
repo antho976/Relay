@@ -178,16 +178,18 @@ internal suspend fun DayViewModel.ensureLoggedExercise(exerciseId: String): Long
         // slot id so the slot stays mapped (#11). `exerciseId` here is the slot (plan.id).
         val effective = currentUi.effectiveExerciseId.ifBlank { exerciseId }
         currentUi.loggedExerciseId
-            ?: workoutRepo.loggedExerciseForSlot(sessionId, exerciseId)
-            ?: workoutRepo.addExerciseToSession(
+            // Read-and-create in ONE transaction. The mutex above serialises this ViewModel's own
+            // callers; it says nothing about the WRIST, whose commands run through SetLogUseCase in
+            // this same process and reach the same slot by a path that never took this lock.
+            ?: workoutRepo.ensureLoggedExerciseForSlot(
                 sessionId = sessionId,
+                slotId = exerciseId,
                 exerciseId = effective,
                 // Order index from the rendered list, not the static day plan (which is -1 for
                 // custom/cross-day exercises that aren't in dayPlan.exercises).
                 orderIndex = _state.value.exercises.indexOfFirst { it.plan.id == exerciseId },
                 swappedName = currentUi.sessionSwapName ?: currentUi.persistentSwapName,
-                swappedUnit = currentUi.sessionSwapUnit ?: currentUi.persistentSwapUnit,
-                slotId = exerciseId.takeIf { it != effective }
+                swappedUnit = currentUi.sessionSwapUnit ?: currentUi.persistentSwapUnit
             )
     }
 
