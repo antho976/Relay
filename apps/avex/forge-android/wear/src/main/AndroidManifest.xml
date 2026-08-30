@@ -7,8 +7,30 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <!-- OngoingActivity's session chip rides a notification (runtime-granted on Wear 4+). -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <!-- Live HR via Health Services during sessions (W3) — runtime-granted, works-without state. -->
-    <uses-permission android:name="android.permission.BODY_SENSORS" />
+    <!-- Live HR via Health Services during sessions (W3) — runtime-granted, works-without state.
+         Declared for two permission eras, because targetSdk is 36 and the module used to declare
+         only the first:
+           • BODY_SENSORS is what the platform enforces for HEART_RATE_BPM up to API 35. Capped
+             there so a watch on 36+ is never asked for a permission it can no longer grant.
+           • android.permission.health.READ_HEART_RATE replaces it from API 36. Without this, an
+             API 36 watch starts the exercise and receives no heart rate at all — the failure is a
+             silently empty metric, not an error, so nothing in the app notices.
+         Requested version-gated at runtime; see WearHealthPermissions. -->
+    <uses-permission
+        android:name="android.permission.BODY_SENSORS"
+        android:maxSdkVersion="35" />
+    <uses-permission android:name="android.permission.health.READ_HEART_RATE" />
+    <!-- CALORIES_TOTAL is activity-derived, not a sensor read, and Health Services enforces
+         ACTIVITY_RECOGNITION for it on every API level. The exercise config has always asked for
+         it; without this permission the calorie half of every HR batch is quietly absent, and the
+         phone falls back to its MET estimate believing the watch simply had nothing to say.
+
+         No background health permission is declared on purpose. BODY_SENSORS_BACKGROUND (33–35) and
+         READ_HEALTH_DATA_IN_BACKGROUND (36) cover reading sensors while the app is in the
+         background; this app only ever reads inside a type="health" foreground service, which is
+         while-in-use. Adding one would widen the Play health-data declaration for access the app
+         does not take. -->
+    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_HEALTH" />
     <!-- No INTERNET permission — the Data Layer is Bluetooth IPC; nothing leaves the wrist. -->

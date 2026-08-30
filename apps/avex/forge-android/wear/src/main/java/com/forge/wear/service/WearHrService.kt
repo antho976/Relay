@@ -19,6 +19,7 @@ import androidx.health.services.client.data.ExerciseLapSummary
 import androidx.health.services.client.data.ExerciseType
 import androidx.health.services.client.data.ExerciseUpdate
 import com.forge.shared.protocol.HrBatchDto
+import com.forge.wear.WearHealthPermissions
 import com.forge.wear.data.WearDataRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -35,9 +36,13 @@ import java.time.Instant
  * Live HR during a session (W3): a health foreground service holding a Health Services
  * [ExerciseType.STRENGTH_TRAINING] exercise while the phone session is active. Sensor-fused HR
  * (+ the exercise's cumulative calories) batches to the phone every ~5 s over /hr/batch — active
- * session only, never a daily stream. Degrades quietly: no BODY_SENSORS, a registration failure
- * or another app owning the exercise (ExerciseClient is exclusive) just means no HR — the session
- * itself is untouched.
+ * session only, never a daily stream. Degrades quietly: no heart-rate permission, a registration
+ * failure or another app owning the exercise (ExerciseClient is exclusive) just means no HR — the
+ * session itself is untouched.
+ *
+ * "No heart-rate permission" is api-level-dependent — see [WearHealthPermissions]. It is checked in
+ * [onStartCommand] rather than only by the caller, because START_STICKY hands the system a licence
+ * to recreate this service without one.
  */
 class WearHrService : Service() {
 
@@ -52,6 +57,16 @@ class WearHrService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         sessionId = intent?.getLongExtra(EXTRA_SESSION_ID, -1L) ?: -1L
         if (sessionId <= 0) { stopSelf(); return START_NOT_STICKY }
+        // Checked HERE, not only at the call site. START_STICKY means the system recreates this
+        // service on its own after the process is reclaimed, and a Data Layer wake can start it
+        // from a path that never consulted the permission at all — by which time the user may have
+        // revoked it. From API 34 a health-typed foreground service whose app holds none of the
+        // health permissions throws SecurityException out of startForeground, which lands as a
+        // crash in a background process nobody is watching. No permission is simply no HR.
+        if (!WearHealthPermissions.canStreamHeartRate(this)) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
         startInForeground()
         if (!exerciseStarted) {
             exerciseStarted = true
@@ -130,10 +145,16 @@ class WearHrService : Service() {
             val batch = synchronized(pending) { pending.toList() }
             if (batch.isEmpty()) continue
             if (!repo.sendHrBatchAwait(sessionId, batch, totalKcal)) continue
-            synchronized(pending) {
-                // Drop only what was actually delivered; samples that arrived during the send stay.
-                repeat(batch.size) { if (pending.isNotEmpty()) pending.removeFirst() }
-            }
+            // Drop the samples that were actually delivered, BY IDENTITY. Removing batch.size
+            // items from the front instead assumed the front of the deque was still the snapshot,
+            // which stops being true the moment PENDING_CAP evicts: a send that takes long enough
+            // for the buffer to fill — the slow-delivery case this buffer exists for — has already
+            // dropped some of the snapshot off the front, so counting off batch.size then deletes
+            // that many NEWLY ARRIVED samples which were never sent at all. Samples are keyed
+            // (session_id, at_ms) with IGNORE-on-conflict on the phone, so matching on at_ms is
+            // exactly as precise as the storage is.
+            val delivered = batch.mapTo(HashSet(batch.size)) { it.atMs }
+            synchronized(pending) { pending.removeAll { it.atMs in delivered } }
         }
     }
 

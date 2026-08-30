@@ -10,6 +10,7 @@ import androidx.wear.watchface.complications.data.TimeDifferenceComplicationText
 import androidx.wear.watchface.complications.data.TimeDifferenceStyle
 import androidx.wear.watchface.complications.datasource.ComplicationRequest
 import androidx.wear.watchface.complications.datasource.SuspendingComplicationDataSourceService
+import com.forge.wear.data.WearClockSkew
 import java.time.Instant
 
 /**
@@ -69,16 +70,24 @@ class RestTimerComplicationService : SuspendingComplicationDataSourceService() {
 
     override suspend fun onComplicationRequest(request: ComplicationRequest): ComplicationData? {
         if (request.complicationType != ComplicationType.SHORT_TEXT) return null
-        val timer = WearGlanceStore.timer(this)
-        val running = timer != null && !timer.paused && timer.endAtMs > System.currentTimeMillis()
-        if (!running) {
+        val now = System.currentTimeMillis()
+        // endAtMs is an instant on the PHONE's clock and the watch face counts down on its OWN, so
+        // comparing the two directly turned every millisecond of skew between the devices into a
+        // millisecond of error — and in the opposite direction from the same countdown inside the
+        // app, which corrects for it (RestCountdown). With no measurement available the phone
+        // instant is returned unchanged, which is exactly the previous behaviour.
+        val endOnThisWatch = WearGlanceStore.timer(this)
+            ?.takeIf { !it.paused }
+            ?.let { WearClockSkew.toWatchInstant(this, it.endAtMs, now) }
+            ?.takeIf { it > now }
+        if (endOnThisWatch == null) {
             return ShortTextComplicationData.Builder(text("—"), text("Rest timer"))
                 .setTitle(text("REST")).build()
         }
         // TimeDifference text renders the countdown locally on the watch face — zero updates.
         val countdown = TimeDifferenceComplicationText.Builder(
             TimeDifferenceStyle.SHORT_DUAL_UNIT,
-            CountDownTimeReference(Instant.ofEpochMilli(timer!!.endAtMs))
+            CountDownTimeReference(Instant.ofEpochMilli(endOnThisWatch))
         ).build()
         return ShortTextComplicationData.Builder(countdown, text("Rest timer"))
             .setTitle(text("REST")).build()

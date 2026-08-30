@@ -42,6 +42,7 @@ class WorkoutSessionService : Service() {
     @Inject lateinit var bridge: WorkoutSessionBridge
     @Inject lateinit var settingsRepo: SettingsRepository
     @Inject lateinit var wearConnection: com.forge.app.service.wear.WearConnection
+    @Inject lateinit var wearPublisher: com.forge.app.service.wear.WearStatePublisher
 
     private val serviceScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var currentState: SessionNotifState? = null
@@ -198,10 +199,17 @@ class WorkoutSessionService : Service() {
         // buzz — the phone waits a short grace for the wrist's ack and stays silent when it lands.
         // No ack (watch app dead, BT dropped at the boundary) → the phone buzzes late rather than
         // nobody buzzing.
+        // Read the timer's identity BEFORE the grace period: by the time the wrist's ack could
+        // arrive, the controller may have stopped and the publisher cleared it.
+        val timerEndAtMs = wearPublisher.lastPublishedTimerEndAtMs
         val watchReachable = wearConnection.reachableWearNodeId() != null
         if (watchReachable) {
             kotlinx.coroutines.delay(HAPTIC_ACK_GRACE_MS)
-            if (wearConnection.hapticAckedWithin(HAPTIC_ACK_WINDOW_MS, System.currentTimeMillis())) return
+            // Matched on WHICH timer the wrist buzzed for, not merely on recency. Recency alone let
+            // an ack for the rest that just ended silence a rest started seconds later, inside the
+            // eight-second Bluetooth-lag window — and since the wrist had already buzzed for the
+            // old timer, neither device buzzed for the new one.
+            if (wearConnection.hapticAckedFor(timerEndAtMs, HAPTIC_ACK_WINDOW_MS, System.currentTimeMillis())) return
         }
         // Quiet hours: still buzz (you're mid-workout and want the cue) but skip the heads-up
         // notification so the phone stays visually silent.
