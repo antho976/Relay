@@ -369,20 +369,22 @@ class MainActivity : FragmentActivity() {
         lifecycleScope.launch {
             // FLAG_SECURE follows privacy mode OR the app lock — turning on a lock implies keeping the
             // app out of the recents preview / screenshots, as every app-lock feature does.
-            combine(
-                settingsRepo.privacyMode,
-                settingsRepo.appLockEnabled,
-                settingsRepo.galleryLockEnabled
-            ) { privacy, appLock, galleryLock ->
-                Triple(privacy, appLock, galleryLock)
-            }.collect { (privacy, appLock, galleryLock) ->
+            settingsRepo.protections.collect { p ->
                 // Keep the sentinel current, so the next failed startup read falls back to what the
                 // user chose most recently rather than to what they chose at some earlier launch.
-                ProtectionSentinel.remember(
-                    this@MainActivity,
-                    ProtectionSentinel.Protections(privacy, appLock, galleryLock)
-                )
-                applyPrivacyMode(privacy || appLock || galleryLock)
+                //
+                // Only on a REAL read. On a failed one these values ARE the sentinel's fallback, so
+                // writing them back would promote "privacy on because we could not tell" into "the
+                // user asked for privacy on", and overwrite the very record being fallen back to.
+                if (!p.fromFailedRead) {
+                    ProtectionSentinel.remember(
+                        this@MainActivity,
+                        ProtectionSentinel.Protections(
+                            p.privacyMode, p.appLockEnabled, p.galleryLockEnabled
+                        )
+                    )
+                }
+                applyPrivacyMode(p.privacyMode || p.appLockEnabled || p.galleryLockEnabled)
             }
         }
         // Keep the icon pick live so onStop can read it without blocking on DataStore (and never stale).

@@ -53,6 +53,18 @@ object ProtectionSentinel {
         }
     }
 
+    /**
+     * Drop the record entirely.
+     *
+     * A wipe the USER asked for and a store that lost its contents both leave the settings file
+     * empty, and the sentinel is what tells them apart — so a factory reset has to clear it too.
+     * Without this, resetting the app would restore every protection from the sentinel on the very
+     * next read, and the reset would appear not to have worked.
+     */
+    fun forget(context: Context) {
+        runCatching { prefs(context).edit().clear().apply() }
+    }
+
     /** The last recorded protections, or null when none were ever recorded. */
     fun lastKnown(context: Context): Protections? = runCatching {
         val p = prefs(context)
