@@ -314,7 +314,6 @@ object GoalPortfolio {
                 lessonId = null
             )
         }
-        if (cut != null) return null
         return null
     }
 
