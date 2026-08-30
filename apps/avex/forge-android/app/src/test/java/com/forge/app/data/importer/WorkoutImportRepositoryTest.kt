@@ -228,6 +228,57 @@ class WorkoutImportRepositoryTest {
         assertEquals("still two sessions, not three", 2, storedSessionCount())
     }
 
+    /**
+     * The same two workouts, re-imported in the OPPOSITE order.
+     *
+     * FitNotes records a DATE, so both of these start at the same midnight and the second takes the
+     * next free slot a second later. The slot search used to begin at a per-run counter and only
+     * move forward: on the reversed pass Row matched itself at +1s and pushed the counter to +2s,
+     * Bench began its search at +2s, never looked at the midnight slot where it was already stored,
+     * and was inserted a second time.
+     *
+     * Re-running an import is the one thing this path promises changes nothing, and the order of
+     * rows in a file is not something a user controls — two exports of the same data from the same
+     * app can differ in it.
+     */
+    @Test
+    fun reImportingTheSameDayInTheOppositeOrderAddsNothing() = runTest {
+        val forwards = fitNotesFile(
+            "forwards.csv",
+            row("2026-01-05", "Bench Press", 100, 10),
+            row("2026-01-05", "Barbell Row", 90, 8)
+        )
+        repo.import(forwards)
+        assertEquals(2, storedSessionCount())
+
+        val backwards = fitNotesFile(
+            "backwards.csv",
+            row("2026-01-05", "Barbell Row", 90, 8),
+            row("2026-01-05", "Bench Press", 100, 10)
+        )
+        val again = repo.import(backwards)
+
+        assertTrue("got $again", again is ImportResult.NothingToImport)
+        assertEquals("both workouts were already stored", 2, storedSessionCount())
+    }
+
+    @Test
+    fun aGenuinelyNewWorkoutOnAnAlreadyCrowdedDayStillLands() = runTest {
+        // The guard must stay loose in the other direction: scanning every occupied slot is for
+        // finding a match, not for refusing anything that collides on a date-only midnight.
+        repo.import(
+            fitNotesFile(
+                "morning.csv",
+                row("2026-01-05", "Bench Press", 100, 10),
+                row("2026-01-05", "Barbell Row", 90, 8)
+            )
+        )
+
+        repo.import(fitNotesFile("evening.csv", row("2026-01-05", "Squat", 200, 5)))
+
+        assertEquals("the new workout takes the next free slot", 3, storedSessionCount())
+    }
+
     // ── Merge, never replace ────────────────────────────────────────────────────────────────────
 
     @Test

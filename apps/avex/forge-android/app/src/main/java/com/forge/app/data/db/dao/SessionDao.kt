@@ -196,18 +196,18 @@ interface SessionDao {
     @Query("SELECT * FROM session WHERE finished_at IS NOT NULL AND started_at >= :fromMs AND started_at < :toMs ORDER BY started_at ASC")
     fun observeFinishedInRange(fromMs: Long, toMs: Long): Flow<List<Session>>
 
-    /** How many sessions already start at this exact epoch — the import duplicate guard (#GYMAP-17):
-     *  re-importing the same export won't double-insert workouts, since imported sessions carry the
-     *  source's stable start time. */
-    @Query("SELECT COUNT(*) FROM session WHERE started_at = :startedAt")
-    suspend fun countAtStart(startedAt: Long): Int
-
-    /** Every session already starting at this exact epoch — the import duplicate guard's candidates.
-     *  A stored session at the same instant is only a duplicate when it holds the same work; a
-     *  DIFFERENT workout that merely collides on a date-only midnight is nudged forward instead of
-     *  being dropped, so the comparison itself lives in the importer, which can read the sets. */
-    @Query("SELECT id FROM session WHERE started_at = :startedAt")
-    suspend fun idsAtStart(startedAt: Long): List<Long>
+    /**
+     * Every session starting inside [fromMs, toMs), with the instant each one occupies — the whole
+     * nudge window for one imported workout, in a single query.
+     *
+     * The importer walked this window a slot at a time and only ever forwards from wherever the
+     * previous workout in the same file had stopped, so re-importing the same file with its
+     * workouts in a different order could start the search PAST the slot a workout already
+     * occupied and insert it a second time. Handing back the window lets the guard check every
+     * candidate regardless of order, and costs one query instead of up to sixty.
+     */
+    @Query("SELECT id, started_at FROM session WHERE started_at >= :fromMs AND started_at < :toMs")
+    suspend fun startRefsInRange(fromMs: Long, toMs: Long): List<SessionStartRef>
 
     /** Deletes all sessions (CASCADE removes LoggedExercise, LoggedSet, MoodEntry). For reset (#119). */
     @Query("DELETE FROM session")
@@ -345,3 +345,9 @@ interface SessionDao {
     """)
     suspend fun prSessionStartTimes(): List<Long>
 }
+
+/** A session's id and the instant it starts on — [SessionDao.startRefsInRange]. */
+data class SessionStartRef(
+    val id: Long,
+    @androidx.room.ColumnInfo(name = "started_at") val startedAt: Long
+)

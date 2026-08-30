@@ -264,16 +264,97 @@ class GoalPortfolioTest {
 
     // ── Conflicts ──────────────────────────────────────────────────────────────
 
+    /** Weigh-ins flat at [lb], so a target below it is a cut and a target above it is a bulk. */
+    private fun weighingIn(lb: Double) = snapshot(
+        bodyweight = (0 until 10).map { i ->
+            BodyweightEntry(dateKey = "d$i", weightLb = lb, recordedAt = now - (9 - i) * 3 * day)
+        }
+    )
+
     @Test
     fun cuttingWhileChasingAMax_isFlaggedAndSequenced() {
         val goals = listOf(
-            goal(CoachGoalKind.BODYWEIGHT, target = 170.0, id = 1),
+            goal(CoachGoalKind.BODYWEIGHT, target = 170.0, id = 1, note = WeightPhase.CUT.code),
             goal(CoachGoalKind.LIFT_1RM, target = 315.0, targetKey = "bench", id = 2)
         )
         val c = GoalPortfolio.conflicts(goals).single()
         assertTrue(c.explanation.contains("recovery budget"))
         assertTrue(c.proposal.isNotBlank())
         assertEquals(GoalPortfolio.LESSON_GOALS_FIGHT, c.lessonId)
+    }
+
+    /**
+     * Both bodyweight conflicts are arguments about an energy DEFICIT — one says losing weight
+     * competes with adding to a max, the other that building a muscle "needs a surplus". Neither is
+     * true of a bulk. The branches returned unconditionally anyway, and the `cut` check written one
+     * line above them was never read, so someone eating to grow was told their goals fight, in
+     * cutting language.
+     */
+    @Test
+    fun bulkingWhileChasingAMax_isNotAConflict() {
+        val goals = listOf(
+            goal(CoachGoalKind.BODYWEIGHT, target = 200.0, id = 1, note = WeightPhase.BULK.code),
+            goal(CoachGoalKind.LIFT_1RM, target = 315.0, targetKey = "bench", id = 2)
+        )
+        assertTrue(GoalPortfolio.conflicts(goals).isEmpty())
+    }
+
+    @Test
+    fun bulkingWhileBuildingAMuscle_isThePlanNotAConflict() {
+        val goals = listOf(
+            goal(CoachGoalKind.BODYWEIGHT, target = 200.0, id = 1, note = WeightPhase.BULK.code),
+            goal(CoachGoalKind.MUSCLE_VOLUME, target = 16.0, targetKey = MuscleGroup.CHEST.code, id = 2)
+        )
+        assertTrue(GoalPortfolio.conflicts(goals).isEmpty())
+    }
+
+    @Test
+    fun maintainingWhileChasingAMax_isNotAConflict() {
+        val goals = listOf(
+            goal(CoachGoalKind.BODYWEIGHT, target = 180.0, id = 1, note = WeightPhase.MAINTAIN.code),
+            goal(CoachGoalKind.LIFT_1RM, target = 315.0, targetKey = "bench", id = 2)
+        )
+        assertTrue(GoalPortfolio.conflicts(goals).isEmpty())
+    }
+
+    // ── With no stored phase, the direction comes from the weight itself ──────
+
+    @Test
+    fun aTargetBelowTheAthletesWeightIsReadAsACut() {
+        val goals = listOf(
+            goal(CoachGoalKind.BODYWEIGHT, target = 170.0, id = 1),
+            goal(CoachGoalKind.LIFT_1RM, target = 315.0, targetKey = "bench", id = 2)
+        )
+        assertEquals(1, GoalPortfolio.conflicts(goals, weighingIn(190.0)).size)
+    }
+
+    @Test
+    fun aTargetAboveTheAthletesWeightIsReadAsABulk() {
+        val goals = listOf(
+            goal(CoachGoalKind.BODYWEIGHT, target = 200.0, id = 1),
+            goal(CoachGoalKind.LIFT_1RM, target = 315.0, targetKey = "bench", id = 2)
+        )
+        assertTrue(GoalPortfolio.conflicts(goals, weighingIn(180.0)).isEmpty())
+    }
+
+    /** Inside the trend tolerance the goal is maintenance, whichever side of it the target sits. */
+    @Test
+    fun aTargetTheAthleteIsAlreadyAtIsReadAsMaintenance() {
+        val goals = listOf(
+            goal(CoachGoalKind.BODYWEIGHT, target = 180.0, id = 1),
+            goal(CoachGoalKind.LIFT_1RM, target = 315.0, targetKey = "bench", id = 2)
+        )
+        assertTrue(GoalPortfolio.conflicts(goals, weighingIn(180.5)).isEmpty())
+    }
+
+    /** No phase and no weigh-ins: unknown. Silence beats telling someone their goals fight. */
+    @Test
+    fun anUndeterminedDirectionClaimsNoConflict() {
+        val goals = listOf(
+            goal(CoachGoalKind.BODYWEIGHT, target = 170.0, id = 1),
+            goal(CoachGoalKind.LIFT_1RM, target = 315.0, targetKey = "bench", id = 2)
+        )
+        assertTrue(GoalPortfolio.conflicts(goals).isEmpty())
     }
 
     @Test

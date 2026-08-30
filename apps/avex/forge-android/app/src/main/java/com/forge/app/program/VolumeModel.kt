@@ -109,8 +109,19 @@ object VolumeModel {
             // prioritised muscle blow well past the junk-volume ceiling).
             val cap = (personalCaps[muscle] ?: weeklyCap[muscle] ?: return@forEach) +
                 if (muscle in focus) minOf(slots.size * EMPHASIS_BONUS_SETS, MAX_EMPHASIS_HEADROOM) else 0
+            // No slot can go below [minSets], so a muscle with enough slots has a weekly total this
+            // cap cannot reach: eight slots at a floor of two is sixteen sets, whatever the ceiling
+            // says. The trim loop already stopped there — it ran out of slots above the floor and
+            // broke — but it did so while still "over cap", so the model went on describing a
+            // ceiling the structure it had just built could never sit under.
+            //
+            // Trimming a muscle further means REMOVING a slot, which is a different decision from
+            // resizing one and belongs to the generator that chose the split, not to this pass. So
+            // state the achievable number instead of pretending: below the floor, the floor is the cap.
+            val structuralFloor = slots.size * minSets
+            val effectiveCap = maxOf(cap, structuralFloor)
             var total = slots.sumOf { (di, si) -> result[di][si] }
-            while (total > cap) {
+            while (total > effectiveCap) {
                 val biggest = slots.filter { (di, si) -> result[di][si] > minSets }
                     .maxByOrNull { (di, si) -> result[di][si] } ?: break
                 result[biggest.first][biggest.second] -= 1

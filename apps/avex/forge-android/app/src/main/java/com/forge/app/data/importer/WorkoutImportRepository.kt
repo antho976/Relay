@@ -186,12 +186,6 @@ class WorkoutImportRepository @Inject constructor(
         // file order, so a genuine re-import reproduces the same instants and the duplicate guard below
         // still recognises them, while distinct same-day workouts no longer collide and get dropped.
         //
-        // The nonce is per-run; the DB is not. A slot already occupied by a DIFFERENT workout — the
-        // morning session from a FitNotes export, when the evening one arrives later in a Strong
-        // export whose Date column is date-only — used to make the incoming workout "a duplicate"
-        // and drop it silently. The slot search below walks past occupied instants instead, and only
-        // calls it a duplicate when the stored session holds the same work.
-        val startNonce = HashMap<Long, Int>()
         // Memoise name→catalogue-id for this import: the same movement recurs across many sessions and
         // ExerciseNameMatcher.match scans the whole library, so resolve each distinct name only once.
         val matchCache = HashMap<String, String?>()
@@ -221,21 +215,30 @@ class WorkoutImportRepository @Inject constructor(
                 // legitimately different midnight workouts was reported as a duplicate and dropped,
                 // silently, on an import path whose whole promise is that it does not lose anything.
                 val incomingPrint = fingerprintOf(session, matchCache)
-                var nth = startNonce.getOrDefault(session.startedAtMs, 0)
-                var startedAt = session.startedAtMs + nth * 1000L
-                var duplicate = false
-                while (nth < MAX_START_NUDGES) {
-                    val storedIds = sessionDao.idsAtStart(startedAt)
-                    if (storedIds.isEmpty()) break
-                    if (storedIds.any { storedFingerprint(it) == incomingPrint }) {
-                        duplicate = true
-                        break
-                    }
-                    nth++
-                    startedAt = session.startedAtMs + nth * 1000L
-                }
-                startNonce[session.startedAtMs] = nth + 1
+
+                // EVERY slot this workout could occupy, checked regardless of the order the file
+                // presents its workouts in.
+                //
+                // The search used to begin at a per-run nonce and only move forward, so re-importing
+                // the same file with its workouts reordered started PAST the slot a workout already
+                // held. Import A then B: A lands at midnight, B at midnight+1s. Re-import B then A:
+                // B matches itself at +1s and advances the nonce to +2s, A begins at +2s, never
+                // looks at midnight where it is already stored, and is inserted a second time — on
+                // an import path whose whole promise is that re-running it changes nothing.
+                //
+                // The nonce is gone. Inside this transaction the database already knows which slots
+                // are taken, including the ones this run has just filled, so occupancy is read from
+                // the one source that cannot disagree with itself.
+                val windowEndMs = session.startedAtMs + MAX_START_NUDGES * 1000L
+                val occupied = sessionDao.startRefsInRange(session.startedAtMs, windowEndMs)
+                val duplicate = occupied.any { storedFingerprint(it.id) == incomingPrint }
                 if (duplicate) { duplicates++; continue }
+
+                val taken = occupied.mapTo(HashSet(occupied.size)) { it.startedAt }
+                val startedAt = (0 until MAX_START_NUDGES)
+                    .map { session.startedAtMs + it * 1000L }
+                    .firstOrNull { it !in taken }
+                    ?: windowEndMs // Window full: keep the previous behaviour and take the edge.
 
                 // Three separate facts, and conflating them rewrote real training history.
                 //
@@ -480,7 +483,7 @@ class WorkoutImportRepository @Inject constructor(
     ): String = session.exercises.joinToString("|") { ex ->
         val matched = ex.catalogueId ?: matchCache.getOrPut(ex.name) { ExerciseNameMatcher.match(ex.name) }
         val id = matched ?: syntheticId(ex.name)
-        id + ":" + ex.sets.joinToString(",") { setPrint(it.reps, it.weightLb) }
+        id + ":" + ex.sets.joinToString(",") { setPrint(it.reps, it.weightLb, it.durationSeconds) }
     }
 
     /** [fingerprintOf] for a session already in the database. */
@@ -489,12 +492,20 @@ class WorkoutImportRepository @Inject constructor(
         return loggedExerciseDao.forSession(sessionId).joinToString("|") { le ->
             le.exerciseId + ":" + setsByExercise[le.id].orEmpty()
                 .sortedBy { it.setIndex }
-                .joinToString(",") { setPrint(it.reps, it.weightLb) }
+                .joinToString(",") { setPrint(it.reps, it.weightLb, it.durationSeconds) }
         }
     }
 
-    private fun setPrint(reps: Int, weightLb: Double?): String =
-        "$reps@" + (weightLb?.let { String.format(java.util.Locale.US, "%.3f", it) } ?: "bw")
+    /**
+     * One set, as the duplicate guard sees it.
+     *
+     * [durationSeconds] is part of the identity: a 60-second weighted hold and a 60-rep set at the
+     * same load are not the same work, and without it a source that records both could have one
+     * silently swallow the other.
+     */
+    private fun setPrint(reps: Int, weightLb: Double?, durationSeconds: Int?): String =
+        "$reps@" + (weightLb?.let { String.format(java.util.Locale.US, "%.3f", it) } ?: "bw") +
+            (durationSeconds?.let { "/${it}s" } ?: "")
 
     private fun syntheticId(name: String): String {
         val slug = name.trim().lowercase()

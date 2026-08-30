@@ -207,16 +207,29 @@ private fun List<FreestyleTemplateExercise>.toItems(weightUnit: com.forge.app.do
         val def = ExerciseLibrary.byId(te.libId)
         if (def == null) {
             val name = te.customName?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            // A custom move has no catalogue entry to re-derive its shape from, so the shape has to
+            // come off the rows it was logged on. It used to be assumed: every custom move came back
+            // as a weighted rep exercise, so a bodyweight movement reappeared with a weight field
+            // and a timed hold reappeared as reps — reusing a past workout silently changed what the
+            // movement WAS, and then logged it that way.
+            val unit = te.unitCode?.let { ExerciseUnit.fromCode(it) }
+            val customBodyweight = unit == ExerciseUnit.BODYWEIGHT
+            val customTimed = te.sets.any { it.durationSeconds != null }
             return@mapNotNull FsExercise(
                 libId = te.libId,
                 name = name,
+                // Not recoverable: no muscle is stored on a logged row, so a custom move's muscle
+                // exists only in the draft that created it. It defaults rather than being guessed
+                // at, and the athlete can re-pick it.
                 muscle = MuscleGroup.entries.first(),
-                bodyweight = false,
+                bodyweight = customBodyweight,
+                timed = customTimed,
                 custom = true,
                 sets = te.sets.map { s ->
                     FsSet(
-                        weight = s.weightLb?.let { weightInputValue(it, weightUnit) } ?: "",
-                        reps = s.reps.toString()
+                        weight = if (customBodyweight) "" else s.weightLb?.let { weightInputValue(it, weightUnit) } ?: "",
+                        reps = if (customTimed) "" else s.reps.toString(),
+                        hold = s.durationSeconds?.let { holdText(it) } ?: ""
                     )
                 }.ifEmpty { listOf(FsSet()) }
             )
@@ -228,11 +241,14 @@ private fun List<FreestyleTemplateExercise>.toItems(weightUnit: com.forge.app.do
             muscle = def.muscle,
             bodyweight = bodyweight,
             timed = def.timed,
-            // A timed template seeds structure only — the hold time is re-entered (templates carry no duration yet).
+            // The hold time comes through now. A timed template used to seed structure only, so
+            // "start from this workout" handed back a set of empty hold fields — the one number a
+            // hold has, dropped on the way in.
             sets = te.sets.map { s ->
                 FsSet(
                     weight = if (bodyweight) "" else s.weightLb?.let { weightInputValue(it, weightUnit) } ?: "",
-                    reps = s.reps.toString()
+                    reps = if (def.timed) "" else s.reps.toString(),
+                    hold = s.durationSeconds?.let { holdText(it) } ?: ""
                 )
             }.ifEmpty { listOf(FsSet()) }
         )
@@ -265,6 +281,9 @@ private fun sanitizeHoldText(input: String): String {
     else filtered.substring(0, firstColon + 1) + filtered.substring(firstColon + 1).replace(":", "")
     return collapsed.take(5)
 }
+
+/** Seconds as the hold field wants them (GYMAP-51): mm:ss, matching what the user typed. */
+private fun holdText(seconds: Int): String = "%d:%02d".format(seconds / 60, seconds % 60)
 
 /** mm:ss, or h:mm:ss past an hour — the running session clock. */
 private fun formatElapsed(ms: Long): String {
