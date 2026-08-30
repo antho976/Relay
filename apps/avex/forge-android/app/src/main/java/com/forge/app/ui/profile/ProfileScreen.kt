@@ -105,8 +105,9 @@ import kotlinx.coroutines.withContext
  * at all — fifteen `pp_seed*.jpg` fixtures were sitting in the debug app's storage from an earlier
  * session, and they were cleared off the device.
  *
- * The open-editorial original is at `.design-backups/editorial-2026-08/src/profile/`; one command
- * restores it. Every shipped section (`AllTimeSection`, `BodyMetricsSection`, `LifetimeVolumeGraph`,
+ * The open-editorial original is in git history, not in a snapshot directory beside the live file
+ * (`git log -- app/src/main/java/com/forge/app/ui/profile/` finds the commit that replaced it).
+ * Every shipped section (`AllTimeSection`, `BodyMetricsSection`, `LifetimeVolumeGraph`,
  * `SectionHeader`, `ChartCaption`) is still in the package, untouched and simply no longer called.
  *
  * The rank / standing / trophy sections are still boxed. They are behind `Features

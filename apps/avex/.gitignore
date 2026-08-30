@@ -25,3 +25,15 @@ local.properties
 .env.*
 !.env.example
 __pycache__/
+
+# Point-in-time snapshots of files that git already has. `.design-backups/` and
+# `backups/profile-ui-2026-07-03/` were copies made before two redesigns; `.impeccable/` is one
+# review run's screenshots, logs and per-surface notes. 2.7 MB that every clone pays for, that no
+# build reads, and that a `grep` for a symbol answers from twice — once from the live file and once
+# from a stale copy of it. The history has the originals; keep them there.
+/.design-backups/
+/backups/
+/.impeccable/
+
+# A 1.7 MB before/after render that was committed at the repo root and referenced by nothing.
+/forge-before-after.mp4
