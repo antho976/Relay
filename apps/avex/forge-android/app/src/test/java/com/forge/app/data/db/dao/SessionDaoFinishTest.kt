@@ -1,5 +1,6 @@
 package com.forge.app.data.db.dao
 
+import androidx.room.withTransaction
 import com.forge.app.data.db.ForgeDatabase
 import com.forge.app.data.db.inMemoryForgeDb
 import com.forge.app.data.db.session
@@ -7,6 +8,7 @@ import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -43,6 +45,60 @@ class SessionDaoFinishTest {
 
         assertEquals("the loser must be told it lost", 0, dao.finishIfUnfinished(id, 9_000L))
         assertEquals("and must not have re-stamped it", 5_000L, dao.get(id)!!.finishedAt)
+    }
+
+    // ── The stamp and everything derived from it commit together ─────────────
+
+    /**
+     * The winner decision being atomic fixed the double-finish and left a worse bug behind it.
+     *
+     * `finished_at` was stamped by its own statement; the segment close and the derived totals ran
+     * after it as separate writes. Anything that interrupted the gap — a crash, a cancelled
+     * coroutine, a throw from a later statement — left a session that is FINISHED with no active
+     * seconds, no volume, no PR count and an open segment still running. A retry then took the
+     * "already finished" branch and returned early, because `finished_at` was no longer null, so
+     * the missing work was never repaired and the session stayed wrong forever.
+     *
+     * One transaction means a crash can only leave two states: not finished, or finished and
+     * complete. This asserts the first.
+     */
+    @Test
+    fun `a failure after the stamp leaves the session open so a retry converges`() = runTest {
+        val id = dao.insert(session(finishedAt = null))
+
+        val attempt = runCatching {
+            db.withTransaction {
+                dao.finishIfUnfinished(id, 5_000L)
+                dao.setFinishTotals(id, totalVolumeLb = 1234.0, prCount = 2, setCount = 9, activeSeconds = 60)
+                error("interrupted between the stamp and the rest of the finish")
+            }
+        }
+        assertTrue("the failure has to propagate", attempt.isFailure)
+
+        val after = dao.get(id)!!
+        assertNull("still open, or the retry below returns early and repairs nothing", after.finishedAt)
+        assertEquals("no half-written totals", 0, after.setCount)
+        assertEquals(0, after.activeSeconds)
+
+        // The retry is now the winner, exactly as it would have been on the first attempt.
+        assertEquals(1, dao.finishIfUnfinished(id, 7_000L))
+    }
+
+    @Test
+    fun `a committed finish carries its totals with it`() = runTest {
+        val id = dao.insert(session(finishedAt = null))
+
+        db.withTransaction {
+            dao.finishIfUnfinished(id, 5_000L)
+            dao.setFinishTotals(id, totalVolumeLb = 1234.0, prCount = 2, setCount = 9, activeSeconds = 60)
+        }
+
+        val after = dao.get(id)!!
+        assertEquals(5_000L, after.finishedAt)
+        assertEquals(1234.0, after.totalVolumeLb!!, 0.001)
+        assertEquals(2, after.prCount)
+        assertEquals(9, after.setCount)
+        assertEquals(60, after.activeSeconds)
     }
 
     @Test

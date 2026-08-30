@@ -323,42 +323,101 @@ class WorkoutRepository @Inject constructor(
      */
     suspend fun finishSession(sessionId: Long): Int {
         val now = clock.nowMs()
-        // ONE writer finishes a session, and SQLite decides which. A read, a `finishedAt == null`
-        // check and a write are three steps with two gaps in them, and a double-tapped FINISH, a
-        // finish racing the orphan-recovery pass, or a wrist command arriving as the phone finishes
-        // could both pass the check: the session was stamped twice, counted twice toward the
-        // program rotation, and mirrored to Health Connect twice. The conditional UPDATE collapses
-        // the check and the write into one statement, and its affected-row count names the winner.
+        // EVERY local change a finish makes, in one transaction.
         //
-        // Note the ordering: nothing before this line has any effect, so a loser leaves no trace.
-        if (sessionDao.finishIfUnfinished(sessionId, now) == 0) {
-            // Already finished — report the duration that was stamped and do nothing else.
-            return sessionDao.get(sessionId)?.activeSeconds ?: 0
+        // The winner decision alone was already atomic, and that fixed the double-finish. It left a
+        // worse failure behind it: `finished_at` was stamped by its own statement, and the segment
+        // close and the derived totals ran after it as separate writes. A crash, a cancelled
+        // coroutine or a throw anywhere in between left a session that is FINISHED and has no
+        // active seconds, no volume, no PR count, no set count and an open segment still running —
+        // and a retry took the `== 0` branch and returned early, because `finished_at` was no
+        // longer null. The session was permanently wrong and nothing could repair it.
+        //
+        // Committing the stamp together with everything derived from it means the two states a
+        // crash can leave are "not finished" (retry converges) and "finished and complete".
+        val outcome = database.withTransaction {
+            // ONE writer finishes a session, and SQLite decides which. A read, a `finishedAt == null`
+            // check and a write are three steps with two gaps in them, and a double-tapped FINISH, a
+            // finish racing the orphan-recovery pass, or a wrist command arriving as the phone
+            // finishes could both pass the check: the session was stamped twice, counted twice
+            // toward the program rotation, and mirrored to Health Connect twice. The conditional
+            // UPDATE collapses the check and the write into one statement, and its affected-row
+            // count names the winner.
+            if (sessionDao.finishIfUnfinished(sessionId, now) == 0) {
+                // Already finished — report the duration that was stamped and do nothing else.
+                FinishOutcome.AlreadyFinished(sessionDao.get(sessionId)?.activeSeconds ?: 0)
+            } else {
+                sessionSegmentDao.closeOpen(sessionId, now)
+                // Soft-fail instead of crashing if the row vanished (e.g. a concurrent program
+                // regenerate discarded the active session mid-finish).
+                val session = sessionDao.get(sessionId)
+                if (session == null) FinishOutcome.Gone else {
+                    val segMs = closedSegmentMs(sessionId)
+                    val activeSeconds = if (segMs > 0) (segMs / 1000L).toInt()
+                        else ((now - session.startedAt) / 1000L).toInt().coerceAtLeast(0)
+                    val sets = loggedSetDao.allForSession(sessionId)
+                    val prCount = loggedExerciseDao.forSession(sessionId).count { it.wasPr }
+                    // Targeted columns rather than a full-row write built from a snapshot taken
+                    // before the finish. The whole-entity write carried is_untracked, session_type,
+                    // intensity, tags and journal from that older read, so marking a session
+                    // untracked (or tagging it, or writing a journal entry) from the finish sheet
+                    // was silently reverted by the finish itself.
+                    sessionDao.setFinishTotals(
+                        id = sessionId,
+                        totalVolumeLb = VolumeCalculator.sessionVolumeLb(sets),
+                        prCount = prCount,
+                        setCount = sets.size,
+                        activeSeconds = activeSeconds
+                    )
+                    FinishOutcome.Won(session, activeSeconds)
+                }
+            }
         }
-        sessionSegmentDao.closeOpen(sessionId, now)
-        // Soft-fail instead of crashing if the row vanished (e.g. a concurrent program regenerate
-        // discarded the active session mid-finish): nothing to stamp, report 0 active seconds.
-        val session = sessionDao.get(sessionId) ?: return 0
-        val segMs = closedSegmentMs(sessionId)
-        val activeSeconds = if (segMs > 0) (segMs / 1000L).toInt()
-            else ((now - session.startedAt) / 1000L).toInt().coerceAtLeast(0)
-        val sets = loggedSetDao.allForSession(sessionId)
-        val prCount = loggedExerciseDao.forSession(sessionId).count { it.wasPr }
-        // Targeted columns rather than a full-row write built from a snapshot taken before the
-        // finish. The whole-entity write carried is_untracked, session_type, intensity, tags and
-        // journal from that older read, so marking a session untracked (or tagging it, or writing a
-        // journal entry) from the finish sheet was silently reverted by the finish itself.
-        sessionDao.setFinishTotals(
-            id = sessionId,
-            totalVolumeLb = VolumeCalculator.sessionVolumeLb(sets),
-            prCount = prCount,
-            setCount = sets.size,
-            activeSeconds = activeSeconds
-        )
-        maybeRotateProgram()
-        writeFinishMirrors(session, endMs = now, activeSeconds = activeSeconds)
-        refreshWidget()
-        return activeSeconds
+
+        if (outcome !is FinishOutcome.Won) {
+            return if (outcome is FinishOutcome.AlreadyFinished) outcome.activeSeconds else 0
+        }
+
+        // Everything past the commit is a side effect on state this transaction does not own:
+        // DataStore (the rotation counter), Health Connect, and the widget. None of it belongs
+        // inside a Room transaction — `maybeRotateProgram` writes DataStore and can regenerate a
+        // whole program, which would hold the database lock for the duration.
+        //
+        // Each is attempted independently. They used to run in sequence with no guard, so a throw
+        // in the rotation (a DataStore read failure, a generation error) skipped the Health Connect
+        // mirrors AND the widget refresh, and the finish itself then reported a failure to a caller
+        // whose local data was already correctly committed.
+        finishSideEffect { maybeRotateProgram() }
+        finishSideEffect { writeFinishMirrors(outcome.session, endMs = now, activeSeconds = outcome.activeSeconds) }
+        finishSideEffect { refreshWidget() }
+        return outcome.activeSeconds
+    }
+
+    /** What the finish transaction decided, so the side effects below it know whether to run. */
+    private sealed interface FinishOutcome {
+        /** This call stamped the session; it owns the follow-up work. */
+        data class Won(val session: Session, val activeSeconds: Int) : FinishOutcome
+        /** Someone else already finished it — report their duration and do nothing. */
+        data class AlreadyFinished(val activeSeconds: Int) : FinishOutcome
+        /** The row disappeared mid-finish. */
+        object Gone : FinishOutcome
+    }
+
+    /**
+     * Run one post-commit side effect without letting it take the others down.
+     *
+     * Cancellation is rethrown: swallowing it would let a cancelled scope keep working, and the
+     * caller is entitled to stop us.
+     */
+    private suspend inline fun finishSideEffect(block: () -> Unit) {
+        try {
+            block()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // Local state is already committed and correct; a failed mirror or widget refresh is
+            // not a reason to report the finish as failed.
+        }
     }
 
     /**
