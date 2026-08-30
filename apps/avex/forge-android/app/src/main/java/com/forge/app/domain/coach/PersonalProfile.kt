@@ -85,6 +85,8 @@ object PersonalProfile {
      */
     private fun volumeCaps(s: AdaptationSnapshot): Map<MuscleGroup, Int> {
         val slotMuscle = s.program.flatMap { it.slots }.associate { it.exerciseId to it.muscle }
+        // How many slots the current split gives each muscle — the structural floor's input.
+        val slotCount = s.program.flatMap { it.slots }.groupingBy { it.muscle }.eachCount()
         // muscle -> week -> (working sets, best e1rm that week)
         val byMuscleWeek = HashMap<MuscleGroup, HashMap<Long, Pair<Int, Double>>>()
         s.exerciseHistory.forEach { (id, bouts) ->
@@ -124,7 +126,16 @@ object PersonalProfile {
             if (abs(gap) < VOLUME_RESPONSE_GAP_LB) return@mapNotNull null
             val default = VolumeModel.weeklyCap[muscle] ?: Profile.DEFAULT_CAP
             val target = if (gap > 0) default * (1 + CAP_BAND) else default * (1 - CAP_BAND)
-            muscle to target.roundToInt().coerceAtLeast(4)
+            // Clamped UP to what the current split can actually produce.
+            //
+            // No slot goes below `VolumeModel.MIN_SETS`, so a muscle with six slots has a weekly
+            // floor of twelve sets whatever this number says. `VolumeModel` already refuses to trim
+            // past that floor — but this value is also what the Coach screen PRINTS, as "up to N
+            // sets a week", so a cap below the floor put a promise on screen that the generator
+            // beside it could not keep. Making the number achievable here fixes the reading and the
+            // prescription together, rather than teaching the UI a second rule.
+            val floor = slotCount[muscle]?.times(VolumeModel.MIN_SETS) ?: 0
+            muscle to maxOf(target.roundToInt(), floor).coerceAtLeast(4)
         }.toMap()
     }
 

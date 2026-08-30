@@ -181,6 +181,95 @@ class RestoreApplyTest {
         assertFalse(File(liveDb.path + "-shm").exists())
     }
 
+    // ── Interruption between commits ──────────────────────────────────────────
+
+    private fun journal() = File(filesDir, "pending_restore_journal")
+    private fun stagedPrefs() = File(filesDir, "datastore/forge_settings.preferences_pb.restoring")
+
+    /**
+     * Phase 2 is a sequence of renames, and a process death between two of them used to be
+     * unrecoverable: the database was live, the preferences were not, and the next boot saw neither
+     * a pending file (staging had renamed it away) nor any record that a restore was half-applied.
+     * The staged preferences sat under a `.restoring` name nothing reads, and the mixed state was
+     * permanent.
+     *
+     * Simulated exactly as a crash leaves it: the database committed, the journal still naming what
+     * has not.
+     */
+    @Test
+    fun `a boot interrupted between commits is finished by the next one`() {
+        setUpDirs()
+        write(liveDb, "restored-db")                       // the database already landed
+        write(livePrefs(), "live-prefs")                   // the preferences did not
+        write(stagedPrefs(), "restored-prefs")             // ...but they are staged
+        write(journal(), "prefs")                          // and the journal says so
+
+        assertTrue("the resumed restore completes", RestoreApply.apply(filesDir, liveDb))
+
+        assertEquals("restored-prefs", livePrefs().readText())
+        assertFalse("the journal is spent", journal().exists())
+        assertFalse("and nothing is left staged", stagedPrefs().exists())
+    }
+
+    @Test
+    fun `a resumed boot with nothing else pending reports the restore complete`() {
+        setUpDirs()
+        write(liveDb, "restored-db")
+        write(stagedPrefs(), "restored-prefs")
+        write(journal(), "prefs")
+
+        // No pending_restore_* files at all: this boot's only work is finishing the last one's.
+        assertTrue(RestoreApply.apply(filesDir, liveDb))
+    }
+
+    /**
+     * A crash during STAGING, before any journal existed. Staging renames the pending file away, so
+     * without recovery the restore is not delayed — it is gone: the next boot looks for
+     * `pending_restore.db` and finds nothing, while the bytes sit under a name nothing reads.
+     */
+    @Test
+    fun `a file stranded by a crash during staging is put back and retried`() {
+        setUpDirs()
+        write(liveDb, "live-db")
+        // Exactly what a crash mid-staging leaves: staged bytes, no pending file, no journal.
+        write(File(liveDb.path + ".restoring"), "restored-db")
+
+        // First boot recovers it to the pending name. Nothing is applied yet.
+        assertFalse(RestoreApply.apply(filesDir, liveDb))
+        assertEquals("restored-db", File(filesDir, "pending_restore.db").readText())
+        assertEquals("the live database is untouched", "live-db", liveDb.readText())
+
+        // Second boot applies it normally.
+        assertTrue(RestoreApply.apply(filesDir, liveDb))
+        assertEquals("restored-db", liveDb.readText())
+    }
+
+    /**
+     * The orphan sweep must not touch files a journal is holding mid-commit — those are phase-2
+     * state belonging to the resume above, not abandoned staging.
+     */
+    @Test
+    fun `the orphan sweep leaves journalled files alone`() {
+        setUpDirs()
+        write(liveDb, "restored-db")
+        write(stagedPrefs(), "restored-prefs")
+        write(journal(), "prefs")
+
+        RestoreApply.apply(filesDir, liveDb)
+
+        assertEquals("committed, not unstaged", "restored-prefs", livePrefs().readText())
+        assertFalse("and not returned to a pending name", File(filesDir, "pending_restore_prefs.pb").exists())
+    }
+
+    @Test
+    fun `a complete restore leaves no journal behind`() {
+        setUpDirs()
+        stageEverything()
+
+        assertTrue(RestoreApply.apply(filesDir, liveDb))
+        assertFalse(journal().exists())
+    }
+
     // ── The primitives that carry the guarantee ───────────────────────────────
 
     @Test

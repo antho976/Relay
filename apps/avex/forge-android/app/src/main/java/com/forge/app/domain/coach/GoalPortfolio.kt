@@ -96,23 +96,35 @@ object GoalPortfolio {
      * muscle was told their two goals fight, in cutting language, on the strength of a check that
      * had been written and then not wired up.
      *
-     * The stored phase wins when present, because it is what the user picked. Otherwise the target
-     * against the current smoothed weight answers it, with the same tolerance the goal is declared
-     * met at — inside that band the goal is maintenance, not a cut.
+     * Read from the goal's own TARGET against the athlete's weight, and corroborated by the trend.
+     *
+     * The first version keyed off `goal.note.contains("cut")`. That field is documented as "free
+     * text the user attached; never generated" — arbitrary prose, not a structured phase. A note
+     * reading "no cut this time, just eat" declares the opposite of what the substring says, and
+     * "bulk up the accessories" is not a phase at all. Guessing a direction from someone's own words
+     * and then telling them their goals conflict is worse than saying nothing.
+     *
+     * The target IS structured: a bodyweight goal states the number being chased, and against the
+     * current smoothed weight that is the direction — with the same tolerance the goal is declared
+     * met at, so inside that band it reads as maintenance rather than a cut.
+     *
+     * Intent is what this question is about, so the target wins where there is one. Someone at
+     * 190 lb aiming for 170 who has not started losing yet is still planning a deficit, and that is
+     * precisely when the sequencing advice is worth giving. [WeightPhase.of] is the fallback for a
+     * goal with no target at all, where the measured trend is the only evidence there is.
+     *
+     * Neither available means unknown, and unknown claims no conflict.
      */
     private fun isCut(goal: CoachGoal, s: AdaptationSnapshot?): Boolean? {
-        when {
-            goal.note.contains(WeightPhase.CUT.code) -> return true
-            goal.note.contains(WeightPhase.BULK.code) -> return false
-            goal.note.contains(WeightPhase.MAINTAIN.code) -> return false
+        val entries = s?.bodyweight?.sortedBy { it.recordedAt } ?: return null
+        val current = WeightPhase.smoothedLatest(entries) ?: return null
+
+        goal.targetValue?.let { target ->
+            if (abs(current - target) <= WEIGHT_TREND_LB) return false
+            return target < current
         }
-        val target = goal.targetValue ?: return null
-        val current = s?.bodyweight
-            ?.sortedBy { it.recordedAt }
-            ?.let { WeightPhase.smoothedLatest(it) }
-            ?: return null
-        if (abs(current - target) <= WEIGHT_TREND_LB) return false
-        return target < current
+        val measured = WeightPhase.of(entries)
+        return if (measured.isKnown) measured == WeightPhase.CUT else null
     }
 
     // ── Per-kind readings ──────────────────────────────────────────────────────

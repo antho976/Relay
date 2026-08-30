@@ -274,10 +274,10 @@ class GoalPortfolioTest {
     @Test
     fun cuttingWhileChasingAMax_isFlaggedAndSequenced() {
         val goals = listOf(
-            goal(CoachGoalKind.BODYWEIGHT, target = 170.0, id = 1, note = WeightPhase.CUT.code),
+            goal(CoachGoalKind.BODYWEIGHT, target = 170.0, id = 1),
             goal(CoachGoalKind.LIFT_1RM, target = 315.0, targetKey = "bench", id = 2)
         )
-        val c = GoalPortfolio.conflicts(goals).single()
+        val c = GoalPortfolio.conflicts(goals, weighingIn(190.0)).single()
         assertTrue(c.explanation.contains("recovery budget"))
         assertTrue(c.proposal.isNotBlank())
         assertEquals(GoalPortfolio.LESSON_GOALS_FIGHT, c.lessonId)
@@ -293,28 +293,56 @@ class GoalPortfolioTest {
     @Test
     fun bulkingWhileChasingAMax_isNotAConflict() {
         val goals = listOf(
-            goal(CoachGoalKind.BODYWEIGHT, target = 200.0, id = 1, note = WeightPhase.BULK.code),
+            goal(CoachGoalKind.BODYWEIGHT, target = 200.0, id = 1),
             goal(CoachGoalKind.LIFT_1RM, target = 315.0, targetKey = "bench", id = 2)
         )
-        assertTrue(GoalPortfolio.conflicts(goals).isEmpty())
+        assertTrue(GoalPortfolio.conflicts(goals, weighingIn(180.0)).isEmpty())
     }
 
     @Test
     fun bulkingWhileBuildingAMuscle_isThePlanNotAConflict() {
         val goals = listOf(
-            goal(CoachGoalKind.BODYWEIGHT, target = 200.0, id = 1, note = WeightPhase.BULK.code),
+            goal(CoachGoalKind.BODYWEIGHT, target = 200.0, id = 1),
             goal(CoachGoalKind.MUSCLE_VOLUME, target = 16.0, targetKey = MuscleGroup.CHEST.code, id = 2)
         )
-        assertTrue(GoalPortfolio.conflicts(goals).isEmpty())
+        assertTrue(GoalPortfolio.conflicts(goals, weighingIn(180.0)).isEmpty())
     }
 
     @Test
     fun maintainingWhileChasingAMax_isNotAConflict() {
         val goals = listOf(
-            goal(CoachGoalKind.BODYWEIGHT, target = 180.0, id = 1, note = WeightPhase.MAINTAIN.code),
+            goal(CoachGoalKind.BODYWEIGHT, target = 180.0, id = 1),
             goal(CoachGoalKind.LIFT_1RM, target = 315.0, targetKey = "bench", id = 2)
         )
-        assertTrue(GoalPortfolio.conflicts(goals).isEmpty())
+        assertTrue(GoalPortfolio.conflicts(goals, weighingIn(180.0)).isEmpty())
+    }
+
+    /**
+     * The note is "free text the user attached; never generated", so reading a phase out of it was
+     * reading someone's prose as a data field. This note says the opposite of what a substring
+     * search for "cut" finds in it.
+     */
+    @Test
+    fun aFreeTextNoteIsNotReadAsAPhase() {
+        val goals = listOf(
+            goal(
+                CoachGoalKind.BODYWEIGHT, target = 200.0, id = 1,
+                note = "no cut this time, just eat and get strong"
+            ),
+            goal(CoachGoalKind.LIFT_1RM, target = 315.0, targetKey = "bench", id = 2)
+        )
+        // Weighing 180 and aiming for 200 is a bulk, whatever the prose contains.
+        assertTrue(GoalPortfolio.conflicts(goals, weighingIn(180.0)).isEmpty())
+    }
+
+    /** With no target, the measured trend is the only evidence — and a flat one is not a cut. */
+    @Test
+    fun aTargetlessGoalOnAFlatTrendIsNotACut() {
+        val goals = listOf(
+            goal(CoachGoalKind.BODYWEIGHT, target = null, id = 1),
+            goal(CoachGoalKind.LIFT_1RM, target = 315.0, targetKey = "bench", id = 2)
+        )
+        assertTrue(GoalPortfolio.conflicts(goals, weighingIn(180.0)).isEmpty())
     }
 
     // ── With no stored phase, the direction comes from the weight itself ──────

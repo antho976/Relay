@@ -38,11 +38,52 @@ internal object RestoreApply {
     /** Must match `ProgressPhotoRepository`'s folder. */
     private const val PHOTOS_NAME = "progress_photos"
 
+    /** Component names, as the journal records them. Order is the commit order. */
+    private const val DB = "db"
+    private const val PREFS = "prefs"
+    private const val PHOTOS = "photos"
+    private const val AVATAR = "avatar"
+
+    /** Commit order. The database is first and is the anchor; the rest follow it. */
+    private val ORDER = listOf(DB, PREFS, PHOTOS, AVATAR)
+
     /**
-     * @return true only when a database was swapped AND every other staged component landed — the
-     *   one case that may be reported to the user as a successful restore.
+     * The commit journal: which components are staged and still need to be renamed into place.
+     *
+     * Phase 2 is a sequence of renames, and a process death between two of them used to be
+     * unrecoverable. The database would be live, the preferences would not, and the next boot saw
+     * neither a pending file (staging had renamed it away) nor any record that a restore was
+     * half-applied — so the staged preferences sat under a `.restoring` name nothing reads, and the
+     * mixed state became permanent.
+     *
+     * Written before the first commit, shortened after each successful one, deleted when empty. Its
+     * presence at boot means a restore was interrupted mid-commit and the components it names still
+     * have to land.
+     */
+    private const val JOURNAL = "pending_restore_journal"
+
+    /**
+     * @return true when a restore reached a fully-applied state on this boot — either one staged
+     *   here, or one a previous boot left part-way through and this boot finished. The only case
+     *   that may be reported to the user as a successful restore.
      */
     fun apply(filesDir: File, liveDb: File): Boolean {
+        // ── Resume: finish what a previous boot started. ──
+        //
+        // Before anything else, because these components are already committed-or-not against a
+        // database that may already have been swapped; staging a NEW restore on top of a half-applied
+        // one would interleave two sets.
+        val interrupted = readJournal(filesDir)
+        val resumed = interrupted.isNotEmpty() && runJournal(filesDir, liveDb, interrupted)
+
+        // ── Orphans: a crash during staging, before any journal existed. ──
+        //
+        // Staging renames the pending file away, so a `.restoring` file with no journal naming it is
+        // a restore that would otherwise be lost outright. Put it back under the name the next boot
+        // looks for. Skipped while a journal survives, because then those files are mid-commit and
+        // belong to it.
+        if (readJournal(filesDir).isEmpty()) unstageOrphans(filesDir, liveDb)
+
         val pendingDb = File(filesDir, "pending_restore.db")
         val pendingPrefs = File(filesDir, "pending_restore_prefs.pb")
         val pendingPhotos = File(filesDir, "pending_restore_photos")
@@ -52,77 +93,158 @@ internal object RestoreApply {
         val hadPrefs = pendingPrefs.exists()
         val hadPhotos = pendingPhotos.isDirectory
         val hadAvatar = pendingAvatar.exists()
-        if (!hadDb && !hadPrefs && !hadPhotos && !hadAvatar) return false
+        if (!hadDb && !hadPrefs && !hadPhotos && !hadAvatar) return resumed
 
         val livePrefs = File(filesDir, PREFS_PATH)
         val liveAvatar = File(filesDir, AVATAR_NAME)
 
         // ── Phase 1: stage beside each destination. Nothing is live yet. ──
+        //
+        // Everything that can realistically fail — the byte copy, a cross-filesystem move, a full
+        // disk, a file another process still holds — happens here, where the live app is untouched
+        // and abandoning costs nothing. Phase 2 is renames within a single directory.
         val stagedDb = if (hadDb) stageBeside(pendingDb, liveDb) else null
         val stagedPrefs = if (hadPrefs) stageBeside(pendingPrefs, livePrefs) else null
         val stagedAvatar = if (hadAvatar) stageBeside(pendingAvatar, liveAvatar) else null
 
         if ((hadDb && stagedDb == null) || (hadPrefs && stagedPrefs == null) || (hadAvatar && stagedAvatar == null)) {
+            // Put back whatever did stage, so the next cold start retries the set as one unit, and
+            // leave this boot running entirely on pre-restore data.
             stagedDb?.let { unstage(it, pendingDb) }
             stagedPrefs?.let { unstage(it, pendingPrefs) }
             stagedAvatar?.let { unstage(it, pendingAvatar) }
-            return false
+            return resumed
         }
 
-        // ── Phase 2: commit. Renames inside one directory, back to back. ──
-        var applied = false
-        var anyFailed = false
+        // ── Phase 2: commit, journalled. ──
+        val toCommit = buildList {
+            if (stagedDb != null) add(DB)
+            if (stagedPrefs != null) add(PREFS)
+            if (hadPhotos) add(PHOTOS)
+            if (stagedAvatar != null) add(AVATAR)
+        }
+        writeJournal(filesDir, toCommit)
+        val applied = runJournal(filesDir, liveDb, toCommit)
 
-        if (stagedDb != null) {
+        if (!applied && DB in readJournal(filesDir)) {
+            // The anchor itself did not land, so nothing else may: the staged preferences describe
+            // the staged dataset. Abandon the set and retry it whole next boot.
+            writeJournal(filesDir, emptyList())
+            stagedDb?.let { unstage(it, pendingDb) }
+            stagedPrefs?.let { unstage(it, pendingPrefs) }
+            stagedAvatar?.let { unstage(it, pendingAvatar) }
+            return resumed
+        }
+
+        if (applied && hadDb && !hadAvatar && hadPrefs) {
+            // The restore replaced the prefs but carried no avatar → the restored state has none.
+            // Clear any live avatar so a previously-seeded default cover can't outlive the (now
+            // blank) avatarDefaultId — otherwise the cover shows but the picker rings nothing.
+            runCatching { liveAvatar.delete() }
+        }
+        return applied && hadDb
+    }
+
+    /**
+     * Commit each component the journal still names, shortening it as each lands.
+     *
+     * The database goes first and is the anchor: if it does not land, the caller abandons the set
+     * rather than leaving preferences that describe a dataset which is not there. Anything that
+     * fails after it stays in the journal, so the next boot finishes it instead of the mixed state
+     * becoming permanent.
+     *
+     * @return true when the journal emptied.
+     */
+    private fun runJournal(filesDir: File, liveDb: File, entries: List<String>): Boolean {
+        var remaining = entries
+        for (component in entries.sortedBy { ORDER.indexOf(it) }) {
+            if (!commitComponent(component, filesDir, liveDb)) {
+                if (component == DB) break // Anchor failed; the caller unwinds the rest.
+                continue                   // Leave it journalled for the next boot.
+            }
+            remaining = remaining - component
+            writeJournal(filesDir, remaining)
+            // Only discard the source once its content is actually in place.
+            pendingFor(component, filesDir)?.let {
+                runCatching { if (it.isDirectory) it.deleteRecursively() else it.delete() }
+            }
+        }
+        return remaining.isEmpty()
+    }
+
+    private fun commitComponent(component: String, filesDir: File, liveDb: File): Boolean = when (component) {
+        DB -> stagedBeside(liveDb)?.let {
             // Drop stale WAL/-shm sidecars so SQLite can't replay old frames over the restored file.
-            // A surviving sidecar makes the swap a failure.
-            val ok = commitStaged(stagedDb, liveDb, afterSwap = {
+            commitStaged(it, liveDb, afterSwap = {
                 deleteOrThrow(File(liveDb.path + "-wal"))
                 deleteOrThrow(File(liveDb.path + "-shm"))
             })
-            if (ok) {
-                pendingDb.delete(); applied = true
-            } else {
-                // The anchor did not land, so nothing else may: the staged preferences describe the
-                // staged dataset. Return everything to its pending name and retry next boot.
-                unstage(stagedDb, pendingDb)
-                stagedPrefs?.let { unstage(it, pendingPrefs) }
-                stagedAvatar?.let { unstage(it, pendingAvatar) }
-                return false
-            }
+        } ?: false
+        PREFS -> File(filesDir, PREFS_PATH).let { live -> stagedBeside(live)?.let { commitStaged(it, live) } ?: false }
+        AVATAR -> File(filesDir, AVATAR_NAME).let { live -> stagedBeside(live)?.let { commitStaged(it, live) } ?: false }
+        PHOTOS -> commitPhotos(filesDir)
+        else -> true // An entry we do not recognise cannot be committed; drop it rather than loop.
+    }
+
+    /** Swap the restored photo folder in via rename, keeping the originals recoverable throughout. */
+    private fun commitPhotos(filesDir: File): Boolean = runCatching {
+        val pendingPhotos = File(filesDir, "pending_restore_photos")
+        if (!pendingPhotos.isDirectory) return@runCatching false
+        val livePhotos = File(filesDir, PHOTOS_NAME)
+        val oldPhotos = File(filesDir, "$PHOTOS_NAME.old")
+        if (oldPhotos.exists()) oldPhotos.deleteRecursively()
+        val hadLive = livePhotos.exists()
+        if (hadLive && !livePhotos.renameTo(oldPhotos)) error("Could not move current photos aside")
+        if (!pendingPhotos.renameTo(livePhotos)) {
+            if (hadLive) oldPhotos.renameTo(livePhotos) // roll back to the originals
+            error("Could not move restored photos into place")
         }
-        if (stagedPrefs != null) {
-            if (commitStaged(stagedPrefs, livePrefs)) pendingPrefs.delete() else anyFailed = true
+        oldPhotos.deleteRecursively()
+        true
+    }.getOrDefault(false)
+
+    /** The staged file beside [live], if staging left one there. */
+    private fun stagedBeside(live: File): File? =
+        File(live.parentFile, "${live.name}.restoring").takeIf { it.exists() }
+
+    private fun pendingFor(component: String, filesDir: File): File? = when (component) {
+        DB -> File(filesDir, "pending_restore.db")
+        PREFS -> File(filesDir, "pending_restore_prefs.pb")
+        PHOTOS -> File(filesDir, "pending_restore_photos")
+        AVATAR -> File(filesDir, "pending_restore_avatar.jpg")
+        else -> null
+    }
+
+    /**
+     * Return every `.restoring` file to the name the next boot looks for.
+     *
+     * Only reached with no journal, which means the crash happened during STAGING — the pending file
+     * had been renamed away and nothing recorded that it existed. Without this the restore is not
+     * merely delayed, it is gone.
+     */
+    private fun unstageOrphans(filesDir: File, liveDb: File) {
+        listOf(
+            liveDb to File(filesDir, "pending_restore.db"),
+            File(filesDir, PREFS_PATH) to File(filesDir, "pending_restore_prefs.pb"),
+            File(filesDir, AVATAR_NAME) to File(filesDir, "pending_restore_avatar.jpg")
+        ).forEach { (live, pending) ->
+            stagedBeside(live)?.let { if (!pending.exists()) unstage(it, pending) else it.delete() }
         }
-        if (hadPhotos) {
-            // Swap via rename: move the current folder aside, slot the restored one in, then drop the
-            // old copy — and if the slot-in fails, move the original back. renameTo within filesDir is
-            // atomic, so there's no window where the user is left with neither folder.
-            val swapped = runCatching {
-                val livePhotos = File(filesDir, PHOTOS_NAME)
-                val oldPhotos = File(filesDir, "$PHOTOS_NAME.old")
-                if (oldPhotos.exists()) oldPhotos.deleteRecursively()
-                val hadLive = livePhotos.exists()
-                if (hadLive && !livePhotos.renameTo(oldPhotos)) error("Could not move current photos aside")
-                if (!pendingPhotos.renameTo(livePhotos)) {
-                    if (hadLive) oldPhotos.renameTo(livePhotos) // roll back to the originals
-                    error("Could not move restored photos into place")
-                }
-                oldPhotos.deleteRecursively()
-            }.isSuccess
-            // Only discard the staged folder once it's actually in place; otherwise keep it for retry.
-            if (swapped) pendingPhotos.deleteRecursively() else anyFailed = true
+    }
+
+    private fun journalFile(filesDir: File) = File(filesDir, JOURNAL)
+
+    private fun readJournal(filesDir: File): List<String> = runCatching {
+        journalFile(filesDir).takeIf { it.isFile }
+            ?.readLines()?.map { it.trim() }?.filter { it.isNotEmpty() }
+            .orEmpty()
+    }.getOrDefault(emptyList())
+
+    private fun writeJournal(filesDir: File, remaining: List<String>) {
+        runCatching {
+            val f = journalFile(filesDir)
+            if (remaining.isEmpty()) f.delete() else f.writeText(remaining.joinToString("\n"))
         }
-        if (stagedAvatar != null) {
-            if (commitStaged(stagedAvatar, liveAvatar)) pendingAvatar.delete() else anyFailed = true
-        } else if (hadPrefs && !anyFailed) {
-            // The restore replaced the prefs but carried no avatar → the restored state has none. Clear
-            // any live avatar so a previously-seeded default cover can't outlive the (now blank)
-            // avatarDefaultId — otherwise the cover shows but the picker rings nothing. The one-time
-            // seed re-runs cleanly on next Profile open. Gated on a clean prefs swap (!anyFailed).
-            runCatching { liveAvatar.delete() }
-        }
-        return applied && !anyFailed
     }
 
     /**

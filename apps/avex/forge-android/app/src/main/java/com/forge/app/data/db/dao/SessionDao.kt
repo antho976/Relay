@@ -134,9 +134,29 @@ interface SessionDao {
     @Query("SELECT COUNT(*) FROM session WHERE finished_at IS NOT NULL AND is_untracked = 0")
     suspend fun trackedFinishedCount(): Int
 
-    /** Day key of the most recently finished session — the training reminder's "next up" anchor. */
-    @Query("SELECT day_key FROM session WHERE finished_at IS NOT NULL ORDER BY finished_at DESC LIMIT 1")
+    /**
+     * Day key of the most recently finished TRACKED session — the "next up" anchor for the training
+     * reminder and the widget.
+     *
+     * This was the last inclusive query left feeding `resolveNextUp`, and it sat beside two that
+     * already filtered: `finishedDayKeysSince` (today's trained keys) and `finishedAtsSince` (the
+     * week dots) both exclude untracked work. So one excluded session moved the rotation on for the
+     * reminder and the widget while every other input to the same decision ignored it — the two
+     * surfaces disagreed with the app about what came next.
+     *
+     * The widget's separate "has this user ever trained" check stays inclusive: that one is asking
+     * whether any data exists, not what to do next.
+     */
+    @Query("""
+        SELECT day_key FROM session
+        WHERE finished_at IS NOT NULL AND is_untracked = 0
+        ORDER BY finished_at DESC LIMIT 1
+    """)
     suspend fun lastFinishedDayKey(): String?
+
+    /** Whether ANY finished session exists, untracked included — the widget's zero-state check. */
+    @Query("SELECT EXISTS(SELECT 1 FROM session WHERE finished_at IS NOT NULL)")
+    suspend fun hasAnyFinishedSession(): Boolean
 
     /**
      * Day keys of sessions finished since [sinceMs] — the widget's "trained today" set, which feeds

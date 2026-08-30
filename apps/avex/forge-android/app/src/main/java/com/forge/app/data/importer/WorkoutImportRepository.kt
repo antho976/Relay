@@ -189,6 +189,19 @@ class WorkoutImportRepository @Inject constructor(
         // Memoise name→catalogue-id for this import: the same movement recurs across many sessions and
         // ExerciseNameMatcher.match scans the whole library, so resolve each distinct name only once.
         val matchCache = HashMap<String, String?>()
+        // A stored session stands in for exactly ONE incoming workout.
+        //
+        // Without this the guard asks "does a session with this content exist?", which cannot tell
+        // a re-import from a second, genuinely identical workout. A date-only source records no time
+        // and this app stores no workout title, so two real sessions of Bench 3x10x100 on the same
+        // day are indistinguishable in the database — and the file that carries both had its second
+        // one dropped, every time, on a path whose promise is that it does not lose anything.
+        //
+        // Counting instead of testing membership resolves it without needing to tell them apart:
+        // the file says how many such workouts there are, the database says how many it already
+        // holds, and only the surplus is new. Ids this run inserts are claimed too, so the first of
+        // two identical workouts cannot make the second look like a duplicate of itself.
+        val claimedStoredIds = HashSet<Long>()
 
         db.withTransaction {
             for (session in sessions) {
@@ -231,8 +244,14 @@ class WorkoutImportRepository @Inject constructor(
                 // the one source that cannot disagree with itself.
                 val windowEndMs = session.startedAtMs + MAX_START_NUDGES * 1000L
                 val occupied = sessionDao.startRefsInRange(session.startedAtMs, windowEndMs)
-                val duplicate = occupied.any { storedFingerprint(it.id) == incomingPrint }
-                if (duplicate) { duplicates++; continue }
+                val alreadyStored = occupied.firstOrNull {
+                    it.id !in claimedStoredIds && storedFingerprint(it.id) == incomingPrint
+                }
+                if (alreadyStored != null) {
+                    claimedStoredIds += alreadyStored.id
+                    duplicates++
+                    continue
+                }
 
                 val taken = occupied.mapTo(HashSet(occupied.size)) { it.startedAt }
                 val startedAt = (0 until MAX_START_NUDGES)
@@ -287,6 +306,9 @@ class WorkoutImportRepository @Inject constructor(
                         activeSeconds = activeSec
                     )
                 )
+                // Claimed immediately: a second, identical workout later in this same file must not
+                // match the one just written and be dropped as its duplicate.
+                claimedStoredIds += sessionId
                 // Mood feeds readiness and recovery, and the export has always carried it.
                 session.mood?.let { mood ->
                     moodDao.insert(
