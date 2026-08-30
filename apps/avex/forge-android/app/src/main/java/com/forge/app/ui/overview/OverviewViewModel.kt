@@ -13,10 +13,8 @@ import com.forge.app.data.repo.WorkoutRepository
 import com.forge.app.domain.adapt.Recommendation
 import com.forge.app.domain.coach.AutoCoachPlanner
 import com.forge.app.domain.units.WeightUnit
-import com.forge.app.domain.units.formatVolumeCompact
 import com.forge.app.domain.units.formatWeight
 import com.forge.app.program.ExerciseLibrary
-import com.forge.app.program.Trophies
 import com.forge.app.ui.overview.state.CoachItem
 import com.forge.app.ui.overview.state.CoachLearningHint
 import com.forge.app.ui.overview.state.OnThisDayMemory
@@ -279,19 +277,6 @@ class OverviewViewModel @Inject constructor(
         // coach, weekly-stats ticks) for the same unchanged sessions. weightUnit is part of the cache
         // signature so flipping the unit re-formats the marquee instead of serving a stale string.
         s.copy(recentItems = withTopLifts(s.recentItems, weightUnit))
-    }.combine(
-        // Near-miss rows + the current unlocked set + the display unit, folded together so the
-        // "Up next" label can (a) skip stale rows for trophies already unlocked — near-miss rows
-        // aren't deleted on unlock — and (b) render the right unit for distance/tonnage misses.
-        combine(trophyRepo.observeNearMisses(), trophyRepo.observeUnlockedIds(), settingsRepo.weightUnit) {
-            nearMisses, unlockedIds, weightUnit -> Triple(nearMisses, unlockedIds.toHashSet(), weightUnit)
-        }
-    ) { s, (nearMisses, unlockedIds, weightUnit) ->
-        // "Up next" trophy: the locked trophy closest to unlocking (highest progress fraction).
-        val top = nearMisses
-            .filter { it.target > 0 && it.trophyId !in unlockedIds }
-            .maxByOrNull { it.progress.toFloat() / it.target }
-        s.copy(topNearMiss = top?.let { nearMissLabel(it, weightUnit) })
     }.combine(goalsFlow) { s, gc ->
         s.copy(goals = gc.first, customGoals = gc.second)
     }.combine(weeklyVolumeFlow) { s, series ->
@@ -307,22 +292,6 @@ class OverviewViewModel @Inject constructor(
         started = SharingStarted.WhileSubscribed(stopTimeoutMillis = 5_000),
         initialValue = OverviewUiState()
     )
-
-    /**
-     * "X <unit> to go · Name" for a near-miss. Most trophies are count-based ("3 to go"); distance,
-     * tonnage and anniversary misses carry a unit so the bare integer isn't ambiguous (e.g. "15 km
-     * to go" rather than "15 to go"). The rule is looked up from the in-memory catalogue by id.
-     */
-    private fun nearMissLabel(nm: com.forge.app.data.db.entities.TrophyNearMiss, weightUnit: WeightUnit): String {
-        val remaining = (nm.target - nm.progress).coerceAtLeast(0)
-        val toGo = when (Trophies.all.firstOrNull { it.id == nm.trophyId }?.unlock) {
-            is com.forge.app.program.UnlockRule.CardioDistanceAtLeastKm -> "$remaining km to go"
-            is com.forge.app.program.UnlockRule.LifetimeTonnageAtLeast -> "${formatVolumeCompact(remaining.toDouble(), weightUnit)} to go"
-            is com.forge.app.program.UnlockRule.TrainingAnniversaryRule -> "$remaining days to go"
-            else -> "$remaining to go"
-        }
-        return "$toGo · ${nm.trophyName}"
-    }
 
     init {
         viewModelScope.launch { _onThisDayMemory.value = statsRepo.findOnThisDayMemory() }

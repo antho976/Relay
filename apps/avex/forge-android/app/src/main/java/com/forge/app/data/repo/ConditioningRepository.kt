@@ -23,6 +23,18 @@ import javax.inject.Singleton
  *
  * Every read is fail-soft. Conditioning is a support system, so a bad read degrades to "no
  * prescription" rather than taking the cardio screen down with it.
+ *
+ * ## Nothing injects this yet, and that is a HOLD, not an oversight
+ *
+ * E-A ([ConditioningLoad]) has shipped — `ReadinessAdvisor` reads its interference penalty, and
+ * `AcademyRepository` teaches it. E-B through E-D are complete and covered by `ConditioningTest`,
+ * and they are waiting on the cardio surface that prescribes from them; `TodayDirective` says as
+ * much in its own docstring ("cardio stays a suggestion until Engine E-B can actually prescribe
+ * one"). Until that surface lands nothing constructs this class, so an unreferenced-symbol sweep
+ * reads the whole engine as dead.
+ *
+ * It is not. Say so here rather than in a review comment, the way `SessionBreakDao` does for the
+ * same situation one layer down, so the next sweep stops at this paragraph instead of at a delete.
  */
 @Singleton
 class ConditioningRepository @Inject constructor(
