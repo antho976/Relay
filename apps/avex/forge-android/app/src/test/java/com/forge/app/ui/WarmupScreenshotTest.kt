@@ -115,4 +115,13 @@ class WarmupScreenshotTest {
         flow(typical, checked = typical.steps.take(2).map { it.id }.toSet())
     }
 
+    /**
+     * All ticked — the only state where the start button burns at full accent. Paired with
+     * [warmup] (nothing ticked, button dimmed) this pins both ends of the CTA's emphasis, which is
+     * otherwise a one-value change no assertion would notice.
+     */
+    @Test fun warmupAllTicked() = shoot("warmup-all-ticked") {
+        flow(typical, checked = typical.steps.map { it.id }.toSet())
+    }
+
 }

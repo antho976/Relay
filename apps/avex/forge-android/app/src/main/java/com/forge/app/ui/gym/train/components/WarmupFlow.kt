@@ -1,5 +1,6 @@
 package com.forge.app.ui.gym.train.components
 
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -17,10 +18,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -37,6 +40,10 @@ import com.forge.app.ui.common.clickableLabeled
  * jumping jacks, but the ticks are their own scratchpad, not a checklist the app grades: nothing is
  * required, nothing is stored, and the button works from the first frame. There is exactly one
  * button because "start" and "skip" were the same action wearing two labels.
+ *
+ * The button is DIMMED while drills remain and comes up to full accent once they are all ticked.
+ * That is emphasis, not enforcement — it still starts the session at any tick count. A full-strength
+ * accent slab from frame one made the drills above it look optional.
  */
 @Composable
 fun WarmupFlow(
@@ -49,6 +56,7 @@ fun WarmupFlow(
     modifier: Modifier = Modifier
 ) {
     val onBg = MaterialTheme.colorScheme.onBackground
+    val bg = MaterialTheme.colorScheme.background
     val muted = MaterialTheme.colorScheme.onSurfaceVariant
     val accent = MaterialTheme.colorScheme.primary
 
@@ -71,8 +79,28 @@ fun WarmupFlow(
 
         Spacer(Modifier.height(24.dp))
 
+        // Dimmed until every drill is ticked, then it comes up to full accent. Still a button the
+        // whole time — nothing is gated, it just stops shouting over the drills it is asking you to
+        // do first. At full strength from the first frame it read as the only thing on the screen
+        // worth touching, which is the opposite of what a warmup screen is for. Both colours
+        // animate, so ticking the last row is visibly what lit it.
+        //
+        // The FILL dims, not the button: fading the whole slab took the label down with it, and
+        // `onPrimary` is a dark tone — dark text on a 35% accent wash over a near-black ground is
+        // unreadable, not quiet. So the dim state composites the accent at 0.35 over the background
+        // and hands the label `onBackground` instead, which keeps it at full contrast the whole way.
+        val allTicked = prep.all { it.id in checked }
+        val ctaFill by animateColorAsState(
+            targetValue = if (allTicked) accent else accent.copy(alpha = 0.35f).compositeOver(bg),
+            label = "warmupCtaFill"
+        )
+        val ctaLabel by animateColorAsState(
+            targetValue = if (allTicked) MaterialTheme.colorScheme.onPrimary else onBg,
+            label = "warmupCtaLabel"
+        )
+
         // Accent-filled, matching Home's start CTA: this is the same act, so it wears the same coat.
-        StartButton(label = "Start lifting", onClick = onStart)
+        StartButton(label = "Start lifting", fill = ctaFill, labelColor = ctaLabel, onClick = onStart)
 
         Spacer(Modifier.height(12.dp))
         // Separated by air rather than a mid dot: at mono's baseline the dot reads as a full stop
@@ -143,15 +171,21 @@ private fun CheckDisc(checked: Boolean, muted: Color, accent: Color) {
     )
 }
 
-/** The one action. Accent fill, `onPrimary` label, sized like Home's start CTA. */
+/**
+ * The one action, sized like Home's start CTA.
+ *
+ * [fill] and [labelColor] are passed in rather than read here because the button carries two
+ * states: dimmed while drills remain, full accent once they are done. Neither is a disabled state —
+ * it starts the session at any tick count.
+ */
 @Composable
-private fun StartButton(label: String, onClick: () -> Unit) {
+private fun StartButton(label: String, fill: Color, labelColor: Color, onClick: () -> Unit) {
     Box(
         Modifier
             .fillMaxWidth()
             .heightIn(min = 56.dp)
             .clip(StartShape)
-            .background(MaterialTheme.colorScheme.primary)
+            .background(fill)
             .bounceClick(onClick = onClick)
             .padding(horizontal = 20.dp, vertical = 14.dp),
         contentAlignment = Alignment.Center
@@ -160,7 +194,7 @@ private fun StartButton(label: String, onClick: () -> Unit) {
             label,
             style = MaterialTheme.typography.labelLarge,
             fontWeight = FontWeight.Bold,
-            color = MaterialTheme.colorScheme.onPrimary
+            color = labelColor
         )
     }
 }
