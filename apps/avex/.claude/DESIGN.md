@@ -184,19 +184,19 @@ sheet top 16 — no custom radii. Photos: rounded 16 clips, caption UNDER the pl
 `bounceCombinedClick` · `clickableLabeled` · `GlyphButton` · `ForgeHeroAction` · `ForgePrimaryCapsule` /
 `ForgeOutlineCapsule` · `ForgeRowPill` · `ForgeShimmer` · `ConfettiOverlay` · `statsEntrance` ·
 `EntranceItem` · `rememberDrawProgress` · `CountUpText` · `ExerciseLibraryPicker` ·
-`ProvideTouchExploration` · `SnackbarController`. **A pattern used on a 3rd
+`ProvideTouchExploration` · `SnackbarController` · `DayLogSheet`. **A pattern used on a 3rd
 screen gets promoted here the same turn (§2⑥)** — `DoctrineParityTest` checks this list against the
 package both ways, so it cannot drift.
 
 What a signature won't tell you: `EditorialHairline` is **data lines only** (§1) · `SegmentPill` carries
 every filter/lens toggle · `ConfettiOverlay` is celebration only · `bounceCombinedClick` adds the
-long-press hook (Home CTA tap = start, hold = skip warmup) · `GlyphButton` guarantees the ≥48dp target
-a padded `Text` kept missing · `ProvideTouchExploration` feeds the TalkBack flag that restores ripple
-(§9) · `SnackbarController` is the app's ONE Undo snackbar, an injected `@Singleton` any VM reaches via
-`showUndo(msg){ restore }`, rendered once at the app root by `SnackbarControllerHost` beside
-`ProgramChangeGuardHost`; §12's
-undo-over-confirm soft-delete uses it (delete now, re-insert the captured row on undo) so a reversible
-delete never gets a confirm dialog. Don't re-roll a per-screen `SnackbarHostState`.
+long-press hook (Home CTA tap = start, hold = skip warmup) · `DayLogSheet` answers "what did I do that day" for
+every consistency grid (Stats, Profile), over History's own rows · `GlyphButton` guarantees the ≥48dp target a
+padded `Text` kept missing · `ProvideTouchExploration` feeds the TalkBack flag that restores ripple (§9) ·
+`SnackbarController` is the app's ONE Undo snackbar, an injected `@Singleton` any VM reaches via `showUndo(msg){
+restore }`, rendered once at the app root by `SnackbarControllerHost` beside `ProgramChangeGuardHost`; §12's
+undo-over-confirm soft-delete uses it (delete now, re-insert the captured row on undo) so a reversible delete
+never gets a confirm dialog. Don't re-roll a per-screen `SnackbarHostState`.
 
 **Buttons — three levels only**: ① filled capsule = do-it-now, ≤1/section (light; `accent = true` only for a MODAL's one commit, which has to out-rank the selection controls above it); ② outlined capsule =
 its sidekick (a destructive one-shot = level ② tinted `error` via `ForgeOutlineCapsule(contentColor)`,

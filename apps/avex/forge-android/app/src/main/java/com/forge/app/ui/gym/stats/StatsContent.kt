@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.domain.units.WeightUnit
+import com.forge.app.ui.common.DayLogSheet
 import com.forge.app.ui.common.InlineEmptyHint
 import com.forge.app.ui.gym.session.SegmentRow
 import com.forge.app.ui.common.statsEntrance
@@ -152,8 +153,8 @@ fun StatsContent(
     // "What did I do that day?" — opened from the consistency heatmap; rows drill into the same
     // detail screens History uses.
     dayDetail?.let { detail ->
-        StatsDayDetailSheet(
-            detail = detail,
+        DayLogSheet(
+            log = detail,
             onOpenSession = { viewModel.closeDay(); onOpenSession(it) },
             onOpenCardio = { viewModel.closeDay(); onOpenCardioSession(it) },
             onDismiss = viewModel::closeDay

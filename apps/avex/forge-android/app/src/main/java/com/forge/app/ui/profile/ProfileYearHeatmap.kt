@@ -52,10 +52,16 @@ internal fun YearConsistencySection(
 ) {
     val today = remember { LocalDate.now() }
     val year = today.year
+    // Both readings are about THIS YEAR, and the map they read spans all of history — it stopped at
+    // the year boundary until ACTIVITY needed to page back through months. Scope them here rather
+    // than at the source: the grid draws one year and is the only thing that knows which.
+    val thisYear = remember(activityByDay, year) {
+        activityByDay.filterKeys { LocalDate.ofEpochDay(it).year == year }
+    }
     // Normalize against the busiest day so the gradient spreads; a 0.5 floor keeps a single-workout
     // day clearly lit (workout counts run low, so raw normalizing would wash lone days out to faint).
-    val maxCount = remember(activityByDay) { (activityByDay.values.maxOrNull() ?: 1).coerceAtLeast(1) }
-    val activeDays = activityByDay.size
+    val maxCount = remember(thisYear) { (thisYear.values.maxOrNull() ?: 1).coerceAtLeast(1) }
+    val activeDays = thisYear.size
     val faint = MaterialTheme.colorScheme.outline.copy(alpha = 0.18f)
 
     Column(modifier) {

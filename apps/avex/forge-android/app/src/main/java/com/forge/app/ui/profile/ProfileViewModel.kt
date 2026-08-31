@@ -7,8 +7,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.forge.app.data.db.entities.BodyFatEntry
 import com.forge.app.data.db.entities.BodyweightEntry
+import com.forge.app.data.db.dao.SessionDao
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.data.repo.BodyFatRepository
+import com.forge.app.data.repo.CardioRepository
 import com.forge.app.data.repo.BodyweightRepository
 import com.forge.app.data.repo.ExtendedGoalRepository
 import com.forge.app.data.repo.ProfileData
@@ -18,6 +20,8 @@ import com.forge.app.data.repo.ProgressPhoto
 import com.forge.app.data.repo.ProgressPhotoRepository
 import com.forge.app.domain.goal.GoalMetric
 import com.forge.app.domain.goal.parseGoalType
+import com.forge.app.ui.common.DayLog
+import com.forge.app.ui.common.loadDayLog
 import com.forge.app.ui.profile.state.ProfileUiState
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -47,7 +51,11 @@ class ProfileViewModel @Inject constructor(
     private val avatarRepo: AvatarRepository,
     private val bodyweightRepo: BodyweightRepository,
     private val bodyFatRepo: BodyFatRepository,
-    private val extendedGoalRepo: ExtendedGoalRepository
+    private val extendedGoalRepo: ExtendedGoalRepository,
+    // The ACTIVITY calendar's day sheet reads one day straight out of the DB rather than through
+    // the profile snapshot — the snapshot carries per-day COUNTS, and the sheet needs the sessions.
+    private val sessionDao: SessionDao,
+    private val cardioRepo: CardioRepository
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(ProfileUiState())
@@ -253,6 +261,34 @@ class ProfileViewModel @Inject constructor(
 
     /** Called by the UI after the one-shot celebration has played so it never replays on recompose. */
     fun clearRankUpCelebration() { _showRankUpCelebration.value = false }
+
+    // ── ACTIVITY day sheet ────────────────────────────────────────────────────────
+
+    /** The day tapped on the ACTIVITY calendar; null = sheet closed. */
+    private val _dayLog = MutableStateFlow<DayLog?>(null)
+    val dayLog: StateFlow<DayLog?> = _dayLog.asStateFlow()
+
+    /** The in-flight [openDay] load, cancelled by the next tap — see [loadDayLog] for why. */
+    private var dayLogJob: kotlinx.coroutines.Job? = null
+
+    /** Load everything logged on [date] and open the day sheet. Same behaviour as Stats' heatmap. */
+    fun openDay(date: LocalDate) {
+        dayLogJob?.cancel()
+        dayLogJob = viewModelScope.launch {
+            runCatching { loadDayLog(sessionDao, cardioRepo, date) }
+                .getOrElse { e ->
+                    // runCatching swallows CancellationException too, and a cancelled load
+                    // publishing its half-finished result is the very thing the cancel prevents.
+                    if (e is kotlinx.coroutines.CancellationException) throw e else null
+                }
+                ?.let { _dayLog.value = it }
+        }
+    }
+
+    fun closeDay() {
+        dayLogJob?.cancel()
+        _dayLog.value = null
+    }
 
     /**
      * Inline rename from the profile header — persists to prefs and reflects immediately.

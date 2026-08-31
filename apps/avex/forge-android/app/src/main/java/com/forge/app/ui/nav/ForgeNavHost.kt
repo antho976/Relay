@@ -281,7 +281,10 @@ fun ForgeNavHost(initialDayKey: String? = null, privacyPolicyRequest: Int = 0) {
                 onBack = { nav.popBackStack() },
                 onOpenTrophies = { nav.navigate(Routes.TROPHIES) },
                 onOpenPhotoGallery = { nav.navigate(Routes.MIRROR_TEST) },
-                onOpenMeasurements = { nav.navigate(Routes.BODY_MEASUREMENTS) }
+                onOpenMeasurements = { nav.navigate(Routes.BODY_MEASUREMENTS) },
+                // Out of the ACTIVITY day sheet, into the same two destinations History opens.
+                onOpenSession = { sessionId -> nav.navigate(Routes.sessionDetail(sessionId)) },
+                onOpenCardio = { cardioId -> nav.navigate(Routes.cardioSession(cardioId)) }
             )
         }
         composable(Routes.TROPHIES) {
