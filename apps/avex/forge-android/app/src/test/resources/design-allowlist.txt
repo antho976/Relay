@@ -199,7 +199,7 @@
 1 em-dash ui/gym/train/DayScreen.kt em dash in string
 2 em-dash ui/gym/train/DaySwapHandlers.kt em dash in string
 1 em-dash ui/gym/train/DayViewModelBuilders.kt em dash in string
-2 em-dash ui/gym/train/components/ExerciseCard.kt em dash in string
+1 em-dash ui/gym/train/components/ExerciseCard.kt em dash in string
 1 em-dash ui/gym/train/components/ExerciseCardComponents.kt em dash in string
 1 em-dash ui/gym/train/components/ExerciseChartSheet.kt em dash in string
 1 em-dash ui/gym/train/components/SetInputRow.kt em dash in string
@@ -233,7 +233,7 @@
 2 font-size ui/gym/stats/StatsVolume.kt fontSize=
 5 font-size ui/gym/train/DaySessionContent.kt fontSize=
 3 font-size ui/gym/train/components/DayCardComponents.kt fontSize=
-7 font-size ui/gym/train/components/ExerciseCard.kt fontSize=
+6 font-size ui/gym/train/components/ExerciseCard.kt fontSize=
 10 font-size ui/gym/train/components/ExerciseCardComponents.kt fontSize=
 6 font-size ui/gym/train/components/ExerciseChartSheet.kt fontSize=
 1 font-size ui/gym/train/components/RestTimerBubble.kt fontSize=

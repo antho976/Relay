@@ -22,7 +22,6 @@ import com.forge.app.domain.volume.volumeLb
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontStyle
@@ -33,8 +32,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.forge.app.data.db.types.EffortRating
 import com.forge.app.domain.timer.RestTimerState
+import com.forge.app.domain.units.unitLabel
 import com.forge.app.program.ExerciseUnit
-import com.forge.app.ui.common.rpeLabel
+import com.forge.app.ui.theme.LocalForgeSettings
 import com.forge.app.ui.gym.train.state.ExerciseUiState
 
 /** Reps to PRE-FILL the field with — numeric targets only ("8-12" → 12, "15" → 15); null otherwise. */
@@ -54,26 +54,6 @@ private fun recommendedRepsOf(reps: String): Int? {
     if (t.equals("AMRAP", ignoreCase = true)) return 12
     if (t.contains('s')) return null
     return Regex("""\d+""").findAll(t).map { it.value.toInt() }.lastOrNull()
-}
-
-/** One italic "Suggested next → …" cue line, with an optional parenthesised reason. Shared by the
- *  weighted suggestion and the bodyweight rep-progression cue so the two can't drift in styling (CO5).
- *  Accent, not muted: it is the screen's only piece of coaching and the only line asking you to
- *  change what you were going to do, so it has to out-rank the target line above it. */
-@Composable
-private fun SuggestionLine(label: String, reason: String?, muted: Color) {
-    Spacer(Modifier.height(2.dp))
-    val line = buildAnnotatedString {
-        withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
-            // The recommendation carries the accent; its justification stays muted behind it, so the
-            // eye lands on the number to lift rather than on a full sentence of accent (§5).
-            append(label)
-            if (!reason.isNullOrBlank()) {
-                withStyle(SpanStyle(color = muted)) { append(" ($reason)") }
-            }
-        }
-    }
-    Text(line, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
 }
 
 @OptIn(ExperimentalFoundationApi::class)
@@ -207,30 +187,43 @@ fun ExerciseCard(
 
                 Spacer(Modifier.height(6.dp))
 
-                // Target + last session line
+                // Plan line — the whole brief for this exercise in ONE line: what to do, what you
+                // did last time, and the one number to aim for. It used to be three stacked italic
+                // lines (target / "Suggested next → 140 (keep this weight — reach 12 reps on every
+                // set before adding load)" / the same again for reps), which buried the set table
+                // under a paragraph of coaching nobody re-reads mid-set. The reason text is gone
+                // rather than moved: the number IS the advice, and the sentence explaining it only
+                // earned its place when it had a line to itself.
                 val priorLastSet = state.priorSets.lastOrNull()
-                val targetText = buildAnnotatedString {
+                // The cue is a weight on weighted lifts and reps on bodyweight ones (CO5); it keeps
+                // the accent, since it is the only part of the line asking you to change what you
+                // were about to do. The unit rides along — the field below is labelled in the
+                // display unit and a bare "140" invited a kg user to log 140 kg
+                // (docs/bug-scan-2026-08/03-units-math.md).
+                val accent = MaterialTheme.colorScheme.primary
+                val weightUnit = LocalForgeSettings.current.weightUnit
+                val cue = when {
+                    state.suggestedWeight != null ->
+                        if (isPlates) "try ${state.suggestedWeight} pl"
+                        else "try ${state.suggestedWeight} ${unitLabel(weightUnit)}"
+                    state.suggestedReps != null -> "try ${state.suggestedReps} reps"
+                    else -> null
+                }
+                val planLine = buildAnnotatedString {
                     withStyle(SpanStyle(fontStyle = FontStyle.Italic)) {
-                        append("Target ${state.plan.sets} × ${state.plan.reps}")
+                        append("${state.plan.sets} × ${state.plan.reps}")
                         if (priorLastSet != null) {
-                            append(" · last session ${priorLastSet.weightText} × ${priorLastSet.reps}")
-                            priorLastSet.rpe?.let { rpe ->
-                                append(" @ RPE ${rpeLabel(rpe)}")
-                            }
+                            append(" · last ${priorLastSet.weightText} × ${priorLastSet.reps}")
                         } else {
-                            append(" · first time — no history yet")
+                            append(" · first time")
+                        }
+                        if (cue != null) {
+                            append(" · ")
+                            withStyle(SpanStyle(color = accent)) { append(cue) }
                         }
                     }
                 }
-                Text(targetText, style = MaterialTheme.typography.bodySmall, color = muted)
-
-                // Suggested next line — a weight (weighted lifts) or, for bodyweight, more reps (CO5).
-                if (state.suggestedWeight != null) {
-                    SuggestionLine("Suggested next → ${state.suggestedWeight}", state.suggestionReason, muted)
-                }
-                if (state.suggestedReps != null) {
-                    SuggestionLine("Suggested next → ${state.suggestedReps} reps", state.suggestedRepsReason, muted)
-                }
+                Text(planLine, style = MaterialTheme.typography.bodySmall, color = muted)
 
                 // Pinned cue
                 if (state.pinnedNote.isNotBlank()) {
@@ -279,19 +272,9 @@ fun ExerciseCard(
                     onClick = onOpenChart
                 )
 
+                // No "N / M SETS · X LB" chip here — the strip above already carries both, and a
+                // second copy two lines down was pure restatement.
                 Spacer(Modifier.height(16.dp))
-
-                // Session stats chip (sets progress + volume)
-                if (state.loggedSets.isNotEmpty()) {
-                    val volumeText = if (currentVolumeLb > 0) "  ·  ${currentVolumeLb.toInt()} LB" else ""
-                    Text(
-                        "${state.loggedSets.size} / ${state.targetSets} SETS$volumeText",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = muted,
-                        fontSize = 9.sp
-                    )
-                    Spacer(Modifier.height(8.dp))
-                }
 
                 // ── Set table ─────────────────────────────────────────────────
                 val stacked = SetTable.stacked()
