@@ -17,7 +17,6 @@ import com.forge.app.domain.units.formatWeight
 import com.forge.app.program.ExerciseLibrary
 import com.forge.app.ui.overview.state.CoachItem
 import com.forge.app.ui.overview.state.CoachLearningHint
-import com.forge.app.ui.overview.state.OnThisDayMemory
 import com.forge.app.ui.overview.state.OverviewRecentItem
 import com.forge.app.ui.overview.state.OverviewUiState
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -143,7 +142,6 @@ class OverviewViewModel @Inject constructor(
         _movement.value = TodayMovement(steps = todaySteps, typicalSteps = typical)
     }
 
-    private val _onThisDayMemory = MutableStateFlow<OnThisDayMemory?>(null)
     private val _coach = MutableStateFlow<List<CoachItem>>(emptyList())
 
     /** Sub-gate "still learning" nudge (CD-1) — null once the coach has activated. */
@@ -217,7 +215,6 @@ class OverviewViewModel @Inject constructor(
         statsRepo.observeWeeklyStats(),
         cardioRepo.observeRecent(7),
         settingsRepo.shownMilestones,
-        _onThisDayMemory,
         trophyRepo.observeUnlockedIds(),
         weeklyCardioKm,
         statsRepo.observeDayVolumeStats(),
@@ -230,20 +227,18 @@ class OverviewViewModel @Inject constructor(
         val recentCardio = args[1] as List<com.forge.app.data.db.entities.CardioEntry>
         @Suppress("UNCHECKED_CAST")
         val shown = args[2] as Set<String>
-        val memory = args[3] as OnThisDayMemory?
-        val unlockedIds = args[4] as List<*>
-        val distanceKm = (args[5] as Double?) ?: 0.0
+        val unlockedIds = args[3] as List<*>
+        val distanceKm = (args[4] as Double?) ?: 0.0
         @Suppress("UNCHECKED_CAST")
-        val dayVolStats = args[6] as Map<String, SessionDao.DayVolumeStats>
-        val cardioTarget = args[7] as Int
-        val weightUnit = args[8] as WeightUnit
-        val useMiles = args[9] as Boolean
+        val dayVolStats = args[5] as Map<String, SessionDao.DayVolumeStats>
+        val cardioTarget = args[6] as Int
+        val weightUnit = args[7] as WeightUnit
+        val useMiles = args[8] as Boolean
 
         buildOverviewUiState(
             stats = stats,
             recentCardio = recentCardio,
             shown = shown,
-            memory = memory,
             trophiesUnlocked = unlockedIds.size,
             distanceKm = distanceKm,
             dayVolStats = dayVolStats,
@@ -302,7 +297,6 @@ class OverviewViewModel @Inject constructor(
     )
 
     init {
-        viewModelScope.launch { _onThisDayMemory.value = statsRepo.findOnThisDayMemory() }
         viewModelScope.launch { reloadCoach() }
         refreshDirective()
         refreshMovement()

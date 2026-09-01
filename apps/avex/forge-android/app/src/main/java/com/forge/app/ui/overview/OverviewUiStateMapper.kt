@@ -10,7 +10,6 @@ import com.forge.app.domain.units.WeightUnit
 import com.forge.app.program.Program
 import com.forge.app.domain.notify.Milestones
 import com.forge.app.ui.overview.state.MilestoneEvent
-import com.forge.app.ui.overview.state.OnThisDayMemory
 import com.forge.app.ui.overview.state.OverviewRecentItem
 import com.forge.app.ui.overview.state.OverviewUiState
 import java.time.DayOfWeek
@@ -31,7 +30,6 @@ internal fun buildOverviewUiState(
     stats: StatsRepository.WeeklyStats,
     recentCardio: List<CardioEntry>,
     shown: Set<String>,
-    memory: OnThisDayMemory?,
     trophiesUnlocked: Int,
     distanceKm: Double,
     dayVolStats: Map<String, SessionDao.DayVolumeStats>,
@@ -111,7 +109,6 @@ internal fun buildOverviewUiState(
         streakDays = stats.streakDays,
         bestSessionThisWeekLb = stats.bestSessionThisWeekLb,
         pendingMilestone = computePendingMilestone(stats, shown, weightUnit),
-        onThisDayMemory = memory,
         nextUpDayKey = stats.nextUpDayKey,
         weekDaysTrained = stats.weekDaysTrained,
         cardioWeekDays = cardioWeekDays,

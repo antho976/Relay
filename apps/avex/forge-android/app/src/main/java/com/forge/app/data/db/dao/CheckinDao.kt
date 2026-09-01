@@ -7,7 +7,7 @@ import androidx.room.Query
 import com.forge.app.data.db.entities.CheckinEntry
 import kotlinx.coroutines.flow.Flow
 
-/** The morning check-in (Coach v3 B1). One row per ISO day; REPLACE upserts by `date_key`. */
+/** The daily check-in (Coach v3 B1). One row per ISO day; REPLACE upserts by `date_key`. */
 @Dao
 interface CheckinDao {
 
@@ -23,10 +23,6 @@ interface CheckinDao {
     /** Newest first, windowed — readiness reads days, not history. */
     @Query("SELECT * FROM checkin_entry WHERE recorded_at >= :sinceMs ORDER BY recorded_at DESC")
     suspend fun since(sinceMs: Long): List<CheckinEntry>
-
-    /** Newest first — adaptive prompting counts the recent run of skips. */
-    @Query("SELECT * FROM checkin_entry ORDER BY date_key DESC LIMIT :limit")
-    suspend fun recent(limit: Int): List<CheckinEntry>
 
     @Query("SELECT * FROM checkin_entry ORDER BY date_key DESC")
     suspend fun all(): List<CheckinEntry>

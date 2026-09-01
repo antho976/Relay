@@ -41,7 +41,7 @@ internal fun CoachSettingsPage(
     state: SettingsUiState,
     vm: SettingsViewModel,
     onOpenRecovery: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
     // Trust is loaded only to gate the "auto isn't active yet" note — the bars themselves render
     // on the Coach tab's Journey lens.

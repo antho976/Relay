@@ -38,17 +38,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.text.font.FontStyle
 import com.forge.app.ui.settings.SettingsIcons
 import com.forge.app.ui.common.NotificationBell
 import com.forge.app.ui.nav.NavIcons
 import com.forge.app.ui.common.bounceCombinedClick
 import com.forge.app.ui.common.clickableLabeled
 import com.forge.app.ui.overview.components.HeroHeadline
-import com.forge.app.ui.overview.state.OnThisDayMemory
 import com.forge.app.ui.overview.state.OverviewRecentItem
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -537,7 +536,8 @@ fun OverviewScreen(
             Spacer(Modifier.height(8.dp))
             Text(
                 reason,
-                style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.bodySmall,
+                fontStyle = FontStyle.Italic,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             directive?.secondary?.let { secondary ->
@@ -548,26 +548,6 @@ fun OverviewScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-
-            state.brief?.targets
-                ?.filter { it.targetWeightLb != null }
-                ?.take(2)
-                ?.takeIf { it.isNotEmpty() }
-                ?.let { targets ->
-                    Spacer(Modifier.height(12.dp))
-                    targets.forEach { target ->
-                        Text(
-                            "${target.name} · ${target.setsText}×${target.repsText} @ " +
-                                com.forge.app.domain.units.formatWeight(
-                                    target.targetWeightLb!!,
-                                    LocalForgeSettings.current.weightUnit
-                                ),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onBackground,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
 
             Spacer(Modifier.height(20.dp))
             Row(
@@ -703,49 +683,8 @@ fun OverviewScreen(
                 }
             }
 
-            state.onThisDayMemory?.let { memory ->
-                Spacer(Modifier.height(20.dp))
-                OnThisDayMemoryLine(memory = memory, onBg = onBg, muted = muted)
-            }
-
             Spacer(Modifier.height(28.dp))
         }
-    }
-}
-
-/**
- * "On this day" (#106) — a session from 1/3/6/12 months ago that lands near today's date.
- *
- * ## It is not a card
- *
- * It used to be a 12dp-radius box with a hairline border around content its own KDoc described as
- * "display-only; tapping through to the session is a separate roadmap item". That is §1's central
- * ban stated exactly: a surface or a border is EARNED by interactivity, because a box is a promise
- * of a tap. It was also the only bordered element on a page whose every other passive line sits
- * bare, so it read as the one thing you were supposed to be able to press, and it could not be.
- * `FAILURES.md` has the diagnosis under "boxed passive content".
- *
- * Air and its own mono label separate it now, like every other section on the page. Renamed from
- * `OnThisDayCard` so the name stops describing a shape it no longer has.
- */
-@Composable
-private fun OnThisDayMemoryLine(
-    memory: OnThisDayMemory,
-    onBg: Color,
-    muted: Color
-) {
-    val weightUnit = LocalForgeSettings.current.weightUnit
-    val agoLabel = com.forge.app.ui.common.monthsAgoPhrase(memory.monthsAgo).uppercase()
-    val vol = com.forge.app.domain.units.formatVolumeCompact(memory.totalVolumeLb, weightUnit)
-    val prText = if (memory.prCount > 0) " · ${memory.prCount} PR${if (memory.prCount > 1) "s" else ""}" else ""
-    Column(Modifier.fillMaxWidth()) {
-        // labelSmall IS the 10sp mono rung. It was `labelSmall` plus `fontSize = 10.sp`, which
-        // restates the style's own size while opting the line out of the type scale (§6).
-        Text("ON THIS DAY · $agoLabel", style = MaterialTheme.typography.labelSmall, color = muted)
-        // §7: a mono label and the prose under it are different roles and never butt flush.
-        Spacer(Modifier.height(8.dp))
-        Text("You trained ${memory.dayName} · $vol moved$prText",
-            style = MaterialTheme.typography.bodyMedium, color = onBg)
     }
 }
 

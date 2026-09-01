@@ -67,6 +67,10 @@ object PreferenceKeys {
      *  on every app open for a lesson that unlocked days ago and is still sitting unread. */
     val ANNOUNCED_LESSON_NOTICES = stringSetPreferencesKey("announced_lesson_notices")
 
+    /** ISO dates whose daily check-in banner has already flown to the bell. The feed row stays
+     *  until saved, but the small arrival banner plays only once per local day. */
+    val ANNOUNCED_CHECKIN_DATES = stringSetPreferencesKey("announced_checkin_dates")
+
     // ─── Per-day accent color (#65) ───────────────────────────────────────────
     /** Stored as hex e.g. "#FF5733". Key per day: "day_color_upper-a". */
     fun dayColorKey(dayKey: String) = stringPreferencesKey("day_color_$dayKey")

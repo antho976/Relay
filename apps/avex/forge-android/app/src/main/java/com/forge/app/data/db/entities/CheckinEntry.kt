@@ -6,16 +6,15 @@ import androidx.room.Index
 import androidx.room.PrimaryKey
 
 /**
- * The morning check-in (Coach v3 B1): four taps that tell the coach how you actually are, plus the
+ * The daily check-in (Coach v3 B1): four taps that tell the coach how you actually are, plus the
  * optional extras that only make sense at the same moment.
  *
  * Keyed by ISO calendar date (`yyyy-MM-dd`), one row per day — deliberately NOT a program-day key
  * (`Session.dayKey` is a program-day id like "push", a known foot-gun). Room upserts by that unique
- * index, so answering twice in one morning corrects the day rather than stacking rows.
+ * index, so answering twice in one day corrects the day rather than stacking rows.
  *
- * A SKIPPED day still writes a row ([skipped] = true). That's what makes adaptive prompting
- * possible: a user who dismisses it every day should stop being asked, and silence with no record
- * is indistinguishable from never having opened the app.
+ * Older versions wrote SKIPPED rows for a dismissed launch prompt. [skipped] remains for database
+ * and backup compatibility, but it never feeds readiness or resolves today's notification.
  *
  * Every field is nullable because every question is optional — four taps is the ceiling, not the
  * requirement, and a partial check-in is worth more than an abandoned one.
@@ -41,7 +40,7 @@ data class CheckinEntry(
      * soreness tap can't provide it.
      */
     @ColumnInfo(name = "sore_muscles") val soreMuscles: String = "",
-    /** The user dismissed the sheet. Feeds adaptive prompting; never feeds readiness. */
+    /** Legacy dismissed-prompt marker. Kept for stored-data compatibility; never feeds readiness. */
     @ColumnInfo(name = "skipped") val skipped: Boolean = false,
     @ColumnInfo(name = "recorded_at") val recordedAt: Long
 ) {
