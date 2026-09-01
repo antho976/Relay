@@ -4,15 +4,18 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import com.forge.app.core.time.TimeSignals
 import com.forge.app.data.health.HealthConnectManager
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.domain.notify.Milestones
 import com.forge.app.program.Program
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
@@ -24,6 +27,7 @@ import javax.inject.Singleton
 /** What a notice does when its row is tapped. [None] renders the row passive (DESIGN §2③). */
 sealed interface NoticeAction {
     data class ResumeSession(val dayKey: String) : NoticeAction
+    data object OpenCheckin : NoticeAction
     data object OpenCoachBrief : NoticeAction
     data object ConnectWearable : NoticeAction
 
@@ -49,6 +53,7 @@ enum class NoticeKind(val key: String, val label: String, val explainer: String)
     // [key] is the stored id and must never change, but reordering these is free and is how a new
     // kind picks its place in the list.
     ACTIVE_SESSION("active_session", "Unfinished workouts", "Resume where you stopped"),
+    CHECK_IN("check_in", "Daily check-ins", "Sleep, soreness, stress, and drive"),
     COACH_BRIEF("coach_brief", "Coach briefs", "Each week's read, when it's new"),
     MILESTONE("milestone", "Milestones", "100 workouts, your first full month"),
 
@@ -103,9 +108,11 @@ class NotificationFeed @Inject constructor(
     @ApplicationContext private val context: Context,
     private val settings: SettingsRepository,
     private val workoutRepo: WorkoutRepository,
+    private val checkinRepo: CheckinRepository,
     private val coachRepo: CoachRepository,
     private val healthConnect: HealthConnectManager,
     private val academyRepo: AcademyRepository,
+    private val timeSignals: TimeSignals,
 ) {
     private val coachBrief = MutableStateFlow<CoachBanner?>(null)
 
@@ -163,6 +170,26 @@ class NotificationFeed @Inject constructor(
                     action = NoticeAction.OpenLesson(state.lesson.id),
                 )
             }
+    }
+
+    /** Pending until today's sheet is saved. Rebinds at midnight and after a timezone change, then
+     * Room removes the notice as soon as the write lands. Legacy skipped rows do not resolve it. */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val checkinNotice: Flow<AppNotice?> = timeSignals.dayStarts().flatMapLatest {
+        val dateKey = checkinRepo.todayKey()
+        checkinRepo.observeToday().map { entry ->
+            if (entry?.skipped == false) null else AppNotice(
+                id = "$PREFIX_CHECKIN$dateKey",
+                kind = NoticeKind.CHECK_IN,
+                glyph = NoticeGlyph.COACH,
+                eyebrow = "TODAY",
+                title = "How are you feeling today?",
+                detail = "Sleep, soreness, stress, drive, and optional weight.",
+                action = NoticeAction.OpenCheckin,
+                // Saving resolves it. Clear all should not silently skip today's check-in.
+                dismissible = false,
+            )
+        }
     }
 
     /**
@@ -267,6 +294,8 @@ class NotificationFeed @Inject constructor(
                 )
             )
         }
+    }.combine(checkinNotice) { rows, checkin ->
+        if (checkin == null) rows else rows + checkin
     }.combine(academyNotices) { rows, academy ->
         // Sorted by kind rather than appended, so a new kind's place in the feed is decided by its
         // position in the enum (§4.8) instead of by where its builder happened to be called. The
@@ -286,31 +315,38 @@ class NotificationFeed @Inject constructor(
      *  bell, so a kind switched off in Settings drops out of both at once. */
     val academyUnreadCount: Flow<Int> = notices.map { rows -> rows.count { it.kind == NoticeKind.ACADEMY } }
 
-    /**
-     * Lesson notices that have never had their arrival banner played.
-     *
-     * Separate from "unread" because the two answer different questions. A lesson stays UNREAD
-     * until you open it, possibly for weeks; it is UNANNOUNCED only until the banner has flown to
-     * the bell once. Without the split, every app open would re-announce everything still sitting
-     * unread, which is the nagging this whole mechanism exists to avoid.
-     */
+    /** Notices whose small arrival banner has not played yet. The feed row and banner have separate
+     * lifetimes so an unanswered check-in or unread lesson does not pop up again on every launch. */
     val pendingAnnouncements: Flow<List<AppNotice>> = combine(
         academyNotices,
+        checkinNotice,
         settings.announcedLessonNotices,
+        settings.announcedCheckinDates,
         settings.disabledNoticeKinds,
-    ) { rows, announced, disabled ->
-        // A kind switched off announces nothing, the same way it shows no rows.
-        if (NoticeKind.ACADEMY.key in disabled) emptyList()
-        else rows.filter { it.id.removePrefix(PREFIX_LESSON) !in announced }
+    ) { academy, checkin, announcedLessons, announcedCheckins, disabled ->
+        buildList {
+            if (NoticeKind.CHECK_IN.key !in disabled && checkin != null &&
+                checkin.id.removePrefix(PREFIX_CHECKIN) !in announcedCheckins
+            ) add(checkin)
+            if (NoticeKind.ACADEMY.key !in disabled) {
+                addAll(academy.filter { it.id.removePrefix(PREFIX_LESSON) !in announcedLessons })
+            }
+        }
     }
 
     /** Mark arrival banners as played. One-way: an announcement happens once, ever. */
-    suspend fun markAnnounced(noticeIds: List<String>) =
+    suspend fun markAnnounced(noticeIds: List<String>) {
         settings.markLessonNoticesAnnounced(
             noticeIds.filter { it.startsWith(PREFIX_LESSON) }
                 .map { it.removePrefix(PREFIX_LESSON) }
                 .toSet()
         )
+        settings.markCheckinDatesAnnounced(
+            noticeIds.filter { it.startsWith(PREFIX_CHECKIN) }
+                .map { it.removePrefix(PREFIX_CHECKIN) }
+                .toSet()
+        )
+    }
 
     /**
      * Clear one notice and hand back the operation that puts it back, so the caller can offer an Undo
@@ -386,6 +422,7 @@ class NotificationFeed @Inject constructor(
         private const val PREFIX_MILESTONE = "milestone."
         private const val PREFIX_SYSTEM = "system."
         private const val PREFIX_LESSON = "lesson."
+        private const val PREFIX_CHECKIN = "checkin."
 
         private fun eyebrowFor(noticeId: String): String = when (noticeId) {
             NOTICE_IMPORT -> "IMPORT"

@@ -20,10 +20,7 @@ import javax.inject.Inject
 import com.forge.app.domain.units.filterDecimalInput
 
 /**
- * The morning check-in (Coach v3 B1). Four taps, all optional, always skippable.
- *
- * The sheet asks once per day at first open and stops asking someone who never answers — the
- * repository owns that rule so no surface can re-implement it differently.
+ * The daily check-in (Coach v3 B1). Four taps, all optional, opened from its notification.
  */
 @HiltViewModel
 class CheckinViewModel @Inject constructor(
@@ -48,7 +45,7 @@ class CheckinViewModel @Inject constructor(
          * reading on their trend line, and a relative-strength denominator wrong by a factor of two.
          */
         val weightUnit: WeightUnit = WeightUnit.LB,
-        /** Already answered today — the manual entry point says "update" rather than "log". */
+        /** Already answered today, so saving an opened historical state updates the same row. */
         val answeredToday: Boolean = false
     ) {
         /** The muscle picker only appears once soreness is real; one tap shouldn't open a menu. */
@@ -61,8 +58,7 @@ class CheckinViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             val answered = checkinRepo.today()?.hasAnswers == true
-            val shouldPrompt = runCatching { checkinRepo.shouldPrompt() }.getOrDefault(false)
-            _state.update { it.copy(visible = shouldPrompt, answeredToday = answered) }
+            _state.update { it.copy(answeredToday = answered) }
         }
         // Live, so the field's label follows a unit change made while the app is open.
         viewModelScope.launch {
@@ -70,7 +66,7 @@ class CheckinViewModel @Inject constructor(
         }
     }
 
-    /** Open it by hand — the coach surfaces this once daily prompting has backed off. */
+    /** Open today's check-in from its notification. */
     fun open() {
         viewModelScope.launch {
             val today = checkinRepo.today()
@@ -144,16 +140,7 @@ class CheckinViewModel @Inject constructor(
         }
     }
 
-    fun skip() {
-        viewModelScope.launch {
-            runCatching { checkinRepo.skipToday() }
-                .onSuccess { _state.update { st -> st.copy(visible = false) } }
-                .onFailure { e ->
-                    if (e is CancellationException) throw e
-                    snackbar.show("Couldn't skip today's check-in. Try again.")
-                }
-        }
-    }
+    fun close() = _state.update { it.copy(visible = false) }
 
     private fun update(block: (UiState) -> UiState) {
         _state.value = block(_state.value)

@@ -32,12 +32,12 @@ import com.forge.app.ui.common.SegmentPill
 import com.forge.app.ui.common.clickableLabeled
 
 /**
- * The morning check-in sheet (Coach v3 B1) — the coach's only daily question, and the capture point
- * for illness and per-muscle soreness.
+ * The daily check-in sheet (Coach v3 B1), opened from its notification and used to capture illness and
+ * per-muscle soreness without interrupting app launch.
  *
  * Modal archetype (§3): surface fill, large top corners, one decision per row, nothing hidden
  * behind a tap. Four 1–5 scales in the app's existing pill vocabulary, and every one of them
- * optional — a partial answer beats an abandoned form, and "Skip" is always one tap away.
+ * optional — a partial answer beats an abandoned form, and closing it changes nothing.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -52,7 +52,7 @@ fun CheckinSheet(viewModel: CheckinViewModel = hiltViewModel()) {
     val outline = MaterialTheme.colorScheme.outline
 
     ModalBottomSheet(
-        onDismissRequest = viewModel::skip,
+        onDismissRequest = viewModel::close,
         sheetState = sheetState,
         containerColor = MaterialTheme.colorScheme.surface
     ) {
@@ -64,7 +64,7 @@ fun CheckinSheet(viewModel: CheckinViewModel = hiltViewModel()) {
                 .padding(bottom = 16.dp)
         ) {
             Text(
-                "This morning",
+                "Today's check-in",
                 style = MaterialTheme.typography.headlineSmall,
                 color = onBg
             )
@@ -138,11 +138,11 @@ fun CheckinSheet(viewModel: CheckinViewModel = hiltViewModel()) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    "Skip today",
+                    "Close",
                     style = MaterialTheme.typography.bodyMedium,
                     color = muted,
                     modifier = Modifier
-                        .clickableLabeled("Skip today's check-in") { viewModel.skip() }
+                        .clickableLabeled("Close check-in") { viewModel.close() }
                         .padding(vertical = 8.dp, horizontal = 4.dp)
                 )
                 ForgePrimaryCapsule(if (state.answeredToday) "Update" else "Save", onClick = viewModel::save)

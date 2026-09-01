@@ -86,7 +86,7 @@ internal val PAGE_ENTRIES = listOf(
     SettingsPageEntry(SettingsPage.Appearance, "appearance amoled dark theme accent color compact logging display privacy look app icon launcher home screen"),
     SettingsPageEntry(SettingsPage.Format, "units format kg lb weight date time week timezone locale distance strength standards sex"),
     SettingsPageEntry(SettingsPage.Session, "session haptic feedback vibration notes templates rest timer between sets compound isolation"),
-    SettingsPageEntry(SettingsPage.Notifications, "notifications reminders quiet hours recap timer alerts notify suppress"),
+    SettingsPageEntry(SettingsPage.Notifications, "notifications reminders quiet hours recap timer alerts notify suppress daily check-in morning sleep soreness stress drive weight"),
     SettingsPageEntry(SettingsPage.Security, "security lock app lock gallery lock biometric fingerprint face pin passcode privacy photos protect unlock"),
     SettingsPageEntry(SettingsPage.Program, "program equipment generate auto split days routine rotate trainings workouts barbell dumbbell cable machine plate focus goal experience emphasis priority"),
     SettingsPageEntry(SettingsPage.Coach, "coach weekly review autopilot auto-apply suggest mode on off tweaks"),
@@ -137,6 +137,7 @@ internal val ALL_ITEMS = listOf(
     SettingsItem("Ask to dislike after swap", "swap dislike prompt hide exercise default", SettingsPage.ExercisePrefs),
     SettingsItem("Holiday mode", "holiday vacation pause streak break away travel", SettingsPage.Vacation),
     SettingsItem("Coach mode", "coach mode suggest auto apply autopilot earn", SettingsPage.Coach),
+    SettingsItem("Daily check-ins", "morning sleep soreness stress drive weight readiness", SettingsPage.Notifications),
 ) + com.forge.app.program.Equipment.entries.map { equip ->
     // Each piece of equipment is searchable by name, so a query like "kettlebell" surfaces it
     // (tagged to the Program & equipment page) instead of only the generic "Available equipment" row.

@@ -45,6 +45,8 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.data.repo.AppNotice
 import com.forge.app.data.repo.NoticeAction
+import com.forge.app.ui.checkin.CheckinSheet
+import com.forge.app.ui.checkin.CheckinViewModel
 import com.forge.app.ui.common.InlineEmptyHint
 import com.forge.app.ui.common.bounceCombinedClick
 import com.forge.app.ui.common.clickableLabeled
@@ -71,6 +73,7 @@ fun NotificationsScreen(
     onOpenNotificationSettings: () -> Unit,
     onOpenLesson: (lessonId: String) -> Unit,
     viewModel: NotificationsViewModel = hiltViewModel(),
+    checkinViewModel: CheckinViewModel = hiltViewModel(),
 ) {
     val notices by viewModel.notices.collectAsStateWithLifecycle()
     val context = LocalContext.current
@@ -84,6 +87,7 @@ fun NotificationsScreen(
     fun act(notice: AppNotice) {
         when (val action = notice.action) {
             is NoticeAction.ResumeSession -> onResumeSession(action.dayKey)
+            NoticeAction.OpenCheckin -> checkinViewModel.open()
             NoticeAction.OpenCoachBrief -> { viewModel.onCoachBriefOpened(); onOpenCoachBrief() }
             NoticeAction.ConnectWearable -> onConnectWearable()
             // Opening the lesson is what clears its row: the feed shows unlocked-and-unread
@@ -107,6 +111,8 @@ fun NotificationsScreen(
             onDismiss = { sheetOpen = false }
         )
     }
+
+    CheckinSheet(checkinViewModel)
 
     Scaffold(
         topBar = {

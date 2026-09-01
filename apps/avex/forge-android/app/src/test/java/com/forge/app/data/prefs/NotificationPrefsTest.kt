@@ -251,4 +251,14 @@ class NotificationPrefsTest {
         repo.markLessonNoticesAnnounced(emptySet())
         assertTrue(repo.announcedLessonNotices.first().isEmpty())
     }
+
+    @Test
+    fun checkinArrivalIsRememberedByDate() = runTest {
+        assertTrue(repo.announcedCheckinDates.first().isEmpty())
+
+        repo.markCheckinDatesAnnounced(setOf("2026-09-01"))
+        repo.markCheckinDatesAnnounced(setOf("2026-09-02"))
+
+        assertEquals(setOf("2026-09-01", "2026-09-02"), repo.announcedCheckinDates.first())
+    }
 }

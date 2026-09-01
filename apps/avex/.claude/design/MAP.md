@@ -91,11 +91,14 @@ Three `MainActivity` dialogs were folded in at the same time: the share-import r
 backup-restored confirmation and the POST_NOTIFICATIONS rationale. The first two were pure "here's
 what happened · OK" over whatever screen you were on; the third interrupted a cold launch to ask.
 The permission row now opens the OS app-notification screen rather than re-requesting, so it keeps
-working after any number of denials. **Still dialogs on purpose**: `ProgramChangeGuardHost` (a
-destructive confirm — it must block), `CheckinSheet` and `DislikeSwapPromptDialog` (they ask for
-input at the moment of relevance, not for attention), and Settings → Notifications'
-`NotificationsBlockedBanner`, which is the denied-state of the controls directly beneath it (§12)
-rather than a notice.
+working after any number of denials. `CheckinSheet` left `MainActivity` on 2026-08-31 as well: a
+small once-daily arrival banner flies to Home's bell, where its row waits and opens the sheet when
+tapped. Saving resolves the row for that local day. Daily input does not earn a launch interruption
+or a second entry point in Coach settings. **Still dialogs on purpose**: `ProgramChangeGuardHost`
+(a destructive confirm — it
+must block), `CheckinSheet` and `DislikeSwapPromptDialog` (they ask for input after an explicit or
+contextual action), and Settings → Notifications' `NotificationsBlockedBanner`, which is the
+denied-state of the controls directly beneath it (§12) rather than a notice.
 
 ### Academy — `ui/academy`
 

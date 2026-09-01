@@ -87,7 +87,6 @@ data class OverviewUiState(
     /** Highest single-session volume (lb) logged in the current ISO week; null/0 when none. */
     val bestSessionThisWeekLb: Double? = null,
     val pendingMilestone: MilestoneEvent? = null,
-    val onThisDayMemory: OnThisDayMemory? = null,
     /** Next gym day in the rotation. */
     val nextUpDayKey: String = "upper-a",
     /** 0=Mon..6=Sun indices that had a gym session this ISO week. */

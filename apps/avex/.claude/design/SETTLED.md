@@ -10,6 +10,21 @@ Also lists what may not be touched, and the known defects to fix opportunistical
 
 ---
 
+## Daily check-in lives behind the bell, not at launch (2026-09-01)
+
+The check-in never opens when the app launches. A small non-blocking arrival banner flies to Home's
+bell once per local day, while the daily row waits in the notifications feed. Tapping the banner
+opens the feed; tapping the row opens the existing sheet, and saving resolves it for that day. The
+row returns after local midnight and its kind can be disabled under Settings → Notifications. Do
+not restore the automatic `MainActivity` prompt or a second entry point under Coach settings.
+
+## On this day removed from Home (2026-08-31)
+
+The passive `ON THIS DAY` throwback is gone from Home. It sat after RECENT without changing what the
+user should do or linking to the remembered session, so it lengthened the operational snapshot with
+another past-tense fact. Do not restore the line or a card version of it. The underlying memory
+query remains for the weekly recap, where a retrospective belongs.
+
 ## Settled — do not reintroduce / do not touch
 
 **The warm-up stepper** (removed 2026-08-23, same day it landed): the rebuild replaced a fixed
@@ -46,7 +61,9 @@ the launch beat and on exported artifacts only) · **the Coach→Academy link** 
 knowledge half of the coach is its own bottom tab now, so a link from a sibling tab is redundant
 navigation, §4.2. Removed from the Goals section; the `onOpenAcademy` wiring into `CoachScreen` went
 with it. Home's contextual lesson link was the one entry point that stayed; it was **removed
-2026-08-22**, see the Home entry below, so no sibling tab links to the Academy at all now) · the Profile's ON THIS DAY (Home's `OnThisDayMemoryLine` owns that throwback — a mark is cut, not copied, §4.3; it was also the page's one prose-only section, hung off a decorative accent rule) · Coach status serif verdicts AND status/anticipation asides (status states
+2026-08-22**, see the Home entry below, so no sibling tab links to the Academy at all now) · ON THIS
+DAY on Profile and Home (the weekly recap owns the remaining throwback; Home's passive line was
+removed 2026-08-31) · Coach status serif verdicts AND status/anticipation asides (status states
 = eyebrow + figures) · Coach pre-baseline signal dot-checklist in the hero (→ one labeled Baseline
 bar in the "Coming up" idiom; the effort/HC inputs it spelled out live in Signals only, §4.3,
 GYMAP-24) · hairline section separators (§1) · the 9-row milestone ladder (→ rail + next, §4.10).
@@ -254,7 +271,8 @@ directly. Six removals, no content cut:
 - **The box around ON THIS DAY.** A 12dp radius and a hairline border around content its own KDoc
   called display-only — §1's central ban, and the only bordered element on a page whose every other
   passive line sits bare, so it read as the one pressable thing and was not. Renamed
-  `OnThisDayMemoryLine`; the memory itself is unchanged.
+  `OnThisDayMemoryLine`; the line itself was removed from Home on 2026-08-31, while the weekly recap
+  kept the underlying memory query.
 
 Also paid down, same pass: the page gutter (20 → §7's 24; Stats' 16 is still the open defect), the
 spacing scale (5dp and 3dp gaps between text of different roles → one 8/12/16/20/28 rhythm, §7),
@@ -639,4 +657,3 @@ page.** `ExerciseIcons.Bodyweight` is a stick figure that holds at 22dp, so deta
 failed — ambiguity was. The History row keeps its glyph SLOT (the left rail it gave gym rows is
 worth having on its own), so restoring this is a one-line change at `HistoryRows.SessionRow` and
 `OverviewScreen.RecentRow`; the family itself is in git, not in the tree.
-

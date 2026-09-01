@@ -239,6 +239,19 @@ class SettingsRepository @Inject constructor(
         }
     }
 
+    /** Local dates whose daily check-in arrival banner has already played. */
+    val announcedCheckinDates: Flow<Set<String>> = pref { prefs ->
+        prefs[PreferenceKeys.ANNOUNCED_CHECKIN_DATES] ?: emptySet()
+    }
+
+    suspend fun markCheckinDatesAnnounced(dateKeys: Set<String>) {
+        if (dateKeys.isEmpty()) return
+        context.forgePreferences.edit { prefs ->
+            prefs[PreferenceKeys.ANNOUNCED_CHECKIN_DATES] =
+                (prefs[PreferenceKeys.ANNOUNCED_CHECKIN_DATES] ?: emptySet()) + dateKeys
+        }
+    }
+
     /** `NoticeKind.key`s switched off — those rows never reach the feed. */
     val disabledNoticeKinds: Flow<Set<String>> = pref { prefs -> prefs[PreferenceKeys.DISABLED_NOTICE_KINDS] ?: emptySet() }
 
