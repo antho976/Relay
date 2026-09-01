@@ -199,7 +199,7 @@
 1 em-dash ui/gym/train/DayScreen.kt em dash in string
 2 em-dash ui/gym/train/DaySwapHandlers.kt em dash in string
 1 em-dash ui/gym/train/DayViewModelBuilders.kt em dash in string
-2 em-dash ui/gym/train/components/ExerciseCard.kt em dash in string
+1 em-dash ui/gym/train/components/ExerciseCard.kt em dash in string
 1 em-dash ui/gym/train/components/ExerciseCardComponents.kt em dash in string
 1 em-dash ui/gym/train/components/ExerciseChartSheet.kt em dash in string
 1 em-dash ui/gym/train/components/SetInputRow.kt em dash in string
@@ -218,6 +218,7 @@
 2 font-size ui/checkin/CheckinSheet.kt fontSize=
 7 font-size ui/coach/CoachCharts.kt fontSize=
 1 font-size ui/coach/GoalPickerDialog.kt fontSize=
+1 font-size ui/common/DayLog.kt fontSize=
 3 font-size ui/common/Editorial.kt fontSize=
 1 font-size ui/common/SegmentPill.kt fontSize=
 11 font-size ui/gym/freestyle/FreestyleLogScreen.kt fontSize=
@@ -226,14 +227,13 @@
 9 font-size ui/gym/session/SessionDetailComponents.kt fontSize=
 2 font-size ui/gym/session/SessionDetailMetricCards.kt fontSize=
 1 font-size ui/gym/session/SessionTypeDialog.kt fontSize=
-1 font-size ui/gym/stats/StatsDayDetailSheet.kt fontSize=
 2 font-size ui/gym/stats/StatsOverview.kt fontSize=
 1 font-size ui/gym/stats/StatsReadiness.kt fontSize=
 3 font-size ui/gym/stats/StatsStrength.kt fontSize=
 2 font-size ui/gym/stats/StatsVolume.kt fontSize=
 5 font-size ui/gym/train/DaySessionContent.kt fontSize=
 3 font-size ui/gym/train/components/DayCardComponents.kt fontSize=
-7 font-size ui/gym/train/components/ExerciseCard.kt fontSize=
+6 font-size ui/gym/train/components/ExerciseCard.kt fontSize=
 10 font-size ui/gym/train/components/ExerciseCardComponents.kt fontSize=
 6 font-size ui/gym/train/components/ExerciseChartSheet.kt fontSize=
 1 font-size ui/gym/train/components/RestTimerBubble.kt fontSize=

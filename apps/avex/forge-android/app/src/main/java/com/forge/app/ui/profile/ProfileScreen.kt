@@ -45,6 +45,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.forge.app.Features
 import com.forge.app.security.LocalAppLock
 import com.forge.app.ui.common.ConfettiOverlay
+import com.forge.app.ui.common.DayLogSheet
 import com.forge.app.ui.common.statsEntrance
 import com.forge.app.ui.experiment.SectionAnchor
 import com.forge.app.ui.experiment.SurfaceCard
@@ -182,9 +183,13 @@ fun ProfileScreen(
     onOpenTrophies: () -> Unit,
     onOpenPhotoGallery: () -> Unit = {},
     onOpenMeasurements: () -> Unit = {},
+    /** Drill-downs out of the ACTIVITY day sheet — the same destinations History opens. */
+    onOpenSession: (Long) -> Unit = {},
+    onOpenCardio: (Long) -> Unit = {},
     viewModel: ProfileViewModel = hiltViewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val dayLog by viewModel.dayLog.collectAsStateWithLifecycle()
     val galleryLocked by LocalAppLock.current.galleryLocked.collectAsStateWithLifecycle()
     val showRankUpCelebration by viewModel.showRankUpCelebration.collectAsStateWithLifecycle()
     val bodyweight by viewModel.bodyweight.collectAsStateWithLifecycle()
@@ -360,6 +365,7 @@ fun ProfileScreen(
                     // `colorScheme.primary` IS the near-white neutral, so the ramp goes grey with
                     // the rest of the app rather than needing a branch here.
                     hue = accent,
+                    onDayTap = viewModel::openDay,
                     modifier = pad.statsEntrance(2)
                 )
 
@@ -444,6 +450,18 @@ fun ProfileScreen(
         val r = state.rank
         val xp = state.xp
         if (r != null && xp != null) RankInfoSheet(r, xp, onDismiss = { showXpInfo = false })
+    }
+
+    // "What did I do that day?" — opened by tapping a lit day on the ACTIVITY calendar. The same
+    // sheet Stats' heatmap opens, so a day looks the same wherever you ask about it, and the rows
+    // drill into the same detail screens History uses.
+    dayLog?.let { log ->
+        DayLogSheet(
+            log = log,
+            onOpenSession = { viewModel.closeDay(); onOpenSession(it) },
+            onOpenCardio = { viewModel.closeDay(); onOpenCardio(it) },
+            onDismiss = viewModel::closeDay
+        )
     }
 
     if (showWeightSheet) {

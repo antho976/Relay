@@ -12,11 +12,21 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ChevronLeft
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -26,10 +36,12 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.forge.app.ui.common.clickableLabeled
 import com.forge.app.ui.theme.MonoSectionAnchor
 import java.time.DayOfWeek
 import java.time.LocalDate
 import java.time.YearMonth
+import java.time.format.DateTimeFormatter
 import java.time.format.TextStyle
 import java.util.Locale
 
@@ -75,6 +87,17 @@ import java.util.Locale
  * Days outside the month draw nothing, so the grid keeps the month's own ragged first and last
  * rows. Days still ahead of today draw below the rest-day rung — the month keeps its full shape
  * without claiming a future day is a rest day.
+ *
+ * ## Tappable, and pageable (2026-08-31)
+ *
+ * It was deliberately passive at first, on the grounds that the tappable day-detail already lived
+ * on Stats. In practice nobody goes to Stats to answer "what did I do on the 12th" while looking
+ * straight at the 12th, so a lit day opens the same [com.forge.app.ui.common.DayLogSheet] Stats
+ * opens — the same rows, drilling into the same session and cardio screens. Rest days stay inert.
+ *
+ * The month name became a stepper at the same time, because a calendar you cannot page is a
+ * calendar that answers questions about this month only. Back stops at the oldest month with
+ * anything in it, forward stops at this one.
  *
  * Swapping back to the year is one call site in [ProfileScreen]; both live in the package.
  */
@@ -125,10 +148,25 @@ internal fun ProfileActivityMonth(
     onBg: Color,
     muted: Color,
     hue: Color,
+    /** Opens the day sheet. Only lit days call it — a rest day has nothing to show. */
+    onDayTap: ((LocalDate) -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     val today = remember { LocalDate.now() }
-    val month = remember(today) { YearMonth.from(today) }
+    val thisMonth = remember(today) { YearMonth.from(today) }
+    // How many months back the grid is showing. An Int, not a YearMonth, because that is what
+    // survives process death through rememberSaveable without a custom Saver.
+    var monthsBack by rememberSaveable { mutableIntStateOf(0) }
+    val month = remember(thisMonth, monthsBack) { thisMonth.minusMonths(monthsBack.toLong()) }
+
+    // How far back there is anything to look at. Paging into a run of empty months is a worse
+    // answer than a dead arrow, and the map now spans all of history rather than this year, so it
+    // knows where the record actually starts.
+    val oldestMonth = remember(activityByDay, thisMonth) {
+        activityByDay.keys.minOrNull()?.let { YearMonth.from(LocalDate.ofEpochDay(it)) } ?: thisMonth
+    }
+    val canGoBack = month.isAfter(oldestMonth)
+    val canGoForward = monthsBack > 0
 
     // The grid spans whole weeks: back to the Monday on or before the 1st, forward to the Sunday on
     // or after the last day. Monday-first matches the app's other calendar (Stats' heatmap).
@@ -150,43 +188,66 @@ internal fun ProfileActivityMonth(
     }
     val activeDays = monthCounts.size
     val sessions = monthCounts.sum()
-    val streak = remember(streakDays, longestStreakDays) { MonthStreak.of(streakDays, longestStreakDays) }
+    // Both streak figures are about TODAY, not about the month on screen. Printed under a paged-back
+    // March they would read as March's run, which is a wrong answer dressed as a reading — so they
+    // show only while the grid is showing the month they belong to.
+    val streak = remember(streakDays, longestStreakDays, monthsBack) {
+        if (monthsBack == 0) MonthStreak.of(streakDays, longestStreakDays) else null
+    }
 
     val empty = MaterialTheme.colorScheme.outline.copy(alpha = MONTH_EMPTY_ALPHA)
     val future = MaterialTheme.colorScheme.outline.copy(alpha = MONTH_FUTURE_ALPHA)
     val monthName = month.month.getDisplayName(TextStyle.FULL, Locale.getDefault()).uppercase()
-    val reading = if (activeDays == 0) {
-        "$monthName: no sessions logged yet"
-    } else {
-        "$monthName: trained on $activeDays days, $sessions sessions"
-    }
-    // The grid's own description stays about the grid; the streak is spoken by its reading below.
-
 
     Column(modifier.fillMaxWidth()) {
         // Not `SectionAnchor`: its trailing slot is a navigation link ("view all →"), and the month
-        // name is a caption for what is drawn, not somewhere to go.
+        // name is not somewhere to go — it is the caption for what is drawn, and now also the
+        // readout of a stepper. Chevrons in `IconButton`s, matching Stats' heatmap pager exactly,
+        // because it is the same control over the same kind of grid.
         Row(
             Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text("ACTIVITY", style = MonoSectionAnchor, color = muted)
-            Text(
-                "$monthName ${month.year}",
-                style = MaterialTheme.typography.labelSmall,
-                color = muted
-            )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                MonthStep(
+                    icon = Icons.Filled.ChevronLeft,
+                    label = "Earlier month",
+                    enabled = canGoBack,
+                    onBg = onBg,
+                    muted = muted
+                ) { monthsBack++ }
+                Text(
+                    "$monthName ${month.year}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = muted,
+                    textAlign = TextAlign.Center,
+                    // A floor, not a fixed width: the label still grows for SEPTEMBER and still
+                    // scales with the font setting. It stops the chevrons walking sideways under
+                    // the finger that is tapping them as the month name changes length.
+                    modifier = Modifier.widthIn(min = 108.dp)
+                )
+                MonthStep(
+                    icon = Icons.Filled.ChevronRight,
+                    label = "Later month",
+                    enabled = canGoForward,
+                    onBg = onBg,
+                    muted = muted
+                ) { monthsBack-- }
+            }
         }
         Spacer(Modifier.height(14.dp))
         // Header and grid share one width so the weekday labels stay centred over their columns.
         Column(Modifier.fillMaxWidth()) {
             WeekdayHeader(muted)
             Spacer(Modifier.height(8.dp))
+            // No `mergeDescendants` any more: it collapsed the whole month into one announcement,
+            // which was right while the grid was a passive texture and is wrong now that the cells
+            // are individually tappable. Each day speaks for itself below, and the summary the
+            // merge used to carry is printed in words on the readings line further down.
             Column(
-                Modifier
-                    .fillMaxWidth()
-                    .semantics(mergeDescendants = true) { contentDescription = reading },
+                Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(MONTH_CELL_GAP)
             ) {
                 for (week in 0 until weeks) {
@@ -203,13 +264,28 @@ internal fun ProfileActivityMonth(
                                 // Outside the month — nothing drawn, so the grid keeps its shape.
                                 Box(cell)
                             } else {
-                                val level = monthLevelOf(activityByDay[date.toEpochDay()] ?: 0)
+                                val count = activityByDay[date.toEpochDay()] ?: 0
+                                val level = monthLevelOf(count)
                                 val color = when {
                                     date.isAfter(today) -> future
                                     level == 0 -> empty
                                     else -> lerp(empty, hue, MONTH_LIT_RUNGS[level - 1])
                                 }
-                                Box(cell.clip(MONTH_CELL_SHAPE).background(color))
+                                // Only a LIT day opens the sheet — same rule as Stats' heatmap. A
+                                // rest day has nothing to show, and a tap that opens "nothing
+                                // logged" teaches the grid is broken rather than that you rested.
+                                val tap = onDayTap.takeIf { count > 0 }
+                                Box(
+                                    cell
+                                        .clip(MONTH_CELL_SHAPE)
+                                        .background(color)
+                                        .semantics { contentDescription = dayReading(date, count) }
+                                        .then(
+                                            if (tap != null)
+                                                Modifier.clickableLabeled("See what you did") { tap(date) }
+                                            else Modifier
+                                        )
+                                )
                             }
                         }
                     }
@@ -287,6 +363,38 @@ private data class MonthStreak(val figure: String, val noun: String, val best: S
         }
     }
 }
+
+/**
+ * One chevron of the month stepper. A full [IconButton] rather than a bare tinted glyph, for the
+ * 48dp target §14 asks for; at a bound it dims and goes inert rather than disappearing, so the
+ * stepper keeps its shape and the reason you cannot page further is visible.
+ */
+@Composable
+private fun MonthStep(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    enabled: Boolean,
+    onBg: Color,
+    muted: Color,
+    onClick: () -> Unit
+) {
+    IconButton(onClick = onClick, enabled = enabled) {
+        Icon(icon, contentDescription = label, tint = if (enabled) onBg else muted.copy(alpha = 0.35f))
+    }
+}
+
+/** What TalkBack says on one day cell: the date, then what is on it. */
+private fun dayReading(date: LocalDate, count: Int): String {
+    val day = date.format(DAY_READING_FMT)
+    return when {
+        count <= 0 -> "$day, rest day"
+        count == 1 -> "$day, 1 session"
+        else -> "$day, $count sessions"
+    }
+}
+
+private val DAY_READING_FMT: DateTimeFormatter =
+    DateTimeFormatter.ofPattern("MMMM d", Locale.getDefault())
 
 /**
  * M T W T F S S, each centred over its column.

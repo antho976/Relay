@@ -6,7 +6,8 @@ import com.forge.app.data.db.dao.SessionDao
 import com.forge.app.data.repo.AdaptationRepository
 import com.forge.app.data.repo.CardioRepository
 import com.forge.app.data.repo.StatsRepository
-import com.forge.app.ui.gym.history.HistoryItem
+import com.forge.app.ui.common.DayLog
+import com.forge.app.ui.common.loadDayLog
 import com.forge.app.ui.gym.stats.state.StatsUiState
 import com.forge.app.ui.gym.stats.state.balanceRatioUi
 import com.forge.app.ui.gym.stats.state.buildReadinessPulse
@@ -22,17 +23,7 @@ import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import java.time.LocalDate
-import java.time.ZoneId
 import javax.inject.Inject
-
-/**
- * Everything logged on one calendar day — opened by tapping a lit day on the consistency heatmap.
- * Reuses [HistoryItem] so the sheet renders the exact same rows as the History screen.
- */
-data class StatsDayDetail(
-    val date: LocalDate,
-    val items: List<HistoryItem>
-)
 
 @HiltViewModel
 class StatsViewModel @Inject constructor(
@@ -75,8 +66,8 @@ class StatsViewModel @Inject constructor(
     fun saveStatsTab(name: String) = viewModelScope.launch { settingsRepo.setLastStatsTabName(name) }
 
     /** The day the user tapped on the consistency heatmap; null = sheet closed. */
-    private val _dayDetail = MutableStateFlow<StatsDayDetail?>(null)
-    val dayDetail: StateFlow<StatsDayDetail?> = _dayDetail.asStateFlow()
+    private val _dayDetail = MutableStateFlow<DayLog?>(null)
+    val dayDetail: StateFlow<DayLog?> = _dayDetail.asStateFlow()
 
     /** The in-flight [openDay] load, cancelled by the next tap. */
     private var dayDetailJob: kotlinx.coroutines.Job? = null
@@ -94,14 +85,7 @@ class StatsViewModel @Inject constructor(
         dayDetailJob?.cancel()
         dayDetailJob = viewModelScope.launch {
         runCatching {
-            val zone = ZoneId.systemDefault()
-            val fromMs = date.atStartOfDay(zone).toInstant().toEpochMilli()
-            val toMs = date.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
-            val workouts = sessionDao.finishedInRange(fromMs, toMs).map { HistoryItem.Workout(it) }
-            // Bounded query (non-rest, in [fromMs, toMs)) instead of loading the whole cardio history
-            // and filtering one day out of it.
-            val cardio = cardioRepo.entriesInRange(fromMs, toMs).map { HistoryItem.Cardio(it) }
-            StatsDayDetail(date, (workouts + cardio).sortedByDescending { it.dateMs })
+            loadDayLog(sessionDao, cardioRepo, date)
         }.getOrElse { e ->
             // runCatching swallows CancellationException too, and a cancelled load publishing its
             // half-finished result is the very thing the cancel exists to prevent.
