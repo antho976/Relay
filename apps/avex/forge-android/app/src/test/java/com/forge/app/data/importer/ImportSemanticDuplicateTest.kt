@@ -56,13 +56,24 @@ class ImportSemanticDuplicateTest {
     private val startedAt = 1_767_600_000_000L
 
     /** One Avex-JSON workout: a single pull-up set, with whatever set fields [setExtras] adds. */
-    private fun avexExport(name: String, setExtras: String = "", exerciseExtras: String = ""): Uri {
+    private fun avexExport(
+        name: String,
+        setExtras: String = "",
+        exerciseExtras: String = "",
+        /** Session-level fields to add or override — `finishedAt`, `prCount`, `mood` (M-03). */
+        sessionOverrides: Map<String, String> = emptyMap()
+    ): Uri {
         val file = temporaryFolder.newFile(name)
+        val session = LinkedHashMap<String, String>().apply {
+            put("startedAt", "$startedAt")
+            put("finishedAt", "${startedAt + 3_600_000L}")
+            putAll(sessionOverrides)
+        }
+        val fields = session.entries.joinToString(",") { (k, v) -> "\"$k\":$v" }
         file.writeText(
             """
             {"exportVersion":1,"sessions":[{
-              "startedAt":$startedAt,
-              "finishedAt":${startedAt + 3_600_000L},
+              $fields,
               "exercises":[{
                 "name":"Pull Up",
                 $exerciseExtras
@@ -124,4 +135,38 @@ class ImportSemanticDuplicateTest {
         assertEquals(0, skipped.duplicatesSkipped)
         assertEquals(2, storedSessions().size)
     }
+
+    // ── M-03: the session's own timing, counts and mood ──────────────────────
+
+    /**
+     * The five fields the print still could not see. Each is parsed, persisted, and something a
+     * user can correct — so an export whose ONLY change was one of them printed identically and
+     * was discarded, on the one path whose promise is that it does not lose anything.
+     *
+     * These prove the correction is no longer SILENTLY DROPPED. They do not prove it is stored as
+     * a correction: without a source identity on the session row there is nothing to replace by,
+     * and the corrected copy lands beside the original — see `docs/AUDIT_DEFERRED.md`.
+     */
+    @Test
+    fun aCorrectedEndTimeIsNotADuplicate() = runTest {
+        repo.import(avexExport("before.json"))
+
+        val corrected = repo.import(avexExport("after.json", sessionOverrides = mapOf("finishedAt" to "1767603600000")))
+            as ImportResult.Success
+
+        assertEquals("the corrected copy is different work", 0, corrected.duplicatesSkipped)
+        assertEquals(1, corrected.sessions)
+    }
+
+    @Test
+    fun aCorrectedPrCountOrMoodIsNotADuplicate() = runTest {
+        repo.import(avexExport("plain.json"))
+
+        val pr = repo.import(avexExport("pr.json", sessionOverrides = mapOf("prCount" to "2"))) as ImportResult.Success
+        val mood = repo.import(avexExport("mood.json", sessionOverrides = mapOf("mood" to "\"strong\""))) as ImportResult.Success
+
+        assertEquals(0, pr.duplicatesSkipped)
+        assertEquals(0, mood.duplicatesSkipped)
+    }
+
 }

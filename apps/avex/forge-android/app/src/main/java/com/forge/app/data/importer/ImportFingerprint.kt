@@ -12,10 +12,16 @@ package com.forge.app.data.importer
  * on the one path whose promise is that it does not lose anything. An assisted pull-up staying
  * PR-eligible is the concrete cost.
  *
- * So the fingerprint is now every field the insert path actually writes and a user could change,
- * and nothing it derives (the nudged start instant, the denormalised volume, a set's completion
- * stamp when the source records none) — those differ between two copies of the same workout and
- * would report a re-import as new.
+ * So the fingerprint is every field the insert path actually writes and a user could change, and
+ * nothing it derives INDEPENDENTLY of the row it would be compared against — the nudged start
+ * instant and the denormalised volume.
+ *
+ * The derived timings ARE covered, and covered by deriving them the same way on both sides (M-03).
+ * A session's end time, its active duration and each set's completion stamp are the source's own
+ * values when it states them and computed from the candidate start slot when it does not, so the
+ * caller prints an incoming workout against each slot it could occupy rather than once. Printing
+ * the raw source values instead would report every re-import from a source that omits them as new;
+ * omitting them, which is what the first pass did, discarded an export corrected in one of them.
  *
  * The encoding is injective, not merely readable: free text is length-prefixed, so a note
  * containing the separator cannot forge a different workout's print. Pure, so the two sides of the
@@ -34,7 +40,16 @@ internal data class FingerprintSet(
     val toFailure: Boolean,
     val setType: String?,
     val difficultyTag: String?,
-    val dropAnnotation: String?
+    val dropAnnotation: String?,
+    /**
+     * When this set was completed, as the row would STORE it — the source's own instant, or the
+     * session's finish where the source records none (M-03).
+     *
+     * Derived on both sides against the same candidate start slot, which is what makes it safe to
+     * compare: including the raw source value would report every re-import from a source that
+     * omits it as new.
+     */
+    val completedAt: Long
 )
 
 internal data class FingerprintExercise(
@@ -56,6 +71,19 @@ internal data class FingerprintSession(
     val isUntracked: Boolean,
     val tags: String,
     val journal: String,
+    /**
+     * The three session-level values the first pass left out (M-03). They are parsed, persisted,
+     * and a user can change them, so an export corrected in one of them alone was discarded as
+     * identical: a fixed end time, a re-counted PR, or a mood added after the fact.
+     *
+     * [finishedAt] and [activeSeconds] are the values that would be STORED, derived against the
+     * candidate start slot exactly as the insert derives them — see [FingerprintSet.completedAt].
+     */
+    val finishedAt: Long,
+    val activeSeconds: Int,
+    val prCount: Int,
+    /** The `mood_entry` code written beside the session, or empty when the source records none. */
+    val mood: String,
     val exercises: List<FingerprintExercise>
 )
 
@@ -67,6 +95,8 @@ internal data class FingerprintSession(
 internal fun fingerprintOf(session: FingerprintSession): String = buildString {
     append("s"); text(session.dayKey); text(session.sessionType); text(session.intensity)
     flag(session.isUntracked); text(session.tags); text(session.journal)
+    append('t'); append(session.finishedAt); append('+'); append(session.activeSeconds)
+    append('p'); append(session.prCount); text(session.mood)
     session.exercises.sortedBy { it.orderIndex }.forEach { ex ->
         append("|e"); append(ex.orderIndex); text(ex.exerciseId); text(ex.swappedName)
         text(ex.difficulty); flag(ex.skipped); text(ex.note)
@@ -82,6 +112,7 @@ internal fun fingerprintOf(session: FingerprintSession): String = buildString {
             append('r'); append(s.rpe?.let { String.format(java.util.Locale.US, "%.2f", it) } ?: "-")
             flag(s.isAssisted); flag(s.isAmrap); flag(s.toFailure)
             text(s.setType); text(s.difficultyTag); text(s.dropAnnotation)
+            append('c'); append(s.completedAt)
         }
     }
 }
