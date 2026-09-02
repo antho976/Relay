@@ -14,6 +14,7 @@ import com.forge.app.domain.adapt.bestE1rm
 import com.forge.app.domain.coach.GoalPortfolio
 import com.forge.app.ui.common.ProgramChangeGuard
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -157,7 +158,10 @@ class CoachViewModel @Inject constructor(
     }
 
     private suspend fun runAndRefresh(block: suspend () -> Unit) {
-        runCatching { block() }
+        // A cancelled scope must unwind, not be laundered into a refresh: the repository's apply is
+        // transactional, so cancellation rolls it back cleanly, and refreshing here would read and
+        // publish state from inside a coroutine that is already cancelled (H-03).
+        runCatching { block() }.onFailure { if (it is CancellationException) throw it }
         // A lifecycle tap can move trust, learned biases and the brief itself; refresh all three
         // reads (each falls back to the last good value on failure). The chart series don't change.
         val s = _state.value

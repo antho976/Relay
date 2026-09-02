@@ -69,6 +69,9 @@ class OutcomeWatcherTest {
     /** Six short nights (6h ≤ the 6.5h ceiling) inside the deload window → the sleep-debt driver (+2). */
     private fun shortNights() = (0 until 6).map { SleepNight(endedAtMs = now - (1 + it) * day, durationMin = 360) }
 
+    /** Non-skipped bouts of the target slot on the given days — the exposure an "ok" now requires (M-08). */
+    private fun trainedSince(vararg days: Int) = snapshot(mapOf("ua1" to days.map { bout(it) }))
+
     @Test
     fun insideWindow_noSkips_noVerdictYet() {
         // Applied day 50, now day 60 — 10 of 14 days elapsed, trained twice without skipping.
@@ -213,7 +216,7 @@ class OutcomeWatcherTest {
             )
         )
         val verdict = OutcomeWatcher.evaluate(
-            listOf(decision(appliedAtDay = 30)), snapshot(), life = life
+            listOf(decision(appliedAtDay = 30)), trainedSince(32, 35), life = life
         ).single()
         assertEquals(CoachDecision.OUTCOME_NOT_FOLLOWED, verdict.outcome)
         assertTrue(verdict.failReason!!.contains("away or unwell"))
@@ -226,7 +229,7 @@ class OutcomeWatcherTest {
         // illness rather than from the change.
         val life = LifeEvents.State.NONE.copy(sick = true, sickAtMs = listOf(45 * day))
         val verdict = OutcomeWatcher.evaluate(
-            listOf(decision(appliedAtDay = 40)), snapshot(), life = life
+            listOf(decision(appliedAtDay = 40)), trainedSince(44, 48), life = life
         ).single()
         assertEquals(CoachDecision.OUTCOME_NOT_FOLLOWED, verdict.outcome)
     }
@@ -240,7 +243,7 @@ class OutcomeWatcherTest {
         // ill on the wrong day cost the coach every unit of trust the fortnight had earned.
         val life = LifeEvents.State.NONE.copy(sick = true, sickAtMs = listOf(59 * day))
         val verdict = OutcomeWatcher.evaluate(
-            listOf(decision(appliedAtDay = 40)), snapshot(), life = life
+            listOf(decision(appliedAtDay = 40)), trainedSince(44, 48), life = life
         ).single()
         assertEquals("ok", verdict.outcome)
     }
@@ -254,7 +257,7 @@ class OutcomeWatcherTest {
         // verdicts that should have counted, and TrustLedger reads those verdicts.
         fun verdictWithSickDay(dayIndex: Int) = OutcomeWatcher.evaluate(
             listOf(decision(appliedAtDay = 40)),
-            snapshot(),
+            trainedSince(44, 48),
             life = LifeEvents.State.NONE.copy(sick = true, sickAtMs = listOf(dayIndex * day))
         ).single().outcome
 
@@ -285,14 +288,65 @@ class OutcomeWatcherTest {
         // change still covers the start of its window — you don't recover the moment you tap Apply.
         val life = LifeEvents.State.NONE.copy(sick = true, sickAtMs = listOf(38 * day))
         val verdict = OutcomeWatcher.evaluate(
-            listOf(decision(appliedAtDay = 40)), snapshot(), life = life
+            listOf(decision(appliedAtDay = 40)), trainedSince(44, 48), life = life
         ).single()
         assertEquals(CoachDecision.OUTCOME_NOT_FOLLOWED, verdict.outcome)
     }
 
     @Test
     fun anOrdinaryLifeStillGetsARealVerdict() {
-        val verdict = OutcomeWatcher.evaluate(listOf(decision(appliedAtDay = 40)), snapshot()).single()
+        val verdict = OutcomeWatcher.evaluate(listOf(decision(appliedAtDay = 40)), trainedSince(44, 48)).single()
+        assertEquals("ok", verdict.outcome)
+    }
+
+    // ── No exposure is not a success (audit M-08) ──────────────────────────────
+
+    @Test
+    fun swap_windowClosed_neverTrained_isNotFollowedNotOk() {
+        // Applied day 44, window closed, and the slot was never performed. This used to fall through
+        // to "ok" — and TrustLedger reads that column, so a swap nobody ever did counted toward
+        // auto-apply. An empty window is evidence of nothing: it closes neutral.
+        val verdict = OutcomeWatcher.evaluate(listOf(decision(appliedAtDay = 44)), snapshot()).single()
+        assertEquals(CoachDecision.OUTCOME_NOT_FOLLOWED, verdict.outcome)
+        assertTrue(verdict.failReason!!.contains("wasn't trained"))
+    }
+
+    @Test
+    fun swap_windowClosed_onlySkippedOnce_isNotFollowed() {
+        // One skip is below the avoidance threshold (two fails it) — but it is still zero performed bouts.
+        val verdict = OutcomeWatcher.evaluate(
+            listOf(decision(appliedAtDay = 44)),
+            snapshot(mapOf("ua1" to listOf(bout(50, skipped = true))))
+        ).single()
+        assertEquals(CoachDecision.OUTCOME_NOT_FOLLOWED, verdict.outcome)
+    }
+
+    @Test
+    fun swap_insideWindow_neverTrained_isStillPending() {
+        // The neutral close only lands once the window shuts — a live window stays undecided.
+        assertTrue(OutcomeWatcher.evaluate(listOf(decision(appliedAtDay = 50)), snapshot()).isEmpty())
+    }
+
+    @Test
+    fun repShift_windowClosed_noWorkingSetsSinceTheChange_isNotFollowed() {
+        // Plenty of history BEFORE the change, none after: there is no post-change e1RM to judge the
+        // shift on, so it closes neutral rather than as a win.
+        val verdict = OutcomeWatcher.evaluate(
+            listOf(decision(type = "rep_shift", appliedAtDay = 44, undoData = "6-8")),
+            snapshot(mapOf("ua1" to listOf(wbout(36, 50.0), wbout(40, 52.0))))
+        ).single()
+        assertEquals(CoachDecision.OUTCOME_NOT_FOLLOWED, verdict.outcome)
+        assertTrue(verdict.failReason!!.contains("no logged working sets"))
+    }
+
+    @Test
+    fun repShift_windowClosed_trainedWithNoPriorBaseline_ok() {
+        // Performed under the new range with nothing to compare against: the change was followed and
+        // there is no regression evidence, so it passes on the strength of having been done.
+        val verdict = OutcomeWatcher.evaluate(
+            listOf(decision(type = "rep_shift", appliedAtDay = 44, undoData = "6-8")),
+            snapshot(mapOf("ua1" to listOf(wbout(48, 50.0), wbout(52, 52.0))))
+        ).single()
         assertEquals("ok", verdict.outcome)
     }
 
