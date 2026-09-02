@@ -152,8 +152,28 @@ class WorkoutImportRepository @Inject constructor(
             } catch (e: Exception) {
                 0
             }
-            val entry = if (count == 0) null
-            else FoundImport(doc.uri, doc.name ?: "export", importer.source, count, stamp)
+            // The non-workout rows count too (L-01). The scanner asked only how many WORKOUTS a
+            // file held, so a bodyweight CSV — which returns its data through parseExtras by
+            // design — was cached as "nothing here", and so was a cardio- or goals-only Avex JSON.
+            // The same file picked directly imported perfectly, which is what made it a quiet one.
+            val extras = try {
+                importer.parseExtras(text)
+            } catch (e: OutOfMemoryError) {
+                ImportedExtras()
+            } catch (e: Exception) {
+                ImportedExtras()
+            }
+            val entry = if (count == 0 && extras.isEmpty) null
+            else FoundImport(
+                uri = doc.uri,
+                name = doc.name ?: "export",
+                source = importer.source,
+                sessionCount = count,
+                lastModified = stamp,
+                cardioCount = extras.cardio.size,
+                coachGoalCount = extras.coachGoals.size,
+                bodyweightCount = extras.bodyweight.size
+            )
             scanCache[key] = stamp to entry
             entry?.let(found::add)
         }
@@ -682,5 +702,31 @@ data class FoundImport(
     val name: String,
     val source: ImportSource,
     val sessionCount: Int,
-    val lastModified: Long
+    val lastModified: Long,
+    /** Cardio entries the file carries (Avex JSON export). */
+    val cardioCount: Int = 0,
+    /** Coach goals the file carries (Avex JSON export). */
+    val coachGoalCount: Int = 0,
+    /** Weigh-ins the file carries (Avex JSON export, or an Avex bodyweight CSV). */
+    val bodyweightCount: Int = 0
 )
+
+/**
+ * What a found file is, in one line: what it holds, not just how many workouts (L-01).
+ *
+ * A file with no workouts is a real import — a bodyweight CSV has nothing else in it — and the row
+ * used to be unable to say so, because the scanner had only a workout count to describe it with.
+ * Everything the file actually carries is named, in the same order the result summary uses, and a
+ * file with nothing countable still names its source rather than claiming "0 workouts".
+ */
+fun foundImportSummary(found: FoundImport): String {
+    fun plural(n: Int, one: String, many: String) = "$n ${if (n == 1) one else many}"
+    val parts = buildList {
+        if (found.sessionCount > 0) add(plural(found.sessionCount, "workout", "workouts"))
+        if (found.cardioCount > 0) add(plural(found.cardioCount, "cardio entry", "cardio entries"))
+        if (found.bodyweightCount > 0) add(plural(found.bodyweightCount, "weigh-in", "weigh-ins"))
+        if (found.coachGoalCount > 0) add(plural(found.coachGoalCount, "goal", "goals"))
+    }
+    return if (parts.isEmpty()) found.source.displayName
+    else "${found.source.displayName} · ${parts.joinToString(" · ")}"
+}

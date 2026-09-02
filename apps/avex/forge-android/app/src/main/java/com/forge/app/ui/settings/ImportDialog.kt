@@ -22,6 +22,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.forge.app.data.importer.FoundImport
+import com.forge.app.data.importer.foundImportSummary
 import com.forge.app.ui.common.clickableLabeled
 
 /**
@@ -134,7 +135,9 @@ private fun FoundFileRow(
             // No maxLines: a file NAME is user content and wraps rather than truncating (§14).
             Text(file.name, style = MaterialTheme.typography.bodyMedium, color = onBg)
             Text(
-                "${file.source.displayName} · ${file.sessionCount} ${if (file.sessionCount == 1) "workout" else "workouts"} · ${formatShortDate(file.lastModified)}",
+                // What the file HOLDS, not just its workout count (L-01): a bodyweight CSV carries
+                // no workouts at all, and describing it as "0 workouts" is why it read as empty.
+                "${foundImportSummary(file)} · ${formatShortDate(file.lastModified)}",
                 style = MaterialTheme.typography.labelSmall, color = muted, fontSize = 9.sp
             )
         }
