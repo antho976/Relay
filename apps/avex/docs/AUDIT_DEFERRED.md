@@ -175,3 +175,79 @@ seven fixes that compiled, passed their tests, and did not fully close the findi
 check proves a file parses; it cannot tell you that `startupPreferences()` was the second reader of
 a preference whose flow you fixed, or that the cap you clamped is also printed on a screen. Reading
 every call site is what catches those, and it is worth budgeting for on anything merged from here.
+
+---
+
+## The 2026-09-01 production source audit: what this pass left open
+
+The pass against `docs/AVEX_PRODUCTION_SOURCE_AUDIT_2026-09-01.md` closed the Critical finding and
+all fifteen Highs, plus a first wave of Mediums. The same environment constraint applied: no Android
+SDK, so nothing was compiled locally; every change was traced by hand to its call sites and CI is the
+compiler. What follows is what the pass deliberately did not do, so nobody has to re-derive it.
+
+### C-01 / H-01 — restore
+
+Closed: a staged set is vouched for by a manifest (sizes and SHA-256) published last; a set the
+process died in the middle of staging is quarantined; the candidate is opened through the production
+Room builder before it is kept; the pre-restore snapshots stay until the application has opened the
+restored database, and are put back if it cannot.
+
+Open, and worth knowing:
+
+- The manifest is verified by hashing every component again at boot, on the main thread in
+  `Application.onCreate`. A multi-year Avex database is a few megabytes, so this is milliseconds; a
+  device restoring a pathological multi-hundred-megabyte backup will feel it. Size-only verification
+  above a threshold would be the cheap escape if it is ever needed.
+- A landed set whose confirmation never ran (the process died between the swap and the first open)
+  is treated as confirmed on the next boot: its snapshots are swept, as before. The window is the
+  few milliseconds between `RestoreApply.apply` returning and Room opening.
+- Room validation of the candidate copies it under `databases/forge_restore_probe.db` rather than
+  opening the staged file by absolute path; that is one extra copy of the database per restore, in
+  exchange for not depending on the framework accepting a path as a name.
+
+### H-02 — block phases
+
+Closed: the deload week is served through the existing deload regeneration when the block enters
+it, the weekly pass proposes that deload when none is running and never adds volume during it,
+Intensify holds volume, Peak trims a set and keeps the structure still.
+
+Open: `BlockPhase.progressionScale` still has no production consumer. The per-set load suggestion
+(`ProgressionAdvisor.suggestNextLoad`) and the pre-session brief do not scale their target by the
+phase. The value is documented as such in `BlockPlanner.kt`. Threading it through means deciding how
+it composes with the readiness scale on the same axis, which is a product decision, not a patch.
+
+### H-08 — wrist command deduplication
+
+Closed without a schema change: a file-backed ledger records each command's ack after the mutation
+and replays it for any same-id retry; the watch resolves an ack that arrives after its timeout.
+
+Open: the ledger record is written after the Room mutation commits, not inside its transaction. A
+process death in the few milliseconds between the commit and the ledger write still re-runs the
+command on retry. Closing that needs the outcome in a `wear_command` table written in the same
+transaction, which is a migration, which needs the Room compiler (see "The environment constraint"
+above). The transport is also unchanged: commands still travel on `MessageClient`.
+
+### H-04 / H-05 — Health Connect
+
+Closed in the app: the body-fat and history permissions are declared and a test keeps every
+requested permission in the manifest; the weight backfill latches complete only with history
+access, and offers the older import otherwise.
+
+Open, outside the repository: the Play Console health-data declaration must list body fat (read and
+write) and history read before the next release, or Play will reject the bundle. A real-device
+grant, read and write-back of body fat has not been run.
+
+### H-06 — volume response
+
+Closed with a shared per-lift model. Two behaviour changes beyond the finding are recorded here so
+they are not mistaken for regressions: weekly volume now counts sets from bouts with no e1RM
+(bodyweight-only bouts), which the old learner dropped; and the Stats insight now excludes
+test/technique/first-back bouts, as the cap learner always did. The 2 percent dead band is a judgment
+call with no data behind it.
+
+### H-13 — Program Builder draft
+
+Closed via `SavedStateHandle`. The draft is bounded by what a saved state bundle can carry; a program
+with hundreds of exercises would exceed it, and the builder then falls back to the previous
+behaviour (an empty, loaded builder). No cap is enforced because no program in the library approaches
+that size.
