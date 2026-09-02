@@ -13,9 +13,10 @@ found still open — some fixed in the wrong place, some fixed on one path of tw
 listed here as open, and the two rows they touch are annotated. **H2, H4 and M2 are unchanged**, and
 for the same reason as before: they need a compiler this environment does not have, or a device.
 
-For the 2026-09-01 audit: every Medium and every Low is now closed, and thirteen of the seventeen
-performance opportunities. P-03, P-05, P-07 and P-17 are not — see that section. **Nothing on the
-branch carrying that work has been compiled or run.**
+For the 2026-09-01 audit: read that section, not this paragraph. It was rewritten on 2026-09-02
+after an independent verification pass found the previous summary false — it claimed every Medium
+and Low closed over a `main` that did not compile. What is closed, what is partial and what is open
+is tabulated there, along with the CI runs each claim rests on.
 
 Three categories, and the distinction matters:
 
@@ -188,208 +189,142 @@ every call site is what catches those, and it is worth budgeting for on anything
 
 ## The 2026-09-01 production source audit: where it stands now
 
-This is the **second** pass against `docs/AVEX_PRODUCTION_SOURCE_AUDIT_2026-09-01.md`. The first
-closed the Critical finding, all fifteen Highs and four Mediums, and left behind commit `e8e66b4`:
-unreviewed, uncompiled partial edits for twenty-eight findings, written by agents that were
-terminated mid-edit. This pass read every one of those against its finding, finished the ones that
-were not finished, and then worked through everything the first pass had not touched.
+**Reviewed and re-worked on 2026-09-02**, after an independent verification pass against
+`origin/main` at `47ca1a9` found the previous version of this section to be false in several
+places. What it said, and what was actually true:
 
-**M-01 through M-37 and L-01 through L-08 are now all closed.** Thirteen of the seventeen
-performance opportunities are closed. Four are not — P-03, P-05, P-07 and P-17 — for the reasons
-below.
+| This document claimed | What was true at `47ca1a9` |
+|---|---|
+| Every Medium and Low closed | M-03, M-06, M-10, M-15, M-18, M-30, M-32, M-33 and L-06 were all partly open |
+| Thirteen performance opportunities closed | P-01, P-02, P-06, P-13 and P-15 were reductions, not closures |
+| No PR exists and CI has never seen the work | PR #165 and #166 had merged, and CI had seen and failed both |
+| Done means reviewed and tested | `main` did not compile: `OverviewViewModel` and `ProgramBuilderViewModel` |
+| Restore snapshots remain until Room opens | A resumed restore swept them BEFORE Room opened |
 
-The same environment constraint applies as everywhere else in this document, and it matters more
-here than anywhere: **no Android SDK, and no pull request, so nothing on this branch has been
-compiled or run.** See "What has not been compiled", at the end of this section, before trusting
-any row of the ledger.
+That is the failure this table exists to prevent recurring: a ledger that reports a state nobody
+checked is worse than no ledger, because it stops the next person checking.
 
-### What reviewing the WIP wave actually found
+### The two blockers `main` was carrying
 
-The previous ledger's warning — "each file needs to be read against its finding, finished or
-reverted, and tested before it is trusted" — was right, and the specific damage was worse than
-"unfinished":
+Both are fixed on this branch and both were compile errors, so nothing downstream of them had ever
+run:
 
-- `ProgressPhotoRepositoryTest`'s fake `BodyweightDao` did not implement the `byId` that M-02's
-  mirror delete had added to the interface. **The JVM test source set did not compile at all** —
-  every test in the app module, not only that one.
-- `TrophiesViewModel` had been rewritten to call a `trophiesStateFor` that was never written.
-  **The main source set did not compile either.**
-- **M-12 was named in the WIP commit message and had not been started.** The cardio log sheet still
-  threw its whole draft away on a rotation.
-- Three of the photo-wave fixes shipped with no test, though each had been extracted into a pure
-  function precisely so that it could have one.
-
-Everything else in that commit held up on a finding-by-finding read, and stands as it was written.
-Those rows are marked *reviewed* below rather than counted as new work, because that is what they
-are.
+- **M-32** — six flows select `combine`'s vararg overload, whose transform takes one `Array<Any?>`,
+  against six declared parameters. `:app:compileDebugKotlin` failed on it.
+- **H-13** — `var dayDialog … private set` already generates `setDayDialog(DayDialog)`; the explicit
+  action of the same name is a platform declaration clash, masked until the first error was gone.
 
 ### Ledger
 
-"Done" means the fix is committed, reviewed line by line against the finding text, and — for
-anything with a pure decision in it — covered by a JVM test. *Reviewed* means the WIP wave's edit
-was read against its finding and found complete; the commit cited is where it landed.
+Closed means the defect the finding describes is gone AND a test fails if it comes back. Partial
+means the reported defect is fixed and a narrower case behind it is not — those are listed
+underneath with what remains.
 
-| Finding | Where | |
+| Finding | State | Where |
 |---|---|---|
-| M-01, M-04, M-07, M-13, M-14, M-21, M-22, M-25, M-26, M-27, M-28, M-29, L-03, L-05, L-07 | `e8e66b4` | reviewed, complete as written |
-| M-02, M-05, M-16, M-17, M-19, M-20, M-24 | `e8e66b4`, `37c9d9c` | reviewed; fake DAO fixed, three tests added |
-| M-34, M-36, L-02, L-04 | `e8e66b4`, `ad1566c` | reviewed, complete as written |
-| M-12 cardio log draft lost on recreation | `ad1566c` | not started by the WIP; done here |
-| L-08 Trophies reads a pending snapshot as zero | `ad1566c` | WIP left it uncompilable; done here |
-| M-03 import duplicate print ignores most fields | `3deba74` | |
-| M-06 deload marker and generated program diverge | `4dc4fd5` | |
-| M-10 wrist edit lost when the send fails | `ce6338c` | |
-| M-15 Cardio stale across midnight and time-zone moves | `f4502d4` | |
-| M-18 removed folder keeps its persisted URI grant | `305c89e` | |
-| M-30 widget tap silently does nothing | `b3ce92b` | |
-| M-31, M-32, M-33, L-06 goals lens, window, baseline, orphan pin | `e464a03` | |
-| M-35 motion setting not live; M-37 accent contrast below AA | `79a2357` | |
-| L-01 folder scan hides extras-only exports | `e59e27b` | |
-| P-09, P-10, P-11, P-12 | `4ebda8c` | |
-| P-01, P-02, P-04 | `ce7e3c8` | |
-| P-06, P-14, P-15 | `12d3f22` | |
-| P-08, P-13, P-16 | `48c3067` | |
+| C-01 / H-01 restore | **Closed** | `RestoreApply` is a three-state protocol: membership published before the first rename, an explicit awaiting-validation state, sweeping only when nothing is in flight |
+| H-02 block phases | **Partial** | `composedLoadScale` wires the phase into the per-set suggestion and the pre-session brief; Peak's test-week prescription is still copy |
+| H-03 Coach apply | Closed | One Room transaction; its seven tests failed only because they raced the real `ForgeApp` |
+| H-04 body fat | Closed in code | Play Console declaration and a real provider grant are external release checks |
+| H-05 Health Connect history | **Closed** | `HealthConnectFeatures` gates the request AND the retry affordance; unsupported and declined render differently |
+| H-06 volume response | **Closed** | `ExerciseBout.performedExerciseId`; e1RMs group by the lift performed, muscle still by the slot |
+| H-07 weekday schedule | **Closed** | `Placement.TODAY / UPCOMING / UNSCHEDULED`; only TODAY may open a session |
+| H-08 wrist commands | **Partial** | The watch side is durable; the phone-side exactly-once window is open — see below |
+| H-09 – H-12, H-14, H-15 | Closed | Unchanged by this pass; the verification found no contrary case |
+| H-13 Program Builder | **Closed** | The setter clash, and the picker's query and ticks through `rememberSaveable` |
+| M-03 import correction | **Partial** | The print now covers the timings, counts and mood it writes; source-identified replacement is open — see below |
+| M-06 generation saga | **Closed** | Intended after-signature + operation id + one mutation mutex; a third signature is superseded, not applied |
+| M-10 wrist edit recovery | **Closed** | The pending edit is a file, written before the optimistic removal, cleared only on an ack |
+| M-15 Cardio time zone | **Closed** | The zone travels with the day anchor; a doctrine test bans a remembered one anywhere in `ui/` |
+| M-18 folder grants | **Closed** | One owner for persisted trees; a take that fails changes nothing |
+| M-30 widget routing | **Closed** | `Program.readiness` replaces the four-second poll; the request survives recreation in saved state |
+| M-32 Home + Cardio clocks | **Closed** | The compile blocker, and Cardio's own goals and deadline captions on the day signal |
+| M-33 bodyweight baseline | **Closed** | The first weigh-in at or after the goal's creation, read back after the write |
+| Other M / L rows | Closed | Unchanged by this pass |
+| L-06 goal pins | **Closed** | Cleanup behind `GoalRepository.clearGoal`; reconcile before the cap; `take` so Undo keeps what it restored |
+| P-01 export | **Closed** | Four batched queries, streamed through `JsonWriter` to a scratch file, cancellable, with progress |
+| P-02 wear glance | **Closed** | A capability listener, one publish per arrival, one shared fact assembly |
+| P-06 Coach loads | **Closed** | The invisible loads are gone; each action still refreshes what it changes |
+| P-13 sparkline | **Closed** | Geometry built once per (series, size) instead of once per frame |
+| P-15 Home inputs | **Closed** | Three dead inputs and five dead state fields removed |
+| P-03, P-05, P-07, P-17 | Open | Unchanged — see the section above |
+| P-09 image resize | Closed in code | The oversize-bitmap fallback still needs a device pass |
 
 ### Still open, and why
 
-#### P-03 — missing indices on the hot chronological queries
+**H-08 — the phone-side exactly-once window.** The file ledger records a command's outcome AFTER the
+Room mutation commits, so a process death in the milliseconds between them re-runs the command on
+the watch's retry. Closing it means a `wear_command` result row written in the SAME transaction as
+the mutation, and replaying the stored acknowledgement for a duplicate id instead of executing
+anything.
 
-Blocked by the same thing H2 and H4 are blocked by, one section up: it is a v37 schema change, and
-Room's exported `37.json` carries an `identityHash` only the Room compiler can compute.
-`MigrationChainTest` requires that file to exist and match; a hand-written hash breaks
-`MigrationTestHelper`, which is the test that proves the migration works. The audit's evidence —
-`EXPLAIN QUERY PLAN` output and desktop SQLite scaling on the exact v36 schema — is
-platform-independent and stands; the work is one migration away once a machine with the Room
-compiler runs it. Benchmark before adding composites: each index costs writes.
+That is a new table, which is a Room migration, which needs the Room compiler to emit
+`app/schemas/…/37.json` with an `identityHash` only it can compute — see **The environment
+constraint** above. Hand-writing that hash would break `MigrationTestHelper`, the very test that
+proves the migration works, and a wrong one is a "cannot verify the data integrity" crash on every
+launch. It is not attempted here. The watch half IS closed: the pending edit survives the process,
+comes back as an offer to re-send under its original id, and is retired only by an acknowledgement.
 
-#### P-05 — no baseline profile is generated or shipped
+**M-03 — correction versus a second workout.** The duplicate print now covers every field the insert
+writes, including the session's end time, active duration, PR count, mood and each set's completion
+instant, which it did not before — so a corrected export is no longer silently discarded. It still
+lands BESIDE the original rather than replacing it, because a session row carries no source
+identity to replace by. That wants a `source_ref` column (source-install namespace plus the exported
+session id) and a transactional upsert, and it is the same migration blocker.
 
-This is the same finding as **M2** above, restated by the newer audit with the evidence attached
-(2,737 dependency rules and zero `Lcom/forge` rules in the release merge). It needs the generator
-run on a real device or emulator, the output inspected and committed, and a CI assertion that a
-non-empty Avex profile is actually packaged — otherwise it silently regresses to this state.
+**H-02 — Peak's test week.** The phase now reaches the weight on the bar. A Peak week's test-day
+behaviour is still descriptive copy rather than a tagged prescription the session can act on.
 
-#### P-07 — Academy decodes oversized covers on the main thread
+### The product decision this pass made
 
-Thirty-one of the 35 `drawable-nodpi/cover_*.webp` assets are 1200x1600, roughly 7.3 MiB each as
-ARGB, and `painterResource` decodes on the main thread. The fix is display-sized thumbnails, which
-means **regenerating image assets** and choosing dimensions from a measured cold Academy scroll on a
-physical device. Guessing the sizes here would replace measured assets with unmeasured ones and
-would also cross the screenshot goldens; it is not code this environment can honestly produce.
+H-02 needed one and it is recorded here so it can be overruled: **the block phase's ambition and the
+day's autoregulation multiply, and the product is clamped to 0.80–1.10.** They answer different
+questions — the phase is what this week of the mesocycle asks for, readiness/intensity is how the
+athlete is today — so both apply, and the clamp stops them compounding into a cut or a jump neither
+asked for. With no active block the composition is the identity, so the majority of sessions are
+unchanged. See `BlockPhase.composedLoadScale`.
 
-#### P-17 — startup wordmarks rebuild a RenderEffect every frame
+### Test integrity
 
-**Decided against, not blocked.** The suggested repair is to build the Compose `RenderEffect` once
-and keep updating the `RuntimeShader`'s uniforms. But `RenderEffect.createRuntimeShaderEffect`
-snapshots the shader when the effect is constructed, and whether a later uniform write reaches an
-already-built effect is exactly the platform behaviour in question. If it does not, the launch
-wordmark freezes on its first frame — a visible, every-launch regression traded for 75-90 native
-allocations spread over a 1.3-second overlay that happens once per cold start. It cannot be checked
-without a device, so it was left alone. Take it the moment someone can run it on hardware.
+Nineteen tests failed at `47ca1a9`. Sixteen of them were the harness, not the product, and a suite
+that reports defects that are not there costs a real investigation every time:
 
-### Behaviour worth knowing about, not regressions
+| Suite | What was wrong |
+|---|---|
+| `GoalPinTest` (×5) | One DataStore file shared by every test in the class; results depended on method order |
+| `BackupFolderGrantTest` | Teardown closed the database and left the persisted URI grants and folder preferences |
+| `CoachRepositoryApplyTest` (×7) | Robolectric booted the real `ForgeApp`, whose async `ensureLoaded()` replaced the process-global `Program` mid-fixture |
+| `CardioDayAnchorTest` | Compared two cell lists that cannot differ — a future day and an untrained past day are the same value |
+| `OnboardingDraftKeeperTest` (×2) | `advanceUntilIdle()` does not advance time for `backgroundScope`, so the debounced write never ran |
+| `RestoreApplyTest` | A real regression, and the test asserting the old sweep asserted the bug |
+| `DesignDoctrineTest` | A stale allowlist row for a violation P-16 had already removed |
+| `DoctrineParityTest` | `ForgeShimmerHost` lived in `ui/common/` and DESIGN §8 did not name it |
 
-- **M-06** records a *generation intent* in DataStore carrying the signature of the program it is
-  replacing, and reconciles it at the next boot. That is a deliberate substitute for the column this
-  would otherwise need: no schema change, so no migration, so no Room compiler. A deload always
-  changes the plan's set counts, which is what makes the two outcomes distinguishable.
-- **P-06, P-14 and P-15** move work off first paint without deleting anything: the fields, the
-  mappings and the entry points all stay, and `refreshCoach()` exists for the surface that brings
-  the Coach cards back. This is about *when* the work runs, not about removing a surface the team may
-  restore. The same caution as the dead-code list above, for the same reason.
-- **M-10** keeps the optimistic affordance removal — a wrist row that hesitates reads as broken —
-  and adds the missing half: a failed delivery restores the row and offers a same-id retry, which the
-  phone's deduper drops if the original command did in fact land.
-- **M-37** changes no curated preset and no default. Every accent that already cleared AA keeps
-  exactly the content colour the old luminance threshold gave it; the difference is only in the band
-  where the threshold was picking a side that could not be read.
-- **L-01** changes what a scanned row says: a bodyweight- or cardio-only export names its source
-  instead of describing itself as "0 workouts".
+### How this branch was verified
 
-### What has not been compiled
+No Android SDK here either — `dl.google.com` is blocked by the environment's network policy — so CI
+is the compiler, driven by `workflow_dispatch` on this branch rather than assumed. Every claim of
+"closed" above rests on a CI run of this branch, not on a local build.
 
-Nothing on this branch. There is no Android SDK in this environment (`dl.google.com` is blocked by
-organisation network policy), and CI runs only on a push to `main` or on a pull request against it.
-No pull request was opened for this work, so **CI has never seen a line of it**. Every change was
-traced by hand to each of its call sites, checked against the constants, DAO projections and
-interface signatures it depends on, and read back adversarially for the compile errors this method
-is known to miss — an unimplemented interface member, a deleted declaration with a surviving
-reference, a `@Composable` call in a non-composable position, an unused import that `DesignDoctrine`
-or a warnings-as-errors build would reject.
+Two of those runs found compile errors this environment could not: a package move that left two
+same-package callers without an import, and a `buildSet` whose element type inference could not fix
+from a `null` branch. That is the reliability bound, again, and the reason the workflow now ends a
+failed `Verify` by printing the compile errors and failing test names — a red run used to require
+downloading an artifact to read.
 
-That method is exactly what failed on the WIP wave, and this pass found the two places it failed.
-Treat the first CI run on this branch as part of the work, not as a formality.
+**Nothing here has been run on a physical device.** Health Connect history availability, Program
+Builder recreation, watch disconnect and process death, timezone rollover, and restore
+validation/revert all still want a real device pass before release.
+
+### Merge process
+
+PR #165 and PR #166 both merged with `Verify` unstarted, and both broke `main`. The workflow-side
+half is fixed on this branch — all three jobs check out an immutable commit rather than a transient
+PR merge ref, which is why #166's late `Verify` failed before compiling anything. The rest is
+repository settings and needs an admin: see `docs/CI_MERGE_POLICY.md`.
 
 ### Notes carried forward from the first pass
 
-What follows is unchanged from the previous ledger: the residue the first pass left behind on the
-Critical and the Highs it closed. None of it is open work in the sense above — each is a narrower
-case, an out-of-repository step, or a documented behaviour change — but it is the part of those
-findings that a reader would otherwise have to re-derive.
-
-### C-01 / H-01 — restore
-
-Closed: a staged set is vouched for by a manifest (sizes and SHA-256) published last; a set the
-process died in the middle of staging is quarantined; the candidate is opened through the production
-Room builder before it is kept; the pre-restore snapshots stay until the application has opened the
-restored database, and are put back if it cannot.
-
-Open, and worth knowing:
-
-- The manifest is verified by hashing every component again at boot, on the main thread in
-  `Application.onCreate`. A multi-year Avex database is a few megabytes, so this is milliseconds; a
-  device restoring a pathological multi-hundred-megabyte backup will feel it. Size-only verification
-  above a threshold would be the cheap escape if it is ever needed.
-- A landed set whose confirmation never ran (the process died between the swap and the first open)
-  is treated as confirmed on the next boot: its snapshots are swept, as before. The window is the
-  few milliseconds between `RestoreApply.apply` returning and Room opening.
-- Room validation of the candidate copies it under `databases/forge_restore_probe.db` rather than
-  opening the staged file by absolute path; that is one extra copy of the database per restore, in
-  exchange for not depending on the framework accepting a path as a name.
-
-### H-02 — block phases
-
-Closed: the deload week is served through the existing deload regeneration when the block enters
-it, the weekly pass proposes that deload when none is running and never adds volume during it,
-Intensify holds volume, Peak trims a set and keeps the structure still.
-
-Open: `BlockPhase.progressionScale` still has no production consumer. The per-set load suggestion
-(`ProgressionAdvisor.suggestNextLoad`) and the pre-session brief do not scale their target by the
-phase. The value is documented as such in `BlockPlanner.kt`. Threading it through means deciding how
-it composes with the readiness scale on the same axis, which is a product decision, not a patch.
-
-### H-08 — wrist command deduplication
-
-Closed without a schema change: a file-backed ledger records each command's ack after the mutation
-and replays it for any same-id retry; the watch resolves an ack that arrives after its timeout.
-
-Open: the ledger record is written after the Room mutation commits, not inside its transaction. A
-process death in the few milliseconds between the commit and the ledger write still re-runs the
-command on retry. Closing that needs the outcome in a `wear_command` table written in the same
-transaction, which is a migration, which needs the Room compiler (see "The environment constraint"
-above). The transport is also unchanged: commands still travel on `MessageClient`.
-
-### H-04 / H-05 — Health Connect
-
-Closed in the app: the body-fat and history permissions are declared and a test keeps every
-requested permission in the manifest; the weight backfill latches complete only with history
-access, and offers the older import otherwise.
-
-Open, outside the repository: the Play Console health-data declaration must list body fat (read and
-write) and history read before the next release, or Play will reject the bundle. A real-device
-grant, read and write-back of body fat has not been run.
-
-### H-06 — volume response
-
-Closed with a shared per-lift model. Two behaviour changes beyond the finding are recorded here so
-they are not mistaken for regressions: weekly volume now counts sets from bouts with no e1RM
-(bodyweight-only bouts), which the old learner dropped; and the Stats insight now excludes
-test/technique/first-back bouts, as the cap learner always did. The 2 percent dead band is a judgment
-call with no data behind it.
-
-### H-13 — Program Builder draft
-
-Closed via `SavedStateHandle`. The draft is bounded by what a saved state bundle can carry; a program
-with hundreds of exercises would exceed it, and the builder then falls back to the previous
-behaviour (an empty, loaded builder). No cap is enforced because no program in the library approaches
-that size.
+`docs/AVEX_PRODUCTION_SOURCE_AUDIT_2026-09-01.md` stays frozen as the original audit. It is the
+statement of what was found; this file is the statement of what was done about it, and only this
+file is edited as the work moves.
