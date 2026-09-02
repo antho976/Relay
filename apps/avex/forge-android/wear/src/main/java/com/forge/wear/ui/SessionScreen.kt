@@ -82,8 +82,13 @@ fun SetView(
     var confirmJump by remember(seedKey) { mutableStateOf(false) }
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
 
+    // 1 Hz on the second boundary, not 4 Hz (P-04). Nothing here needs finer: the elapsed figure
+    // moves by the minute, and the undo/rate window it also drives is twelve seconds wide.
     LaunchedEffect(Unit) {
-        while (true) { nowMs = System.currentTimeMillis(); delay(250) }
+        while (true) {
+            nowMs = System.currentTimeMillis()
+            delay(RestCountdown.TICK_MS - (nowMs % RestCountdown.TICK_MS))
+        }
     }
     // Ack resolution — confirmation is the mirror updating; success feedback fires in WearRoot.
     // Also keyed on timedOutId: the phone replays a recorded ack for a retried id, and a late ack

@@ -45,6 +45,7 @@ class WearStatePublisher @Inject constructor(
     private val adaptationRepo: AdaptationRepository,
     private val directiveRepo: com.forge.app.data.repo.DirectiveRepository,
     private val statsRepo: StatsRepository,
+    private val connection: WearConnection,
     private val clock: Clock
 ) {
     private val dataClient by lazy { Wearable.getDataClient(context) }
@@ -112,8 +113,16 @@ class WearStatePublisher @Inject constructor(
         scope.launch { publishGlanceNow() }
     }
 
-    /** One-shot /glance/today refresh — cheap reads, stamped with its compute time. */
+    /**
+     * One-shot /glance/today refresh — stamped with its compute time.
+     *
+     * Gated on a watch existing at all (P-02). The reads below are not cheap: readiness alone walks
+     * every finished session, its exercises and its sets, and the directive walks them again, so
+     * every cold start on a phone with no paired watch paid for a tile nothing would ever render —
+     * and only discovered there was no consumer at the Data Layer write on the far side of it.
+     */
     suspend fun publishGlanceNow() {
+        if (!connection.hasPairedWearApp()) return
         val readiness = runCatching { adaptationRepo.readinessScale() }.getOrNull()
         val week = runCatching { statsRepo.observeWeeklyStats().first() }.getOrNull()
         val freestyle = settingsRepo.freestyleMode.first()

@@ -104,7 +104,7 @@ class BackupRepository @Inject constructor(
     }
 
     /** Export this week's data as JSON for AI analysis (#5). Returns the file path. */
-    suspend fun exportWeeklyJson(): File {
+    suspend fun exportWeeklyJson(): File = withContext(Dispatchers.IO) {
         val nowMs = clock.nowMs()
         // The ISO week the app itself calls "this week" everywhere else, not a rolling 7 x 24 h from
         // whenever Export was tapped — otherwise the file and the Stats screen describe different
@@ -190,7 +190,7 @@ class BackupRepository @Inject constructor(
         // Fixed filename (overwrite) so repeated exports don't accumulate forever (#84).
         val file = exportFile(context, "avex_weekly_export.json")
         file.writeText(root.toString(2))
-        return file
+        file
     }
 
     /**
@@ -199,7 +199,7 @@ class BackupRepository @Inject constructor(
      * back in. The real restore path is the whole-DB backup ([backupToUri] / [restoreFromUri]).
      * Named so it doesn't imply recoverability (#70).
      */
-    suspend fun exportFullDataJson(): File {
+    suspend fun exportFullDataJson(): File = withContext(Dispatchers.IO) {
         val allSessions = sessionDao.allFinished()
         val allCardio = cardioDao.since(0L)
         val allCoachGoals = coachGoalDao.all()
@@ -321,7 +321,7 @@ class BackupRepository @Inject constructor(
         // Fixed filename (overwrite) — see #84; avoids unbounded accumulation in filesDir.
         val file = exportFile(context, "avex_export.json")
         file.writeText(root.toString(2))
-        return file
+        file
     }
 
     /**
@@ -393,7 +393,7 @@ class BackupRepository @Inject constructor(
         else value
 
     /** Export as CSV — sessions summary (#138). */
-    suspend fun exportSessionsCsv(): File {
+    suspend fun exportSessionsCsv(): File = withContext(Dispatchers.IO) {
         val allSessions = sessionDao.allFinished()
         val sb = StringBuilder()
         sb.appendLine("id,dayKey,date,durationMin,volumeLb,prs,sets,intensity,tags")
@@ -407,7 +407,7 @@ class BackupRepository @Inject constructor(
         // Fixed filename (overwrite) — see #84.
         val file = exportFile(context, "avex_sessions.csv")
         file.writeText(sb.toString())
-        return file
+        file
     }
 
     /**
@@ -415,7 +415,7 @@ class BackupRepository @Inject constructor(
      * motivating records to share or keep (#542). One row per exercise: its heaviest tracked set ever.
      * Reuses the same tracked/non-assisted set projection the Stats hall of fame is built from.
      */
-    suspend fun exportPrsCsv(): File {
+    suspend fun exportPrsCsv(): File = withContext(Dispatchers.IO) {
         val sets = loggedSetDao.observeAllFinishedSetsWithSession().first()
         val sb = StringBuilder()
         sb.appendLine("exercise,muscle,bestWeightLb,reps,date")
@@ -427,18 +427,18 @@ class BackupRepository @Inject constructor(
         }
         val file = exportFile(context, "avex_prs.csv")
         file.writeText(sb.toString())
-        return file
+        file
     }
 
     /** Every bodyweight weigh-in as CSV (Cat 11). One row per entry, newest first. */
-    suspend fun exportBodyweightCsv(): File {
+    suspend fun exportBodyweightCsv(): File = withContext(Dispatchers.IO) {
         val entries = db.bodyweightDao().all()
         val sb = StringBuilder()
         sb.appendLine("date,weightLb")
         entries.forEach { e -> sb.appendLine("${e.dateKey},${e.weightLb}") }
         val file = exportFile(context, "avex_bodyweight.csv")
         file.writeText(sb.toString())
-        return file
+        file
     }
 
     /**
@@ -446,7 +446,7 @@ class BackupRepository @Inject constructor(
      * its display name (custom activities included, GYMAP-37) so the sheet reads as words, not raw
      * `custom_…` codes; distance stays canonical km like the other exports' canonical-unit columns.
      */
-    suspend fun exportCardioCsv(): File {
+    suspend fun exportCardioCsv(): File = withContext(Dispatchers.IO) {
         val entries = cardioDao.since(0L)
         val customs = settingsRepo.customCardioTypes.first()
         val sb = StringBuilder()
@@ -466,7 +466,7 @@ class BackupRepository @Inject constructor(
         }
         val file = exportFile(context, "avex_cardio.csv")
         file.writeText(sb.toString())
-        return file
+        file
     }
 
     /** Total on-disk database size (main file + WAL + SHM), in bytes — the Data dialog readout. */

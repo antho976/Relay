@@ -30,6 +30,26 @@ class WearConnection @Inject constructor(
         null
     }
 
+    /**
+     * Whether ANY node carrying the Avex wear app is paired — reachable or not (P-02).
+     *
+     * Deliberately not [reachableWearNodeId]: a DataItem written for a watch that is currently out
+     * of range syncs when it comes back, so a paired-but-away watch must still be published to. The
+     * question here is only "is there a consumer at all", and on a phone with no watch — which is
+     * most phones — the answer lets the caller skip building a payload nothing will read.
+     *
+     * Fail-soft like everything else on this seam: no Play services, no wear app, or a thrown
+     * lookup all read as "no watch", which costs a stale tile at worst and never a crash.
+     */
+    suspend fun hasPairedWearApp(): Boolean = try {
+        Wearable.getCapabilityClient(context)
+            .getCapability(WearProtocol.CAPABILITY_WEAR_APP, CapabilityClient.FILTER_ALL)
+            .await()
+            .nodes.isNotEmpty()
+    } catch (t: Throwable) {
+        false
+    }
+
     // ── Timer-haptic handoff (the no-silent-timer rule, DESIGN.md §16) ───────
     // The watch acks its timer-done buzz over PATH_HAPTIC_ACK; the phone waits a short grace and
     // buzzes itself only when no ack arrived — one buzz, on the body part that feels it, and a

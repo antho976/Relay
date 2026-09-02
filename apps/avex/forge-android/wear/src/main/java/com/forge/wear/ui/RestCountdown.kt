@@ -35,14 +35,38 @@ internal object RestCountdown {
         // render as "-1:-05" — the one formatting a negative can produce.
         if (timer.paused) return timer.pausedRemainingSeconds.coerceAtLeast(0)
 
-        val remainingMs =
-            if (timer.publishedAtMs > 0L) (timer.endAtMs - timer.publishedAtMs) - (nowMs - receivedAtMs)
-            else timer.endAtMs - nowMs
-
         // Round UP: a timer with 200 ms left reads "0:01" until it is genuinely done. Truncating
         // instead shows 0:00 for most of the final second, which reads as a stuck timer.
-        return ((remainingMs + 999) / 1000).toInt().coerceAtLeast(0)
+        return ((remainingMs(timer, nowMs, receivedAtMs) + 999) / 1000).toInt().coerceAtLeast(0)
     }
+
+    /**
+     * How long to sleep before the DISPLAYED figure changes, in ms (P-04).
+     *
+     * The view polled every 200 ms — 18,000 recompositions an hour — to render a number that moves
+     * once a second. A plain 1 Hz tick would fix the cadence and lose the crispness: the countdown's
+     * own boundary is set by `endAtMs`, which has no reason to sit on a wall-clock second, so the
+     * figure would change up to a second late and read as a stuck timer. This lands ON the boundary
+     * instead: 1 Hz, in phase with the number it draws.
+     *
+     * A paused or finished timer has no boundary of its own, and returns the plain second — the
+     * view still needs a slow tick for the undo/rate window that sits under it.
+     */
+    fun msUntilNextTick(timer: TimerStateDto, nowMs: Long, receivedAtMs: Long): Long {
+        if (timer.paused) return TICK_MS
+        val remaining = remainingMs(timer, nowMs, receivedAtMs)
+        if (remaining <= 0L) return TICK_MS
+        // `ceil(r / 1000)` drops when r crosses the next lower multiple of 1000, so the wait is
+        // r mod 1000 — with a whole multiple waiting a full second rather than not at all.
+        return ((remaining - 1).mod(1000L)) + 1
+    }
+
+    /** The idle cadence, for a timer with no boundary left to land on. */
+    const val TICK_MS = 1_000L
+
+    private fun remainingMs(timer: TimerStateDto, nowMs: Long, receivedAtMs: Long): Long =
+        if (timer.publishedAtMs > 0L) (timer.endAtMs - timer.publishedAtMs) - (nowMs - receivedAtMs)
+        else timer.endAtMs - nowMs
 
     /** Ring fill, 1.0 at the start of the rest down to 0.0 at zero. */
     fun ringProgress(remainingSeconds: Int, totalSeconds: Int): Float =

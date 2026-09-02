@@ -56,8 +56,14 @@ fun TimerView(
     // One undo per logged set: reset when a new set's ack arrives.
     var undoSent by remember(lastLog?.setId) { mutableStateOf(false) }
 
-    LaunchedEffect(Unit) {
-        while (true) { nowMs = System.currentTimeMillis(); delay(200) }
+    // 1 Hz, in phase with the figure it draws (P-04). This polled every 200 ms — 18,000
+    // recompositions an hour — to render a number that moves once a second. Keyed on the payload so
+    // a +30, a pause or a fresh rest re-phases the tick against its new boundary.
+    LaunchedEffect(timer, receivedAtMs) {
+        while (true) {
+            nowMs = System.currentTimeMillis()
+            delay(RestCountdown.msUntilNextTick(timer, nowMs, receivedAtMs))
+        }
     }
 
     // The arithmetic lives in [RestCountdown] — see its KDoc for the clock-skew rule. Kept out of

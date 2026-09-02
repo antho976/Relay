@@ -7,9 +7,15 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import com.forge.wear.data.WearDataRepository
 import com.forge.wear.data.WristHaptics
 import com.forge.wear.ui.WearRoot
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
@@ -43,11 +49,32 @@ class MainActivity : ComponentActivity() {
             }
         }
         if (wanted.isNotEmpty()) permissions.launch(wanted.toTypedArray())
-        // Mid-set glances shouldn't fight the screen timeout while the app is foreground.
-        window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         val repo = WearDataRepository.instance(this)
+        // Mid-set glances shouldn't fight the screen timeout — but only mid-SET (P-04). The flag
+        // used to be set unconditionally in onCreate and never cleared, so a wrist raised on the
+        // idle glance held a watch display awake with nothing running on it. It follows the live
+        // session and the rest timer instead: the two states the athlete is actually standing
+        // there watching.
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                combine(repo.session, repo.timer) { session, timer -> session != null || timer != null }
+                    .distinctUntilChanged()
+                    .collect { keepAwake -> setKeepScreenOn(keepAwake) }
+            }
+        }
         val haptics = WristHaptics(this)
         setContent { WearRoot(repo, haptics) }
+    }
+
+    /** Backgrounding is never a reason to hold the display: the collector above stops, so clear it. */
+    override fun onStop() {
+        super.onStop()
+        setKeepScreenOn(false)
+    }
+
+    private fun setKeepScreenOn(on: Boolean) {
+        val flag = android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+        if (on) window.addFlags(flag) else window.clearFlags(flag)
     }
 }

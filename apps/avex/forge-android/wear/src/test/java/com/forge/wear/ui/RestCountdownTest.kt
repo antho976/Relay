@@ -165,4 +165,45 @@ class RestCountdownTest {
     fun aNegativeInputNeverRendersASignedFigure() {
         assertEquals("0:00", RestCountdown.formatMmSs(-65))
     }
+
+    // ── The tick cadence (P-04) ────────────────────────────────────────────────────────────────
+
+    @Test
+    fun theTickLandsOnTheBoundaryTheFigureActuallyChangesAt() {
+        // Received at the watch's 5_000 with 150 s left. 400 ms of local time have passed, so the
+        // displayed figure (150) drops to 149 in 600 ms — not in a full second, and not now.
+        assertEquals(600L, RestCountdown.msUntilNextTick(timer(), nowMs = 5_400L, receivedAtMs = 5_000L))
+        assertEquals(1L, RestCountdown.msUntilNextTick(timer(), nowMs = 5_999L, receivedAtMs = 5_000L))
+    }
+
+    @Test
+    fun aWholeSecondRemainingWaitsAFullSecondRatherThanNotAtAll() {
+        // Exactly 149 s left: the figure reads 149 for another whole second.
+        assertEquals(
+            RestCountdown.TICK_MS,
+            RestCountdown.msUntilNextTick(timer(), nowMs = 6_000L, receivedAtMs = 5_000L)
+        )
+    }
+
+    @Test
+    fun everyTickIsAtMostOneSecondAndAtLeastOne() {
+        // The property that matters for battery and for correctness together: never faster than 1 Hz,
+        // and never a zero-length sleep that would spin.
+        (0..2_500 step 37).forEach { elapsed ->
+            val wait = RestCountdown.msUntilNextTick(timer(), nowMs = 5_000L + elapsed, receivedAtMs = 5_000L)
+            assertTrue("elapsed $elapsed gave $wait", wait in 1L..RestCountdown.TICK_MS)
+        }
+    }
+
+    @Test
+    fun aPausedOrFinishedTimerStillTicksSlowlyForTheRowUnderIt() {
+        assertEquals(
+            RestCountdown.TICK_MS,
+            RestCountdown.msUntilNextTick(timer(paused = true, pausedRemainingSeconds = 40), 5_000L, 5_000L)
+        )
+        assertEquals(
+            RestCountdown.TICK_MS,
+            RestCountdown.msUntilNextTick(timer(), nowMs = 900_000L, receivedAtMs = 5_000L)
+        )
+    }
 }
