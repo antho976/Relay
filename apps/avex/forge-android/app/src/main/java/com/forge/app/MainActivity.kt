@@ -80,11 +80,25 @@ class MainActivity : FragmentActivity() {
     private var pendingImportUri by mutableStateOf<Uri?>(null)
 
     /**
-     * The widget deep-link day to open. State (not a local) because `launchMode=singleTask` delivers a
-     * widget tap while the app is already running via [onNewIntent], not a fresh [onCreate] — updating
-     * this recomposes the nav host so it opens the day, instead of the tap silently doing nothing.
+     * The widget deep-link to open. State (not a local) because `launchMode=singleTask` delivers a
+     * widget tap while the app is already running via [onNewIntent], not a fresh [onCreate] —
+     * updating this recomposes the nav host so it opens the day, instead of the tap silently doing
+     * nothing.
+     *
+     * A sequenced EVENT rather than the day string it used to be (M-30): tapping the same widget
+     * twice assigned the same value, which is no state change at all, so the nav host's effect
+     * never ran a second time and the tap did nothing. [WidgetOpenRequest.id] is what distinguishes
+     * the second tap from the first.
      */
-    private var pendingWidgetDayKey by mutableStateOf<String?>(null)
+    private var widgetOpenRequest by mutableStateOf<com.forge.app.widget.WidgetOpenRequest?>(null)
+    private var widgetRequestSeq = 0L
+
+    /** Record a widget tap as the next event in the sequence. A blank/absent key is not a tap. */
+    private fun requestWidgetOpen(dayKey: String?) {
+        if (dayKey.isNullOrBlank()) return
+        widgetRequestSeq += 1
+        widgetOpenRequest = com.forge.app.widget.WidgetOpenRequest(widgetRequestSeq, dayKey)
+    }
     private var privacyPolicyRequest by mutableStateOf(0)
 
     /** Emits volume-down presses for the "log same as last set" shortcut (#151). */
@@ -136,7 +150,7 @@ class MainActivity : FragmentActivity() {
         handleImportIntent(intent)
         // singleTask reuse: a widget tap arrives here, not in onCreate — pick up the day so the nav
         // host opens it (the deep-link would otherwise be dropped and the tap do nothing).
-        intent.getStringExtra(com.forge.app.widget.EXTRA_START_DAY_KEY)?.let { pendingWidgetDayKey = it }
+        requestWidgetOpen(intent.getStringExtra(com.forge.app.widget.EXTRA_START_DAY_KEY))
         if (opensHealthConnectPrivacyPolicy(intent.action)) privacyPolicyRequest++
     }
 
@@ -286,7 +300,7 @@ class MainActivity : FragmentActivity() {
         // active session's day when one is in progress). Read it once on a fresh launch and hand it to
         // the nav host, which opens it on top of Overview so Back returns home.
         if (savedInstanceState == null)
-            pendingWidgetDayKey = intent?.getStringExtra(com.forge.app.widget.EXTRA_START_DAY_KEY)
+            requestWidgetOpen(intent?.getStringExtra(com.forge.app.widget.EXTRA_START_DAY_KEY))
         if (savedInstanceState == null && opensHealthConnectPrivacyPolicy(intent?.action)) privacyPolicyRequest++
 
         // A cold-start share/open of an export file (#GYMAP-17) — import it once, not again on a
@@ -486,7 +500,7 @@ class MainActivity : FragmentActivity() {
                                             .then(if (lockActive) Modifier.clearAndSetSemantics {} else Modifier)
                                     ) {
                                         ForgeNavHost(
-                                            initialDayKey = pendingWidgetDayKey,
+                                            widgetOpen = widgetOpenRequest,
                                             privacyPolicyRequest = privacyPolicyRequest
                                         )
                                     }
