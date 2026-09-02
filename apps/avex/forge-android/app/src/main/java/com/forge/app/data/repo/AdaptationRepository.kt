@@ -398,9 +398,10 @@ class AdaptationRepository @Inject constructor(
                 com.forge.app.domain.coach.PersonalProfile.build(snapshotOrEmpty()).volumeCaps
             }.getOrDefault(emptyMap())
         )
-        // Persist the deload BEFORE regenerating: generate() leaves a deload marker untouched but
-        // clears it for any non-deload regenerate, so a later manual "Generate" exits the deload (#18).
-        settingsRepository.setDeloadWeekStartMs(clock.nowMs())
+        // The deload marker is NOT written here any more (M-06). Writing it first meant a generate
+        // that threw — an ordinary failure, not a race — left "you are in a deload week" standing
+        // over the untouched full-volume plan with nothing to clear it. `generate` now settles the
+        // marker itself, after its rows are committed, for this path and Settings' alike.
         programRepository.generate(
             params,
             settingsRepository.availableEquipment.first()

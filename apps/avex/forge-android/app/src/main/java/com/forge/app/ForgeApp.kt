@@ -49,6 +49,10 @@ class ForgeApp : Application(), Configuration.Provider {
         // Re-arm the daily training reminder from its persisted setting (no-op when it's off).
         CoroutineScope(Dispatchers.IO).launch {
             programRepository.ensureLoaded()
+            // Finish any regeneration that died between its program transaction and the deload
+            // marker beside it (M-06). Two stores, no shared transaction: this is what stops them
+            // disagreeing forever. Fail-soft — a reconciliation that throws must not stop startup.
+            runCatching { programRepository.reconcilePendingGeneration() }
             reminderScheduler.ensureScheduled(
                 settingsRepository.trainingReminderEnabled.first(),
                 settingsRepository.trainingReminderHour.first()

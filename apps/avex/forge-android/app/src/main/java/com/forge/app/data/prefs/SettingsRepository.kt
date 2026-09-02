@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
 import com.forge.app.core.time.Clock
 import com.forge.app.security.ProtectionSentinel
+import com.forge.app.domain.program.ProgramGenerationIntent
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
@@ -776,6 +777,20 @@ class SettingsRepository @Inject constructor(
     val deloadWeekStartMs: Flow<Long> = pref { it[PreferenceKeys.DELOAD_WEEK_START_MS] ?: 0L }
     suspend fun setDeloadWeekStartMs(ms: Long) =
         context.forgePreferences.edit { it[PreferenceKeys.DELOAD_WEEK_START_MS] = ms }
+
+    /**
+     * The regeneration currently in flight, or null (M-06). Written before the program transaction
+     * and cleared once the deload marker beside it has been brought into agreement, so a boot that
+     * finds one knows a regeneration was interrupted and can finish deciding what it meant.
+     */
+    val programGenerationIntent: Flow<ProgramGenerationIntent?> =
+        pref { ProgramGenerationIntent.fromJson(it[PreferenceKeys.PROGRAM_GENERATION_INTENT]) }
+
+    suspend fun setProgramGenerationIntent(intent: ProgramGenerationIntent) =
+        context.forgePreferences.edit { it[PreferenceKeys.PROGRAM_GENERATION_INTENT] = intent.toJson() }
+
+    suspend fun clearProgramGenerationIntent() =
+        context.forgePreferences.edit { it.remove(PreferenceKeys.PROGRAM_GENERATION_INTENT) }
 
     // ─── Day-aware scheduling (weekly plan vs legacy sequence) ────────────────
     /** "sequence" (default — day after the last finished) or "weekday" (fixed Mon..Sun plan). */
