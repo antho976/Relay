@@ -54,6 +54,24 @@ import java.io.File
  * snapshots used to be discarded the moment the renames finished, which is exactly when nothing
  * had yet proven the replacement could be opened.
  *
+ * ## The three states, and why membership is separate from progress
+ *
+ * [JOURNAL] is PROGRESS: what is left to commit, shortened as each component lands and deleted when
+ * empty. [SET_RECORD] is MEMBERSHIP: everything the set consists of, written before the first live
+ * rename and untouched until [confirm] or [revert]. Together they name exactly three states at boot:
+ *
+ *  - journal present            → mid-commit. Resume it, rolling the WHOLE set back if it fails.
+ *  - journal absent, record present → landed, unproven. Go back into the Room open. This is the
+ *    state that did not exist before: an empty journal read as "nothing in flight", so a set that
+ *    landed and lost its process before validation had its snapshots swept as orphans and was never
+ *    offered to [revert] at all.
+ *  - both absent                → nothing in flight. Only here may anything be swept.
+ *
+ * Conflating the two is what made resume unsafe. Membership was derived from the journal, so a set
+ * resumed on a later boot could only see the components it still had to commit: roll that back and
+ * the ones an earlier boot had already landed — the database, first in commit order and so first to
+ * leave the journal — stayed live, on top of preferences from before the backup.
+ *
  * Lives outside `ForgeApp` so the sequencing is reachable from a test with a temp directory; the
  * Application only supplies the two paths and records the confirmation flag.
  */
@@ -91,11 +109,29 @@ internal object RestoreApply {
     private const val SNAPSHOT_SUFFIX = ".prerestore"
 
     /**
-     * Which components the last landed set replaced, kept until [confirm] or [revert]. A component
-     * that replaced NOTHING has no snapshot, so without this record [revert] could not know that
-     * its restored bytes are part of the set being backed out.
+     * The set's FULL membership, published before the first live rename and untouched until
+     * [confirm] or [revert].
+     *
+     * Two jobs, and it has to be written up front to do either. [revert] needs it because a
+     * component that replaced NOTHING has no snapshot, so nothing else on disk says its restored
+     * bytes belong to the set being backed out. And rollback needs it because [JOURNAL] is a list of
+     * what is LEFT: it stops naming a component the moment that component lands, so a set resumed on
+     * a later boot could only ever see the suffix it still had to commit. Deriving membership from
+     * that suffix is what let a failed resume roll back three components out of four and leave the
+     * fourth — the database — live, with its snapshot then swept as an orphan.
+     *
+     * Its presence with an EMPTY journal is also the protocol's third state: the set has landed and
+     * nothing has yet opened the database, so the next boot owes it a validation rather than a
+     * sweep. See [apply].
      */
-    private const val APPLIED = "pending_restore_applied"
+    private const val SET_RECORD = "pending_restore_set"
+
+    /**
+     * What [SET_RECORD] replaced: a post-hoc, best-effort record of the same membership, written
+     * AFTER the set landed. Only ever read now to be swept, so an install interrupted across the
+     * upgrade does not keep a file nothing will ever collect.
+     */
+    private const val LEGACY_APPLIED = "pending_restore_applied"
 
     /**
      * What committing one component did.
@@ -119,26 +155,53 @@ internal object RestoreApply {
         // only safe move. Its components are mid-commit, so sweeping would strand them and staging a
         // new set would interleave two restores — and we cannot tell which components they are.
         val interrupted = readJournal(filesDir) ?: return false
+        // The set record is read under the same rule and for the same reason: unreadable means a set
+        // exists whose membership we cannot name, and every branch below needs that membership to
+        // act safely.
+        val recorded = readSetRecord(filesDir) ?: return false
 
         // ── Resume: finish what a previous boot started. ──
         //
         // Before anything else, because these components are already committed-or-not against a
         // database that may already have been swapped.
-        val resumed = interrupted.isNotEmpty() && finishSet(filesDir, liveDb, interrupted)
-        // A resumed set is spent: its components have landed, so its READY marker has done its job.
-        if (resumed) RestoreManifest.discard(filesDir)
+        var resumed = false
+        if (interrupted.isNotEmpty()) {
+            // Membership, NOT the work list. The record names every component of the set, including
+            // any an earlier boot already landed and shortened out of the journal. The fallback is
+            // for a set left mid-commit by a build that predates the record and can only be as good
+            // as what that build wrote down — the journal — which is why the record is published
+            // before the first rename rather than derived here.
+            val members = recorded.ifEmpty { interrupted }
+            resumed = finishSet(filesDir, liveDb, members = members, remaining = interrupted)
+            // A resumed set is spent: its components have landed, so its READY marker has done its job.
+            if (resumed) RestoreManifest.discard(filesDir)
+        }
 
         // [finishSet] leaves no journal either way, so anything still here means the clear itself
         // failed. Staging a new set on top of a record we could not retire would mix two restores.
         val settled = readJournal(filesDir)
         if (settled == null || settled.isNotEmpty()) return resumed
 
+        // ── Awaiting validation: landed, but nothing has opened the database yet. ──
+        //
+        // An empty journal used to mean "no restore in flight", and that is where the set's own
+        // safety net was thrown away. A set lands, `apply` returns, and the process dies before Room
+        // opens: on the next boot the journal is gone, so the snapshots were swept as orphans and
+        // this returned false — skipping the validate/revert branch entirely. The restored database
+        // was then permanent and unbacked-out-of, having never once been proven openable.
+        //
+        // The record outlives the journal precisely so that state is nameable. Returning true here
+        // sends the caller back into the Room open it never completed; only [confirm] or [revert]
+        // retires the record, so this repeats every boot until one of them answers.
+        if (setRecordFile(filesDir).exists()) return true
+
         // ── Orphans: a crash during staging, before any journal existed. ──
         //
         // Staging renames the pending file away, so a `.restoring` file with no journal naming it is
         // a restore that would otherwise be lost outright. Put it back under the name the next boot
-        // looks for. With no journal nothing is in flight, so this also clears any snapshot left by
-        // a crash between the last commit and its cleanup.
+        // looks for. Reached only past the branch above, so no journal AND no set record: nothing is
+        // in flight and nothing is awaiting validation, and a snapshot here belongs to no set any
+        // longer — see [sweepOrphans] for why that is now a narrower claim than it used to be.
         sweepOrphans(filesDir, liveDb)
 
         // ── The READY marker: pending files are a restore only once their manifest says so. ──
@@ -202,7 +265,7 @@ internal object RestoreApply {
             return resumed
         }
 
-        if (!finishSet(filesDir, liveDb, toCommit)) return resumed
+        if (!finishSet(filesDir, liveDb, members = toCommit, remaining = toCommit)) return resumed
         RestoreManifest.discard(filesDir)
 
         if (hadDb && !hadAvatar && hadPrefs) {
@@ -213,6 +276,14 @@ internal object RestoreApply {
             // bring it back with the rest and [confirm] discards it with the rest.
             snapshot(liveAvatar)
         }
+        if (!hadDb) {
+            // The set landed and contains no database, so there is nothing for Room to open and no
+            // later boot will ever reach [confirm] for it. Left as-is the record and its snapshots
+            // would sit unclaimed forever, and the awaiting-validation branch above would re-report
+            // this same restore on every subsequent boot. Prove it here instead: a set with no
+            // database has already survived everything that could test it.
+            confirm(filesDir, liveDb)
+        }
         return hadDb
     }
 
@@ -222,15 +293,17 @@ internal object RestoreApply {
      */
     fun confirm(filesDir: File, liveDb: File) {
         ORDER.forEach { c -> liveFor(c, filesDir, liveDb)?.let { discard(snapshotOf(it)) } }
-        discard(File(filesDir, APPLIED))
+        discard(setRecordFile(filesDir))
+        discard(File(filesDir, LEGACY_APPLIED))
     }
 
     /**
      * The restored database could NOT be opened: put every component of the landed set back.
      *
      * A component with a snapshot gets its pre-restore bytes back over the restored ones; a
-     * component the set replaced nothing with (no snapshot, but named in the applied record) has
-     * its restored bytes removed, which is the state it was in before. The database's sidecars go
+     * component the set replaced nothing with (no snapshot, but named in [SET_RECORD]) has its
+     * restored bytes removed, which is the state it was in before — the fresh-install case, where
+     * the restored database landed over no database at all. The database's sidecars go
      * with it, so nothing can replay over the file that returns. The set itself is not requeued: it
      * was validated through this same configuration when it was staged, so a file that cannot be
      * opened now has been damaged since, and retrying it would only fail the same way.
@@ -238,12 +311,16 @@ internal object RestoreApply {
      * @return true when every component that had a snapshot is back in place.
      */
     fun revert(filesDir: File, liveDb: File): Boolean {
-        val applied = readApplied(filesDir)
+        // The whole set, as recorded before the first rename — not just the components that had
+        // something to move aside. A component that replaced nothing has no snapshot to find it by,
+        // and one landed on an EARLIER boot has long since left the journal.
+        val members = readSetRecord(filesDir)?.takeIf { it.isNotEmpty() }
+            ?: readLegacyApplied(filesDir)
         var ok = true
         for (component in ORDER) {
             val live = liveFor(component, filesDir, liveDb) ?: continue
             val snapshot = snapshotOf(live)
-            if (!snapshot.exists() && component !in applied) continue
+            if (!snapshot.exists() && component !in members) continue
             discard(live)
             if (component == DB) {
                 discard(File(liveDb.path + "-wal"))
@@ -251,7 +328,8 @@ internal object RestoreApply {
             }
             if (snapshot.exists() && !move(snapshot, live)) ok = false
         }
-        discard(File(filesDir, APPLIED))
+        discard(setRecordFile(filesDir))
+        discard(File(filesDir, LEGACY_APPLIED))
         return ok
     }
 
@@ -261,22 +339,55 @@ internal object RestoreApply {
         ORDER.forEach { c -> pendingFor(c, filesDir)?.let { discard(it) } }
     }
 
-    private fun readApplied(filesDir: File): Set<String> = runCatching {
-        val f = File(filesDir, APPLIED)
+    private fun setRecordFile(filesDir: File) = File(filesDir, SET_RECORD)
+
+    /**
+     * @return the recorded membership; an empty list when no record exists; **null** when one exists
+     *   but could not be read — which, exactly like an unreadable journal, means a set is in flight
+     *   whose components cannot be named, and the only safe move is to touch nothing.
+     */
+    private fun readSetRecord(filesDir: File): List<String>? {
+        val file = setRecordFile(filesDir)
+        if (!file.exists()) return emptyList()
+        return runCatching {
+            file.readLines().map { it.trim() }.filter { it.isNotEmpty() }
+        }.getOrNull()
+    }
+
+    private fun readLegacyApplied(filesDir: File): Set<String> = runCatching {
+        val f = File(filesDir, LEGACY_APPLIED)
         if (!f.isFile) emptySet() else f.readLines().map { it.trim() }.filter { it.isNotEmpty() }.toSet()
     }.getOrDefault(emptySet())
 
-    /** Best-effort, like the journal's shortening: without it [revert] still restores every snapshot. */
-    private fun writeApplied(filesDir: File, entries: List<String>) {
-        runCatching {
-            val target = File(filesDir, APPLIED)
-            val scratch = File(filesDir, "$APPLIED.tmp")
-            scratch.writeText(entries.joinToString("\n"))
+    /**
+     * Publish [members] as the set's membership, if it is not published already.
+     *
+     * NOT best-effort, which is what its predecessor was: it was written after the set had landed and
+     * its failure was swallowed, so a set could go live with nothing on disk naming what it consisted
+     * of — and [revert] would then leave every snapshotless component of it in place. This runs
+     * BEFORE the first live rename and its caller abandons the set when it fails, so the record and
+     * the mutation cannot disagree.
+     *
+     * An existing record is never rewritten. It is the immutable statement of what the set is; a
+     * resume re-deriving it would only ever narrow it to the components still outstanding, which is
+     * the defect this file exists to close.
+     */
+    private fun ensureSetRecord(filesDir: File, members: List<String>): Boolean {
+        val target = setRecordFile(filesDir)
+        if (target.exists()) return true
+        if (members.isEmpty()) return true
+        return runCatching {
+            val scratch = File(filesDir, "$SET_RECORD.tmp")
+            scratch.writeText(members.joinToString("\n"))
             if (!scratch.renameTo(target)) {
                 target.delete()
-                if (!scratch.renameTo(target)) scratch.delete()
+                if (!scratch.renameTo(target)) {
+                    scratch.delete()
+                    return@runCatching false
+                }
             }
-        }
+            target.isFile
+        }.getOrDefault(false)
     }
 
     /**
@@ -288,15 +399,25 @@ internal object RestoreApply {
      *
      * @return true when every component landed.
      */
-    private fun finishSet(filesDir: File, liveDb: File, entries: List<String>): Boolean {
-        if (runJournal(filesDir, liveDb, entries)) {
-            // The pre-restore bytes stay beside each live file: the restored database is not proven
-            // until Room has opened it, and until [confirm] says so [revert] must be able to put
-            // every component of this set back.
-            writeApplied(filesDir, entries)
-            return true
+    private fun finishSet(
+        filesDir: File,
+        liveDb: File,
+        members: List<String>,
+        remaining: List<String>
+    ): Boolean {
+        // Membership first, before a single live file moves. Both ways out of phase 2 need the whole
+        // set — [rollBack] to put all of it back, [revert] to back all of it out after the fact —
+        // and the journal below stops naming a component the instant it lands. A set that cannot
+        // publish what it consists of is a set that cannot be undone, so it does not begin.
+        if (!ensureSetRecord(filesDir, members)) {
+            rollBack(filesDir, liveDb, members)
+            return false
         }
-        rollBack(filesDir, liveDb, entries)
+        // The pre-restore bytes stay beside each live file: the restored database is not proven
+        // until Room has opened it, and until [confirm] says so [revert] must be able to put every
+        // component of this set back.
+        if (runJournal(filesDir, liveDb, remaining)) return true
+        rollBack(filesDir, liveDb, members)
         return false
     }
 
@@ -386,6 +507,10 @@ internal object RestoreApply {
             snapshotOf(live).takeIf { it.exists() }?.let { move(it, live) }
         }
         writeJournal(filesDir, emptyList())
+        // The set is back at its pending names and nothing of it is live, so there is nothing left
+        // to confirm or revert. Leaving the record would read as a landed set awaiting validation.
+        discard(setRecordFile(filesDir))
+        discard(File(filesDir, LEGACY_APPLIED))
     }
 
     /**
@@ -427,13 +552,16 @@ internal object RestoreApply {
     /**
      * Return every `.restoring` file to the name the next boot looks for, and drop stale snapshots.
      *
-     * Only reached with no journal, which means no restore is in flight. A `.restoring` file here is
-     * a crash during STAGING — the pending file had been renamed away and nothing recorded that it
-     * existed, so without this the restore is not merely delayed, it is gone. A `.prerestore` file
-     * here is the opposite: a set that landed on an earlier boot and was never confirmed or
-     * reverted, because the process died between the swap and the open. That boot is over and the
-     * app has run on the restored data since, so the snapshot is finished business, and keeping it
-     * would leave a whole spare database on a device that may be short of room.
+     * Only reached with no journal AND no [SET_RECORD], which together mean no restore is in flight
+     * and none is awaiting validation — nothing on disk can ever claim these files. A `.restoring`
+     * file here is a crash during STAGING: the pending file had been renamed away and nothing
+     * recorded that it existed, so without this the restore is not merely delayed, it is gone.
+     *
+     * A `.prerestore` file here is an unowned leftover, which under this protocol means one written
+     * by a build that predates the set record — the sweep used to run whenever the journal was empty,
+     * and that is exactly how it discarded the rollback copy of a set that had landed and not yet
+     * been proven. A set that landed under the current protocol still has its record, so it is
+     * caught by the awaiting-validation branch in [apply] long before it reaches here.
      */
     private fun sweepOrphans(filesDir: File, liveDb: File) {
         ORDER.forEach { component ->
@@ -444,7 +572,7 @@ internal object RestoreApply {
             }
             snapshotOf(live).takeIf { it.exists() }?.let { discard(it) }
         }
-        discard(File(filesDir, APPLIED))
+        discard(File(filesDir, LEGACY_APPLIED))
     }
 
     private fun journalFile(filesDir: File) = File(filesDir, JOURNAL)

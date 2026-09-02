@@ -1,8 +1,10 @@
 package com.forge.app
 
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeFalse
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -77,6 +79,29 @@ class RestoreApplyTest {
      */
     private fun blockThePreferencesPath() {
         write(File(filesDir, "datastore"), "not a directory")
+    }
+
+    /** Directories made read-only by [freezeThePreferencesDirectory], so the rule can clean up. */
+    private val frozen = mutableListOf<File>()
+
+    @After fun thaw() = frozen.forEach { it.setWritable(true) }
+
+    /**
+     * Make phase 2 fail for the preferences the way a real device can: the staged bytes are there
+     * and readable, but the live file cannot be moved aside, so the swap is refused rather than
+     * done irreversibly.
+     *
+     * Skipped rather than failed where the process bypasses permission bits (running as root), so
+     * this reports "not exercised here" instead of a false pass.
+     */
+    private fun freezeThePreferencesDirectory() {
+        val dir = File(filesDir, "datastore")
+        dir.setWritable(false)
+        frozen += dir
+        val probe = File(dir, ".probe")
+        val bypassed = runCatching { probe.createNewFile() }.getOrDefault(false)
+        if (bypassed) probe.delete()
+        assumeFalse("permission bits are not enforced for this process", bypassed)
     }
 
     // ── The whole set lands together ──────────────────────────────────────────
@@ -207,6 +232,7 @@ class RestoreApplyTest {
     // ── Interruption between commits ──────────────────────────────────────────
 
     private fun journal() = File(filesDir, "pending_restore_journal")
+    private fun setRecord() = File(filesDir, "pending_restore_set")
     private fun stagedPrefs() = File(filesDir, "datastore/forge_settings.preferences_pb.restoring")
 
     /**
@@ -616,23 +642,229 @@ class RestoreApplyTest {
         assertEquals("restored-db", liveDb.readText())
         assertEquals("restored-prefs", livePrefs().readText())
         assertFalse(File(liveDb.path + ".prerestore").exists())
-        assertFalse(File(filesDir, "pending_restore_applied").exists())
+        assertFalse(setRecord().exists())
         // A revert after a confirm has nothing to act on.
         assertTrue(RestoreApply.revert(filesDir, liveDb))
         assertEquals("restored-db", liveDb.readText())
     }
 
+    // ── The set record: membership, and the state between landing and proof ───
+
+    /**
+     * The gap that made every other guarantee in this file conditional.
+     *
+     * A set lands, `apply` returns true, and the process dies before the caller opens Room. The
+     * journal is gone — it is a list of what is LEFT — so the next boot read "nothing in flight",
+     * swept the `.prerestore` snapshots as orphans, and returned false. Returning false skips the
+     * caller's validate/revert branch entirely, so the restored database became permanent on a boot
+     * where nothing had ever proven it could be opened, with its rollback copy deleted in the same
+     * pass. Both halves of the safety net, removed by the same line.
+     *
+     * The set record outlives the journal so that state has a name.
+     */
     @Test
-    fun `a snapshot a previous boot never confirmed is swept on the next one`() {
+    fun `a set that landed but was never validated is offered again, snapshots intact`() {
         setUpDirs()
         stageEverything()
         assertTrue(RestoreApply.apply(filesDir, liveDb))
-        // The process died between the swap and the open; the app has since run on this data.
+        // The process died between the swap and the open.
+        assertTrue(File(liveDb.path + ".prerestore").exists())
+        assertTrue("the record is what survives the journal", setRecord().exists())
+
+        assertTrue(
+            "the next boot owes this set a validation, not a sweep",
+            RestoreApply.apply(filesDir, liveDb)
+        )
+        assertTrue("and the rollback copy is still there to make that answerable",
+            File(liveDb.path + ".prerestore").exists())
+        assertEquals("restored-db", liveDb.readText())
+
+        // The boot that does answer retires it, and only then.
+        RestoreApply.confirm(filesDir, liveDb)
+        assertFalse(File(liveDb.path + ".prerestore").exists())
+        assertFalse(setRecord().exists())
+        assertFalse("nothing left in flight", RestoreApply.apply(filesDir, liveDb))
+    }
+
+    /** The other answer to the same state: the database will not open, so the set goes back. */
+    @Test
+    fun `a set awaiting validation can still be reverted whole on a later boot`() {
+        setUpDirs()
+        stageEverything()
+        assertTrue(RestoreApply.apply(filesDir, liveDb))
+
+        assertTrue("re-offered", RestoreApply.apply(filesDir, liveDb))
+        assertTrue(RestoreApply.revert(filesDir, liveDb))
+
+        assertEquals("live-db", liveDb.readText())
+        assertEquals("live-prefs", livePrefs().readText())
+        assertEquals("live-avatar", liveAvatar().readText())
+        assertTrue(File(livePhotos(), "pp_old.jpg").exists())
+        assertFalse(setRecord().exists())
+    }
+
+    /**
+     * Membership is published BEFORE the first live rename, and that ordering is the whole point.
+     *
+     * `runJournal` shortens the journal as each component lands, so a set resumed on a later boot
+     * only ever saw the suffix it still had to commit. Rollback was built from that suffix: fail the
+     * preference commit on the resuming boot and the database — first in commit order, and so the
+     * first to leave the journal — was not rolled back with it. The user ended the boot on a
+     * restored database beside pre-restore preferences: exactly the mixture this file exists to
+     * make impossible, reached by the path meant to prevent it.
+     */
+    @Test
+    fun `a resume that fails rolls back components an earlier boot already landed`() {
+        setUpDirs()
+        write(liveDb, "live-db")
+        write(livePrefs(), "live-prefs")
+        write(File(filesDir, "pending_restore.db"), "restored-db")
+        write(File(filesDir, "pending_restore_prefs.pb"), "restored-prefs")
+        publish()                                          // staging's last act, on the first boot
+
+        // Now exactly what that boot's crash leaves behind: the database committed (its pre-restore
+        // bytes moved aside, its pending source discarded), the preferences staged but not, and a
+        // journal naming only what is LEFT. The record names the whole set, which is the point.
+        write(File(liveDb.path + ".prerestore"), "live-db")
+        write(liveDb, "restored-db")
+        assertTrue(File(filesDir, "pending_restore.db").delete())
+        write(stagedPrefs(), "restored-prefs")
+        assertTrue(File(filesDir, "pending_restore_prefs.pb").delete())
+        write(journal(), "prefs")
+        write(setRecord(), "db\nprefs")
+
+        // Fail the preference commit where phase 2 really can fail: moving the live file aside.
+        freezeThePreferencesDirectory()
+
+        assertFalse("the set cannot complete", RestoreApply.apply(filesDir, liveDb))
+
+        assertEquals(
+            "the database an earlier boot landed goes back with the rest",
+            "live-db", liveDb.readText()
+        )
+        assertEquals("and the untouched component is untouched", "live-prefs", livePrefs().readText())
+        assertFalse("no half-set is left recorded as landed", setRecord().exists())
+        assertFalse(journal().exists())
+        assertEquals(
+            "while the whole set is queued to retry",
+            "restored-db", File(filesDir, "pending_restore.db").readText()
+        )
+        assertEquals(
+            "restored-prefs", File(filesDir, "pending_restore_prefs.pb").readText()
+        )
+    }
+
+    /**
+     * The fresh-install shape of the same defect. Nothing is moved aside, because there was nothing
+     * there — so a snapshot cannot be what tells [RestoreApply.revert] the database belongs to the
+     * set. Only the record can, and only if it names the whole set rather than whatever was left in
+     * the journal when the resuming boot picked it up.
+     */
+    @Test
+    fun `revert removes a component that landed on a later boot over nothing`() {
+        setUpDirs()
+        // A fresh install: the database landed on the first boot over no file at all, so it has no
+        // snapshot. The preferences are still to come.
+        write(liveDb, "restored-db")
+        write(stagedPrefs(), "restored-prefs")
+        write(journal(), "prefs")
+        write(setRecord(), "db\nprefs")
+
+        assertTrue("the resume completes", RestoreApply.apply(filesDir, liveDb))
+        assertEquals("restored-prefs", livePrefs().readText())
+
+        // ...and Room cannot open the result.
+        assertTrue(RestoreApply.revert(filesDir, liveDb))
+
+        assertFalse(
+            "the database is snapshotless but still part of the set, so it goes",
+            liveDb.exists()
+        )
+        assertFalse(livePrefs().exists())
+    }
+
+    /**
+     * A crash at the very last journal write: every component is live and the journal names the last
+     * one, which no longer has a staged file. That entry resolves as ALREADY, the journal empties —
+     * and the set must still be handed to validation rather than treated as finished business.
+     */
+    @Test
+    fun `a crash after the last rename still leaves the set awaiting validation`() {
+        setUpDirs()
+        write(File(liveDb.path + ".prerestore"), "live-db")
+        write(liveDb, "restored-db")
+        write(File(livePrefs().path + ".prerestore"), "live-prefs")
+        write(livePrefs(), "restored-prefs")
+        write(journal(), "prefs")
+        write(setRecord(), "db\nprefs")
+
+        assertTrue(RestoreApply.apply(filesDir, liveDb))
+        assertFalse(journal().exists())
+        assertTrue("the record is not spent until something answers it", setRecord().exists())
         assertTrue(File(liveDb.path + ".prerestore").exists())
 
+        assertTrue("so the next boot asks again", RestoreApply.apply(filesDir, liveDb))
+    }
+
+    /**
+     * Membership that cannot be published is a set that cannot be undone, so it must not begin.
+     * The record is written to a scratch file and renamed in, exactly like the journal; a directory
+     * squatting on the scratch name is the same injection the journal's own test uses.
+     */
+    @Test
+    fun `a set whose membership cannot be published does not commit`() {
+        setUpDirs()
+        stageEverything()
+        File(filesDir, "pending_restore_set.tmp").mkdirs()   // writeText will throw
+
+        assertFalse("the set is abandoned rather than committed irreversibly",
+            RestoreApply.apply(filesDir, liveDb))
+
+        assertEquals("nothing went live", "live-db", liveDb.readText())
+        assertEquals("live-prefs", livePrefs().readText())
+        assertFalse(journal().exists())
+        assertEquals(
+            "and the set is back at the name the next boot looks for",
+            "restored-db", File(filesDir, "pending_restore.db").readText()
+        )
+    }
+
+    /**
+     * The sweep's remaining job, and its new precondition. A `.prerestore` with NO record beside it
+     * is a leftover from a build that predates the record — nothing can ever claim it — so it still
+     * goes. One WITH a record is a live rollback copy and is caught long before this point.
+     */
+    @Test
+    fun `an unowned snapshot with no set record is still swept`() {
+        setUpDirs()
+        write(liveDb, "restored-db")
+        write(File(liveDb.path + ".prerestore"), "live-db")
+        write(File(filesDir, "pending_restore_applied"), "db")
+
         assertFalse("nothing pending, so nothing to apply", RestoreApply.apply(filesDir, liveDb))
+
         assertFalse(File(liveDb.path + ".prerestore").exists())
         assertFalse(File(filesDir, "pending_restore_applied").exists())
         assertEquals("restored-db", liveDb.readText())
+    }
+
+    /**
+     * A set with no database has nothing Room can open, so no later boot would ever confirm it.
+     * It is proven on the spot instead — otherwise its record would sit unclaimed forever and every
+     * subsequent boot would re-report the same restore.
+     */
+    @Test
+    fun `a set carrying no database is confirmed where it lands`() {
+        setUpDirs()
+        write(livePrefs(), "live-prefs")
+        write(File(filesDir, "pending_restore_prefs.pb"), "restored-prefs")
+        publish()
+
+        assertFalse("no database, so nothing to report as a restore", RestoreApply.apply(filesDir, liveDb))
+
+        assertEquals("restored-prefs", livePrefs().readText())
+        assertFalse("nothing is left awaiting a validation that cannot happen", setRecord().exists())
+        assertFalse(File(livePrefs().path + ".prerestore").exists())
+        assertFalse("and the next boot has nothing to do", RestoreApply.apply(filesDir, liveDb))
     }
 }
