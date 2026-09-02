@@ -1,9 +1,11 @@
 package com.forge.app.data.prefs
 
 import android.content.Context
+import androidx.datastore.preferences.core.edit
 import androidx.test.core.app.ApplicationProvider
 import com.forge.app.core.time.Clock
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Before
@@ -23,9 +25,19 @@ class GoalPinTest {
 
     private lateinit var repo: SettingsRepository
 
+    /**
+     * `forgePreferences` is a file-level property delegate, so every test in this class shares one
+     * DataStore instance and one backing file for the life of the JVM — Robolectric giving each
+     * test a fresh Application does not give it a fresh store. Pins written by whichever test ran
+     * first were still there for the next, so the suite's result depended on JUnit's method order
+     * and five of these failed together in a way that looked like a production bug.
+     *
+     * Clearing the one key this class touches is enough and leaves the rest of the store alone.
+     */
     @Before
-    fun setUp() {
+    fun setUp() = runBlocking {
         val context: Context = ApplicationProvider.getApplicationContext()
+        context.forgePreferences.edit { it.remove(PreferenceKeys.PINNED_GOALS) }
         repo = SettingsRepository(context, Clock { 0L })
     }
 
