@@ -84,17 +84,20 @@ fun SetView(
         while (true) { nowMs = System.currentTimeMillis(); delay(250) }
     }
     // Ack resolution — confirmation is the mirror updating; success feedback fires in WearRoot.
-    LaunchedEffect(lastAck, pendingId) {
-        val ack: CmdAckDto = lastAck ?: return@LaunchedEffect
-        if (ack.commandId != pendingId) return@LaunchedEffect
+    // Also keyed on timedOutId: the phone replays a recorded ack for a retried id, and a late ack
+    // can arrive on its own, so an answer for the TIMED-OUT command must clear "Not logged" too.
+    LaunchedEffect(lastAck, pendingId, timedOutId) {
+        val outcome = resolveAck(lastAck, pendingId, timedOutId)
+        if (outcome == AckOutcome.Unrelated) return@LaunchedEffect
         pendingId = null
         // Resolved either way, so there is nothing left to resend under this id.
         timedOutId = null
         timedOutPayload = null
-        when {
-            ack.ok -> statusLine = null
-            ack.needsConfirm -> { confirmJump = true; statusLine = "Big jump, tap to confirm" }
-            else -> statusLine = ack.reason ?: "Not logged"
+        when (outcome) {
+            AckOutcome.Logged -> statusLine = null
+            AckOutcome.NeedsConfirm -> { confirmJump = true; statusLine = "Big jump, tap to confirm" }
+            is AckOutcome.Refused -> statusLine = outcome.reason
+            AckOutcome.Unrelated -> Unit
         }
     }
     // Pending timeout → quiet reconnect line. The command may still land, which is why the id is

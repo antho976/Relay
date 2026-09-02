@@ -16,20 +16,28 @@ import javax.inject.Singleton
  */
 @Singleton
 class WearCommandHandler @Inject constructor(
-    private val deduper: CommandDeduper,
+    private val ledger: WearCommandLedger,
     private val publisher: WearStatePublisher,
     private val setLog: com.forge.app.domain.session.SetLogUseCase,
     private val clock: Clock
 ) {
+    /**
+     * Every mutating command goes through the ledger: it runs [effect] once per command id, records
+     * the ack it produced, and answers any same-id retry by publishing that recorded ack again —
+     * so a set logged just before the phone process died is neither logged twice nor left
+     * unacknowledged on the wrist.
+     */
+    private suspend fun runOnce(commandId: String, effect: suspend () -> CmdAckDto) =
+        ledger.run(commandId, publish = { publisher.publishAck(it) }, effect = effect)
+
     suspend fun handleLogSet(bytes: ByteArray) {
         val cmd = when (val d = WearCodec.decode<LogSetCommand>(bytes)) {
             is WearCodec.DecodeResult.Ok -> d.value
             WearCodec.DecodeResult.NewerVersion -> return refuseNewerVersion(bytes)
             else -> return // Invalid: corrupt bytes, nothing to ack against.
         }
-        if (!deduper.isNew(cmd.commandId)) return
-        val result = setLog.logFromWatch(cmd)
-        publisher.publishAck(
+        runOnce(cmd.commandId) {
+            val result = setLog.logFromWatch(cmd)
             CmdAckDto(
                 commandId = cmd.commandId,
                 ok = result.ok,
@@ -40,7 +48,7 @@ class WearCommandHandler @Inject constructor(
                 atMs = clock.nowMs(),
                 kind = CmdAckDto.KIND_LOG_SET
             )
-        )
+        }
     }
 
     suspend fun handleSetRpe(bytes: ByteArray) {
@@ -49,9 +57,8 @@ class WearCommandHandler @Inject constructor(
             WearCodec.DecodeResult.NewerVersion -> return refuseNewerVersion(bytes)
             else -> return
         }
-        if (!deduper.isNew(cmd.commandId)) return
-        val result = setLog.rpeFromWatch(cmd.setId, cmd.rpe)
-        publisher.publishAck(
+        runOnce(cmd.commandId) {
+            val result = setLog.rpeFromWatch(cmd.setId, cmd.rpe)
             CmdAckDto(
                 commandId = cmd.commandId,
                 ok = result.ok,
@@ -63,7 +70,7 @@ class WearCommandHandler @Inject constructor(
                 // re-armed its undo/rate row on the strength of it.
                 kind = CmdAckDto.KIND_SET_RPE
             )
-        )
+        }
     }
 
     /**
@@ -97,9 +104,8 @@ class WearCommandHandler @Inject constructor(
             WearCodec.DecodeResult.NewerVersion -> return refuseNewerVersion(bytes)
             else -> return
         }
-        if (!deduper.isNew(cmd.commandId)) return
-        val result = setLog.undoLastFromWatch(cmd.sessionId, cmd.setId)
-        publisher.publishAck(
+        runOnce(cmd.commandId) {
+            val result = setLog.undoLastFromWatch(cmd.sessionId, cmd.setId)
             CmdAckDto(
                 commandId = cmd.commandId,
                 ok = result.ok,
@@ -107,6 +113,6 @@ class WearCommandHandler @Inject constructor(
                 atMs = clock.nowMs(),
                 kind = CmdAckDto.KIND_UNDO_SET
             )
-        )
+        }
     }
 }
