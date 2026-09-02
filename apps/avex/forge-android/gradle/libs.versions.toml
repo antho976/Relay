@@ -11,8 +11,11 @@ lifecycle = "2.9.0"
 navigation-compose = "2.8.9"
 
 # Hilt + DI
+# androidx.hilt is held at 1.2.0 by compileSdk, same wall as core-ktx above: 1.4.0 requires
+# compileSdk 37 and transitively pulls lifecycle 2.11.0, which requires 37 too — so the
+# catalog pin of lifecycle 2.9.0 does not hold it back (CI run 33662166299).
 hilt = "2.56.2"
-hilt-navigation-compose = "1.4.0"
+hilt-navigation-compose = "1.2.0"
 
 # Persistence
 room = "2.8.4"
@@ -45,7 +48,7 @@ concurrent-futures = "1.2.0"
 
 # WorkManager
 work = "2.10.1"
-hilt-work = "1.4.0"
+hilt-work = "1.2.0"
 
 # Test
 junit = "4.13.2"
