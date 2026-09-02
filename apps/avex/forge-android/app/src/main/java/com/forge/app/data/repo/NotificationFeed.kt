@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import androidx.core.app.NotificationManagerCompat
 import com.forge.app.core.time.TimeSignals
 import com.forge.app.data.health.HealthConnectManager
 import com.forge.app.data.prefs.SettingsRepository
@@ -11,12 +12,14 @@ import com.forge.app.domain.notify.Milestones
 import com.forge.app.program.Program
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.time.temporal.IsoFields
@@ -137,9 +140,7 @@ class NotificationFeed @Inject constructor(
         wearableConnected.value = runCatching {
             healthConnect.canReadSteps() || healthConnect.canReadExercise()
         }.getOrDefault(false)
-        notificationsAllowed.value = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
-            context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) ==
-            PackageManager.PERMISSION_GRANTED
+        notificationsAllowed.value = osNotificationsEnabled(context)
     }
 
     /**
@@ -397,9 +398,24 @@ class NotificationFeed @Inject constructor(
         else -> ({})
     }
 
-    /** Clear everything clearable in one go, returning the single operation that restores them all. */
+    /**
+     * Clear everything clearable in one go, returning the single operation that restores them all.
+     *
+     * All or nothing (M-27): if a later dismissal fails, the ones already made are put back before
+     * the failure propagates, so the caller never publishes an Undo that would restore only part of
+     * the list, and never leaves a half-cleared feed with no Undo at all. The rollback runs shielded
+     * because the failure that got here may itself be the caller's cancellation.
+     */
     suspend fun dismissAll(): suspend () -> Unit {
-        val undos = notices.first().filter { it.dismissible }.map { dismiss(it.id) }
+        val undos = mutableListOf<suspend () -> Unit>()
+        try {
+            notices.first().filter { it.dismissible }.forEach { undos += dismiss(it.id) }
+        } catch (e: Exception) {
+            withContext(NonCancellable) {
+                undos.asReversed().forEach { undo -> runCatching { undo() } }
+            }
+            throw e
+        }
         return { undos.forEach { it() } }
     }
 
@@ -437,6 +453,24 @@ class NotificationFeed @Inject constructor(
         }
 
         private val WEEK_DAY_FORMAT: DateTimeFormatter = DateTimeFormatter.ofPattern("d MMM", Locale.getDefault())
+
+        /**
+         * Whether the OS will actually deliver this app's notifications.
+         *
+         * Every version below 13 used to be reported as allowed outright, on the grounds that the
+         * runtime permission did not exist yet. But the user can block an app's notifications in
+         * OS settings on any version, and on Android 8 to 12 that block hid the feed's only
+         * recovery row (M-28). [NotificationManagerCompat.areNotificationsEnabled] answers the
+         * real question on every supported API; the runtime permission is checked alongside it on
+         * 13+, where a missing grant is the same outcome by a different route. The user's own
+         * "don't remind me" choice is a separate preference and stays out of this read.
+         */
+        internal fun osNotificationsEnabled(context: Context): Boolean {
+            val permitted = Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+                context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) ==
+                PackageManager.PERMISSION_GRANTED
+            return permitted && NotificationManagerCompat.from(context).areNotificationsEnabled()
+        }
 
         /**
          * "2026-W27" reads as "Week of 29 Jun" (§11: machine identifiers never render). An id that

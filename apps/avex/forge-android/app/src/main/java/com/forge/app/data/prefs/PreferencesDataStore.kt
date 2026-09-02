@@ -341,6 +341,11 @@ object PreferenceKeys {
      *  than the (schema-locked) Room DB; a logged session references one only by its stable code. */
     val CUSTOM_CARDIO_TYPES = stringPreferencesKey("custom_cardio_types")
 
+    /** User-created freestyle exercises (id, name, target muscle) as one JSON blob, see
+     *  [com.forge.app.program.CustomExerciseDef]. The logged row keeps only the id and name; the
+     *  muscle had nowhere else to live without a schema change, so this registry carries it. */
+    val CUSTOM_EXERCISES = stringPreferencesKey("custom_exercises")
+
     /** The activity code of the last cardio session logged (GYMAP-40) — the log sheet seeds a new
      *  entry to it instead of always defaulting to Run. Absent until the first session; rest days
      *  don't write it (a rest default would be nonsense). */

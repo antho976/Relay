@@ -311,6 +311,9 @@ fun ForgeNavHost(initialDayKey: String? = null, privacyPolicyRequest: Int = 0) {
         }
         composable(Routes.NOTIFICATIONS) {
             com.forge.app.ui.notifications.NotificationsScreen(
+                // The root-scoped instance held above, so a Clear all or a seen-mark still in flight
+                // survives popping this destination (M-27).
+                viewModel = notificationsVm,
                 onBack = { nav.popBackStack() },
                 // Acting on a notice leaves the feed behind rather than stacking on top of it, so Back
                 // from the session (or the brief) returns to where the user actually was.

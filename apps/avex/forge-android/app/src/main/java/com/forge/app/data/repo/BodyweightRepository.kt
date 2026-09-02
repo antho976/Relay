@@ -6,6 +6,7 @@ import com.forge.app.data.db.entities.BodyweightEntry
 import com.forge.app.data.health.HealthConnectManager
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.domain.health.BodyweightSync
+import com.forge.app.domain.health.HcRecordKeys
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import java.time.Instant
@@ -85,11 +86,27 @@ class BodyweightRepository @Inject constructor(
         // failure can't break the local save above (the DB stays the single source of truth), and a
         // backdated value never lands in HC at the wrong instant (HC keeps its own history).
         if (date == todayLocal && settings.hcWriteBodyweight.first() && health.canWriteWeight()) {
-            health.writeWeight(weightLb, now)
+            // Keyed on the day, not the row id: the upsert above hands a re-saved day a fresh id,
+            // while the date_key is the one identity the entry keeps. So a second weigh-in today
+            // UPDATES the mirror instead of adding a duplicate, and [delete] can find it (M-02).
+            health.writeWeight(
+                weightLb, now,
+                clientRecordId = HcRecordKeys.weight(dateKey),
+                clientRecordVersion = now
+            )
         }
     }
 
-    suspend fun delete(id: Long) = dao.delete(id)
+    /**
+     * Delete a weigh-in and the Health Connect copy Avex wrote for it (M-02). The local delete
+     * comes first and never waits on the mirror; the mirror delete is fail-soft and a no-op for a
+     * day that was never mirrored (backdated, or logged before the write-back opt-in).
+     */
+    suspend fun delete(id: Long) {
+        val entry = dao.byId(id)
+        dao.delete(id)
+        if (entry != null) health.deleteWeights(listOf(HcRecordKeys.weight(entry.dateKey)))
+    }
 
     /** Whether an "Import from Health Connect" affordance should be offered (read permission granted). */
     suspend fun canImportFromHealthConnect(): Boolean = health.canReadWeight()

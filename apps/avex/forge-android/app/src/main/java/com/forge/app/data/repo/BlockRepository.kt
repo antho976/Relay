@@ -1,7 +1,9 @@
 package com.forge.app.data.repo
 
+import androidx.room.withTransaction
 import com.forge.app.core.time.Clock
 import com.forge.app.core.time.deloadWeekEndMs
+import com.forge.app.data.db.ForgeDatabase
 import com.forge.app.data.db.dao.TrainingBlockDao
 import com.forge.app.data.db.entities.TrainingBlock
 import com.forge.app.data.prefs.SettingsRepository
@@ -11,6 +13,8 @@ import com.forge.app.domain.coach.BlockPlanner
 import com.forge.app.domain.coach.CoachGoalKind
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -28,12 +32,30 @@ class BlockRepository @Inject constructor(
     private val coachGoalRepository: CoachGoalRepository,
     private val academyRepository: AcademyRepository,
     private val settingsRepository: SettingsRepository,
+    private val database: ForgeDatabase,
     private val clock: Clock
 ) {
 
+    /**
+     * Serialises [start], [advanceForWeek] and [end] within the process. Each is a read-then-write
+     * on the singleton live row, and two of them interleaving is how a second active block came to
+     * exist (M-13). Not held by [active]: the lifecycle methods call it while holding this.
+     */
+    private val lifecycleMutex = Mutex()
+
     fun observeActive(): Flow<TrainingBlock?> = blockDao.observeActive()
 
-    suspend fun active(): TrainingBlock? = blockDao.active()
+    /**
+     * The live block, repairing the singleton invariant on the way: any extra open row is ended in
+     * the same transaction, so a duplicate left behind by an older build cannot outlive the block
+     * the user can see and reappear after they end it.
+     */
+    suspend fun active(): TrainingBlock? = database.withTransaction {
+        val open = blockDao.allActive()
+        val visible = open.firstOrNull() ?: return@withTransaction null
+        if (open.size > 1) blockDao.endAllExcept(keepId = visible.id, endedAt = clock.nowMs())
+        visible
+    }
 
     suspend fun history(): List<TrainingBlock> = blockDao.all()
 
@@ -44,8 +66,7 @@ class BlockRepository @Inject constructor(
      * Start a block around the athlete's top-priority goal, so the block has something to be FOR.
      * Its intent line is written from that goal rather than generated from a template.
      */
-    suspend fun start(weeks: Int = BlockPlanner.DEFAULT_WEEKS, weekId: String): TrainingBlock {
-        active()?.let { return it }
+    suspend fun start(weeks: Int = BlockPlanner.DEFAULT_WEEKS, weekId: String): TrainingBlock = lifecycleMutex.withLock {
         val focus = runCatching { coachGoalRepository.active().firstOrNull() }.getOrNull()
         val intent = when (val kind = focus?.let { CoachGoalKind.fromCode(it.kind) }) {
             null -> "Build steadily, then take a planned week back."
@@ -56,20 +77,26 @@ class BlockRepository @Inject constructor(
             CoachGoalKind.CONDITIONING -> "Build the aerobic base alongside your lifting."
             CoachGoalKind.BALANCE -> "Even out what's lagging before pushing the whole again."
         }
-        val block = BlockPlanner.start(
-            nowMs = clock.nowMs(),
-            weekId = weekId,
-            plannedWeeks = weeks,
-            focusGoalId = focus?.id ?: 0,
-            intent = intent
-        )
-        val id = blockDao.insert(block)
+        // "Is one running?" and the insert are one transaction, so two starts that both got here
+        // cannot both insert: the second reads the first's committed row and returns it (M-13).
+        val (block, created) = database.withTransaction {
+            active()?.let { running -> return@withTransaction running to false }
+            val planned = BlockPlanner.start(
+                nowMs = clock.nowMs(),
+                weekId = weekId,
+                plannedWeeks = weeks,
+                focusGoalId = focus?.id ?: 0,
+                intent = intent
+            )
+            val id = blockDao.insert(planned)
+            planned.copy(id = id) to true
+        }
         // A block is a coach concept the user can now see, so its lessons exist from this moment.
-        runCatching {
+        if (created) runCatching {
             academyRepository.unlock("programming.what_a_block_is")
             academyRepository.unlock("programming.reading_your_block_card")
         }
-        return block.copy(id = id)
+        block
     }
 
     /**
@@ -85,8 +112,8 @@ class BlockRepository @Inject constructor(
      * The weekly pass advances the block before it snapshots the program, so the pass that follows
      * plans against the deloaded week rather than the one it replaced.
      */
-    suspend fun advanceForWeek(weekId: String): TrainingBlock? {
-        val block = active() ?: return null
+    suspend fun advanceForWeek(weekId: String): TrainingBlock? = lifecycleMutex.withLock {
+        val block = active() ?: return@withLock null
         val fatigue = runCatching {
             DeloadAdvisor.fatigue(adaptationRepository.snapshotCached())?.score ?: 0
         }.getOrDefault(0)
@@ -101,7 +128,7 @@ class BlockRepository @Inject constructor(
             }
             if (BlockPlanner.entersDeload(block, advanced)) serveScheduledDeload()
         }
-        return advanced
+        advanced
     }
 
     /**
@@ -117,8 +144,16 @@ class BlockRepository @Inject constructor(
         runCatching { adaptationRepository.applyDeloadWeek() }
     }
 
-    /** End the block early — the user's veto, always available. */
-    suspend fun end() {
-        active()?.let { blockDao.update(it.copy(endedAt = clock.nowMs())) }
+    /**
+     * End the block early — the user's veto, always available.
+     *
+     * Ends EVERY open row, not only the visible one: a hidden duplicate that survived the visible
+     * block's end used to reappear as the live block and keep driving phase behaviour (M-13).
+     */
+    suspend fun end() = lifecycleMutex.withLock {
+        val now = clock.nowMs()
+        database.withTransaction {
+            blockDao.allActive().forEach { blockDao.update(it.copy(endedAt = now)) }
+        }
     }
 }

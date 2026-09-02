@@ -41,6 +41,10 @@ interface BodyweightDao {
     @Query("SELECT * FROM bodyweight_entry WHERE recorded_at >= :sinceMs ORDER BY recorded_at DESC")
     suspend fun since(sinceMs: Long): List<BodyweightEntry>
 
+    /** One row by id, read before a delete so its Health Connect mirror (keyed on `date_key`) can go too. */
+    @Query("SELECT * FROM bodyweight_entry WHERE id = :id LIMIT 1")
+    suspend fun byId(id: Long): BodyweightEntry?
+
     @Query("DELETE FROM bodyweight_entry WHERE id = :id")
     suspend fun delete(id: Long)
 

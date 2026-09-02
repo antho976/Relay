@@ -23,6 +23,10 @@ interface BodyFatDao {
     @Query("SELECT * FROM body_fat ORDER BY date_key DESC, recorded_at DESC")
     suspend fun all(): List<BodyFatEntry>
 
+    /** One row by id, read before a delete so its Health Connect mirror (keyed on `date_key`) can go too. */
+    @Query("SELECT * FROM body_fat WHERE id = :id LIMIT 1")
+    suspend fun byId(id: Long): BodyFatEntry?
+
     @Query("DELETE FROM body_fat WHERE id = :id")
     suspend fun delete(id: Long)
 

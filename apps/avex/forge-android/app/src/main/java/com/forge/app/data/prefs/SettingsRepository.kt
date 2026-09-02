@@ -37,7 +37,12 @@ enum class SettingsSection(val keys: List<Preferences.Key<*>>) {
         listOf(
             PreferenceKeys.WEIGHT_UNIT, PreferenceKeys.USE_KG, PreferenceKeys.USER_SEX, PreferenceKeys.DATE_FORMAT,
             PreferenceKeys.TIMEZONE,
-            PreferenceKeys.TIME_FORMAT_24H, PreferenceKeys.FIRST_DAY_MONDAY
+            PreferenceKeys.TIME_FORMAT_24H, PreferenceKeys.FIRST_DAY_MONDAY,
+            // The Distance and Length chip rows on the same page. Both were missing, so "Reset this
+            // section" restored the weight unit while miles and centimetres kept their explicit
+            // picks — and, because both DERIVE from the weight unit until picked, the page then
+            // showed a mix the user never chose. Removing the keys puts them back on that derivation.
+            PreferenceKeys.USE_MILES, PreferenceKeys.USE_CM
             // FAVORITE_TIMEZONES is the user's curated star list (data, not a format default), so a
             // scoped "reset Format" must NOT wipe it — it's only cleared by a full settings reset.
         )
@@ -789,6 +794,29 @@ class SettingsRepository @Inject constructor(
             it[PreferenceKeys.SCHEDULE_WEEKLY] = com.forge.app.domain.schedule.WeeklySchedule.encode(slots)
         }
 
+    /**
+     * Assign [dayKey] ("" = rest) to weekday [weekdayIndex] (0 = Mon .. 6 = Sun), reading the seven
+     * slots and writing them back inside ONE DataStore edit.
+     *
+     * The ViewModel used to read the whole list, change one slot and write the whole list back as
+     * three separate suspending steps. Choose Monday then Tuesday before Monday's write landed and
+     * both coroutines read the same list, so the later whole-list write silently reverted the other
+     * weekday (M-21). `edit` runs its block on the store's single actor against the current
+     * contents, so two day edits now compose no matter how they interleave. An index outside the
+     * week is ignored rather than padded into an eighth slot.
+     */
+    suspend fun setWeeklyScheduleDay(weekdayIndex: Int, dayKey: String) {
+        if (weekdayIndex !in 0 until com.forge.app.domain.schedule.WeeklySchedule.SLOTS) return
+        context.forgePreferences.edit { prefs ->
+            val slots = prefs[PreferenceKeys.SCHEDULE_WEEKLY]
+                ?.let { stored -> com.forge.app.domain.schedule.WeeklySchedule.parse(stored) }
+                ?: com.forge.app.domain.schedule.WeeklySchedule.defaultFor(com.forge.app.program.Program.dayKeys)
+            prefs[PreferenceKeys.SCHEDULE_WEEKLY] = com.forge.app.domain.schedule.WeeklySchedule.encode(
+                slots.mapIndexed { index, slot -> if (index == weekdayIndex) dayKey else slot }
+            )
+        }
+    }
+
     // ─── Cardio weekly-minutes goal (cardio tab — NOT a program day) ──────────
     val cardioWeeklyTargetMin: Flow<Int> = pref { it[PreferenceKeys.CARDIO_WEEKLY_TARGET_MIN] ?: 0 }
     suspend fun setCardioWeeklyTargetMin(min: Int) =
@@ -835,6 +863,26 @@ class SettingsRepository @Inject constructor(
             prefs[PreferenceKeys.CUSTOM_CARDIO_TYPES] =
                 com.forge.app.domain.cardio.CustomCardioType.listToJson(cur.filter { it.code != code })
         }
+
+    // ─── Custom (user-created) freestyle exercises ───────────────────────────
+    /** Every custom exercise the user has created or saved, decoded from the JSON blob (empty when none). */
+    val customExercises: Flow<List<com.forge.app.program.CustomExerciseDef>> =
+        pref { com.forge.app.program.CustomExerciseDef.listFromJson(it[PreferenceKeys.CUSTOM_EXERCISES]) }
+
+    /**
+     * Record (or re-record) a custom exercise's identity, keyed by its id. Written when the move is
+     * created in the browser and again when the workout it is on is saved, so the muscle picked at
+     * creation outlives the logger. The in-process [com.forge.app.program.CustomExerciseRegistry]
+     * is updated in the same call so stats/recap resolve the id before the flow re-emits.
+     */
+    suspend fun registerCustomExercise(def: com.forge.app.program.CustomExerciseDef) {
+        context.forgePreferences.edit { prefs ->
+            val cur = com.forge.app.program.CustomExerciseDef.listFromJson(prefs[PreferenceKeys.CUSTOM_EXERCISES])
+            prefs[PreferenceKeys.CUSTOM_EXERCISES] =
+                com.forge.app.program.CustomExerciseDef.listToJson(cur.filter { it.id != def.id } + def)
+        }
+        com.forge.app.program.CustomExerciseRegistry.put(def)
+    }
 
     // ─── Plate weight (machine/cable plate-loaded exercises) ──────────────────
     /** Weight of one plate in lb. Plate-loaded exercises are entered/shown as a plate count. */

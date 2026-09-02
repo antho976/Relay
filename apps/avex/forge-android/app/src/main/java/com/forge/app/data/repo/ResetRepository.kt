@@ -12,13 +12,24 @@ import com.forge.app.data.db.dao.SessionDao
 import com.forge.app.data.db.dao.SuggestionOutcomeDao
 import com.forge.app.data.db.dao.TrophyNearMissDao
 import com.forge.app.data.db.dao.UnlockedTrophyDao
+import com.forge.app.data.health.HealthConnectManager
 import com.forge.app.data.prefs.SettingsRepository
+import com.forge.app.domain.health.HcRecordKeys
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/** Handles the destructive reset operations in the Settings screen (#119). */
+/**
+ * Handles the destructive reset operations in the Settings screen (#119).
+ *
+ * Every reset that removes rows Avex has mirrored to Health Connect takes the mirrors with them
+ * (M-02): "Deletes ALL data" used to clear the local tables while Samsung Health / Fit kept every
+ * Avex-written session, calorie, heart-rate, weight and body-fat record. The mirrors are keyed on
+ * local row ids ([HcRecordKeys]), so each reset captures the keys BEFORE its wipe; the local
+ * delete then runs first and never waits on the provider, and the external cleanup that follows
+ * is best-effort and fail-soft (no provider, no grant or a provider error cannot fail the reset).
+ */
 @Singleton
 class ResetRepository @Inject constructor(
     private val sessionDao: SessionDao,
@@ -34,6 +45,8 @@ class ResetRepository @Inject constructor(
     private val settingsRepo: SettingsRepository,
     private val photoRepo: ProgressPhotoRepository,
     private val avatarRepo: AvatarRepository,
+    private val health: HealthConnectManager,
+    private val clock: com.forge.app.core.time.Clock,
     private val db: ForgeDatabase
 ) {
     /**
@@ -48,22 +61,33 @@ class ResetRepository @Inject constructor(
      * The user asked for a clean slate and got a "fresh" program silently shaped by the data they
      * had just erased.
      *
-     * One transaction so a reset is all-or-nothing rather than half a wipe.
+     * One transaction so a reset is all-or-nothing rather than half a wipe. The session ids are
+     * read first: they are the only handle on the Health Connect mirrors, and the wipe destroys them.
      */
-    suspend fun resetSessions() = db.withTransaction {
-        sessionDao.deleteAll()
-        moodDao.deleteAll()
-        suggestionOutcomeDao.deleteAll()
-        adviceEventDao.deleteAll()
-        restEventDao.deleteAll()
-        restDayDao.deleteAll()
-        coachDao.deleteAllDecisions()
-        coachDao.deleteAllPasses()
-        nearMissDao.deleteAll()
+    suspend fun resetSessions() {
+        val sessionIds = sessionDao.allIds()
+        db.withTransaction {
+            sessionDao.deleteAll()
+            moodDao.deleteAll()
+            suggestionOutcomeDao.deleteAll()
+            adviceEventDao.deleteAll()
+            restEventDao.deleteAll()
+            restDayDao.deleteAll()
+            coachDao.deleteAllDecisions()
+            coachDao.deleteAllPasses()
+            nearMissDao.deleteAll()
+        }
+        health.deleteSessionMirrors(sessionIds)
     }
 
     suspend fun resetTrophies() = trophyDao.deleteAll()
-    suspend fun resetCardio() = cardioDao.deleteAll()
+
+    /** Cardio entries plus the exercise sessions Avex mirrored for them (ids captured before the wipe). */
+    suspend fun resetCardio() {
+        val entryIds = cardioDao.allIds()
+        cardioDao.deleteAll()
+        health.deleteExerciseSessions(entryIds.map(HcRecordKeys::cardio))
+    }
 
     /** Restore default preferences but keep onboarding/identity so the user isn't re-onboarded. */
     suspend fun resetAppSettings() = settingsRepo.resetSettingsOnly()
@@ -77,6 +101,11 @@ class ResetRepository @Inject constructor(
         withContext(Dispatchers.IO) { db.clearAllTables() }
         photoRepo.deleteAll() // progress photos live as files outside the DB — clear them too (#138).
         avatarRepo.clear()    // the avatar is an app-private file too.
+        // Every record Avex ever wrote to Health Connect, of every type, by time range rather than
+        // by key: the tables are already gone, and a range delete is scoped by the provider to
+        // this app's own records, so nothing of another app's is touched. Before the preference
+        // wipe so the reset's external half runs while the grants and opt-ins still describe it.
+        health.deleteAllAvexRecords(clock.nowMs())
         settingsRepo.resetAll()
     }
 }

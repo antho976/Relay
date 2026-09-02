@@ -78,6 +78,8 @@ class CoachViewModel @Inject constructor(
         val newLessons: Int = 0,
         /** The live training block (C), or null when the coach is running reactively. */
         val block: com.forge.app.data.db.entities.TrainingBlock? = null,
+        /** A block start or end is in flight; the action is inert until it lands (M-13). */
+        val blockBusy: Boolean = false,
         /** D: the running project, and the next one the coach would propose. */
         val project: com.forge.app.data.db.entities.CoachProject? = null,
         val projectProposal: com.forge.app.domain.coach.ProjectScanner.Candidate? = null,
@@ -193,15 +195,39 @@ class CoachViewModel @Inject constructor(
     /** Start a block around the athlete's top goal. Announced, never silent. */
     fun startBlock() = viewModelScope.launch {
         val weekId = _state.value.brief?.pass?.weekId ?: return@launch
-        runCatching { blockRepo.start(weekId = weekId) }
-        val block = runCatching { blockRepo.active() }.getOrNull()
-        _state.update { it.copy(block = block) }
+        if (!claimBlockAction()) return@launch
+        try {
+            runCatching { blockRepo.start(weekId = weekId) }
+            val block = runCatching { blockRepo.active() }.getOrNull()
+            _state.update { it.copy(block = block) }
+        } finally {
+            _state.update { it.copy(blockBusy = false) }
+        }
     }
 
     /** End it early — the user's veto is always one tap away. */
     fun endBlock() = viewModelScope.launch {
-        runCatching { blockRepo.end() }
-        _state.update { it.copy(block = null) }
+        if (!claimBlockAction()) return@launch
+        try {
+            runCatching { blockRepo.end() }
+            _state.update { it.copy(block = null) }
+        } finally {
+            _state.update { it.copy(blockBusy = false) }
+        }
+    }
+
+    /**
+     * Claim the block action for one start or end, or report that one is already in flight. The
+     * repository serialises the writes; this keeps a second tap from queueing a second one behind
+     * the first (M-13).
+     */
+    private fun claimBlockAction(): Boolean {
+        var claimed = false
+        _state.update { s ->
+            claimed = !s.blockBusy
+            if (claimed) s.copy(blockBusy = true) else s
+        }
+        return claimed
     }
 
     // ─── Projects (D) ──────────────────────────────────────────────────────────

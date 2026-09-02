@@ -194,11 +194,14 @@ private fun RecentRow(
         item.statusPill.takeIf { it.isNotBlank() },
         item.topLift
     ).joinToString(" · ")
+    // A custom cardio activity's name lives in the user's definitions, provided at the nav root;
+    // the mapper only had its storage code.
+    val title = item.displayTitle(com.forge.app.ui.cardio.LocalCardioTypes.current)
 
     SurfaceListRow(
         icon = if (item.isGym) SettingsIcons.Session else NavIcons.Cardio,
         hue = palette.hues[0],
-        label = item.title,
+        label = title,
         sub = sub,
         figure = figure,
         delta = delta,
@@ -206,7 +209,7 @@ private fun RecentRow(
         onBg = onBg,
         muted = palette.mutedOnCard,
         onClick = onClick,
-        clickLabel = "Open ${item.title}"
+        clickLabel = "Open $title"
     )
 }
 
@@ -394,7 +397,7 @@ fun OverviewScreen(
     if (selectedItem != null) {
         val item = selectedItem!!
         SummarySheet(
-            title = item.title,
+            title = item.displayTitle(com.forge.app.ui.cardio.LocalCardioTypes.current),
             dateMs = item.timestampMs,
             tag = item.tag,
             durationMin = item.durationMin,

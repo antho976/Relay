@@ -94,9 +94,72 @@ class ProgressPhotoRepository @Inject constructor(
     // the leaf mutators lock — callers (add/addCaptured) never lock and then call a locking helper.
     private val writeMutex = Mutex()
 
+    // Staging files of imports currently being copied in. [sweepOrphans] skips these, so a sweep
+    // that lands mid-import (the first read of a cold process, say) cannot delete a copy in flight.
+    private val inFlight: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    // The orphan sweep runs once per process, on the first read: that is "repository init" for a
+    // lazily-constructed singleton, and it happens before any surface can show the library.
+    @Volatile private var swept = false
+
     /** All photos, newest first. */
     suspend fun photos(): List<ProgressPhoto> = withContext(Dispatchers.IO) {
+        if (!swept) { swept = true; sweepOrphans() }
         runCatching { readIndex().sortedByDescending { it.takenAtMs } }.getOrDefault(emptyList())
+    }
+
+    /**
+     * Delete photo-shaped files in [dir] that the index does not name.
+     *
+     * An import used to copy straight to its final `pp_*.jpg` name and index it afterwards, so a
+     * process death between the two left an image on disk that no gallery entry pointed at: hidden,
+     * undeletable from the UI, and swept into every backup, because the archive zipped the whole
+     * folder. Imports now stage under [STAGING_SUFFIX] and publish under the lock (see [publish]),
+     * which narrows the window to the rename-then-index step; this sweep closes it, and clears any
+     * staging file an older or interrupted process left behind.
+     *
+     * Skips in-flight staging files, and does nothing at all when the index cannot be read: an
+     * unreadable index is exactly the state in which "not indexed" proves nothing.
+     */
+    suspend fun sweepOrphans() = withContext(Dispatchers.IO) {
+        runCatching {
+            writeMutex.withLock {
+                val indexed = readIndex().mapTo(HashSet()) { it.fileName }
+                orphanFileNames(dir.list().orEmpty().toList(), indexed, inFlight.toSet())
+                    .forEach { File(dir, it).delete() }
+            }
+        }
+    }
+
+    /** What a backup carries from this library. See [backupSnapshot]. */
+    class BackupSnapshot(
+        /** Metadata files by basename, as bytes read through the same atomic path the app reads. */
+        val metadata: Map<String, ByteArray>,
+        /** The image files the index names, resolved through [safeFile]. */
+        val photos: List<File>
+    )
+
+    /**
+     * The files a backup archive should carry: the index and album list, plus the photo files the
+     * index names. Never the folder's whole listing, which is what used to propagate an orphaned
+     * image (and any stray file) into every archive.
+     *
+     * If the index cannot be parsed there is no way to tell an orphan from a photo, so every file
+     * named the way this app names photos is carried along with the index bytes as they are: a
+     * corrupt index should cost the user a repair, not their images.
+     */
+    fun backupSnapshot(): BackupSnapshot {
+        val metadata = LinkedHashMap<String, ByteArray>()
+        listOf(indexFile, albumsFile).forEach { f ->
+            if (f.existsAtomically()) {
+                runCatching { f.readTextAtomically().toByteArray(Charsets.UTF_8) }
+                    .onSuccess { metadata[f.name] = it }
+            }
+        }
+        val photos = runCatching { readIndex().mapNotNull { safeFile(it.fileName) } }
+            .getOrElse { dir.list().orEmpty().filter { PHOTO_FILE_NAME.matches(it) }.mapNotNull { safeFile(it) } }
+            .filter { it.isFile }
+        return BackupSnapshot(metadata, photos)
     }
 
     /**
@@ -147,68 +210,111 @@ class ProgressPhotoRepository @Inject constructor(
         muscles: List<String> = emptyList(),
         takenAtMsOverride: Long? = null
     ): ProgressPhoto? = withContext(Dispatchers.IO) {
-        val fileName = "pp_${UUID.randomUUID().toString().take(12)}.jpg"
-        val dest = File(dir, fileName)
-        // BOUNDED. `copyTo` reads until the stream ends, and the stream belongs to a content
-        // provider chosen by the user from the system picker — a huge file, or a provider that never
-        // terminates, wrote until internal storage was full, taking the database's room with it. A
-        // photo over the cap is refused with its partial file removed rather than truncated into
-        // something that looks like a valid image.
-        val ok = runCatching {
-            context.contentResolver.openInputStream(source)?.use { input ->
-                dest.outputStream().use { output -> copyAtMost(input, output, MAX_PHOTO_BYTES) }
-            } ?: false
-        }.getOrDefault(false)
-        if (!ok || dest.length() == 0L) { dest.delete(); return@withContext null }
-        if (!isDecodableImage(dest)) { dest.delete(); return@withContext null }
-        val takenAt = exifTakenAtMs(dest) ?: takenAtMsOverride ?: System.currentTimeMillis()
-        runCatching { index(fileName, takenAt, note, album, pose, muscles) }
-            .getOrElse { dest.delete(); null }
+        val fileName = newFileName()
+        val staging = stagingFile(fileName)
+        inFlight += staging.name
+        try {
+            // BOUNDED. `copyTo` reads until the stream ends, and the stream belongs to a content
+            // provider chosen by the user from the system picker — a huge file, or a provider that never
+            // terminates, wrote until internal storage was full, taking the database's room with it. A
+            // photo over the cap is refused with its partial file removed rather than truncated into
+            // something that looks like a valid image.
+            val ok = runCatching {
+                context.contentResolver.openInputStream(source)?.use { input ->
+                    staging.outputStream().use { output -> copyAtMost(input, output, MAX_PHOTO_BYTES) }
+                } ?: false
+            }.getOrDefault(false)
+            if (!ok || staging.length() == 0L) { staging.delete(); return@withContext null }
+            if (!isDecodableImage(staging)) { staging.delete(); return@withContext null }
+            val takenAt = exifTakenAtMs(staging) ?: takenAtMsOverride ?: System.currentTimeMillis()
+            runCatching { publish(staging, fileName, takenAt, note, album, pose, muscles) }
+                .getOrElse { staging.delete(); null }
+        } finally {
+            inFlight -= staging.name
+        }
     }
 
     /**
      * Save a photo just captured by the in-app camera. The file already sits in cache; its bytes are
-     * copied in and the temp removed. Capture time is "now" — a fresh shot has no meaningful EXIF date.
+     * copied in, and [temp] is removed ONLY once the photo is published. Capture time is "now" — a
+     * fresh shot has no meaningful EXIF date.
+     *
+     * A null result leaves [temp] exactly where it was. It is the only copy of a shot the user has
+     * just taken, and deleting it on a failed copy, a refused decode or an unwritable index turned
+     * a transient failure into a lost photo; kept, the caller can offer a retry against the same
+     * file (see `ProgressCameraViewModel`).
      */
     suspend fun addCaptured(temp: File, pose: String = "", album: String = ""): ProgressPhoto? =
         withContext(Dispatchers.IO) {
             if (!temp.exists() || temp.length() == 0L) return@withContext null
-            val fileName = "pp_${UUID.randomUUID().toString().take(12)}.jpg"
-            val dest = File(dir, fileName)
-            // Bounded like [add], even though this source is the app's own camera temp file rather
-            // than a provider the user picked: the asymmetry was the only thing making one of these
-            // two paths safe and the other trusting.
-            val ok = runCatching {
-                temp.inputStream().use { input ->
-                    dest.outputStream().use { output -> copyAtMost(input, output, MAX_PHOTO_BYTES) }
-                }
-            }.getOrDefault(false)
-            temp.delete()
-            if (!ok || dest.length() == 0L) { dest.delete(); return@withContext null }
-            if (!isDecodableImage(dest)) { dest.delete(); return@withContext null }
-            runCatching { index(fileName, System.currentTimeMillis(), "", album, pose, emptyList()) }
-                .getOrElse { dest.delete(); null }
+            val fileName = newFileName()
+            val staging = stagingFile(fileName)
+            inFlight += staging.name
+            try {
+                // Bounded like [add], even though this source is the app's own camera temp file rather
+                // than a provider the user picked: the asymmetry was the only thing making one of these
+                // two paths safe and the other trusting.
+                val ok = runCatching {
+                    temp.inputStream().use { input ->
+                        staging.outputStream().use { output -> copyAtMost(input, output, MAX_PHOTO_BYTES) }
+                    }
+                }.getOrDefault(false)
+                if (!ok || staging.length() == 0L) { staging.delete(); return@withContext null }
+                if (!isDecodableImage(staging)) { staging.delete(); return@withContext null }
+                val photo = runCatching { publish(staging, fileName, System.currentTimeMillis(), "", album, pose, emptyList()) }
+                    .getOrElse { staging.delete(); null }
+                if (photo != null) temp.delete()
+                photo
+            } finally {
+                inFlight -= staging.name
+            }
         }
 
-    /** Append a copied-in file to the index, snapshotting the nearest bodyweight for its date. */
-    private suspend fun index(
+    private fun newFileName(): String = "pp_${UUID.randomUUID().toString().take(12)}.jpg"
+
+    /** Where an import's bytes land until they are published: beside the final name, never AS it. */
+    private fun stagingFile(fileName: String): File = File(dir, "$fileName$STAGING_SUFFIX")
+
+    /**
+     * Publish a validated [staging] file as [fileName] and append it to the index, snapshotting the
+     * nearest bodyweight for its date. Null when the file could not be moved into place.
+     *
+     * Both steps happen under the write lock, in this order: read the index (a corrupt index throws
+     * HERE, before any file is touched), rename the staging file to its final name, then commit the
+     * index naming it. A process death before the rename leaves a staging file; one between the
+     * rename and the commit leaves an unindexed `pp_*.jpg`. Both are exactly what [sweepOrphans]
+     * removes, so neither can become a hidden image. A commit that throws unwinds the rename.
+     */
+    private suspend fun publish(
+        staging: File,
         fileName: String,
         takenAtMs: Long,
         note: String,
         album: String,
         pose: String,
         muscles: List<String>
-    ): ProgressPhoto {
+    ): ProgressPhoto? {
         // Snapshot outside the lock (canonicalAlbum + the bodyweight read don't touch the index).
         val photo = ProgressPhoto(
             fileName, takenAtMs, note, canonicalAlbum(album), pose, nearestBodyweightLb(takenAtMs),
             muscles = muscles
         )
-        writeMutex.withLock {
-            writeIndex(readIndex() + photo)
+        return writeMutex.withLock {
+            val current = readIndex()
+            val dest = File(dir, fileName)
+            if (!staging.renameTo(dest)) {
+                staging.delete()
+                return@withLock null
+            }
+            try {
+                writeIndex(current + photo)
+            } catch (failure: Throwable) {
+                dest.delete()
+                throw failure
+            }
             bump()
+            photo
         }
-        return photo
     }
 
     /**
@@ -519,9 +625,29 @@ class ProgressPhotoRepository @Inject constructor(
         albumsFile.writeTextAtomically(arr.toString())
     }
 
-    private companion object {
+    internal companion object {
         // A weigh-in this close to the shot is treated as "the weight at that time".
         const val NEAR_WINDOW_MS = 14L * 24 * 60 * 60 * 1000
+
+        /**
+         * Suffix of an import's staging file (`pp_<id>.jpg.tmp`). It cannot match [PHOTO_FILE_NAME],
+         * so a staging file is never a photo, however far the import got.
+         */
+        const val STAGING_SUFFIX = ".tmp"
+
+        /**
+         * Which of the names [present] in the photo folder are orphans: staging files, and
+         * photo-named files the index does not list. Everything else (the index, the album list, a
+         * name this app never writes) is left alone, as is anything in [inFlight]. Pure so the
+         * decision is testable apart from the filesystem.
+         */
+        fun orphanFileNames(present: Collection<String>, indexed: Set<String>, inFlight: Set<String>): List<String> =
+            present.filter { name ->
+                if (name in inFlight) return@filter false
+                val isStaging = name.endsWith(STAGING_SUFFIX) &&
+                    PHOTO_FILE_NAME.matches(name.removeSuffix(STAGING_SUFFIX))
+                isStaging || (PHOTO_FILE_NAME.matches(name) && name !in indexed)
+            }
         // Plausible capture dates: 2000-01-01 up to now + a day of camera-clock slack. Outside this,
         // the EXIF value is treated as corrupt and the import falls back to override/now.
         const val EXIF_MIN_MS = 946_684_800_000L

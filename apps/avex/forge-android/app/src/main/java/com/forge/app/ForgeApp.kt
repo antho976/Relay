@@ -54,6 +54,12 @@ class ForgeApp : Application(), Configuration.Provider {
                 settingsRepository.trainingReminderHour.first()
             )
         }
+        // The user's custom (freestyle-created) exercises into their facade, the way the program is
+        // loaded into Program above: the muscle/name resolvers are synchronous and process-wide, so
+        // the registry has to be, too. Collected for the app's life so a create/save is reflected.
+        appScope.launch {
+            settingsRepository.customExercises.collect { com.forge.app.program.CustomExerciseRegistry.setAll(it) }
+        }
         // Mirror phone state to the wrist (W1): /session/live + /timer/state + /config collectors,
         // and the app-open /glance/today refresh. All fail-soft — no watch means unread DataItems.
         wearStatePublisher.start(appScope)

@@ -316,6 +316,10 @@ object Program {
     fun exercise(id: String): ExercisePlan? =
         active.flatMap { it.exercises }.firstOrNull { it.id == id }
             ?: ExerciseLibrary.byId(id)?.toPlan()
+            // A user-created freestyle move has no program slot and no library row; its identity
+            // (name + the muscle picked at creation) lives in the registry. Resolved LAST so a
+            // program/library id can never be shadowed, and only for ids nothing else knows.
+            ?: CustomExerciseRegistry.plan(id)
 
     /**
      * The single resolution point every display surface (history, PR list, goals, notes search,

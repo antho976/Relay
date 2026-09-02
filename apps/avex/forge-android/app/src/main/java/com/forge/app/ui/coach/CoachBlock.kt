@@ -72,11 +72,17 @@ internal fun LazyListScope.coachBlock(
                 }
                 Spacer(Modifier.height(6.dp))
             }
+            // Inert while a start or end is in flight (M-13): the second of two quick taps used to
+            // race the first for the singleton live row. Muted for that moment, so it reads as taken.
             CoachAction(
                 if (state.block == null) "Start a block →" else "End the block →",
-                if (state.block == null) c.accent else c.muted,
+                if (state.block == null && !state.blockBusy) c.accent else c.muted,
                 if (state.block == null) "Start a training block" else "End the training block"
-            ) { if (state.block == null) onStartBlock() else onEndBlock() }
+            ) {
+                if (!state.blockBusy) {
+                    if (state.block == null) onStartBlock() else onEndBlock()
+                }
+            }
         }
     }
 }

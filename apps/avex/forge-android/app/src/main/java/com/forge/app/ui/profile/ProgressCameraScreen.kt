@@ -83,6 +83,9 @@ fun ProgressCameraScreen(
 
     val latestByPose by viewModel.latestByPose.collectAsStateWithLifecycle()
     val newest by viewModel.newest.collectAsStateWithLifecycle()
+    // A shot the repository refused to save. Its cache file is the only copy, so it is kept and the
+    // shutter retries it rather than taking a new picture over it.
+    val pending by viewModel.pending.collectAsStateWithLifecycle()
 
     var pose by remember { mutableStateOf(PhotoPose.FRONT) }
     var lensFront by remember { mutableStateOf(true) }
@@ -113,15 +116,23 @@ fun ProgressCameraScreen(
         controller.cameraSelector = if (lensFront) CameraSelector.DEFAULT_FRONT_CAMERA else CameraSelector.DEFAULT_BACK_CAMERA
     }
 
+    // A failed repository save: the shot is kept (see `pending`), so the line names the way back.
+    fun onSaveFailed() { capturing = false; error = "Couldn't save the photo. Tap the shutter to retry." }
     fun capture() {
         capturing = true
+        error = null
+        // Snapshot the pose WITH the shutter request. The CameraX callback below lands later, and a
+        // pose tapped in between used to retag a shot that had already been framed as the old one.
+        val shotPose = pose
         val temp = File(context.cacheDir, "cap_${System.nanoTime()}.jpg")
         val opts = ImageCapture.OutputFileOptions.Builder(temp).build()
         controller.takePicture(opts, executor, object : ImageCapture.OnImageSavedCallback {
             // Save first, navigate back only once the write lands (onBack clears the VM + cancels its
-            // scope, so firing it before the save could drop the photo).
+            // scope, so firing it before the save could drop the photo). Back fires ONLY on a real
+            // save: a null repository result is a failure, and navigating on it presented a photo
+            // that did not exist as saved.
             override fun onImageSaved(result: ImageCapture.OutputFileResults) {
-                viewModel.addCaptured(temp, pose.name) { onBack() }
+                viewModel.addCaptured(temp, shotPose.name, onSaved = { onBack() }, onFailed = { onSaveFailed() })
             }
             override fun onError(exc: ImageCaptureException) { capturing = false; error = "Couldn't save the photo." }
         })
@@ -130,6 +141,12 @@ fun ProgressCameraScreen(
         // Guard against a re-tap while a countdown runs or a capture is already in flight (a fresh shot
         // navigates away on success, so `capturing` only ever resets on the error path).
         if (countdown > 0 || capturing) return
+        if (pending != null) {
+            capturing = true
+            error = null
+            viewModel.retryPending(onSaved = { onBack() }, onFailed = { onSaveFailed() })
+            return
+        }
         if (timerOn) scope.launch {
             for (i in 3 downTo 1) { countdown = i; delay(1000) }
             countdown = 0; capture()
@@ -137,6 +154,9 @@ fun ProgressCameraScreen(
     }
 
     val ghost = latestByPose[pose.name] ?: newest
+    // Pose is fixed from the moment the shutter is asked for until the shot lands: a change during
+    // the countdown or the in-flight capture would no longer describe the photo being taken.
+    val poseLocked = countdown > 0 || capturing
 
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         if (hasPermission) {
@@ -177,7 +197,7 @@ fun ProgressCameraScreen(
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 PhotoPose.entries.forEach { p ->
-                    SegmentPill(p.label, selected = pose == p, onClick = { pose = p }, Color.White, Color.White, Color.White.copy(alpha = 0.6f), Color.White, 11.sp)
+                    SegmentPill(p.label, selected = pose == p, onClick = { if (!poseLocked) pose = p }, Color.White, Color.White, Color.White.copy(alpha = 0.6f), Color.White, 11.sp)
                 }
             }
         }

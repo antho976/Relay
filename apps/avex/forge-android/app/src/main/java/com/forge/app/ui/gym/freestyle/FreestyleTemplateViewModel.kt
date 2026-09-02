@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.forge.app.data.db.dao.LoggedExerciseDao
 import com.forge.app.data.db.dao.LoggedSetDao
 import com.forge.app.data.db.dao.SessionDao
+import com.forge.app.program.CustomExerciseRegistry
 import com.forge.app.program.Program
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Dispatchers
@@ -55,7 +56,13 @@ data class FreestyleTemplateExercise(
      * weight field, and a custom timed hold came back as a rep set — reusing a past workout quietly
      * changed what the movement was.
      */
-    val unitCode: String? = null
+    val unitCode: String? = null,
+    /**
+     * [com.forge.app.program.MuscleGroup.code] for a custom move, from the custom-exercise registry.
+     * No logged row stores a muscle, so without this the rebuild defaulted every custom move to the
+     * first enum value (Chest) and the athlete had to re-pick it on every reuse.
+     */
+    val muscleCode: String? = null
 )
 
 /**
@@ -126,10 +133,14 @@ class FreestyleTemplateViewModel @Inject constructor(
             }
         }
         return byLib.map { (libId, sets) ->
+            // The registry is the only place a custom move's muscle was ever kept; its name is the
+            // fallback for a row whose swapped_name did not survive.
+            val registered = if (isCustomExerciseId(libId)) CustomExerciseRegistry.get(libId) else null
             FreestyleTemplateExercise(
                 libId, sets,
-                customName = customNames[libId],
-                unitCode = unitCodes[libId]
+                customName = customNames[libId] ?: registered?.name,
+                unitCode = unitCodes[libId],
+                muscleCode = registered?.muscleCode
             )
         }
     }

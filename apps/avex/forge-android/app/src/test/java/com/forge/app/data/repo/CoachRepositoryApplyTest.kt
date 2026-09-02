@@ -114,6 +114,7 @@ class CoachRepositoryApplyTest {
             coachGoalRepository = coachGoalRepository,
             academyRepository = academyRepository,
             settingsRepository = settings,
+            database = db,
             clock = clock
         )
         repo = CoachRepository(

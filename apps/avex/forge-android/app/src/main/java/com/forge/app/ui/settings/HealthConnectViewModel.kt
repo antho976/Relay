@@ -8,6 +8,7 @@ import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.data.repo.BodyFatRepository
 import com.forge.app.data.repo.BodyweightRepository
 import com.forge.app.domain.health.BodyweightSync
+import com.forge.app.ui.common.launchDurable
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -234,27 +235,33 @@ class HealthConnectViewModel @Inject constructor(
     /** The "import older weight" retry (H-05), called once the history-permission launcher returns. */
     fun importOlderWeight() = refresh(forceWeightHistory = true)
 
-    fun setWearableBrand(key: String) = viewModelScope.launch {
+    // The brand pick and the four outbound toggles are durable writes (M-22): each was a bare
+    // viewModelScope.launch, and this ViewModel dies with the Recovery destination, so opting OUT
+    // of weight or session write-back and leaving the page at once could cancel the DataStore edit
+    // mid-flight. The switch had shown "off"; later weigh-ins and sessions kept mirroring. The
+    // shield covers only the preference edit; imports and backfills stay cancellable.
+
+    fun setWearableBrand(key: String) = viewModelScope.launchDurable {
         settingsRepo.setWearableBrand(key)
         _state.update { it.copy(wearableBrand = key) }
     }
 
-    fun setWriteBodyweight(value: Boolean) = viewModelScope.launch {
+    fun setWriteBodyweight(value: Boolean) = viewModelScope.launchDurable {
         settingsRepo.setHcWriteBodyweight(value)
         _state.update { it.copy(writeBodyweight = value) }
     }
 
-    fun setWriteCalories(value: Boolean) = viewModelScope.launch {
+    fun setWriteCalories(value: Boolean) = viewModelScope.launchDurable {
         settingsRepo.setHcWriteCalories(value)
         _state.update { it.copy(writeCalories = value) }
     }
 
-    fun setWriteSessions(value: Boolean) = viewModelScope.launch {
+    fun setWriteSessions(value: Boolean) = viewModelScope.launchDurable {
         settingsRepo.setHcWriteSessions(value)
         _state.update { it.copy(writeSessions = value) }
     }
 
-    fun setWriteBodyFat(value: Boolean) = viewModelScope.launch {
+    fun setWriteBodyFat(value: Boolean) = viewModelScope.launchDurable {
         settingsRepo.setHcWriteBodyFat(value)
         _state.update { it.copy(writeBodyFat = value) }
     }

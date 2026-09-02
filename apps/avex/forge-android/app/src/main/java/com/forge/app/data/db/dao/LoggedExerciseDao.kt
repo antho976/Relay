@@ -191,6 +191,24 @@ interface LoggedExerciseDao {
         @androidx.room.ColumnInfo(name = "session_count") val sessionCount: Int
     )
 
+    /**
+     * The same population as [frequencySince] (finished, tracked, non-skipped, started on or after
+     * [sinceMs]) but as raw (session, exercise id, swapped name) rows, for a caller that has to
+     * resolve each row's DISPLAY identity before counting. The Recap's "most trained" needs that:
+     * a custom move keeps its name only in `swapped_name`, and a slot that was swapped late keeps
+     * its original id under a different name, so grouping on `exercise_id` alone named the wrong
+     * movement (a humanized slug) or merged two into one bucket.
+     */
+    @Query("""
+        SELECT le.session_id AS session_id, le.exercise_id AS exercise_id, le.swapped_name AS swapped_name
+        FROM logged_exercise le
+        INNER JOIN session s ON le.session_id = s.id
+        WHERE s.finished_at IS NOT NULL AND s.started_at >= :sinceMs
+          AND s.is_untracked = 0 AND le.skipped = 0
+        ORDER BY s.started_at ASC, le.id ASC
+    """)
+    suspend fun sessionExerciseRowsSince(sinceMs: Long): List<SessionExerciseRow>
+
     /** All PR dates per exercise ordered chronologically — used to compute time-to-next-PR (#74). */
     @Query("""
         SELECT le.exercise_id, s.started_at AS session_date

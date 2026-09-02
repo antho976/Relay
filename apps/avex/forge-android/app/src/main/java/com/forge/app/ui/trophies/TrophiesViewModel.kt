@@ -43,24 +43,20 @@ class TrophiesViewModel @Inject constructor(
         filterFlow,
         settingsRepo.weightUnit
     ) { unlocked, nearMisses, snapshot, filter, weightUnit ->
-        if (snapshot == null) {
-            TrophiesUiState(isLoading = true, totalCount = Trophies.all.size, selectedFilter = filter)
-        } else {
-            buildState(
-                unlockedByIdToDate = unlocked.associate { it.trophyId to it.unlockedAt },
-                snapshot = snapshot,
-                filter = filter,
-                weightUnit = weightUnit,
-                nearMisses = nearMisses.map { nm ->
-                    NearMissEntry(
-                        trophyName = nm.trophyName,
-                        progress = nm.progress,
-                        target = nm.target,
-                        recordedAt = nm.recordedAt
-                    )
-                }.distinctBy { it.trophyName }.take(10)
-            )
-        }
+        trophiesStateFor(
+            unlockedByIdToDate = unlocked.associate { it.trophyId to it.unlockedAt },
+            nearMisses = nearMisses.map { nm ->
+                NearMissEntry(
+                    trophyName = nm.trophyName,
+                    progress = nm.progress,
+                    target = nm.target,
+                    recordedAt = nm.recordedAt
+                )
+            }.distinctBy { it.trophyName }.take(10),
+            snapshot = snapshot,
+            filter = filter,
+            weightUnit = weightUnit
+        )
     }.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(stopTimeoutMillis = 5_000),

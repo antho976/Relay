@@ -675,17 +675,21 @@ class BackupRepository @Inject constructor(
                 prefs.inputStream().use { it.copyTo(zip) }
                 zip.closeEntry()
             }
-            // Progress photos live as files outside the DB (ProgressPhotoRepository) — fold the folder
-            // in so a restore brings the physique photos back too (#138). Flat: progress_photos/<name>.
-            val photosDir = photoRepo.dir
-            if (photosDir.exists()) {
-                photosDir.listFiles()?.forEach { f ->
-                    if (f.isFile) {
-                        zip.putNextEntry(java.util.zip.ZipEntry("$PHOTOS_PREFIX${f.name}"))
-                        f.inputStream().use { it.copyTo(zip) }
-                        zip.closeEntry()
-                    }
-                }
+            // Progress photos live as files outside the DB (ProgressPhotoRepository) — fold the
+            // library in so a restore brings the physique photos back too (#138). Flat:
+            // progress_photos/<name>. Only what the index names, plus the index itself: zipping the
+            // folder's whole listing carried every orphaned image an interrupted import had left
+            // behind, hidden from the gallery, into every archive.
+            val library = photoRepo.backupSnapshot()
+            library.metadata.forEach { (name, bytes) ->
+                zip.putNextEntry(java.util.zip.ZipEntry("$PHOTOS_PREFIX$name"))
+                zip.write(bytes)
+                zip.closeEntry()
+            }
+            library.photos.forEach { f ->
+                zip.putNextEntry(java.util.zip.ZipEntry("$PHOTOS_PREFIX${f.name}"))
+                f.inputStream().use { it.copyTo(zip) }
+                zip.closeEntry()
             }
             // The profile avatar (single app-private file) — folded in like the photos. exists() is
             // length-checked, so a stray zero-byte avatar.jpg can't be zipped and later overwrite a good one.

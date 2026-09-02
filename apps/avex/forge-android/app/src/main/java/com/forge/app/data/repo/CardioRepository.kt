@@ -7,6 +7,7 @@ import com.forge.app.data.health.HcExerciseTypes
 import com.forge.app.data.health.HealthConnectManager
 import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.domain.cardio.CardioType
+import com.forge.app.domain.health.HcRecordKeys
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import javax.inject.Inject
@@ -82,5 +83,7 @@ class CardioRepository @Inject constructor(
         )
     }
 
-    private fun clientRecordId(entryId: Long) = "avex-cardio-$entryId"
+    // One scheme for writers and deleters (M-02): the reset path derives the same key from the ids
+    // it captures before the wipe, so it can address exactly what this wrote.
+    private fun clientRecordId(entryId: Long) = HcRecordKeys.cardio(entryId)
 }

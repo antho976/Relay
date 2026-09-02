@@ -27,6 +27,7 @@ import com.forge.app.data.prefs.SettingsRepository
 import com.forge.app.domain.coach.LifeEvents
 import com.forge.app.domain.session.SessionType
 import com.forge.app.domain.health.ActiveCalorieEstimator
+import com.forge.app.domain.health.HcRecordKeys
 import com.forge.app.domain.units.MAX_HOLD_SECONDS
 import com.forge.app.domain.pr.PrDetector
 import com.forge.app.domain.volume.VolumeCalculator
@@ -35,6 +36,8 @@ import com.forge.app.program.GenerationParams
 import com.forge.app.program.Program
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -139,12 +142,24 @@ class WorkoutRepository @Inject constructor(
     suspend fun activeSession(): Session? = sessionDao.getActiveSession()
 
     /**
+     * Serialises [startOrResumeSession] within the process. The transaction inside it is what makes
+     * two starts agree on one row; the mutex keeps the zombie resolution and the tagging reads that
+     * precede it from interleaving with another start's, so a second start always observes the
+     * first's outcome rather than racing it.
+     */
+    private val startMutex = Mutex()
+
+    /**
      * Starts a new session, OR resumes the currently-active one if there already
      * is one. App invariant: at most one active session at a time. Returns the full
      * row plus created/has-work flags so the caller doesn't re-query what this
      * method already knows (session-open is the screen's latency-critical path).
+     *
+     * The "is there an active session?" read and the insert used to be separate statements, so two
+     * concurrent starts could both read none and both insert (M-07). They run as one transaction
+     * now ([com.forge.app.data.db.SessionWrites.startOrResume]); the loser resumes the winner's row.
      */
-    suspend fun startOrResumeSession(dayKey: String): StartedSession {
+    suspend fun startOrResumeSession(dayKey: String): StartedSession = startMutex.withLock {
         sessionDao.getActiveSession()?.let { active ->
             // Don't resume a "zombie" session whose day the program no longer has — resuming it would
             // load the wrong day's plan (Program.day() falls back to the first day) and log under a stale
@@ -153,7 +168,7 @@ class WorkoutRepository @Inject constructor(
             // (seed keys only, on a cold start) can't mis-classify a perfectly valid live session.
             val isZombie = Program.isLoaded && active.dayKey !in Program.dayKeys
             if (!isZombie) {
-                return StartedSession(session = active, created = false)
+                return@withLock StartedSession(session = active, created = false)
             }
             resolveOrphanSession(Program.dayKeys.toSet())
         }
@@ -165,13 +180,13 @@ class WorkoutRepository @Inject constructor(
         // since #109 with nothing to write it; this is its writer. The tag keeps the return week out
         // of stall and fatigue reads (A1's filter), so easing back in never reads as a plateau.
         val sessionType = if (isFirstBack()) SessionType.FIRST_BACK.key else SessionType.NORMAL.key
-        val session = Session(
+        val candidate = Session(
             dayKey = dayKey, startedAt = clock.nowMs(), finishedAt = null, deloadMarkedHere = inDeloadWeek,
             sessionType = sessionType
         )
-        val id = sessionDao.insert(session)
-        refreshWidget()
-        return StartedSession(session.copy(id = id), created = true)
+        val (session, created) = com.forge.app.data.db.SessionWrites.startOrResume(database, candidate)
+        if (created) refreshWidget()
+        StartedSession(session = session, created = created)
     }
 
     /**
@@ -457,7 +472,7 @@ class WorkoutRepository @Inject constructor(
             endMs = finishedAtMs,
             // Same key shape as the session and HR mirrors above, so a re-finish updates the
             // record rather than adding another.
-            clientRecordId = "avex-session-kcal-${session.id}",
+            clientRecordId = HcRecordKeys.sessionCalories(session.id),
             clientRecordVersion = finishedAtMs
         )
     }
@@ -471,7 +486,7 @@ class WorkoutRepository @Inject constructor(
         val samples = sessionHrSampleDao.forSession(session.id)
         if (samples.isEmpty()) return
         health.writeHrSeries(
-            clientRecordId = "avex-session-hr-${session.id}",
+            clientRecordId = HcRecordKeys.sessionHeartRate(session.id),
             clientRecordVersion = endMs,
             startMs = session.startedAt,
             endMs = endMs,
@@ -494,7 +509,7 @@ class WorkoutRepository @Inject constructor(
         if (!settingsRepo.hcWriteSessions.first()) return
         if (!health.canWriteExerciseSessions()) return
         health.writeExerciseSession(
-            clientRecordId = "avex-session-${session.id}",
+            clientRecordId = HcRecordKeys.session(session.id),
             clientRecordVersion = endMs,
             exerciseType = com.forge.app.data.health.HcExerciseTypes.STRENGTH,
             title = Program.dayDisplayName(session.dayKey),
@@ -606,6 +621,10 @@ class WorkoutRepository @Inject constructor(
     suspend fun discardSession(sessionId: Long) {
         val session = sessionDao.get(sessionId) ?: return
         sessionDao.delete(session) // CASCADE removes LoggedExercises and their LoggedSets
+        // A FINISHED session may have been mirrored to Health Connect (session + calories + HR
+        // trace); take every copy with it, after the local delete and fail-soft (M-02). An active
+        // session was never mirrored, so it skips the IPC entirely.
+        if (session.finishedAt != null) health.deleteSessionMirrors(listOf(session.id))
         refreshWidget()
     }
 

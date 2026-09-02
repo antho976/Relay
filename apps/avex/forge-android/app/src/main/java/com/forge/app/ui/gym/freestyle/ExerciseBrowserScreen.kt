@@ -101,19 +101,49 @@ private const val CUSTOM_PREFIX = "custom-"
 /** True when this logged-exercise id is a move the user created rather than a library one. */
 fun isCustomExerciseId(id: String): Boolean = id.startsWith(CUSTOM_PREFIX)
 
+/** Longest slug an id carries; anything past it is identified by the digest instead. */
+private const val CUSTOM_SLUG_MAX = 40
+
 /**
  * A stable id for a user-created move, keyed on its name — so creating "Sled Push" again next week
  * lands on the same id and its sets group with the earlier ones in history/PRs/stats. Mirrors the
  * importer's synthetic-id slugging for the same reason.
+ *
+ * An ordinary name (one whose slug is non-empty and fits) keeps exactly the id it always had, so
+ * existing history still groups. The slug alone was lossy in two cases, and both merged DISTINCT
+ * movements under one id, one inheriting the other's last sets and PR frontier: a punctuation-only
+ * name ("!!!" and "@@@" both slugged to nothing), and two names sharing their first 40 slug
+ * characters. Those ids now carry a short digest of the full canonical name after the slug, so
+ * two different names can no longer share an id while one name still always maps to one id.
  */
 fun customExerciseId(name: String): String {
-    val slug = name.trim().lowercase()
+    val canonical = canonicalCustomExerciseName(name)
+    val fullSlug = canonical
         .map { if (it.isLetterOrDigit()) it else '-' }
         .joinToString("")
         .replace(Regex("-+"), "-")
         .trim('-')
-        .take(40)
-    return CUSTOM_PREFIX + slug.ifBlank { "exercise" }
+    if (fullSlug.isNotEmpty() && fullSlug.length <= CUSTOM_SLUG_MAX) return CUSTOM_PREFIX + fullSlug
+    val slug = fullSlug.take(CUSTOM_SLUG_MAX).trimEnd('-').ifBlank { "exercise" }
+    return CUSTOM_PREFIX + slug + "-" + customNameDigest(canonical)
+}
+
+/** The name as identity: trimmed, lower-cased, inner whitespace collapsed to one space. */
+fun canonicalCustomExerciseName(name: String): String =
+    name.trim().lowercase().split(Regex("\\s+")).filter { it.isNotEmpty() }.joinToString(" ")
+
+/**
+ * Eight hex characters of FNV-1a over the canonical name. Stable across processes and builds
+ * (unlike an identity hash) and short enough to sit in an id; a full hash would be overkill for
+ * telling apart the handful of moves one person names alike.
+ */
+private fun customNameDigest(canonical: String): String {
+    var h = 0x811C9DC5.toInt()
+    for (c in canonical) {
+        h = h xor c.code
+        h *= 0x01000193
+    }
+    return String.format(java.util.Locale.US, "%08x", h)
 }
 
 /**

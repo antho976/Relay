@@ -2,10 +2,6 @@
 
 package com.forge.app.ui.profile
 
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.graphics.Matrix
-import android.media.ExifInterface
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -66,15 +62,20 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.forge.app.core.io.OrientedBitmaps
 import com.forge.app.data.repo.ProgressPhoto
 import com.forge.app.domain.photo.PhotoPose
 import com.forge.app.domain.photo.PhotoTag
 import com.forge.app.domain.units.WeightUnit
-import com.forge.app.domain.units.parseToLb
+import com.forge.app.domain.units.formatWeight
+import com.forge.app.domain.units.toDisplayWeight
 import com.forge.app.domain.units.unitLabel
 import com.forge.app.domain.units.weightInputValue
 import com.forge.app.program.MuscleGroup
 import com.forge.app.ui.common.bounceClick
+import com.forge.app.ui.onboarding.MAX_BODYWEIGHT_LB
+import com.forge.app.ui.onboarding.MIN_BODYWEIGHT_LB
+import com.forge.app.ui.onboarding.parseSaneBodyweightLb
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -83,6 +84,7 @@ import java.time.Instant
 import java.time.ZoneId
 import java.util.Date
 import java.util.Locale
+import kotlin.math.roundToInt
 
 /**
  * Full-screen, swipeable photo viewer + metadata editor. Opens on the tapped photo and pages through
@@ -116,77 +118,83 @@ internal fun GalleryViewerPager(
     val pagerState = rememberPagerState(initialPage = start) { photos.size }
     val current = photos.getOrElse(pagerState.currentPage) { photos[start] }
 
-    // Live buffers keyed by file so edits survive swipes; overrides echo committed values back when you
-    // page to a photo again, over the (frozen) `photos` snapshot.
+    // The last COMMITTED metadata per file, seeded from the frozen `photos` snapshot and updated
+    // after every dispatched mutation, so edits survive swipes and page back in as what was saved.
+    // Dirty checks compare against THIS, never against the launch snapshot: with the snapshot as
+    // the baseline, editing a note A to B (committed on swipe) and back to A read as "no change"
+    // and left B on disk. Title and weight had the same failure.
+    val committed = remember { mutableStateMapOf<String, ProgressPhoto>() }
+    fun baseline(p: ProgressPhoto): ProgressPhoto = committed[p.fileName] ?: p
+    fun record(next: ProgressPhoto) { committed[next.fileName] = next }
+    fun weightText(p: ProgressPhoto): String = p.weightLb?.let { weightInputValue(it, weightUnit) } ?: ""
+
     var editingFile by remember { mutableStateOf(current.fileName) }
-    val noteOverride = remember { mutableStateMapOf<String, String>() }
-    val titleOverride = remember { mutableStateMapOf<String, String>() }
-    val albumOverride = remember { mutableStateMapOf<String, String>() }
-    val poseOverride = remember { mutableStateMapOf<String, String>() }
-    val muscleOverride = remember { mutableStateMapOf<String, List<String>>() }
-    val tagOverride = remember { mutableStateMapOf<String, List<String>>() }
-    val weightOverride = remember { mutableStateMapOf<String, Double?>() }
-    val dateOverride = remember { mutableStateMapOf<String, Long>() }
-    var noteInput by remember { mutableStateOf(noteOverride[current.fileName] ?: current.note) }
-    var titleInput by remember { mutableStateOf(titleOverride[current.fileName] ?: current.title) }
-    var weightInput by remember {
-        mutableStateOf(current.weightLb?.let { weightInputValue(it, weightUnit) } ?: "")
-    }
+    var noteInput by remember { mutableStateOf(baseline(current).note) }
+    var titleInput by remember { mutableStateOf(baseline(current).title) }
+    var weightInput by remember { mutableStateOf(weightText(baseline(current))) }
     var showDatePicker by remember { mutableStateOf(false) }
     var tagInput by remember { mutableStateOf("") }
     var editorOpen by remember { mutableStateOf(false) }
 
-    val currentAlbum = albumOverride[current.fileName] ?: current.album
-    val currentPose = poseOverride[current.fileName] ?: current.pose
-    val currentMuscles = muscleOverride[current.fileName] ?: current.muscles
-    val currentTags = tagOverride[current.fileName] ?: current.tags
-    val currentDate = dateOverride[current.fileName] ?: current.takenAtMs
+    val shown = baseline(current)
+    val currentAlbum = shown.album
+    val currentPose = shown.pose
+    val currentMuscles = shown.muscles
+    val currentTags = shown.tags
+    val currentDate = shown.takenAtMs
+    // Invalid nonblank weight text is shown as such while it is typed and never written (see
+    // weightCommitDecision); the same range line the weigh-in sheet uses.
+    val weightInvalid = weightCommitDecision(weightInput, shown.weightLb, weightUnit) is WeightCommit.Invalid
+    val weightRangeText = if (weightUnit == WeightUnit.ST) {
+        "Enter ${formatWeight(MIN_BODYWEIGHT_LB, weightUnit)}–${formatWeight(MAX_BODYWEIGHT_LB, weightUnit)}."
+    } else {
+        val minDisp = toDisplayWeight(MIN_BODYWEIGHT_LB, weightUnit).roundToInt()
+        val maxDisp = toDisplayWeight(MAX_BODYWEIGHT_LB, weightUnit).roundToInt()
+        "Enter $minDisp–$maxDisp ${unitLabel(weightUnit)}."
+    }
 
     fun commit() {
         val original = photos.firstOrNull { it.fileName == editingFile } ?: return
+        var base = baseline(original)
         // A tag typed but never submitted is still a tag the user meant. Flush it rather than
         // silently dropping it when they swipe to the next shot.
         if (tagInput.isNotBlank()) {
-            val existing = tagOverride[editingFile] ?: original.tags
-            val next = PhotoTag.added(existing, tagInput)
+            val next = PhotoTag.added(base.tags, tagInput)
             tagInput = ""
-            if (next != existing) {
-                tagOverride[editingFile] = next
-                onSetTags(original, next)
+            if (next != base.tags) {
+                base = base.copy(tags = next); record(base)
+                onSetTags(base, next)
             }
         }
         val trimmed = noteInput.trim()
-        noteOverride[editingFile] = trimmed
-        if (trimmed != original.note) onSaveNote(original, trimmed)
+        if (trimmed != base.note) {
+            base = base.copy(note = trimmed); record(base)
+            onSaveNote(base, trimmed)
+        }
         val trimmedTitle = titleInput.trim()
-        titleOverride[editingFile] = trimmedTitle
-        if (trimmedTitle != original.title) onSaveTitle(original, trimmedTitle)
-        // Compare in DISPLAY units, not lb: weightInput was seeded via weightInputValue (which rounds to
-        // the display step), so a 0.1-kg rounding is ~0.11 lb and an untouched field would trip a raw-lb
-        // threshold and silently rewrite the snapshot. Same display text as seeded ⇒ untouched ⇒ no write.
-        val prevDisplay = original.weightLb?.let { weightInputValue(it, weightUnit) } ?: ""
-        val curDisplay = weightInput.trim()
-        if (curDisplay != prevDisplay) {
-            val parsed = curDisplay.ifBlank { null }?.let { parseToLb(it, weightUnit) }
-            weightOverride[editingFile] = parsed
-            onSetWeight(original, parsed)
+        if (trimmedTitle != base.title) {
+            base = base.copy(title = trimmedTitle); record(base)
+            onSaveTitle(base, trimmedTitle)
+        }
+        // Blank is the one way to clear a weight. Text that does not parse keeps the committed
+        // value: it used to be written as null over a valid snapshot, because "invalid" and
+        // "cleared" both parsed to null.
+        val decision = weightCommitDecision(weightInput, base.weightLb, weightUnit)
+        if (decision is WeightCommit.Set) {
+            base = base.copy(weightLb = decision.lb); record(base)
+            onSetWeight(base, decision.lb)
         }
     }
     LaunchedEffect(pagerState.currentPage) {
         if (current.fileName != editingFile) {
             commit()
             editingFile = current.fileName
-            noteInput = noteOverride[current.fileName] ?: current.note
-            titleInput = titleOverride[current.fileName] ?: current.title
-            // containsKey, not elvis: `weightOverride[file] ?: current.weightLb` cannot tell "no
-            // override" from "an override of null", and clearing the field stores exactly the second.
-            // Swiping away and back therefore restored the snapshot the user had just deleted, and
-            // the next commit compared against it and wrote it back to the database.
-            weightInput = if (weightOverride.containsKey(current.fileName)) {
-                weightOverride[current.fileName]?.let { weightInputValue(it, weightUnit) } ?: ""
-            } else {
-                current.weightLb?.let { weightInputValue(it, weightUnit) } ?: ""
-            }
+            val next = baseline(current)
+            noteInput = next.note
+            titleInput = next.title
+            // Seeded from the committed value, so a cleared weight stays cleared when you page
+            // back, and invalid text you swiped away from is dropped rather than carried along.
+            weightInput = weightText(next)
         }
     }
 
@@ -299,7 +307,7 @@ internal fun GalleryViewerPager(
                     PhotoPose.entries.forEach { p ->
                         GalleryChip(p.label, selected = currentPose == p.name) {
                             val next = if (currentPose == p.name) "" else p.name
-                            poseOverride[current.fileName] = next
+                            record(baseline(current).copy(pose = next))
                             onSetPose(current, next)
                         }
                     }
@@ -311,7 +319,7 @@ internal fun GalleryViewerPager(
                     MuscleGroup.entries.forEach { m ->
                         GalleryChip(m.displayName, selected = m.code in currentMuscles) {
                             val next = if (m.code in currentMuscles) currentMuscles - m.code else currentMuscles + m.code
-                            muscleOverride[current.fileName] = next
+                            record(baseline(current).copy(muscles = next))
                             onSetMuscles(current, next)
                         }
                     }
@@ -324,14 +332,14 @@ internal fun GalleryViewerPager(
                     currentTags.forEach { t ->
                         GalleryChip(PhotoTag.display(t), selected = true, trailing = "✕") {
                             val next = currentTags - t
-                            tagOverride[current.fileName] = next
+                            record(baseline(current).copy(tags = next))
                             onSetTags(current, next)
                         }
                     }
                     knownTags.filter { it !in currentTags }.take(6).forEach { t ->
                         GalleryChip(PhotoTag.display(t), selected = false) {
                             val next = PhotoTag.added(currentTags, t)
-                            tagOverride[current.fileName] = next
+                            record(baseline(current).copy(tags = next))
                             onSetTags(current, next)
                         }
                     }
@@ -349,7 +357,7 @@ internal fun GalleryViewerPager(
                             val next = PhotoTag.added(currentTags, tagInput)
                             tagInput = ""
                             if (next != currentTags) {
-                                tagOverride[current.fileName] = next
+                                record(baseline(current).copy(tags = next))
                                 onSetTags(current, next)
                             }
                         }),
@@ -390,15 +398,19 @@ internal fun GalleryViewerPager(
                     )
                     Text(unitLabel(weightUnit), style = MaterialTheme.typography.labelMedium, color = muted)
                 }
+                if (weightInvalid) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(weightRangeText, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+                }
 
                 // Album.
                 EditorField("Album", muted) {
                     GalleryChip("Unsorted", selected = currentAlbum.isBlank()) {
-                        albumOverride[current.fileName] = ""; onMove(current, "")
+                        record(baseline(current).copy(album = "")); onMove(current, "")
                     }
                     albumNames.forEach { name ->
                         GalleryChip(name, selected = currentAlbum == name) {
-                            albumOverride[current.fileName] = name; onMove(current, name)
+                            record(baseline(current).copy(album = name)); onMove(current, name)
                         }
                     }
                 }
@@ -419,7 +431,7 @@ internal fun GalleryViewerPager(
                         // DatePicker returns UTC midnight — map that calendar day to local start-of-day.
                         val localDate = Instant.ofEpochMilli(picked).atZone(ZoneId.of("UTC")).toLocalDate()
                         val ms = localDate.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
-                        dateOverride[current.fileName] = ms
+                        record(baseline(current).copy(takenAtMs = ms))
                         onSetDate(current, ms)
                     }
                     showDatePicker = false
@@ -439,6 +451,35 @@ internal fun GalleryViewerPager(
             }
         ) { DatePicker(state = dpState, colors = pickerColors) }
     }
+}
+
+/** What committing the viewer's weight field should do. See [weightCommitDecision]. */
+internal sealed interface WeightCommit {
+    /** The text is the committed value as displayed: untouched, so nothing is written. */
+    object Keep : WeightCommit
+    /** Nonblank text that is not a plausible bodyweight: the committed value stays, the range line shows. */
+    object Invalid : WeightCommit
+    /** Write [lb]. Null only for a blank field, which is the one way to clear a weight. */
+    data class Set(val lb: Double?) : WeightCommit
+}
+
+/**
+ * The commit decision for the weight field, against the LAST COMMITTED value rather than the launch
+ * snapshot (so A to B to A commits A), compared in DISPLAY units: [input] was seeded via
+ * [weightInputValue], which rounds to the display step, so a 0.1-kg rounding is ~0.11 lb and an
+ * untouched field would trip a raw-lb comparison and silently rewrite the snapshot.
+ *
+ * Blank is the only clear. Text that parses to nothing, or to an implausible weight, used to be
+ * indistinguishable from blank at this point and was written as null over a valid stored value;
+ * it is now [WeightCommit.Invalid], which writes nothing. Pure so the three outcomes are testable.
+ */
+internal fun weightCommitDecision(input: String, committedLb: Double?, unit: WeightUnit): WeightCommit {
+    val text = input.trim()
+    val committedText = committedLb?.let { weightInputValue(it, unit) } ?: ""
+    if (text == committedText) return WeightCommit.Keep
+    if (text.isEmpty()) return WeightCommit.Set(null)
+    val lb = parseSaneBodyweightLb(text, unit) ?: return WeightCommit.Invalid
+    return WeightCommit.Set(lb)
 }
 
 /**
@@ -483,7 +524,7 @@ internal fun GalleryFullImage(
     contentScale: ContentScale = ContentScale.Fit
 ) {
     val bitmap by produceState<ImageBitmap?>(initialValue = null, file.path, reqPx) {
-        value = withContext(Dispatchers.IO) { decodeFittedBitmap(file, reqPx)?.asImageBitmap() }
+        value = withContext(Dispatchers.IO) { OrientedBitmaps.decode(file, reqPx)?.asImageBitmap() }
     }
     val bmp = bitmap
     if (bmp != null) {
@@ -498,31 +539,4 @@ internal fun GalleryFullImage(
     } else {
         Box(modifier)
     }
-}
-
-private fun decodeFittedBitmap(file: File, reqPx: Int): Bitmap? {
-    if (!file.exists()) return null
-    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-    BitmapFactory.decodeFile(file.path, bounds)
-    var sample = 1
-    val maxDim = maxOf(bounds.outWidth, bounds.outHeight)
-    while (maxDim / (sample * 2) >= reqPx) sample *= 2
-    val opts = BitmapFactory.Options().apply {
-        inSampleSize = sample
-        inPreferredConfig = Bitmap.Config.ARGB_8888
-    }
-    val decoded = BitmapFactory.decodeFile(file.path, opts) ?: return null
-
-    val orientation = runCatching {
-        ExifInterface(file.path).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
-    }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
-    val degrees = when (orientation) {
-        ExifInterface.ORIENTATION_ROTATE_90 -> 90f
-        ExifInterface.ORIENTATION_ROTATE_180 -> 180f
-        ExifInterface.ORIENTATION_ROTATE_270 -> 270f
-        else -> return decoded
-    }
-    return runCatching {
-        Bitmap.createBitmap(decoded, 0, 0, decoded.width, decoded.height, Matrix().apply { postRotate(degrees) }, true)
-    }.getOrDefault(decoded).also { if (it !== decoded) decoded.recycle() }
 }

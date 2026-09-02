@@ -3,6 +3,7 @@ package com.forge.app.data.db
 import androidx.room.withTransaction
 import com.forge.app.data.db.entities.LoggedExercise
 import com.forge.app.data.db.entities.LoggedSet
+import com.forge.app.data.db.entities.Session
 
 /**
  * The two writes during a live session that must be indivisible, in one place.
@@ -29,6 +30,23 @@ import com.forge.app.data.db.entities.LoggedSet
  * DAO suites can drive the real code concurrently rather than a copy of it.
  */
 internal object SessionWrites {
+
+    /**
+     * The active session, or [candidate] freshly inserted when there is none — as ONE transaction.
+     *
+     * Returns the row and whether THIS call inserted it. The app's invariant is at most one active
+     * session, and the DAO's `LIMIT 1` reads it rather than enforcing it: two starts racing (a
+     * double-tapped day, a wrist command landing as the phone opens the day) both read no active
+     * session and both inserted one, and the loser's row became a live workout nobody could see
+     * (M-07). Room serialises transactions on its single writer connection, so the second caller
+     * runs its read after the first's insert has committed, and resumes it.
+     */
+    suspend fun startOrResume(db: ForgeDatabase, candidate: Session): Pair<Session, Boolean> =
+        db.withTransaction {
+            db.sessionDao().getActiveSession()?.let { active -> return@withTransaction active to false }
+            val id = db.sessionDao().insert(candidate)
+            candidate.copy(id = id) to true
+        }
 
     /**
      * The `logged_exercise` row for [slotId] in [sessionId], creating it if it does not exist.

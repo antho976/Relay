@@ -3,19 +3,17 @@ package com.forge.app.ui.profile
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.LinearGradient
-import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
-import android.media.ExifInterface
 import android.net.Uri
 import androidx.core.content.FileProvider
+import com.forge.app.core.io.OrientedBitmaps
 import java.io.File
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
@@ -178,36 +176,13 @@ object BeforeAfterCardRenderer {
         SimpleDateFormat("MMM d, yyyy", Locale.getDefault()).format(Date(ms)).uppercase(Locale.getDefault())
 
     /**
-     * Decodes a progress photo downsampled to ~[reqPx] on its longest edge and rotated per its EXIF
-     * orientation (portrait phone shots otherwise composite sideways). Mirrors the gallery's
-     * `decodeOriented` (ProgressPhotoImage.kt) — kept self-contained so the renderer has no UI-layer
+     * Decodes a progress photo downsampled to ~[reqPx] on its longest edge and brought upright per
+     * its EXIF orientation (portrait phone shots otherwise composite sideways). The same
+     * [OrientedBitmaps] decoder the gallery and viewer use, so the exported card can never disagree
+     * with what the screen showed; the helper lives in core, so the renderer still has no UI-layer
      * coupling, exactly as RankCardRenderer stays self-contained.
      */
-    private fun decodeOriented(file: File, reqPx: Int): Bitmap? {
-        if (!file.exists()) return null
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeFile(file.path, bounds)
-        var sample = 1
-        val maxDim = maxOf(bounds.outWidth, bounds.outHeight)
-        while (maxDim / (sample * 2) >= reqPx) sample *= 2
-        val decoded = BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply {
-            inSampleSize = sample
-            inPreferredConfig = Bitmap.Config.ARGB_8888
-        }) ?: return null
-
-        val orientation = runCatching {
-            ExifInterface(file.path).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)
-        }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
-        val degrees = when (orientation) {
-            ExifInterface.ORIENTATION_ROTATE_90 -> 90f
-            ExifInterface.ORIENTATION_ROTATE_180 -> 180f
-            ExifInterface.ORIENTATION_ROTATE_270 -> 270f
-            else -> return decoded
-        }
-        return runCatching {
-            Bitmap.createBitmap(decoded, 0, 0, decoded.width, decoded.height, Matrix().apply { postRotate(degrees) }, true)
-        }.getOrDefault(decoded).also { if (it !== decoded) decoded.recycle() }
-    }
+    private fun decodeOriented(file: File, reqPx: Int): Bitmap? = OrientedBitmaps.decode(file, reqPx)
 
     fun share(context: Context, uri: Uri) {
         val send = Intent(Intent.ACTION_SEND).apply {

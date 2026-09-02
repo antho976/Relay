@@ -72,6 +72,7 @@ import com.forge.app.domain.units.toStoredWeightText
 import com.forge.app.domain.units.weightInputValue
 import com.forge.app.domain.units.formatHold
 import com.forge.app.domain.units.parseHold
+import com.forge.app.program.CustomExerciseRegistry
 import com.forge.app.program.ExerciseLibrary
 import com.forge.app.program.ExerciseUnit
 import com.forge.app.program.MuscleGroup
@@ -177,7 +178,9 @@ private fun draftToItems(
             return@mapNotNull FsExercise(
                 libId = de.libId,
                 name = name,
-                muscle = de.muscleCode?.let { MuscleGroup.fromCode(it) } ?: MuscleGroup.entries.first(),
+                muscle = de.muscleCode?.let { MuscleGroup.fromCode(it) }
+                    ?: CustomExerciseRegistry.muscle(de.libId)
+                    ?: MuscleGroup.entries.first(),
                 bodyweight = false,
                 custom = true,
                 sets = sets
@@ -218,10 +221,11 @@ private fun List<FreestyleTemplateExercise>.toItems(weightUnit: com.forge.app.do
             return@mapNotNull FsExercise(
                 libId = te.libId,
                 name = name,
-                // Not recoverable: no muscle is stored on a logged row, so a custom move's muscle
-                // exists only in the draft that created it. It defaults rather than being guessed
-                // at, and the athlete can re-pick it.
-                muscle = MuscleGroup.entries.first(),
+                // No logged row stores a muscle; the custom-exercise registry (written when the
+                // move was created and when its workout was saved) is where it lives. A move that
+                // predates the registry defaults rather than being guessed at; the athlete can
+                // re-pick it.
+                muscle = te.muscleCode?.let { MuscleGroup.fromCode(it) } ?: MuscleGroup.entries.first(),
                 bodyweight = customBodyweight,
                 timed = customTimed,
                 custom = true,
@@ -253,6 +257,17 @@ private fun List<FreestyleTemplateExercise>.toItems(weightUnit: com.forge.app.do
             }.ifEmpty { listOf(FsSet()) }
         )
     }
+
+/**
+ * Whether a drafted set counts as logged: a rep set needs positive reps, a timed hold (GYMAP-51)
+ * needs a hold time that parses to more than zero seconds; a hold's reps are legitimately zero.
+ * The one predicate behind the session total, the Save gate and each card's `N SETS` line, so the
+ * three can never disagree about the same set.
+ */
+internal fun isLoggedFreestyleSet(timed: Boolean, reps: String, hold: String): Boolean =
+    if (timed) (parseHold(hold) ?: 0) > 0 else (reps.toIntOrNull() ?: 0) > 0
+
+private fun FsExercise.isLogged(set: FsSet): Boolean = isLoggedFreestyleSet(timed, set.reps, set.hold)
 
 /** Volume of one set in lb (weight × reps); bodyweight moves contribute no external load. */
 private fun FsExercise.setVolumeLb(set: FsSet, weightUnit: com.forge.app.domain.units.WeightUnit): Double {
@@ -388,9 +403,7 @@ fun FreestyleLogScreen(
 
     val totalVolumeLb = items.sumOf { ex -> ex.sets.sumOf { ex.setVolumeLb(it, weightUnit) } }
     // A set counts as logged when it has reps (rep set) OR a parseable hold time (timed set, GYMAP-51).
-    val loggedSets = items.sumOf { ex ->
-        ex.sets.count { if (ex.timed) (parseHold(it.hold) ?: 0) > 0 else (it.reps.toIntOrNull() ?: 0) > 0 }
-    }
+    val loggedSets = items.sumOf { ex -> ex.sets.count { ex.isLogged(it) } }
     val canSave = loggedSets > 0
 
     fun save() {
@@ -430,7 +443,8 @@ fun FreestyleLogScreen(
                     )
                 }
             }
-            if (sets.isEmpty()) null else FreestyleExerciseInput(ex.libId, sets, ex.name.takeIf { ex.custom })
+            if (sets.isEmpty()) null
+            else FreestyleExerciseInput(ex.libId, sets, ex.name.takeIf { ex.custom }, ex.muscle.code.takeIf { ex.custom })
         }
         if (payload.isNotEmpty()) {
             leaving = true   // stop the debounced autosave from re-writing the draft after save clears it
@@ -583,6 +597,9 @@ fun FreestyleLogScreen(
                     // Same name twice resolves to the same id; don't add a second row for it.
                     if (items.none { it.libId == id }) {
                         items = items + FsExercise(libId = id, name = name, muscle = muscle, bodyweight = false, custom = true)
+                        // The picked muscle has no home on a logged row: register the move's
+                        // identity now so stats/recap/reuse know it, whether or not this log is saved.
+                        viewModel.registerCustomExercise(id, name, muscle)
                     }
                     showBrowser = false
                 }
@@ -683,7 +700,9 @@ private fun FsExerciseCard(
     onReplaceSets: (List<FsSet>) -> Unit
 ) {
     val cs = MaterialTheme.colorScheme
-    val setsDone = exercise.sets.count { (it.reps.toIntOrNull() ?: 0) > 0 }
+    // The same predicate the session total and Save use, so a timed hold's card cannot say 0 SETS
+    // while the header counts it and Save is enabled (a hold legitimately stores zero reps).
+    val setsDone = exercise.sets.count { exercise.isLogged(it) }
     val volumeLb = exercise.sets.sumOf { exercise.setVolumeLb(it, weightUnit) }
     val weightStep = when (weightUnit) {
         com.forge.app.domain.units.WeightUnit.KG -> 2.5
