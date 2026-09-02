@@ -5,9 +5,11 @@ import android.content.Intent
 import android.net.Uri
 import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.documentfile.provider.DocumentFile
+import com.forge.app.RestoreManifest
 import com.forge.app.core.io.exportFile
 import com.forge.app.core.time.mondayStartMs
 import com.forge.app.data.db.ForgeDatabase
+import com.forge.app.data.db.forgeDatabaseBuilder
 import com.forge.app.data.db.dao.CardioDao
 import com.forge.app.data.db.dao.LoggedExerciseDao
 import com.forge.app.data.db.dao.LoggedSetDao
@@ -869,6 +871,14 @@ class BackupRepository @Inject constructor(
             if (pendingDb.exists()) pendingDb.delete()
             dbFile.copyTo(pendingDb, overwrite = true)
 
+            // Everything above read the header, three table NAMES, the pages and a version number.
+            // A same-version SQLite file with three empty tables of the right names passed all of
+            // it, replaced the live database at boot, and only then failed Room's own validation,
+            // with the pre-restore snapshot already gone. So the staged file is now opened the way
+            // the app will open it: the production builder, its migrations, Room's identity check
+            // and a read. Refused here, a bad file costs nothing; an old one is migrated forward.
+            if (!opensWithRoom(pendingDb)) return@withContext RestoreOutcome.CORRUPT
+
             // The prefs half of a backup used to be staged with no validation at all, while the
             // database half gets a zip sniff, a SQLite magic-byte check, a schema check and two
             // version floors. Anything whose settings entry is not a Preferences protobuf — a
@@ -911,7 +921,11 @@ class BackupRepository @Inject constructor(
             runCatching { File(context.filesDir, MANUAL_BACKUP_MARKER).delete() }
 
             // Every staged component landed. Only now is the pending set complete, and only now may
-            // ForgeApp.applyPendingRestore swap it in at boot.
+            // ForgeApp.applyPendingRestore swap it in at boot — which it learns from the manifest,
+            // published last and atomically. A process killed anywhere above leaves components
+            // with no manifest, or ones that no longer match it, and the boot quarantines those
+            // instead of renaming a truncated database live.
+            if (!RestoreManifest.publish(context.filesDir)) return@withContext RestoreOutcome.IO_ERROR
             stagedOk = true
             return@withContext RestoreOutcome.SUCCESS
         } catch (e: java.util.zip.ZipException) {
@@ -967,6 +981,8 @@ class BackupRepository @Inject constructor(
      * after being told the restore failed — is the confusing outcome this guards against.
      */
     private fun clearPendingRestore() {
+        // Marker first: a clear cut short part-way must leave no READY beside a partial set.
+        RestoreManifest.discard(context.filesDir)
         runCatching { File(context.filesDir, PENDING_DB_NAME).delete() }
         runCatching { File(context.filesDir, PENDING_PREFS_NAME).delete() }
         runCatching { File(context.filesDir, PENDING_PHOTOS_DIR).deleteRecursively() }
@@ -999,6 +1015,49 @@ class BackupRepository @Inject constructor(
             hasTables && quickCheck(dbFile)
         }
     }.getOrDefault(false)
+
+    /**
+     * Open a staged database through the production Room configuration, and hand back the file it
+     * leaves behind.
+     *
+     * The file is copied to a probe name under `databases/`, opened with [forgeDatabaseBuilder]
+     * (the same migrations, the same identity check as the app's own open), read once and closed.
+     * Anything Room throws — a schema that only names our tables, a missing `room_master_table`, a
+     * migration that cannot run, a page its error handler decides is corrupt — is a refusal. On
+     * success the MIGRATED probe replaces the staged file, so the boot-time swap opens a database
+     * already at this build's version and the pre-restore snapshot is released the moment that
+     * open succeeds rather than after a migration on the main thread.
+     *
+     * The probe's WAL sidecars are removed after the close: a clean close checkpoints them into the
+     * file, and the staged component is the single file the manifest will describe.
+     */
+    private fun opensWithRoom(staged: File): Boolean {
+        val probe = context.getDatabasePath(PROBE_DB_NAME)
+        val sidecars = listOf("-wal", "-shm", "-journal").map { File(probe.path + it) }
+        fun dropProbe() {
+            runCatching { probe.delete() }
+            sidecars.forEach { runCatching { it.delete() } }
+        }
+        dropProbe()
+        val opened = runCatching {
+            probe.parentFile?.mkdirs()
+            staged.copyTo(probe, overwrite = true)
+            val room = forgeDatabaseBuilder(context, PROBE_DB_NAME).build()
+            try {
+                room.openHelper.writableDatabase.query("SELECT count(*) FROM session").use { it.moveToFirst() }
+            } finally {
+                room.close()
+            }
+        }.isSuccess
+        sidecars.forEach { runCatching { it.delete() } }
+        if (opened && probe.isFile) {
+            // Same filesystem as filesDir, so this is a rename; the copy is the cross-volume fallback.
+            staged.delete()
+            if (!probe.renameTo(staged)) probe.copyTo(staged, overwrite = true)
+        }
+        dropProbe()
+        return opened
+    }
 
     /**
      * `PRAGMA quick_check` over the whole file — the per-page structural check, without
@@ -1136,6 +1195,8 @@ class BackupRepository @Inject constructor(
         // Staged-restore filenames. Must stay in sync with ForgeApp.applyPendingRestore, which
         // reads the same four paths out of filesDir at boot.
         private const val PENDING_DB_NAME = "pending_restore.db"
+        /** Where [opensWithRoom] opens a candidate: a real `databases/` name, so Room needs no path. */
+        private const val PROBE_DB_NAME = "forge_restore_probe.db"
         private const val PENDING_PREFS_NAME = "pending_restore_prefs.pb"
         /** Backup-ZIP entry for the profile avatar — derived from AvatarRepository so a rename can't desync. */
         private const val ZIP_AVATAR_ENTRY = AvatarRepository.FILE_NAME

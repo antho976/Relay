@@ -1,10 +1,8 @@
 package com.forge.app.di
 
 import android.content.Context
-import androidx.room.Room
-import com.forge.app.BuildConfig
-import com.forge.app.data.db.ALL_MIGRATIONS
 import com.forge.app.data.db.ForgeDatabase
+import com.forge.app.data.db.forgeDatabaseBuilder
 import com.forge.app.data.db.dao.BodyFatDao
 import com.forge.app.data.db.dao.BodyMeasurementDao
 import com.forge.app.data.db.dao.BodyweightDao
@@ -40,23 +38,9 @@ object DatabaseModule {
     @Provides
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): ForgeDatabase =
-        Room.databaseBuilder(context, ForgeDatabase::class.java, "forge.db")
-            // Schema is LOCKED from v12 onward — real migrations preserve data (see Migrations.kt).
-            .addMigrations(*ALL_MIGRATIONS)
-            // Only the pre-lock versions (≤11) may still reset rather than crash. Future bumps
-            // without a migration will fail loudly at startup instead of silently wiping data.
-            .fallbackToDestructiveMigrationFrom(true, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)
-            .apply {
-                // Debug only: parallel feature branches sit at different schema versions, so
-                // sideloading an older-schema build over a newer on-disk DB opens as a DOWNGRADE
-                // (e.g. installed v31, then a v29 branch) — a path Room can't satisfy, and it
-                // crashes at startup. In dev that data is disposable, so recreate destructively
-                // instead. Release deliberately keeps the loud crash: a real downgrade can only
-                // come from a shipped version rollback, and we'd rather fail than silently wipe a
-                // user's history (matches the "never silently wipe data" lock above).
-                if (BuildConfig.DEBUG) fallbackToDestructiveMigrationOnDowngrade(true)
-            }
-            .build()
+        // One builder, shared with restore validation, so the file a restore accepts is a file
+        // this exact configuration can open (see ForgeDatabaseFactory.kt).
+        forgeDatabaseBuilder(context, "forge.db").build()
 
     @Provides fun provideSessionDao(db: ForgeDatabase): SessionDao = db.sessionDao()
     @Provides fun provideLoggedExerciseDao(db: ForgeDatabase): LoggedExerciseDao = db.loggedExerciseDao()

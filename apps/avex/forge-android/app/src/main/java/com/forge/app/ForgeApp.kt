@@ -29,6 +29,8 @@ class ForgeApp : Application(), Configuration.Provider {
     @Inject lateinit var settingsRepository: SettingsRepository
     @Inject lateinit var reminderScheduler: ReminderScheduler
     @Inject lateinit var wearStatePublisher: com.forge.app.service.wear.WearStatePublisher
+    /** Lazy: a normal boot must not open Room here; only a landed restore proves itself through it. */
+    @Inject lateinit var database: dagger.Lazy<com.forge.app.data.db.ForgeDatabase>
 
     /** App-lifetime work that should survive any screen (the wear publisher's collectors, W1). */
     private val appScope = CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.Default)
@@ -65,17 +67,33 @@ class ForgeApp : Application(), Configuration.Provider {
      * is first read (it's lazily created on first access, which happens after this).
      */
     private fun applyPendingRestore() {
-        if (RestoreApply.apply(filesDir, getDatabasePath("forge.db"))) {
+        val liveDb = getDatabasePath("forge.db")
+        // Carrying on when this returns false is safe BECAUSE of what RestoreApply guarantees: it
+        // never returns having left a mixture. Either the whole set is live, or none of it is and
+        // the set is queued to retry — so the boot below always runs on one coherent dataset, and
+        // the user is told nothing rather than told something untrue.
+        if (!RestoreApply.apply(filesDir, liveDb)) return
+
+        // The set is live, but its pre-restore snapshots are still on disk. The restored database
+        // is proven only once THIS configuration has opened it — migrations, identity check and a
+        // read — so that happens here, before anything else touches Room, and the snapshots are
+        // released or put back on the answer. Staging already opened the file through the same
+        // builder, so a failure here means the bytes were damaged in between; it used to mean an
+        // app that could not start, with the previous database already discarded.
+        val opened = runCatching {
+            database.get().openHelper.writableDatabase
+                .query("SELECT count(*) FROM session").use { it.moveToFirst() }
+        }.isSuccess
+        if (opened) {
+            RestoreApply.confirm(filesDir, liveDb)
             // One-shot flag so MainActivity can confirm the restore landed on this launch — the swap
             // runs at boot before any UI exists, and the staging path restarts the process silently
-            // otherwise. Only written for a fully clean restore so we never claim "successfully" on
-            // a partial one.
-            //
-            // Carrying on when this returns false is safe BECAUSE of what RestoreApply guarantees:
-            // it never returns having left a mixture. Either the whole set is live, or none of it
-            // is and the set is queued to retry — so the boot below always runs on one coherent
-            // dataset, and the user is told nothing rather than told something untrue.
+            // otherwise. Only written for a fully clean, opened restore so we never claim
+            // "successfully" on a partial one.
             runCatching { File(filesDir, RESTORE_DONE_FLAG).writeText("1") }
+        } else {
+            RestoreApply.revert(filesDir, liveDb)
+            runCatching { File(filesDir, RESTORE_FAILED_FLAG).writeText("1") }
         }
     }
 
@@ -130,5 +148,7 @@ class ForgeApp : Application(), Configuration.Provider {
     companion object {
         /** One-shot marker written after a boot-time restore swap; read + cleared by MainActivity. */
         const val RESTORE_DONE_FLAG = "restore_just_completed"
+        /** One-shot marker written when a landed restore could not be opened and was put back. */
+        const val RESTORE_FAILED_FLAG = "restore_put_back"
     }
 }
