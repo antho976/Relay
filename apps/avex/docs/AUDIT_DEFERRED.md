@@ -306,17 +306,29 @@ No Android SDK here either — `dl.google.com` is blocked by the environment's n
 is the compiler, driven by `workflow_dispatch` on this branch rather than assumed. Every claim of
 "closed" above rests on a CI run of this branch, not on a local build.
 
-Two of those runs found compile errors this environment could not: a package move that left two
-same-package callers without an import, and a `buildSet` whose element type inference could not fix
-from a `null` branch. That is the reliability bound, again, and the reason the workflow now ends a
+**The state that backs this ledger: CI run 266 at `ba2ce3b`, all three jobs green.** `Guard`;
+`Verify (JVM)` — 1640 unit tests, the Roborazzi goldens, Android Lint on the release variant of both
+phone and wear, and a debug + release assemble; and `Instrumented (emulator)` — the Room migration
+test and a release smoke launch on an AVD. Nothing above is claimed closed on a run that did not
+reach the step which would have contradicted it.
+
+Getting there cost five red runs, and every one of them found something this environment could not.
+Three were compile errors: a package move that left two same-package callers without an import, a
+`buildSet` whose element type inference could not fix from a `null` branch, and a hand-written DAO
+fake that stopped implementing its interface when M-33 added a query. Two were defects in this
+pass's own new work, caught by the suite rather than by review: a duplicate-import fixture whose
+"corrected" export was byte-identical to the original, so the test asserting they differ could only
+ever fail; and an export progress dialog whose title pushed `screen-name-title` one over its
+allowed count. That is the reliability bound, stated plainly, and the reason the workflow now ends a
 failed `Verify` by printing the compile errors and failing test names — a red run used to require
 downloading an artifact to read.
 
-**Nothing here has been run on a physical device.** Health Connect history availability, Program
-Builder recreation, watch disconnect and process death, timezone rollover, restore
-validation/revert, and P-09's oversize-bitmap fallback all still want a real device pass before
-release. The table above marks P-09 "closed in code" for exactly this reason: the decode path is
-right, and no JVM test can prove what a 108-megapixel photo does to a real heap.
+**Nothing here has been run on a physical device.** The emulator job is real and it covers the
+migration path and a release launch, which is more than nothing; it is not a phone. Health Connect
+history availability, Program Builder recreation, watch disconnect and process death, timezone
+rollover, restore validation/revert, and P-09's oversize-bitmap fallback all still want a real
+device pass before release. The table above marks P-09 "closed in code" for exactly this reason: the
+decode path is right, and no JVM test can prove what a 108-megapixel photo does to a real heap.
 
 ### Merge process
 
