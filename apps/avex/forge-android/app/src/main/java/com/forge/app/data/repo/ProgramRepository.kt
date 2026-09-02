@@ -73,16 +73,26 @@ class ProgramRepository @Inject constructor(
     /** Seed-if-empty, then load the DB program into the [Program] facade. Safe to call at startup,
      *  idempotent, and safe to call concurrently — on return [Program.isLoaded] is guaranteed true. */
     suspend fun ensureLoaded() = loadMutex.withLock {
-        // Seed the default split only ONCE, on a genuine first run before onboarding. The persisted
-        // PROGRAM_SEEDED flag (set the first time we seed) — not just dayCount==0 — is what gates this,
-        // so a deliberately EMPTY plan (build-your-own / cleared) can never be silently re-seeded: not
-        // on relaunch, and not in the brief window where onboarding has cleared the program but not yet
-        // flipped ONBOARDING_DONE (a concurrent widget refresh used to re-seed the default there).
-        if (dao.dayCount() == 0 && !settings.programSeeded.first() && !settings.onboardingDone.first()) {
-            seedFromDefault()
-            settings.setProgramSeeded(true)
+        // A load that cannot complete is REPORTED, not silent (M-30): callers awaiting readiness —
+        // the widget deep-link, which cannot judge a day key against a program that has not loaded —
+        // would otherwise wait for something that is never coming.
+        try {
+            // Seed the default split only ONCE, on a genuine first run before onboarding. The persisted
+            // PROGRAM_SEEDED flag (set the first time we seed) — not just dayCount==0 — is what gates this,
+            // so a deliberately EMPTY plan (build-your-own / cleared) can never be silently re-seeded: not
+            // on relaunch, and not in the brief window where onboarding has cleared the program but not yet
+            // flipped ONBOARDING_DONE (a concurrent widget refresh used to re-seed the default there).
+            if (dao.dayCount() == 0 && !settings.programSeeded.first() && !settings.onboardingDone.first()) {
+                seedFromDefault()
+                settings.setProgramSeeded(true)
+            }
+            loadIntoFacade()
+        } catch (c: kotlinx.coroutines.CancellationException) {
+            throw c
+        } catch (t: Throwable) {
+            Program.markLoadFailed()
+            throw t
         }
-        loadIntoFacade()
     }
 
     /**

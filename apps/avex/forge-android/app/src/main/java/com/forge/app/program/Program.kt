@@ -298,8 +298,45 @@ object Program {
      */
     val isLoaded: Boolean get() = loaded
 
+    /** How far the DB-backed load has got. See [readiness]. */
+    enum class Readiness {
+        /** Nothing has been loaded yet; [days] is still the seed split and cannot be judged against. */
+        PENDING,
+        /** [setActive] has run: [days] is the user's real program. */
+        LOADED,
+        /** The load was attempted and could not complete. [days] is still the seed split. */
+        FAILED
+    }
+
+    private val _readiness = kotlinx.coroutines.flow.MutableStateFlow(Readiness.PENDING)
+
+    /**
+     * [isLoaded] as something a caller can AWAIT rather than poll (M-30).
+     *
+     * The widget deep-link needed this: it validates a day key against the loaded program, so until
+     * the load lands it cannot judge the key at all — `Program` reports the seed split, which has
+     * never contained a custom builder day. Polling behind an arbitrary four-second timeout meant a
+     * slow load looked exactly like a program that does not contain the day, and the tap was
+     * silently discarded. Waiting on a state that also reports FAILURE lets the difference be acted
+     * on: only [Readiness.LOADED] may reject a key.
+     */
+    val readiness: kotlinx.coroutines.flow.StateFlow<Readiness> = _readiness
+
     /** Swap in a new active program (ProgramRepository, after load / generate). */
-    fun setActive(newDays: List<DayPlan>) { active = newDays; loaded = true }
+    fun setActive(newDays: List<DayPlan>) {
+        active = newDays
+        loaded = true
+        _readiness.value = Readiness.LOADED
+    }
+
+    /**
+     * The DB-backed load could not complete — the program stays the seed split. Reported rather
+     * than left silent so a caller awaiting [readiness] stops waiting instead of hanging on a load
+     * that is never coming.
+     */
+    fun markLoadFailed() {
+        if (!loaded) _readiness.value = Readiness.FAILED
+    }
 
     fun day(key: String): DayPlan =
         dayOrNull(key)
