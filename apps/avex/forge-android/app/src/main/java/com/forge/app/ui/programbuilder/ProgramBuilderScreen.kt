@@ -130,7 +130,7 @@ fun ProgramBuilderScreen(
             day = editingDay,
             snackbarHostState = snackbarHostState,
             dialog = viewModel.dayDialog,
-            onDialog = { viewModel.setDayDialog(it) },
+            onDialog = { viewModel.showDayDialog(it) },
             onBack = { viewModel.closeDay() },
             onRename = { viewModel.renameDay(editingDay.uid, it) },
             onSetType = { viewModel.setDayType(editingDay.uid, it) },

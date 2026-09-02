@@ -190,7 +190,10 @@ class ProgramBuilderViewModel internal constructor(
     }
 
     /** Open (or, with [DayDialog.None], close) a dialog/sheet inside the day editor. */
-    fun setDayDialog(dialog: DayDialog) {
+    // Not setDayDialog: `var dayDialog` already compiles its (private) setter to
+    // setDayDialog(DayDialog), and two declarations cannot share a JVM signature. Named for
+    // what it does, like openDay/closeDay above.
+    fun showDayDialog(dialog: DayDialog) {
         dayDialog = dialog
         persistDraft()
     }
