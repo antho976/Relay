@@ -115,11 +115,18 @@ class ExtendedGoalRepository @Inject constructor(
         return dao.getById(g.id)?.stretchValue ?: first
     }
 
-    /** Every custom goal with its live progress, achieved-first then closest-first. */
-    suspend fun goalsWithProgress(): List<Progress> {
+    /**
+     * Every custom goal with its live progress, achieved-first then closest-first.
+     *
+     * @param nowMs the instant the progress is read AT. Defaults to the clock, but a caller
+     *   recomputing because a day boundary moved should pass the instant it is recomputing for, so
+     *   the progress it renders and the deadline caption beside it are answering the same question
+     *   (M-32).
+     */
+    suspend fun goalsWithProgress(nowMs: Long = clock.nowMs()): List<Progress> {
         val goals = dao.getAll()
         if (goals.isEmpty()) return emptyList()
-        val now = clock.nowMs()
+        val now = nowMs
         return goals.mapNotNull { g ->
             val parsed = parseGoalType(g.goalType) ?: return@mapNotNull null
             val current = currentValue(parsed.metric, parsed.period, g, now)

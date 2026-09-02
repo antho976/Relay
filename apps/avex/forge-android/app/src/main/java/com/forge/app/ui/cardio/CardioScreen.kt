@@ -492,6 +492,7 @@ private fun LazyListScope.progressLens(
             Spacer(Modifier.height(SECTION_GAP))
             CardioGoalsSection(
                 goals = state.cardioGoals,
+                todayStartMs = state.todayStartMs,
                 onOpenGoals = onOpenGoals,
                 onBg = onBg, muted = muted, accent = accent, outline = outline
             )
