@@ -151,7 +151,10 @@ class ImportSemanticDuplicateTest {
     fun aCorrectedEndTimeIsNotADuplicate() = runTest {
         repo.import(avexExport("before.json"))
 
-        val corrected = repo.import(avexExport("after.json", sessionOverrides = mapOf("finishedAt" to "1767603600000")))
+        // A quarter of an hour later than the default this fixture writes — expressed against that
+        // default rather than as a literal, so it cannot silently become the same instant again.
+        val correctedEnd = startedAt + 3_600_000L + 900_000L
+        val corrected = repo.import(avexExport("after.json", sessionOverrides = mapOf("finishedAt" to "$correctedEnd")))
             as ImportResult.Success
 
         assertEquals("the corrected copy is different work", 0, corrected.duplicatesSkipped)
