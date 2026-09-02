@@ -31,6 +31,7 @@ import androidx.wear.compose.material.Text
 import com.forge.shared.protocol.CmdAckDto
 import com.forge.shared.protocol.SessionLiveDto
 import com.forge.wear.data.WearDataRepository
+import com.forge.wear.data.WristEdit
 import kotlinx.coroutines.delay
 
 /**
@@ -53,6 +54,7 @@ fun SetView(
     val colors = LocalWearColors.current
     val lastAck by repo.lastAck.collectAsStateWithLifecycle()
     val lastLog by repo.lastLog.collectAsStateWithLifecycle()
+    val failedSend by repo.failedSend.collectAsStateWithLifecycle()
 
     // Adjusted values, reseeded whenever the mirror advances to a new set/exercise.
     val seedKey = "${session.exerciseId}:${session.setIndex}:${session.targetWeightText}"
@@ -278,6 +280,15 @@ fun SetView(
                             .padding(6.dp)
                     )
                 }
+            }
+            // An edit the transport never delivered, and the way back to it (M-10). Shown wherever
+            // the undo/rate row lives, since that row is what came back when the send failed.
+            failedSend?.let { failed ->
+                Spacer(Modifier.height(2.dp))
+                WristRetryRow(
+                    label = if (failed.kind == WristEdit.Kind.RPE) "rating not sent" else "undo not sent",
+                    onRetry = { repo.retryFailedSend() }
+                )
             }
         }
     }

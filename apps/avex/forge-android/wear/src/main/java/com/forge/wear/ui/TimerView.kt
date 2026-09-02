@@ -25,6 +25,7 @@ import androidx.wear.compose.material.Text
 import com.forge.shared.protocol.TimerCommand
 import com.forge.shared.protocol.TimerStateDto
 import com.forge.wear.data.WearDataRepository
+import com.forge.wear.data.WristEdit
 import kotlinx.coroutines.delay
 
 /**
@@ -43,6 +44,7 @@ fun TimerView(
 ) {
     val colors = LocalWearColors.current
     val lastLog by repo.lastLog.collectAsStateWithLifecycle()
+    val failedSend by repo.failedSend.collectAsStateWithLifecycle()
     val session by repo.session.collectAsStateWithLifecycle()
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
     // When THIS watch first saw this timer instance. endAtMs is an absolute instant on the PHONE's
@@ -108,6 +110,15 @@ fun TimerView(
                             .padding(6.dp)
                     )
                 }
+            }
+            // An edit the transport never delivered, and the way back to it (M-10). It sits under
+            // the row it belongs to, because the row is what came back when the send failed.
+            failedSend?.let { failed ->
+                Spacer(Modifier.height(2.dp))
+                WristRetryRow(
+                    label = if (failed.kind == WristEdit.Kind.RPE) "rating not sent" else "undo not sent",
+                    onRetry = { repo.retryFailedSend() }
+                )
             }
         }
     }

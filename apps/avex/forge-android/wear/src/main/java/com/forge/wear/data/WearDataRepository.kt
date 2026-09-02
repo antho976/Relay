@@ -25,6 +25,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import java.util.UUID
@@ -60,11 +61,40 @@ class WearDataRepository private constructor(context: Context) : DataClient.OnDa
     val lastAck: StateFlow<CmdAckDto?> = _lastAck
 
     /** The last successfully logged set (from its ack), stamped with LOCAL receive time — drives
-     *  the rest screen's transient undo/RPE row. [rpeSent] hides the row once a rating went out. */
-    data class LastLog(val setId: Long, val atLocalMs: Long, val rpeSent: Boolean = false)
+     *  the rest screen's transient undo/RPE row. See [WristLastLog]. */
+    private val _lastLog = MutableStateFlow<WristLastLog?>(null)
+    val lastLog: StateFlow<WristLastLog?> = _lastLog
 
-    private val _lastLog = MutableStateFlow<LastLog?>(null)
-    val lastLog: StateFlow<LastLog?> = _lastLog
+    /**
+     * The wrist edit whose delivery never happened, or null (M-10).
+     *
+     * Rating a set and undoing one both used to remove their own affordance BEFORE the transport
+     * was asked, and then ignore what it said: out of range, `sendWithRetry` gave up, the rating
+     * was never queued, and the row it would have been offered from was already gone. The edit was
+     * lost in silence, on the one screen with no way to look it up.
+     *
+     * The affordance is still removed optimistically — the common case is that it lands, and a
+     * wrist row that hesitates reads as broken — but a failed delivery puts it back and leaves this
+     * behind. [WristEdit.commandId] is the same id the failed attempt carried, so
+     * [retryFailedSend] is a REPLAY the phone's deduper can recognise rather than a second edit.
+     */
+    private val _failedSend = MutableStateFlow<WristEdit?>(null)
+    val failedSend: StateFlow<WristEdit?> = _failedSend
+
+    /** Re-send the edit that could not be delivered, under its original id. No-op when there is none. */
+    fun retryFailedSend() {
+        val failed = _failedSend.value ?: return
+        _failedSend.value = null
+        when (failed.kind) {
+            WristEdit.Kind.RPE ->
+                sendSetRpe(failed.setId ?: return, failed.rpe ?: return, commandId = failed.commandId)
+            WristEdit.Kind.UNDO ->
+                sendUndoSet(failed.sessionId, failed.setId, commandId = failed.commandId)
+        }
+    }
+
+    /** Drop a failure the user has acknowledged (or that a later edit has made irrelevant). */
+    fun clearFailedSend() { _failedSend.value = null }
 
     /**
      * The phone speaks a newer protocol on a path the watch cannot work without — the UI shows
@@ -141,7 +171,7 @@ class WearDataRepository private constructor(context: Context) : DataClient.OnDa
                 // command it answers; an older phone leaves that blank, and the fallback is the
                 // wrist's own record of the ids it sent RPE for.
                 if (ack.ok && ack.setId != null && isNewlyLoggedSet(ack)) {
-                    _lastLog.value = LastLog(ack.setId!!, System.currentTimeMillis())
+                    _lastLog.value = WristLastLog(ack.setId!!, System.currentTimeMillis())
                 }
             }
             return
@@ -233,19 +263,39 @@ class WearDataRepository private constructor(context: Context) : DataClient.OnDa
      * Undo [setId] — the set the caller's row is offering to undo, not "whatever was logged last".
      * Callers pass the id from [lastLog]; the phone falls back to its own resolution when it is null.
      */
-    fun sendUndoSet(sessionId: Long, setId: Long?): String {
+    fun sendUndoSet(sessionId: Long, setId: Long?, commandId: String? = null): String {
+        val removed = _lastLog.value
         _lastLog.value = null // The row acted; don't offer to rate an undone set.
+        _failedSend.value = null
+        val id = commandId ?: newId()
         return send(
             WearProtocol.PATH_CMD_UNDO_SET,
-            UndoSetCommand(commandId = newId(), sessionId = sessionId, setId = setId)
-        )
+            UndoSetCommand(commandId = id, sessionId = sessionId, setId = setId)
+        ) { delivered ->
+            if (!delivered) {
+                // Put the row back — but only if nothing newer has taken its place, which would
+                // mean the user has moved on and this set's window is over anyway.
+                _lastLog.update { current -> WearEditRecovery.afterFailedUndo(current, removed) }
+                _failedSend.value = WristEdit(WristEdit.Kind.UNDO, id, sessionId, setId, rpe = null)
+            }
+        }
     }
 
-    fun sendSetRpe(setId: Long, rpe: Double): String {
+    fun sendSetRpe(setId: Long, rpe: Double, commandId: String? = null): String {
         _lastLog.value = _lastLog.value?.takeIf { it.setId == setId }?.copy(rpeSent = true)
-        val commandId = newId()
-        rememberRpeCommand(commandId)
-        return send(WearProtocol.PATH_CMD_SET_RPE, SetRpeCommand(commandId = commandId, setId = setId, rpe = rpe))
+        _failedSend.value = null
+        val id = commandId ?: newId()
+        rememberRpeCommand(id)
+        return send(
+            WearProtocol.PATH_CMD_SET_RPE,
+            SetRpeCommand(commandId = id, setId = setId, rpe = rpe)
+        ) { delivered ->
+            if (!delivered) {
+                // The rating never left the watch: offer the row again, and the same-id retry.
+                _lastLog.update { current -> WearEditRecovery.afterFailedRating(current, setId) }
+                _failedSend.value = WristEdit(WristEdit.Kind.RPE, id, sessionId = 0L, setId = setId, rpe = rpe)
+            }
+        }
     }
 
     /**
@@ -294,8 +344,12 @@ class WearDataRepository private constructor(context: Context) : DataClient.OnDa
         )
     }
 
-    private inline fun <reified T> send(path: String, dto: T): String where T : Any {
-        sendBytes(path, WearCodec.encode(dto))
+    private inline fun <reified T> send(
+        path: String,
+        dto: T,
+        noinline onResult: ((delivered: Boolean) -> Unit)? = null
+    ): String where T : Any {
+        sendBytes(path, WearCodec.encode(dto), onResult)
         // The commandId rides inside the dto; recover it for pending-state tracking.
         return when (dto) {
             is TimerCommand -> dto.commandId
@@ -306,8 +360,16 @@ class WearDataRepository private constructor(context: Context) : DataClient.OnDa
         }
     }
 
-    private fun sendBytes(path: String, bytes: ByteArray) {
-        scope.launch { sendWithRetry(path, bytes) }
+    /**
+     * Fire the payload off on [scope] and, when the caller asked, report whether it was actually
+     * delivered. The outcome used to be discarded everywhere, which is what let a rating the
+     * transport never sent be treated as sent (M-10).
+     */
+    private fun sendBytes(path: String, bytes: ByteArray, onResult: ((Boolean) -> Unit)? = null) {
+        scope.launch {
+            val delivered = sendWithRetry(path, bytes)
+            onResult?.invoke(delivered)
+        }
     }
 
     /**
