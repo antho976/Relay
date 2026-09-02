@@ -50,6 +50,7 @@ import com.forge.app.ui.common.SegmentPill
 import com.forge.app.ui.common.clickableLabeled
 import com.forge.app.ui.common.forgeItemMotion
 import com.forge.app.ui.common.statsEntrance
+import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -101,11 +102,20 @@ fun CardioScreen(
     ) { route -> viewModel.onRouteConsented(route) }
 
     val zone = ZoneId.systemDefault()
-    val today = LocalDate.now(zone)
+    // Today comes from the ViewModel's anchor, not from a fresh clock read here (M-15). A
+    // composition that reads the clock directly has nothing to recompose it, so a phone left on
+    // this tab from Monday 23:59 into Tuesday kept Monday's dates in the week label and kept
+    // Monday styled as today. The anchor moves on every day boundary and on any clock or timezone
+    // change, and moving it is what re-emits this state. Zero is the pre-load state only.
+    val today = remember(state.todayStartMs, zone) {
+        state.todayStartMs.takeIf { it > 0L }
+            ?.let { Instant.ofEpochMilli(it).atZone(zone).toLocalDate() }
+            ?: LocalDate.now(zone)
+    }
     val weekNum = today.get(WeekFields.ISO.weekOfWeekBasedYear())
     val isoWeekStart = today.minusDays(today.dayOfWeek.value.toLong() - 1)
     val isoWeekEnd = isoWeekStart.plusDays(6)
-    val weekLabel = remember(weekNum) {
+    val weekLabel = remember(isoWeekStart) {
         val fmt = DateTimeFormatter.ofPattern("MMM d", Locale.getDefault())
         "${isoWeekStart.format(fmt).uppercase()} – ${isoWeekEnd.format(fmt).uppercase()}"
     }

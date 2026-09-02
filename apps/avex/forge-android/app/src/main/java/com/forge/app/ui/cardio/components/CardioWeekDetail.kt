@@ -62,6 +62,12 @@ internal fun CardioWeekDetail(
     useMiles: Boolean,
     weekTargetMin: Int,
     zone: ZoneId,
+    /**
+     * Local midnight of today, from the caller's state rather than a clock read here (M-15). It is
+     * what decides whether this week is the CURRENT one and which cell is today, and a composition
+     * that reads the clock itself has nothing to recompose it across midnight. 0 falls back to now.
+     */
+    todayStartMs: Long,
     onOpenSession: (Long) -> Unit,
     onBack: () -> Unit
 ) {
@@ -73,9 +79,14 @@ internal fun CardioWeekDetail(
     val weekStart = remember(weekStartMs, zone) {
         Instant.ofEpochMilli(weekStartMs).atZone(zone).toLocalDate()
     }
-    val currentMonday = remember(zone) { LocalDate.now(zone).with(java.time.DayOfWeek.MONDAY) }
+    val today = remember(todayStartMs, zone) {
+        todayStartMs.takeIf { it > 0L }
+            ?.let { Instant.ofEpochMilli(it).atZone(zone).toLocalDate() }
+            ?: LocalDate.now(zone)
+    }
+    val currentMonday = remember(today) { today.with(java.time.DayOfWeek.MONDAY) }
     val isCurrentWeek = weekStart == currentMonday
-    val todayDow = if (isCurrentWeek) LocalDate.now(zone).dayOfWeek.value - 1 else -1
+    val todayDow = if (isCurrentWeek) today.dayOfWeek.value - 1 else -1
     val title = remember(weekStart, currentMonday) {
         com.forge.app.ui.cardio.relativeWeekLabel(weekStart, currentMonday)
     }

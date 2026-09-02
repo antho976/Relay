@@ -88,6 +88,7 @@ fun CardioWeeksScreen(
             useMiles = state.useMiles,
             weekTargetMin = state.weekTargetMin,
             zone = zone,
+            todayStartMs = state.todayStartMs,
             onOpenSession = onOpenSession,
             // Entered ON this week → back leaves; entered on the chart → back returns to it.
             onBack = if (viewModel.arrivedOnWeek) onBack else viewModel::closeWeek
@@ -109,8 +110,16 @@ fun CardioWeeksScreen(
         state.weeks.subList(start, end)
     }
 
-    val currentWeekStartMs = remember(zone) {
-        LocalDate.now(zone).with(DayOfWeek.MONDAY).atStartOfDay(zone).toInstant().toEpochMilli()
+    // Derived from the state's anchor, not from a clock read in this composition (M-15): the week
+    // that is still running must stop being "current" the moment Monday arrives, on a chart that is
+    // still open. Zero is the pre-load state only.
+    val today = remember(state.todayStartMs, zone) {
+        state.todayStartMs.takeIf { it > 0L }
+            ?.let { Instant.ofEpochMilli(it).atZone(zone).toLocalDate() }
+            ?: LocalDate.now(zone)
+    }
+    val currentWeekStartMs = remember(today, zone) {
+        today.with(DayOfWeek.MONDAY).atStartOfDay(zone).toInstant().toEpochMilli()
     }
     val target = if (state.weekTargetMin > 0) state.weekTargetMin else WHO_WEEKLY_ACTIVITY_MIN
     // The figures read the WINDOW, so paging back actually says something about the weeks on screen.
