@@ -27,9 +27,22 @@ import kotlin.math.roundToInt
  */
 object ForgeMotion {
 
-    /** The system animator duration scale: 1f = normal · 0f = the user disabled animations.
-     *  Written by MainActivity at start and whenever the setting changes. */
-    @Volatile var durationScale: Float = 1f
+    /**
+     * The system animator duration scale: 1f = normal · 0f = the user disabled animations.
+     * Written by MainActivity at start and whenever the setting changes.
+     *
+     * Compose snapshot state, not a plain volatile field (M-35). Toggling "Remove animations" while
+     * Avex is in the background updated the field and invalidated nothing, so the paths Compose
+     * cannot stop by itself — the Academy's seven-second poke rotator, its promoted/chapter split,
+     * an animated WebP mid-play in onboarding — kept running until some unrelated recomposition
+     * happened along. A read inside composition now subscribes, so the setting takes effect where
+     * it is consulted; reads from ordinary code are unchanged.
+     */
+    var durationScale: Float
+        get() = durationScaleState.floatValue
+        set(value) { durationScaleState.floatValue = value }
+
+    private val durationScaleState = androidx.compose.runtime.mutableFloatStateOf(1f)
 
     private val reduceMotion: Boolean get() = durationScale <= 0f
 
