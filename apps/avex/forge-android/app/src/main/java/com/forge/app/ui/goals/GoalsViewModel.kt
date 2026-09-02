@@ -170,7 +170,9 @@ class GoalsViewModel @Inject constructor(
         // The live keys go with the toggle so the cap is applied to pins that still resolve. Null
         // before the first load: an empty snapshot would read as "no goal exists" and clear the lot.
         val snapshot = state.value
-        val live = if (snapshot.loading) null else buildSet {
+        // Typed explicitly: the `null` branch alone gives inference nothing to fix the element type
+        // to, and `buildSet` resolves its E to Nothing?.
+        val live: Set<String>? = if (snapshot.loading) null else buildSet<String> {
             snapshot.liftGoals.forEach { add(liftPinKey(it.exerciseId)) }
             snapshot.customGoals.forEach { add(customPinKey(it.id)) }
         }
