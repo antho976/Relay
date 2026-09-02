@@ -70,6 +70,17 @@ class ProgramRepository @Inject constructor(
      *  load before resolving orphan sessions) can't both seed an empty DB or double-load the facade. */
     private val loadMutex = Mutex()
 
+    /**
+     * Serializes every write that REPLACES the program — generate, reroll, the builder's save, and
+     * the boot reconciliation (M-06).
+     *
+     * The generation saga is a two-store transaction with a DataStore intent standing in for
+     * atomicity, and an unrelated program write landing inside it invalidates the very comparison
+     * the intent exists to make. Not reentrant: `reroll` and `clearProgram` delegate to the locked
+     * functions rather than taking it themselves.
+     */
+    private val mutationMutex = Mutex()
+
     /** Seed-if-empty, then load the DB program into the [Program] facade. Safe to call at startup,
      *  idempotent, and safe to call concurrently — on return [Program.isLoaded] is guaranteed true. */
     suspend fun ensureLoaded() = loadMutex.withLock {
@@ -100,7 +111,12 @@ class ProgramRepository @Inject constructor(
      * source of truth, so the customization overlay + coach swaps are wiped (a manual rebuild is the
      * user taking the wheel) and any in-progress session is discarded. Empty lists = no plan.
      */
-    suspend fun saveCustomProgram(days: List<ProgramDay>, slots: List<ProgramSlot>) {
+    suspend fun saveCustomProgram(days: List<ProgramDay>, slots: List<ProgramSlot>): Unit = mutationMutex.withLock {
+        // A hand-built program supersedes any generation attempt still on file (M-06): its rows are
+        // about to become the program neither that attempt's before- nor after-signature describes,
+        // and its marker must not be applied to them. Cleared inside the lock, so a reconciliation
+        // cannot read an intent this write has already invalidated.
+        settings.clearProgramGenerationIntent()
         database.withTransaction {
             dao.replaceProgram(days, slots)
             customizationDao.deleteAll()
@@ -178,7 +194,7 @@ class ProgramRepository @Inject constructor(
         disliked: Set<String>,
         recent: Set<String> = emptySet(),
         seed: Long = System.nanoTime()
-    ) {
+    ): Unit = mutationMutex.withLock {
         // The regenerate is about to clear the customization overlay (reconcile below) — fold the
         // coach's learned adjustments into the new BASELINE so they survive the refresh. volumeBias
         // and prefer/avoid feed selection inside the generator; repBias is applied to the slot reps
@@ -202,7 +218,11 @@ class ProgramRepository @Inject constructor(
         val intent = ProgramGenerationIntent(
             deload = params.deload,
             atMs = clock.nowMs(),
-            beforeSignature = currentProgramSignature()
+            beforeSignature = currentProgramSignature(),
+            // What this attempt is about to write, known here because the rows are already built.
+            // Recognising its own result is what tells a commit from somebody else's write (M-06).
+            afterSignature = signatureOf(days, slots),
+            opId = java.util.UUID.randomUUID().toString()
         )
         settings.setProgramGenerationIntent(intent)
         // One transaction so a crash can't leave the fresh program bound to stale overlays (seam
@@ -241,14 +261,32 @@ class ProgramRepository @Inject constructor(
      * it did not, and the attempt is dropped with the marker untouched; a changed one means the
      * rows landed and the marker is brought into agreement with them now.
      */
-    suspend fun reconcilePendingGeneration() {
-        val intent = settings.programGenerationIntent.first() ?: return
+    suspend fun reconcilePendingGeneration(): Unit = mutationMutex.withLock {
+        val intent = settings.programGenerationIntent.first() ?: return@withLock
         when (val pending = resolvePendingGeneration(intent, currentProgramSignature())) {
             is PendingGeneration.Apply -> settings.setDeloadWeekStartMs(pending.deloadStartMs)
-            PendingGeneration.Discard, PendingGeneration.None -> Unit
+            // Superseded: a write that is not this attempt's has landed since, so its marker
+            // describes a program that no longer exists. Dropped without touching the deload state.
+            PendingGeneration.Superseded,
+            PendingGeneration.Discard,
+            PendingGeneration.None -> Unit
         }
         settings.clearProgramGenerationIntent()
     }
+
+    /** [programSignature] of a program about to be written, from the rows themselves. */
+    private fun signatureOf(days: List<ProgramDay>, slots: List<ProgramSlot>): String =
+        programSignature(
+            days.map { day ->
+                ProgramSignatureDay(
+                    id = day.id,
+                    archetype = day.archetype,
+                    slots = slots.filter { it.dayId == day.id }
+                        .sortedBy { it.position }
+                        .map { ProgramSignatureSlot(it.exerciseLibId, it.sets, it.reps) }
+                )
+            }
+        )
 
     /** [programSignature] of the program currently on disk. */
     private suspend fun currentProgramSignature(): String = programSignature(
