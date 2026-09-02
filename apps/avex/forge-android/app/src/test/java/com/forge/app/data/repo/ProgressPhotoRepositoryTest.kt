@@ -48,6 +48,7 @@ class ProgressPhotoRepositoryTest {
         override suspend fun byDateKey(dateKey: String): BodyweightEntry? = null
         override suspend fun all(): List<BodyweightEntry> = emptyList()
         override suspend fun since(sinceMs: Long): List<BodyweightEntry> = emptyList()
+        override suspend fun byId(id: Long): BodyweightEntry? = null
         override suspend fun delete(id: Long) = Unit
         override suspend fun deleteAll() = Unit
     }
