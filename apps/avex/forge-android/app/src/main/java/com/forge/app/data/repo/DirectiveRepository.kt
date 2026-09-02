@@ -91,11 +91,15 @@ class DirectiveRepository @Inject constructor(
         )
         val weekdayMode = mode == WeeklySchedule.MODE_WEEKDAY
         // A blank weekday slot is a deliberate rest day. The resolver still names the next scheduled
-        // workout so the rest can say what's coming, but only a day resolved for TODAY may become
-        // "train". The offset used to be dropped here, so Wednesday's rest opened Thursday's session
-        // as if it were today's. Sequence mode has no calendar; its answer is always today's.
-        val restDayScheduled = weekdayMode && resolved != null && resolved.daysAhead > 0
-        val nextUp = resolved?.dayKey?.takeUnless { restDayScheduled }
+        // workout so the rest can say what's coming, but only a day the resolver places TODAY may
+        // become "train".
+        //
+        // Read the placement, not the offset. Offset zero is also what the sequence FALLBACK carries
+        // when a weekday schedule resolves nothing at all — every slot rest, or every slot naming a
+        // day a regenerate has since dropped — and taking that as today's scheduled session put the
+        // user in a workout their own schedule does not contain, on a day it marks as rest.
+        val nextUp = WeeklySchedule.trainTodayKey(resolved)
+        val upcoming = WeeklySchedule.upcomingKey(resolved)
 
         // A consistency goal is the athlete's own weekly budget; without one the coach doesn't
         // invent a number to hold them to.
@@ -116,8 +120,8 @@ class DirectiveRepository @Inject constructor(
             sessionsThisWeek = TodayDirective.sessionsSince(snapshot, weekStartMs),
             weeklyTarget = weeklyTarget,
             freestyle = freestyle,
-            upcomingDayKey = resolved?.dayKey?.takeIf { restDayScheduled },
-            upcomingInDays = resolved?.daysAhead ?: 0
+            upcomingDayKey = upcoming,
+            upcomingInDays = if (upcoming != null) resolved?.daysAhead ?: 0 else 0
         )
 
         val brief = directive.dayKey?.let { key ->
