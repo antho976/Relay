@@ -540,18 +540,65 @@ class BackupRepository @Inject constructor(
         tmp.renameTo(AUTO_BACKUP_NAME)
     }
 
-    /** Take a persistable read+write grant on the picked backup folder and remember it (GYMAP-67). */
+    /**
+     * Take a persistable read+write grant on the picked backup folder and remember it (GYMAP-67).
+     *
+     * A folder being REPLACED has its own grant released afterwards (M-18): a persisted grant lives
+     * until it is revoked or released, so choosing folder B while A was connected used to leave
+     * Avex holding A across reboots — read AND write access to a tree the user could no longer see
+     * anywhere in the app. Replaced destinations accumulated one grant each.
+     *
+     * The new grant is taken FIRST and the old one released only after the preference has moved, so
+     * a failure anywhere in between leaves the app with access to the folder it is pointing at
+     * rather than to neither.
+     */
     suspend fun rememberBackupFolder(treeUri: Uri) = withContext(Dispatchers.IO) {
+        val previous = settingsRepo.backupFolderUri.first()
         runCatching {
             context.contentResolver.takePersistableUriPermission(
                 treeUri, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
             )
         }
         settingsRepo.setBackupFolderUri(treeUri.toString())
+        if (previous != null && previous != treeUri.toString()) releasePersistedTree(previous)
+        Unit
     }
 
-    /** Stop mirroring backups to a folder (its persisted grant is dropped by the OS in time). */
-    suspend fun forgetBackupFolder() = settingsRepo.setBackupFolderUri(null)
+    /**
+     * Stop mirroring backups to a folder, and give up the access that went with it (M-18).
+     *
+     * Clearing the preference alone left the persisted grant in place: "Remove folder" reported
+     * that Avex was no longer connected to the tree while it kept read and write access to it
+     * indefinitely, surviving reboots. The preference is cleared first — that is what the user
+     * asked for and it must not depend on the release succeeding.
+     */
+    suspend fun forgetBackupFolder() = withContext(Dispatchers.IO) {
+        val previous = settingsRepo.backupFolderUri.first()
+        settingsRepo.setBackupFolderUri(null)
+        previous?.let { releasePersistedTree(it) }
+    }
+
+    /**
+     * Release the persisted grant on [uriString], with exactly the flags this app is actually
+     * holding on it — releasing flags that were never taken throws, and a tree taken read-only by
+     * an older build would otherwise fail the whole release. Unparseable, already-released and
+     * never-held uris are all no-ops.
+     */
+    private suspend fun releasePersistedTree(uriString: String) {
+        // The import folder is a separate setting that can name the SAME tree (Downloads, most
+        // obviously) under its own read grant. Releasing here would take that folder's scan with it,
+        // so a tree the importer is still pointing at is left alone; it has its own owner.
+        if (settingsRepo.importFolderUri.first() == uriString) return
+        runCatching {
+            val uri = Uri.parse(uriString)
+            val held = context.contentResolver.persistedUriPermissions
+                .firstOrNull { it.uri == uri } ?: return
+            var flags = 0
+            if (held.isReadPermission) flags = flags or Intent.FLAG_GRANT_READ_URI_PERMISSION
+            if (held.isWritePermission) flags = flags or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            if (flags != 0) context.contentResolver.releasePersistableUriPermission(uri, flags)
+        }
+    }
 
     /** When the auto-backup slot was last written, or null if none exists yet (#86 restore affordance). */
     fun autoBackupSavedAtMs(): Long? =
