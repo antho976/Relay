@@ -24,16 +24,10 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.forge.app.domain.goal.HOME_PIN_SLOTS
+import com.forge.app.domain.goal.customPinKey
+import com.forge.app.domain.goal.liftPinKey
 import javax.inject.Inject
-
-/** How many goals Home shows. The pin list is capped here so a fourth pin drops the oldest. */
-const val HOME_PIN_SLOTS = 3
-
-/** Pin key for a lift target. Namespaced so it cannot collide with a custom goal's row id. */
-fun liftPinKey(exerciseId: String): String = "lift:$exerciseId"
-
-/** Pin key for a custom goal. Keyed on the row ID, never the label — a rename must not drop the pin. */
-fun customPinKey(id: Long): String = "custom:$id"
 
 /**
  * The aggregated Goals screen. Two kinds of goal live here:
@@ -148,12 +142,9 @@ class GoalsViewModel @Inject constructor(
     }
 
     fun clearLiftGoal(exerciseId: String) = viewModelScope.launch {
-        withContext(NonCancellable) {
-            goalRepo.clearGoal(exerciseId)
-            // The pin goes with the goal (L-06): a key with no goal behind it is invisible on Home
-            // but still counts against the three-slot cap, so the next pin evicts a live one.
-            settingsRepo.removeGoalPin(liftPinKey(exerciseId))
-        }
+        // The pin goes with the goal (L-06), and that now happens inside [GoalRepository.clearGoal]
+        // — there are two ways to clear a lift target and only this one used to do it.
+        withContext(NonCancellable) { goalRepo.clearGoal(exerciseId) }
     }
 
     // ─── Home pins (2026-08-16) ────────────────────────────────────────────────
@@ -162,9 +153,12 @@ class GoalsViewModel @Inject constructor(
      * The goals pinned to Home, in pin order. Home renders the first three.
      *
      * The keys are namespaced (`lift:<exerciseId>` / `custom:<id>`) because the two goal kinds live
-     * in unrelated tables and their ids would otherwise collide. A key whose goal has since been
-     * deleted stays in the list harmlessly — Home resolves keys against live goals and skips the
-     * ones that no longer match, so an orphan pin is invisible rather than an error.
+     * in unrelated tables and their ids would otherwise collide.
+     *
+     * An orphan key — one left by a build that deleted a goal without its pin — is invisible on
+     * Home, which resolves keys against live goals and skips what no longer matches. It was NOT
+     * invisible to the pin cap, which counted it as one of the three; that is reconciled at toggle
+     * time now, so an existing install's orphan cannot evict a live pin (L-06).
      */
     val pinnedGoals: StateFlow<List<String>> = settingsRepo.pinnedGoals
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -173,7 +167,16 @@ class GoalsViewModel @Inject constructor(
     fun toggleCustomPin(id: Long) = togglePin(customPinKey(id))
 
     private fun togglePin(key: String) = viewModelScope.launch {
-        withContext(NonCancellable) { settingsRepo.toggleGoalPin(key, max = HOME_PIN_SLOTS) }
+        // The live keys go with the toggle so the cap is applied to pins that still resolve. Null
+        // before the first load: an empty snapshot would read as "no goal exists" and clear the lot.
+        val snapshot = state.value
+        val live = if (snapshot.loading) null else buildSet {
+            snapshot.liftGoals.forEach { add(liftPinKey(it.exerciseId)) }
+            snapshot.customGoals.forEach { add(customPinKey(it.id)) }
+        }
+        withContext(NonCancellable) {
+            settingsRepo.toggleGoalPin(key, max = HOME_PIN_SLOTS, liveKeys = live)
+        }
     }
 
     // ─── Custom goals (extended_goal) ──────────────────────────────────────────

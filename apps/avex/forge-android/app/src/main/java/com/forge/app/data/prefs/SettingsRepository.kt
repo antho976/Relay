@@ -305,10 +305,25 @@ class SettingsRepository @Inject constructor(
                 .orEmpty()
         }
 
-    /** Adds or removes [key], preserving pin order. Capped so Home's three slots stay meaningful. */
-    suspend fun toggleGoalPin(key: String, max: Int = 3) =
+    /**
+     * Adds or removes [key], preserving pin order. Capped so Home's three slots stay meaningful.
+     *
+     * @param liveKeys the pin keys of goals that currently EXIST, or null to skip reconciliation.
+     *
+     * Reconciliation happens BEFORE the cap, and that order is the fix (L-06). An orphan — a key
+     * whose goal was deleted by a path that did not clean the pin up, which every install from
+     * before that fix can still be carrying — is invisible on Home, because Home resolves keys
+     * against live goals. It was not invisible to `takeLast(max)`: it counted as one of the three,
+     * so pinning a fourth goal evicted a LIVE pin to make room for a dead one, and Home showed two
+     * goals in three slots with nothing saying which had gone. Filtering first means the cap only
+     * ever measures pins the user can actually see.
+     */
+    suspend fun toggleGoalPin(key: String, max: Int = 3, liveKeys: Set<String>? = null) =
         context.forgePreferences.edit { prefs ->
-            val current = readGoalPins(prefs)
+            val stored = readGoalPins(prefs)
+            // [key] itself is always kept: it is the goal being pinned or unpinned right now, so it
+            // is live by definition even if the caller's snapshot has not caught up.
+            val current = if (liveKeys == null) stored else stored.filter { it in liveKeys || it == key }
             val next = if (key in current) current - key else (current + key).takeLast(max)
             prefs[PreferenceKeys.PINNED_GOALS] = next.joinToString(",")
         }
@@ -331,14 +346,23 @@ class SettingsRepository @Inject constructor(
         return index
     }
 
-    /** Put [key] back at [index] (clamped), for the Undo that restores the goal it belonged to. */
+    /**
+     * Put [key] back at [index] (clamped), for the Undo that restores the goal it belonged to.
+     *
+     * `take`, not `takeLast`, and that is the whole of it (L-06). At full capacity — delete pinned A
+     * from [A,B,C], pin D while the Undo is still on screen, then Undo — inserting A at index 0 and
+     * keeping the LAST three dropped A immediately: the Undo appeared to work, restored the goal,
+     * and silently threw away the one thing it was asked to put back. Keeping the FIRST three
+     * preserves the restored pin and evicts the newest one instead, which is the pin the user added
+     * knowing a slot had just freed up.
+     */
     suspend fun restoreGoalPin(key: String, index: Int, max: Int = 3) =
         context.forgePreferences.edit { prefs ->
             val current = readGoalPins(prefs)
             if (key !in current) {
                 val at = index.coerceIn(0, current.size)
                 prefs[PreferenceKeys.PINNED_GOALS] =
-                    current.toMutableList().apply { add(at, key) }.takeLast(max).joinToString(",")
+                    current.toMutableList().apply { add(at, key) }.take(max).joinToString(",")
             }
         }
 

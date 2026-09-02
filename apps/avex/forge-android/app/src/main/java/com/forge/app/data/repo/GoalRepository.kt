@@ -4,6 +4,7 @@ import com.forge.app.core.time.Clock
 import com.forge.app.data.db.dao.ExerciseGoalDao
 import com.forge.app.data.db.dao.LoggedSetDao
 import com.forge.app.data.db.entities.ExerciseGoal
+import com.forge.app.domain.goal.liftPinKey
 import com.forge.app.program.Program
 import kotlinx.coroutines.flow.Flow
 import javax.inject.Inject
@@ -13,6 +14,7 @@ import javax.inject.Singleton
 class GoalRepository @Inject constructor(
     private val goalDao: ExerciseGoalDao,
     private val loggedSetDao: LoggedSetDao,
+    private val settingsRepository: com.forge.app.data.prefs.SettingsRepository,
     private val clock: Clock
 ) {
     fun observe(exerciseId: String): Flow<ExerciseGoal?> = goalDao.observe(exerciseId)
@@ -24,7 +26,22 @@ class GoalRepository @Inject constructor(
         goalDao.upsert(ExerciseGoal(exerciseId = exerciseId, targetWeightLb = targetWeightLb, createdAt = clock.nowMs()))
     }
 
-    suspend fun clearGoal(exerciseId: String) = goalDao.delete(exerciseId)
+    /**
+     * Delete the lift target for [exerciseId], and the Home pin that pointed at it (L-06).
+     *
+     * The cleanup lives HERE, not in one ViewModel, because there are two ways to clear a lift
+     * goal — the Goals screen and the workout screen's goal setter — and only the first knew to do
+     * it. The pin left behind by the second is invisible on Home (Home resolves keys against live
+     * goals) but still counts as one of the three slots, so the next pin evicts a live one to make
+     * room and Home quietly shows two goals in three slots.
+     *
+     * @return the position the pin held, or -1 when the goal was not pinned — so a caller offering
+     *   Undo can put it back where the user had it.
+     */
+    suspend fun clearGoal(exerciseId: String): Int {
+        goalDao.delete(exerciseId)
+        return settingsRepository.removeGoalPin(liftPinKey(exerciseId))
+    }
 
     /** One goal joined with the current best (heaviest set) logged for that exercise. */
     data class GoalProgress(

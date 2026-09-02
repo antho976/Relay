@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -95,5 +96,78 @@ class GoalPinTest {
         repo.toggleGoalPin("a", max = 3)
         repo.restoreGoalPin("a", 0, max = 3)
         assertEquals(listOf("a"), pins())
+    }
+
+    // ── The three holes the first pass left ──────────────────────────────────
+
+    /**
+     * Hole 2: an install that already HAS an orphan. The first fix cleaned up on delete, which does
+     * nothing for a pin whose goal was deleted by the build before it. The cap still counted that
+     * dead key, so pinning over it evicted a live one — the very failure the fix was for, reached
+     * from an upgrade instead of from a deletion.
+     */
+    @Test
+    fun anOrphanFromAnEarlierVersionCannotEvictALivePin() = runTest {
+        listOf("a", "b", "ghost").forEach { repo.toggleGoalPin(it, max = 3) }
+
+        // "ghost" resolves to no goal — exactly what an install upgraded across the fix carries.
+        repo.toggleGoalPin("d", max = 3, liveKeys = setOf("a", "b", "d"))
+
+        assertEquals(
+            "the dead key makes way, not a live one",
+            listOf("a", "b", "d"), pins()
+        )
+    }
+
+    @Test
+    fun reconciliationNeverDropsThePinBeingToggledOrRunsWithoutASnapshot() = runTest {
+        listOf("a", "b").forEach { repo.toggleGoalPin(it, max = 3) }
+        // The key being pinned right now is live by definition, even if the caller's snapshot of
+        // the goal list has not caught up with the goal it was just created for.
+        repo.toggleGoalPin("c", max = 3, liveKeys = setOf("a", "b"))
+        assertEquals(listOf("a", "b", "c"), pins())
+
+        // No snapshot (the goals have not loaded): reconcile nothing rather than read an empty
+        // list as "no goal exists" and clear every pin the user has.
+        repo.toggleGoalPin("d", max = 3, liveKeys = null)
+        assertEquals(listOf("b", "c", "d"), pins())
+    }
+
+    /**
+     * Hole 3: Undo at full capacity. Delete pinned A from [a,b,c], pin D while the Undo is still on
+     * screen, then Undo. Inserting A at index 0 and keeping the LAST three dropped A on the spot —
+     * the Undo restored the goal and silently threw away the pin it was asked to put back.
+     */
+    @Test
+    fun anUndoAtFullCapacityKeepsTheRestoredPin() = runTest {
+        listOf("a", "b", "c").forEach { repo.toggleGoalPin(it, max = 3) }
+        val index = repo.removeGoalPin("a")
+        assertEquals(0, index)
+        repo.toggleGoalPin("d", max = 3)
+        assertEquals(listOf("b", "c", "d"), pins())
+
+        repo.restoreGoalPin("a", index, max = 3)
+
+        assertEquals(
+            "the restored pin survives; the newest one makes way for it",
+            listOf("a", "b", "c"), pins()
+        )
+    }
+
+    @Test
+    fun anUndoAtFullCapacityWorksFromEveryPosition() = runTest {
+        for (at in 0..2) {
+            val keys = listOf("a", "b", "c")
+            keys.forEach { repo.toggleGoalPin(it, max = 3) }
+            val removed = keys[at]
+            val index = repo.removeGoalPin(removed)
+            repo.toggleGoalPin("d", max = 3)
+
+            repo.restoreGoalPin(removed, index, max = 3)
+
+            assertTrue("restored from index $at", removed in pins())
+            assertEquals("still exactly three", 3, pins().size)
+            pins().forEach { repo.toggleGoalPin(it, max = 3) }   // reset for the next position
+        }
     }
 }
