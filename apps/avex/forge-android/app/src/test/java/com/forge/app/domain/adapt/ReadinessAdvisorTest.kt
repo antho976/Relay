@@ -359,6 +359,28 @@ class ReadinessAdvisorTest {
     }
 
     @Test
+    fun anExpiredLayoffNoLongerSilencesTheSpacingRule() {
+        // The ramp is over (returning = false, away = false) but LifeEvents still reports the gap
+        // for the decision watcher's sake. Readiness must read the ordinary spacing signal again.
+        val expired = LifeEvents.State.NONE.copy(
+            layoff = LifeEvents.Layoff(days = 28, away = false, returning = false, returnedAtMs = now - 10 * day, gapStartMs = now - 38 * day)
+        )
+        val r = ReadinessAdvisor.evaluate(sessions(2), emptyList(), now, lifeEvents = expired)
+        assertTrue(r!!.reason, r.reason.contains("fresh after 2 rest days"))
+        assertTrue(!r.reason.contains("first week back"))
+        assertEquals(ReadinessAdvisor.evaluate(sessions(2), emptyList(), now)!!.percent, r.percent)
+    }
+
+    @Test
+    fun beingAwayStillKeepsTheSpacingRuleQuiet() {
+        val away = LifeEvents.State.NONE.copy(
+            layoff = LifeEvents.Layoff(days = 16, away = true, returning = false, returnedAtMs = null, gapStartMs = now - 16 * day)
+        )
+        val r = ReadinessAdvisor.evaluate(sessions(16), emptyList(), now, lifeEvents = away)
+        assertTrue(r == null || !r.reason.contains("ease in"))
+    }
+
+    @Test
     fun assessCarriesSorenessGatesAndLifeState() {
         val life = LifeEvents.State.NONE.copy(soreMuscles = setOf(com.forge.app.program.MuscleGroup.QUADS))
         val read = ReadinessAdvisor.assess(sessions(1), emptyList(), now, lifeEvents = life)

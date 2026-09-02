@@ -92,8 +92,13 @@ object ReadinessAdvisor {
             if (!onVacation(gapDay)) daysSince++
             gapDay = gapDay.plusDays(1)
         }
-        // Suppressed while a layoff already spoke — one home for "you've been away" (§4.3).
-        if (lifeEvents.layoff == null) {
+        // Suppressed while a layoff already speaks — one home for "you've been away" (§4.3). Only
+        // while it SPEAKS: LifeEvents keeps a layoff object around for two weeks past its return
+        // ramp so decision windows that overlapped the gap can still be excused, and testing the
+        // object rather than its state silenced this rule for that whole fortnight. One old break
+        // then cost readiness its ordinary spacing input on every later fresh or ease-in day.
+        val layoffSpeaks = lifeEvents.layoff?.let { it.away || it.returning } == true
+        if (!layoffSpeaks) {
             when {
                 // DESIGN §11: join with a comma, never an em dash.
                 daysSince >= 5 -> { percent -= 3; parts += "first session back after $daysSince days, ease in" }
