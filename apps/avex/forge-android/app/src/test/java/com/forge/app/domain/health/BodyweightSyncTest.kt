@@ -88,4 +88,72 @@ class BodyweightSyncTest {
         val second = BodyweightSync.historyToImport(readings, existingDateKeys = setOf("2026-01-02"))
         assertTrue(second.isEmpty())
     }
+
+    // ── Window vs history (H-05) ───────────────────────────────────────────────
+
+    @Test
+    fun historyLatchesCompleteOnlyWhenHistoryAccessWasLive() {
+        assertEquals(
+            BodyweightSync.HistoryOutcome.COMPLETE,
+            BodyweightSync.historyOutcome(readSucceeded = true, historyGranted = true)
+        )
+        // A successful read WITHOUT history access reached only the 30-day window: partial, never
+        // complete. This is the latch that used to swallow months of a smart scale's history.
+        assertEquals(
+            BodyweightSync.HistoryOutcome.PARTIAL,
+            BodyweightSync.historyOutcome(readSucceeded = true, historyGranted = false)
+        )
+    }
+
+    @Test
+    fun historyFailedReadLatchesNothingWhateverTheGrant() {
+        assertEquals(
+            BodyweightSync.HistoryOutcome.RETRY,
+            BodyweightSync.historyOutcome(readSucceeded = false, historyGranted = true)
+        )
+        assertEquals(
+            BodyweightSync.HistoryOutcome.RETRY,
+            BodyweightSync.historyOutcome(readSucceeded = false, historyGranted = false)
+        )
+    }
+
+    @Test
+    fun backfillRunsOnFirstGrantWithOrWithoutHistory() {
+        assertTrue(BodyweightSync.shouldBackfillHistory(weightReadGranted = true, historyGranted = true, complete = false, partial = false))
+        // History declined: the ordinary 30-day window still imports.
+        assertTrue(BodyweightSync.shouldBackfillHistory(weightReadGranted = true, historyGranted = false, complete = false, partial = false))
+    }
+
+    @Test
+    fun backfillNeverRunsWithoutWeightReadOrOnceComplete() {
+        assertFalse(BodyweightSync.shouldBackfillHistory(weightReadGranted = false, historyGranted = true, complete = false, partial = false))
+        assertFalse(BodyweightSync.shouldBackfillHistory(weightReadGranted = true, historyGranted = true, complete = true, partial = false))
+        assertFalse(BodyweightSync.shouldBackfillHistory(weightReadGranted = true, historyGranted = false, complete = true, partial = false))
+    }
+
+    @Test
+    fun partialWindowRunsOnceUntilHistoryAccessAppears() {
+        // Declined history + window already imported: don't re-read the provider every refresh.
+        assertFalse(BodyweightSync.shouldBackfillHistory(weightReadGranted = true, historyGranted = false, complete = false, partial = true))
+        // History granted later (in Health Connect's own settings): fetch the rest.
+        assertTrue(BodyweightSync.shouldBackfillHistory(weightReadGranted = true, historyGranted = true, complete = false, partial = true))
+    }
+
+    @Test
+    fun pageSaysPartialOnlyAfterAWindowPassWithoutHistory() {
+        assertTrue(BodyweightSync.historyWindowIsPartial(weightReadGranted = true, historyGranted = false, complete = false, partial = true))
+        // Nothing has run yet (or the first read failed): nothing to disclose, the retry is the refresh.
+        assertFalse(BodyweightSync.historyWindowIsPartial(weightReadGranted = true, historyGranted = false, complete = false, partial = false))
+        // Complete with history live: the whole history is in.
+        assertFalse(BodyweightSync.historyWindowIsPartial(weightReadGranted = true, historyGranted = true, complete = true, partial = false))
+        // Weight disconnected: the row has nothing to say about history.
+        assertFalse(BodyweightSync.historyWindowIsPartial(weightReadGranted = false, historyGranted = false, complete = true, partial = false))
+    }
+
+    @Test
+    fun pageDoesNotTrustAPreHistoryLatchOverTheLiveGrant() {
+        // An install that latched "complete" before history access existed could only have imported
+        // the window: offer the older import rather than believe the latch.
+        assertTrue(BodyweightSync.historyWindowIsPartial(weightReadGranted = true, historyGranted = false, complete = true, partial = false))
+    }
 }

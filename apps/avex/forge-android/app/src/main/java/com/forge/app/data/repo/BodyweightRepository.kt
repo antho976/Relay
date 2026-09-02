@@ -122,15 +122,20 @@ class BodyweightRepository @Inject constructor(
     }
 
     /**
-     * One-time bulk backfill of the ENTIRE Health Connect weight history into the local log (GYMAP-63,
-     * on first connect). Reduces HC's readings to one-per-day and inserts ONLY days we don't already
-     * have (see [BodyweightSync.historyToImport]) so a typed weigh-in is never overwritten and re-running
+     * Bulk backfill of the Health Connect weight history into the local log (GYMAP-63, on first
+     * connect). Reduces HC's readings to one-per-day and inserts ONLY days we don't already have
+     * (see [BodyweightSync.historyToImport]) so a typed weigh-in is never overwritten and re-running
      * is idempotent.
+     *
+     * How much history this reaches is set by the grant, not the range asked for: without
+     * [HealthConnectManager.canReadHistory] Health Connect returns only the 30 days before Avex's
+     * first grant (H-05). The caller checks that grant and latches "entire history imported" only
+     * when it was live; otherwise it records a partial window and keeps the retry offered.
      *
      * Returns the number of new days imported on a SUCCESSFUL read (0 when HC had nothing new), or
      * **null** when the read couldn't happen (unavailable / not granted / a transient provider error).
-     * The caller latches the "history imported" flag only on a non-null result, so a momentary failure
-     * right after the grant never permanently skips the backfill.
+     * The caller latches either flag only on a non-null result, so a momentary failure right after
+     * the grant never permanently skips the backfill.
      */
     suspend fun importHistoryFromHealthConnect(): Int? {
         if (!health.canReadWeight()) return null

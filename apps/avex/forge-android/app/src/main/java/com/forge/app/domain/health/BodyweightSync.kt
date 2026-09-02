@@ -41,4 +41,55 @@ object BodyweightSync {
             .groupBy { it.dateKey }
             .map { (_, sameDay) -> sameDay.maxByOrNull { it.recordedAtMs }!! }
             .sortedBy { it.dateKey }
+
+    // ── History backfill: window vs history (H-05) ─────────────────────────────
+    //
+    // Health Connect limits an ordinary read to the 30 days before the app's first grant; only the
+    // separate READ_HEALTH_DATA_HISTORY permission reaches further back. The backfill used to latch
+    // "entire history imported" after ANY successful read, so a scale's older months vanished from
+    // the migration path for good. These rules keep the latch honest and the retry available.
+
+    /** What one backfill pass did, from what the read returned and the grant it ran under. */
+    enum class HistoryOutcome {
+        /** The read could not happen (no provider / not granted / a transient error): touch nothing, retry on the next refresh. */
+        RETRY,
+        /** The read succeeded with history access live: the entire history is in, latch the one-time flag. */
+        COMPLETE,
+        /** The read succeeded without history access: only the ordinary 30-day window came over. */
+        PARTIAL
+    }
+
+    fun historyOutcome(readSucceeded: Boolean, historyGranted: Boolean): HistoryOutcome = when {
+        !readSucceeded -> HistoryOutcome.RETRY
+        historyGranted -> HistoryOutcome.COMPLETE
+        else -> HistoryOutcome.PARTIAL
+    }
+
+    /**
+     * Should a refresh run the backfill? Only while weight READ is granted and the history isn't
+     * latched complete. A window-only pass runs once ([partial] latches it) so a declined history
+     * grant doesn't re-read the provider on every refresh; but if history access has appeared since
+     * (granted in Health Connect's own settings), run again to fetch the rest.
+     */
+    fun shouldBackfillHistory(
+        weightReadGranted: Boolean,
+        historyGranted: Boolean,
+        complete: Boolean,
+        partial: Boolean
+    ): Boolean = weightReadGranted && !complete && (historyGranted || !partial)
+
+    /**
+     * Should the page say only the recent window came over and offer the older-weight import?
+     * True whenever weight is connected, history access is NOT live, and a pass has already run.
+     * That covers the partial latch, and also a "complete" latch with no history grant: that can
+     * only be an install that latched before history access existed, or one that revoked it since,
+     * so the live grant outranks the latch. The retry is idempotent either way, so offering it costs
+     * nothing but a tap.
+     */
+    fun historyWindowIsPartial(
+        weightReadGranted: Boolean,
+        historyGranted: Boolean,
+        complete: Boolean,
+        partial: Boolean
+    ): Boolean = weightReadGranted && !historyGranted && (complete || partial)
 }

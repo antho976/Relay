@@ -1,6 +1,6 @@
 # Avex Privacy Policy
 
-_Last updated: August 24, 2026_
+_Last updated: September 1, 2026_
 
 Avex is an offline, single-user fitness tracker. It has no account, servers, analytics,
 advertising, or `INTERNET` permission. Your data stays on your devices unless you export or
@@ -19,6 +19,7 @@ If you grant access, Avex may read:
 - Sleep
 - Resting heart rate
 - Weight
+- Body fat
 - Steps
 - Exercise sessions
 - Heart rate
@@ -27,11 +28,14 @@ If you grant access, Avex may read:
 - Heart-rate variability
 - Lean body mass
 
+If you also allow history access, the one-time weight import can read weight older than 30 days.
+
 These readings support recovery, cardio, body, and training-history features.
 
 Avex may write:
 
 - Weight
+- Body fat
 - Active calories
 - Exercise sessions
 - Heart rate

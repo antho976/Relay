@@ -470,10 +470,17 @@ class SettingsRepository @Inject constructor(
     suspend fun setHcWriteSessions(value: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.HC_WRITE_SESSIONS] = value }
 
-    /** Whether the one-time HC weight-history backfill has run (GYMAP-63). Default false. */
+    /** Whether the one-time HC weight-history backfill has run WITH history access (GYMAP-63, H-05).
+     *  Default false. */
     val hcWeightHistoryImported: Flow<Boolean> = pref { it[PreferenceKeys.HC_WEIGHT_HISTORY_IMPORTED] ?: false }
     suspend fun setHcWeightHistoryImported(value: Boolean) =
         context.forgePreferences.edit { it[PreferenceKeys.HC_WEIGHT_HISTORY_IMPORTED] = value }
+
+    /** Whether the backfill ran without history access and so imported only the ordinary 30-day
+     *  window (H-05). Default false. Cleared once a pass with history access latches the flag above. */
+    val hcWeightHistoryPartial: Flow<Boolean> = pref { it[PreferenceKeys.HC_WEIGHT_HISTORY_PARTIAL] ?: false }
+    suspend fun setHcWeightHistoryPartial(value: Boolean) =
+        context.forgePreferences.edit { it[PreferenceKeys.HC_WEIGHT_HISTORY_PARTIAL] = value }
 
     /** Which watch the user wears ([com.forge.app.domain.health.WearableBrand] key; "" = never
      *  asked). Advisory only — tailors Recovery's setup pointers, never gates a read. */

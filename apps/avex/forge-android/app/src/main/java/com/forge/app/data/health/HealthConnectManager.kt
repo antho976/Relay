@@ -81,6 +81,19 @@ class HealthConnectManager @Inject constructor(
     )
 
     /**
+     * Health-data HISTORY permission (H-05) — Health Connect limits an ordinary read to the 30 days
+     * before the app's first grant, so without this the first-connect weight backfill can only ever
+     * see a month of a smart scale's history. Requested alongside [weightPermissions] by the
+     * bodyweight row and again by the "import older weight" retry; kept as its own set so the
+     * caller can tell, per request, whether the history grant is part of what it is asking for.
+     * Declined (or unsupported by the provider) is fine: the ordinary window still imports and the
+     * page says so instead of latching the backfill as complete.
+     */
+    val historyPermissions: Set<String> = setOf(
+        HealthPermission.PERMISSION_READ_HEALTH_DATA_HISTORY
+    )
+
+    /**
      * Body-fat-% permissions (GYMAP-62) — read so a smart-scale reading can flow INTO Avex, write so
      * a Avex figure can flow BACK to Health Connect. Its own set like [weightPermissions], so enabling
      * body-fat sync never silently asks for weight/recovery, and vice-versa. HC stores body fat as its
@@ -210,6 +223,14 @@ class HealthConnectManager @Inject constructor(
     suspend fun canWriteWeight(): Boolean =
         grantedPermissions().contains(HealthPermission.getWritePermission(WeightRecord::class))
 
+    /**
+     * True when Avex may read Health Connect data older than the 30-day first-grant window (H-05).
+     * Decides whether a weight-history read is the ENTIRE history or just the ordinary window, so
+     * the first-connect backfill latches "complete" only when this is live at import time.
+     */
+    suspend fun canReadHistory(): Boolean =
+        grantedPermissions().contains(HealthPermission.PERMISSION_READ_HEALTH_DATA_HISTORY)
+
     /** A bodyweight reading mirrored out of Health Connect as plain Kotlin (lb + when it was taken). */
     data class HcWeight(val weightLb: Double, val timeMs: Long)
 
@@ -234,9 +255,13 @@ class HealthConnectManager @Inject constructor(
     }
 
     /**
-     * The FULL weight history in `[sinceMs, untilMs]`, oldest first, in lb (GYMAP-63 first-connect
+     * The weight history in `[sinceMs, untilMs]`, oldest first, in lb (GYMAP-63 first-connect
      * backfill). Pages through the provider (unlike [latestWeight]'s single row) and caps at
      * [HISTORY_MAX_RECORDS] so a pathological history can't pull unbounded records.
+     *
+     * "History" is only as deep as the grant: without [canReadHistory] Health Connect silently
+     * trims the range to the 30 days before Avex's first grant, however early [sinceMs] is (H-05).
+     * The caller checks that grant itself to decide whether the result is the whole history.
      *
      * Returns **null** when the read couldn't happen (no provider / not granted / a read error) — as
      * opposed to an empty list, which means the read SUCCEEDED and HC simply has no records. The caller
