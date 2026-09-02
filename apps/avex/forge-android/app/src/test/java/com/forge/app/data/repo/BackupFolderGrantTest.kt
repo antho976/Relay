@@ -3,17 +3,22 @@ package com.forge.app.data.repo
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import androidx.datastore.preferences.core.edit
 import androidx.test.core.app.ApplicationProvider
 import com.forge.app.core.time.Clock
 import com.forge.app.data.db.ForgeDatabase
 import com.forge.app.data.db.inMemoryForgeDb
+import com.forge.app.data.prefs.PreferenceKeys
 import com.forge.app.data.prefs.SettingsRepository
+import com.forge.app.data.prefs.forgePreferences
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -48,6 +53,31 @@ class BackupFolderGrantTest {
         db = db,
         clock = clock
     )
+
+    /**
+     * Both halves of the shared state this class mutates, reset before every test.
+     *
+     * `forgePreferences` is a file-level property delegate, so one DataStore file is shared by
+     * every test in the JVM, and `persistedUriPermissions` is real device state that outlives an
+     * Application. Teardown closed the database and nothing else, so a folder connected by one test
+     * was still connected — in the preference AND as a held grant — for the next, and
+     * `aTreeTheImporterIsStillPointingAtIsLeftAlone` failed on a tree it never granted.
+     */
+    @Before
+    fun setUp(): Unit = runBlocking {
+        context.contentResolver.persistedUriPermissions.forEach {
+            runCatching {
+                context.contentResolver.releasePersistableUriPermission(
+                    it.uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                )
+            }
+        }
+        context.forgePreferences.edit {
+            it.remove(PreferenceKeys.BACKUP_FOLDER_URI)
+            it.remove(PreferenceKeys.IMPORT_FOLDER_URI)
+        }
+    }
 
     @After
     fun tearDown() = db.close()

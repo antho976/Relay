@@ -36,7 +36,7 @@ class GoalPinTest {
      * Clearing the one key this class touches is enough and leaves the rest of the store alone.
      */
     @Before
-    fun setUp() = runBlocking {
+    fun setUp(): Unit = runBlocking {
         val context: Context = ApplicationProvider.getApplicationContext()
         context.forgePreferences.edit { it.remove(PreferenceKeys.PINNED_GOALS) }
         repo = SettingsRepository(context, Clock { 0L })
