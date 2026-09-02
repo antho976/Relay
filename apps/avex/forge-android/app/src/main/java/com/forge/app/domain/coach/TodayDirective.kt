@@ -66,6 +66,9 @@ object TodayDirective {
      * @param weekdayMode the schedule can name weekdays; false = sequence mode's degraded read.
      * @param sessionsThisWeek finished sessions since the week started, for the weekly budget.
      * @param weeklyTarget the athlete's own sessions-per-week goal, when they set one.
+     * @param upcomingDayKey in weekday mode, the next scheduled day when today's slot is a rest —
+     *   named in the rest copy, never opened as today's session.
+     * @param upcomingInDays how many calendar days away [upcomingDayKey] is (0 = none).
      */
     fun compute(
         s: AdaptationSnapshot,
@@ -78,6 +81,8 @@ object TodayDirective {
         sessionsThisWeek: Int,
         weeklyTarget: Int? = null,
         freestyle: Boolean = false,
+        upcomingDayKey: String? = null,
+        upcomingInDays: Int = 0,
         t: AdaptThresholds = AdaptThresholds()
     ): Directive {
         // ── Life first. Illness and a live layoff outrank every schedule. ─────────
@@ -179,14 +184,18 @@ object TodayDirective {
 
         // ── Otherwise: train what's next ─────────────────────────────────────────
         if (nextUpDayKey == null) {
+            // A deliberate weekday rest slot names what's coming, so the rest reads as planned
+            // rather than as an empty schedule — and never as "train Thursday's session today".
+            val upcoming = upcomingDayKey?.takeIf { !freestyle && upcomingInDays > 0 }
             return Directive(
                 kind = if (freestyle) Kind.TRAIN else Kind.REST,
                 headline = if (freestyle) "Train freestyle" else "Rest today",
-                reason = if (freestyle) {
-                    "No fixed program, so pick your lifts. Spacing says you're ready for one."
-                } else {
-                    "Nothing scheduled today."
+                reason = when {
+                    freestyle -> "No fixed program, so pick your lifts. Spacing says you're ready for one."
+                    upcoming != null -> "Today is a rest day in your schedule."
+                    else -> "Nothing scheduled today."
                 },
+                secondary = upcoming?.let { "${dayName(it)} is next, ${inDays(s, upcomingInDays)}." },
                 soreMuscles = life.soreMuscles,
                 freestyle = freestyle
             )
@@ -220,6 +229,15 @@ object TodayDirective {
             soreMuscles = life.soreMuscles,
             freestyle = freestyle
         )
+    }
+
+    /** "tomorrow", or "on Thursday": the calendar day [daysAhead] days from the snapshot's today. */
+    private fun inDays(s: AdaptationSnapshot, daysAhead: Int): String {
+        if (daysAhead == 1) return "tomorrow"
+        val weekday = java.time.Instant.ofEpochMilli(s.nowMs).atZone(s.zoneId).toLocalDate()
+            .plusDays(daysAhead.toLong()).dayOfWeek
+            .getDisplayName(java.time.format.TextStyle.FULL, java.util.Locale.getDefault())
+        return "on $weekday"
     }
 
     const val LESSON_READINESS = "coach.readiness_built_from"

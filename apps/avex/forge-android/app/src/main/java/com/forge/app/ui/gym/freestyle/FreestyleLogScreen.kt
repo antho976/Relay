@@ -159,7 +159,7 @@ private fun draftToItems(
     draft: FreestyleDraft,
     weightUnit: com.forge.app.domain.units.WeightUnit
 ): List<FsExercise> {
-    return draft.exercises.mapNotNull { de ->
+    return draft.exercises.distinctBy { it.libId }.mapNotNull { de ->
         val sets = de.sets
             .map {
                 // Re-expressed in the CURRENT unit, using the one the draft was typed in — the
@@ -199,7 +199,7 @@ private fun draftToItems(
  *  from that session and converted to the display unit, name/muscle/bodyweight re-derived from the
  *  library, and any move no longer in the library dropped — mirrors [draftToItems]. */
 private fun List<FreestyleTemplateExercise>.toItems(weightUnit: com.forge.app.domain.units.WeightUnit): List<FsExercise> =
-    mapNotNull { te ->
+    distinctBy { it.libId }.mapNotNull { te ->
         // A custom move has no library row to re-derive from — it carries its own name, exactly as
         // a resumed draft does. Resolving every id through ExerciseLibrary and letting mapNotNull
         // drop the misses meant a template built from custom exercises came back missing them, and
@@ -568,7 +568,10 @@ fun FreestyleLogScreen(
                 exclude = items.map { it.libId }.toSet(),
                 onClose = { showBrowser = false },
                 onConfirm = { picked ->
-                    val added = picked.mapNotNull { id ->
+                    // Uniqueness is enforced here as well as in the browser: `libId` keys the lazy
+                    // list, so a duplicate is a crash on measure, not a cosmetic repeat.
+                    val onLog = items.map { it.libId }.toSet()
+                    val added = picked.filter { it !in onLog }.distinct().mapNotNull { id ->
                         val def = ExerciseLibrary.byId(id) ?: return@mapNotNull null
                         FsExercise(libId = def.id, name = def.name, muscle = def.muscle, bodyweight = def.unit == ExerciseUnit.BODYWEIGHT, timed = def.timed)
                     }

@@ -139,7 +139,9 @@ internal data class FreestyleDraft(
             }
             FreestyleDraft(
                 openedAtMs = o.getLong("openedAtMs"),
-                exercises = exercises,
+                // A blob that somehow carries the same move twice must not restore two rows: the
+                // logger keys its lazy list on libId, and a duplicate crashes it on every resume.
+                exercises = exercises.distinctBy { it.libId },
                 unitLabel = o.optString("u").ifBlank { null }
             )
         }.getOrNull()

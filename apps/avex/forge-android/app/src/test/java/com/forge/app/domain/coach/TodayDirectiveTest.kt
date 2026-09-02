@@ -66,12 +66,15 @@ class TodayDirectiveTest {
         weekdayMode: Boolean = true,
         sessionsThisWeek: Int = 1,
         weeklyTarget: Int? = null,
-        freestyle: Boolean = false
+        freestyle: Boolean = false,
+        upcomingDayKey: String? = null,
+        upcomingInDays: Int = 0
     ) = TodayDirective.compute(
         s = s, readiness = readiness, life = life, nextUpDayKey = nextUp,
         dayName = { if (it == "push") "Push day" else it },
         trainedToday = TodayDirective.trainedToday(s), weekdayMode = weekdayMode,
-        sessionsThisWeek = sessionsThisWeek, weeklyTarget = weeklyTarget, freestyle = freestyle
+        sessionsThisWeek = sessionsThisWeek, weeklyTarget = weeklyTarget, freestyle = freestyle,
+        upcomingDayKey = upcomingDayKey, upcomingInDays = upcomingInDays
     )
 
     /** A snapshot whose most recent session was logged today. */
@@ -256,5 +259,43 @@ class TodayDirectiveTest {
     @Test
     fun deterministic() {
         assertEquals(compute(), compute())
+    }
+
+    // ── A scheduled rest day is a rest day, even when a workout is next up ────
+
+    @Test
+    fun weekdayRestSlot_restsAndNamesTomorrowsSession() {
+        val d = compute(nextUp = null, upcomingDayKey = "push", upcomingInDays = 1)
+        assertEquals(TodayDirective.Kind.REST, d.kind)
+        assertEquals("Rest today", d.headline)
+        assertEquals("Today is a rest day in your schedule.", d.reason)
+        assertEquals("Push day is next, tomorrow.", d.secondary)
+        assertNull(d.dayKey)
+    }
+
+    @Test
+    fun weekdayRestSlot_namesTheWeekdayWhenFurtherOut() {
+        val d = compute(nextUp = null, upcomingDayKey = "push", upcomingInDays = 2)
+        assertEquals(TodayDirective.Kind.REST, d.kind)
+        val expected = java.time.Instant.ofEpochMilli(now).atZone(java.time.ZoneOffset.UTC).toLocalDate()
+            .plusDays(2).dayOfWeek
+            .getDisplayName(java.time.format.TextStyle.FULL, java.util.Locale.getDefault())
+        assertEquals("Push day is next, on $expected.", d.secondary)
+    }
+
+    @Test
+    fun nothingScheduledAnywhere_keepsThePlainRest() {
+        val d = compute(nextUp = null)
+        assertEquals(TodayDirective.Kind.REST, d.kind)
+        assertEquals("Nothing scheduled today.", d.reason)
+        assertNull(d.secondary)
+    }
+
+    @Test
+    fun anUpcomingDayNeverBecomesTodaysSession() {
+        // The directive only ever opens `nextUpDayKey`; an upcoming key is copy, not a target.
+        val d = compute(nextUp = null, upcomingDayKey = "push", upcomingInDays = 1)
+        assertNull(d.dayKey)
+        assertTrue(d.kind != TodayDirective.Kind.TRAIN)
     }
 }

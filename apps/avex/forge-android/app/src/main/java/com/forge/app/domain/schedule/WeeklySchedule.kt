@@ -46,13 +46,36 @@ object WeeklySchedule {
         dayKeys: List<String>,
         lastFinishedDayKey: String?,
         trainedTodayKeys: Set<String>
-    ): String? {
+    ): String? = resolveNextUpWithOffset(
+        mode, todayIndex, schedule, dayKeys, lastFinishedDayKey, trainedTodayKeys
+    )?.dayKey
+
+    /**
+     * The "next up" program day together with how many calendar days away it is.
+     *
+     * [NextUp.daysAhead] is what separates "next up" from "train today": in weekday mode a blank
+     * slot today resolves to the next scheduled workout with a positive offset, and the Today
+     * directive has to read that as a rest day rather than open Thursday's session on Wednesday.
+     * Sequence mode has no calendar, and the sequence fallback for an all-rest weekday schedule is
+     * a suggestion rather than a date, so both report 0.
+     */
+    fun resolveNextUpWithOffset(
+        mode: String,
+        todayIndex: Int,
+        schedule: List<String>,
+        dayKeys: List<String>,
+        lastFinishedDayKey: String?,
+        trainedTodayKeys: Set<String>
+    ): NextUp? {
         if (dayKeys.isEmpty()) return null
         if (mode == MODE_WEEKDAY) {
             nextScheduled(todayIndex, schedule, dayKeys.toSet(), trainedTodayKeys)?.let { return it }
         }
-        return sequenceNextUp(dayKeys, lastFinishedDayKey)
+        return NextUp(sequenceNextUp(dayKeys, lastFinishedDayKey), daysAhead = 0)
     }
+
+    /** A resolved program day and its distance from today in calendar days (0 = today). */
+    data class NextUp(val dayKey: String, val daysAhead: Int)
 
     /** Scan today → +6 days for the first scheduled, in-program, not-already-done-today workout. */
     private fun nextScheduled(
@@ -60,13 +83,13 @@ object WeeklySchedule {
         schedule: List<String>,
         validKeys: Set<String>,
         trainedTodayKeys: Set<String>
-    ): String? {
+    ): NextUp? {
         for (i in 0 until SLOTS) {
             val weekday = (todayIndex + i) % SLOTS
             val key = schedule.getOrElse(weekday) { "" }
             if (key.isBlank() || key !in validKeys) continue
             if (i == 0 && key in trainedTodayKeys) continue
-            return key
+            return NextUp(key, daysAhead = i)
         }
         return null
     }

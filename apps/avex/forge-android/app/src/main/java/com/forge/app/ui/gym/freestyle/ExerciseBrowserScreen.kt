@@ -89,6 +89,11 @@ fun browseLibrary(
     }
 }
 
+/** The Recently-performed rail minus the moves already on the log, so Recent can never offer a
+ *  duplicate of something the grid is already hiding. */
+fun recentForBrowser(recent: List<ExerciseDef>, exclude: Set<String>): List<ExerciseDef> =
+    recent.filter { it.id !in exclude }
+
 /** Prefix marking a user-created move. Distinct from the program editor's `custom_…` ids (a
  *  different table) and from the importer's `ext-…`, so the three never alias each other. */
 private const val CUSTOM_PREFIX = "custom-"
@@ -137,7 +142,10 @@ fun ExerciseBrowserScreen(
         browseLibrary(query, muscle, favoritesOnly, favorites, exclude)
     }
     val unfiltered = query.isBlank() && muscle == null && !favoritesOnly
-    val showRecent = unfiltered && recent.isNotEmpty()
+    // The grid already hides what's on the log; Recent has to as well, or picking a move from
+    // both rails appends a duplicate id and the keyed lazy list throws on measure.
+    val recentShown = remember(recent, exclude) { recentForBrowser(recent, exclude) }
+    val showRecent = unfiltered && recentShown.isNotEmpty()
     val sectionLabel = when {
         query.isNotBlank() -> "Results · ${results.size}"
         favoritesOnly -> "Favorites · ${results.size}"
@@ -221,7 +229,7 @@ fun ExerciseBrowserScreen(
                                 Modifier.horizontalScroll(rememberScrollState()),
                                 horizontalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
-                                recent.forEach { def ->
+                                recentShown.forEach { def ->
                                     ExerciseTile(
                                         def = def,
                                         selected = def.id in picked,

@@ -78,4 +78,49 @@ class WeeklyScheduleTest {
     @Test fun emptyProgram_returnsNull() {
         assertNull(WeeklySchedule.resolveNextUp(WeeklySchedule.MODE_WEEKDAY, 0, schedule, emptyList(), null, emptySet()))
     }
+
+    // ── The offset: "next up" is not "train today" ───────────────────────────
+
+    private fun withOffset(todayIndex: Int, trainedToday: Set<String> = emptySet()) =
+        WeeklySchedule.resolveNextUpWithOffset(
+            WeeklySchedule.MODE_WEEKDAY, todayIndex, schedule, keys,
+            lastFinishedDayKey = null, trainedTodayKeys = trainedToday
+        )
+
+    @Test fun weekday_todaysWorkoutIsZeroDaysAhead() {
+        assertEquals(WeeklySchedule.NextUp("lower-a", 0), withOffset(todayIndex = 0))
+    }
+
+    @Test fun weekday_restDayNamesTheNextWorkoutWithItsDistance() {
+        // Wednesday is blank: Thursday's Upper B is next, but it is tomorrow's session, not today's.
+        assertEquals(WeeklySchedule.NextUp("upper-b", 1), withOffset(todayIndex = 2))
+        // Saturday: Monday's legs are two days out.
+        assertEquals(WeeklySchedule.NextUp("lower-a", 2), withOffset(todayIndex = 5))
+    }
+
+    @Test fun weekday_alreadyTrainedToday_rollsForwardWithADistance() {
+        assertEquals(
+            WeeklySchedule.NextUp("upper-a", 1),
+            withOffset(todayIndex = 0, trainedToday = setOf("lower-a"))
+        )
+    }
+
+    @Test fun sequenceAndFallback_haveNoCalendar_soReportToday() {
+        assertEquals(
+            WeeklySchedule.NextUp("lower-a", 0),
+            WeeklySchedule.resolveNextUpWithOffset(
+                WeeklySchedule.MODE_SEQUENCE, 2, schedule, keys, "upper-a", emptySet()
+            )
+        )
+        assertEquals(
+            WeeklySchedule.NextUp("upper-b", 0),
+            WeeklySchedule.resolveNextUpWithOffset(
+                WeeklySchedule.MODE_WEEKDAY, 0, List(7) { "" }, keys, "lower-a", emptySet()
+            )
+        )
+    }
+
+    @Test fun keyOnlyResolverAgreesWithTheOffsetResolver() {
+        for (i in 0 until 7) assertEquals(withOffset(i)?.dayKey, weekday(todayIndex = i))
+    }
 }
