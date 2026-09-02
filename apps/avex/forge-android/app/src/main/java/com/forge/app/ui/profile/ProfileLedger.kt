@@ -30,6 +30,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.forge.app.ui.common.sparklineSeries
 import com.forge.app.Features
 import com.forge.app.domain.rank.StandingMetric
 import com.forge.app.domain.units.formatVolumeCompact
@@ -120,7 +121,13 @@ internal fun LifetimeVolumeGraph(
 ) {
     if (volumeSeriesLb.size < 2) return
     val weightUnit = LocalForgeSettings.current.weightUnit
-    val series = volumeSeriesLb.map { toDisplayWeight(it, weightUnit) }
+    // Reduced to what a phone-width chart can actually show, and remembered (P-13): this is one
+    // point per finished session with no cap, and the reveal below re-walked every one of them to
+    // rebuild both paths on each of its ~54 frames. The headline figure above still reads the raw
+    // series, so the number is exact however the curve under it is plotted.
+    val series = remember(volumeSeriesLb, weightUnit) {
+        sparklineSeries(volumeSeriesLb).map { toDisplayWeight(it, weightUnit) }
+    }
     Column(modifier) {
         SectionHeader("LIFETIME VOLUME", muted)
         Row(verticalAlignment = Alignment.Bottom) {

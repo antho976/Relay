@@ -17,6 +17,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.forge.app.ui.common.ForgeShimmerHost
 import com.forge.app.ui.common.forgeShimmer
 
 /**
@@ -26,7 +27,7 @@ import com.forge.app.ui.common.forgeShimmer
  * so the populated content swaps in without a jump.
  */
 @Composable
-internal fun ProfileSkeleton(modifier: Modifier = Modifier, topInset: Dp = 0.dp) {
+internal fun ProfileSkeleton(modifier: Modifier = Modifier, topInset: Dp = 0.dp) = ForgeShimmerHost {
     Column(modifier.verticalScroll(rememberScrollState())) {
         // Full-bleed identity cover banner (mirrors the real profile-photo header, incl. the area
         // behind the status bar so the load→loaded swap doesn't jump).

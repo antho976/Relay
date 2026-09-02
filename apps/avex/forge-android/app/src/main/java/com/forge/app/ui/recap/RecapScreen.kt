@@ -36,6 +36,7 @@ import com.forge.app.domain.units.WeightUnit
 import com.forge.app.domain.units.formatVolumeCompact
 import com.forge.app.ui.common.EditorialFigure
 import com.forge.app.ui.common.EditorialHeader
+import com.forge.app.ui.common.ForgeShimmerHost
 import com.forge.app.ui.common.forgeShimmer
 import com.forge.app.ui.theme.LocalForgeSettings
 
@@ -157,7 +158,7 @@ fun RecapScreen(
 /** Loading placeholder mirroring the two recap sections (label · big stats · rows) — uses the shared
  *  [forgeShimmer] so the populated content swaps in without a layout jump (#404). */
 @Composable
-private fun RecapSkeleton(modifier: Modifier = Modifier) {
+private fun RecapSkeleton(modifier: Modifier = Modifier) = ForgeShimmerHost {
     Column(modifier, verticalArrangement = Arrangement.spacedBy(16.dp)) {
         repeat(2) {
             Column(

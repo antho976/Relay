@@ -199,24 +199,29 @@ class CardioViewModel @Inject constructor(
     // so toggling the sheet (a pure UI event) never re-runs the full-history streak/day passes, and
     // none of it runs on the main thread.
     private val derivedFlow = dayStart.flatMapLatest { todayStartMs ->
+        entriesFlow.map { all -> all to todayStartMs }
+    }.map { (all, todayStartMs) ->
         val weekStartMs = com.forge.app.core.time.mondayStartMs(todayStartMs)
-        combine(
-            entriesFlow,
-            cardioRepo.observeMinutesSince(weekStartMs),
-            cardioRepo.observeSince(weekStartMs)
-        ) { all, weekMin, weekEntries -> Triple(all, weekMin, weekEntries) to Pair(todayStartMs, weekStartMs) }
-    }.map { (parts, anchors) ->
-        val (all, weekMin, weekEntries) = parts
-        val (todayStartMs, weekStartMs) = anchors
         val zone = ZoneId.systemDefault()
         // Today comes from the ANCHOR, not from a fresh LocalDate.now() inside each helper: the
         // anchor is what the day-boundary tick moves, so deriving from it is what makes "today"
         // change on the screen that is still open, and what makes the helpers testable at all.
         val today = Instant.ofEpochMilli(todayStartMs).atZone(zone).toLocalDate()
+        // The week's slice comes from the history ALREADY IN HAND, not from two more observers on
+        // the same table (P-08). Combining `observeAll` with `observeMinutesSince` and
+        // `observeSince` meant one insert invalidated three SQL queries, so a single logged session
+        // could re-run the full-history streak, records and pace passes more than once — and, in
+        // between, mix a new slice with an old whole. The filters below are exactly what those two
+        // queries were: `date >= weekStart`, and the same sum over non-rest rows (a SUM over no
+        // rows is NULL, which the caller read as 0).
+        val weekEntries = all.filter { it.date >= weekStartMs }
+        val weekMinutes = weekEntries
+            .filter { it.type != CardioType.REST.code }
+            .sumOf { it.durationMin }
         CardioDerived(
             all = all,
             todayStartMs = todayStartMs,
-            weekMinutes = weekMin ?: 0,
+            weekMinutes = weekMinutes,
             cardioDaysThisWeek = countActiveDays(weekEntries, zone),
             cardioStreakDays = computeCardioStreak(all, zone, today),
             weekDays = buildWeekDays(weekEntries, zone, today),
