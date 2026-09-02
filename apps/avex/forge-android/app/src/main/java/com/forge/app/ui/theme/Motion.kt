@@ -15,14 +15,20 @@ import kotlin.math.roundToInt
  * numbers. Easings follow the Material 3 "emphasized" family — incoming content decelerates
  * into place, outgoing content accelerates away.
  *
- * Reduced motion: [durationScale] mirrors the system "Remove animations" preference
- * (Settings.Global.ANIMATOR_DURATION_SCALE, set once in MainActivity). Because every spec below
- * is derived through [scaled] / [reduceMotion], honoring that preference is automatic — tweens
- * collapse to 0 ms and springs snap instantly. No call site has to check it.
+ * Reduced motion: [durationScale] mirrors the system animator duration scale
+ * (Settings.Global.ANIMATOR_DURATION_SCALE — 0 when "Remove animations" is on; MainActivity
+ * writes it at start and keeps it live). For everything Compose animates it is a GATE, not a
+ * multiplier: Compose already applies that same platform scale exactly once through its
+ * `MotionDurationScale`, so every spec below carries its NOMINAL duration and only collapses
+ * (tweens to 0 ms, springs to a snap) when the scale is 0. Multiplying here as well applied the
+ * setting twice — 2x became 4x, 10x became 100x. The scale is used as a factor ONLY by
+ * [scaledDuration], for motion Compose does not clock (raw `delay()`s between animations,
+ * animated drawables, ValueAnimators). No call site has to check the preference itself.
  */
 object ForgeMotion {
 
-    /** 1f = normal speed · 0f = the user disabled animations. Set once at app start. */
+    /** The system animator duration scale: 1f = normal · 0f = the user disabled animations.
+     *  Written by MainActivity at start and whenever the setting changes. */
     @Volatile var durationScale: Float = 1f
 
     private val reduceMotion: Boolean get() = durationScale <= 0f
@@ -37,11 +43,26 @@ object ForgeMotion {
      * stop the timer itself and offer the manual control instead.
      */
     val animationsOff: Boolean get() = reduceMotion
-    private fun scaled(durationMs: Int): Int = (durationMs * durationScale).roundToInt()
 
-    /** Scale a one-off raw duration (for animations not built from the helpers below — e.g. a
-     *  literal tween in a Canvas) by the reduced-motion preference; 0 when animations are off. */
-    fun scaledDuration(durationMs: Int): Int = scaled(durationMs)
+    /** A Compose spec duration: the nominal value, or 0 when animations are off. Deliberately NOT
+     *  multiplied by [durationScale] — Compose applies the platform scale itself. */
+    private fun nominal(durationMs: Int): Int = if (reduceMotion) 0 else durationMs
+
+    /**
+     * The duration to hand a Compose animation built at a call site (a literal tween in a Canvas,
+     * an `infiniteRepeatable` period, a `delayMillis`): the NOMINAL value, or 0 when animations
+     * are off. Compose scales it by the platform animator scale on its own clock, so scaling it
+     * here too would square the setting.
+     */
+    fun nominalDuration(durationMs: Int): Int = nominal(durationMs)
+
+    /**
+     * Scale a raw duration that Compose does NOT clock — a kotlinx `delay()` between animations,
+     * an animated drawable, a ValueAnimator — by the platform animator scale so it keeps pace
+     * with the Compose motion around it; 0 when animations are off. Never feed this into a
+     * Compose spec: Compose would scale it a second time (use [nominalDuration] there).
+     */
+    fun scaledDuration(durationMs: Int): Int = (durationMs * durationScale).roundToInt()
 
     // ── Durations (ms) ──────────────────────────────────────────────────────────
     const val DurationFast = 150          // micro: press, tiny fades
@@ -77,17 +98,18 @@ object ForgeMotion {
         else spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMedium)
 
     // ── Tween helpers ─────────────────────────────────────────────────────────--
+    // Nominal durations: Compose applies the animator scale once via MotionDurationScale.
     fun <T> enterTween(durationMs: Int = DurationStandard): FiniteAnimationSpec<T> =
-        tween(scaled(durationMs), easing = Decelerate)
+        tween(nominal(durationMs), easing = Decelerate)
 
     fun <T> exitTween(durationMs: Int = DurationStandard): FiniteAnimationSpec<T> =
-        tween(scaled(durationMs), easing = Accelerate)
+        tween(nominal(durationMs), easing = Accelerate)
 
     fun <T> standardTween(durationMs: Int = DurationStandard): FiniteAnimationSpec<T> =
-        tween(scaled(durationMs), easing = Standard)
+        tween(nominal(durationMs), easing = Standard)
 
     /** A long, even chart draw-in: starts instantly, decelerates gently to a soft stop. Slower and
      *  smoother than [enterTween] so a line/bar reveal glides in rather than snapping. */
     fun <T> drawTween(durationMs: Int = DurationDraw): FiniteAnimationSpec<T> =
-        tween(scaled(durationMs), easing = DrawDecelerate)
+        tween(nominal(durationMs), easing = DrawDecelerate)
 }

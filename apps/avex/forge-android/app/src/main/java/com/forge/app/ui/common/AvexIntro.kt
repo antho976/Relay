@@ -54,7 +54,10 @@ fun AvexIntro(iconKey: String, themed: Boolean = true, onDone: () -> Unit) {
             reveal.animateTo(1f, ForgeMotion.enterTween(ForgeMotion.DurationEmphasized))
         }
         val choreographedExit = !reduceMotion && wordmarkExitChoreographed(icon)
-        delay(if (reduceMotion) 450 else if (choreographedExit) 570 else 700)
+        // Holds are raw delays Compose does not clock, so they take the animator scale here to stay
+        // in step with the tweens (which Compose scales itself); the reduced-motion hold is a fixed
+        // still beat, not motion, and is left alone.
+        delay(if (reduceMotion) 450L else ForgeMotion.scaledDuration(if (choreographedExit) 570 else 700).toLong())
         if (choreographedExit) {
             // The death starts first; the plate fade joins in later so the destruction reads before
             // everything dims together. Molten melts DECELERATING (material gives way fast, then
@@ -64,15 +67,15 @@ fun AvexIntro(iconKey: String, themed: Boolean = true, onDone: () -> Unit) {
                 exit.animateTo(
                     1f,
                     tween(
-                        ForgeMotion.scaledDuration(if (melt) 650 else 480),
+                        ForgeMotion.nominalDuration(if (melt) 650 else 480),
                         easing = if (melt) ForgeMotion.Decelerate else ForgeMotion.Accelerate
                     )
                 )
             }
-            delay(if (melt) 320 else 230)
+            delay(ForgeMotion.scaledDuration(if (melt) 320 else 230).toLong())
         }
         if (!reduceMotion) {
-            plateAlpha.animateTo(0f, tween(ForgeMotion.scaledDuration(ForgeMotion.DurationStandard), easing = ForgeMotion.Accelerate))
+            plateAlpha.animateTo(0f, tween(ForgeMotion.nominalDuration(ForgeMotion.DurationStandard), easing = ForgeMotion.Accelerate))
         }
         onDone()
     }

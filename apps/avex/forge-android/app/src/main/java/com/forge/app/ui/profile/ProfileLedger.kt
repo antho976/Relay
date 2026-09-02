@@ -176,8 +176,8 @@ internal fun StandingSection(
                 val w by animateFloatAsState(
                     targetValue = if (play) frac else 0f,
                     animationSpec = tween(
-                        durationMillis = ForgeMotion.scaledDuration(ForgeMotion.DurationEmphasized),
-                        delayMillis = ForgeMotion.scaledDuration(i * 90),
+                        durationMillis = ForgeMotion.nominalDuration(ForgeMotion.DurationEmphasized),
+                        delayMillis = ForgeMotion.nominalDuration(i * 90),
                         easing = ForgeMotion.Standard
                     ),
                     label = "standing-bar"

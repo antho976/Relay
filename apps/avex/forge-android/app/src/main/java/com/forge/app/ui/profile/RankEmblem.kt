@@ -259,9 +259,10 @@ private fun cosf(x: Float): Float = kotlin.math.cos(x.toDouble()).toFloat()
 /** A sawtooth phase mapped to a 0f..1f sine oscillation; 0.5 (mid) when not animating. */
 private fun osc(p: State<Float>?): Float = if (p == null) 0.5f else (sinf(p.value * TAU) + 1f) / 2f
 
-/** A 0f→1f sawtooth phase that loops every [periodMs] (honoring reduced-motion scaling). */
+/** A 0f→1f sawtooth phase that loops every [periodMs] (nominal — Compose applies the animator
+ *  scale itself; reduced motion collapses it, floored at 1 ms so the repeat never divides by 0). */
 @Composable
 private fun InfiniteTransition.phase(periodMs: Int): State<Float> {
-    val d = ForgeMotion.scaledDuration(periodMs).coerceAtLeast(1)
+    val d = ForgeMotion.nominalDuration(periodMs).coerceAtLeast(1)
     return animateFloat(0f, 1f, infiniteRepeatable(tween(d, easing = LinearEasing)), label = "phase-$periodMs")
 }
